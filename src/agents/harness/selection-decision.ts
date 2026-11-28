@@ -1,0 +1,209 @@
+/** Synchronous harness selection facts, without loading invocation machinery. */
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveProviderRefOwnership } from "../../plugins/providers.js";
+import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
+import { resolveAgentHarnessAvailabilityDecision } from "./availability.js";
+import { BUILTIN_AGENT_HARNESS_METADATA } from "./builtin-openclaw-metadata.js";
+import { MissingAgentHarnessError } from "./errors.js";
+import type { AgentHarnessPolicy } from "./policy.js";
+import { listRegisteredAgentHarnesses, resolveAgentHarnessOwnerPluginId } from "./registry.js";
+import { buildAgentHarnessSupportContext, resolveAutoAgentHarnessSelection } from "./support.js";
+import type { AgentHarness, AgentHarnessSupportContext } from "./types.js";
+
+const log = createSubsystemLogger("agents/harness");
+
+export type AgentHarnessSelectionParams = {
+  provider: string;
+  modelId?: string;
+  modelProvider?: AgentHarnessSupportContext["modelProvider"];
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  agentHarnessId?: string;
+  agentHarnessRuntimeOverride?: string;
+};
+
+export type AgentHarnessSelectionDecisionParams = AgentHarnessSelectionParams & {
+  /** Finalized route/auth facts must always pass harness support, including persisted pins. */
+  preparedModelProvider?: boolean;
+};
+
+export type AgentHarnessPreparedModelProvider = NonNullable<
+  AgentHarnessSupportContext["modelProvider"]
+>;
+
+export type AgentHarnessSelectionCandidate = {
+  id: string;
+  label: string;
+  pluginId?: string;
+  supported?: boolean;
+  priority?: number;
+  reason?: string;
+};
+
+export type AgentHarnessSelectionDecision = {
+  policy: AgentHarnessPolicy;
+  selectedHarnessId: string;
+  selectedReason:
+    | "forced_openclaw"
+    | "forced_plugin"
+    // Implicit Codex preference found no registered Codex harness, so OpenClaw handled the run.
+    | "implicit_plugin_unavailable_openclaw"
+    // Implicit Codex preference cannot reproduce the prepared transport, so OpenClaw handled it.
+    | "implicit_plugin_unsupported_openclaw"
+    // The requested plugin declared OpenClaw as a lossless fallback for this prepared request.
+    | "plugin_declared_fallback_openclaw"
+    // Provider-owned CLI runtime aliases have no agent harness plugin counterpart.
+    | "cli_runtime_passthrough_openclaw"
+    | "auto_plugin"
+    | "auto_openclaw";
+  candidates: AgentHarnessSelectionCandidate[];
+} & (
+  | { builtIn: true; harness?: never; ownerPluginId?: never }
+  | { builtIn: false; harness: AgentHarness; ownerPluginId: string }
+);
+
+/** Reads delivery policy from the same validated decision used for execution. */
+export function resolveAgentHarnessDeliveryDefaults(
+  params: AgentHarnessSelectionParams,
+): AgentHarness["deliveryDefaults"] {
+  const selection = resolveAgentHarnessSelectionDecision(params);
+  return selection.builtIn
+    ? BUILTIN_AGENT_HARNESS_METADATA.deliveryDefaults
+    : selection.harness.deliveryDefaults;
+}
+
+export function resolveAgentHarnessSelectionDecision(
+  params: AgentHarnessSelectionDecisionParams,
+): AgentHarnessSelectionDecision {
+  // Keep the probed instance: owner validation must reject replacement during supports().
+  const pluginHarnesses = listRegisteredAgentHarnesses().map((entry) => entry.harness);
+  const availability = resolveAgentHarnessAvailabilityDecision({
+    ...params,
+    resolveProviderOwnership: () =>
+      resolveProviderRefOwnership({
+        provider: params.provider,
+        config: params.config,
+      }),
+  });
+  const policy = availability.policy;
+  const finishSelection = (
+    selectedReason: AgentHarnessSelectionDecision["selectedReason"],
+    harness?: AgentHarness,
+    selectedPolicy = policy,
+  ) =>
+    buildAgentHarnessSelectionDecision({
+      harness,
+      policy: selectedPolicy,
+      selectedReason,
+      candidates: listHarnessCandidates(pluginHarnesses),
+    });
+  // OpenClaw's built-in harness is intentionally not part of the plugin candidate list. Explicit plugin
+  // runtimes fail closed unless the selected plugin declares OpenClaw as a lossless fallback.
+  const runtime = policy.runtime;
+  if (runtime === "openclaw") {
+    const selectedReason =
+      availability.kind === "implicit-unavailable"
+        ? "implicit_plugin_unavailable_openclaw"
+        : availability.kind === "implicit-unsupported"
+          ? "implicit_plugin_unsupported_openclaw"
+          : availability.kind === "declared-fallback"
+            ? "plugin_declared_fallback_openclaw"
+            : "forced_openclaw";
+    return finishSelection(selectedReason);
+  }
+  if (runtime !== "auto") {
+    const forced = pluginHarnesses.find((entry) => entry.id === runtime);
+    if (forced) {
+      const support = availability.support;
+      if (!support || support.supported || support.fallbackRuntime === "openclaw") {
+        if (support && !support.supported) {
+          log.info(
+            `agent harness selected requested=${runtime} selected=${forced.id} reason=private_qa_forced_runtime`,
+          );
+        }
+        return finishSelection("forced_plugin", forced);
+      }
+      if (!isCliRuntimeAliasForProvider({ runtime, provider: params.provider })) {
+        const providerModel = params.modelId
+          ? `${params.provider}/${params.modelId}`
+          : params.provider;
+        throw new Error(
+          `Requested agent harness "${runtime}" does not support ${providerModel}${
+            support.reason ? ` (${support.reason})` : ""
+          }.`,
+        );
+      }
+    } else if (
+      !isCliRuntimeAliasForProvider({
+        runtime,
+        provider: params.provider,
+        cfg: params.config,
+      })
+    ) {
+      throw new MissingAgentHarnessError(runtime);
+    }
+    return finishSelection("cli_runtime_passthrough_openclaw", undefined, {
+      ...policy,
+      runtime: "openclaw",
+    });
+  }
+
+  const { candidates, selected } = resolveAutoAgentHarnessSelection(
+    pluginHarnesses,
+    params.provider,
+    () =>
+      buildAgentHarnessSupportContext({
+        ...params,
+        requestedRuntime: runtime,
+        providerOwnership: resolveProviderRefOwnership({
+          provider: params.provider,
+          config: params.config,
+        }),
+      }),
+  );
+  return buildAgentHarnessSelectionDecision({
+    harness: selected,
+    policy,
+    selectedReason: selected ? "auto_plugin" : "auto_openclaw",
+    candidates: candidates.map(({ harness, support }) => ({
+      id: harness.id,
+      label: harness.label,
+      pluginId: harness.pluginId,
+      supported: support.supported,
+      priority: support.supported ? support.priority : undefined,
+      reason: support.reason,
+    })),
+  });
+}
+
+function listHarnessCandidates(harnesses: AgentHarness[]): AgentHarnessSelectionCandidate[] {
+  return harnesses.map((harness) => ({
+    id: harness.id,
+    label: harness.label,
+    pluginId: harness.pluginId,
+  }));
+}
+
+export function buildAgentHarnessSelectionDecision(params: {
+  harness?: AgentHarness;
+  policy: AgentHarnessPolicy;
+  selectedReason: AgentHarnessSelectionDecision["selectedReason"];
+  candidates: AgentHarnessSelectionCandidate[];
+}): AgentHarnessSelectionDecision {
+  const common = {
+    policy: params.policy,
+    selectedHarnessId: params.harness?.id ?? BUILTIN_AGENT_HARNESS_METADATA.id,
+    selectedReason: params.selectedReason,
+    candidates: params.candidates,
+  };
+  return params.harness
+    ? {
+        ...common,
+        builtIn: false,
+        harness: params.harness,
+        ownerPluginId: resolveAgentHarnessOwnerPluginId(params.harness),
+      }
+    : { ...common, builtIn: true };
+}

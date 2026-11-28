@@ -1,6 +1,11 @@
 // Discord tests cover speaker context plugin behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Client } from "../internal/discord.js";
+import {
+  attachRestMock,
+  createInternalTestClient,
+} from "../internal/test-builders.test-support.js";
+import { resolveDiscordVoiceAccess } from "./owner-access.js";
 import { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 
 function createClient(fetchMember: ReturnType<typeof vi.fn>): Client {
@@ -11,48 +16,72 @@ function createClient(fetchMember: ReturnType<typeof vi.fn>): Client {
 }
 
 describe("DiscordVoiceSpeakerContextResolver", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("reuses cached speaker context for repeated speaker lookups", async () => {
-    const fetchMember = vi.fn().mockResolvedValue({
-      nickname: "Ada",
-      roles: [],
-      user: { id: "u1", username: "ada", globalName: "Ada" },
-    });
-    const resolver = new DiscordVoiceSpeakerContextResolver({
-      client: createClient(fetchMember),
-    });
-
-    await expect(resolver.resolveContext("g1", "u1")).resolves.toMatchObject({ label: "Ada" });
-    await expect(resolver.resolveContext("g1", "u1")).resolves.toMatchObject({ label: "Ada" });
-
-    expect(fetchMember).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not cache speaker context when the cache expiry would exceed Date range", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-    const fetchMember = vi
+  it("reuses the client's member cache and observes Gateway member updates", async () => {
+    const client = createInternalTestClient();
+    const get = vi
       .fn()
       .mockResolvedValueOnce({
-        nickname: "Ada",
-        roles: [],
-        user: { id: "u1", username: "ada", globalName: "Ada" },
+        nick: "Ada",
+        roles: ["role-a"],
+        user: { id: "u1", username: "ada" },
       })
       .mockResolvedValueOnce({
-        nickname: "Grace",
-        roles: [],
-        user: { id: "u1", username: "grace", globalName: "Grace" },
+        nick: "Grace",
+        roles: ["role-b"],
+        user: { id: "u1", username: "grace" },
       });
+    attachRestMock(client, { get });
+    const resolver = new DiscordVoiceSpeakerContextResolver({ client });
+
+    await expect(resolver.resolveContext("g1", "u1")).resolves.toEqual({
+      id: "u1",
+      label: "Ada",
+      name: "ada",
+      tag: "ada",
+      memberRoleIds: ["role-a"],
+      senderIsOwner: false,
+    });
+    await expect(resolver.resolveContext("g1", "u1")).resolves.toMatchObject({ label: "Ada" });
+    expect(get).toHaveBeenCalledTimes(1);
+    await client.dispatchGatewayEvent("GUILD_MEMBER_UPDATE", {
+      guild_id: "g1",
+      user: { id: "u1" },
+    });
+    await expect(resolver.resolveContext("g1", "u1")).resolves.toMatchObject({
+      label: "Grace",
+      memberRoleIds: ["role-b"],
+    });
+    expect(get.mock.calls.map(([route]) => route)).toEqual([
+      "/guilds/g1/members/u1",
+      "/guilds/g1/members/u1",
+    ]);
+  });
+
+  it.each([
+    { owner: "123456789012345678", senderIsOwner: true },
+    { owner: "discord:123456789012345678", senderIsOwner: true },
+    { owner: "user:123456789012345678", senderIsOwner: true },
+    { owner: "pk:123456789012345678", senderIsOwner: true },
+    { owner: "<@123456789012345678>", senderIsOwner: true },
+    { owner: "<@!123456789012345678>", senderIsOwner: true },
+    { owner: "discord:user:123456789012345678", senderIsOwner: true },
+    { owner: "slack:123456789012345678", senderIsOwner: false },
+    { owner: "discord:*", senderIsOwner: false },
+    { owner: "user:*", senderIsOwner: false },
+    { owner: "pk:*", senderIsOwner: false },
+  ])("preserves owner target authority for voice: $owner", async ({ owner, senderIsOwner }) => {
+    const id = "123456789012345678";
+    const fetchMember = vi.fn().mockResolvedValue({ user: { id, username: "ada" } });
+    const access = resolveDiscordVoiceAccess({
+      cfg: { commands: { ownerAllowFrom: [owner] } },
+      discordConfig: {},
+      accountId: "default",
+    });
     const resolver = new DiscordVoiceSpeakerContextResolver({
       client: createClient(fetchMember),
+      ownerAllowFrom: access.ownerAllowFrom,
     });
 
-    await expect(resolver.resolveContext("g1", "u1")).resolves.toMatchObject({ label: "Ada" });
-    await expect(resolver.resolveContext("g1", "u1")).resolves.toMatchObject({ label: "Grace" });
-
-    expect(fetchMember).toHaveBeenCalledTimes(2);
+    await expect(resolver.resolveContext("g1", id)).resolves.toMatchObject({ senderIsOwner });
   });
 });

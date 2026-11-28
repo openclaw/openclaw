@@ -9,7 +9,7 @@ struct DevicePermissionsTests {
     @Test func `contacts statuses map to shared grants`() {
         #expect(DevicePermissionStatusMap.contacts(.authorized) == .granted)
         #expect(DevicePermissionStatusMap.contacts(.limited) == .limited)
-        #expect(DevicePermissionStatusMap.contacts(.notDetermined) == .notRequested)
+        #expect(DevicePermissionStatusMap.contacts(.notDetermined) == .notDetermined)
         #expect(DevicePermissionStatusMap.contacts(.denied) == .denied)
         #expect(DevicePermissionStatusMap.contacts(.restricted) == .denied)
     }
@@ -17,7 +17,7 @@ struct DevicePermissionsTests {
     @Test func `photos statuses map to shared grants`() {
         #expect(DevicePermissionStatusMap.photos(.authorized) == .granted)
         #expect(DevicePermissionStatusMap.photos(.limited) == .limited)
-        #expect(DevicePermissionStatusMap.photos(.notDetermined) == .notRequested)
+        #expect(DevicePermissionStatusMap.photos(.notDetermined) == .notDetermined)
         #expect(DevicePermissionStatusMap.photos(.denied) == .denied)
     }
 
@@ -26,62 +26,20 @@ struct DevicePermissionsTests {
         #expect(DevicePermissionStatusMap.eventKitWrite(.writeOnly) == .granted)
         #expect(DevicePermissionStatusMap.eventKitRead(.fullAccess) == .granted)
         #expect(DevicePermissionStatusMap.eventKitWrite(.fullAccess) == .granted)
-        #expect(DevicePermissionStatusMap.eventKitRead(.notDetermined) == .notRequested)
+        #expect(DevicePermissionStatusMap.eventKitRead(.notDetermined) == .notDetermined)
         #expect(DevicePermissionStatusMap.eventKitRead(.denied) == .denied)
     }
 
     @Test func `first-run onboarding moves directly from intro to pairing`() {
-        #expect(OnboardingStep.intro.previous == nil)
-        #expect(OnboardingStep.welcome.previous == .intro)
-        #expect(!OnboardingStep.welcome.canGoBack)
+        #expect(OnboardingStep.intro.pushedSteps.isEmpty)
+        #expect(OnboardingStep.welcome.pushedSteps.isEmpty)
         #expect(OnboardingStep.welcome.manualProgressTitle.isEmpty)
     }
 
-    @Test func `onboarding has no aggregate system permission prompt`() throws {
-        let onboardingDirectory = Self.sourceRoot()
-            .appending(path: "Onboarding", directoryHint: .isDirectory)
-        let wizard = try String(
-            contentsOf: onboardingDirectory.appending(path: "OnboardingWizardView.swift"),
-            encoding: .utf8)
-
-        #expect(!FileManager.default.fileExists(
-            atPath: onboardingDirectory.appending(path: "OnboardingPermissionsStep.swift").path))
-        #expect(!wizard.contains("OnboardingPermissionsStep"))
-        #expect(!wizard.contains("navigate(to: .permissions)"))
-    }
-
-    @Test func `settings first request says Continue and immediately requests permission`() throws {
-        let settings = try String(
-            contentsOf: Self.sourceRoot()
-                .appending(path: "Settings", directoryHint: .isDirectory)
-                .appending(path: "PrivacyAccessSectionView.swift"),
-            encoding: .utf8)
-        let actionTitles = try #require(Self.extract(
-            settings,
-            from: "    private func standardActionTitle(",
-            to: "    /// `limitedRequests`"))
-        let action = try #require(Self.extract(
-            settings,
-            from: "    private func standardAction(",
-            to: "    private func requestContacts()"))
-
-        #expect(actionTitles.contains("case .notRequested:\n            LocalizedStringResource(\"Continue\")"))
-        #expect(!actionTitles.contains("LocalizedStringResource(\"Allow\")"))
-        #expect(action.contains("await request()"))
-        #expect(action.contains("case .notRequested:\n            return run"))
-    }
-
-    private static func sourceRoot() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appending(path: "Sources", directoryHint: .isDirectory)
-    }
-
-    private static func extract(_ source: String, from start: String, to end: String) -> String? {
-        guard let startRange = source.range(of: start),
-              let endRange = source.range(of: end, range: startRange.upperBound..<source.endIndex)
-        else { return nil }
-        return String(source[startRange.lowerBound..<endRange.lowerBound])
+    @Test func `manual onboarding steps pop back one at a time to Connect Gateway`() {
+        #expect(OnboardingStep.mode.pushedSteps == [.mode])
+        #expect(OnboardingStep.connect.pushedSteps == [.mode, .connect])
+        #expect(OnboardingStep.auth.pushedSteps == [.mode, .connect, .auth])
+        #expect(OnboardingStep.success.pushedSteps.isEmpty)
     }
 }

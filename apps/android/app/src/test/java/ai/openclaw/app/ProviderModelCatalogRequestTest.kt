@@ -1,7 +1,7 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -25,32 +25,58 @@ class ProviderModelCatalogRequestTest {
   }
 
   @Test
+  fun preservesKnownAvailabilityReasonsAndFailsOpenForUnknownReasons() {
+    val models =
+      parseGatewayModels(
+        Json
+          .parseToJsonElement(
+            """
+            [
+              {"id":"missing","name":"Missing","provider":"synthetic","available":false,"unavailableReason":"missing-auth"},
+              {"id":"failed","name":"Failed","provider":"synthetic","available":false,"unavailableReason":"auth-failed"},
+              {"id":"cooling","name":"Cooling","provider":"synthetic","available":false,"unavailableReason":"cooldown"},
+              {"id":"future","name":"Future","provider":"synthetic","available":false,"unavailableReason":"future-reason"}
+            ]
+            """.trimIndent(),
+          ).jsonArray,
+      )
+
+    assertEquals(GatewayModelUnavailableReason.MissingAuth, models[0].unavailableReason)
+    assertEquals(GatewayModelUnavailableReason.AuthFailed, models[1].unavailableReason)
+    assertEquals(GatewayModelUnavailableReason.Cooldown, models[2].unavailableReason)
+    assertEquals(null, models[3].unavailableReason)
+  }
+
+  @Test
   fun reportsProviderConfigUnsupportedWithoutSubstitutingConfiguredView() =
     runBlocking {
       val requests = mutableListOf<String>()
       var actual: Throwable? = null
 
       try {
-        requestProviderModelConfig { paramsJson ->
+        requestProviderModelConfig(agentId = "beta", refresh = true) { paramsJson ->
           requests += paramsJson
-          throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "unsupported view"))
+          throw GatewayRequestRejected(ErrorShape("INVALID_REQUEST", "unsupported view"))
         }
       } catch (err: Throwable) {
         actual = err
       }
 
       assertTrue(actual is ProviderModelConfigUnsupported)
-      assertEquals(listOf("""{"view":"provider-config"}"""), requests)
+      assertEquals(
+        listOf(Json.parseToJsonElement("""{"view":"provider-config","agentId":"beta","refresh":true}""")),
+        requests.map(Json::parseToJsonElement),
+      )
     }
 
   @Test
   fun preservesNonCompatibilityGatewayFailures() =
     runBlocking {
-      val expected = GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "gateway busy"))
+      val expected = GatewayRequestRejected(ErrorShape("UNAVAILABLE", "gateway busy"))
       var actual: Throwable? = null
 
       try {
-        requestProviderModelConfig { throw expected }
+        requestProviderModelConfig(agentId = "beta") { throw expected }
       } catch (err: Throwable) {
         actual = err
       }

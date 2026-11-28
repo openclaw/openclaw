@@ -3,13 +3,27 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveLegacyStateDirs, resolveStateDir } from "../config/paths.js";
-import { root } from "../infra/fs-safe.js";
+import { isMissingPathError } from "../infra/errno.js";
+import { pathMayExistSync } from "../infra/path-existence.js";
+import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
+import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveWorkspaceStateIdentity } from "./workspace-state-store.js";
+import type {
+  LegacyWorkspaceResetPlan,
+  LegacyWorkspaceResetResult,
+} from "./workspace-filesystem.types.js";
+import { captureWorkspaceFilesystemEvidence } from "./workspace-state-guard.js";
+import {
+  resolveCanonicalWorkspacePath,
+  resolveCanonicalWorkspacePathAsync,
+  createWorkspaceStateIdentity,
+  normalizeWorkspaceIdentityPath,
+} from "./workspace-state-identity.js";
 
-export const LEGACY_WORKSPACE_STATE_DIRNAME = ".openclaw";
-const LEGACY_WORKSPACE_STATE_FILENAME = "workspace-state.json";
 export const LEGACY_WORKSPACE_STATE_CURRENT_FILENAME = "openclaw-workspace-state.json";
 export const LEGACY_WORKSPACE_ATTESTATION_DIRNAME = "workspace-attestations";
 const LEGACY_WORKSPACE_ATTESTATION_SUFFIX = ".attested";
@@ -28,35 +42,15 @@ type LegacyWorkspaceSourcePaths = {
   siblingAttestationPaths: string[];
 };
 
-type LegacyWorkspaceResetCleanup = {
-  removedPaths: string[];
-  warnings: string[];
-};
-
-type LegacyWorkspaceResetCandidate = {
-  rootDir: string;
-  sourcePath: string;
-  requireAttestationHeader: boolean;
-};
-
-type LegacyWorkspaceResetPlan = {
-  candidates: LegacyWorkspaceResetCandidate[];
-};
-
 function uniqueSiblingPaths(paths: readonly string[]): string[] {
-  const seen = new Set<string>();
-  return paths.filter((candidate) => {
+  return dedupeByKey(paths, (candidate) => {
     let key = path.resolve(candidate);
     try {
       key = path.join(fs.realpathSync.native(path.dirname(candidate)), path.basename(candidate));
     } catch {
       // Missing parents stay distinct lexical migration inputs.
     }
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
+    return key;
   });
 }
 
@@ -64,16 +58,31 @@ export function resolveLegacyWorkspaceSourcePaths(
   workspaceDir: string,
   options?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
 ): LegacyWorkspaceSourcePaths {
-  // Hashed and sibling legacy filenames used the lexical configured path.
-  // Setup files live inside the workspace, so bind them to the canonical root
-  // while it still exists; destructive cleanup may remove the alias first.
+  const sources = createLegacyWorkspaceSourcePaths(
+    workspaceDir,
+    resolveCanonicalWorkspacePath(workspaceDir),
+    options,
+  );
+  sources.siblingAttestationPaths = uniqueSiblingPaths(sources.siblingAttestationPaths);
+  return sources;
+}
+
+function createLegacyWorkspaceSourcePaths(
+  workspaceDir: string,
+  canonicalDirectoryPath: string,
+  options?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
+): LegacyWorkspaceSourcePaths {
+  // Legacy sibling/hash paths used the lexical root; setup lives at the raw
+  // canonical root. NFC state identities must never select filesystem paths.
   const workspacePath = path.resolve(resolveUserPath(workspaceDir));
-  const canonicalIdentity = resolveWorkspaceStateIdentity(workspaceDir);
+  const canonicalIdentity = createWorkspaceStateIdentity(
+    normalizeWorkspaceIdentityPath(canonicalDirectoryPath),
+  );
   const workspaceKeys = [
     createHash("sha256").update(workspacePath).digest("hex"),
     canonicalIdentity.workspaceKey,
   ];
-  const workspacePaths = [workspacePath, canonicalIdentity.workspacePath];
+  const workspacePaths = [workspacePath, canonicalDirectoryPath];
   const env = options?.env ?? process.env;
   const stateDirs = [
     resolveStateDir(env, options?.homedir),
@@ -81,14 +90,7 @@ export function resolveLegacyWorkspaceSourcePaths(
   ];
   return {
     workspacePath,
-    setupStatePaths: [
-      path.join(canonicalIdentity.workspacePath, LEGACY_WORKSPACE_STATE_CURRENT_FILENAME),
-      path.join(
-        canonicalIdentity.workspacePath,
-        LEGACY_WORKSPACE_STATE_DIRNAME,
-        LEGACY_WORKSPACE_STATE_FILENAME,
-      ),
-    ],
+    setupStatePaths: [path.join(canonicalDirectoryPath, LEGACY_WORKSPACE_STATE_CURRENT_FILENAME)],
     stateDirAttestationPaths: [...new Set(stateDirs)].flatMap((stateDir) =>
       [...new Set(workspaceKeys)].map((workspaceKey) =>
         path.join(
@@ -98,87 +100,167 @@ export function resolveLegacyWorkspaceSourcePaths(
         ),
       ),
     ),
-    siblingAttestationPaths: uniqueSiblingPaths(
-      [...new Set(workspacePaths)].map(
-        (candidate) => `${candidate}${LEGACY_WORKSPACE_ATTESTATION_SUFFIX}`,
-      ),
+    siblingAttestationPaths: [...new Set(workspacePaths)].map(
+      (candidate) => `${candidate}${LEGACY_WORKSPACE_ATTESTATION_SUFFIX}`,
     ),
   };
 }
 
-function pathOrClaimExists(filePath: string): boolean {
-  for (const candidate of [filePath, `${filePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`]) {
+/** Share presence-only sibling ownership checks between runtime and Doctor. */
+export function legacyWorkspaceSiblingAttestationMayExist(filePath: string): boolean {
+  try {
+    const before = fs.lstatSync(filePath);
+    if (!before.isFile()) {
+      return false;
+    }
+    const noFollow = typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
+    let fd: number;
     try {
-      fs.lstatSync(candidate);
+      fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
+    } catch {
+      // An unreadable regular file could be an owned marker. Doctor must surface it.
       return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+    }
+    try {
+      const opened = fs.fstatSync(fd);
+      if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) {
         return true;
       }
-    }
-  }
-  return false;
-}
-
-function siblingPathIsOwnedMarker(filePath: string): boolean {
-  let stat: fs.Stats;
-  try {
-    stat = fs.lstatSync(filePath);
-  } catch {
-    return false;
-  }
-  if (!stat.isFile()) {
-    return false;
-  }
-  try {
-    const noFollow = typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
-    const fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
-    try {
-      const buffer = Buffer.alloc(
-        Math.min(stat.size, LEGACY_WORKSPACE_ATTESTATION_HEADER.length + 1),
-      );
-      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
-      return (
-        buffer.subarray(0, bytesRead).toString("utf8") ===
-        `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n`
-      );
+      const expected = Buffer.from(`${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n`, "utf8");
+      const bytes = Buffer.alloc(expected.length);
+      const read = fs.readSync(fd, bytes, 0, bytes.length, 0);
+      return read === expected.length && bytes.equals(expected);
+    } catch {
+      return true;
     } finally {
       fs.closeSync(fd);
     }
   } catch {
-    // A regular file at the exact retired path is ambiguous when it cannot be
-    // inspected. Doctor owns the safe decision; runtime must not assume absence.
-    return true;
+    return false;
+  }
+}
+
+function findUnmigratedWorkspaceSource(
+  sources: LegacyWorkspaceSourcePaths,
+  stateDirOnly = false,
+): string | undefined {
+  const withClaims = (paths: string[]) =>
+    paths.flatMap((filePath) => [filePath, `${filePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`]);
+  if (stateDirOnly) {
+    return withClaims(sources.stateDirAttestationPaths).find(pathMayExistSync);
+  }
+  return (
+    withClaims([...sources.setupStatePaths, ...sources.stateDirAttestationPaths]).find(
+      pathMayExistSync,
+    ) ?? withClaims(sources.siblingAttestationPaths).find(legacyWorkspaceSiblingAttestationMayExist)
+  );
+}
+
+function workspaceMigrationError(
+  blockedPaths: string[],
+  env?: NodeJS.ProcessEnv,
+  operation?: "doctor",
+  blockedByStepId?: string,
+): Error {
+  return new StartupMaintenanceRequiredError(
+    "legacy-workspace",
+    operation === "doctor"
+      ? blockedByStepId
+        ? `Legacy workspace setup at ${blockedPaths.join(", ")} was not imported because migration step "${blockedByStepId}" refused; resolve that refusal, then rerun ${formatCliCommand("openclaw doctor --fix", env)}.`
+        : formatDoctorStateRepairFailure(
+            `Legacy workspace setup state requires migration at ${blockedPaths.join(", ")}`,
+            "Stop the Gateway, then restore the retained setup file or claim from a verified backup.",
+          )
+      : `Run ${formatCliCommand("openclaw doctor --fix", env)}. Legacy workspace setup state requires migration for ${blockedPaths.join(", ")}.`,
+  );
+}
+
+/** Recheck lifecycle readiness without reusing a running turn's verified-absence cache. */
+export function assertWorkspaceStateMigrationReady(params: {
+  workspaceDirs: readonly string[];
+  /** Sandbox-writable dirs: only state-dir attestations, which sandboxes cannot write, count. */
+  sandboxWritableDirs?: ReadonlySet<string>;
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+  operation?: "doctor";
+  /** An earlier migration refusal prevented the workspace importer from running. */
+  blockedByStepId?: string;
+}): void {
+  const blocked = params.workspaceDirs.flatMap((workspaceDir) => {
+    const sourcePath = findUnmigratedWorkspaceSource(
+      resolveLegacyWorkspaceSourcePaths(workspaceDir, params),
+      params.sandboxWritableDirs?.has(workspaceDir),
+    );
+    return sourcePath ? [params.operation === "doctor" ? sourcePath : workspaceDir] : [];
+  });
+  if (blocked.length > 0) {
+    throw workspaceMigrationError(blocked, params.env, params.operation, params.blockedByStepId);
   }
 }
 
 /** Fail closed on unmigrated owned state without reading it as runtime data. */
-export function assertNoUnmigratedWorkspaceState(params: { workspaceDir: string }): void {
-  const identity = resolveWorkspaceStateIdentity(params.workspaceDir);
-  const sources = resolveLegacyWorkspaceSourcePaths(params.workspaceDir);
-  const sourceSetKey = JSON.stringify([
-    identity.workspaceKey,
-    ...sources.setupStatePaths,
-    ...sources.stateDirAttestationPaths,
-    ...sources.siblingAttestationPaths,
-  ]);
+export async function assertNoUnmigratedWorkspaceState(params: {
+  workspaceDir: string;
+  canonicalPath?: string;
+}): Promise<void> {
+  const canonical =
+    params.canonicalPath ?? (await resolveCanonicalWorkspacePathAsync(params.workspaceDir));
+  const sources = createLegacyWorkspaceSourcePaths(params.workspaceDir, canonical);
+  const sourceSetKey = JSON.stringify(sources);
   if (checkedWorkspaceSourceSets.has(sourceSetKey)) {
     return;
   }
-  const hasLegacy =
-    sources.setupStatePaths.some(pathOrClaimExists) ||
-    sources.stateDirAttestationPaths.some(pathOrClaimExists) ||
-    sources.siblingAttestationPaths.some(
-      (sourcePath) =>
-        siblingPathIsOwnedMarker(`${sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`) ||
-        siblingPathIsOwnedMarker(sourcePath),
-    );
-  if (hasLegacy) {
-    throw new Error(
-      `Legacy workspace setup state requires migration for ${identity.workspacePath}; run openclaw doctor --fix.`,
-    );
+  for (const source of [...sources.setupStatePaths, ...sources.stateDirAttestationPaths]) {
+    for (const candidate of [source, `${source}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`]) {
+      const exists = await fs.promises.lstat(candidate).then(
+        () => true,
+        (error: unknown) => !isMissingPathError(error),
+      );
+      if (exists) {
+        throw workspaceMigrationError([normalizeWorkspaceIdentityPath(canonical)]);
+      }
+    }
+  }
+  for (const source of sources.siblingAttestationPaths) {
+    for (const candidate of [source, `${source}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`]) {
+      if (await legacyWorkspaceSiblingAttestationMayExistAsync(candidate)) {
+        throw workspaceMigrationError([normalizeWorkspaceIdentityPath(canonical)]);
+      }
+    }
   }
   checkedWorkspaceSourceSets.add(sourceSetKey);
+}
+
+async function legacyWorkspaceSiblingAttestationMayExistAsync(filePath: string): Promise<boolean> {
+  try {
+    const before = await fs.promises.lstat(filePath);
+    if (!before.isFile()) {
+      return false;
+    }
+    const noFollow = typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
+    const file = await fs.promises
+      .open(filePath, fs.constants.O_RDONLY | noFollow)
+      .catch(() => undefined);
+    if (!file) {
+      return true;
+    }
+    try {
+      const opened = await file.stat();
+      if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) {
+        return true;
+      }
+      const expected = Buffer.from(`${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n`, "utf8");
+      const bytes = Buffer.alloc(expected.length);
+      const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
+      return bytesRead === expected.length && bytes.equals(expected);
+    } catch {
+      return true;
+    } finally {
+      await file.close();
+    }
+  } catch {
+    return false;
+  }
 }
 
 function resetLegacyWorkspaceStateCheckForTest(): void {
@@ -190,94 +272,83 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
     { resetLegacyWorkspaceStateCheckForTest };
 }
 
-function isOwnedAttestationBuffer(buffer: Buffer): boolean {
-  return (
-    buffer.subarray(0, LEGACY_WORKSPACE_ATTESTATION_HEADER.length + 1).toString("utf8") ===
-    `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n`
-  );
-}
-
 /** Capture canonical legacy paths before a destructive workspace removal. */
-export function prepareLegacyWorkspaceStateReset(
+export async function prepareLegacyWorkspaceStateReset(
   workspaceDir: string,
-  options?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
-): LegacyWorkspaceResetPlan {
-  const sources = resolveLegacyWorkspaceSourcePaths(workspaceDir, options);
-  const candidates = [
-    ...sources.setupStatePaths.map((sourcePath) => ({
-      rootDir: sourcePath.endsWith(LEGACY_WORKSPACE_STATE_CURRENT_FILENAME)
-        ? path.dirname(sourcePath)
-        : path.dirname(path.dirname(sourcePath)),
+): Promise<LegacyWorkspaceResetPlan> {
+  const sources = createLegacyWorkspaceSourcePaths(
+    workspaceDir,
+    await resolveCanonicalWorkspacePathAsync(workspaceDir),
+  );
+  const siblingKeys = await Promise.all(
+    sources.siblingAttestationPaths.map(async (candidate) => {
+      const parent = await fs.promises
+        .realpath(path.dirname(candidate))
+        .catch(() => path.dirname(candidate));
+      return [candidate, path.join(parent, path.basename(candidate))] as const;
+    }),
+  );
+  sources.siblingAttestationPaths = dedupeByKey(siblingKeys, ([, key]) => key).map(
+    ([candidate]) => candidate,
+  );
+  // Hashed paths are reserved state; sibling markers outside owned roots need a header.
+  const groups = [
+    [sources.setupStatePaths, "workspace"],
+    [sources.stateDirAttestationPaths, "state-dir"],
+    [sources.siblingAttestationPaths, "sibling"],
+  ] as const;
+  const candidates = groups
+    .flatMap(([paths, kind]) =>
+      paths.map((sourcePath) => ({
+        rootDir:
+          kind === "state-dir" ? path.dirname(path.dirname(sourcePath)) : path.dirname(sourcePath),
+        sourcePath,
+        requireAttestationHeader: kind === "sibling",
+      })),
+    )
+    .flatMap((candidate) => [
+      candidate,
+      {
+        ...candidate,
+        sourcePath: `${candidate.sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`,
+        // Sibling claims remain outside OpenClaw-owned roots. Renaming a claimed
+        // marker preserves its header, so require that ownership proof there too.
+        requireAttestationHeader: candidate.requireAttestationHeader,
+      },
+    ]);
+  const roots = new Map(
+    await Promise.all(
+      [...new Set(candidates.map(({ rootDir }) => rootDir))].map(
+        async (rootDir) =>
+          [
+            rootDir,
+            await captureWorkspaceFilesystemEvidence(rootDir).catch((error: unknown) => ({
+              workspaceDir: rootDir,
+              error: String(error),
+            })),
+          ] as const,
+      ),
+    ),
+  );
+  return {
+    candidates: candidates.map(({ rootDir, sourcePath, requireAttestationHeader }) => ({
       sourcePath,
-      requireAttestationHeader: false,
+      requireAttestationHeader,
+      root: roots.get(rootDir)!,
     })),
-    ...sources.stateDirAttestationPaths.map((sourcePath) => ({
-      rootDir: path.dirname(path.dirname(sourcePath)),
-      sourcePath,
-      // Hashed paths inside OpenClaw-owned attestation directories are
-      // reserved state. Explicit reset must remove malformed blockers too.
-      requireAttestationHeader: false,
-    })),
-    ...sources.siblingAttestationPaths.map((sourcePath) => ({
-      rootDir: path.dirname(sourcePath),
-      sourcePath,
-      requireAttestationHeader: true,
-    })),
-  ].flatMap((candidate) => [
-    candidate,
-    {
-      ...candidate,
-      sourcePath: `${candidate.sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`,
-      // Sibling claims remain outside OpenClaw-owned roots. Renaming a claimed
-      // marker preserves its header, so require that ownership proof there too.
-      requireAttestationHeader: candidate.requireAttestationHeader,
-    },
-  ]);
-  return { candidates };
+  };
 }
 
 /** Discard retired workspace files from a pre-removal reset plan. */
 export async function removeLegacyWorkspaceStateForReset(
   plan: LegacyWorkspaceResetPlan,
-  options?: { dryRun?: boolean },
-): Promise<LegacyWorkspaceResetCleanup> {
-  const removedPaths: string[] = [];
-  const warnings: string[] = [];
-  for (const candidate of plan.candidates) {
-    const rootDir = path.resolve(candidate.rootDir);
-    const sourcePath = path.resolve(candidate.sourcePath);
-    const relativePath = path.relative(rootDir, sourcePath);
-    try {
-      fs.lstatSync(rootDir);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      warnings.push(`Could not inspect retired workspace state at ${sourcePath}: ${String(error)}`);
-      continue;
-    }
-    try {
-      const sourceRoot = await root(rootDir, {
-        hardlinks: "reject",
-        maxBytes: LEGACY_WORKSPACE_ATTESTATION_MAX_BYTES,
-        symlinks: "reject",
-      });
-      if (!(await sourceRoot.exists(relativePath))) {
-        continue;
-      }
-      if (candidate.requireAttestationHeader) {
-        const snapshot = await sourceRoot.read(relativePath);
-        if (!isOwnedAttestationBuffer(snapshot.buffer)) {
-          continue;
-        }
-      }
-      if (!options?.dryRun) {
-        await sourceRoot.remove(relativePath);
-      }
-      removedPaths.push(sourcePath);
-    } catch (error) {
-      warnings.push(`Could not remove retired workspace state at ${sourcePath}: ${String(error)}`);
-    }
-  }
-  return { removedPaths, warnings };
+  options?: { dryRun?: boolean; assertCurrent?: () => void },
+): Promise<LegacyWorkspaceResetResult> {
+  const nativeMode = getFsSafeNativeConfig().mode;
+  const { runWorkspaceFilesystemOperation } = await import("./workspace-filesystem.js");
+  return runWorkspaceFilesystemOperation(
+    { kind: "legacy-reset", plan, dryRun: options?.dryRun },
+    { assertHost: options?.assertCurrent },
+    nativeMode,
+  );
 }

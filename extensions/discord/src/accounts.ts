@@ -1,4 +1,3 @@
-// Discord plugin module implements accounts behavior.
 import {
   createAccountActionGate,
   createAccountListHelpers,
@@ -9,14 +8,18 @@ import {
   normalizeChannelDmPolicy,
   type ChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { resolveConfiguredFromCredentialStatuses } from "openclaw/plugin-sdk/channel-status";
+import type {
+  DiscordAccountConfig,
+  DiscordActionConfig,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  resolveConfiguredFromCredentialStatuses,
-  type DiscordAccountConfig,
-  type DiscordActionConfig,
-  type OpenClawConfig,
-} from "./runtime-api.js";
+  inspectDiscordAccountTokenState,
+  resolveDiscordAccountAvailability,
+} from "./account-token-inspect.js";
 import { selectDiscordRuntimeConfig } from "./runtime-config.js";
 import { resolveDiscordToken, type DiscordCredentialStatus } from "./token.js";
 
@@ -30,10 +33,10 @@ export type ResolvedDiscordAccount = {
   config: DiscordAccountConfig;
 };
 
-const {
-  listAccountIds,
-  resolveDefaultAccountId,
-  resolveAccountConfig: resolveMergedDiscordAccountConfig,
+export const {
+  listAccountIds: listDiscordAccountIds,
+  resolveDefaultAccountId: resolveDefaultDiscordAccountId,
+  resolveAccountConfig: mergeDiscordAccountConfig,
 } = createAccountListHelpers<DiscordAccountConfig>("discord", {
   implicitDefaultAccount: {
     channelKeys: ["token"],
@@ -41,8 +44,6 @@ const {
   },
   nestedObjectKeys: ["activities", "agentComponents", "botLoopProtection"],
 });
-export const listDiscordAccountIds = listAccountIds;
-export const resolveDefaultDiscordAccountId = resolveDefaultAccountId;
 
 export function resolveDiscordAccountConfig(
   cfg: OpenClawConfig,
@@ -51,55 +52,72 @@ export function resolveDiscordAccountConfig(
   return resolveAccountEntry(cfg.channels?.discord?.accounts, accountId);
 }
 
-export function mergeDiscordAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): DiscordAccountConfig {
-  return resolveMergedDiscordAccountConfig(cfg, accountId);
-}
+type DiscordAccountParams = { cfg: OpenClawConfig; accountId?: string | null };
 
-export function resolveDiscordAccountAllowFrom(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string[] | undefined {
+export function inspectDiscordAccountConfig(
+  params: DiscordAccountParams,
+  options: {
+    includeName?: boolean;
+    resolveFallbackToken: (accountId: string) => {
+      token: string;
+      source: "env" | "config" | "none";
+    };
+  },
+) {
   const accountId = normalizeAccountId(
     params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
   );
+  const config = mergeDiscordAccountConfig(params.cfg, accountId);
+  const enabled = params.cfg.channels?.discord?.enabled !== false && config.enabled !== false;
   const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
+  const hasAccountToken = Boolean(accountConfig && Object.hasOwn(accountConfig, "token"));
+  return inspectDiscordAccountTokenState({
+    base: {
+      accountId,
+      enabled,
+      ...(options.includeName ? { name: normalizeOptionalString(config.name) } : {}),
+    },
+    config,
+    accountToken: accountConfig?.token,
+    hasAccountToken,
+    channelToken: params.cfg.channels?.discord?.token,
+    resolveFallbackToken: () => options.resolveFallbackToken(accountId),
+  });
+}
+
+function readConfiguredAccount(params: DiscordAccountParams) {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
+  );
+  return resolveDiscordAccountConfig(params.cfg, accountId);
+}
+
+export function resolveDiscordAccountAllowFrom(params: DiscordAccountParams): string[] | undefined {
+  const accountConfig = readConfiguredAccount(params);
   const rootConfig = params.cfg.channels?.discord as DiscordAccountConfig | undefined;
   const allowFrom = accountConfig?.allowFrom ?? rootConfig?.allowFrom;
   return allowFrom ? mapAllowFromEntries(allowFrom) : undefined;
 }
 
-export function resolveDiscordAccountDmPolicy(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): ChannelDmPolicy | undefined {
-  const accountId = normalizeAccountId(
-    params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
-  );
-  const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
+export function resolveDiscordAccountDmPolicy(
+  params: DiscordAccountParams,
+): ChannelDmPolicy | undefined {
+  const accountConfig = readConfiguredAccount(params);
   const rootConfig = params.cfg.channels?.discord as DiscordAccountConfig | undefined;
   return normalizeChannelDmPolicy(accountConfig?.dmPolicy ?? rootConfig?.dmPolicy ?? "pairing");
 }
 
-export function createDiscordActionGate(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): (key: keyof DiscordActionConfig, defaultValue?: boolean) => boolean {
-  const accountId = normalizeAccountId(
-    params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
-  );
+export function createDiscordActionGate(
+  params: DiscordAccountParams,
+): (key: keyof DiscordActionConfig, defaultValue?: boolean) => boolean {
+  const accountConfig = readConfiguredAccount(params);
   return createAccountActionGate({
     baseActions: params.cfg.channels?.discord?.actions,
-    accountActions: resolveDiscordAccountConfig(params.cfg, accountId)?.actions,
+    accountActions: accountConfig?.actions,
   });
 }
 
-export function resolveDiscordAccount(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): ResolvedDiscordAccount {
+export function resolveDiscordAccount(params: DiscordAccountParams): ResolvedDiscordAccount {
   const cfg = selectDiscordRuntimeConfig(params.cfg);
   const accountId = normalizeAccountId(params.accountId ?? resolveDefaultDiscordAccountId(cfg));
   const baseEnabled = cfg.channels?.discord?.enabled !== false;
@@ -132,61 +150,26 @@ export function resolveDiscordMaxLinesPerMessage(params: {
   }).config.maxLinesPerMessage;
 }
 
-function resolveDiscordAccountTokenOwner(params: {
-  cfg: OpenClawConfig;
-  token: string;
-}): string | undefined {
-  const token = params.token.trim();
-  if (!token) {
-    return undefined;
-  }
-  let owner: { accountId: string; priority: number; index: number } | undefined;
-  const accountIds = listDiscordAccountIds(params.cfg);
-  for (const [index, accountId] of accountIds.entries()) {
-    const account = resolveDiscordAccount({ cfg: params.cfg, accountId });
-    const accountToken = account.token.trim();
-    if (!account.enabled || accountToken !== token) {
-      continue;
-    }
-    const priority = account.tokenSource === "config" ? 2 : account.tokenSource === "env" ? 1 : 0;
-    if (!owner || priority > owner.priority) {
-      owner = { accountId: account.accountId, priority, index };
-      continue;
-    }
-    if (priority === owner.priority && index < owner.index) {
-      owner = { accountId: account.accountId, priority, index };
-    }
-  }
-  return owner?.accountId;
-}
-
-function resolveDiscordDuplicateTokenOwner(params: {
-  cfg: OpenClawConfig;
-  account: ResolvedDiscordAccount;
-}): string | undefined {
-  const owner = resolveDiscordAccountTokenOwner({
-    cfg: params.cfg,
-    token: params.account.token,
+function inspectDiscordRuntimeAvailability(account: ResolvedDiscordAccount, cfg: OpenClawConfig) {
+  return resolveDiscordAccountAvailability({
+    account,
+    resolveAccounts: () =>
+      listDiscordAccountIds(cfg).map((accountId) => resolveDiscordAccount({ cfg, accountId })),
   });
-  return owner && owner !== params.account.accountId ? owner : undefined;
 }
 
 export function isDiscordAccountEnabledForRuntime(
   account: ResolvedDiscordAccount,
   cfg: OpenClawConfig,
 ): boolean {
-  return account.enabled && !resolveDiscordDuplicateTokenOwner({ cfg, account });
+  return inspectDiscordRuntimeAvailability(account, cfg).enabled;
 }
 
 export function resolveDiscordAccountDisabledReason(
   account: ResolvedDiscordAccount,
   cfg: OpenClawConfig,
 ): string {
-  if (!account.enabled) {
-    return "disabled";
-  }
-  const owner = resolveDiscordDuplicateTokenOwner({ cfg, account });
-  return owner ? `duplicate bot token; using account "${owner}"` : "disabled";
+  return inspectDiscordRuntimeAvailability(account, cfg).stateReason ?? "disabled";
 }
 
 export function listEnabledDiscordAccounts(cfg: OpenClawConfig): ResolvedDiscordAccount[] {

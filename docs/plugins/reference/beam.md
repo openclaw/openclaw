@@ -1,13 +1,16 @@
 ---
-summary: "Read-only coding-session Beam receiver."
+summary: "Receive coding-session snapshots for viewing and Team handoff."
 read_when:
   - You are installing, configuring, or auditing the beam plugin
-title: "Beam plugin"
+title: "Beam plugin reference"
 ---
 
-# Beam plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
-Read-only coding-session Beam receiver.
+Receive coding-session snapshots for viewing and Team handoff.
 
 ## Distribution
 
@@ -16,7 +19,8 @@ Read-only coding-session Beam receiver.
 
 ## Surface
 
-plugin
+- CLI commands: `openclaw beam`
+- Contracts: `gatewayMethodDispatch`
 
 ## Related docs
 

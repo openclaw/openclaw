@@ -22,33 +22,6 @@ protocol MLXTTSSpeechModel: AnyObject, Sendable {
         referenceText: String?) -> AsyncThrowingStream<[Float], Error>
 }
 
-extension MLXTTSSpeechModel {
-    func generateStream(
-        text: String,
-        voice: String?,
-        language: String?,
-        referenceAudioPath: String?,
-        referenceText: String?) -> AsyncThrowingStream<[Float], Error>
-    {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    try await continuation.yield(self.generate(
-                        text: text,
-                        voice: voice,
-                        language: language,
-                        referenceAudioPath: referenceAudioPath,
-                        referenceText: referenceText))
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-}
-
 typealias MLXTTSModelLoader = @Sendable (String) async throws -> any MLXTTSSpeechModel
 
 public actor MLXTTSHelperService {
@@ -65,6 +38,20 @@ public actor MLXTTSHelperService {
 
     public init(eventSink: @Sendable @escaping (MLXTTSEvent) async -> Void) {
         self.loadModel = { repo in
+            try await MLXTTSModelConfigPreflight.prepare(
+                repo: repo,
+                resolveConfig: { repo in
+                    try await ModelUtils.resolveModelConfig(
+                        repoID: .init(rawValue: repo)
+                            ?? { throw TTSModelError.invalidRepositoryID(repo) }())
+                },
+                recoverModel: { repo in
+                    _ = try await ModelUtils.resolveOrDownloadModel(
+                        repoID: .init(rawValue: repo)
+                            ?? { throw TTSModelError.invalidRepositoryID(repo) }(),
+                        requiredExtension: "safetensors",
+                        additionalMatchingPatterns: ["*.model"])
+                })
             let model = try await TTS.loadModel(modelRepo: repo)
             return UncheckedSpeechModel(raw: model)
         }
@@ -121,7 +108,7 @@ public actor MLXTTSHelperService {
         do {
             model = try await self.model(repo: request.modelRepo)
         } catch is CancellationError {
-            await self.finishCanceled(id: request.id)
+            await self.finish(event: .canceled(id: request.id), id: request.id)
             return
         } catch {
             await self.finish(
@@ -175,7 +162,7 @@ public actor MLXTTSHelperService {
                 await self.finish(event: .audio(audio), id: request.id)
             }
         } catch is CancellationError {
-            await self.finishCanceled(id: request.id)
+            await self.finish(event: .canceled(id: request.id), id: request.id)
         } catch {
             await self.finish(
                 event: .error(MLXTTSErrorEvent(
@@ -197,10 +184,6 @@ public actor MLXTTSHelperService {
         let model = try await loadModel(repo)
         cachedModel = CachedModel(repo: repo, model: model)
         return model
-    }
-
-    private func finishCanceled(id: String) async {
-        await self.finish(event: .canceled(id: id), id: id)
     }
 
     private func finish(event: MLXTTSEvent, id: String) async {

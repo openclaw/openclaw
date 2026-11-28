@@ -1,53 +1,20 @@
-// Deepseek API module exposes the plugin public contract.
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { DEEPSEEK_MODEL_CATALOG } from "./models.js";
-import { resolveDeepSeekV4ThinkingProfile } from "./thinking.js";
 
-type ModelDefinitionDraft = Partial<ModelDefinitionConfig> &
-  Pick<ModelDefinitionConfig, "id" | "name">;
-
-type CatalogMetadataSnapshot = Pick<ModelDefinitionConfig, "contextWindow" | "cost" | "maxTokens">;
-
-// Onboarding wrote these catalog-owned values into user config in prior releases.
-// Refresh only exact matches; any other values remain explicit user overrides.
-const PREVIOUS_BUNDLED_METADATA: Record<string, CatalogMetadataSnapshot> = {
-  "deepseek-v4-flash": {
-    contextWindow: 1_000_000,
-    maxTokens: 384_000,
-    cost: { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
-  },
-  "deepseek-v4-pro": {
-    contextWindow: 1_000_000,
-    maxTokens: 384_000,
-    cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
-  },
-  "deepseek-chat": {
-    contextWindow: 131_072,
-    maxTokens: 8_192,
-    cost: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 },
-  },
-  "deepseek-reasoner": {
-    contextWindow: 131_072,
-    maxTokens: 65_536,
-    cost: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 },
-  },
+// Onboarding wrote these prices with the 1M/384K limits into user config.
+// Refresh only exact snapshots; authored limits and prices remain overrides.
+const PREVIOUS_BUNDLED_COSTS: Record<string, ModelDefinitionConfig["cost"][]> = {
+  "deepseek-v4-flash": [
+    { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
+    { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+  ],
+  "deepseek-v4-pro": [
+    { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+    { input: 0.435, output: 0.87, cacheRead: 0.003625, cacheWrite: 0 },
+  ],
+  "deepseek-v4-flash-vision-exp": [{ input: 0.44, output: 1.32, cacheRead: 0.014, cacheWrite: 0 }],
 };
-
-const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-
-/**
- * Build a lookup from the bundled DeepSeek model catalog so we can hydrate
- * missing metadata (contextWindow, cost, maxTokens) into user-configured
- * model rows without overwriting explicit overrides.
- */
-function buildCatalogIndex(): Map<string, ModelDefinitionConfig> {
-  const index = new Map<string, ModelDefinitionConfig>();
-  for (const model of DEEPSEEK_MODEL_CATALOG) {
-    index.set(model.id, model);
-  }
-  return index;
-}
 
 function isPositiveNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -82,29 +49,11 @@ function hasSameCost(left: unknown, right: ModelDefinitionConfig["cost"] | undef
   );
 }
 
-function isShippedZeroCostAliasSnapshot(
-  raw: ModelDefinitionDraft,
-  previous: CatalogMetadataSnapshot | undefined,
-): boolean {
+function isPreviousBundledMetadataSnapshot(raw: ModelDefinitionConfig): boolean {
   return (
-    (raw.id === "deepseek-chat" || raw.id === "deepseek-reasoner") &&
-    raw.contextWindow === previous?.contextWindow &&
-    raw.maxTokens === previous?.maxTokens &&
-    hasSameCost(raw.cost, ZERO_COST)
-  );
-}
-
-function isPreviousBundledMetadataSnapshot(
-  raw: ModelDefinitionDraft,
-  previous: CatalogMetadataSnapshot | undefined,
-): boolean {
-  if (!previous) {
-    return false;
-  }
-  return (
-    raw.contextWindow === previous.contextWindow &&
-    raw.maxTokens === previous.maxTokens &&
-    (hasSameCost(raw.cost, previous.cost) || isShippedZeroCostAliasSnapshot(raw, previous))
+    raw.contextWindow === 1_000_000 &&
+    raw.maxTokens === 384_000 &&
+    (PREVIOUS_BUNDLED_COSTS[raw.id]?.some((cost) => hasSameCost(raw.cost, cost)) ?? false)
   );
 }
 
@@ -123,69 +72,48 @@ export function normalizeConfig(params: {
     return providerConfig;
   }
 
-  const catalog = buildCatalogIndex();
+  const catalog = new Map(DEEPSEEK_MODEL_CATALOG.map((model) => [model.id, model]));
   let mutated = false;
 
   const nextModels = providerConfig.models.map((model) => {
-    const raw = model as ModelDefinitionDraft;
-    const catalogEntry = catalog.get(raw.id);
+    const catalogEntry = catalog.get(model.id);
     if (!catalogEntry) {
       return model;
     }
-    const previousEntry = PREVIOUS_BUNDLED_METADATA[raw.id];
-    const hasPreviousBundledMetadata = isPreviousBundledMetadataSnapshot(raw, previousEntry);
-
-    let modelMutated = false;
-    const patched: Record<string, unknown> = {};
+    const hasPreviousBundledMetadata = isPreviousBundledMetadataSnapshot(model);
+    const patched: Partial<ModelDefinitionConfig> = {};
 
     // Refresh only whole snapshots written by prior releases. A partial match can
     // be an intentional user cap, so per-field refresh would silently erase it.
-    if (
-      (!isPositiveNumber(raw.contextWindow) ||
-        (hasPreviousBundledMetadata && raw.contextWindow !== catalogEntry.contextWindow)) &&
-      isPositiveNumber(catalogEntry.contextWindow)
-    ) {
-      patched.contextWindow = catalogEntry.contextWindow;
-      modelMutated = true;
+    for (const key of ["contextWindow", "maxTokens"] as const) {
+      if (
+        (!isPositiveNumber(model[key]) ||
+          (hasPreviousBundledMetadata && model[key] !== catalogEntry[key])) &&
+        isPositiveNumber(catalogEntry[key])
+      ) {
+        patched[key] = catalogEntry[key];
+      }
     }
 
-    // Hydrate maxTokens from catalog when missing or not a positive number.
     if (
-      (!isPositiveNumber(raw.maxTokens) ||
-        (hasPreviousBundledMetadata && raw.maxTokens !== catalogEntry.maxTokens)) &&
-      isPositiveNumber(catalogEntry.maxTokens)
-    ) {
-      patched.maxTokens = catalogEntry.maxTokens;
-      modelMutated = true;
-    }
-
-    // Hydrate missing cost or refresh a known catalog-owned snapshot from a prior release.
-    if (
-      (!hasCostValues(raw.cost) || hasPreviousBundledMetadata) &&
+      (!hasCostValues(model.cost) || hasPreviousBundledMetadata) &&
       hasCostValues(catalogEntry.cost) &&
-      !hasSameCost(raw.cost, catalogEntry.cost)
+      !hasSameCost(model.cost, catalogEntry.cost)
     ) {
       patched.cost = catalogEntry.cost;
-      modelMutated = true;
     }
 
-    if (!modelMutated) {
+    if (Object.keys(patched).length === 0) {
       return model;
     }
 
     mutated = true;
-    return { ...raw, ...patched };
+    return { ...model, ...patched };
   });
 
   if (!mutated) {
     return providerConfig;
   }
 
-  return { ...providerConfig, models: nextModels as ModelDefinitionConfig[] };
-}
-
-export function resolveThinkingProfile(params: { provider: string; modelId: string }) {
-  return params.provider.trim().toLowerCase() === "deepseek"
-    ? resolveDeepSeekV4ThinkingProfile(params.modelId)
-    : null;
+  return { ...providerConfig, models: nextModels };
 }

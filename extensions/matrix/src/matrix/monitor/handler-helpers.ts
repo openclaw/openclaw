@@ -1,20 +1,39 @@
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CoreConfig } from "../../types.js";
-import {
-  formatMatrixMediaTooLargeText,
-  formatMatrixMediaUnavailableText,
-  formatMatrixMessageText,
-} from "../media-text.js";
-import { formatPollAsText, isPollStartType, parsePollStartContent } from "../poll-types.js";
+import { formatMatrixMessageText } from "../media-text.js";
+import { formatPollAsText, isPollStartType, parsePollStart } from "../poll-types.js";
+import { RelationType } from "../send/types.js";
 import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
 import { isMatrixAudioContent } from "./preflight-audio.js";
 import type { RoomMessageEventContent, MatrixRawEvent } from "./types.js";
-import { RelationType } from "./types.js";
 
 const MATRIX_TOOL_PROGRESS_MAX_CHARS = 300;
 const MAX_TRACKED_SHARED_DM_CONTEXT_NOTICES = 512;
 type MatrixAllowBotsMode = "off" | "mentions" | "all";
+
+// Matrix rich replies: clients strip the legacy reply fallback (leading `> ` quote lines in body,
+// leading <mx-reply> in formatted_body); the quoted event is fetched separately as reply context.
+export function resolveMatrixCurrentContent(
+  content: RoomMessageEventContent,
+): RoomMessageEventContent {
+  if (!content["m.relates_to"]?.["m.in_reply_to"]?.event_id) {
+    return content;
+  }
+  const { body, formatted_body: html } = content;
+  const plain =
+    typeof body === "string" && /^> (?:\* )?<@[^>\n]+>/.test(body)
+      ? body.replace(/^(?:> .*(?:\n|$))+\n?/, "")
+      : body;
+  const formatted =
+    content.format === "org.matrix.custom.html"
+      ? html?.replace(/^<mx-reply>[\s\S]*?<\/mx-reply>/i, "")
+      : html;
+  return plain === body && formatted === html
+    ? content
+    : { ...content, body: plain, formatted_body: formatted };
+}
 
 export function resolveMatrixMentionPrecheckText(params: {
   eventType: string;
@@ -28,7 +47,7 @@ export function resolveMatrixMentionPrecheckText(params: {
     return params.content.body.trim();
   }
   if (isPollStartType(params.eventType)) {
-    const parsed = parsePollStartContent(params.content as never);
+    const parsed = parsePollStart(params.content as never);
     if (parsed) {
       return formatPollAsText(parsed);
     }
@@ -42,35 +61,6 @@ export function hasBundledMatrixReplacementRelation(event: MatrixRawEvent) {
     return false;
   }
   return relations[RelationType.Replace] !== undefined;
-}
-
-export function resolveMatrixInboundBodyText(params: {
-  rawBody: string;
-  filename?: string;
-  mediaPlaceholder?: string;
-  msgtype?: string;
-  hadMediaUrl: boolean;
-  mediaDownloadFailed: boolean;
-  mediaSizeLimitExceeded?: boolean;
-}): string {
-  if (params.mediaPlaceholder) {
-    return params.rawBody || params.mediaPlaceholder;
-  }
-  if (!params.mediaDownloadFailed || !params.hadMediaUrl) {
-    return params.rawBody;
-  }
-  if (params.mediaSizeLimitExceeded) {
-    return formatMatrixMediaTooLargeText({
-      body: params.rawBody,
-      filename: params.filename,
-      msgtype: params.msgtype,
-    });
-  }
-  return formatMatrixMediaUnavailableText({
-    body: params.rawBody,
-    filename: params.filename,
-    msgtype: params.msgtype,
-  });
 }
 
 export function markTrackedRoomIfFirst(set: Set<string>, roomId: string): boolean {
@@ -87,7 +77,7 @@ export function markTrackedRoomIfFirst(set: Set<string>, roomId: string): boolea
   return true;
 }
 
-export function resolveMatrixSharedDmContextNotice(params: {
+export async function resolveMatrixSharedDmContextNotice(params: {
   storePath: string;
   sessionKey: string;
   roomId: string;
@@ -95,7 +85,7 @@ export function resolveMatrixSharedDmContextNotice(params: {
   dmSessionScope?: "per-user" | "per-room";
   sentRooms: Set<string>;
   logVerboseMessage: (message: string) => void;
-}): string | null {
+}): Promise<string | null> {
   if ((params.dmSessionScope ?? "per-user") === "per-room") {
     return null;
   }
@@ -105,7 +95,7 @@ export function resolveMatrixSharedDmContextNotice(params: {
 
   try {
     const currentSession = resolveMatrixStoredSessionMeta(
-      getSessionEntry({
+      await getSessionEntryAsync({
         storePath: params.storePath,
         sessionKey: params.sessionKey,
       }),
@@ -128,8 +118,7 @@ export function resolveMatrixSharedDmContextNotice(params: {
 
     return [
       "This Matrix DM is sharing a session with another Matrix DM room.",
-      "Use /focus here for a one-off isolated thread session when thread bindings are enabled, or set",
-      "channels.matrix.dm.sessionScope to per-room to isolate each Matrix DM room.",
+      "Set channels.matrix.dm.sessionScope to per-room to isolate each Matrix DM room.",
     ].join(" ");
   } catch (err) {
     params.logVerboseMessage(
@@ -144,30 +133,36 @@ export function resolveMatrixPendingHistoryText(params: {
   content: RoomMessageEventContent;
   mediaUrl?: string;
 }): string {
-  if (params.mentionPrecheckText) {
-    return params.mentionPrecheckText;
-  }
   if (!params.mediaUrl) {
-    return "";
+    return params.mentionPrecheckText;
   }
   const body = typeof params.content.body === "string" ? params.content.body : undefined;
   const filename =
     typeof params.content.filename === "string" ? params.content.filename : undefined;
   const msgtype = typeof params.content.msgtype === "string" ? params.content.msgtype : undefined;
-  return formatMatrixMessageText({ body, filename, msgtype }) ?? "";
+  return formatMatrixMessageText({ body, filename, msgtype }) ?? params.mentionPrecheckText;
+}
+
+export function resolveMatrixInboundMediaContent(content: RoomMessageEventContent) {
+  const file = content.file && typeof content.file === "object" ? content.file : undefined;
+  const info =
+    content.info && typeof content.info === "object"
+      ? (content.info as { mimetype?: string; size?: number })
+      : undefined;
+  const body = normalizeOptionalString(content.body);
+
+  return {
+    url: normalizeOptionalString(content.url) ?? normalizeOptionalString(file?.url),
+    file,
+    body: body ?? "",
+    contentType: info?.mimetype,
+    sizeBytes: typeof info?.size === "number" ? info.size : undefined,
+    originalFilename: normalizeOptionalString(content.filename) ?? body,
+  };
 }
 
 export function isMatrixAudioMediaEnabled(cfg: CoreConfig): boolean {
-  const tools = cfg.tools as
-    | {
-        media?: {
-          audio?: {
-            enabled?: boolean;
-          };
-        };
-      }
-    | undefined;
-  return tools?.media?.audio?.enabled !== false;
+  return cfg.tools?.media?.audio?.enabled !== false;
 }
 
 export function shouldDeferMatrixAudioPreflightForRoomIngress(params: {
@@ -177,22 +172,12 @@ export function shouldDeferMatrixAudioPreflightForRoomIngress(params: {
   if (!isMatrixAudioMediaEnabled(params.cfg)) {
     return false;
   }
-  const content = params.content;
-  const contentUrl = "url" in content && typeof content.url === "string" ? content.url : undefined;
-  const contentFile =
-    "file" in content && content.file && typeof content.file === "object"
-      ? content.file
-      : undefined;
-  const mediaUrl = contentUrl ?? contentFile?.url;
-  const contentInfo =
-    "info" in content && content.info && typeof content.info === "object"
-      ? (content.info as { mimetype?: string })
-      : undefined;
+  const mediaContent = resolveMatrixInboundMediaContent(params.content);
   return (
-    mediaUrl?.startsWith("mxc://") === true &&
+    mediaContent.url?.startsWith("mxc://") === true &&
     isMatrixAudioContent({
-      msgtype: typeof content.msgtype === "string" ? content.msgtype : undefined,
-      mimetype: contentInfo?.mimetype,
+      msgtype: typeof params.content.msgtype === "string" ? params.content.msgtype : undefined,
+      mimetype: mediaContent.contentType,
     })
   );
 }

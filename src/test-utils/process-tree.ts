@@ -1,22 +1,31 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fixtureReceiptClientSource } from "../../test/helpers/fixture-receipts.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 
-export async function writeForkingNoOutputScript(dir: string): Promise<string> {
+export async function writeForkingNoOutputScript(
+  dir: string,
+  receiptEndpoint: string,
+): Promise<string> {
   const scriptPath = path.join(dir, "fork-no-output.sh");
-  // The readiness byte on stderr re-arms the caller's rolling no-output timer,
-  // so the silence window that kills the tree starts only after the forked pid
-  // is on disk; without it, slow spawns under suite load race the first window
-  // and the test reads a missing/empty pid file.
+  const childPath = path.join(dir, "fork-no-output.mjs");
+  // The descendant publishes its PID after installing its keepalive, so callers
+  // can trigger the idle deadline only after a live process tree is ready. It
+  // stays silent: later output refreshes the idle timer and cancels a deadline
+  // the caller already fired.
+  await fs.writeFile(
+    childPath,
+    [
+      fixtureReceiptClientSource(receiptEndpoint),
+      'import { writeFileSync } from "node:fs";',
+      "setInterval(() => {}, 1000);",
+      "writeFileSync(process.env.PID_FILE, String(process.pid));",
+      'sendReceipt(process.env.PID_FILE, "ready");',
+    ].join("\n"),
+  );
   await fs.writeFile(
     scriptPath,
-    [
-      "#!/bin/sh",
-      '"$NODE_BINARY" -e "setInterval(() => {}, 1000)" &',
-      'printf "%s" "$!" > "$PID_FILE"',
-      "echo ready >&2",
-      "sleep 30",
-    ].join("\n"),
+    ["#!/bin/sh", `"$NODE_BINARY" ${JSON.stringify(childPath)} &`, "wait"].join("\n"),
     "utf8",
   );
   await fs.chmod(scriptPath, 0o700);

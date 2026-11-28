@@ -1,16 +1,14 @@
 package ai.openclaw.app.wear
 
-import ai.openclaw.app.chat.BackgroundTask
 import ai.openclaw.app.chat.ChatSwarmDotStatus
 import ai.openclaw.app.chat.ChatSwarmGroup
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 internal fun projectWearAgentPulse(
   gatewayConnected: Boolean,
-  tasks: List<BackgroundTask>?,
   swarmAvailable: Boolean,
   swarmGroups: List<ChatSwarmGroup>,
   pendingApprovalCount: Int,
@@ -19,38 +17,18 @@ internal fun projectWearAgentPulse(
 ): JsonObject =
   buildJsonObject {
     put(
-      "tasks",
-      buildJsonObject {
-        if (!gatewayConnected || tasks == null) {
-          put("state", "unavailable")
-        } else {
-          val queued = tasks.count { task -> task.status == "queued" }
-          val running = tasks.count { task -> task.status == "running" }
-          val completed = tasks.count { task -> task.status == "completed" }
-          val failed =
-            tasks.count { task ->
-              task.status == "failed" || task.status == "cancelled" || task.status == "timed_out"
-            }
-          put("state", "ready")
-          put("scope", "bounded")
-          put("queued", queued)
-          put("running", running)
-          put("completed", completed)
-          put("failed", failed)
-          put("activeAtLimit", queued + running >= ACTIVE_TASK_LIMIT)
-          put("recentAtLimit", completed + failed >= RECENT_TASK_LIMIT)
-        }
-      },
-    )
-    put(
       "swarm",
       buildJsonObject {
         when {
-          !gatewayConnected || !swarmAvailable -> put("state", "unavailable")
+          !gatewayConnected || !swarmAvailable -> {
+            put("state", "unavailable")
+          }
+
           swarmGroups.isEmpty() -> {
             put("state", "idle")
             put("scope", "selected-session")
           }
+
           else -> {
             val phaseBuckets = MutableList(MAX_PHASE_BUCKETS) { MutablePhaseCounts() }
             var morePhases = false
@@ -77,21 +55,19 @@ internal fun projectWearAgentPulse(
             put("failed", swarmGroups.sumOf(ChatSwarmGroup::failed))
             put(
               "phases",
-              buildJsonArray {
+              JsonArray(
                 phaseBuckets
                   .dropLastWhile { phase -> !phase.hasData() }
-                  .forEach { phase ->
-                    add(
-                      buildJsonObject {
-                        put("queued", phase.queued)
-                        put("running", phase.running)
-                        put("done", phase.done)
-                        put("failed", phase.failed)
-                        put("hidden", phase.hidden)
-                      },
-                    )
-                  }
-              },
+                  .map { phase ->
+                    buildJsonObject {
+                      put("queued", phase.queued)
+                      put("running", phase.running)
+                      put("done", phase.done)
+                      put("failed", phase.failed)
+                      put("hidden", phase.hidden)
+                    }
+                  },
+              ),
             )
             put("morePhases", morePhases)
           }
@@ -101,15 +77,15 @@ internal fun projectWearAgentPulse(
     put(
       "approvals",
       buildJsonObject {
-        when {
-          !gatewayConnected -> put("state", "unavailable")
-          approvalsRefreshing -> put("state", "refreshing")
-          !approvalsAvailable -> put("state", "unavailable")
-          else -> {
-            put("state", "ready")
-            put("pending", pendingApprovalCount.coerceAtLeast(0))
+        val state =
+          when {
+            !gatewayConnected -> "unavailable"
+            approvalsRefreshing -> "refreshing"
+            !approvalsAvailable -> "unavailable"
+            else -> "ready"
           }
-        }
+        put("state", state)
+        if (state == "ready") put("pending", pendingApprovalCount.coerceAtLeast(0))
       },
     )
   }
@@ -124,6 +100,4 @@ private data class MutablePhaseCounts(
   fun hasData(): Boolean = queued != 0 || running != 0 || done != 0 || failed != 0 || hidden != 0
 }
 
-private const val ACTIVE_TASK_LIMIT = 100
-private const val RECENT_TASK_LIMIT = 50
 private const val MAX_PHASE_BUCKETS = 8

@@ -1,12 +1,13 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
@@ -20,6 +21,13 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewayDevicePairingRuntimeTest {
+  private val runtimes = mutableListOf<NodeRuntime>()
+
+  @After
+  fun closeRuntimes() {
+    runtimes.forEach(::closeNodeRuntimeTestFixture)
+  }
+
   @Before
   fun clearPlainPrefs() {
     RuntimeEnvironment
@@ -40,10 +48,17 @@ class GatewayDevicePairingRuntimeTest {
       runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
         requests += method to params
         when (method) {
-          "device.pair.approve" -> """{"requestId":"request-1","device":{"deviceId":"device-1"}}"""
-          "device.pair.list" ->
+          "device.pair.approve" -> {
+            """{"requestId":"request-1","device":{"deviceId":"device-1"}}"""
+          }
+
+          "device.pair.list" -> {
             """{"pending":[],"paired":[{"deviceId":"device-1","displayName":"Pixel","roles":["operator"],"scopes":["operator.read"],"tokens":[],"approvedAtMs":2}]}"""
-          else -> error("unexpected method $method")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -96,12 +111,19 @@ class GatewayDevicePairingRuntimeTest {
       seedNodesDevices(runtime, pending = listOf(pendingDevice()))
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         when (method) {
-          "device.pair.approve" ->
+          "device.pair.approve" -> {
             throw GatewayRequestRejected(
-              GatewaySession.ErrorShape("INVALID_REQUEST", "device pairing approval denied"),
+              ErrorShape("INVALID_REQUEST", "device pairing approval denied"),
             )
-          "device.pair.list" -> """{"pending":[{"requestId":"request-1","deviceId":"device-1","roles":["operator"],"scopes":["operator.read"]}],"paired":[]}"""
-          else -> error("unexpected method $method")
+          }
+
+          "device.pair.list" -> {
+            """{"pending":[{"requestId":"request-1","deviceId":"device-1","roles":["operator"],"scopes":["operator.read"]}],"paired":[]}"""
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -119,7 +141,7 @@ class GatewayDevicePairingRuntimeTest {
         "openclaw.node.device.pairing.runtime.test.${UUID.randomUUID()}",
         android.content.Context.MODE_PRIVATE,
       )
-    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
+    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs)).also(runtimes::add)
   }
 
   private fun seedConnectedRuntime(runtime: NodeRuntime) {

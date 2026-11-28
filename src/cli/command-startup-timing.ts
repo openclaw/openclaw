@@ -1,22 +1,9 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { DiagnosticsTimelineOptions as CliCommandStartupTimingOptions } from "../infra/diagnostics-timeline.js";
+import { measureGatewayBootstrapStep } from "./startup-trace.js";
 
 type DiagnosticsTimelineModule = typeof import("../infra/diagnostics-timeline.js");
 
-type CliCommandStartupTimingOptions = {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-};
-
 let diagnosticsTimelineModulePromise: Promise<DiagnosticsTimelineModule> | undefined;
-
-function hasDiagnosticsTimelinePath(env: NodeJS.ProcessEnv): boolean {
-  return Boolean(env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH?.trim());
-}
-
-function loadDiagnosticsTimelineModule(): Promise<DiagnosticsTimelineModule> {
-  diagnosticsTimelineModulePromise ??= import("../infra/diagnostics-timeline.js");
-  return diagnosticsTimelineModulePromise;
-}
 
 /** Measures command-specific work hidden inside Commander parse/action dispatch. */
 export async function measureCliCommandStartup<T>(
@@ -25,11 +12,15 @@ export async function measureCliCommandStartup<T>(
   options: CliCommandStartupTimingOptions = {},
 ): Promise<T> {
   const env = options.env ?? process.env;
-  if (!hasDiagnosticsTimelinePath(env)) {
-    return await run();
+  const tracedRun = stage.startsWith("doctor.config-preflight.")
+    ? run
+    : () => measureGatewayBootstrapStep(`cli.command.${stage}`, run);
+  if (!env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH?.trim()) {
+    return await tracedRun();
   }
-  const { measureDiagnosticsTimelineSpan } = await loadDiagnosticsTimelineModule();
-  return await measureDiagnosticsTimelineSpan("cli.command-startup", run, {
+  diagnosticsTimelineModulePromise ??= import("../infra/diagnostics-timeline.js");
+  const { measureDiagnosticsTimelineSpan } = await diagnosticsTimelineModulePromise;
+  return await measureDiagnosticsTimelineSpan("cli.command-startup", tracedRun, {
     config: options.config,
     env,
     phase: "cli.command-startup",

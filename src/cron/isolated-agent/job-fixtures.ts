@@ -1,3 +1,6 @@
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "../scheduled-occurrence.test-support.js";
 /** Shared loose cron fixtures for isolated-agent tests. */
 type LooseRecord = Record<string, unknown>;
 
@@ -18,12 +21,24 @@ export function makeIsolatedAgentParamsFixture(overrides?: LooseRecord) {
   // without repeating unrelated scheduler defaults.
   const jobOverrides =
     overrides && "job" in overrides ? (overrides.job as LooseRecord | undefined) : undefined;
-  return {
-    cfg: {},
+  const cfg: OpenClawConfig = {};
+  const params = {
+    occurrence: TEST_SCHEDULED_OCCURRENCE,
+    deliveryAttemptFence: null,
+    cfg,
     deps: {} as never,
     job: makeIsolatedAgentJobFixture(jobOverrides),
     message: "test",
     sessionKey: "cron:test",
     ...overrides,
   };
+  // Admission and the synthetic session must name the same physical store.
+  if (params.cfg.session?.store === undefined) {
+    params.cfg = {
+      ...params.cfg,
+      session: { ...params.cfg.session, store: "/tmp/store.json" },
+    };
+  }
+  setRuntimeConfigSnapshot(params.cfg);
+  return params;
 }

@@ -3,7 +3,7 @@ const HOST_DESKTOP_GUIDANCE = {
   darwin:
     "Enable System Settings -> General -> Sharing -> Screen Sharing, or run `sudo launchctl enable system/com.apple.screensharing && sudo launchctl kickstart -k system/com.apple.screensharing`.",
   linux:
-    "Install the managed desktop binaries with `apt install tigervnc-standalone-server tigervnc-tools xfce4-session`, enable desktop.host.managed, or run a loopback-only VNC server yourself. gnome-remote-desktop uses unsupported VeNCrypt.",
+    "Install the managed desktop binaries with `apt install tigervnc-standalone-server tigervnc-tools xfce4-session dbus-daemon`, enable desktop.host.managed, or run a loopback-only VNC server yourself. For optional managed desktop audio, also install pulseaudio pulseaudio-utils; audio uses a private null sink, never the host microphone or physical system mix. gnome-remote-desktop uses unsupported VeNCrypt.",
   win32:
     "Install TightVNC with `SET_USEVNCAUTHENTICATION=1 SET_ALLOWLOOPBACK=1 ACCEPTHTTPCONNECTIONS=0` and listen on 127.0.0.1:5900. Locked or UAC sessions may render black.",
 } as const;

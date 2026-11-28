@@ -1,176 +1,92 @@
-// Covers provider model helper behavior for plugin model registries.
 import type { ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
   resolveFamilyForwardCompatModel,
-} from "./provider-model-helpers.js";
+} from "../plugin-sdk/provider-model-shared.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
-import type { ProviderResolveDynamicModelContext } from "./types.js";
 
-function createContext(models: ProviderRuntimeModel[]): ProviderResolveDynamicModelContext {
+const provider = "test-provider";
+const modelId = "next-model";
+const identity = { id: modelId, name: modelId, provider };
+
+function template(id: string, patch: Partial<ProviderRuntimeModel> = {}): ProviderRuntimeModel {
+  return { id, name: id, provider, api: "openai-completions", ...patch } as ProviderRuntimeModel;
+}
+
+function input(models: ProviderRuntimeModel[]) {
   return {
-    provider: "test-provider",
-    modelId: "next-model",
-    modelRegistry: {
-      find(providerId: string, modelId: string) {
-        return (
-          models.find((model) => model.provider === providerId && model.id === modelId) ?? null
-        );
-      },
-    } as ModelRegistry,
+    providerId: provider,
+    modelId,
+    ctx: {
+      provider,
+      modelId,
+      modelRegistry: {
+        find: (owner: string, id: string) =>
+          models.find((model) => model.provider === owner && model.id === id) ?? null,
+      } as ModelRegistry,
+    },
   };
 }
+const transport = { api: "anthropic-messages", baseUrl: "https://models.example" } as const;
 
-function createTemplateModel(
-  id: string,
-  overrides: Partial<ProviderRuntimeModel> = {},
-): ProviderRuntimeModel {
-  return {
-    id,
-    name: id,
-    provider: "test-provider",
-    api: "openai-completions",
-    ...overrides,
-  } as ProviderRuntimeModel;
-}
-
-function expectClonedTemplateModel(
-  params: Parameters<typeof cloneFirstTemplateModel>[0],
-  expected: Record<string, unknown> | undefined,
-) {
-  const model = cloneFirstTemplateModel(params);
-  if (expected == null) {
-    expect(model).toBeUndefined();
-    return;
-  }
-  expect(model).toEqual(expected);
-}
-
-function expectPrefixMatch(params: {
-  id: string;
-  candidates: readonly string[];
-  expected: boolean;
-}) {
-  expect(matchesExactOrPrefix(params.id, params.candidates)).toBe(params.expected);
-}
-
-function expectPrefixMatchCase(params: {
-  id: string;
-  candidates: readonly string[];
-  expected: boolean;
-}) {
-  expectPrefixMatch(params);
-}
-
-describe("cloneFirstTemplateModel", () => {
-  it.each([
-    {
-      name: "clones the first matching template and applies patches",
-      params: {
-        providerId: "test-provider",
-        modelId: " next-model ",
-        templateIds: ["missing", "template-a", "template-b"],
-        ctx: createContext([createTemplateModel("template-a", { name: "Template A" })]),
-        patch: { reasoning: true },
-      },
-      expected: {
-        id: "next-model",
-        name: "next-model",
-        provider: "test-provider",
-        api: "openai-completions",
-        reasoning: true,
-      },
-    },
-    {
-      name: "returns undefined when no template exists",
-      params: {
-        providerId: "test-provider",
-        modelId: "next-model",
-        templateIds: ["missing"],
-        ctx: createContext([]),
-      },
-      expected: undefined,
-    },
-  ] as const)("$name", ({ params, expected }) => {
-    expectClonedTemplateModel(params, expected);
+it.each([false, true])("clones and normalizes the first available template (found=%s)", (found) => {
+  const original = template("template-a", { name: "Template A" });
+  const model = cloneFirstTemplateModel({
+    ...input(found ? [original] : []),
+    modelId: " next-model ",
+    templateIds: ["missing", "template-a", "template-b"],
+    patch: { reasoning: true, ...transport, baseUrl: transport.baseUrl + "/v1" },
   });
+  expect(model).toEqual(found ? template(modelId, { ...transport, reasoning: true }) : undefined);
+  expect([original.api, original.baseUrl]).toEqual(["openai-completions", undefined]);
 });
 
-describe("matchesExactOrPrefix", () => {
-  it.each([
-    {
-      id: "MiniMax-M2.7",
-      candidates: ["minimax-m2.7"],
-      expected: true,
-    },
-    {
-      id: "minimax-m2.7-highspeed",
-      candidates: ["MiniMax-M2.7"],
-      expected: true,
-    },
-    {
-      id: "glm-5",
-      candidates: ["minimax-m2.7"],
-      expected: false,
-    },
-  ] as const)("matches $id against prefixes", expectPrefixMatchCase);
+it.each([
+  ["MiniMax-M2.7", "minimax-m2.7", true],
+  ["minimax-m2.7-highspeed", "MiniMax-M2.7", true],
+  ["glm-5", "minimax-m2.7", false],
+] as const)("matchesExactOrPrefix: %s against prefix %s: %s", (id, candidate, expected) => {
+  expect(matchesExactOrPrefix(id, [candidate])).toBe(expected);
 });
 
-describe("resolveFamilyForwardCompatModel", () => {
-  it("selects the first matching family and ordered cross-provider template", () => {
-    const ctx = createContext([
-      createTemplateModel("template-b", { provider: "template-provider", reasoning: false }),
-    ]);
-
-    expect(
-      resolveFamilyForwardCompatModel({
-        providerId: "test-provider",
-        ctx,
-        cases: [
-          {
-            match: (id) => id.startsWith("next-"),
-            templateSources: [
-              { templateIds: ["missing"] },
-              { providerId: "template-provider", templateIds: ["template-b"] },
-            ],
-            patch: { provider: "test-provider", reasoning: true },
-          },
+it.each([false, true])("normalizes a family model with a cross-provider template=%s", (found) => {
+  const patch = { ...transport, provider, baseUrl: transport.baseUrl + "/v1/", reasoning: true };
+  const model = resolveFamilyForwardCompatModel({
+    ...input(
+      found ? [template("template-b", { provider: "template-provider", reasoning: false })] : [],
+    ),
+    cases: [
+      {
+        match: (id) => id === modelId,
+        templateSources: [
+          { templateIds: ["missing"] },
+          { providerId: "template-provider", templateIds: ["template-b"] },
         ],
-      }),
-    ).toMatchObject({
-      id: "next-model",
-      name: "next-model",
-      provider: "test-provider",
-      reasoning: true,
-    });
+        patch: found
+          ? patch
+          : ({ normalizedModelId }) => ({ ...patch, reasoning: normalizedModelId === modelId }),
+      },
+    ],
+    synthesize: !found,
   });
+  expect(model).toMatchObject({ ...identity, ...transport, reasoning: true });
+});
 
-  it("synthesizes a normalized model when a matched family has no template", () => {
-    expect(
-      resolveFamilyForwardCompatModel({
-        providerId: "test-provider",
-        ctx: createContext([]),
-        cases: [
-          {
-            match: (id) => id === "next-model",
-            templateIds: ["missing"],
-            patch: ({ normalizedModelId }) => ({
-              api: "openai-responses",
-              provider: "test-provider",
-              reasoning: normalizedModelId === "next-model",
-            }),
-          },
-        ],
-        synthesize: true,
-      }),
-    ).toMatchObject({
-      id: "next-model",
-      name: "next-model",
-      provider: "test-provider",
-      api: "openai-responses",
-      reasoning: true,
-    });
+it.each([true, false])("preserves existing rows only after a family matches (%s)", (matches) => {
+  const existing = template(modelId, {
+    ...transport,
+    baseUrl: transport.baseUrl + "/v1",
   });
+  const patch = { name: "must-not-replace-existing" };
+  const entry = { match: () => matches, patch };
+  const model = resolveFamilyForwardCompatModel({
+    ...input([existing]),
+    cases: [entry],
+    preserveExisting: true,
+    synthesize: true,
+  });
+  expect(model).toBe(matches ? existing : undefined);
+  expect(existing.baseUrl).toBe("https://models.example/v1");
 });

@@ -1,6 +1,6 @@
 // Matrix API module exposes the plugin public contract.
-export { matrixPlugin } from "./src/channel.js";
 export { MatrixClient } from "./src/matrix/sdk.js";
+export { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
 export {
   openMatrixIdbSnapshotStoreOptions,
   openMatrixRecoveryKeyStoreOptions,
@@ -8,8 +8,8 @@ export {
 export {
   normalizeMatrixStorageMetadata,
   openMatrixStorageMetaStoreOptions,
-} from "./src/matrix/client/storage.js";
-export type { MatrixStorageMetadata } from "./src/matrix/client/storage.js";
+} from "./src/matrix/client/storage-metadata.js";
+export type { MatrixStorageMetadata } from "./src/matrix/client/storage-metadata.js";
 export type {
   EncryptedFile,
   MatrixDeviceVerificationStatus,
@@ -28,4 +28,5 @@ export type {
   MatrixVerificationMethod,
   MatrixVerificationSummary,
 } from "./src/matrix/sdk/verification-manager.js";
+export { resolveMatrixMonitorAccessState } from "./src/matrix/monitor/access-state.js";
 export { setMatrixRuntime } from "./src/runtime.js";

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 345049,
-  "reason": "streamed-markdown highlighting changes (#127749, #127754) consumed the ratchet",
-  "updatedAt": "2026-08-22"
+  "startupJsGzipBytes": 91561,
+  "reason": "PR #195865 (L310): warm cached-page reveal latch in startup boot owners; lead byte exception",
+  "updatedAt": "2026-11-09"
 }

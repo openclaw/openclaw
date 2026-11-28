@@ -61,31 +61,49 @@ public struct TalkDirectiveParseResult: Equatable, Sendable {
     }
 }
 
+public enum TalkVoiceAliases {
+    static func normalizedMap(_ value: AnyCodable?) -> [String: String] {
+        value?.dictionaryValue?.reduce(into: [:]) { result, entry in
+            let key = entry.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let value = entry.value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !key.isEmpty, !value.isEmpty else { return }
+            result[key] = value
+        } ?? [:]
+    }
+
+    public static func resolve(_ value: String?, aliases: [String: String]) -> String? {
+        guard let trimmed = value?.trimmedNonEmpty else { return nil }
+        if let mapped = aliases[trimmed.lowercased()] {
+            return mapped
+        }
+        if aliases.values.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            return trimmed
+        }
+        return self.isLikelyID(trimmed) ? trimmed : nil
+    }
+
+    public static func isLikelyID(_ value: String) -> Bool {
+        guard value.count >= 10 else { return false }
+        return value.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
+    }
+}
+
 public enum TalkDirectiveParser {
     public static func parse(_ text: String) -> TalkDirectiveParseResult {
         let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
-        var lines = normalized.split(separator: "\n", omittingEmptySubsequences: false)
-        guard !lines.isEmpty else { return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: []) }
-
+        let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false)
         guard let firstNonEmptyIndex =
             lines.firstIndex(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         else {
             return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: [])
         }
 
-        var firstNonEmpty = firstNonEmptyIndex
-        if firstNonEmpty > 0 {
-            lines.removeSubrange(0..<firstNonEmpty)
-            firstNonEmpty = 0
-        }
-
-        let head = lines[firstNonEmpty].trimmingCharacters(in: .whitespacesAndNewlines)
+        let head = lines[firstNonEmptyIndex].trimmingCharacters(in: .whitespacesAndNewlines)
         guard head.hasPrefix("{"), head.hasSuffix("}") else {
             return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: [])
         }
 
-        guard let data = head.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let json = try? JSONSerialization.jsonObject(with: Data(head.utf8)) as? [String: Any]
         else {
             return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: [])
         }
@@ -109,24 +127,7 @@ public enum TalkDirectiveParser {
             latencyTier: intValue(json, keys: ["latency", "latency_tier", "latencyTier"]),
             once: boolValue(json, keys: ["once"]))
 
-        let hasDirective = [
-            directive.voiceId,
-            directive.modelId,
-            directive.speed.map { "\($0)" },
-            directive.rateWPM.map { "\($0)" },
-            directive.stability.map { "\($0)" },
-            directive.similarity.map { "\($0)" },
-            directive.style.map { "\($0)" },
-            directive.speakerBoost.map { "\($0)" },
-            directive.seed.map { "\($0)" },
-            directive.normalize,
-            directive.language,
-            directive.outputFormat,
-            directive.latencyTier.map { "\($0)" },
-            directive.once.map { "\($0)" },
-        ].contains { $0 != nil }
-
-        guard hasDirective else {
+        guard directive != TalkDirective() else {
             return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: [])
         }
 
@@ -147,24 +148,18 @@ public enum TalkDirectiveParser {
         ])
         let unknownKeys = json.keys.filter { !knownKeys.contains($0.lowercased()) }.sorted()
 
-        lines.remove(at: firstNonEmpty)
-        if firstNonEmpty < lines.count {
-            let next = lines[firstNonEmpty].trimmingCharacters(in: .whitespacesAndNewlines)
-            if next.isEmpty {
-                lines.remove(at: firstNonEmpty)
-            }
+        var body = lines.dropFirst(firstNonEmptyIndex + 1)
+        if body.first?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+            body = body.dropFirst()
         }
 
-        let stripped = lines.joined(separator: "\n")
+        let stripped = body.joined(separator: "\n")
         return TalkDirectiveParseResult(directive: directive, stripped: stripped, unknownKeys: unknownKeys)
     }
 
     private static func stringValue(_ dict: [String: Any], keys: [String]) -> String? {
         for key in keys {
-            if let value = dict[key] as? String {
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { return trimmed }
-            }
+            if let value = (dict[key] as? String)?.trimmedNonEmpty { return value }
         }
         return nil
     }
@@ -181,7 +176,7 @@ public enum TalkDirectiveParser {
     private static func intValue(_ dict: [String: Any], keys: [String]) -> Int? {
         for key in keys {
             if let value = dict[key] as? Int { return value }
-            if let value = dict[key] as? Double { return Int(value) }
+            if let value = dict[key] as? Double { return Int(exactly: value.rounded(.towardZero)) }
             if let value = dict[key] as? String, let parsed = Int(value) { return parsed }
         }
         return nil

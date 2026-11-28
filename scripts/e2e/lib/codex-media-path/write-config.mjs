@@ -1,7 +1,6 @@
-// Writes config fixtures for Codex media-path E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
-import { readPositiveIntEnv, readTcpPortEnv } from "./limits.mjs";
+import { readPositiveIntEnv, readTcpPortEnv } from "../env-limits.mjs";
 
 function requireEnv(name) {
   const value = process.env[name];
@@ -17,6 +16,15 @@ const workspaceDir = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
 const token = requireEnv("OPENCLAW_GATEWAY_TOKEN");
 const timeoutSeconds = readPositiveIntEnv("OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS", 180);
 const gatewayPort = readTcpPortEnv("PORT", 18790);
+const agentConfig = {
+  model: { primary: "openai/gpt-5.6-luna", fallbacks: [] },
+  models: {
+    "openai/gpt-5.6-luna": {
+      agentRuntime: { id: "codex" },
+    },
+  },
+  workspace: workspaceDir,
+};
 
 const config = {
   gateway: {
@@ -37,7 +45,6 @@ const config = {
             command: "node",
             args: ["scripts/e2e/lib/codex-media-path/fake-codex-app-server.mjs"],
             requestTimeoutMs: timeoutSeconds * 1000,
-            turnCompletionIdleTimeoutMs: timeoutSeconds * 1000,
           },
         },
       },
@@ -45,28 +52,13 @@ const config = {
   },
   agents: {
     defaults: {
-      model: { primary: "openai/gpt-5.6-luna", fallbacks: [] },
-      models: {
-        "openai/gpt-5.6-luna": {
-          agentRuntime: { id: "codex" },
-        },
-      },
-      workspace: workspaceDir,
+      ...agentConfig,
       skipBootstrap: true,
       timeoutSeconds,
       sandbox: { mode: "off" },
     },
     entries: {
-      main: {
-        default: true,
-        model: { primary: "openai/gpt-5.6-luna", fallbacks: [] },
-        models: {
-          "openai/gpt-5.6-luna": {
-            agentRuntime: { id: "codex" },
-          },
-        },
-        workspace: workspaceDir,
-      },
+      main: agentConfig,
     },
   },
   skills: { allowBundled: [] },

@@ -1,6 +1,6 @@
 // Keeps child-process diagnostic tails byte-bounded without splitting UTF-8 characters.
 
-function outputText(value: string | Buffer | null | undefined): string {
+export function spawnOutputText(value: string | Buffer | null | undefined): string {
   if (typeof value === "string") {
     return value;
   }
@@ -10,7 +10,7 @@ function outputText(value: string | Buffer | null | undefined): string {
   return "";
 }
 
-function decodeUtf8Tail(buffer: Buffer): string {
+export function decodeUtf8Tail(buffer: Buffer): string {
   let start = 0;
   while (start < buffer.length && (buffer[start]! & 0b1100_0000) === 0b1000_0000) {
     start += 1;
@@ -19,7 +19,7 @@ function decodeUtf8Tail(buffer: Buffer): string {
 }
 
 export function outputTail(value: string | Buffer | null | undefined, maxBytes: number): string {
-  const text = outputText(value).trim();
+  const text = spawnOutputText(value).trim();
   if (!text) {
     return "";
   }

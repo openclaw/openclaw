@@ -1,38 +1,21 @@
 import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
-import { sessionRouteNamespaceFromPath } from "../../app-route-paths.ts";
-import type { RouteId } from "../../app-routes.ts";
+import { isApplicationEntryPath, sameRouteLocation } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { readSessionDefaults } from "../../app/gateway-store.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 
-export function isDefaultChatLanding(
-  location: RouteLocation,
-  basePath: string,
-  routeIdFromPath: (pathname: string, basePath: string) => string | null,
-): boolean {
-  const query = new URLSearchParams(location.search);
-  const hash = new URLSearchParams(location.hash.startsWith("#") ? location.hash.slice(1) : "");
-  if (query.has("session") || hash.has("session")) {
-    return false;
-  }
-  const routeId = routeIdFromPath(location.pathname, basePath);
-  if (routeId !== null && routeId !== "chat") {
-    return false;
-  }
-  return sessionRouteNamespaceFromPath(location.pathname, basePath) === null;
-}
-
-function locationsMatch(left: RouteLocation, right: RouteLocation): boolean {
-  // Session aliases are canonicalized into the pathname before this guard;
-  // the removed query-based session identity needs no separate comparison.
+export function isDefaultChatLanding(location: RouteLocation, basePath: string): boolean {
+  // Only an implicit landing may adopt a saved session or first-run setup.
+  // Unknown deep links belong to the router's visible not-found state.
   return (
-    left.pathname === right.pathname && left.search === right.search && left.hash === right.hash
+    !new URLSearchParams(location.search + "&" + location.hash.slice(1)).has("session") &&
+    (isApplicationEntryPath(location.pathname, basePath) ||
+      /^\/chat(?:\/main)?\/?$/u.test(location.pathname.slice(basePath.length)))
   );
 }
 
 export async function startModelSetupFirstRunRedirectAfterLocation(params: {
-  context: ApplicationContext<RouteId>;
+  context: ApplicationContext;
   enabled: boolean;
   history: Pick<RouterHistory, "location" | "replace">;
   initialLocationReady: Promise<RouteLocation>;
@@ -43,7 +26,7 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
 }): Promise<() => void> {
   const initialLocation = await params.initialLocationReady;
   if (
-    !locationsMatch(params.history.location(), initialLocation) &&
+    !sameRouteLocation(params.history.location(), initialLocation) &&
     params.shouldInstallLocation?.() !== false
   ) {
     if (params.installLocation) {
@@ -56,31 +39,18 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
     params.onInitialDecision?.();
     return () => undefined;
   }
-  return startModelSetupFirstRunRedirect({
-    context: params.context,
-    isStillDefaultLanding: () => locationsMatch(params.history.location(), initialLocation),
-    redirect:
-      params.redirect ?? (() => params.context.replace("model-setup", { search: "?firstRun=1" })),
-    onInitialDecision: params.onInitialDecision ?? (() => undefined),
-  });
-}
-
-function startModelSetupFirstRunRedirect(params: {
-  context: ApplicationContext<RouteId>;
-  isStillDefaultLanding: () => boolean;
-  redirect: () => void;
-  onInitialDecision: () => void;
-}): () => void {
+  const { context } = params;
+  const isStillDefaultLanding = () => sameRouteLocation(params.history.location(), initialLocation);
+  const redirect =
+    params.redirect ?? (() => context.replace("model-setup", { search: "?firstRun=1" }));
   let initialDecisionSettled = false;
   const settleInitialDecision = () => {
     if (!initialDecisionSettled) {
       initialDecisionSettled = true;
-      params.onInitialDecision();
+      params.onInitialDecision?.();
     }
   };
-  const handleSnapshot: Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0] = (
-    snapshot,
-  ) => {
+  const handleSnapshot: Parameters<ApplicationContext["gateway"]["subscribe"]>[0] = (snapshot) => {
     if (initialDecisionSettled) {
       return;
     }
@@ -93,23 +63,52 @@ function startModelSetupFirstRunRedirect(params: {
       }
       return;
     }
-    const defaults = snapshot.hello ? readSessionDefaults(snapshot.hello) : undefined;
-    const selectedAgentId = params.context.agentSelection.state.selectedId?.trim() || null;
-    const defaultAgentId = defaults?.defaultAgentId?.trim() || null;
-    const usesDefaultAgent = selectedAgentId === null || selectedAgentId === defaultAgentId;
+    const defaults = readSessionDefaults(snapshot);
+    const selectedAgentId = context.agentSelection.state.selectedId?.trim() || null;
     if (
-      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-      isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") === true &&
-      defaults?.modelConfigured === false &&
-      usesDefaultAgent &&
-      params.isStillDefaultLanding()
+      canCallGatewayMethod(snapshot, "openclaw.setup.detect", "operator.admin") &&
+      (!selectedAgentId || selectedAgentId === defaults?.defaultAgentId?.trim()) &&
+      isStillDefaultLanding()
     ) {
-      params.redirect();
+      if (defaults?.modelConfigured === false) {
+        redirect();
+      } else if (defaults?.modelConfigured) {
+        try {
+          if (localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")) {
+            const ownerRevision = context.gateway.connectionRevision;
+            // Crypto stays lazy; only an existing receipt suspends startup.
+            void import("./first-run-activation-receipt.ts")
+              .then(({ readFirstRunActivationReceipt }) => {
+                const current = context.gateway.snapshot;
+                const receipt =
+                  !initialDecisionSettled &&
+                  current.phase === "connected" &&
+                  current.client === snapshot.client &&
+                  current.hello === snapshot.hello &&
+                  context.gateway.connectionRevision === ownerRevision &&
+                  (context.agentSelection.state.selectedId?.trim() || null) === selectedAgentId &&
+                  isStillDefaultLanding()
+                    ? readFirstRunActivationReceipt(context)
+                    : null;
+                // A Models sign-in record reopens its own dialog, not first-run setup.
+                if (receipt && receipt.kind !== "provider-login") {
+                  redirect();
+                }
+                settleInitialDecision();
+              })
+              .catch(settleInitialDecision);
+            return;
+          }
+        } catch {
+          // Blocked browser storage cannot own durable activation recovery.
+        }
+      }
     }
     settleInitialDecision();
   };
-  const unsubscribe = params.context.gateway.subscribe(handleSnapshot);
-  handleSnapshot(params.context.gateway.snapshot);
+  // The first terminal connection decision settles the router gate exactly once.
+  const unsubscribe = context.gateway.subscribe(handleSnapshot);
+  handleSnapshot(context.gateway.snapshot);
   return () => {
     unsubscribe();
     settleInitialDecision();

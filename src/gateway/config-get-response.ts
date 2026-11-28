@@ -27,9 +27,10 @@ function createConfigGetResponse(
   return {
     ...redacted,
     hash: redacted.hash ? revisionProjector.projectRawHash(redacted.hash) : redacted.hash,
-    configRevisionHash: revisionProjector.projectResolvedHash(
-      hashRuntimeConfigValue(snapshot.sourceConfig),
-    ),
+    // Diagnostic snapshots have no resolved revision until config is valid.
+    configRevisionHash: snapshot.valid
+      ? revisionProjector.projectResolvedHash(hashRuntimeConfigValue(snapshot.sourceConfig))
+      : null,
     appliedConfigHash: appliedConfigHash
       ? revisionProjector.projectResolvedHash(appliedConfigHash)
       : null,
@@ -39,21 +40,24 @@ function createConfigGetResponse(
 /** Reads and projects config.get once per watcher-owned runtime and plugin-schema revision. */
 export async function readConfigGetResponse(params: {
   getHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
-  loadUiHints: () => Parameters<typeof redactConfigSnapshot>[1];
   revisionProjector: GatewayConfigRevisionProjector;
 }): Promise<ConfigGetResponse> {
-  const getHotReloadStatus = params.getHotReloadStatus;
-  if (!getHotReloadStatus || getHotReloadStatus() !== "active") {
+  const readResponse = async () => {
+    const { loadGatewayConfigRedactionHints } = await import("../config/runtime-schema.js");
     return createConfigGetResponse(
       await readConfigFileSnapshot(),
-      params.loadUiHints(),
+      loadGatewayConfigRedactionHints(),
       params.revisionProjector,
     );
+  };
+  const getHotReloadStatus = params.getHotReloadStatus;
+  if (!getHotReloadStatus || getHotReloadStatus() !== "active") {
+    return readResponse();
   }
   const appliedConfigHash = getRuntimeConfigAppliedHash();
   const pluginRegistryVersion = getActivePluginRegistryVersion();
-  // With an active watcher, cache hits never re-read the file. External edits
-  // become visible after its successful commit; the write path invalidates early.
+  // With an active watcher, cache hits never re-read the file. Candidate
+  // observation invalidates persisted bytes before runtime acceptance.
   if (
     configGetResponseCache?.getHotReloadStatus === getHotReloadStatus &&
     configGetResponseCache.revisionProjector === params.revisionProjector &&
@@ -63,12 +67,7 @@ export async function readConfigGetResponse(params: {
     return await configGetResponseCache.promise;
   }
 
-  const promise = (async () =>
-    createConfigGetResponse(
-      await readConfigFileSnapshot(),
-      params.loadUiHints(),
-      params.revisionProjector,
-    ))();
+  const promise = readResponse();
   configGetResponseCache = {
     getHotReloadStatus,
     revisionProjector: params.revisionProjector,
@@ -87,7 +86,7 @@ export async function readConfigGetResponse(params: {
   }
 }
 
-/** Invalidates cached config.get work after the watcher accepts a config candidate. */
+/** Invalidates cached config.get work when the watcher observes or accepts a candidate. */
 export function invalidateConfigGetResponseCache(): void {
   configGetResponseCache = undefined;
 }

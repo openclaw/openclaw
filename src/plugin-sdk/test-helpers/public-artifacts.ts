@@ -2,10 +2,25 @@
  * Shared public artifact basename helpers for bundled plugin contracts.
  */
 import { uniqueStrings } from "../../../packages/normalization-core/src/string-normalization.js";
-import {
-  assertUniqueValues,
-  BUNDLED_RUNTIME_SIDECAR_PATHS,
-} from "../../plugins/runtime-sidecar-paths.js";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../plugins/runtime-sidecar-paths.js";
+
+function assertUniqueValues<T extends string>(values: readonly T[], label: string): readonly T[] {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) {
+      duplicates.add(value);
+      continue;
+    }
+    seen.add(value);
+  }
+  if (duplicates.size > 0) {
+    throw new Error(`Duplicate ${label}: ${Array.from(duplicates).join(", ")}`);
+  }
+  return values;
+}
+
+assertUniqueValues(BUNDLED_RUNTIME_SIDECAR_PATHS, "bundled runtime sidecar path");
 
 export function getPublicArtifactBasename(relativePath: string): string {
   return relativePath.split("/").at(-1) ?? relativePath;

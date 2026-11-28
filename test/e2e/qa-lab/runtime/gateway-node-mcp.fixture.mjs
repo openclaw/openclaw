@@ -3,12 +3,16 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  NodeStreamableHTTPServerTransport,
+  localhostHostValidation,
+} from "@modelcontextprotocol/node";
+// Keep a legacy SSE peer for v2-to-v1 interoperability proof.
+import { McpServer as LegacyMcpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { McpServer, isInitializeRequest } from "@modelcontextprotocol/server";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import express from "express";
 import * as z from "zod/v4";
 
 const READY_TYPE = "openclaw-mcp-parity-ready";
@@ -75,7 +79,7 @@ function waitForFile(filePath) {
     const directory = path.dirname(filePath);
     const filename = path.basename(filePath);
     const watcher = fs.watch(directory, (_event, changed) => {
-      if (changed && changed.toString() !== filename) {
+      if (changed && changed !== filename) {
         return;
       }
       if (fs.existsSync(filePath)) {
@@ -104,18 +108,23 @@ async function holdNextCatalogList(catalogGate) {
   await waitForFile(path.join(catalogGate.directory, "release"));
 }
 
-function createProbeServer(label, catalogState = { rotated: false }, control = {}) {
+function createProbeServer(
+  label,
+  catalogState = { rotated: false },
+  control = {},
+  Server = McpServer,
+) {
   catalogState.generations ??= {};
   const generation = (catalogState.generations[label] ?? 0) + 1;
   catalogState.generations[label] = generation;
-  const server = new McpServer({ name: `openclaw-mcp-parity-${label}`, version: "1.0.0" });
+  const server = new Server({ name: `openclaw-mcp-parity-${label}`, version: "1.0.0" });
   const initialToolConfig = {
     description: `MCP parity probe for ${label}`,
-    inputSchema: { marker: z.string() },
+    inputSchema: z.object({ marker: z.string() }),
   };
   const rotatedToolConfig = {
     description: `Rotated MCP parity probe for ${label}`,
-    inputSchema: { marker: z.string(), revision: z.string().optional() },
+    inputSchema: z.object({ marker: z.string(), revision: z.string().optional() }),
   };
   const runProbe = async ({ marker }) => {
     if (marker === "break-notifications") {
@@ -128,7 +137,10 @@ function createProbeServer(label, catalogState = { rotated: false }, control = {
       catalogState.rotated = true;
       registeredProbe.update({
         name: "parity_rotated",
-        paramsSchema: rotatedToolConfig.inputSchema,
+        paramsSchema:
+          Server === LegacyMcpServer
+            ? rotatedToolConfig.inputSchema.shape
+            : rotatedToolConfig.inputSchema,
       });
     }
     return buildProbeResult({
@@ -155,7 +167,9 @@ function createProbeServer(label, catalogState = { rotated: false }, control = {
         server.sendToolListChanged();
         // The SDK helper is fire-and-forget. Yield once so the notification is
         // queued before the successful call lets the next request begin.
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
       }
       return buildProbeResult({ label: `${label}-app`, marker, generation });
     });
@@ -279,7 +293,7 @@ async function runStressStdio(label) {
   };
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => {
-    buffer += chunk;
+    buffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
     while (true) {
       const newline = buffer.indexOf("\n");
       if (newline < 0) {
@@ -303,8 +317,16 @@ async function runHttp() {
   if (!labelPrefix) {
     throw new Error("HTTP mode requires --label-prefix");
   }
-  const app = createMcpExpressApp();
+  const app = express();
+  const validateHost = localhostHostValidation();
+  app.use((req, res, next) => {
+    if (validateHost(req, res)) {
+      next();
+    }
+  });
+  app.use(express.json());
   const sessions = new Map();
+  const pendingSessionExpirations = new Map();
   const records = new Set();
   const catalogState = { rotated: false, expiryCalls: 0 };
   const appFixtureEnabled = process.env.MCP_APP_GRANT_REVALIDATION_FIXTURE === "1";
@@ -353,24 +375,36 @@ async function runHttp() {
       const sessionId = req.headers["mcp-session-id"];
       let transport;
       if (typeof sessionId === "string") {
-        if (req.body?.params?.arguments?.marker === "expire-session") {
+        const marker = req.body?.params?.arguments?.marker;
+        if (marker === "expire-session" || marker === "expire-concurrent-session") {
           catalogState.expiryCalls += 1;
+          const pending = pendingSessionExpirations.get(sessionId) ?? [];
+          pending.push({ response: res, id: req.body?.id ?? null });
+          if (marker === "expire-concurrent-session" && pending.length < 2) {
+            // Expire only after both calls reach this session. The first 404
+            // otherwise retires the transport before the second request arrives.
+            pendingSessionExpirations.set(sessionId, pending);
+            return;
+          }
+          pendingSessionExpirations.delete(sessionId);
           sessions.delete(sessionId);
-          res.status(404).json({
-            jsonrpc: "2.0",
-            error: { code: -32001, message: "Session not found" },
-            id: req.body?.id ?? null,
-          });
+          for (const { response, id } of pending) {
+            response.status(404).json({
+              jsonrpc: "2.0",
+              error: { code: -32001, message: "Session not found" },
+              id,
+            });
+          }
           return;
         }
         const record = sessions.get(sessionId);
-        if (!(record?.transport instanceof StreamableHTTPServerTransport)) {
+        if (!(record?.transport instanceof NodeStreamableHTTPServerTransport)) {
           rpcError(res, -32000, "Unknown Streamable HTTP session");
           return;
         }
         transport = record.transport;
       } else if (req.method === "POST" && isInitializeRequest(req.body)) {
-        const createdTransport = new StreamableHTTPServerTransport({
+        const createdTransport = new NodeStreamableHTTPServerTransport({
           sessionIdGenerator: randomUUID,
           onsessioninitialized: (createdSessionId) => {
             sessions.set(createdSessionId, record);
@@ -411,12 +445,17 @@ async function runHttp() {
       return;
     }
     const transport = new SSEServerTransport("/messages", res);
-    const server = createProbeServer(`${labelPrefix}-sse`, catalogState, {
-      breakNotifications: () => {
-        terminalSseOnce = true;
-        setTimeout(() => void transport.close().catch(() => {}), 25);
+    const server = createProbeServer(
+      `${labelPrefix}-sse`,
+      catalogState,
+      {
+        breakNotifications: () => {
+          terminalSseOnce = true;
+          setTimeout(() => void transport.close().catch(() => {}), 25);
+        },
       },
-    });
+      LegacyMcpServer,
+    );
     const record = track(server, transport);
     sessions.set(transport.sessionId, record);
     await server.connect(transport);

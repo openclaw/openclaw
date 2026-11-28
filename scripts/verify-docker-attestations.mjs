@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-// Verifies Docker image attestations cover required platforms and predicates.
 import { execFileSync } from "node:child_process";
 import process from "node:process";
+import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const ATTESTATION_REFERENCE_TYPE = "attestation-manifest";
@@ -10,9 +10,6 @@ const EXPECTED_ATTESTATION_ARTIFACT_TYPE = "application/vnd.docker.attestation.m
 const REQUIRED_PREDICATES = ["https://spdx.dev/Document", "https://slsa.dev/provenance/v1"];
 const DOCKER_INSPECT_TIMEOUT_MS = 120_000;
 
-/**
- * Rewrites an image reference to use the provided digest.
- */
 export function imageRefForDigest(imageRef, digest) {
   const atIndex = imageRef.indexOf("@");
   if (atIndex >= 0) {
@@ -24,9 +21,6 @@ export function imageRefForDigest(imageRef, digest) {
   return `${base}@${digest}`;
 }
 
-/**
- * Parses os/architecture[/variant] platform strings.
- */
 export function parsePlatform(value) {
   const [os, architecture, variant] = value.split("/");
   if (!os || !architecture || value.split("/").length > 3) {
@@ -41,7 +35,6 @@ function formatPlatform(platform) {
     : `${platform.os}/${platform.architecture}`;
 }
 
-/** Verify required Docker attestations for every image reference. */
 export function verifyDockerAttestations(params) {
   const {
     imageRefs,
@@ -95,9 +88,6 @@ function parseJson(raw, label) {
   }
 }
 
-/**
- * Collects missing/mismatched attestation errors for required image platforms.
- */
 export function collectDockerAttestationErrors(params) {
   const {
     imageRef,
@@ -174,21 +164,13 @@ export function inspectRaw(imageRef, params = {}) {
   });
 }
 
-function readOptionValue(argv, index, optionName) {
-  const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  return value;
-}
-
 export function parseArgs(argv) {
   const imageRefs = [];
   const requiredPlatforms = [];
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--platform") {
-      requiredPlatforms.push(parsePlatform(readOptionValue(argv, i, arg)));
+      requiredPlatforms.push(parsePlatform(requireOptionArgument(argv, i, arg)));
       i += 1;
       continue;
     }

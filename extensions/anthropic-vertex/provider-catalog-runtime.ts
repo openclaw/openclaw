@@ -3,9 +3,6 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import { buildAnthropicVertexProvider } from "./provider-catalog.js";
 import { hasAnthropicVertexAvailableAuth } from "./region.js";
 
-const PROVIDER_ID = "anthropic-vertex";
-
-/** Merge an implicit Anthropic Vertex provider with explicit user config. */
 export function mergeImplicitAnthropicVertexProvider(params: {
   existing?: ModelProviderConfig;
   implicit: ModelProviderConfig;
@@ -17,14 +14,10 @@ export function mergeImplicitAnthropicVertexProvider(params: {
   return {
     ...implicit,
     ...existing,
-    models:
-      Array.isArray(existing.models) && existing.models.length > 0
-        ? existing.models
-        : implicit.models,
+    models: existing.models?.length ? existing.models : implicit.models,
   };
 }
 
-/** Resolve an implicit Anthropic Vertex provider when ADC credentials are available. */
 export function resolveImplicitAnthropicVertexProvider(params?: { env?: NodeJS.ProcessEnv }) {
   const env = params?.env ?? process.env;
   if (!hasAnthropicVertexAvailableAuth(env)) {
@@ -34,7 +27,6 @@ export function resolveImplicitAnthropicVertexProvider(params?: { env?: NodeJS.P
   return buildAnthropicVertexProvider({ env });
 }
 
-/** Build the shared catalog result used by discovery and the full plugin entry. */
 export async function runAnthropicVertexCatalog(ctx: ProviderCatalogContext) {
   const implicit = resolveImplicitAnthropicVertexProvider({
     env: ctx.env,
@@ -43,9 +35,6 @@ export async function runAnthropicVertexCatalog(ctx: ProviderCatalogContext) {
     return null;
   }
   return {
-    provider: mergeImplicitAnthropicVertexProvider({
-      existing: ctx.config.models?.providers?.[PROVIDER_ID],
-      implicit,
-    }),
+    provider: implicit,
   };
 }

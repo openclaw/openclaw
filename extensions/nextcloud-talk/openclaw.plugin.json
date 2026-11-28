@@ -1,11 +1,11 @@
 {
   "id": "nextcloud-talk",
+  "categories": ["channels"],
   "doctorContract": {
     "configRepair": true
   },
   "name": "Nextcloud Talk",
   "description": "OpenClaw Nextcloud Talk channel plugin for conversations.",
-  "icon": "https://cdn.simpleicons.org/nextcloud",
   "activation": {
     "onStartup": false
   },

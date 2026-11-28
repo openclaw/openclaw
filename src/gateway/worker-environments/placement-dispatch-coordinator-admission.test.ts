@@ -1,0 +1,190 @@
+import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  ACTIVE_PLACEMENT,
+  createOperationGate,
+  coordinate,
+  PROVISIONING_PLACEMENT,
+  REQUEST,
+} from "./placement-dispatch-coordinator.test-support.js";
+import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
+import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
+
+type DispatchService = WorkerPlacementDispatchService;
+
+function createCoordinatedService(overrides: Partial<DispatchService>) {
+  return coordinate(overrides, (_request, run, _authorize, signal) => run(signal));
+}
+
+describe("worker placement session admission", () => {
+  it.each(["success", "failure", "cancellation"] as const)(
+    "counts pending device dispatches through cleanup until %s settles",
+    async (outcome) => {
+      const dispatchGate = createOperationGate(undefined);
+      const cleanupStarted = createDeferredCore();
+      const finishCleanup = createDeferredCore();
+      const controller = new AbortController();
+      const terminalError = new Error(`dispatch ${outcome}`);
+      const request = { ...REQUEST, deviceId: "node-one" };
+      const dispatch = vi.fn<DispatchService["dispatch"]>(
+        async (current, _report, _authorize, signal) => {
+          const active = {
+            ...ACTIVE_PLACEMENT,
+            sessionId: current.sessionId,
+            sessionKey: current.sessionKey,
+          };
+          if (current.sessionId !== request.sessionId) {
+            await finishCleanup.promise;
+            return active;
+          }
+          try {
+            await dispatchGate.run();
+            signal?.throwIfAborted();
+            if (outcome === "failure") {
+              throw terminalError;
+            }
+            return active;
+          } finally {
+            cleanupStarted.resolve();
+            await finishCleanup.promise;
+          }
+        },
+      );
+      const coordinated = createCoordinatedService({ dispatch });
+      const first = coordinated.dispatch(request, undefined, undefined, controller.signal);
+      await dispatchGate.entered;
+      const joined = coordinated.dispatch(request);
+      const sibling = coordinated.dispatch({ ...request, sessionId: "sibling" });
+      const remote = coordinated.dispatch({
+        ...request,
+        sessionId: "remote",
+        executionMode: "remote-exec",
+      });
+      const otherDevice = coordinated.dispatch({
+        ...request,
+        sessionId: "other-device",
+        deviceId: "node-two",
+      });
+      const settled = Promise.allSettled([first, joined, sibling, remote, otherDevice]);
+
+      try {
+        expect(coordinated.getPendingDeviceDispatchCount("node-one")).toBe(2);
+        expect(coordinated.getPendingDeviceDispatchCount("node-one", request.sessionId)).toBe(1);
+        expect(coordinated.getPendingDeviceDispatchCount("node-two")).toBe(1);
+        expect(coordinated.getPendingDeviceDispatchCount("unknown-node")).toBe(0);
+        if (outcome === "cancellation") {
+          controller.abort(terminalError);
+        }
+        dispatchGate.release();
+        await cleanupStarted.promise;
+        expect(coordinated.getPendingDeviceDispatchCount("node-one")).toBe(2);
+      } finally {
+        dispatchGate.release();
+        finishCleanup.resolve();
+        await settled;
+      }
+
+      const results = await settled;
+      const expected =
+        outcome === "success"
+          ? { status: "fulfilled", value: ACTIVE_PLACEMENT }
+          : { status: "rejected", reason: terminalError };
+      expect(results.slice(0, 2)).toEqual([expected, expected]);
+      expect(results.slice(2).every((result) => result.status === "fulfilled")).toBe(true);
+      expect(coordinated.getPendingDeviceDispatchCount("node-one")).toBe(0);
+      expect(coordinated.getPendingDeviceDispatchCount("node-two")).toBe(0);
+    },
+  );
+
+  it("refuses setup with no live dispatch owner and honors cancelled input", async () => {
+    const coordinated = createCoordinatedService({});
+    await expect(coordinated.waitForInitialPlacement(PROVISIONING_PLACEMENT)).rejects.toThrow(
+      "no matching live dispatch owner",
+    );
+    await expect(
+      coordinated.waitForInitialPlacement(PROVISIONING_PLACEMENT, AbortSignal.abort()),
+    ).rejects.toThrow();
+  });
+
+  it("joins same-session recovery before acknowledging a targeted pass", async () => {
+    const recoveryGate = createOperationGate(undefined);
+    const targetedAdmission = createDeferredCore();
+    let state = "reconciling";
+    const observed: Array<{ state: string; mode: "results-only" | undefined }> = [];
+    const unrelated = vi.fn(async () => {});
+    const coordinated = createCoordinatedService({
+      reconcileActive: async (environmentId, admit) => {
+        if (environmentId === undefined) {
+          await admit!([REQUEST.sessionId], async () => {
+            await recoveryGate.run();
+            state = "failed";
+          });
+        } else if (environmentId === "unrelated") {
+          await admit!(["unrelated"], unrelated);
+        } else {
+          const recovery = admit!([REQUEST.sessionId], async (mode) => {
+            observed.push({ state, mode });
+          });
+          targetedAdmission.resolve();
+          await recovery;
+        }
+      },
+    });
+    const sweep = coordinated.reconcileActive();
+    await recoveryGate.entered;
+    const targeted = coordinated.reconcileActive("worker-active");
+    try {
+      await targetedAdmission.promise;
+      await coordinated.reconcileActive("unrelated");
+      expect(unrelated).toHaveBeenCalledOnce();
+      expect(observed).toEqual([]);
+    } finally {
+      recoveryGate.release();
+      await Promise.all([sweep, targeted]);
+    }
+    expect(observed).toEqual([{ state: "failed", mode: undefined }]);
+  });
+
+  it.each(["full", "targeted"] as const)(
+    "%s recovery admits only result recovery while the session is busy",
+    async (kind) => {
+      const dispatchGate = createOperationGate(undefined);
+      const recover = vi.fn(async (_mode?: "results-only") => {});
+      const admissionAttempted = createDeferredCore();
+      const admitted: boolean[] = [];
+      const dispatch = vi.fn(async (request: WorkerPlacementDispatchRequest) => {
+        if (request.sessionId === REQUEST.sessionId) {
+          await dispatchGate.run();
+        }
+        return { ...ACTIVE_PLACEMENT, ...request };
+      });
+      const coordinated = createCoordinatedService({
+        dispatch,
+        reconcileActive: async (_environmentId, admit) => {
+          const unit = admit!([REQUEST.sessionId], recover);
+          admissionAttempted.resolve();
+          admitted.push(await unit);
+        },
+      });
+      const first = coordinated.dispatch(REQUEST);
+      await dispatchGate.entered;
+      const sweep = coordinated.reconcileActive(kind === "targeted" ? "worker-active" : undefined);
+      await admissionAttempted.promise;
+      await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
+      if (kind === "full") {
+        expect(recover).not.toHaveBeenCalled();
+        await sweep;
+        expect(admitted).toEqual([false]);
+      } else {
+        expect(recover).toHaveBeenCalledExactlyOnceWith("results-only");
+      }
+      dispatchGate.release();
+      await Promise.all([first, sweep]);
+      if (kind === "full") {
+        await coordinated.reconcileActive();
+      }
+      expect(recover).toHaveBeenCalledOnce();
+      expect(admitted).toEqual(kind === "full" ? [false, true] : [true]);
+    },
+  );
+});

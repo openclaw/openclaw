@@ -25,7 +25,10 @@ type NodeWorkerContainerExpectedOwner = {
   launchId: string;
 };
 
-const DEFAULT_NODE_WORKER_CONTAINER_IMAGE = "node:22-slim";
+const DEFAULT_NODE_WORKER_CONTAINER_IMAGE = "node:24.22.1-slim";
+// Burst launches can delay a healthy daemon's identity response; keep revalidation
+// fail-closed without treating temporary daemon contention as an unavailable engine.
+const CONTAINER_REVALIDATION_TIMEOUT_MS = 30_000;
 
 const HOST_LABEL = "openclaw.node-worker.host";
 const GATEWAY_LABEL = "openclaw.node-worker.gateway";
@@ -34,6 +37,18 @@ const CONTAINER_NODE_EXECUTABLE = "node";
 const CONTAINER_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const CONTAINER_ID_PATTERN = /^[a-f0-9]{64}$/u;
 const ENCODED_LAUNCH_PATTERN = /^[A-Za-z0-9_-]+$/u;
+// `.State.Running` is false both before a container starts and after it exits.
+// A created or initialized container still owns an admitted workload, so its
+// launch must never be finalized or fenced as if the worker had already ended.
+const OWNED_CONTAINER_STATUSES = new Set([
+  "created",
+  "initialized",
+  "running",
+  "paused",
+  "restarting",
+  "stopping",
+]);
+const ENDED_CONTAINER_STATUSES = new Set(["exited", "stopped", "dead", "removing"]);
 
 function hostNamespace(bundleRoot: string): string {
   return createHash("sha256").update(path.resolve(bundleRoot)).digest("hex").slice(0, 32);
@@ -66,16 +81,27 @@ function missingContainer(error: unknown): boolean {
 }
 
 async function runContainerCommand(
-  engine: Pick<NodeWorkerContainerEngine, "command" | "env">,
+  engine: Pick<NodeWorkerContainerEngine, "id" | "command" | "env">,
   args: string[],
   timeoutMs = 15_000,
 ): Promise<string> {
-  const result = await runExec(engine.command, args, {
-    ...(engine.env ? { baseEnv: engine.env } : {}),
-    timeoutMs,
-    logOutput: false,
-  });
-  return result.stdout.trim();
+  try {
+    const result = await runExec(engine.command, args, {
+      ...(engine.env ? { baseEnv: engine.env } : {}),
+      timeoutMs,
+      logOutput: false,
+    });
+    return result.stdout.trim();
+  } catch (error) {
+    if (!isRecord(error) || error.timedOut !== true) {
+      throw error;
+    }
+    // Only the engine and fixed operation are safe to display; arguments can contain secrets.
+    throw new Error(
+      `Container command timed out after ${timeoutMs} milliseconds: ${engine.id} ${args[0]}`,
+      { cause: error },
+    );
+  }
 }
 
 async function resolveContainerEngineTarget(
@@ -83,6 +109,7 @@ async function resolveContainerEngineTarget(
   options: { pinned?: boolean } = {},
 ): Promise<Pick<NodeWorkerContainerEngine, "target" | "env">> {
   const env = engine.env ?? process.env;
+  const timeoutMs = options.pinned ? CONTAINER_REVALIDATION_TIMEOUT_MS : 5_000;
   if (engine.id === "docker") {
     const endpoint =
       env.DOCKER_HOST?.trim() ||
@@ -102,7 +129,7 @@ async function resolveContainerEngineTarget(
     const daemonId = await runContainerCommand(
       { ...engine, env: frozenEnv },
       ["info", "--format", "{{.ID}}"],
-      5_000,
+      timeoutMs,
     );
     if (!daemonId || daemonId === "<no value>") {
       throw new Error("Docker daemon did not report a stable identity");
@@ -116,7 +143,7 @@ async function resolveContainerEngineTarget(
   const info = await runContainerCommand(
     engine,
     ["info", "--format", "{{.Host.Hostname}}\t{{.Store.GraphRoot}}\t{{.Host.RemoteSocket.Path}}"],
-    5_000,
+    timeoutMs,
   );
   const [hostname, graphRoot, remoteSocket = "", extra] = info.split("\t");
   if (extra !== undefined || !hostname || !graphRoot || hostname === "<no value>") {
@@ -189,7 +216,7 @@ async function resolveContainerEngineTarget(
 export async function resolveNodeWorkerContainerEngine(
   options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<NodeWorkerContainerEngine> {
-  const env = options.env ? Object.freeze({ ...process.env, ...options.env }) : process.env;
+  const env = options.env ? { ...process.env, ...options.env } : process.env;
   const failures: string[] = [];
   for (const id of ["docker", "podman"] as const) {
     const command = resolveExecutableFromPathEnv(id, env.PATH ?? process.env.PATH ?? "", env);
@@ -221,6 +248,22 @@ export async function resolveNodeWorkerContainerEngine(
   );
 }
 
+// A comma separates `--mount` fields, so a whole `key=value` field holding one has to be quoted
+// the way that parser reads it, with interior quotes doubled. Engine arguments are spawned
+// without a shell, so nothing else adds this quoting. Only comma-bearing fields are quoted:
+// those paths already fail on every engine, so no launch that works today changes shape. A path
+// holding a quote but no comma still fails on Docker as it does today; quoting it would break
+// Podman, which accepts that path, so that conflict is not settled here.
+function mountField(key: string, value: string): string {
+  const field = `${key}=${value}`;
+  return value.includes(",") ? `"${field.replaceAll('"', '""')}"` : field;
+}
+
+function bindMount(source: string, target: string, options: { readOnly?: boolean } = {}): string {
+  const spec = `type=bind,${mountField("source", source)},${mountField("target", target)}`;
+  return options.readOnly ? `${spec},readonly` : spec;
+}
+
 /** Create a labeled, stopped container so its durable identity exists before worker admission. */
 export async function createNodeWorkerContainer(
   engine: NodeWorkerContainerEngine,
@@ -228,6 +271,7 @@ export async function createNodeWorkerContainer(
     bundleRoot: string;
     bundleEntry: string;
     workspaceDir: string;
+    homeDir?: string;
     gatewayNamespace: string;
     launchId: string;
     env: NodeJS.ProcessEnv;
@@ -253,19 +297,22 @@ export async function createNodeWorkerContainer(
     "--label",
     `${LAUNCH_LABEL}=${encodeLaunchLabel(params.launchId)}`,
     "--mount",
-    `type=bind,source=${bundleDir},target=${bundleDir},readonly`,
+    bindMount(bundleDir, bundleDir, { readOnly: true }),
     "--mount",
-    `type=bind,source=${params.workspaceDir},target=${params.workspaceDir}`,
+    bindMount(params.workspaceDir, params.workspaceDir),
     "--workdir",
     params.workspaceDir,
   ];
+  if (params.homeDir && params.homeDir !== params.workspaceDir) {
+    args.push("--mount", bindMount(params.homeDir, params.homeDir));
+  }
   if (engine.id === "docker" && process.getuid && process.getgid) {
     args.push("--user", `${process.getuid()}:${process.getgid()}`);
   }
   const containerEnv: NodeJS.ProcessEnv = {
     ...params.env,
     PATH: CONTAINER_PATH,
-    HOME: params.workspaceDir,
+    HOME: params.homeDir ?? params.workspaceDir,
   };
   if (containerEnv.NODE_EXTRA_CA_CERTS) {
     let certificatePath: string;
@@ -306,6 +353,7 @@ export async function createNodeWorkerContainer(
     CONTAINER_NODE_EXECUTABLE,
     params.image ?? DEFAULT_NODE_WORKER_CONTAINER_IMAGE,
     params.bundleEntry,
+    "--internal-worker-session",
   );
   const current = await resolveContainerEngineTarget(engine, { pinned: true });
   if (current.target !== engine.target) {
@@ -328,13 +376,6 @@ export async function createNodeWorkerContainer(
   return { engine: engine.id, containerId, engineTarget: engine.target };
 }
 
-export function buildNodeWorkerContainerStartArgv(
-  engine: NodeWorkerContainerEngine,
-  containerId: string,
-): string[] {
-  return [engine.command, "start", "--attach", "--interactive", containerId];
-}
-
 /** Inspect the container rather than its disposable Docker client process. */
 export async function inspectNodeWorkerContainer(
   engine: NodeWorkerContainerEngine,
@@ -343,8 +384,8 @@ export async function inspectNodeWorkerContainer(
 ): Promise<"live" | "dead" | "reused" | "unknown"> {
   try {
     const format = expected
-      ? `{{.State.Running}}\t{{index .Config.Labels "${HOST_LABEL}"}}\t{{index .Config.Labels "${GATEWAY_LABEL}"}}\t{{index .Config.Labels "${LAUNCH_LABEL}"}}`
-      : "{{.State.Running}}";
+      ? `{{.State.Status}}\t{{index .Config.Labels "${HOST_LABEL}"}}\t{{index .Config.Labels "${GATEWAY_LABEL}"}}\t{{index .Config.Labels "${LAUNCH_LABEL}"}}`
+      : "{{.State.Status}}";
     const state = await runContainerCommand(engine, [
       "inspect",
       "--type",
@@ -353,7 +394,7 @@ export async function inspectNodeWorkerContainer(
       format,
       containerId,
     ]);
-    const [running, owner, gateway, launch, extra] = state.split("\t");
+    const [status = "", owner, gateway, launch, extra] = state.split("\t");
     if (expected) {
       if (
         extra !== undefined ||
@@ -366,7 +407,11 @@ export async function inspectNodeWorkerContainer(
     } else if (owner !== undefined) {
       return "unknown";
     }
-    return running === "true" ? "live" : running === "false" ? "dead" : "unknown";
+    return OWNED_CONTAINER_STATUSES.has(status)
+      ? "live"
+      : ENDED_CONTAINER_STATUSES.has(status)
+        ? "dead"
+        : "unknown";
   } catch (error) {
     return missingContainer(error) ? "dead" : "unknown";
   }

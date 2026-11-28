@@ -1,0 +1,638 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { performance } from "node:perf_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import * as diagnosticRuntime from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { DiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { runWithDiagnosticTraceContext } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type {
+  CodexControlRequestObservation,
+  CodexRequestWaiterSummary,
+} from "./app-server/request-observation.js";
+import {
+  CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+  CODEX_LOCAL_SESSION_HOST_ID,
+  commandRpcMocks,
+  createCodexSessionCatalogControlFactory,
+  createCatalogTestProvider,
+  createRuntime,
+  fs,
+  fsSync,
+  idleThread,
+  path,
+  type OpenClawConfig,
+} from "./session-catalog.test-helpers.js";
+
+const nativeRequest = commandRpcMocks.codexControlRequest;
+
+const sink = vi.hoisted(() => ({ throwing: false, attempts: 0 }));
+
+vi.mock("openclaw/plugin-sdk/diagnostic-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/diagnostic-runtime")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => {
+      const logger = actual.createSubsystemLogger(...args);
+      if (args[0] !== "gateway/session-catalog") {
+        return logger;
+      }
+      return {
+        ...logger,
+        warn(message: string, metadata?: Record<string, unknown>) {
+          if (message.startsWith("slow Codex catalog ")) {
+            sink.attempts++;
+            if (sink.throwing) {
+              throw new Error("synthetic catalog sink failure");
+            }
+          }
+          logger.warn(message, metadata);
+        },
+      };
+    },
+  };
+});
+
+type LogRecord = Extract<DiagnosticEventPayload, { type: "log.record" }>;
+const LIST = "slow Codex catalog list phases";
+const PAGE = "slow Codex catalog page producer";
+const messages = new Set([LIST, PAGE]);
+const privateText = "synthetic-private-catalog-content";
+const clientInstanceId = "11111111-1111-4111-8111-111111111111";
+let clock = 0;
+let records: LogRecord[] = [];
+let unsubscribe = () => {};
+const releases: Array<() => void> = [];
+const pendingWork: Promise<unknown>[] = [];
+
+beforeEach(() => {
+  diagnosticRuntime.resetDiagnosticEventsForTest();
+  clock += 61_000;
+  vi.spyOn(performance, "now").mockImplementation(() => clock);
+  sink.throwing = false;
+  sink.attempts = 0;
+  records = [];
+  vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
+  setLoggerOverride({ level: "warn", consoleLevel: "silent" });
+  unsubscribe = diagnosticRuntime.onInternalDiagnosticEvent((event) => {
+    if (event.type === "log.record" && messages.has(event.message)) {
+      records.push(event);
+    }
+  });
+});
+
+afterEach(async () => {
+  // Stack-ordered hooks drain request gates before the shared catalog-owner teardown.
+  releases.splice(0).forEach((release) => release());
+  await Promise.allSettled(pendingWork.splice(0));
+  try {
+    await diagnosticRuntime.waitForDiagnosticEventsDrained();
+    expect(JSON.stringify(records)).not.toContain(privateText);
+    for (const record of records) {
+      expectBounded(record);
+      expect(
+        Object.values(fields(record)).every((value) =>
+          ["string", "number", "boolean"].includes(typeof value),
+        ),
+      ).toBe(true);
+    }
+  } finally {
+    unsubscribe();
+    resetLogger();
+    vi.restoreAllMocks();
+    diagnosticRuntime.resetDiagnosticEventsForTest();
+  }
+});
+
+function responseGate() {
+  const gate = createDeferred<unknown>();
+  releases.push(() => gate.resolve({ data: [] }));
+  return gate;
+}
+
+async function emitted(message: string) {
+  await diagnosticRuntime.waitForDiagnosticEventsDrained();
+  return records.filter((record) => record.message === message);
+}
+
+function fields(record: LogRecord | undefined) {
+  if (!record) {
+    throw new Error("expected catalog diagnostic record");
+  }
+  return record.attributes ?? {};
+}
+
+function mockObservedRequest(
+  run: (
+    observation: CodexControlRequestObservation | undefined,
+    params: { cursor?: string },
+    method: string,
+  ) => Promise<unknown>,
+) {
+  nativeRequest.mockImplementation(
+    async (
+      _config: unknown,
+      method: string,
+      params: { cursor?: string },
+      options: { controlObservation?: CodexControlRequestObservation },
+    ) => run(options.controlObservation, params, method),
+  );
+}
+
+function expectBounded(record: LogRecord) {
+  expect(Object.keys(fields(record)).length).toBeLessThanOrEqual(28);
+  expect(Buffer.byteLength(JSON.stringify(fields(record)))).toBeLessThanOrEqual(2_048);
+}
+
+const resolvedWaiters = JSON.stringify([
+  [1, 1, clientInstanceId, 1, 1, "new", 10, 12, 11, 20, "resolved", "native-ok", 19],
+]);
+
+function waiterSummary(
+  overrides: Partial<CodexRequestWaiterSummary> = {},
+): CodexRequestWaiterSummary {
+  return {
+    clientInstanceId,
+    rpcId: 1,
+    waiterOrdinal: 1,
+    disposition: "new",
+    overloadAttemptOrdinal: 1,
+    attemptCreatedAtMs: 10,
+    firstPossibleWriteAtMs: 12,
+    waiterAttachedAtMs: 11,
+    waiterSettledAtMs: 20,
+    waiterOutcome: "resolved",
+    wireOutcomeAtWaiterSettlement: "native-ok",
+    wireObservedAtMs: 19,
+    ...overrides,
+  };
+}
+
+async function fixture(suffix = "default") {
+  const root = fsSync.realpathSync(process.env.OPENCLAW_STATE_DIR!);
+  const home = path.join(root, `private-catalog-home-${suffix}`);
+  const agentDir = path.join(root, "agent");
+  await fs.mkdir(path.join(home, "sessions"), { recursive: true });
+  await fs.mkdir(agentDir, { recursive: true });
+  vi.stubEnv("CODEX_HOME", home);
+  vi.stubEnv("PATH", "");
+  const config: OpenClawConfig = { agents: { entries: { main: { agentDir } } } };
+  const pluginConfig = {
+    supervision: { enabled: true },
+    appServer: { command: "catalog-fixture", homeScope: "user" },
+  };
+  const configAccess = {
+    getPluginConfig: () => pluginConfig,
+    getRuntimeConfig: () => config,
+  };
+  const control = createCodexSessionCatalogControlFactory(configAccess);
+  const { runtime } = createRuntime();
+  const provider = createCatalogTestProvider({
+    runtime,
+    startupConfig: config,
+    control,
+    ...configAccess,
+  });
+  return {
+    provider,
+    control: control.forRequest("main", (await control.homesForAgent("main"))[0]),
+    runtime,
+    home,
+    list: (search?: string) =>
+      provider.list({ hostIds: [CODEX_LOCAL_SESSION_HOST_ID], ...(search ? { search } : {}) }),
+    async thread(originator: "openclaw" | "codex") {
+      const threadId = `${privateText}-${originator}`;
+      const rollout = path.join(home, "sessions", "private-rollout.jsonl");
+      await fs.writeFile(
+        rollout,
+        `${JSON.stringify({ type: "session_meta", payload: { id: threadId, originator } })}\n`,
+      );
+      return idleThread({
+        id: threadId,
+        name: privateText,
+        source: "cli",
+        path: rollout,
+        cwd: home,
+      });
+    },
+  };
+}
+
+it("keeps background hydration context separate from list requests", async () => {
+  const f = await fixture();
+  const managed = await f.thread("openclaw");
+  const ownerScope = new AsyncLocalStorage<string>();
+  const sourceOwners: Array<string | undefined> = [];
+  nativeRequest.mockImplementation(async (_config, method, params) => {
+    expect(method).toBe("thread/list");
+    sourceOwners.push(ownerScope.getStore());
+    clock += 1_100;
+    return params.cursor
+      ? { data: [idleThread({ id: "visible", source: "cli" })] }
+      : { data: [managed], nextCursor: "next" };
+  });
+  const background = { traceId: "1".repeat(32), spanId: "1".repeat(16) };
+  const caller = { traceId: "2".repeat(32), spanId: "2".repeat(16) };
+  try {
+    await ownerScope.run("background", () =>
+      runWithDiagnosticTraceContext(background, () => f.control.initialize()),
+    );
+    const hosts = await ownerScope.run("caller", () =>
+      runWithDiagnosticTraceContext(caller, () => f.list()),
+    );
+    expect(hosts[0]?.sessions).toEqual([expect.objectContaining({ threadId: "visible" })]);
+    expect(sourceOwners).toEqual(["background", "background"]);
+    const pages = await emitted(PAGE);
+    expect(pages.map((page) => page.trace)).toMatchObject([background, background]);
+    for (const page of pages) {
+      expect(fields(page)).not.toHaveProperty("listOperationId");
+    }
+    expect(await emitted(LIST)).toEqual([]);
+    expect(nativeRequest).toHaveBeenCalledTimes(2);
+  } finally {
+    ownerScope.disable();
+  }
+});
+
+it("shares one cold hydration across four callers without logging session data", async () => {
+  const f = await fixture();
+  const thread = await f.thread("codex");
+  const response = responseGate();
+  const started = createDeferred<void>();
+  mockObservedRequest(async (observation) => {
+    started.resolve();
+    const result = await response.promise;
+    observation?.attemptWaiterFinished?.(waiterSummary());
+    return result;
+  });
+  const traces = Array.from({ length: 4 }, (_, index) => ({
+    traceId: String(index + 1).repeat(32),
+    spanId: String(index + 1).repeat(16),
+  }));
+  const pending = traces.map((trace) =>
+    runWithDiagnosticTraceContext(trace, () => f.control.initialize()),
+  );
+  let settledLists = 0;
+  const coldLists = traces.map((trace) =>
+    runWithDiagnosticTraceContext(trace, () => f.list()).then((result) => {
+      settledLists++;
+      return result;
+    }),
+  );
+  pendingWork.push(...pending, ...coldLists);
+  await started.promise;
+  await nextTurn();
+  expect(nativeRequest).toHaveBeenCalledOnce();
+  expect(settledLists).toBe(0);
+  clock += 1_500;
+  response.resolve({ data: [thread] });
+  await Promise.all(pending);
+  const results = await Promise.all(coldLists);
+  expect(results).toEqual(Array.from({ length: 4 }, () => results[0]));
+  expect(results[0]?.[0]?.sessions).toEqual([
+    expect.objectContaining({ threadId: thread.id, name: privateText, cwd: f.home }),
+  ]);
+  const pages = await emitted(PAGE);
+  const lists = await emitted(LIST);
+  expect(pages).toHaveLength(1);
+  expect(lists).toHaveLength(4);
+  for (const trace of traces) {
+    expect(lists).toContainEqual(
+      expect.objectContaining({
+        trace: expect.objectContaining(trace),
+        attributes: expect.objectContaining({
+          outcome: "resolved",
+          elapsedMs: 1_500,
+          controlPageCalls: 1,
+          adoptionCalls: 1,
+        }),
+      }),
+    );
+  }
+  expect(nativeRequest).toHaveBeenCalledOnce();
+  const producer = fields(pages[0]);
+  expect(producer).not.toHaveProperty("controlFailurePhase");
+  expect(producer).not.toHaveProperty("controlFailureCategory");
+  expect(producer).toMatchObject({
+    outcome: "resolved",
+    origin: "cold",
+    controlRequestCalls: 1,
+    inclusiveControlRequestWaitMs: 1_500,
+    inclusiveControlRequestWaitMaxMs: 1_500,
+    provenanceChecks: 1,
+    provenanceReadCalls: 1,
+    provenanceCacheHits: 0,
+    controlWaitersV1: resolvedWaiters,
+    controlWaitersOmitted: 0,
+  });
+  expect(producer).not.toHaveProperty("listOperationId");
+  expect(pages[0]?.trace).toMatchObject(traces[0]!);
+  expect(new Set(records.map((record) => fields(record).diagnosticEpoch)).size).toBe(1);
+  expect(JSON.stringify(records)).not.toContain(f.home);
+  expect(await f.list()).toEqual(results[0]);
+  expect(nativeRequest).toHaveBeenCalledOnce();
+});
+
+it("bounds maximal waiter diagnostics across hydration pages before resident filtering", async () => {
+  const f = await fixture();
+  const thread = await f.thread("codex");
+  const maximum = Number.MAX_SAFE_INTEGER;
+  const cursors: (string | undefined)[] = [];
+  mockObservedRequest(async (observation, params, method) => {
+    expect(method).toBe("thread/list");
+    expect(params).not.toHaveProperty("searchTerm");
+    cursors.push(params.cursor);
+    observation?.attemptWaiterFinished?.(waiterSummary({ clientInstanceId: privateText }));
+    for (let index = 0; index < 6; index++) {
+      observation?.attemptWaiterFinished?.(
+        waiterSummary({
+          rpcId: maximum - index,
+          waiterOrdinal: maximum,
+          overloadAttemptOrdinal: maximum,
+          disposition: "joined",
+          attemptCreatedAtMs: maximum,
+          firstPossibleWriteAtMs: maximum,
+          waiterAttachedAtMs: maximum,
+          waiterSettledAtMs: maximum,
+          waiterOutcome: "authority-rejected",
+          wireOutcomeAtWaiterSettlement: "ingress-rejected",
+          wireObservedAtMs: maximum,
+        }),
+      );
+    }
+    clock += 1_100;
+    return {
+      data: [thread],
+      ...(cursors.length < 20 ? { nextCursor: `private-cursor-${cursors.length}` } : {}),
+    };
+  });
+  await f.control.initialize();
+  const hosts = await f.list("wanted title");
+  expect(hosts[0]).toMatchObject({ connected: true, sessions: [] });
+  expect(hosts[0]).not.toHaveProperty("nextCursor");
+  expect(cursors).toEqual([
+    undefined,
+    ...Array.from({ length: 19 }, (_, i) => `private-cursor-${i + 1}`),
+  ]);
+  expect(await emitted(LIST)).toEqual([]);
+  const pages = await emitted(PAGE);
+  expect(pages).toHaveLength(20);
+  for (const [index, page] of pages.entries()) {
+    expect(fields(page)).toMatchObject({
+      outcome: "resolved",
+      origin: "cold",
+      controlRequestCalls: 1,
+      inclusiveControlRequestWaitMs: 1_100,
+      inclusiveControlRequestWaitMaxMs: 1_100,
+      provenanceChecks: 1,
+      provenanceReadCalls: index === 0 ? 1 : 0,
+      provenanceCacheHits: index === 0 ? 0 : 1,
+      controlWaitersOmitted: 3,
+      omittedObservations: 0,
+      controlWaitersV1: JSON.stringify(
+        [0, 1, 4, 5].map((waiterIndex) => [
+          1,
+          maximum,
+          clientInstanceId,
+          maximum - waiterIndex,
+          maximum,
+          "joined",
+          maximum,
+          maximum,
+          maximum,
+          maximum,
+          "authority-rejected",
+          "ingress-rejected",
+          maximum,
+        ]),
+      ),
+    });
+  }
+  expect(JSON.stringify(records)).not.toContain("private-cursor-");
+  await f.list("another query");
+  expect(nativeRequest).toHaveBeenCalledTimes(20);
+});
+
+it.each(["disabled", "disabled-during-call"] as const)(
+  "keeps %s diagnostics silent without changing the result",
+  async (mode) => {
+    const f = await fixture();
+    const gate = vi
+      .spyOn(diagnosticRuntime, "areDiagnosticsEnabledForProcess")
+      .mockReturnValue(mode !== "disabled");
+    nativeRequest.mockImplementation(async () => {
+      clock += 1_500;
+      if (mode === "disabled-during-call") {
+        gate.mockReturnValue(false);
+      }
+      return { data: [idleThread({ name: privateText, source: "cli" })] };
+    });
+    await f.control.initialize();
+    expect((await f.list())[0]?.sessions[0]?.name).toBe(privateText);
+    await diagnosticRuntime.waitForDiagnosticEventsDrained();
+    expect(records).toEqual([]);
+    expect(sink.attempts).toBe(0);
+    expect(nativeRequest).toHaveBeenCalledOnce();
+    if (mode === "disabled") {
+      expect(nativeRequest.mock.calls[0]?.[3]).not.toHaveProperty("controlObservation");
+    }
+  },
+);
+
+it("separates node inventory and paired-node waits without issuing local requests", async () => {
+  const f = await fixture();
+  vi.mocked(f.runtime.nodes.list).mockImplementation(async () => {
+    clock += 1_200;
+    return {
+      nodes: [
+        {
+          nodeId: privateText,
+          connected: true,
+          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
+        },
+      ],
+    };
+  });
+  vi.mocked(f.runtime.nodes.invoke).mockImplementation(async () => {
+    clock += 400;
+    return { payloadJSON: JSON.stringify({ sessions: [] }) };
+  });
+  const hosts = await f.provider.list({ hostIds: [`node:${privateText}`] });
+  expect(hosts).toEqual([expect.objectContaining({ connected: true, sessions: [] })]);
+  expect(fields((await emitted(LIST))[0])).toMatchObject({
+    elapsedMs: 1_600,
+    localHostCount: 0,
+    controlPageCalls: 0,
+    nodeRegistryCalls: 1,
+    nodeRegistryMs: 1_200,
+    pairedNodeCalls: 1,
+    pairedNodeSettled: 1,
+    nodeWaitSumMs: 400,
+  });
+  expect(f.runtime.nodes.list).toHaveBeenCalledOnce();
+  expect(f.runtime.nodes.invoke).toHaveBeenCalledOnce();
+  expect(nativeRequest).not.toHaveBeenCalled();
+  expect(await emitted(PAGE)).toEqual([]);
+});
+
+it("bounds summaries and active observations without limiting background hydration", async () => {
+  const response = responseGate();
+  const allStarted = createDeferred<void>();
+  let started = 0;
+  nativeRequest.mockImplementation(() => {
+    if (++started === 80) {
+      allStarted.resolve();
+    }
+    return response.promise;
+  });
+  const calls = pendingWork;
+  for (let index = 0; index < 80; index++) {
+    const f = await fixture(`cold-source-${index}`);
+    calls.push(f.control.initialize());
+  }
+  await allStarted.promise;
+  clock += 1_500;
+  response.resolve({ data: [] });
+  await Promise.all(calls);
+  expect(nativeRequest).toHaveBeenCalledTimes(80);
+  await diagnosticRuntime.waitForDiagnosticEventsDrained();
+  expect(records).toHaveLength(60);
+  expect(records.some((record) => Number(fields(record).omittedObservations) >= 16)).toBe(true);
+  records = [];
+  clock += 61_000;
+  nativeRequest.mockImplementation(async () => {
+    clock += 1_100;
+    return { data: [] };
+  });
+  const next = await fixture("after-capacity");
+  await next.control.initialize();
+  expect((await next.list())[0]?.connected).toBe(true);
+  expect(await emitted(PAGE)).toHaveLength(1);
+  expect(fields((await emitted(PAGE))[0])).toMatchObject({ omittedObservations: 4 });
+  expect(await emitted(LIST)).toEqual([]);
+});
+
+it("records each hydration page's control phases and rejects late callbacks after settlement", async () => {
+  const f = await fixture();
+  const thread = await f.thread("codex");
+  let previous: CodexControlRequestObservation | undefined;
+  const completedObservations: CodexControlRequestObservation[] = [];
+  mockObservedRequest(async (observation) => {
+    if (!observation) {
+      throw new Error("expected the active control observation");
+    }
+    completedObservations.push(observation);
+    if (!previous) {
+      clock += 50;
+      observation.phase("prepare");
+      for (let attempt = 0; attempt < 2; attempt++) {
+        clock += 25.25;
+        observation.phase("acquire-client");
+        clock += 100;
+        observation.phase("prepare");
+        clock += 25.25;
+        observation.phase("client-request");
+        clock += 300;
+        observation.phase("release-client");
+        clock += 50;
+        if (attempt === 0) {
+          observation.phase("prepare");
+        }
+      }
+      observation.attemptWaiterFinished?.(waiterSummary());
+      previous = observation;
+      return { data: [thread], nextCursor: "next" };
+    }
+    expect(observation).not.toBe(previous);
+    clock += 50;
+    observation.phase("prepare");
+    clock += 50;
+    observation.phase("acquire-client");
+    clock += 200;
+    observation.phase("client-request");
+    clock += 600;
+    observation.phase("release-client");
+    clock += 100;
+    observation.attemptWaiterFinished?.(
+      waiterSummary({
+        rpcId: 2,
+        waiterOutcome: "native-error",
+        wireOutcomeAtWaiterSettlement: "native-error",
+      }),
+    );
+    observation.failed({ phase: "client-request", category: "rpc-method-unavailable" });
+    clock += 1_000;
+    previous.phase("prepare");
+    previous.failed({ phase: "release-client", category: "other" });
+    previous.attemptWaiterFinished?.(waiterSummary({ rpcId: 99 }));
+    observation.phase("release-client");
+    observation.failed({ phase: "release-client", category: "deadline-observed" });
+    throw new Error(privateText);
+  });
+  await expect(f.control.initialize()).rejects.toThrow(privateText);
+  const pages = await emitted(PAGE);
+  expect(pages).toHaveLength(2);
+  expect(fields(pages[0])).toMatchObject({
+    outcome: "resolved",
+    controlRequestCalls: 1,
+    inclusiveControlRequestWaitMs: 1_051,
+    controlLoadMs: 50,
+    controlPrepareMs: 101,
+    controlAcquireClientMs: 200,
+    controlClientRequestMs: 600,
+    controlReleaseClientMs: 100,
+    postResponseMs: 0,
+    provenanceReadCalls: 1,
+    provenanceMs: 0,
+    controlWaitersV1: resolvedWaiters,
+    controlWaitersOmitted: 0,
+  });
+  expect(fields(pages[1])).toMatchObject({
+    outcome: "rejected",
+    controlRequestCalls: 1,
+    inclusiveControlRequestWaitMs: 2_000,
+    controlLoadMs: 50,
+    controlPrepareMs: 50,
+    controlAcquireClientMs: 200,
+    controlClientRequestMs: 600,
+    controlReleaseClientMs: 100,
+    provenanceReadCalls: 0,
+    controlFailurePhase: "client-request",
+    controlFailureCategory: "rpc-method-unavailable",
+    controlWaitersV1: JSON.stringify([
+      [1, 1, clientInstanceId, 2, 1, "new", 10, 12, 11, 20, "native-error", "native-error", 19],
+    ]),
+    controlWaitersOmitted: 0,
+  });
+  const completed = JSON.stringify(pages);
+  for (const observation of completedObservations) {
+    observation.attemptWaiterFinished?.(waiterSummary({ rpcId: 100 }));
+  }
+  await diagnosticRuntime.waitForDiagnosticEventsDrained();
+  expect(JSON.stringify(pages)).toBe(completed);
+  expect(await emitted(PAGE)).toHaveLength(2);
+});
+
+it("preserves hydration errors and memory reads when the diagnostic sink throws", async () => {
+  const f = await fixture();
+  sink.throwing = true;
+  const failure = new Error(privateText);
+  nativeRequest.mockImplementation(async () => {
+    clock += 1_500;
+    throw failure;
+  });
+  await expect(f.control.initialize()).rejects.toBe(failure);
+  const hosts = await f.list();
+  expect(hosts[0]).toMatchObject({
+    connected: false,
+    sessions: [],
+    error: {
+      code: "APP_SERVER_UNAVAILABLE",
+      message: "Codex app-server is unavailable on this host",
+    },
+  });
+  expect(JSON.stringify(hosts)).not.toContain(privateText);
+  expect(sink.attempts).toBeGreaterThanOrEqual(1);
+  expect(nativeRequest).toHaveBeenCalledOnce();
+});

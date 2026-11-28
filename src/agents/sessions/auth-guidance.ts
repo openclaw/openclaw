@@ -4,7 +4,7 @@
  * Uses docs paths instead of provider-specific instructions so guidance stays correct across OAuth/API-key providers.
  */
 import { join } from "node:path";
-import { getDocsPath } from "../config.js";
+import { getDocsPath } from "../package-metadata.js";
 
 const UNKNOWN_PROVIDER = "unknown";
 
@@ -15,11 +15,6 @@ function getProviderLoginHelp(): string {
     `  ${join(getDocsPath(), "providers.md")}`,
     `  ${join(getDocsPath(), "models.md")}`,
   ].join("\n");
-}
-
-/** Formats the message shown when no configured model can be used. */
-export function formatNoModelsAvailableMessage(): string {
-  return `No models available. ${getProviderLoginHelp()}`;
 }
 
 /** Formats the message shown before a model is selected. */

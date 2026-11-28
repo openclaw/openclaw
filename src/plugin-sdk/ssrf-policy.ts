@@ -87,13 +87,12 @@ export async function assertHttpUrlTargetsPrivateNetwork(
     dangerouslyAllowPrivateNetwork?: boolean | null;
     allowPrivateNetwork?: boolean | null;
     lookupFn?: LookupFn;
+    signal?: AbortSignal;
     errorMessage?: string;
   } = {},
 ): Promise<void> {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     // URL parser errors retain rejected input. Keep only stable classification.
     const err = new TypeError("Invalid URL") as TypeError & { code: string };
     err.code = "ERR_INVALID_URL";
@@ -128,6 +127,7 @@ export async function assertHttpUrlTargetsPrivateNetwork(
   // blanket exemption for cleartext public internet hosts.
   const pinned = await resolvePinnedHostnameWithPolicy(hostname, {
     lookupFn: params.lookupFn,
+    signal: params.signal,
     policy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(true),
   });
   if (!pinned.addresses.every((address) => isPrivateIpAddress(address))) {
@@ -181,15 +181,10 @@ export function isHttpsUrlAllowedByHostnameSuffixAllowlist(
   url: string,
   allowlist: readonly string[],
 ): boolean {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "https:") {
-      return false;
-    }
-    return isHostnameAllowedBySuffixAllowlist(parsed.hostname, allowlist);
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(url);
+  return (
+    parsed?.protocol === "https:" && isHostnameAllowedBySuffixAllowlist(parsed.hostname, allowlist)
+  );
 }
 
 /**
@@ -216,8 +211,5 @@ export function buildHostnameAllowlistPolicyFromSuffixAllowlist(
     patterns.add(`*.${normalized}`);
   }
 
-  if (patterns.size === 0) {
-    return undefined;
-  }
   return { hostnameAllowlist: Array.from(patterns) };
 }

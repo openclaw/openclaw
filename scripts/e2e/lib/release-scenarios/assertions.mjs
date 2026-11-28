@@ -8,27 +8,18 @@ import {
 import {
   assertNoLegacyPrimaryAuthRows,
   assertOpenAiEnvAuthProfileStore,
-  readSharedAuthProfileStoreText,
+  readCanonicalAuthProfileStoreText,
 } from "../auth-profile-store-assertions.mjs";
+import { assert } from "../fixtures/common.mjs";
 import {
   applyMockOpenAiModelConfig,
   parseMockOpenAiPort,
 } from "../fixtures/mock-openai-config.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
-import {
-  ERROR_DETAIL_TAIL_BYTES,
-  fileContainsText,
-  readJson,
-} from "../release-assertion-files.mjs";
-import { readTextFileTail } from "../text-file-utils.mjs";
+import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
+import { assertFileContainsText, fileContainsText, readJson } from "../release-assertion-files.mjs";
 
 const command = process.argv[2];
-
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
 
 function configPath() {
   return (
@@ -60,7 +51,7 @@ function readStateText() {
   const paths = [configPath(), authProfilesPath()].filter((file) => fs.existsSync(file));
   return [
     ...paths.map((file) => fs.readFileSync(file, "utf8")),
-    readSharedAuthProfileStoreText(stateDir()),
+    readCanonicalAuthProfileStoreText(stateDir()),
   ]
     .filter(Boolean)
     .join("\n");
@@ -77,7 +68,7 @@ function assertOpenAiEnvRef() {
   const rawKey = process.argv[3];
   assert(fs.existsSync(configPath()), "openclaw.json missing");
   assertNoLegacyPrimaryAuthRows(stateDir());
-  assertOpenAiEnvAuthProfileStore(readSharedAuthProfileStoreText(stateDir()), {
+  assertOpenAiEnvAuthProfileStore(readCanonicalAuthProfileStoreText(stateDir()), {
     missingMessage: "OpenAI env ref was not persisted",
     envRefMessage: "OpenAI env ref was not persisted",
     rawKeyMessage: "raw OpenAI key was persisted",
@@ -86,11 +77,50 @@ function assertOpenAiEnvRef() {
   assert(!readStateText().includes(rawKey), "raw OpenAI key was persisted");
 }
 
+function summarizeKnownValue(value, knownValues) {
+  if (value === undefined) {
+    return "missing";
+  }
+  return knownValues.includes(value) ? value : "unexpected";
+}
+
+function summarizeBoolean(value) {
+  if (value === true || value === false) {
+    return value;
+  }
+  return value === undefined ? "missing" : "unexpected";
+}
+
+function sessionMemoryHookConfigProjection(cfg) {
+  const wizard = cfg?.wizard;
+  const hooks = cfg?.hooks;
+  const internal = hooks?.internal;
+  const sessionMemory = internal?.entries?.["session-memory"];
+  return {
+    wizard: {
+      present: wizard !== undefined,
+      lastRunCommand: summarizeKnownValue(wizard?.lastRunCommand, ["onboard", "configure"]),
+      lastRunMode: summarizeKnownValue(wizard?.lastRunMode, ["local", "remote"]),
+    },
+    hooks: {
+      present: hooks !== undefined,
+      internalPresent: internal !== undefined,
+      internalEnabled: summarizeBoolean(internal?.enabled),
+      sessionMemoryPresent: sessionMemory !== undefined,
+      sessionMemoryEnabled: summarizeBoolean(sessionMemory?.enabled),
+    },
+  };
+}
+
 function assertSessionMemoryHookEnabled() {
   const cfg = readJson(configPath());
-  assert(
-    cfg.hooks?.internal?.entries?.["session-memory"]?.enabled === true,
-    "session-memory hook was not enabled",
+  if (cfg?.hooks?.internal?.entries?.["session-memory"]?.enabled === true) {
+    return;
+  }
+  throw new Error(
+    `session-memory hook was not enabled. Onboarding config projection: ${JSON.stringify(
+      sessionMemoryHookConfigProjection(cfg),
+    )}`,
   );
 }
 
@@ -105,10 +135,7 @@ function assertAgentTurn() {
 function assertFileContains() {
   const file = process.argv[3];
   const needle = process.argv[4];
-  assert(
-    fileContainsText(file, needle),
-    `${file} did not contain ${needle}. Output tail: ${readTextFileTail(file, ERROR_DETAIL_TAIL_BYTES)}`,
-  );
+  assertFileContainsText(file, needle, assert);
 }
 
 function assertPackageVersion() {
@@ -170,7 +197,10 @@ function assertPluginUninstalled() {
   const cfg = readJson(configPath());
   const installRecords = readPluginInstallRecords({ configPath: configPath() });
   assert(!installRecords[pluginId], `install record still present for ${pluginId}`);
-  assert(!cfg.plugins?.entries?.[pluginId], `plugin config entry still present for ${pluginId}`);
+  assert(
+    hasExpectedPluginUninstallConfigState(cfg, pluginId),
+    `exact disabled uninstall marker missing for ${pluginId}`,
+  );
   const managedRoot = path.join(
     process.env.HOME ?? "",
     ".openclaw",

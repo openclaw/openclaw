@@ -1,7 +1,5 @@
-// Signal plugin module implements approval native behavior.
-import { createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes } from "openclaw/plugin-sdk/approval-delivery-runtime";
-import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutesAsync } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { shouldSuppressLocalNativeExecApprovalPrompt } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildApprovalReactionPendingContentForRequest } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type {
@@ -30,7 +28,7 @@ function isSignalApprovalTransportEnabled(params: {
   return resolveSignalAccount({ cfg: params.cfg, accountId: params.accountId }).enabled;
 }
 
-const signalApproval = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes({
+const signalApproval = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutesAsync({
   channel: "signal",
   channelLabel: "Signal",
   authorizeActorAction: (params) => signalApprovalAuth.authorizeActorAction(params),
@@ -65,16 +63,15 @@ const signalApproval = createApproverRestrictedNativeApprovalCapabilityFromForwa
     },
   },
   createNativeRuntime: (routing) =>
-    createLazyChannelApprovalNativeRuntimeAdapter({
-      eventKinds: ["exec", "plugin"],
+    createLazyChannelApprovalNativeRuntimeAdapterAsync({
+      capabilityBoundary: true,
+      eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: ({ cfg, accountId, context }) =>
         Boolean(context) && routing.isNativeApprovalHandlerConfigured({ cfg, accountId }),
-      shouldHandle: ({ cfg, accountId, context, approvalKind, request }) =>
+      shouldHandle: async ({ cfg, accountId, context, approvalKind, request }) =>
         Boolean(context) &&
         routing.shouldHandleApprovalRequest({ cfg, accountId, approvalKind, request }),
-      load: async () =>
-        (await import("./approval-handler.runtime.js"))
-          .signalApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
+      load: async () => (await import("./approval-handler.runtime.js")).signalApprovalNativeRuntime,
     }),
 });
 const signalApprovalRouting = signalApproval.routing;

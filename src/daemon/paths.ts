@@ -1,4 +1,3 @@
-/** Resolves daemon state, home, and generated task-script paths. */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGatewayProfileSuffix } from "./constants.js";
@@ -6,7 +5,6 @@ import { resolveGatewayProfileSuffix } from "./constants.js";
 const windowsAbsolutePath = /^[a-zA-Z]:[\\/]/;
 const windowsUncPath = /^\\\\/;
 
-/** Resolves the home directory used for daemon state paths. */
 // Daemon unit files must not use infra/home-dir because runtime overrides cannot leak into services.
 export function resolveDaemonHomeDir(env: Record<string, string | undefined>): string {
   const home = normalizeOptionalString(env.HOME) || normalizeOptionalString(env.USERPROFILE);
@@ -25,7 +23,7 @@ function resolveUserPathWithHome(input: string, home?: string): string {
     if (!home) {
       throw new Error("Missing HOME");
     }
-    const expanded = trimmed.replace(/^~(?=$|[\\/])/, home);
+    const expanded = trimmed.replace(/^~(?=$|[\\/])/, () => home);
     return path.resolve(expanded);
   }
   if (windowsAbsolutePath.test(trimmed) || windowsUncPath.test(trimmed)) {

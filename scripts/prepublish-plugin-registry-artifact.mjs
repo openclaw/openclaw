@@ -2,6 +2,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,7 +10,7 @@ export const PREPUBLISH_PLUGIN_REGISTRY_MANIFEST = "prepublish-plugin-registry.j
 const SCHEMA = "openclaw.prepublish-plugin-registry/v1";
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const SOURCE_SHA_PATTERN = /^[0-9a-f]{40}$/u;
-const PACKAGE_NAME_PATTERN = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/u;
+const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
 const TARBALL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$/u;
 
 /**
@@ -53,7 +54,7 @@ function normalizeRequiredPackages(value) {
     !Array.isArray(value) ||
     value.some((name) => typeof name !== "string" || !PACKAGE_NAME_PATTERN.test(name))
   ) {
-    throw new Error("required packages must be an array of scoped npm package names");
+    throw new Error("required packages must be an array of npm package names");
   }
   const sorted = [...new Set(value)].toSorted((a, b) => a.localeCompare(b));
   if (sorted.length !== value.length) {
@@ -132,6 +133,17 @@ function validateManifestShape(manifest) {
   }
 }
 
+function validateRegistryPackageTarball(artifactDir, entry) {
+  const tarball = path.join(artifactDir, entry.tarball);
+  if (sha256File(tarball) !== entry.sha256) {
+    throw new Error(`prepublish plugin registry tarball SHA-256 mismatch for ${entry.name}`);
+  }
+  const packageJson = readTarballPackageJson(tarball);
+  if (packageJson.name !== entry.name || packageJson.version !== entry.version) {
+    throw new Error(`prepublish plugin registry tarball identity mismatch for ${entry.name}`);
+  }
+}
+
 /**
  * @param {ValidatePrepublishPluginRegistryParams} params
  * @returns {{ manifest: PrepublishPluginRegistryManifest, manifestPath: string, manifestSha256: string }}
@@ -187,14 +199,7 @@ export function validatePrepublishPluginRegistryArtifact(params) {
     );
   }
   for (const entry of manifest.packages) {
-    const tarball = path.join(artifactDir, entry.tarball);
-    if (sha256File(tarball) !== entry.sha256) {
-      throw new Error(`prepublish plugin registry tarball SHA-256 mismatch for ${entry.name}`);
-    }
-    const packageJson = readTarballPackageJson(tarball);
-    if (packageJson.name !== entry.name || packageJson.version !== entry.version) {
-      throw new Error(`prepublish plugin registry tarball identity mismatch for ${entry.name}`);
-    }
+    validateRegistryPackageTarball(artifactDir, entry);
   }
   return { manifest, manifestPath, manifestSha256 };
 }
@@ -234,6 +239,123 @@ function runChecked(command, args, cwd) {
   }
 }
 
+function readPreparedRegistryPackages(preparedBundleDir, sourceSha, candidateVersion) {
+  const bundle = readJson(
+    path.join(preparedBundleDir, "package-bundle.json"),
+    "prepared npm bundle",
+  );
+  if (
+    bundle.schema !== "openclaw.npm-package-bundle/v1" ||
+    bundle.releaseSha !== sourceSha ||
+    bundle.packageName !== "openclaw" ||
+    bundle.packageVersion !== candidateVersion ||
+    !Array.isArray(bundle.corePackageTarballs) ||
+    !Array.isArray(bundle.dependencyTarballs)
+  ) {
+    throw new Error("prepared npm bundle identity differs from the selected release candidate");
+  }
+  const packages = new Map();
+  for (const entry of [bundle, ...bundle.corePackageTarballs, ...bundle.dependencyTarballs]) {
+    const value = {
+      name: entry.packageName,
+      version: entry.packageVersion,
+      tarball: entry.tarballName,
+      sha256: entry.tarballSha256,
+    };
+    // dependencyTarballs is the root install subset of the complete core set.
+    const existing = packages.get(value.name);
+    if (existing && JSON.stringify(existing) !== JSON.stringify(value)) {
+      throw new Error(`prepared npm bundle contains conflicting package ${value.name}`);
+    }
+    packages.set(value.name, value);
+  }
+  const entries = [...packages.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+  validateManifestShape({
+    schema: SCHEMA,
+    schemaVersion: 1,
+    sourceSha,
+    candidateVersion,
+    packages: entries,
+  });
+  for (const entry of entries) {
+    validateRegistryPackageTarball(preparedBundleDir, entry);
+  }
+  return entries;
+}
+
+function assertCompatibleRuntimePlugins(
+  repoRoot,
+  sourceSha,
+  hostVersion,
+  requiredPackages,
+  packageVersions,
+) {
+  const policyPath = "src/plugins/official-runtime-plugins.ts";
+  const trackedPolicy = execFileSync("git", ["ls-tree", sourceSha, "--", policyPath], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  }).trim();
+  // Older selected releases have no runtime floor. Untracked files cannot add one.
+  if (!trackedPolicy) {
+    return;
+  }
+  if (!/^100(?:644|755) blob /u.test(trackedPolicy)) {
+    throw new Error("selected runtime plugin policy must be a tracked regular file");
+  }
+  // This selected-source module is import-free, erasable TS. A fresh process avoids
+  // reusing a cached policy when a synchronous caller advances the same checkout.
+  const candidates = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import { pathToFileURL } from "node:url";
+const { CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES: candidates } = await import(pathToFileURL(process.argv[1]).href);
+if (!Array.isArray(candidates)) throw new Error("selected runtime plugin policy must export an install candidate array");
+process.stdout.write(JSON.stringify(candidates));`,
+        path.join(repoRoot, policyPath),
+      ],
+      { cwd: repoRoot, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] },
+    ),
+  );
+  for (const candidate of candidates) {
+    if (
+      !candidate ||
+      typeof candidate.npmSpec !== "string" ||
+      (candidate.versionBoundToOpenClaw !== undefined &&
+        typeof candidate.versionBoundToOpenClaw !== "boolean")
+    ) {
+      throw new Error("selected runtime plugin policy contains an invalid install candidate");
+    }
+    if (
+      !candidate.versionBoundToOpenClaw ||
+      !requiredPackages.includes(candidate.npmSpec) ||
+      candidate.minimumCompatibleVersion === undefined
+    ) {
+      continue;
+    }
+    // Only creation needs the source owner; copied verifiers stay dependency-light.
+    const { isRuntimeAdmissibleForFloor } = createRequire(import.meta.url)(
+      "../src/infra/semver.ts",
+    );
+    const floor = candidate.minimumCompatibleVersion;
+    const candidateVersion = packageVersions.get(candidate.npmSpec);
+    const admissible =
+      typeof floor === "string" &&
+      floor === floor.trim() &&
+      typeof candidateVersion === "string" &&
+      candidateVersion === candidateVersion.trim()
+        ? isRuntimeAdmissibleForFloor(candidateVersion, hostVersion, floor)
+        : null;
+    if (admissible !== true) {
+      throw new Error(
+        `${candidate.npmSpec} candidate ${candidateVersion} does not satisfy selected-source minimum ${String(floor)} at ${sourceSha}; align the release cohort before packaging`,
+      );
+    }
+  }
+}
+
 export function createPrepublishPluginRegistryArtifact(params) {
   const repoRoot = path.resolve(params.repoRoot);
   const outputDir = path.resolve(params.outputDir);
@@ -259,61 +381,124 @@ export function createPrepublishPluginRegistryArtifact(params) {
   if (rootPackage.version !== params.candidateVersion) {
     throw new Error("root package version differs from the requested candidate version");
   }
+  const packages = params.preparedBundleDir
+    ? readPreparedRegistryPackages(
+        params.preparedBundleDir,
+        params.sourceSha,
+        params.candidateVersion,
+      )
+    : [];
+  const pluginSources = requiredPackages.flatMap((packageName) => {
+    if (packages.some((entry) => entry.name === packageName)) {
+      return [];
+    }
+    const { packageDir, packageJson } = findPublishablePlugin(repoRoot, packageName);
+    return [{ packageName, packageDir, packageJson }];
+  });
+  assertCompatibleRuntimePlugins(
+    repoRoot,
+    params.sourceSha,
+    rootPackage.version,
+    requiredPackages,
+    new Map([
+      ...packages.map(({ name, version }) => [name, version]),
+      ...pluginSources.map(({ packageName, packageJson }) => [packageName, packageJson.version]),
+    ]),
+  );
+  for (const { packageName, packageJson } of pluginSources) {
+    if (packageJson.version !== params.candidateVersion) {
+      throw new Error(`${packageName} version differs from the root package candidate`);
+    }
+  }
   fs.mkdirSync(outputDir, { recursive: true });
   if (fs.readdirSync(outputDir).length !== 0) {
     throw new Error(`prepublish plugin registry output directory must be empty: ${outputDir}`);
   }
-  const packages = [];
-  for (const packageName of requiredPackages) {
-    const { packageDir, packageJson } = findPublishablePlugin(repoRoot, packageName);
-    if (packageJson.version !== params.candidateVersion) {
-      throw new Error(`${packageName} version differs from the root package candidate`);
-    }
-    runChecked(
-      process.execPath,
-      [path.join(repoRoot, "scripts/lib/plugin-npm-runtime-build.mjs"), packageDir],
-      repoRoot,
+  for (const entry of packages) {
+    fs.copyFileSync(
+      path.join(params.preparedBundleDir, entry.tarball),
+      path.join(outputDir, entry.tarball),
+      fs.constants.COPYFILE_EXCL,
     );
+  }
+  const batchEntry = path.join(repoRoot, "scripts/lib/plugin-npm-build-and-pack-batch.mts");
+  // Bound module retention without adding build/pack concurrency. Older sources keep their CLI.
+  const batchSize = fs.existsSync(batchEntry) ? 4 : 1;
+  for (let offset = 0; offset < pluginSources.length; offset += batchSize) {
+    const batch = pluginSources.slice(offset, offset + batchSize);
+    const { packageDir } = batch[0];
     const before = new Set(fs.readdirSync(outputDir));
-    runChecked(
-      process.execPath,
-      [
-        path.join(repoRoot, "scripts/lib/plugin-npm-package-manifest.mjs"),
-        "--run",
-        packageDir,
-        "--",
-        "npm",
-        "pack",
-        "--json",
-        "--ignore-scripts",
-        "--pack-destination",
-        outputDir,
-      ],
-      repoRoot,
-    );
+    const buildAndPack = path.join(repoRoot, "scripts/lib/plugin-npm-build-and-pack.mts");
+    if (batchSize > 1) {
+      runChecked(
+        process.execPath,
+        [
+          "--import",
+          "./scripts/tsx.mjs",
+          batchEntry,
+          outputDir,
+          ...batch.map((entry) => entry.packageDir),
+        ],
+        repoRoot,
+      );
+    } else if (fs.existsSync(buildAndPack)) {
+      runChecked(
+        process.execPath,
+        ["--import", "./scripts/tsx.mjs", buildAndPack, packageDir, outputDir],
+        repoRoot,
+      );
+    } else {
+      // Stable release harnesses predate the combined entry; their own builders own packaging.
+      runChecked(
+        process.execPath,
+        [path.join(repoRoot, "scripts/lib/plugin-npm-runtime-build.mjs"), packageDir],
+        repoRoot,
+      );
+      runChecked(
+        process.execPath,
+        [
+          path.join(repoRoot, "scripts/lib/plugin-npm-package-manifest.mjs"),
+          "--run",
+          packageDir,
+          "--",
+          "npm",
+          "pack",
+          "--json",
+          "--ignore-scripts",
+          "--pack-destination",
+          outputDir,
+        ],
+        repoRoot,
+      );
+    }
     const created = fs.readdirSync(outputDir).filter((name) => !before.has(name));
-    if (created.length !== 1 || !TARBALL_PATTERN.test(created[0])) {
-      throw new Error(`${packageName} pack must create exactly one .tgz`);
+    if (created.length !== batch.length || created.some((name) => !TARBALL_PATTERN.test(name))) {
+      throw new Error("plugin pack must create exactly one .tgz per package");
     }
-    const tarball = created[0];
-    const tarballPath = path.join(outputDir, tarball);
-    const packedPackage = readTarballPackageJson(tarballPath);
-    if (packedPackage.name !== packageName || packedPackage.version !== params.candidateVersion) {
-      throw new Error(`${packageName} packed identity differs from the candidate`);
+    const expectedNames = new Set(batch.map((entry) => entry.packageName));
+    for (const tarball of created) {
+      const tarballPath = path.join(outputDir, tarball);
+      const packedPackage = readTarballPackageJson(tarballPath);
+      if (
+        packedPackage.version !== params.candidateVersion ||
+        !expectedNames.delete(packedPackage.name)
+      ) {
+        throw new Error(`${tarball} packed identity differs from the candidate batch`);
+      }
+      packages.push({
+        name: packedPackage.name,
+        version: params.candidateVersion,
+        tarball,
+        sha256: sha256File(tarballPath),
+      });
     }
-    packages.push({
-      name: packageName,
-      version: params.candidateVersion,
-      tarball,
-      sha256: sha256File(tarballPath),
-    });
   }
   const manifest = {
     schema: SCHEMA,
     schemaVersion: 1,
     sourceSha: params.sourceSha,
     candidateVersion: params.candidateVersion,
-    packages,
+    packages: packages.toSorted((a, b) => a.name.localeCompare(b.name)),
   };
   const manifestPath = path.join(outputDir, PREPUBLISH_PLUGIN_REGISTRY_MANIFEST);
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -359,6 +544,7 @@ function main() {
           outputDir: common.artifactDir,
           sourceSha: common.expectedSourceSha,
           candidateVersion: common.expectedCandidateVersion,
+          preparedBundleDir: options.get("--prepared-bundle-dir"),
           requiredPackages,
         })
       : command === "verify"
@@ -378,6 +564,7 @@ function main() {
 
 const isMain =
   process.argv[1] &&
+  fs.existsSync(process.argv[1]) &&
   fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
 if (isMain) {
   try {

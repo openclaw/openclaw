@@ -3,7 +3,7 @@ import Foundation
 import Swabble
 
 @MainActor
-struct TestHookCommand: ParsableCommand {
+struct TestHookCommand: CLICommand {
     @Argument(help: "Text to send to hook") var text: String
     @Option(name: .long("config"), help: "Path to config JSON") var configPath: String?
 
@@ -16,7 +16,7 @@ struct TestHookCommand: ParsableCommand {
     init(parsed: ParsedValues) {
         self.init()
         if let positional = parsed.positional.first { self.text = positional }
-        if let cfg = parsed.options["config"]?.last { self.configPath = cfg }
+        if let cfg = parsed.options["configPath"]?.last { self.configPath = cfg }
     }
 
     mutating func run() async throws {

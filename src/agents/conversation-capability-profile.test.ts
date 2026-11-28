@@ -1,28 +1,94 @@
-import fs from "node:fs";
-import os from "node:os";
+import { readFileSync } from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createAccountCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.types.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
-import { projectConversationToolNames } from "./conversation-tool-policy-pipeline.js";
-import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import {
+  prepareConversationCapabilityProfile,
+  resolveConversationCapabilityProfile as resolveProfile,
+} from "./conversation-capability-profile.js";
+import {
+  isConversationToolAllowed as allows,
+  projectConversationToolNames,
+} from "./conversation-tool-policy-pipeline.js";
+import {
+  preparePluginHarnessToolPolicies,
+  resolvePluginHarnessPolicyToolsAllow,
+} from "./harness/execution-environment.js";
+import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-capability-profile-");
+const readWrite = ["read", "write"];
+const runtimeTools = ["sessions_spawn", "memory_search"];
+
+type Profile = ReturnType<typeof resolveProfile>;
+type ProfileParams = Parameters<typeof resolveProfile>[0];
+function project(capabilityProfile: Profile, toolNames = ["read", "write", "exec"]) {
+  return projectConversationToolNames({ capabilityProfile, toolNames, warn: () => undefined });
+}
+function expectPolicy(profile: Profile, expected: Partial<Profile["policy"]>) {
+  expect(profile.policy).toEqual(expect.objectContaining(expected));
+}
+function groupConfig(
+  toolsBySender: Record<string, { allow?: string[]; deny?: string[] }>,
+  allow = ["read"],
+): OpenClawConfig {
+  return { channels: { whatsapp: { groups: { team: { tools: { allow }, toolsBySender } } } } };
+}
+const direct = (overrides: ProfileParams = {}): ProfileParams => ({
+  sessionKey: "agent:main:main",
+  messageProvider: "telegram",
+  agentAccountId: "work",
+  chatType: "direct",
+  conversationId: "42",
+  senderId: "alice",
+  ...overrides,
+});
 
 describe("resolveConversationCapabilityProfile", () => {
+  it.each(["fixture-reader", "group:plugins"])("requires registered ownership for %s", (allow) => {
+    const profile = resolveProfile({ config: { tools: { allow: [allow, "read"] } } });
+    expect(allows(profile, "read_public_item", { pluginId: "fixture-reader" })).toBe(true);
+    expect(allows(profile, "read_public_item")).toBe(false);
+    expect(allows(profile, "read")).toBe(true);
+  });
+
+  it.each(["read_public_item", "fixture-reader", "group:plugins"])(
+    "rechecks %s denies on registered tools",
+    (deny) => {
+      const profile = resolveProfile({
+        config: { tools: { allow: ["group:plugins"], deny: [deny] } },
+      });
+      expect(allows(profile, "read_public_item", { pluginId: "fixture-reader" })).toBe(false);
+    },
+  );
+
+  it("does not let plugin ownership widen a narrower conversation policy", () => {
+    const profile = resolveProfile({
+      config: { tools: { allow: ["group:plugins", "read"] } },
+      conversationToolPolicy: { allow: ["read"] },
+    });
+    expect(allows(profile, "read_public_item", { pluginId: "fixture-reader" })).toBe(false);
+    expect(allows(profile, "read")).toBe(true);
+  });
+
   it("intersects base and provider profile contributions from plugin manifests", () => {
-    const profile = resolveConversationCapabilityProfile({
-      config: {
-        tools: {
-          profile: "coding",
-          byProvider: { openai: { profile: "messaging" } },
-        },
-      },
+    const profile = resolveProfile({
+      config: { tools: { profile: "coding", byProvider: { openai: { profile: "messaging" } } } },
       modelProvider: "openai",
       pluginMetadataSnapshot: {
         plugins: [
@@ -37,225 +103,103 @@ describe("resolveConversationCapabilityProfile", () => {
         ],
       } as never,
     });
+    expect(project(profile, ["coding_only", "messaging_only", "shared"])).toEqual(["shared"]);
+  });
 
-    expect(
-      projectConversationToolNames({
-        capabilityProfile: profile,
-        toolNames: ["coding_only", "messaging_only", "shared"],
-        warn: () => undefined,
-      }),
-    ).toEqual(["shared"]);
+  it("includes every declared Knowledge tool in coding without opening other plugins", () => {
+    const manifest = JSON.parse(
+      readFileSync(
+        new URL("../../extensions/knowledge/openclaw.plugin.json", import.meta.url),
+        "utf8",
+      ),
+    ) as {
+      contracts: { tools: string[] };
+      toolMetadata?: PluginManifestRecord["toolMetadata"];
+    };
+    const otherTool = "unrelated_plugin_tool";
+    const pluginMetadataSnapshot = {
+      plugins: [
+        createPluginManifestRecordFixture({
+          id: "knowledge",
+          contracts: manifest.contracts,
+          toolMetadata: manifest.toolMetadata,
+        }),
+        createPluginManifestRecordFixture({ id: "unrelated", contracts: { tools: [otherTool] } }),
+      ],
+    };
+    const names = [...manifest.contracts.tools, otherTool];
+    const coding = resolveProfile({
+      config: { tools: { profile: "coding" } },
+      pluginMetadataSnapshot,
+    });
+    expect(project(coding, names)).toEqual(manifest.contracts.tools);
+
+    const denied = resolveProfile({
+      config: { tools: { profile: "coding", deny: ["knowledge_withdraw"] } },
+      pluginMetadataSnapshot,
+    });
+    expect(project(denied, names)).not.toContain("knowledge_withdraw");
+    const messaging = resolveProfile({
+      config: { tools: { profile: "messaging" } },
+      pluginMetadataSnapshot,
+    });
+    expect(project(messaging, names)).toEqual([]);
   });
 
   it("intersects a prepared direct policy with existing tool policy", () => {
-    const profile = resolveConversationCapabilityProfile({
+    const profile = resolveProfile({
       config: { tools: { deny: ["write"] } },
-      chatType: "direct",
       conversationToolPolicy: { allow: ["read", "write", "exec"], deny: ["exec"] },
     });
-
-    expect(profile.policy.groupPolicy).toEqual({
+    expect(profile.policy.inheritancePolicies).toContainEqual({
       allow: ["read", "write", "exec"],
       deny: ["exec"],
     });
-    expect(profile.policy.inheritancePolicies).toContain(profile.policy.groupPolicy);
-    expect(
-      projectConversationToolNames({
-        capabilityProfile: profile,
-        toolNames: ["read", "write", "exec", "process"],
-        warn: () => undefined,
-      }),
-    ).toEqual(["read"]);
+    expect(project(profile, ["read", "write", "exec", "process"])).toEqual(["read"]);
   });
 
   it("does not add a requester restriction without a conversation policy", () => {
-    const profile = resolveConversationCapabilityProfile({ chatType: "direct" });
-
+    const profile = resolveProfile({});
     expect(profile.policy.groupPolicy).toBeUndefined();
-    expect(
-      projectConversationToolNames({
-        capabilityProfile: profile,
-        toolNames: ["read", "write", "exec"],
-        warn: () => undefined,
-      }),
-    ).toEqual(["read", "write", "exec"]);
+    expect(project(profile)).toEqual(["read", "write", "exec"]);
   });
 
-  it("prepares a direct conversation profile with sender tool restrictions", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        toolsBySender: {
-          "id:guest": { deny: ["exec", "process"] },
-        },
-      },
-    };
-
-    const profile = resolveConversationCapabilityProfile({
-      config: cfg,
-      sessionKey: "agent:main:discord:dm:guest",
-      agentId: "main",
-      messageProvider: "discord",
-      chatType: "direct",
-      senderId: "guest",
-      modelProvider: "openai",
-      modelId: "gpt-5.5",
-      modelApi: "responses",
-      workspaceDir: "/tmp/openclaw-direct-profile",
-      cwd: "/tmp/openclaw-direct-profile/task",
-      agentDir: "/tmp/openclaw-agent-direct-profile",
-      skillsSnapshot: {
-        prompt: "",
-        skills: [{ name: "ops" }],
-      },
+  it.each([
+    [{ messageChannel: INTERNAL_MESSAGE_CHANNEL, senderIsOwner: true }, false],
+    [{ messageProvider: INTERNAL_MESSAGE_CHANNEL, senderIsOwner: false }, true],
+    [{ messageProvider: "discord", senderIsOwner: true }, true],
+  ] as const)("applies sender restrictions for %j", (params, restricted) => {
+    const deny = ["exec", "process"];
+    const profile = resolveProfile({
+      config: { tools: { toolsBySender: { "*": { deny } } } },
+      ...params,
     });
-
-    expect(profile.conversation.scope).toBe("direct");
-    expect(profile.policy.senderPolicy).toEqual({ deny: ["exec", "process"] });
-    expect(profile.policy.explicitToolDenylist).toEqual(["exec", "process"]);
-    expect(profile.model).toMatchObject({
-      provider: "openai",
-      id: "gpt-5.5",
-      api: "responses",
+    expectPolicy(profile, {
+      senderPolicy: restricted ? { deny } : undefined,
+      explicitToolDenylist: restricted ? deny : [],
     });
-    expect(profile.workspace).toMatchObject({
-      workspaceRoot: "/tmp/openclaw-direct-profile",
-      runtimeRoot: "/tmp/openclaw-direct-profile/task",
-      instructionRoot: "/tmp/openclaw-agent-direct-profile",
-    });
-    expect(profile.skills.snapshot?.skills).toEqual([{ name: "ops" }]);
-  });
-
-  it("exempts owner WebChat from wildcard sender tool restrictions", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["exec", "process"] },
-        },
-      },
-    };
-
-    const profile = resolveConversationCapabilityProfile({
-      config: cfg,
-      messageProvider: INTERNAL_MESSAGE_CHANNEL,
-      chatType: "direct",
-      senderIsOwner: true,
-    });
-
-    expect(profile.policy.senderPolicy).toBeUndefined();
-    expect(profile.policy.explicitToolDenylist).toEqual([]);
-  });
-
-  it("exempts owner WebChat identified through the message channel", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["exec", "process"] },
-        },
-      },
-    };
-
-    const profile = resolveConversationCapabilityProfile({
-      config: cfg,
-      messageChannel: INTERNAL_MESSAGE_CHANNEL,
-      chatType: "direct",
-      senderIsOwner: true,
-    });
-
-    expect(profile.policy.senderPolicy).toBeUndefined();
-    expect(profile.policy.explicitToolDenylist).toEqual([]);
-  });
-
-  it("keeps wildcard sender tool restrictions for non-owner WebChat", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["exec", "process"] },
-        },
-      },
-    };
-
-    const profile = resolveConversationCapabilityProfile({
-      config: cfg,
-      messageProvider: INTERNAL_MESSAGE_CHANNEL,
-      chatType: "direct",
-      senderIsOwner: false,
-    });
-
-    expect(profile.policy.senderPolicy).toEqual({ deny: ["exec", "process"] });
-    expect(profile.policy.explicitToolDenylist).toEqual(["exec", "process"]);
-  });
-
-  it("keeps wildcard sender tool restrictions for owners on external channels", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["exec", "process"] },
-        },
-      },
-    };
-
-    const profile = resolveConversationCapabilityProfile({
-      config: cfg,
-      messageProvider: "discord",
-      chatType: "direct",
-      senderIsOwner: true,
-    });
-
-    expect(profile.policy.senderPolicy).toEqual({ deny: ["exec", "process"] });
-    expect(profile.policy.explicitToolDenylist).toEqual(["exec", "process"]);
   });
 
   it("prepares a shared conversation profile with group per-sender restrictions", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        whatsapp: {
-          groups: {
-            team: {
-              tools: { allow: ["read"] },
-              toolsBySender: {
-                "id:alice": { allow: ["read", "exec"] },
-              },
-            },
-          },
-        },
-      },
-    };
-
-    const profile = resolveConversationCapabilityProfile({
-      config: cfg,
+    const profile = resolveProfile({
+      config: groupConfig({ "id:alice": { allow: ["read", "exec"] } }),
       sessionKey: "agent:main:whatsapp:group:team",
       agentId: "main",
       messageProvider: "whatsapp",
-      chatType: "group",
       groupId: "team",
       senderId: "alice",
-      modelProvider: "openai",
-      modelId: "gpt-5.5",
-      workspaceDir: "/tmp/openclaw-shared-profile",
     });
-
-    expect(profile.conversation.scope).toBe("shared");
-    expect(profile.policy.trustedGroup).toEqual({ groupId: "team", dropped: false });
-    expect(profile.policy.groupPolicy).toEqual({ allow: ["read", "exec"] });
-    expect(profile.policy.explicitToolAllowlist).toEqual(["read", "exec"]);
+    expectPolicy(profile, {
+      trustedGroup: { groupId: "team", dropped: false },
+      groupPolicy: { allow: ["read", "exec"] },
+      explicitToolAllowlist: ["read", "exec"],
+    });
   });
 
   it("uses a scheduled owner group without reapplying sender wildcard policy", () => {
     const cfg: OpenClawConfig = {
-      tools: {
-        deny: ["exec"],
-        toolsBySender: { "*": { deny: ["write"] } },
-      },
-      channels: {
-        whatsapp: {
-          groups: {
-            team: {
-              tools: { allow: ["read", "write"] },
-              toolsBySender: { "*": { deny: ["write"] } },
-            },
-          },
-        },
-      },
+      ...groupConfig({ "*": { deny: ["write"] } }, readWrite),
+      tools: { deny: ["exec"], toolsBySender: { "*": { deny: ["write"] } } },
     };
     const baseParams = {
       config: cfg,
@@ -264,9 +208,8 @@ describe("resolveConversationCapabilityProfile", () => {
       messageProvider: "whatsapp",
       runtimeToolAllowlist: ["write"],
     };
-
-    const legacy = resolveConversationCapabilityProfile(baseParams);
-    const scheduled = resolveConversationCapabilityProfile({
+    const legacy = resolveProfile(baseParams);
+    const scheduled = resolveProfile({
       ...baseParams,
       scheduledToolPolicy: {
         version: 1,
@@ -275,129 +218,87 @@ describe("resolveConversationCapabilityProfile", () => {
         ownerAccountId: "default",
       },
     });
-
-    expect(legacy.policy.senderPolicy).toEqual({ deny: ["write"] });
-    expect(legacy.policy.groupPolicy).toBeUndefined();
-    expect(scheduled.policy.senderPolicy).toBeUndefined();
-    expect(scheduled.policy.groupPolicy).toEqual({ allow: ["read", "write"] });
-    expect(scheduled.policy.explicitToolDenylist).toEqual(["exec"]);
+    expectPolicy(legacy, { senderPolicy: { deny: ["write"] }, groupPolicy: undefined });
+    expectPolicy(scheduled, {
+      senderPolicy: undefined,
+      groupPolicy: { allow: readWrite },
+      explicitToolDenylist: ["exec"],
+    });
     expect(scheduled.policy.explicitToolAllowlist).toContain("write");
   });
 
-  it("keeps built-in profile grants out of explicit overrides", () => {
-    const profile = resolveConversationCapabilityProfile({
-      config: {
-        tools: {
-          profile: "coding",
-          allow: ["pdf"],
-        },
-      },
-      modelProvider: "ollama",
-      modelId: "qwen3.5:9b",
-    });
-
-    expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
-    expect(profile.policy.explicitToolOverrideAllowlist).toEqual(["pdf"]);
-  });
-
-  it("adds runtime tools without replacing the configured tool surface", () => {
-    const profile = resolveConversationCapabilityProfile({
-      config: {
-        tools: {
-          profile: "coding",
-          deny: ["workboard_block"],
-        },
-      },
-      runtimePluginToolGrant: {
-        pluginId: "workboard",
-        toolNames: ["workboard_heartbeat", " workboard_complete ", "workboard_heartbeat"],
-      },
-    });
-
-    expect(profile.policy.profileAlsoAllow).toEqual(["workboard_heartbeat", "workboard_complete"]);
-    expect(profile.policy.providerProfileAlsoAllow).toEqual([
-      "workboard_heartbeat",
-      "workboard_complete",
-    ]);
-    expect(profile.policy.explicitToolAllowlist).toEqual(expect.arrayContaining(["read", "exec"]));
-    expect(profile.policy.explicitToolAllowlist).not.toContain("workboard_heartbeat");
-    expect(profile.policy.explicitToolOverrideAllowlist).toEqual([]);
-    expect(profile.policy.explicitToolDenylist).toEqual(["workboard_block"]);
-    expect(profile.policy.runtimePluginToolGrant).toEqual({
+  it("normalizes additive runtime tools without making them explicit overrides", () => {
+    const runtimePluginToolGrant = {
       pluginId: "workboard",
       toolNames: ["workboard_heartbeat", " workboard_complete ", "workboard_heartbeat"],
+    };
+    const normalized = ["workboard_heartbeat", "workboard_complete"];
+    const profile = resolveProfile({
+      config: { tools: { profile: "coding" } },
+      runtimePluginToolGrant,
     });
-    expect(profile.policy.inheritancePolicies).not.toContainEqual({
-      allow: ["workboard_heartbeat", "workboard_complete"],
+    expectPolicy(profile, {
+      profileAlsoAllow: normalized,
+      providerProfileAlsoAllow: normalized,
+      explicitToolOverrideAllowlist: [],
     });
+    expect(profile.policy.explicitToolAllowlist).toEqual(expect.arrayContaining(["read", "exec"]));
+    expect(profile.policy.explicitToolAllowlist).not.toContain("workboard_heartbeat");
+    expect(profile.policy.inheritancePolicies).not.toContainEqual({ allow: normalized });
   });
 
   it("keeps inherited subagent grants out of explicit overrides", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-capability-profile-"));
-    const storePath = path.join(tempDir, "sessions.json");
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
     const sessionKey = "agent:main:subagent:limited";
-    await replaceSessionEntry({ storePath, sessionKey }, {
-      sessionId: "limited-session",
-      updatedAt: Date.now(),
-      spawnDepth: 1,
-      subagentRole: "orchestrator",
-      subagentControlScope: "children",
-      spawnedBy: "agent:main:main",
-      inheritedToolPolicyVersion: 1,
-      inheritedToolAllow: ["image_generate"],
-    } as SessionEntry);
-
-    try {
-      const profile = resolveConversationCapabilityProfile({
-        config: { session: { store: storePath } },
-        sessionKey,
-        agentId: "main",
-        modelProvider: "ollama",
-        modelId: "qwen3.5:9b",
-      });
-
-      expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
-      expect(profile.policy.explicitToolOverrideAllowlist).not.toContain("image_generate");
-      expect(profile.policy.delegated).toBe(true);
-      expect(profile.policy.requesterPolicySource).toBe("persisted-child");
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    await replaceSessionEntry(
+      { storePath, sessionKey },
+      {
+        sessionId: "limited-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        spawnedBy: "agent:main:main",
+        inheritedToolPolicyVersion: 1,
+        inheritedToolAllow: ["image_generate"],
+      },
+    );
+    const profile = await prepareConversationCapabilityProfile({
+      config: { session: { store: storePath } },
+      sessionKey,
+      agentId: "main",
+      modelProvider: "ollama",
+      modelId: "qwen3.5:9b",
+    });
+    expect(profile.policy).toMatchObject({
+      explicitToolAllowlist: expect.arrayContaining(["image_generate"]),
+      explicitToolOverrideAllowlist: expect.not.arrayContaining(["image_generate"]),
+      delegated: true,
+      requesterPolicySource: "persisted-child",
+    });
   });
 
   it("keeps runtime allowlists local unless the caller opts into inheritance", () => {
-    const localRuntimeProfile = resolveConversationCapabilityProfile({
-      runtimeToolAllowlist: ["sessions_spawn", "memory_search"],
+    const local = resolveProfile({ runtimeToolAllowlist: runtimeTools });
+    expect(local.policy).toMatchObject({
+      explicitToolAllowlist: runtimeTools,
+      explicitToolOverrideAllowlist: runtimeTools,
+      runtimeToolPolicyForInheritance: undefined,
     });
 
-    expect(localRuntimeProfile.policy.explicitToolAllowlist).toEqual([
-      "sessions_spawn",
-      "memory_search",
-    ]);
-    expect(localRuntimeProfile.policy.explicitToolOverrideAllowlist).toEqual([
-      "sessions_spawn",
-      "memory_search",
-    ]);
-    expect(localRuntimeProfile.policy.runtimeToolPolicyForInheritance).toBeUndefined();
-
-    const inheritedRuntimeProfile = resolveConversationCapabilityProfile({
-      runtimeToolAllowlist: ["sessions_spawn", "memory_search"],
+    const inherited = resolveProfile({
+      runtimeToolAllowlist: runtimeTools,
       inheritRuntimeToolAllowlist: true,
     });
 
-    expect(inheritedRuntimeProfile.policy.runtimeToolPolicyForInheritance).toEqual({
-      allow: ["sessions_spawn", "memory_search"],
-    });
-    expect(inheritedRuntimeProfile.policy.inheritancePolicies).toContain(
-      inheritedRuntimeProfile.policy.runtimeToolPolicyForInheritance,
+    expect(inherited.policy.runtimeToolPolicyForInheritance).toEqual({ allow: runtimeTools });
+    expect(inherited.policy.inheritancePolicies).toContain(
+      inherited.policy.runtimeToolPolicyForInheritance,
     );
   });
 
-  it("does not classify the conversation as shared from a dropped caller group id", () => {
-    // Non-group session key cannot vouch for the caller-supplied group facts:
-    // the trust check drops them, so scope must stay unknown instead of
-    // reflecting untrusted input that the profile itself publishes as null.
-    const profile = resolveConversationCapabilityProfile({
+  it("drops caller group facts that the session key cannot vouch for", () => {
+    const profile = resolveProfile({
       sessionKey: "agent:main:discord:dm:guest",
       agentId: "main",
       messageProvider: "discord",
@@ -408,97 +309,166 @@ describe("resolveConversationCapabilityProfile", () => {
     });
 
     expect(profile.policy.trustedGroup).toEqual({ groupId: null, dropped: true });
-    expect(profile.conversation.groupId).toBeNull();
-    expect(profile.conversation.groupChannel).toBeNull();
-    expect(profile.conversation.groupSpace).toBeNull();
-    expect(profile.conversation.scope).toBe("unknown");
-  });
-
-  it("classifies group-scoped session keys as shared without a live chat type", () => {
-    const profile = resolveConversationCapabilityProfile({
-      sessionKey: "agent:main:whatsapp:group:team",
-      agentId: "main",
-      messageProvider: "whatsapp",
+    expect(profile.conversation).toMatchObject({
+      groupId: null,
+      groupChannel: null,
+      groupSpace: null,
     });
-
-    expect(profile.conversation.scope).toBe("shared");
-  });
-
-  it("classifies shared scope from the live run session key behind a sandbox policy key", () => {
-    const profile = resolveConversationCapabilityProfile({
-      sessionKey: "agent:main:main",
-      runSessionKey: "agent:main:telegram:group:ops",
-      agentId: "main",
-      messageProvider: "telegram",
-    });
-
-    expect(profile.conversation.scope).toBe("shared");
-  });
-
-  it("keeps trusted caller group facts shared when the session key vouches for them", () => {
-    const profile = resolveConversationCapabilityProfile({
-      sessionKey: "agent:main:whatsapp:group:team",
-      agentId: "main",
-      messageProvider: "whatsapp",
-      groupId: "team",
-    });
-
-    expect(profile.policy.trustedGroup).toEqual({ groupId: "team", dropped: false });
-    expect(profile.conversation.scope).toBe("shared");
   });
 });
 
 describe("resolveConversationCapabilityProfile scheduled account authority", () => {
-  const ownerSessionKey = "agent:main:whatsapp:group:safe-room";
-
   beforeEach(() => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "whatsapp",
-          source: "test",
-          plugin: {
-            id: "whatsapp",
-            meta: {},
-            config: createAccountListHelpers("whatsapp"),
-          },
-        },
-      ]),
-    );
+    const plugin = { id: "whatsapp", meta: {}, config: createAccountListHelpers("whatsapp") };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin }]));
   });
 
-  function scheduledProfile(accounts: Record<string, unknown>) {
-    return resolveConversationCapabilityProfile({
-      config: {
-        channels: {
-          whatsapp: {
-            accounts,
-            groups: { "safe-room": { tools: { allow: ["read"] } } },
-          },
+  it.each([
+    ["external", true, "telegram"],
+    ["unknown", true, "whatsapp"],
+    ["local", false, "whatsapp"],
+  ] satisfies Array<[CronScheduledToolCallerOrigin["kind"], boolean, string]>)(
+    "preserves scheduled %s creator authority (configured=%s, delivery=%s)",
+    async (origin, configured, delivery) => {
+      const config: OpenClawConfig = {
+        channels: { whatsapp: { accounts: configured ? { work: {} } : {} } },
+      };
+      const params = {
+        config,
+        sessionKey: "agent:main:cron:job:run:turn",
+        agentId: "main",
+        agentAccountId: "default",
+        messageProvider: delivery,
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey:
+            origin === "local" ? "agent:main:main" : "agent:main:whatsapp:direct:sender",
+          ownerAccountId: "work",
+          ownerOrigin:
+            origin === "external" ? { kind: origin, channel: "whatsapp" } : { kind: origin },
+        } satisfies ScheduledToolPolicyContext,
+      };
+      const conversationTools = () =>
+        project(
+          resolveProfile({
+            ...params,
+            config: { ...params.config, tools: { allow: ["read"] } },
+          }),
+          ["read", "write"],
+        );
+      const webSearch = () =>
+        resolveWebSearchToolPolicy({ ...params, runtimeToolAllowlist: ["web_search"] });
+      const harnessTools = async () =>
+        resolvePluginHarnessPolicyToolsAllow(
+          await preparePluginHarnessToolPolicies({
+            ...params,
+            provider: "fixture",
+            modelId: "fixture-model",
+            senderId: "sender",
+            conversationToolPolicy: { deny: ["*"] },
+          }),
+        );
+
+      if (origin === "unknown" || !configured) {
+        for (const resolve of [conversationTools, webSearch]) {
+          expect(resolve).toThrow('Scheduled account "work" is unavailable');
+        }
+        await expect(harnessTools()).rejects.toThrow('Scheduled account "work" is unavailable');
+        return;
+      }
+      expect(conversationTools()).toEqual(["read"]);
+      expect(webSearch()).toEqual({ allowed: true, persistentAllowed: true });
+      expect(await harnessTools()).toEqual([]);
+    },
+  );
+});
+
+describe("requester conversation policy admission", () => {
+  let registry: ReturnType<typeof captureActivePluginRegistrySnapshot>;
+  beforeEach(() => {
+    registry = captureActivePluginRegistrySnapshot();
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "telegram" }),
+      security: {
+        resolveDirectToolPolicy: ({ cfg, accountId, conversationId, senderId }) =>
+          accountId === "work" && conversationId === "42" && senderId === "alice"
+            ? cfg.channels?.telegram?.direct?.[conversationId]?.tools
+            : { allow: ["read"] },
+      },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]));
+  });
+  afterEach(() => restoreActivePluginRegistrySnapshot(registry));
+
+  it("resolves new admission config for the original DM while preserving the source policy", () => {
+    const source = resolveProfile(
+      direct({
+        config: {
+          agents: { entries: { source: { tools: { allow: ["read"] } } } },
+          channels: { telegram: { direct: { "42": { tools: { deny: ["exec"] } } } } },
         },
-      } as unknown as OpenClawConfig,
-      sessionKey: ownerSessionKey,
-      agentId: "main",
-      messageProvider: "whatsapp",
-      groupId: "safe-room",
-      groupChannel: "whatsapp",
-      scheduledToolPolicy: createAccountCronScheduledToolPolicy({
-        ownerSessionKey,
-        ownerAccountId: "work",
+        agentId: "source",
+        sessionKey: "agent:source:main",
       }),
-    });
-  }
+    );
+    const destination = resolveProfile(
+      direct({
+        config: {
+          channels: { telegram: { direct: { "42": { tools: { deny: ["write"] } } } } },
+        },
+        agentId: "destination",
+        sessionKey: "agent:destination:main",
+        messageProvider: "webchat",
+        agentAccountId: "receiver",
+        conversationId: "99",
+        senderId: "bob",
+        requesterOrigin: source.requesterOrigin,
+      }),
+    );
 
-  it("keeps the group policy while the scheduled owner account stays configured", () => {
-    expect(scheduledProfile({ work: {} }).policy.groupPolicy).toEqual({ allow: ["read"] });
+    expect(project(source)).toEqual(["read"]);
+    expect(project(destination)).toEqual(["read", "exec"]);
+    expect(source.policy.groupPolicy).toEqual({ deny: ["exec"] });
+    expect(destination.requesterOrigin).toMatchObject({
+      accountId: "work",
+      conversationId: "42",
+      senderId: "alice",
+    });
   });
 
-  it("denies every tool for a scheduled run after its owner account is removed", () => {
-    const groupPolicy = scheduledProfile({}).policy.groupPolicy;
+  it("keeps legacy policy on the original queued execution without inheriting it in requester facts", () => {
+    const initial = direct({ conversationToolPolicy: { allow: ["read"] } });
+    const source = resolveProfile(initial);
+    const queued = resolveProfile({
+      ...initial,
+      requesterOrigin: source.requesterOrigin,
+    });
+    const delegated = resolveProfile({
+      config: { channels: { telegram: { direct: { "42": { tools: {} } } } } },
+      sessionKey: "agent:destination:main",
+      requesterOrigin: source.requesterOrigin,
+    });
 
-    expect(groupPolicy).toEqual({ allow: [], deny: ["*"] });
-    for (const toolName of ["read", "write", "exec", "apply_patch"]) {
-      expect(isToolAllowedByPolicyName(toolName, groupPolicy)).toBe(false);
-    }
+    expect(project(queued)).toEqual(["read"]);
+    expect(project(delegated)).toEqual(["read", "write", "exec"]);
+    expect(source.requesterOrigin).not.toHaveProperty("conversationToolPolicy");
+  });
+
+  it("keeps execution-local non-owner authority with preserved owner requester identity", () => {
+    const origin = resolveProfile({
+      sessionKey: "agent:main:main",
+      messageProvider: INTERNAL_MESSAGE_CHANNEL,
+      operatorProfileId: "operator-alice",
+      senderIsOwner: true,
+    }).requesterOrigin;
+    const maintenance = resolveProfile({
+      requesterOrigin: origin,
+      senderIsOwner: false,
+      config: { tools: { toolsBySender: { "*": { deny: ["exec"] } } } },
+    });
+    expect(project(maintenance)).toEqual(["read", "write"]);
+    expect(maintenance.sender.isOwner).toBe(false);
+    expect(origin).not.toHaveProperty("senderIsOwner");
   });
 });

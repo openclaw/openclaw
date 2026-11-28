@@ -1,6 +1,4 @@
-import AVFoundation
 import Foundation
-import Speech
 
 struct QuickChatDictationTextUpdate: Equatable, Sendable {
     let text: String
@@ -74,11 +72,7 @@ final class QuickChatDictation: @unchecked Sendable {
     typealias UpdateHandler = @MainActor @Sendable (Event) -> Void
 
     private let queue = DispatchQueue(label: "ai.openclaw.quickchat.dictation")
-    private var recognizer: SFSpeechRecognizer?
-    private var audioEngine: AVAudioEngine?
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
-    private var tapInstalled = false
+    private let capture = SpeechCaptureResources(mode: .dictation)
     private var sessionID = UUID()
 
     func start(onUpdate: @escaping UpdateHandler) async throws {
@@ -106,54 +100,20 @@ final class QuickChatDictation: @unchecked Sendable {
         let sessionID = UUID()
         self.sessionID = sessionID
 
-        let recognizer = SFSpeechRecognizer(locale: Locale(identifier: Locale.current.identifier))
-        guard let recognizer, recognizer.isAvailable else {
-            throw NSError(
-                domain: "QuickChatDictation",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Recognizer unavailable"])
-        }
-        self.recognizer = recognizer
-
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
-        self.recognitionRequest = request
-
-        guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
-            throw NSError(
-                domain: "QuickChatDictation",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "No usable audio input device available"])
-        }
-
-        let audioEngine = AVAudioEngine()
-        self.audioEngine = audioEngine
-        let input = audioEngine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request] buffer, _ in
-            request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
-        }
-        self.tapInstalled = true
-
-        audioEngine.prepare()
-        try audioEngine.start()
-
-        self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+        try self.capture.start(localeID: Locale.current.identifier) { [weak self] update in
             guard let self else { return }
-            let transcript = result?.bestTranscription.formattedString
-            let isFinal = result?.isFinal ?? false
             self.queue.async { [weak self] in
                 guard let self, self.sessionID == sessionID else { return }
-                if error != nil || isFinal {
+                if update.error != nil || update.isFinal {
                     self.stopLocked()
                 }
                 Task { @MainActor in
-                    if let transcript {
+                    if let transcript = update.transcript {
                         onUpdate(.transcript(transcript))
                     }
-                    if error != nil {
+                    if update.error != nil {
                         onUpdate(.failed)
-                    } else if isFinal {
+                    } else if update.isFinal {
                         onUpdate(.finished)
                     }
                 }
@@ -163,19 +123,6 @@ final class QuickChatDictation: @unchecked Sendable {
 
     private func stopLocked() {
         self.sessionID = UUID()
-        if self.tapInstalled {
-            self.audioEngine?.inputNode.removeTap(onBus: 0)
-            self.tapInstalled = false
-        }
-        self.recognitionRequest?.endAudio()
-        self.recognitionTask?.cancel()
-        self.recognitionTask = nil
-        self.recognitionRequest = nil
-        self.recognizer = nil
-        if self.audioEngine?.isRunning == true {
-            self.audioEngine?.stop()
-            self.audioEngine?.reset()
-        }
-        self.audioEngine = nil
+        self.capture.stop()
     }
 }

@@ -1,8 +1,12 @@
-// Resolves plugin install paths for local and package sources.
 import { createHash } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
+import { readGitHead } from "../infra/git-root.js";
 import {
   resolveSafeInstallDir,
   safeDirName,
@@ -10,12 +14,11 @@ import {
   unscopedPackageName,
 } from "../infra/install-safe-path.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveActivePluginInstallRoots } from "./install-root-context.js";
+import { formatGitPluginSpec } from "./git-source-spec.js";
+import { resolveActivePluginInstallDir } from "./install-root-context.js";
 
 /** Encodes arbitrary input as a safe plugin install filename. */
-export function safePluginInstallFileName(input: string): string {
-  return safeDirName(input);
-}
+export { safeDirName as safePluginInstallFileName };
 
 /** Encodes a plugin id for use as an install directory name. */
 export function encodePluginInstallDirName(pluginId: string): string {
@@ -87,7 +90,7 @@ export function resolveDefaultPluginExtensionsDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir?: () => string,
 ): string {
-  return resolveActivePluginInstallRoots(env, homedir).extensionsDir;
+  return resolveActivePluginInstallDir("extensions", env, homedir);
 }
 
 /** Resolves the default directory for managed npm plugin installs. */
@@ -95,7 +98,7 @@ export function resolveDefaultPluginNpmDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir?: () => string,
 ): string {
-  return resolveActivePluginInstallRoots(env, homedir).npmDir;
+  return resolveActivePluginInstallDir("npm", env, homedir);
 }
 
 /** Encodes an npm package name into a managed npm project directory name. */
@@ -226,7 +229,48 @@ export function resolveDefaultPluginGitDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir?: () => string,
 ): string {
-  return resolveActivePluginInstallRoots(env, homedir).gitDir;
+  return resolveActivePluginInstallDir("git", env, homedir);
+}
+
+/** The managed checkout published for one normalized Git source and ref. */
+export function resolvePluginGitRepoDir(gitDir: string, normalizedSpec: string): string {
+  const digest = sha256HexPrefixCore(redactSensitiveUrlLikeString(normalizedSpec), 16);
+  return path.join(gitDir, `git-${digest}`, "repo");
+}
+
+/** Resolve the physical checkout only when the registered source and commit still identify it. */
+export async function resolveRegisteredGitCheckout(
+  record: PluginInstallRecord,
+  env?: NodeJS.ProcessEnv,
+): Promise<string | null> {
+  if (
+    record.source !== "git" ||
+    !record.installPath?.trim() ||
+    !record.gitUrl ||
+    !record.gitCommit
+  ) {
+    return null;
+  }
+  try {
+    const gitDir = path.resolve(resolveDefaultPluginGitDir(env));
+    const expected = resolvePluginGitRepoDir(
+      gitDir,
+      formatGitPluginSpec(record.gitUrl, record.gitRef),
+    );
+    if (path.resolve(resolveUserPath(record.installPath, env)) !== expected) {
+      return null;
+    }
+    const [gitReal, checkout] = await Promise.all([fs.realpath(gitDir), fs.realpath(expected)]);
+    if (
+      checkout !== path.join(gitReal, path.relative(gitDir, expected)) ||
+      !(await fs.lstat(path.join(checkout, ".git"))).isDirectory()
+    ) {
+      return null;
+    }
+    return readGitHead(checkout, { maxDepth: 1 })?.value === record.gitCommit ? checkout : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Resolves the safe install directory for one plugin id. */

@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../shared/deferred.js";
+import { materializeErrorStack } from "./error-graph-internal.js";
 
 const NODE_DUPLEX_FRAGMENT_BYTES = 8 * 1024;
 const NODE_DUPLEX_MAX_MESSAGE_BYTES = 100 * 1024 * 1024;
@@ -7,9 +8,14 @@ const NODE_DUPLEX_MAX_MESSAGE_BYTES = 100 * 1024 * 1024;
 const MAX_PENDING_MESSAGES = 8;
 const MAX_PENDING_BYTES = 1024 * 1024;
 
+type NodeDuplexFrame = Readonly<
+  | { v: 1; kind: "ready" }
+  | { v: 1; kind: "data"; message: number; index: number; last: boolean; data: string }
+>;
+
 /** Owns ordered, bounded binary messages carried by existing node-invoke string frames. */
 export function createNodeDuplexEndpoint(options: {
-  sendFrame: (frame: string) => Promise<void> | void;
+  sendFrame: (frame: NodeDuplexFrame) => Promise<void> | void;
   onReady?: () => void;
   onError?: (error: Error) => void;
   requireReady?: boolean;
@@ -52,6 +58,7 @@ export function createNodeDuplexEndpoint(options: {
 
   const close = (reason = new Error("node duplex channel is closed")) => {
     closed = true;
+    materializeErrorStack(reason);
     drainClosed.reject(reason);
     listener = undefined;
     incomingFragments.length = 0;
@@ -130,7 +137,10 @@ export function createNodeDuplexEndpoint(options: {
     if (!frame.last) {
       return;
     }
-    const assembled = Buffer.concat(incomingFragments, incomingBytes + fragment.byteLength);
+    const assembled =
+      incomingFragments.length === 1
+        ? fragment
+        : Buffer.concat(incomingFragments, incomingBytes + fragment.byteLength);
     const message = new Uint8Array(assembled.buffer, assembled.byteOffset, assembled.byteLength);
     incomingFragments.length = 0;
     incoming.fragment = 0;
@@ -160,16 +170,16 @@ export function createNodeDuplexEndpoint(options: {
           assertOpen();
           const start = index * NODE_DUPLEX_FRAGMENT_BYTES;
           const fragment = message.subarray(start, start + NODE_DUPLEX_FRAGMENT_BYTES);
-          await options.sendFrame(
-            JSON.stringify({
-              v: 1,
-              kind: "data",
-              message: messageId,
-              index,
-              last: index === fragments - 1,
-              data: Buffer.from(fragment).toString("base64"),
-            }),
-          );
+          await options.sendFrame({
+            v: 1,
+            kind: "data",
+            message: messageId,
+            index,
+            last: index === fragments - 1,
+            data: Buffer.from(fragment.buffer, fragment.byteOffset, fragment.byteLength).toString(
+              "base64",
+            ),
+          });
           assertOpen();
         }
       });
@@ -182,7 +192,7 @@ export function createNodeDuplexEndpoint(options: {
           throw new Error("node duplex framed readiness is duplicate or out of order");
         }
         ready.sent = true;
-        await options.sendFrame(JSON.stringify({ v: 1, kind: "ready" }));
+        await options.sendFrame({ v: 1, kind: "ready" });
         assertOpen();
       });
     },

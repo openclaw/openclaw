@@ -8,7 +8,9 @@ import {
   readPositiveIntegerParam,
   readNumberParam,
   readReactionParams,
+  readStringArrayParam,
   readStringOrNumberParam,
+  ToolInputError,
 } from "./common.js";
 
 type TestActions = {
@@ -42,27 +44,73 @@ describe("readStringOrNumberParam", () => {
   });
 });
 
+describe("readStringArrayParam", () => {
+  it.each([
+    { value: "  alpha  ", expected: ["alpha"] },
+    { value: [" beta ", "", 7, null, "alpha", "beta"], expected: ["beta", "alpha", "beta"] },
+    { value: [], expected: undefined },
+    { value: [" ", false, {}], expected: undefined },
+    { value: " ", expected: undefined },
+    { value: undefined, expected: undefined },
+    { value: null, expected: undefined },
+    { value: 7, expected: undefined },
+  ])("normalizes $value without coercing nonstrings", ({ value, expected }) => {
+    expect(readStringArrayParam({ itemIds: value }, "itemIds")).toEqual(expected);
+  });
+
+  it("preserves direct-key precedence over snake-case aliases", () => {
+    expect(readStringArrayParam({ item_ids: [" first ", "second"] }, "itemIds")).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(readStringArrayParam({ itemIds: ["direct"], item_ids: ["alias"] }, "itemIds")).toEqual([
+      "direct",
+    ]);
+    expect(
+      readStringArrayParam({ itemIds: undefined, item_ids: ["alias"] }, "itemIds"),
+    ).toBeUndefined();
+  });
+
+  it("keeps required errors and custom labels after normalization", () => {
+    expect(() => readStringArrayParam({}, "itemIds", { required: true })).toThrow(
+      new ToolInputError("itemIds required"),
+    );
+    expect(() =>
+      readStringArrayParam({ itemIds: [" ", 7] }, "itemIds", {
+        required: true,
+        label: "items",
+      }),
+    ).toThrow(new ToolInputError("items required"));
+    expect(readStringArrayParam({ itemIds: " first " }, "itemIds", { required: true })).toEqual([
+      "first",
+    ]);
+  });
+
+  it("keeps only explicit empty arrays with allowEmpty and always trims", () => {
+    const options = { trim: false, allowEmpty: true };
+    expect(readStringArrayParam({ itemIds: [" a ", " "] }, "itemIds", options)).toEqual(["a"]);
+    expect(readStringArrayParam({ item_ids: [] }, "itemIds", options)).toEqual([]);
+    expect(readStringArrayParam({ itemIds: " " }, "itemIds", options)).toBeUndefined();
+  });
+});
+
 describe("readNumberParam", () => {
   it("parses numeric strings", () => {
-    const params = { messageId: "42" };
-    expect(readNumberParam(params, "messageId")).toBe(42);
+    expect(readNumberParam({ messageId: "42" }, "messageId")).toBe(42);
   });
 
   it("keeps partial parse behavior by default", () => {
     // Some legacy channel tools pass identifiers with numeric prefixes; strict
     // parsing is opt-in for new bounded fields.
-    const params = { messageId: "42abc" };
-    expect(readNumberParam(params, "messageId")).toBe(42);
+    expect(readNumberParam({ messageId: "42abc" }, "messageId")).toBe(42);
   });
 
   it("rejects partial numeric strings when strict is enabled", () => {
-    const params = { messageId: "42abc" };
-    expect(readNumberParam(params, "messageId", { strict: true })).toBeUndefined();
+    expect(readNumberParam({ messageId: "42abc" }, "messageId", { strict: true })).toBeUndefined();
   });
 
   it("truncates when integer is true", () => {
-    const params = { messageId: "42.9" };
-    expect(readNumberParam(params, "messageId", { integer: true })).toBe(42);
+    expect(readNumberParam({ messageId: "42.9" }, "messageId", { integer: true })).toBe(42);
   });
 
   it("accepts only positive safe integers when positiveInteger is true", () => {

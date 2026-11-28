@@ -1,9 +1,7 @@
 import { REMOTE_WORKSPACE_MUTATION_LOCK_JS } from "./workspace-mutation-lock-remote-script.js";
 import {
-  DERIVED_WORKSPACE_DIRECTORY_NAMES,
-  DERIVED_WORKSPACE_FILE_NAMES,
-  DERIVED_WORKSPACE_FILE_SUFFIXES,
-  isDerivedWorkspacePath,
+  WORKSPACE_PATH_EXCLUSIONS_JS,
+  WORKSPACE_STAGED_INPUT_OWNERSHIP_JS,
 } from "./workspace-path-exclusions.js";
 
 export const REMOTE_WORKSPACE_MUTATION_CONTEXT_JS = String.raw`const mutationActions = [
@@ -43,26 +41,7 @@ const transactionRootStats = fs.lstatSync(transactionRoot);
 if (transactionRootStats.isSymbolicLink() || !transactionRootStats.isDirectory()) {
   throw new Error("unsafe workspace mutation directory");
 }
-const workspaceKey = crypto.createHash("sha256").update(root).digest("hex");
-function removeTree(target) {
-  let stats;
-  try {
-    stats = fs.lstatSync(target);
-  } catch (error) {
-    if (error && error.code === "ENOENT") return;
-    throw error;
-  }
-  if (stats.isDirectory() && !stats.isSymbolicLink()) {
-    fs.chmodSync(target, 0o700);
-    for (const name of fs.readdirSync(target)) removeTree(path.join(target, name));
-    fs.rmdirSync(target);
-  } else {
-    fs.unlinkSync(target);
-  }
-}
-function sameInode(left, right) {
-  return left.dev === right.dev && left.ino === right.ino;
-}`;
+const workspaceKey = crypto.createHash("sha256").update(root).digest("hex");`;
 
 export const REMOTE_WORKSPACE_RSYNC_RECEIVER_RUNTIME_JS = String.raw`const receiverArgs = process.argv.slice(receiverArgvIndex);
 const receiverDestination = receiverArgs.at(-1);
@@ -101,7 +80,7 @@ let gateOpened = false;
     gate.end("open\n");
     const result = await receiverExit;
     const groupWait = new Int32Array(new SharedArrayBuffer(4));
-    while (processGroupIsAlive(lockOwnerPid)) Atomics.wait(groupWait, 0, 0, 10);
+    while (processIsAlive(-lockOwnerPid)) Atomics.wait(groupWait, 0, 0, 10);
     releaseWorkspaceLock();
     lockAcquired = false;
     if (result.signal) process.kill(process.pid, result.signal);
@@ -152,10 +131,8 @@ const action = "reset";
 ${REMOTE_WORKSPACE_MUTATION_CONTEXT_JS}
 const lockOwnerPid = process.pid;
 ${REMOTE_WORKSPACE_MUTATION_LOCK_JS}
-const DERIVED_WORKSPACE_DIRECTORY_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_DIRECTORY_NAMES)};
-const DERIVED_WORKSPACE_FILE_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_NAMES)};
-const DERIVED_WORKSPACE_FILE_SUFFIXES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_SUFFIXES)};
-const isDerivedWorkspacePath = ${isDerivedWorkspacePath.toString()};
+${WORKSPACE_PATH_EXCLUSIONS_JS}
+${WORKSPACE_STAGED_INPUT_OWNERSHIP_JS}
 function clean(directory, relativeDirectory) {
   const originalMode = fs.lstatSync(directory).mode & 0o7777;
   fs.chmodSync(directory, originalMode | 0o700);
@@ -163,7 +140,7 @@ function clean(directory, relativeDirectory) {
     const relative = relativeDirectory ? relativeDirectory + "/" + name : name;
     // Match the initial rsync receiver protections exactly: retry cleanup owns
     // transferable workspace bytes, never Git metadata or derived scratch state.
-    if (name === ".git" || isDerivedWorkspacePath(relative)) continue;
+    if (name === ".git" || isDerivedWorkspacePath(relative, isStagedInput(relative))) continue;
     const target = path.join(directory, name);
     const stats = fs.lstatSync(target);
     if (stats.isDirectory() && !stats.isSymbolicLink()) {

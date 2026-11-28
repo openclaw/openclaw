@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
@@ -7,30 +7,72 @@ import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 
-export function ensureOpenClawAgentDatabasePermissions(
-  pathname: string,
-  options: OpenClawAgentDatabaseOptions,
-): void {
+function ensureMode(target: string, mode: number): void {
+  // Open and explicit repair own mode changes; warm reads and writes do not recheck them.
+  if (process.platform === "win32" || (statSync(target).mode & 0o7777) !== mode) {
+    chmodSync(target, mode);
+  }
+}
+
+function resolveAgentDatabaseModeTargets(pathname: string, options: OpenClawAgentDatabaseOptions) {
   const dir = path.dirname(pathname);
   const defaultPath = resolveOpenClawAgentSqlitePath({
     agentId: options.agentId,
     env: options.env,
   });
-  const isDefaultAgentDatabase = path.resolve(pathname) === path.resolve(defaultPath);
+  return { dir, isDefaultAgentDatabase: path.resolve(pathname) === path.resolve(defaultPath) };
+}
+
+/**
+ * Read-only: whether `ensureOpenClawAgentDatabasePermissions` would create a directory
+ * or change a mode. Windows always rewrites modes.
+ */
+export function agentDatabasePermissionsNeedRepair(
+  pathname: string,
+  options: OpenClawAgentDatabaseOptions,
+): boolean {
+  if (process.platform === "win32") {
+    return true;
+  }
+  const { dir, isDefaultAgentDatabase } = resolveAgentDatabaseModeTargets(pathname, options);
+  if (!existsSync(dir)) {
+    return true;
+  }
+  const differs = (target: string, mode: number) => (statSync(target).mode & 0o7777) !== mode;
+  if (isDefaultAgentDatabase && differs(dir, OPENCLAW_AGENT_DB_DIR_MODE)) {
+    return true;
+  }
+  return resolveSqliteDatabaseFilePaths(pathname).some((candidate) => {
+    try {
+      return differs(candidate, OPENCLAW_AGENT_DB_FILE_MODE);
+    } catch (error) {
+      // SAFETY: statSync throws Node system errors, which carry an errno code.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return false;
+      }
+      throw error;
+    }
+  });
+}
+
+export function ensureOpenClawAgentDatabasePermissions(
+  pathname: string,
+  options: OpenClawAgentDatabaseOptions,
+): void {
+  const { dir, isDefaultAgentDatabase } = resolveAgentDatabaseModeTargets(pathname, options);
   const dirExisted = existsSync(dir);
   mkdirSync(dir, { recursive: true, mode: OPENCLAW_AGENT_DB_DIR_MODE });
   // Default agent state is private by contract; custom pre-existing dirs keep caller ownership.
   if (isDefaultAgentDatabase || !dirExisted) {
-    chmodSync(dir, OPENCLAW_AGENT_DB_DIR_MODE);
+    ensureMode(dir, OPENCLAW_AGENT_DB_DIR_MODE);
   }
   for (const candidate of resolveSqliteDatabaseFilePaths(pathname)) {
     try {
-      chmodSync(candidate, OPENCLAW_AGENT_DB_FILE_MODE);
+      ensureMode(candidate, OPENCLAW_AGENT_DB_FILE_MODE);
     } catch (error) {
       // WAL/SHM/journal sidecars are transient: SQLite removes them at
       // checkpoint/close, so a concurrent worker can race this sweep. A
-      // vanished sidecar needs no tightening; an existsSync guard would just
-      // reintroduce the TOCTOU window.
+      // vanished sidecar needs no tightening, whether stat or chmod observed its removal.
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }

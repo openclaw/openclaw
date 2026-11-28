@@ -1,5 +1,6 @@
-/** Main reply dispatch pipeline from finalized config/context to delivery payloads. */
+import { scopePreparedModelRuntimeLease } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { getGroupThreadTurn } from "../group-thread-context.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
 import { createInboundMessageAuditTerminal } from "./dispatch-from-config.audit.js";
 import { chooseDispatchRoute } from "./dispatch-from-config.choose-route.js";
@@ -14,52 +15,113 @@ import type {
   DispatchFromConfigParams,
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
-import { commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
-import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
-import "./dispatch-from-config.events.js";
+import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
+import { prepareInternalGetReplyOptions } from "./get-reply.types.js";
+import { prepareReplySourceInput, retireUnadoptedReplySource } from "./reply-source-binding.js";
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
-/** Dispatches a reply from config, context, command handling, agent run, and delivery policy. */
+type DispatchRuntimeResources = {
+  stack: AsyncDisposableStack;
+  lease?: ReturnType<typeof scopePreparedModelRuntimeLease>;
+};
+
+function retainDispatchRuntimeLease(
+  this: DispatchRuntimeResources,
+  lease: Parameters<typeof scopePreparedModelRuntimeLease>[0],
+): void {
+  this.lease = this.stack.use(scopePreparedModelRuntimeLease(lease));
+}
+
+function releaseDispatchRuntimeLeaseReference(this: DispatchRuntimeResources): void {
+  this.lease = undefined;
+}
+
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
-  const ticket = reserveReplyAdmissionTicket([
-    params.ctx.SessionKey,
-    params.ctx.CommandTargetSessionKey,
-  ]);
-  const ticketedParams = ticket
-    ? {
-        ...params,
-        replyOptions: { ...params.replyOptions, [REPLY_ADMISSION_TICKET]: ticket },
-      }
-    : params;
+  return await dispatchReplyFromConfigWithQueuePolicy(params, false);
+}
+
+/** Low-level plugin dispatch must reach queue policy before waiting on the active reply owner. */
+export async function dispatchLowLevelChannelReplyFromConfig(
+  params: DispatchFromConfigParams,
+): Promise<DispatchFromConfigResult> {
+  // A group coordinator must retain this turn until execution, not just queue publication.
+  return await dispatchReplyFromConfigWithQueuePolicy(params, !getGroupThreadTurn());
+}
+
+async function dispatchReplyFromConfigWithQueuePolicy(
+  inputParams: DispatchFromConfigParams,
+  allowActiveQueueResolution: boolean,
+): Promise<DispatchFromConfigResult> {
+  const source = await prepareReplySourceInput(
+    inputParams.ctx,
+    inputParams.cfg,
+    prepareInternalGetReplyOptions(inputParams.replyOptions, inputParams.ctx),
+  );
+  const params = { ...inputParams, replyOptions: source.options };
   const messageAuditTerminal = createInboundMessageAuditTerminal(params);
+  let refreshedSessionSnapshot = false;
   try {
-    const result = await dispatchReplyFromConfigInner(ticketedParams, messageAuditTerminal);
-    messageAuditTerminal?.finishSuccess(result);
-    return result;
-  } catch (error) {
-    messageAuditTerminal?.finishError();
-    throw error;
+    while (true) {
+      try {
+        const result = await dispatchReplyFromConfigInner(
+          params,
+          messageAuditTerminal,
+          allowActiveQueueResolution,
+        );
+        messageAuditTerminal?.finishSuccess(result);
+        return result;
+      } catch (error) {
+        if (
+          error instanceof DispatchSessionRefreshRequiredError &&
+          !refreshedSessionSnapshot &&
+          source.input?.retirementRequested !== true &&
+          source.input?.claim?.releaseRequested !== true &&
+          params.replyOptions?.abortSignal?.aborted !== true
+        ) {
+          // Rebuild once from the latest store entry. If another lifecycle mutation wins the
+          // refreshed admission race, leave the event retryable for the channel ingress owner.
+          refreshedSessionSnapshot = true;
+          continue;
+        }
+        messageAuditTerminal?.finishError();
+        throw error;
+      }
+    }
   } finally {
-    ticket?.release();
+    if (source.created) {
+      retireUnadoptedReplySource(source.input);
+    }
   }
 }
 
 async function dispatchReplyFromConfigInner(
   params: DispatchFromConfigParams,
   messageAuditTerminal: ReturnType<typeof createInboundMessageAuditTerminal>,
+  allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
-  const gathered = await gatherDispatchRequest(params, messageAuditTerminal);
+  await using runtimeResources = new AsyncDisposableStack();
+  const runtime: DispatchRuntimeResources = { stack: runtimeResources };
+  // Gathered callbacks outlive dispatch in native async contexts. Bind only this
+  // resource cell, not the execution context; LIFO clears it after its leases drain.
+  runtimeResources.defer(releaseDispatchRuntimeLeaseReference.bind(runtime));
+  const gathered = await gatherDispatchRequest(
+    params,
+    messageAuditTerminal,
+    allowActiveQueueResolution,
+    retainDispatchRuntimeLease.bind(runtime),
+    runtimeResources.defer.bind(runtimeResources),
+  );
   if (gathered.status === "complete") {
     return gathered.result;
   }
 
-  return await withPluginRuntimeRegistryScope(gathered.state.pluginRegistry, async () => {
+  const execute = async () => {
     const delivery = await prepareDispatchDelivery(gathered.state);
 
-    const context = await prepareDispatchOperationContext(delivery.state);
+    const context = await prepareDispatchOperationContext(delivery);
     if (context.status === "complete") {
       return context.result;
     }
@@ -78,13 +140,12 @@ async function dispatchReplyFromConfigInner(
 
       const execution = await prepareDispatchExecution(route.state);
 
-      const executed = await executeDispatch(execution.state);
+      const executed = await executeDispatch(execution);
       if (executed.status === "complete") {
         return executed.result;
       }
 
-      const finalized = await finalizeDispatchAndAudit(executed.state);
-      return finalized.result;
+      return await finalizeDispatchAndAudit(executed.state);
     } catch (err) {
       const {
         failDispatchReplyOperation,
@@ -98,17 +159,27 @@ async function dispatchReplyFromConfigInner(
         return finishReplyOperationAbortedDispatch();
       }
       if (inboundDedupeClaim.status === "claimed") {
-        if (errorState.inboundDedupeReplayUnsafe) {
-          commitInboundDedupe(inboundDedupeClaim.key);
+        if (errorState.turnAdoptionState?.adopted || errorState.inboundDedupeReplayUnsafe) {
+          inboundDedupeClaim.commit();
         } else {
-          releaseInboundDedupe(inboundDedupeClaim.key);
+          inboundDedupeClaim.release();
         }
       }
-      recordAgentDispatchCompleted("error", { error: String(err) });
-      recordProcessed("error", { error: String(err) });
-      markIdle("message_error");
+      if (err instanceof DispatchSessionRefreshRequiredError) {
+        // This attempt already incremented diagnostic queue depth before admission
+        // detected the rotated owner. Balance only that state transition; the
+        // refreshed attempt owns the single processed/audit terminal outcome.
+        markIdle("session_refresh");
+      } else {
+        recordAgentDispatchCompleted("error", { error: String(err) });
+        recordProcessed("error", { error: String(err) });
+        markIdle("message_error");
+      }
       failDispatchReplyOperation(err);
       throw err;
     }
-  });
+  };
+  const runWithRegistry = () =>
+    withPluginRuntimeRegistryScope(gathered.state.pluginRegistry, execute);
+  return runtime.lease ? await runtime.lease.run(runWithRegistry) : await runWithRegistry();
 }

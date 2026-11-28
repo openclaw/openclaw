@@ -1,5 +1,5 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { modelKey } from "./model-key.js";
 
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
 
@@ -24,34 +24,6 @@ type FastModeConfig = {
   };
 };
 
-function modelConfigKey(provider?: string, model?: string): string {
-  const providerId = provider?.trim() ?? "";
-  const modelId = model?.trim() ?? "";
-  if (!providerId) {
-    return modelId;
-  }
-  if (!modelId) {
-    return providerId;
-  }
-  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
-    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
-  )
-    ? modelId
-    : `${providerId}/${modelId}`;
-}
-
-export function resolveFastModeModelParams(params: {
-  cfg: FastModeConfig | undefined;
-  provider?: string;
-  model?: string;
-}): Record<string, unknown> | undefined {
-  const models = params.cfg?.agents?.defaults?.models;
-  if (!models) {
-    return undefined;
-  }
-  return models[modelConfigKey(params.provider, params.model)]?.params;
-}
-
 function normalizeFastModeAutoOnSeconds(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
@@ -60,15 +32,23 @@ export function resolveFastModeModelAutoOnSeconds(params: {
   cfg: FastModeConfig | undefined;
   provider?: string;
   model?: string;
+  modelParamSources?: readonly (Record<string, unknown> | undefined)[];
 }): number {
-  const modelParams = resolveFastModeModelParams(params);
-  return (
-    normalizeFastModeAutoOnSeconds(modelParams?.fastAutoOnSeconds) ??
-    normalizeFastModeAutoOnSeconds(modelParams?.fast_auto_on_seconds) ??
-    normalizeFastModeAutoOnSeconds(modelParams?.fastSeconds) ??
-    normalizeFastModeAutoOnSeconds(modelParams?.fast_seconds) ??
-    DEFAULT_FAST_MODE_AUTO_ON_SECONDS
-  );
+  const sources = params.modelParamSources ?? [
+    params.cfg?.agents?.defaults?.models?.[modelKey(params.provider ?? "", params.model ?? "")]
+      ?.params,
+  ];
+  for (const modelParams of sources) {
+    const seconds =
+      normalizeFastModeAutoOnSeconds(modelParams?.fastAutoOnSeconds) ??
+      normalizeFastModeAutoOnSeconds(modelParams?.fast_auto_on_seconds) ??
+      normalizeFastModeAutoOnSeconds(modelParams?.fastSeconds) ??
+      normalizeFastModeAutoOnSeconds(modelParams?.fast_seconds);
+    if (seconds !== undefined) {
+      return seconds;
+    }
+  }
+  return DEFAULT_FAST_MODE_AUTO_ON_SECONDS;
 }
 
 export function resolveFastModeForElapsed(params: {
@@ -76,18 +56,16 @@ export function resolveFastModeForElapsed(params: {
   startedAtMs: number;
   fastAutoOnSeconds?: number;
   nowMs?: number;
-}): {
-  mode: FastMode | undefined;
-  enabled: boolean;
-  elapsedSeconds: number;
-  fastAutoOnSeconds: number;
-} {
+}) {
   const nowMs = params.nowMs ?? Date.now();
   const elapsedMs = Math.max(0, nowMs - params.startedAtMs);
   const fastAutoOnSeconds =
     normalizeFastModeAutoOnSeconds(params.fastAutoOnSeconds) ?? DEFAULT_FAST_MODE_AUTO_ON_SECONDS;
   const thresholdMs = fastAutoOnSeconds * 1000;
-  const enabled = params.mode === "auto" ? elapsedMs <= thresholdMs : params.mode === true;
+  const enabled =
+    params.mode === "auto"
+      ? elapsedMs <= thresholdMs
+      : params.mode === true || params.mode === "ultrafast";
   const elapsedSeconds = Math.floor(elapsedMs / 1000);
   return {
     mode: params.mode,
@@ -110,8 +88,17 @@ export function formatFastModeAutoProgressText(params: {
   return `💨Fast: auto-off(${params.elapsedSeconds}s>=${fastAutoOnSeconds}s)`;
 }
 
-export function formatFastModeValue(mode: FastMode | undefined): "auto" | "on" | "off" {
-  return mode === "auto" ? "auto" : mode === true ? "on" : "off";
+export function formatFastModeValue(
+  mode: FastMode | undefined,
+): "auto" | "ultrafast" | "on" | "off" {
+  return mode === "auto" || mode === "ultrafast" ? mode : mode === true ? "on" : "off";
+}
+
+export function formatFastModeConfirmation(mode: FastMode | undefined): string {
+  if (mode === "ultrafast") {
+    return "Ultrafast mode enabled.";
+  }
+  return mode === "auto" ? "Fast mode set to auto." : `Fast mode ${mode ? "enabled" : "disabled"}.`;
 }
 
 export function formatFastModeAutoLabel(params?: { fastAutoOnSeconds?: number }): string {
@@ -131,7 +118,7 @@ export function formatFastModeStatusValue(params: {
 }
 
 export function formatFastModeCommandOptions(params?: { fastAutoOnSeconds?: number }): string {
-  return `on, off, ${formatFastModeAutoLabel({
+  return `on, off, ultrafast, ${formatFastModeAutoLabel({
     fastAutoOnSeconds: params?.fastAutoOnSeconds,
   })}, default, status`;
 }

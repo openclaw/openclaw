@@ -1,14 +1,22 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.voice.TalkModeManager
 import android.Manifest
 import android.content.Context
+import android.os.Looper
+import android.speech.SpeechRecognizer
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -17,10 +25,18 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 class VoiceWakeRuntimeTest {
+  private var runtimeUnderTest: NodeRuntime? = null
+
+  @After
+  fun closeRuntime() {
+    runtimeUnderTest?.let(::closeNodeRuntimeTestFixture)
+  }
+
   @Test
   fun disconnectedSaveDoesNotCreateLocalOverride() {
     val runtime = createTestRuntime()
@@ -44,7 +60,7 @@ class VoiceWakeRuntimeTest {
 
       runtime.setVoiceWakeWords(listOf("local draft"))
       withTimeout(5_000) {
-        while (runtime.voiceWakeWordsSaving.value) delay(10)
+        while (runtime.voiceWakeWordsSaving.value || runtime.voiceWakeWordsNoticeText.value == null) delay(10)
       }
 
       assertEquals(listOf("gateway claw"), runtime.voiceWakeWords.value)
@@ -60,7 +76,7 @@ class VoiceWakeRuntimeTest {
 
       runtime.setVoiceWakeWords(listOf("local draft"))
       withTimeout(5_000) {
-        while (runtime.voiceWakeWordsSaving.value) delay(10)
+        while (runtime.voiceWakeWordsSaving.value || runtime.voiceWakeWordsNoticeText.value == null) delay(10)
       }
 
       assertEquals(listOf("openclaw", "claude", "computer"), runtime.voiceWakeWords.value)
@@ -173,7 +189,7 @@ class VoiceWakeRuntimeTest {
       )
     val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
     prefs.setVoiceWakeEnabled(true)
-    val runtime = NodeRuntime(app, prefs, mode = NodeRuntimeMode.ScreenshotFixture)
+    val runtime = NodeRuntime(app, prefs, mode = NodeRuntimeMode.ScreenshotFixture).also { runtimeUnderTest = it }
     val endpoint = GatewayEndpoint.manual("127.0.0.1", 18789)
     writeField(runtime, "connectedEndpoint", endpoint)
 
@@ -184,6 +200,33 @@ class VoiceWakeRuntimeTest {
 
     assertTrue(readField<Boolean>(runtime, "lastVoiceWakeCapabilityEnabled"))
   }
+
+  @Test
+  @Config(sdk = [34])
+  fun permissionSurfaceRefreshUpdatesVoiceWakeAfterMicrophoneGrantAndRevoke() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).denyPermissions(Manifest.permission.RECORD_AUDIO)
+      val runtime = createTestRuntime()
+      // Retire background collectors so only the permission callback can refresh this state.
+      readField<CoroutineScope>(runtime, "scope").coroutineContext[Job]?.cancelAndJoin()
+      assertTrue(runtime.voiceWakeAvailable.value)
+      runtime.setVoiceWakeEnabled(true)
+      assertEquals("Microphone permission required", runtime.voiceWakeStatusText.value)
+
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      runtime.refreshNodePermissionSurface()
+
+      // No Gateway is connected, so permission recovery must still respect wake-word readiness.
+      assertEquals("Paused", runtime.voiceWakeStatusText.value)
+      assertFalse(runtime.voiceWakeIsListening.value)
+
+      shadowOf(app).denyPermissions(Manifest.permission.RECORD_AUDIO)
+      runtime.refreshNodePermissionSurface()
+
+      assertEquals("Microphone permission required", runtime.voiceWakeStatusText.value)
+      assertTrue(runtime.voiceWakeEnabled.value)
+    }
 
   @Test
   fun cameraAudioOwnershipBlocksVoiceNoteUntilRelease() {
@@ -218,6 +261,43 @@ class VoiceWakeRuntimeTest {
     assertTrue(runtime.setCameraAudioCaptureActive(false))
   }
 
+  @Test
+  fun reassertingActiveTalkDoesNotInvalidateItsTerminalOwner() {
+    val runtime = createTestRuntime()
+    shadowOf(RuntimeEnvironment.getApplication()).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    val manager = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+    readField<MutableStateFlow<VoiceCaptureMode>>(runtime, "_voiceCaptureMode").value = VoiceCaptureMode.TalkMode
+    readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value = true
+    readField<MutableStateFlow<Boolean>>(manager, "_isEnabled").value = true
+    val notification = readField<() -> ((() -> Boolean) -> Unit)>(manager, "captureRelayStopNotification").invoke()
+
+    runtime.setTalkModeEnabled(true)
+    readField<MutableStateFlow<Boolean>>(manager, "_isEnabled").value = false
+    notification { true }
+
+    assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+  }
+
+  @Test
+  fun stoppingNativePttKeepsMicOwnedUntilMainDestroysTheRetiredRecognizer() =
+    runBlocking {
+      val runtime = createTestRuntime()
+      val manager = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+      val recognizer = SpeechRecognizer.createSpeechRecognizer(RuntimeEnvironment.getApplication())
+      writeField(manager, "recognizer", recognizer)
+      writeField(manager, "activePttCaptureId", "native-ptt")
+
+      withContext(Dispatchers.Default) { runtime.setTalkModeEnabled(false) }
+      assertFalse(shadowOf(recognizer).isDestroyed)
+      assertFalse("Off must retain the native recognizer while Main cleanup is queued", runtime.tryAcquireVoiceNoteMic())
+      shadowOf(Looper.getMainLooper()).idle()
+      withTimeout(5_000) {
+        while (!runtime.tryAcquireVoiceNoteMic()) delay(10)
+      }
+      assertTrue(shadowOf(recognizer).isDestroyed)
+      runtime.releaseVoiceNoteMic()
+    }
+
   private fun createTestRuntime(): NodeRuntime {
     val app = RuntimeEnvironment.getApplication()
     val securePrefs =
@@ -225,7 +305,7 @@ class VoiceWakeRuntimeTest {
         "openclaw.node.voicewake.runtime.test.${UUID.randomUUID()}",
         Context.MODE_PRIVATE,
       )
-    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
+    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs)).also { runtimeUnderTest = it }
   }
 
   private fun seedConnectedRuntime(runtime: NodeRuntime): GatewayEndpoint {

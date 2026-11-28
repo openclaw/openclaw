@@ -1,83 +1,19 @@
-// Signal plugin module implements message actions behavior.
 import {
   createActionGate,
   jsonResult,
   readStringParam,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
-import type {
-  ChannelMessageActionAdapter,
-  ChannelMessageActionName,
-} from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { removeReactionSignal, sendReactionSignal } from "../reaction-runtime-api.js";
 import { listEnabledSignalAccounts, resolveSignalAccount } from "./accounts.js";
+import { normalizeSignalReactionRecipient } from "./normalize.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
+import { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
 
 const providerId = "signal";
 const GROUP_PREFIX = "group:";
-
-function normalizeSignalReactionRecipient(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  const withoutSignal = trimmed.replace(/^signal:/i, "").trim();
-  if (!withoutSignal) {
-    return withoutSignal;
-  }
-  if (normalizeLowercaseStringOrEmpty(withoutSignal).startsWith("uuid:")) {
-    return withoutSignal.slice("uuid:".length).trim();
-  }
-  return withoutSignal;
-}
-
-function resolveSignalReactionTarget(raw: string): { recipient?: string; groupId?: string } {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return {};
-  }
-  const withoutSignal = trimmed.replace(/^signal:/i, "").trim();
-  if (!withoutSignal) {
-    return {};
-  }
-  if (normalizeLowercaseStringOrEmpty(withoutSignal).startsWith(GROUP_PREFIX)) {
-    const groupId = withoutSignal.slice(GROUP_PREFIX.length).trim();
-    return groupId ? { groupId } : {};
-  }
-  return { recipient: normalizeSignalReactionRecipient(withoutSignal) };
-}
-
-async function mutateSignalReaction(params: {
-  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
-  accountId?: string;
-  target: { recipient?: string; groupId?: string };
-  timestamp: number;
-  emoji: string;
-  remove?: boolean;
-  targetAuthor?: string;
-  targetAuthorUuid?: string;
-}) {
-  const options = {
-    cfg: params.cfg,
-    accountId: params.accountId,
-    groupId: params.target.groupId,
-    targetAuthor: params.targetAuthor,
-    targetAuthorUuid: params.targetAuthorUuid,
-  };
-  if (params.remove) {
-    await removeReactionSignal(
-      params.target.recipient ?? "",
-      params.timestamp,
-      params.emoji,
-      options,
-    );
-    return jsonResult({ ok: true, removed: params.emoji });
-  }
-  await sendReactionSignal(params.target.recipient ?? "", params.timestamp, params.emoji, options);
-  return jsonResult({ ok: true, added: params.emoji });
-}
 
 export const signalMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: ({ cfg, accountId }) => {
@@ -90,15 +26,22 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       return null;
     }
 
-    const actions = new Set<ChannelMessageActionName>(["send"]);
     const reactionsEnabled = configuredAccounts.some((account) =>
       createActionGate(account.config.actions)("reactions"),
     );
-    if (reactionsEnabled) {
-      actions.add("react");
+    if (!reactionsEnabled) {
+      return { actions: ["send"] };
     }
-
-    return { actions: Array.from(actions) };
+    return {
+      actions: ["send", "react"],
+      // Group reactions name the reacted message's author. All-configured keeps
+      // them for Signal reactions advertised from bound or scheduled turns.
+      schema: {
+        actions: ["react"],
+        visibility: "all-configured",
+        properties: { targetAuthor: { type: "string" }, targetAuthorUuid: { type: "string" } },
+      },
+    };
   },
   supportsAction: ({ action }) => action === "react",
   prepareSendPayload: ({ ctx, payload, replyToId, replyToIdSource }) => {
@@ -114,7 +57,14 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       : { ...payload, replyToId: normalizedReplyToId };
   },
 
-  handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
+  handleAction: async ({
+    action,
+    params,
+    cfg,
+    accountId,
+    toolContext,
+    assertDirectAdapterHandoff,
+  }) => {
     if (action === "send") {
       throw new Error("Send should be handled by outbound, not actions handler.");
     }
@@ -144,12 +94,18 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         throw new Error("Signal reactions are disabled via actions.reactions.");
       }
 
-      const recipientRaw = readStringParam(params, "to", {
+      const recipientTarget = readStringParam(params, "to", {
         required: true,
         label: "recipient (UUID, phone number, or group)",
-      });
-      const target = resolveSignalReactionTarget(recipientRaw);
-      if (!target.recipient && !target.groupId) {
+      })
+        .trim()
+        .replace(/^signal:/i, "")
+        .trim();
+      const isGroup = normalizeLowercaseStringOrEmpty(recipientTarget).startsWith(GROUP_PREFIX);
+      const groupId = isGroup ? recipientTarget.slice(GROUP_PREFIX.length).trim() : undefined;
+      const recipient =
+        !isGroup && recipientTarget ? normalizeSignalReactionRecipient(recipientTarget) : undefined;
+      if (!recipient && !groupId) {
         throw new Error("recipient or group required");
       }
 
@@ -162,7 +118,7 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       }
       const targetAuthor = readStringParam(params, "targetAuthor");
       const targetAuthorUuid = readStringParam(params, "targetAuthorUuid");
-      if (target.groupId && !targetAuthor && !targetAuthorUuid) {
+      if (groupId && !targetAuthor && !targetAuthorUuid) {
         throw new Error("targetAuthor or targetAuthorUuid required for group reactions.");
       }
 
@@ -174,35 +130,19 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         throw new Error(`Invalid messageId: ${messageId}. Expected numeric timestamp.`);
       }
 
-      if (remove) {
-        if (!emoji) {
-          throw new Error("Emoji required to remove reaction.");
-        }
-        return await mutateSignalReaction({
-          cfg,
-          accountId: account.accountId,
-          target,
-          timestamp,
-          emoji,
-          remove: true,
-          targetAuthor,
-          targetAuthorUuid,
-        });
-      }
-
       if (!emoji) {
-        throw new Error("Emoji required to add reaction.");
+        throw new Error(`Emoji required to ${remove ? "remove" : "add"} reaction.`);
       }
-      return await mutateSignalReaction({
+      const mutateReaction = remove ? removeReactionSignal : sendReactionSignal;
+      await mutateReaction(recipient ?? "", timestamp, emoji, {
         cfg,
         accountId: account.accountId,
-        target,
-        timestamp,
-        emoji,
-        remove: false,
+        groupId,
         targetAuthor,
         targetAuthorUuid,
+        ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
       });
+      return jsonResult({ ok: true, [remove ? "removed" : "added"]: emoji });
     }
 
     throw new Error(`Action ${action} not supported for ${providerId}.`);

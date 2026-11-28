@@ -1,5 +1,7 @@
 import CoreLocation
 import OpenClawIPC
+import OpenClawWebKitTestSupport
+import Speech
 import Testing
 import UserNotifications
 @testable import OpenClaw
@@ -7,6 +9,47 @@ import UserNotifications
 @Suite(.serialized)
 @MainActor
 struct PermissionManagerTests {
+    @Test(arguments: [
+        (SFSpeechRecognizerAuthorizationStatus.notDetermined, false, false),
+        (.notDetermined, true, false),
+        (.denied, false, false),
+        (.denied, true, true),
+        (.restricted, false, false),
+        (.restricted, true, true),
+        (.authorized, false, false),
+        (.authorized, true, false),
+    ])
+    func `speech recovery only opens Settings for an already denied interactive request`(
+        status: SFSpeechRecognizerAuthorizationStatus,
+        interactive: Bool,
+        shouldRecover: Bool)
+    {
+        #expect(PermissionManager.shouldOpenSpeechRecognitionSettings(
+            status: status,
+            interactive: interactive) == shouldRecover)
+    }
+
+    @Test(arguments: [
+        (Capability.microphone, "Microphone"),
+        (.speechRecognition, "SpeechRecognition"),
+        (.camera, "Camera"),
+        (.location, "LocationServices"),
+    ])
+    func `denied privacy permissions route to their own System Settings pane`(
+        capability: Capability,
+        pane: String)
+    {
+        #expect(SystemSettingsURLSupport.privacySettingsCandidates(for: capability) == [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_\(pane)",
+            "x-apple.systempreferences:com.apple.preference.security",
+        ])
+    }
+
+    @Test(arguments: [Capability.notifications, .accessibility, .screenRecording])
+    func `unrelated permissions do not inherit a privacy recovery pane`(capability: Capability) {
+        #expect(SystemSettingsURLSupport.privacySettingsCandidates(for: capability).isEmpty)
+    }
+
     @Test func `notification authorization accepts provisional delivery`() throws {
         #expect(PermissionManager.isNotificationAuthorized(status: .authorized))
         #expect(PermissionManager.isNotificationAuthorized(status: .provisional))
@@ -14,6 +57,15 @@ struct PermissionManagerTests {
         #expect(!PermissionManager.isNotificationAuthorized(status: .denied))
         let ephemeral = try #require(UNAuthorizationStatus(rawValue: 4))
         #expect(!PermissionManager.isNotificationAuthorized(status: ephemeral))
+    }
+
+    @Test func `speech authorization completion can enter from a background queue`() async throws {
+        try #require(OpenClawInstallSpeechAuthorizationFixture())
+        defer { OpenClawRestoreSpeechAuthorizationFixture() }
+        let result = await PermissionManager.ensure([.speechRecognition], interactive: true)
+        MainActor.assertIsolated()
+        #expect(result[.speechRecognition] == true)
+        #expect(OpenClawSpeechAuthorizationRequestCount() == 1)
     }
 
     @Test func `voice wake permission helpers match status`() async {

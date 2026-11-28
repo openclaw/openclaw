@@ -2,21 +2,21 @@ import { describe, expect, it } from "vitest";
 import { loadOfficialExternalChannelSecretContractApi } from "./official-external-channel-secret-contract.js";
 import { createResolverContext } from "./runtime-shared.js";
 
+function secretRef(id: string) {
+  return { source: "env" as const, provider: "default", id };
+}
+
 describe("official external channel secret contracts", () => {
-  it("collects active QQBot root and account SecretRefs for Tencent 2.0.1", () => {
+  it("binds active QQBot SecretRefs to their exact account owners", () => {
     const config = {
       channels: {
         qqbot: {
           appId: "root-app",
-          clientSecret: { source: "env" as const, provider: "default", id: "QQBOT_ROOT_SECRET" },
+          clientSecret: secretRef("QQBOT_ROOT_SECRET"),
           accounts: {
-            named: {
+            "Named.Team": {
               appId: "named-app",
-              clientSecret: {
-                source: "env" as const,
-                provider: "default",
-                id: "QQBOT_NAMED_SECRET",
-              },
+              clientSecret: secretRef("QQBOT_NAMED_SECRET"),
             },
           },
         },
@@ -27,37 +27,43 @@ describe("official external channel secret contracts", () => {
 
     api?.collectRuntimeConfigAssignments({ config, defaults: undefined, context });
 
-    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
-      "channels.qqbot.clientSecret",
-      "channels.qqbot.accounts.named.clientSecret",
+    expect(context.assignments).toEqual([
+      expect.objectContaining({
+        path: "channels.qqbot.clientSecret",
+        ownerKind: "account",
+        ownerId: "qqbot:default",
+        requiredForGateway: false,
+        disposition: "isolate",
+        ownerContractDigest: expect.any(String),
+      }),
+      expect.objectContaining({
+        path: 'channels.qqbot.accounts["Named.Team"].clientSecret',
+        ownerKind: "account",
+        ownerId: "qqbot:named-team",
+        requiredForGateway: false,
+        disposition: "isolate",
+        ownerContractDigest: expect.any(String),
+      }),
     ]);
     context.assignments[0]?.apply("resolved-root-secret");
     context.assignments[1]?.apply("resolved-named-secret");
     expect(config.channels.qqbot.clientSecret).toBe("resolved-root-secret");
-    expect(config.channels.qqbot.accounts.named.clientSecret).toBe("resolved-named-secret");
+    expect(config.channels.qqbot.accounts["Named.Team"].clientSecret).toBe("resolved-named-secret");
   });
 
   it("uses QQBOT_APP_ID only for the default account and skips inactive credentials", () => {
     const config = {
       channels: {
         qqbot: {
-          clientSecret: { source: "env" as const, provider: "default", id: "QQBOT_ROOT_SECRET" },
+          clientSecret: secretRef("QQBOT_ROOT_SECRET"),
           accounts: {
             disabled: {
               enabled: false,
               appId: "disabled-app",
-              clientSecret: {
-                source: "env" as const,
-                provider: "default",
-                id: "QQBOT_DISABLED_SECRET",
-              },
+              clientSecret: secretRef("QQBOT_DISABLED_SECRET"),
             },
             missingAppId: {
-              clientSecret: {
-                source: "env" as const,
-                provider: "default",
-                id: "QQBOT_MISSING_APP_SECRET",
-              },
+              clientSecret: secretRef("QQBOT_MISSING_APP_SECRET"),
             },
           },
         },

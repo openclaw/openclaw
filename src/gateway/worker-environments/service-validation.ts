@@ -1,49 +1,145 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
-import { WorkerMachineOptionsSchema } from "../../../packages/gateway-protocol/src/schema/environments.js";
+import {
+  WorkerMachineOptionsSchema,
+  WorkerOperatingSystemSchema,
+} from "../../../packages/gateway-protocol/src/schema/environments.js";
+import { validateProviderSettings } from "../../config/provider-settings.js";
+import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
+import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
-  type WorkerDesktopEndpoint,
   type WorkerExecutionMode,
   type WorkerLease,
   type WorkerLeaseStatus,
   type WorkerProvider,
+  type WorkerProfile,
   type WorkerMachineOption,
+  type WorkerOperatingSystem,
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
-import { normalizeWorkerDesktopEndpoint, normalizeWorkerSshEndpoint } from "./store.js";
+import { requireWorkerResourceReceipt } from "../../plugins/worker-resource-receipt.js";
+import { requireWorkerRetentionObservation } from "../../plugins/worker-retention.js";
+import type { WorkerInstallationArtifact } from "./bundle.js";
+import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
+import { normalizeWorkerSshEndpoint } from "./store-validation.js";
+import type { WorkerEnvironmentRecord } from "./store.js";
 
-export function requireProviderProvisionTimeoutMs(
+export function requireWorkerProfile(value: unknown): WorkerProfile {
+  const error = validateProviderSettings(value, "Worker profile");
+  if (error) {
+    throw serviceError("invalid_profile", error);
+  }
+  // SAFETY: Validation accepts only bounded JSON objects and checks any secret references.
+  return value as WorkerProfile;
+}
+
+/** Allocation and prepared-worker retention compare the same admitted profile fields. */
+export function snapshotWorkerAllocationProfile(profile: CloudWorkerProfileConfig): WorkerProfile {
+  return {
+    install: profile.install ?? "bundle",
+    settings: requireWorkerProfile(profile.settings ?? {}),
+    ...(profile.workspaceDurability ? { workspaceDurability: profile.workspaceDurability } : {}),
+  };
+}
+
+export function readWorkerProfileSelection(snapshot: WorkerProfile): {
+  machineClass?: string;
+  os?: string;
+  executionMode?: WorkerExecutionMode;
+} {
+  return {
+    ...(typeof snapshot.machineClass === "string" ? { machineClass: snapshot.machineClass } : {}),
+    ...(typeof snapshot.os === "string" ? { os: snapshot.os } : {}),
+    ...(snapshot.executionMode === "worker-turn" || snapshot.executionMode === "remote-exec"
+      ? { executionMode: snapshot.executionMode }
+      : {}),
+  };
+}
+
+export function requireInheritedWorkerProfileAuthorization(
+  profileId: string,
+  providerId: string,
+  settings: unknown,
+  configuredProviderId: string | undefined,
+): void {
+  if (
+    providerId === DEVICE_WORKER_PROVIDER_ID &&
+    isRecord(settings) &&
+    typeof settings.device === "string" &&
+    profileId === `device:${settings.device}`
+  ) {
+    return;
+  }
+  if (!configuredProviderId) {
+    throw serviceError("profile_not_found", `Unknown worker profile: ${profileId}`);
+  }
+  if (normalizeCapabilityProviderId(configuredProviderId) !== providerId) {
+    throw serviceError("invalid_profile", "Inherited worker provider identity changed");
+  }
+}
+
+export function requireProviderOperationTimeoutMs(
+  operation: "provision" | "destroy",
   timeoutMs: number | undefined,
 ): number | undefined {
   if (timeoutMs === undefined) {
     return undefined;
   }
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMER_TIMEOUT_MS) {
-    throw new WorkerProviderError(
-      `Worker provider provision timeout must be an integer from 1 through ${MAX_TIMER_TIMEOUT_MS}ms`,
+    throw new Error(
+      `Worker provider ${operation} timeout must be an integer from 1 through ${MAX_TIMER_TIMEOUT_MS}ms`,
     );
   }
   return timeoutMs;
 }
 
-function isWorkerMachineOptions(value: unknown): value is readonly WorkerMachineOption[] {
-  return Value.Check(WorkerMachineOptionsSchema, value);
-}
-
 export function normalizeWorkerMachineOptions(
   value: unknown,
 ): readonly WorkerMachineOption[] | undefined {
-  if (!isWorkerMachineOptions(value)) {
+  if (!Value.Check(WorkerMachineOptionsSchema, value)) {
     return undefined;
   }
+  const ids = new Set<string>();
+  const defaultSystems = new Set<string | undefined>();
+  for (const option of value) {
+    const key = JSON.stringify([option.os, option.id]);
+    if (
+      option.id.trim() !== option.id ||
+      option.label.trim() !== option.label ||
+      (option.os !== undefined && option.os.trim() !== option.os) ||
+      ids.has(key) ||
+      (option.default === true && defaultSystems.has(option.os))
+    ) {
+      return undefined;
+    }
+    ids.add(key);
+    if (option.default === true) {
+      defaultSystems.add(option.os);
+    }
+  }
+  return value;
+}
+
+export function normalizeWorkerOperatingSystems(
+  value: unknown,
+): readonly WorkerOperatingSystem[] | undefined {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 8) {
+    return undefined;
+  }
+  const systems: WorkerOperatingSystem[] = [];
   const ids = new Set<string>();
   let hasDefault = false;
   for (const option of value) {
     if (
+      !Value.Check(WorkerOperatingSystemSchema, option) ||
       option.id.trim() !== option.id ||
       option.label.trim() !== option.label ||
+      (option.disabledReason !== undefined &&
+        option.disabledReason.trim() !== option.disabledReason) ||
       ids.has(option.id) ||
       (option.default === true && hasDefault)
     ) {
@@ -51,14 +147,9 @@ export function normalizeWorkerMachineOptions(
     }
     ids.add(option.id);
     hasDefault ||= option.default === true;
+    systems.push(option);
   }
-  return value.map((option) => ({
-    id: option.id,
-    label: option.label,
-    ...(option.cpu === undefined ? {} : { cpu: option.cpu }),
-    ...(option.memoryGb === undefined ? {} : { memoryGb: option.memoryGb }),
-    ...(option.default === undefined ? {} : { default: option.default }),
-  }));
+  return systems;
 }
 
 export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
@@ -74,36 +165,65 @@ export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
   ) {
     throw new Error("Worker provider returned an invalid inspection status");
   }
+  const receipt = {
+    ...(value.resourceReceipt === undefined
+      ? {}
+      : { resourceReceipt: requireWorkerResourceReceipt(value.resourceReceipt) }),
+    ...(value.retention === undefined
+      ? {}
+      : { retention: requireWorkerRetentionObservation(value.retention) }),
+  };
   if (status === "active") {
     if (value.sharedHost !== undefined && typeof value.sharedHost !== "boolean") {
       throw new Error("Worker provider returned an invalid inspection result");
     }
-    return { status, sharedHost: value.sharedHost === true };
+    return { status, sharedHost: value.sharedHost === true, ...receipt };
   }
   if (value.sharedHost !== undefined) {
     throw new Error("Worker provider returned an invalid inspection result");
   }
-  return { status };
+  return { status, ...receipt };
 }
 
-export function resolveWorkerTransportModeError(
-  provider: WorkerProvider<"internal">,
-  transportMode: WorkerExecutionMode,
+export function resolveWorkerLeaseTransportError(
+  provider: WorkerProvider,
+  transport: "node" | "ssh",
+  executionMode?: unknown,
 ): WorkerProviderError | undefined {
   const modes = provider.supportedExecutionModes;
-  const executionMode: WorkerExecutionMode | undefined = modes?.length === 1 ? modes[0] : undefined;
-  return !executionMode || executionMode === transportMode
-    ? undefined
-    : new WorkerProviderError(
-        `${executionMode} providers must return a ${executionMode === "worker-turn" ? "node" : "SSH"} lease`,
-      );
+  if (
+    executionMode !== undefined &&
+    executionMode !== "worker-turn" &&
+    executionMode !== "remote-exec"
+  ) {
+    return new WorkerProviderError("Worker environment has an invalid placement execution mode");
+  }
+  if (
+    transport === "ssh" &&
+    (executionMode === "worker-turn" || (modes !== undefined && !modes.includes("remote-exec")))
+  ) {
+    return new WorkerProviderError("worker-turn providers must return a node lease");
+  }
+  if (executionMode !== undefined && !modes?.includes(executionMode)) {
+    return new WorkerProviderError(
+      `Worker provider ${provider.id} does not advertise ${executionMode} for its ${transport} lease`,
+    );
+  }
+  return undefined;
 }
 
-export function resolveWorkerLeaseModeError(
-  provider: WorkerProvider<"internal">,
-  lease: WorkerLease,
-): WorkerProviderError | undefined {
-  return resolveWorkerTransportModeError(provider, lease.node ? "worker-turn" : "remote-exec");
+export function requireWorkerAllocation(
+  value: unknown,
+): Awaited<ReturnType<WorkerProvider["resolveAllocation"]>> {
+  if (
+    !isRecord(value) ||
+    typeof value.leaseId !== "string" ||
+    !value.leaseId.trim() ||
+    typeof value.sharedHost !== "boolean"
+  ) {
+    throw new Error("Worker provider returned an invalid allocation identity");
+  }
+  return { leaseId: value.leaseId.trim(), sharedHost: value.sharedHost };
 }
 
 export function requireWorkerLease(value: unknown): WorkerLease {
@@ -120,12 +240,20 @@ export function requireWorkerLease(value: unknown): WorkerLease {
   ) {
     throw new Error("Worker provider returned an invalid provision result");
   }
+  const receipt =
+    value.resourceReceipt === undefined
+      ? undefined
+      : requireWorkerResourceReceipt(value.resourceReceipt);
+  if (receipt && receipt.leaseId !== value.leaseId.trim()) {
+    throw new Error("Worker provider resource receipt names another lease");
+  }
   const common = {
     leaseId: value.leaseId.trim(),
-    ...(value.sharedHost === true ? { sharedHost: true } : {}),
+    ...(receipt ? { resourceReceipt: receipt } : {}),
+    ...(value.sharedHost === undefined ? {} : { sharedHost: value.sharedHost }),
     ...(value.desktop === undefined
       ? {}
-      : { desktop: normalizeWorkerDesktopEndpoint(value.desktop as WorkerDesktopEndpoint) }),
+      : { desktop: normalizeWorkerDesktopEndpoint(value.desktop) }),
   };
   if (hasSsh) {
     return {
@@ -138,4 +266,14 @@ export function requireWorkerLease(value: unknown): WorkerLease {
     throw new Error("Worker provider returned an invalid node device id");
   }
   return { ...common, node: { deviceId: deviceId.trim() } };
+}
+
+export function requireInstall(
+  record: Pick<WorkerEnvironmentRecord, "profileSnapshot">,
+): WorkerInstallationArtifact["install"] {
+  const install = record.profileSnapshot.install;
+  if (install !== undefined && install !== "bundle" && install !== "npm") {
+    throw serviceError("invalid_profile", "Worker profile has an invalid install method");
+  }
+  return install ?? "bundle";
 }

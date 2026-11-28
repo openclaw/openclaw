@@ -1,4 +1,16 @@
-// Workboard contract declarations define the plugin and Control UI data model.
+import type { WorkboardSessionsBoardSpec } from "./sessions-board.js";
+
+export type WorkboardDatabasePortApi<Database, Input> = {
+  postgres: string;
+  inspectWorkboardPortSource(db: Database): {
+    version: number;
+    migrationRequired: boolean;
+    pendingColumns: Record<string, string[]>;
+  };
+  admitWorkboardPort(dbPath: string, input?: Input): void;
+  WorkboardPortSchemaError: new (message?: string) => Error;
+};
+
 export const WORKBOARD_STATUSES = [
   "triage",
   "backlog",
@@ -63,6 +75,7 @@ export const WORKBOARD_LINK_TYPES = [
   "relates_to",
 ] as const;
 export const WORKBOARD_PROOF_STATUSES = ["passed", "failed", "skipped", "unknown"] as const;
+export const WORKBOARD_VERIFICATION_OUTCOMES = ["confirmed", "disputed", "inconclusive"] as const;
 export const WORKBOARD_TEMPLATE_IDS = ["bugfix", "docs", "release", "pr_review", "plugin"] as const;
 export const WORKBOARD_DIAGNOSTIC_KINDS = [
   "stranded_ready",
@@ -81,6 +94,11 @@ export function isValidWorkboardBoardId(value: unknown): value is string {
   return typeof value === "string" && WORKBOARD_BOARD_ID_PATTERN.test(value);
 }
 
+export type WorkboardDeleteResult = {
+  deleted: boolean;
+  referenceUpdates?: Array<{ id: string; previousUpdatedAt: number; updatedAt: number }>;
+};
+
 export type WorkboardStatus = (typeof WORKBOARD_STATUSES)[number];
 export type WorkboardPriority = (typeof WORKBOARD_PRIORITIES)[number];
 export type WorkboardExecutionEngine = string;
@@ -90,6 +108,7 @@ export type WorkboardEventKind = (typeof WORKBOARD_EVENT_KINDS)[number];
 export type WorkboardAttemptStatus = (typeof WORKBOARD_ATTEMPT_STATUSES)[number];
 export type WorkboardLinkType = (typeof WORKBOARD_LINK_TYPES)[number];
 export type WorkboardProofStatus = (typeof WORKBOARD_PROOF_STATUSES)[number];
+export type WorkboardVerificationOutcome = (typeof WORKBOARD_VERIFICATION_OUTCOMES)[number];
 export type WorkboardTemplateId = (typeof WORKBOARD_TEMPLATE_IDS)[number];
 export type WorkboardDiagnosticKind = (typeof WORKBOARD_DIAGNOSTIC_KINDS)[number];
 export type WorkboardDiagnosticSeverity = (typeof WORKBOARD_DIAGNOSTIC_SEVERITIES)[number];
@@ -157,6 +176,31 @@ export type WorkboardProof = {
   note?: string;
 };
 
+/**
+ * A checker's optional verdict on a card's result. It never gates completion, changes
+ * proof statuses, or affects dependency scheduling.
+ */
+export type WorkboardVerification = {
+  id: string;
+  recordedAt: number;
+  /** Caller identity Workboard stamped; never taken from the request. */
+  checkerId: string;
+  /**
+   * True when the checker matches the card's assignee, session, or claim owner.
+   * False only means no match was found; it does not establish independence.
+   */
+  checkedOwnWork: boolean;
+  /** What was checked, in the checker's words. */
+  scope: string;
+  outcome: WorkboardVerificationOutcome;
+  /** The worker's proof, an artifact, or a run attempt this check covered, when it named one. */
+  proofId?: string;
+  artifactId?: string;
+  runId?: string;
+  note?: string;
+  url?: string;
+};
+
 export type WorkboardArtifact = {
   id: string;
   createdAt: number;
@@ -185,8 +229,15 @@ export type WorkboardWorkerLog = {
   runId?: string;
 };
 
+export const WORKBOARD_WORKER_STATES = [
+  "idle",
+  "running",
+  "completed",
+  "blocked",
+  "violated",
+] as const;
 export type WorkboardWorkerProtocol = {
-  state: "idle" | "running" | "completed" | "blocked" | "violated";
+  state: (typeof WORKBOARD_WORKER_STATES)[number];
   updatedAt: number;
   detail?: string;
 };
@@ -205,8 +256,17 @@ export type WorkboardClaim = {
   expiresAt?: number;
 };
 
+export const WORKBOARD_DIAGNOSTIC_ACTION_KINDS = [
+  "claim",
+  "unblock",
+  "promote",
+  "reclaim",
+  "reassign",
+  "add_proof",
+  "open_session",
+] as const;
 export type WorkboardDiagnosticAction = {
-  kind: "claim" | "unblock" | "promote" | "reclaim" | "reassign" | "add_proof" | "open_session";
+  kind: (typeof WORKBOARD_DIAGNOSTIC_ACTION_KINDS)[number];
   label: string;
 };
 
@@ -236,6 +296,8 @@ export const WORKBOARD_CHANGED_EVENT = "plugin.workboard.changed";
 export type WorkboardChange = {
   epoch: string;
   revision: number;
+  cardsRevision?: number;
+  sessionsRevision?: number;
 };
 
 export type WorkboardWorkspace = {
@@ -282,6 +344,8 @@ export type WorkboardAutomation = {
   maxRetries?: number;
   scheduledAt?: number;
   summary?: string;
+  /** Written only by workboard_verify; raw metadata patches cannot add entries. */
+  verifications?: WorkboardVerification[];
   createdCardIds?: string[];
   dispatchCount?: number;
   lastDispatchAt?: number;
@@ -290,6 +354,8 @@ export type WorkboardAutomation = {
 
 export type WorkboardBoardMetadata = {
   id: string;
+  kind?: "cards" | "sessions";
+  sessions?: WorkboardSessionsBoardSpec;
   name?: string;
   description?: string;
   icon?: string;
@@ -302,26 +368,19 @@ export type WorkboardBoardMetadata = {
   archivedAt?: number;
 };
 
-export type WorkboardBoardSummary = {
-  id: string;
-  name?: string;
-  description?: string;
-  icon?: string;
-  color?: string;
-  automationJobId?: string;
-  defaultWorkspace?: WorkboardWorkspace;
-  orchestration?: WorkboardOrchestrationSettings;
+export type WorkboardBoardSummary = Omit<WorkboardBoardMetadata, "createdAt" | "updatedAt"> & {
   total: number;
   active: number;
   archived: number;
   byStatus: Partial<Record<WorkboardStatus, number>>;
   updatedAt?: number;
-  archivedAt?: number;
 };
 
 export type WorkboardOrchestrationSettings = {
   autoDecompose?: boolean;
   autoDecomposePerDispatch?: number;
+  /** Running or claimed cards one owner may hold while starting a card on this board. Default 1. */
+  maxActivePerOwner?: number;
   defaultAssignee?: string;
   orchestratorProfile?: string;
 };
@@ -372,7 +431,6 @@ export type WorkboardCard = {
   agentId?: string;
   sessionKey?: string;
   runId?: string;
-  taskId?: string;
   sourceUrl?: string;
   execution?: WorkboardExecution;
   position: number;
@@ -384,7 +442,31 @@ export type WorkboardCard = {
   metadata?: WorkboardMetadata;
 };
 
+export type WorkboardCardCursor = {
+  position: number;
+  createdAt: number;
+  id: string;
+};
+
 export type WorkboardListResult = {
   cards: WorkboardCard[];
   statuses: readonly WorkboardStatus[];
+  nextCursor?: WorkboardCardCursor;
 };
+export {
+  createDefaultWorkboardSessionsBoardSpec,
+  normalizeWorkboardSessionsBoardSpec,
+  patchWorkboardSessionsBoardSpec,
+} from "./sessions-board.js";
+export type {
+  WorkboardSessionFacts,
+  WorkboardSessionPlacement,
+  WorkboardSessionsBoard,
+  WorkboardSessionsBoardRead,
+  WorkboardSessionsBoardRevision,
+  WorkboardSessionsBoardSpec,
+  WorkboardSessionsBoardView,
+  WorkboardSessionsColumn,
+  WorkboardSessionsColumnMatch,
+  WorkboardSessionsObserverHealth,
+} from "./sessions-board.js";

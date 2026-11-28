@@ -1,10 +1,11 @@
-// Codex plugin module implements conversation turn collector behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString,
+  readNonEmptyStringPreservingWhitespace,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isAssistantCommentaryCompletionNotification } from "./app-server/attempt-notifications.js";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { isCodexNotificationForTurn } from "./app-server/notification-correlation.js";
 import {
   isJsonObject,
@@ -24,22 +25,22 @@ export function createCodexConversationTurnCollector(threadId: string) {
   let turnId: string | undefined;
   let completed = false;
   let failedError: string | undefined;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
   const assistantTextByItem = new Map<string, string>();
-  let resolveCompletion: ((value: { replyText: string }) => void) | undefined;
-  let rejectCompletion: ((error: Error) => void) | undefined;
+  let completion: ReturnType<typeof createDeferred<{ replyText: string }>> | undefined;
 
   const collectReplyText = (): string => {
     const texts = [...assistantTextByItem.values()].map((text) => text.trim()).filter(Boolean);
     return texts.at(-1) ?? "";
   };
-  const clearWaitState = () => {
-    if (timeout) {
-      clearTimeout(timeout);
-      timeout = undefined;
+  const completeItem = (item: JsonObject, itemId: string) => {
+    assistantTextByItem.delete(itemId);
+    const text =
+      item.phase === "commentary" || item.delivery === "async"
+        ? undefined
+        : readNonEmptyStringPreservingWhitespace(item.text);
+    if (text?.trim()) {
+      assistantTextByItem.set(itemId, text);
     }
-    resolveCompletion = undefined;
-    rejectCompletion = undefined;
   };
   const finish = () => {
     if (completed) {
@@ -47,11 +48,10 @@ export function createCodexConversationTurnCollector(threadId: string) {
     }
     completed = true;
     if (failedError) {
-      rejectCompletion?.(new Error(failedError));
+      completion?.reject(new Error(failedError));
     } else {
-      resolveCompletion?.({ replyText: collectReplyText() });
+      completion?.resolve({ replyText: collectReplyText() });
     }
-    clearWaitState();
   };
 
   const handleNotification = (notification: CodexServerNotification) => {
@@ -61,7 +61,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
     }
     if (notification.method === "item/agentMessage/delta") {
       const itemId = normalizeOptionalString(params.itemId) ?? "assistant";
-      const delta = readTextString(params, "delta");
+      const delta = readNonEmptyStringPreservingWhitespace(params.delta);
       if (!delta) {
         return;
       }
@@ -73,14 +73,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
       if (item?.type === "agentMessage") {
         const itemId =
           normalizeOptionalString(item.id) ?? normalizeOptionalString(params.itemId) ?? "assistant";
-        assistantTextByItem.delete(itemId);
-        if (isAssistantCommentaryCompletionNotification(notification)) {
-          return;
-        }
-        const text = readTextString(item, "text");
-        if (text?.trim()) {
-          assistantTextByItem.set(itemId, text);
-        }
+        completeItem(item, itemId);
       }
       return;
     }
@@ -106,11 +99,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
           }
           const itemId =
             normalizeOptionalString(item.id) ?? `assistant-${assistantTextByItem.size + 1}`;
-          assistantTextByItem.delete(itemId);
-          const text = item.phase === "commentary" ? undefined : readTextString(item, "text");
-          if (text?.trim()) {
-            assistantTextByItem.set(itemId, text);
-          }
+          completeItem(item, itemId);
         }
       }
       finish();
@@ -128,24 +117,16 @@ export function createCodexConversationTurnCollector(threadId: string) {
           ? Promise.reject(new Error(failedError))
           : Promise.resolve({ replyText: collectReplyText() });
       }
-      return new Promise<{ replyText: string }>((resolve, reject) => {
-        resolveCompletion = resolve;
-        rejectCompletion = reject;
-        timeout = setTimeout(
-          () => {
-            completed = true;
-            reject(new CodexConversationTurnTimeoutError());
-            clearWaitState();
-          },
-          resolveTimerTimeoutMs(params.timeoutMs, 100, 100),
-        );
-        timeout.unref?.();
-      });
+      completion ??= createDeferred<{ replyText: string }>();
+      return raceWithTimeout(
+        completion.promise,
+        resolveTimerTimeoutMs(params.timeoutMs, 100, 100),
+        () => {
+          completed = true;
+          throw new CodexConversationTurnTimeoutError();
+        },
+        { ref: false },
+      );
     },
   };
-}
-
-function readTextString(record: Record<string, unknown> | JsonObject | undefined, key: string) {
-  const value = record?.[key];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }

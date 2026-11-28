@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveOAuthDir } from "../../config/paths.js";
 import { resolveUserPath } from "../../utils.js";
+import { authProfileSourceExists } from "./file-state.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 
 export type LegacyAuthProfileSourceKind =
@@ -26,8 +27,8 @@ function resolveLegacySourceAgentDir(
   return agentDir ? resolveUserPath(agentDir) : resolveSharedMainAuthAgentDir(env);
 }
 
-/** Detects retired auth files by name only; runtime code must never read their contents. */
-export function listLegacyAuthProfileSources(params: {
+/** Capture the fixed legacy candidates before the producer's environment can change. */
+export function resolveLegacyAuthProfileSourceCandidates(params: {
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
 }): LegacyAuthProfileSource[] {
@@ -41,7 +42,17 @@ export function listLegacyAuthProfileSources(params: {
   if (path.resolve(agentDir) === path.resolve(sharedMainDir)) {
     candidates.push({ kind: "legacy-oauth", path: resolveLegacyOAuthPath(params.env) });
   }
-  return candidates.filter((candidate) => fs.existsSync(candidate.path));
+  return candidates;
+}
+
+/** Detect retired files by name; only migration diagnostics may inspect provider metadata. */
+export function listLegacyAuthProfileSources(params: {
+  agentDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): LegacyAuthProfileSource[] {
+  return resolveLegacyAuthProfileSourceCandidates(params).filter((candidate) =>
+    authProfileSourceExists(candidate.path),
+  );
 }
 
 export function listLegacyAuthProfileArchives(params: {

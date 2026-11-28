@@ -1,29 +1,33 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import {
+  INTERNAL_PLUGIN_SETTINGS_PATH_PARAM,
   INTERNAL_PLUGINS_PATH_PARAM,
-  pathForPluginsHubTab,
-  pluginsHubTabFromPath,
-  type PluginsHubRouteTab,
+  pathForRoute,
+  pathForPluginCatalogEntry,
+  pluginCatalogIdFromPath,
+  restoreBridgedRouteLocation,
 } from "../../app-route-paths.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { PluginListResult } from "../../lib/plugins/index.ts";
+
+export type PluginsInventoryRead = {
+  readonly gateway: ApplicationContext["gateway"];
+  readonly gatewaySnapshot: ApplicationGatewaySnapshot;
+  readonly generation: number | undefined;
+  readonly signal: AbortSignal;
+  readonly result: Promise<{ value: PluginListResult } | { error: unknown }>;
+};
+
+export type PluginsRouteData = {
+  location: RouteLocation;
+  inventory?: PluginsInventoryRead;
+};
 
 export function pluginsRouteLocation(location: RouteLocation): RouteLocation {
-  const searchParams = new URLSearchParams(location.search);
-  const pathname = searchParams.get(INTERNAL_PLUGINS_PATH_PARAM) ?? location.pathname;
-  searchParams.delete(INTERNAL_PLUGINS_PATH_PARAM);
-  const search = searchParams.toString();
-  return {
-    pathname,
-    search: search ? `?${search}` : "",
-    hash: location.hash,
-  };
-}
-
-export function pluginsHubTabForRoute(location: RouteLocation, basePath = ""): PluginsHubRouteTab {
-  const pathTab = pluginsHubTabFromPath(location.pathname, basePath);
-  if (pathTab === "discover") {
-    return pathTab;
-  }
-  return new URLSearchParams(location.search).get("tab") === "discover" ? "discover" : "installed";
+  return restoreBridgedRouteLocation(
+    restoreBridgedRouteLocation(location, INTERNAL_PLUGINS_PATH_PARAM),
+    INTERNAL_PLUGIN_SETTINGS_PATH_PARAM,
+  );
 }
 
 export function canonicalPluginsRouteLocation(
@@ -31,13 +35,28 @@ export function canonicalPluginsRouteLocation(
   basePath = "",
 ): RouteLocation | null {
   const searchParams = new URLSearchParams(location.search);
-  const hadLegacyTab = searchParams.has("tab");
-  searchParams.delete("tab");
+  const settingsPath = pathForRoute("plugin-settings", basePath);
+  const legacyTab = searchParams.get("tab");
+  const supportedAdvancedTab = location.pathname === settingsPath && legacyTab === "advanced";
+  const hadLegacyTab = legacyTab !== null && !supportedAdvancedTab;
+  if (hadLegacyTab) {
+    searchParams.delete("tab");
+  }
+  const isLegacyDiscoverPath = location.pathname === `${settingsPath}/discover`;
+  const legacyDiscover = isLegacyDiscoverPath || legacyTab === "discover";
+  const catalogId = pluginCatalogIdFromPath(location.pathname, basePath);
+  const pathname = legacyDiscover
+    ? pathForRoute("plugins", basePath)
+    : catalogId
+      ? pathForPluginCatalogEntry(catalogId, basePath)
+      : location.pathname;
+  if (!hadLegacyTab && pathname === location.pathname) {
+    return null;
+  }
   const search = searchParams.toString();
-  const canonical: RouteLocation = {
-    pathname: pathForPluginsHubTab(pluginsHubTabForRoute(location, basePath), basePath),
+  return {
+    pathname,
     search: search ? `?${search}` : "",
     hash: location.hash,
   };
-  return hadLegacyTab || canonical.pathname !== location.pathname ? canonical : null;
 }

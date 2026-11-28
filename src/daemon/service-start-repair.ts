@@ -1,0 +1,56 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { isPathInside } from "../infra/path-guards.js";
+import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
+import { resolveServiceEntrypoint } from "./service-layout.js";
+import type { GatewayServiceStartRepairIssue, GatewayServiceState } from "./service-types.js";
+
+const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"]
+  .map((entry) => path.resolve(entry))
+  .filter((root) => root !== path.parse(root).root);
+export function collectGatewayServiceStartRepairIssues(
+  state: GatewayServiceState,
+  expectedPort?: number,
+): GatewayServiceStartRepairIssue[] {
+  const command = state.command;
+  if (state.loadState.status !== "loaded" || !command) {
+    return [];
+  }
+  const issues: GatewayServiceStartRepairIssue[] = [];
+  const servicePort =
+    parseTcpPortFromArgs(command.programArguments) ??
+    parseTcpPort(command.environment?.OPENCLAW_GATEWAY_PORT ?? "");
+  if (expectedPort !== undefined && servicePort !== null && servicePort !== expectedPort) {
+    issues.push({
+      message: `service port ${servicePort} does not match current gateway config port ${expectedPort}`,
+    });
+  }
+  for (const candidate of new Set([
+    command.programArguments[0],
+    resolveServiceEntrypoint(command),
+  ])) {
+    if (!candidate || !path.isAbsolute(candidate)) {
+      continue;
+    }
+    const resolved = path.resolve(candidate);
+    if (TEMP_PROGRAM_ROOTS.some((root) => isPathInside(root, resolved))) {
+      issues.push({
+        message: `service command points at a temporary path: ${candidate}`,
+      });
+      continue;
+    }
+    if (!fs.existsSync(candidate)) {
+      issues.push({
+        message: `service command points at a missing path: ${candidate}`,
+      });
+    }
+  }
+  return issues;
+}
+
+export function formatGatewayServiceStartRepairIssues(
+  issues: GatewayServiceStartRepairIssue[],
+): string {
+  return issues.map((issue) => issue.message).join("; ");
+}

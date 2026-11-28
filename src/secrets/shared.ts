@@ -1,16 +1,8 @@
-/** Shared parsing and file helpers for secrets migration/runtime code. */
-import path from "node:path";
-import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { privateFileStoreSync } from "../infra/private-file-store.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
-export { isRecord } from "../utils.js";
-
-/**
- * Narrows to strings that contain non-whitespace content.
- */
-export function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
+/** Shared parsing helpers for secrets migration/runtime code. */
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+export { resolvePositiveTimerTimeoutMs as normalizePositiveTimerMs } from "@openclaw/normalization-core/number-coercion";
+export { isRecord } from "@openclaw/normalization-core/record-coerce";
+export { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 
 /**
  * Parses a simple .env assignment value, stripping one matching quote pair after trimming.
@@ -37,34 +29,8 @@ export function normalizePositiveInt(value: unknown, fallback: number): number {
 }
 
 /**
- * Normalizes timer values with the shared timeout coercion rules used by secret providers.
- */
-export function normalizePositiveTimerMs(value: unknown, fallback: number): number {
-  return resolvePositiveTimerTimeoutMs(value, fallback);
-}
-
-/**
  * Splits a dotted config path into non-empty trimmed segments.
  */
 export function parseDotPath(pathname: string): string[] {
-  return pathname
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0);
-}
-
-/**
- * Atomically writes secret-adjacent text, using the private store for default 0600 files.
- */
-export function writeTextFileAtomic(pathname: string, value: string, mode = 0o600): void {
-  if (mode !== 0o600) {
-    replaceFileAtomicSync({
-      filePath: pathname,
-      content: value,
-      mode,
-      tempPrefix: ".openclaw-secrets",
-    });
-    return;
-  }
-  privateFileStoreSync(path.dirname(pathname)).writeText(path.basename(pathname), value);
+  return normalizeStringEntries(pathname.split("."));
 }

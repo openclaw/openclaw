@@ -16,6 +16,7 @@ private final class SendableTapHandler: @unchecked Sendable {
     }
 }
 
+@Suite(.testWaitLimit)
 struct MacRealtimeTalkAudioCaptureTests {
     @Test func `encoder downmixes resamples and emits little endian pcm16`() throws {
         let buffer = try makeFloatBuffer(
@@ -345,16 +346,17 @@ struct MacRealtimeTalkAudioCaptureTests {
             terminals: [kAudioStreamTerminalTypeHeadphones])
     }
 
-    private func waitForHandledCallback(_ stream: AsyncStream<Void>) async throws {
-        let handled = try await AsyncTimeout.withTimeout(
-            seconds: 1,
-            onTimeout: { CancellationError() },
-            operation: {
-                for await _ in stream.prefix(1) {
-                    return true
-                }
-                return false
-            })
+    @MainActor
+    private func waitForHandledCallback(
+        _ stream: AsyncStream<Void>,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws
+    {
+        var iterator = stream.makeAsyncIterator()
+        let handled = await iterator.next() != nil
+        guard !Task.isCancelled else {
+            Issue.record("Still waiting for handled audio callback", sourceLocation: sourceLocation)
+            throw CancellationError()
+        }
         #expect(handled)
     }
 }

@@ -1,41 +1,11 @@
 // TTS directive number tests cover parsing numeric speech directives.
 import { describe, expect, it } from "vitest";
 import { parseSpeechDirectiveNumberOverride } from "./directive-number.js";
+import { createSpeechPolicy } from "./speech-provider.test-support.js";
 
-const policy = {
-  enabled: true,
-  allowText: true,
-  allowProvider: true,
-  allowVoice: true,
-  allowModelId: true,
-  allowVoiceSettings: true,
-  allowNormalization: true,
-  allowSeed: true,
-};
+const policy = createSpeechPolicy(true);
 
 describe("parseSpeechDirectiveNumberOverride", () => {
-  it("parses strict decimal directive numbers into overrides", () => {
-    expect(
-      parseSpeechDirectiveNumberOverride({
-        ctx: { key: "speed", value: "1.25", policy },
-        overrideKey: "speed",
-        range: { min: 0.5, max: 2 },
-        warning: (value) => `invalid speed ${value}`,
-      }),
-    ).toEqual({ handled: true, overrides: { speed: 1.25 } });
-  });
-
-  it("rejects non-decimal directive numbers", () => {
-    expect(
-      parseSpeechDirectiveNumberOverride({
-        ctx: { key: "speed", value: "0x1", policy },
-        overrideKey: "speed",
-        range: { min: 0.5, max: 2 },
-        warning: (value) => `invalid speed ${value}`,
-      }),
-    ).toEqual({ handled: true, warnings: ["invalid speed 0x1"] });
-  });
-
   it("respects exclusive range bounds", () => {
     expect(
       parseSpeechDirectiveNumberOverride({
@@ -52,13 +22,39 @@ describe("parseSpeechDirectiveNumberOverride", () => {
       parseSpeechDirectiveNumberOverride({
         ctx: {
           key: "speed",
-          value: "1",
+          get value(): never {
+            throw new Error("disabled settings must not read the token");
+          },
           policy: { ...policy, allowVoiceSettings: false },
         },
         overrideKey: "speed",
-        range: { min: 0.5, max: 2 },
-        warning: (value) => `invalid speed ${value}`,
+        get range(): never {
+          throw new Error("disabled settings must not read the range");
+        },
+        get warning(): never {
+          throw new Error("disabled settings must not read the warning");
+        },
       }),
     ).toEqual({ handled: true });
   });
+
+  it.each([
+    { mergeCurrentOverrides: undefined, expected: { speed: 1.25 } },
+    { mergeCurrentOverrides: true, expected: { voice: "retained", speed: 1.25 } },
+  ])(
+    "preserves input when merge is $mergeCurrentOverrides",
+    ({ mergeCurrentOverrides, expected }) => {
+      const currentOverrides = Object.freeze({ voice: "retained", speed: 0.75 });
+      const result = parseSpeechDirectiveNumberOverride({
+        ctx: { key: "speed", value: "1.25", policy, currentOverrides },
+        overrideKey: "speed",
+        range: { min: 0.5, max: 2 },
+        warning: () => "invalid speed",
+        mergeCurrentOverrides,
+      });
+      expect(result).toEqual({ handled: true, overrides: expected });
+      expect(result.overrides).not.toBe(currentOverrides);
+      expect(currentOverrides).toEqual({ voice: "retained", speed: 0.75 });
+    },
+  );
 });

@@ -1,21 +1,38 @@
+import { isAbortError } from "../../infra/abort-signal.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import type { ResolvedCliBackend } from "../cli-backends.js";
+import type { CliOutput } from "../cli-output-contracts.js";
 import { extractCliErrorMessage } from "../cli-output.js";
-import { coerceToFailoverError, FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import {
+  coerceToFailoverError,
+  FailoverError,
+  isFailoverError,
+  resolveFailoverStatus,
+} from "../failover-error.js";
+import { isClaudeCliBackendId } from "./helpers.js";
+import type { PreparedCliRunContext } from "./types.js";
+
+type CliResumeAttempt = {
+  // Option name the backend was invoked with, e.g. --resume-session-at.
+  resumeAtArg?: string;
+  // Checkpoint value that option carried, when the attempt targeted one.
+  resumeCheckpointId?: string;
+};
 
 type CliExitFailoverErrorParams = {
   context: Pick<FailoverError, "provider" | "model" | "sessionId" | "lane">;
-  // Spawn supplies stderr/stdout windows; live stdout is already structured, so it supplies stderr.
   candidates: readonly string[];
-  fallbackMessage: string;
-  // Only a clean premature live exit is protocol-level empty_response; other empty exits are unknown.
-  emptyReason?: FailoverError["reason"];
   retryEmptyFailure: boolean;
+  resumeAtArg?: string;
+  resumeCheckpointId?: string;
+  classifyErrorCode?: ResolvedCliBackend["classifyErrorCode"];
 };
 
 export function createCliFailoverError(
   message: string,
   reason: FailoverError["reason"],
   context: Pick<FailoverError, "provider" | "model" | "sessionId" | "lane">,
-  options?: { cause?: unknown; cliTimeout?: FailoverError["cliTimeout"]; code?: string },
+  options?: Pick<FailoverError, "cause" | "cliTimeout" | "code" | "timeout">,
 ): FailoverError {
   return new FailoverError(message, {
     reason,
@@ -25,21 +42,119 @@ export function createCliFailoverError(
   });
 }
 
+export function resolveCliRunError(error: unknown, context: PreparedCliRunContext): unknown {
+  const { params } = context;
+  const failover = coerceToFailoverError(error, {
+    provider: params.provider,
+    model: context.modelId,
+    sessionId: params.sessionId,
+    lane: params.lane,
+  });
+  if (
+    failover?.reason === "auth" &&
+    params.trigger === "cron" &&
+    params.nativeAuthOnly &&
+    isClaudeCliBackendId(params.provider) &&
+    context.executionTarget.kind !== "node"
+  ) {
+    const explained = new FailoverError(
+      `${failover.message}. Log in to Claude on the Gateway host with \`claude /login\` as the OS user running the Gateway, then retry this job.`,
+      failover,
+    );
+    explained.cause = failover;
+    return explained;
+  }
+  return failover ?? error;
+}
+
+// A refused stream may already have started a native session; the runner decides whether to keep it.
+const refusedStreamOutputs = new WeakMap<FailoverError, CliOutput>();
+
+/** Refuses unparseable CLI output while retaining the stream's partial facts for the runner. */
+export function createCliStreamRefusalError(
+  message: string,
+  context: Pick<FailoverError, "provider" | "model" | "sessionId" | "lane">,
+  output: CliOutput | null | undefined,
+  options?: Pick<FailoverError, "code">,
+): FailoverError {
+  const error = createCliFailoverError(message, "format", context, options);
+  if (output) {
+    refusedStreamOutputs.set(error, output);
+  }
+  return error;
+}
+
+export function readCliStreamRefusalOutput(error: unknown): CliOutput | undefined {
+  return error instanceof FailoverError ? refusedStreamOutputs.get(error) : undefined;
+}
+
+/** Adds the run's tool facts to a refused stream's partial output, as a returned turn carries them. */
+export function recordCliStreamRefusalToolEffects(
+  error: unknown,
+  effects: Pick<CliOutput, "toolSummary" | "acceptedSessionSpawns">,
+): void {
+  const output = readCliStreamRefusalOutput(error);
+  if (output && error instanceof FailoverError) {
+    refusedStreamOutputs.set(error, { ...output, ...effects });
+  }
+}
+
+export function resolveCliResumeAtError(
+  error: unknown,
+  resumeAt: CliResumeAttempt | undefined,
+  context: CliExitFailoverErrorParams["context"],
+): FailoverError | undefined {
+  if (isFailoverError(error) || isAbortError(error)) {
+    return undefined;
+  }
+  const message = formatErrorMessage(error).toLowerCase();
+  // Older CLIs reject the resume option itself as unknown; Claude Code rejects
+  // a checkpoint its transcript compacted away by naming the checkpoint uuid.
+  const rejectedOption = Boolean(
+    resumeAt?.resumeAtArg &&
+    message.includes(resumeAt.resumeAtArg.toLowerCase()) &&
+    /\b(?:unknown|unexpected|unrecognized)\b|\bnot\s+recognized\b/.test(message),
+  );
+  const rejectedCheckpoint = Boolean(
+    resumeAt?.resumeCheckpointId &&
+    message.includes(resumeAt.resumeCheckpointId.toLowerCase()) &&
+    /\bno\s+message\s+found\s+with\s+message\.uuid\b/.test(message),
+  );
+  if (!rejectedOption && !rejectedCheckpoint) {
+    return undefined;
+  }
+  // A rejected local option is already a recovery fact; provider policy must
+  // not materialize before the caller can use its remaining retry budget.
+  return createCliFailoverError(
+    "CLI backend cannot resume from the stored checkpoint.",
+    "session_expired",
+    context,
+    { code: "cli_resume_at_unsupported", cause: error },
+  );
+}
+
 export function createCliExitFailoverError(params: CliExitFailoverErrorParams): FailoverError {
   const candidates = params.candidates.map((candidate) => candidate.trim()).filter(Boolean);
   const structuredError =
     candidates.map((candidate) => extractCliErrorMessage(candidate)).find(Boolean) ?? null;
+  const resumeAtError = resolveCliResumeAtError(
+    structuredError || candidates[0] || "CLI failed.",
+    { resumeAtArg: params.resumeAtArg, resumeCheckpointId: params.resumeCheckpointId },
+    params.context,
+  );
+  if (resumeAtError) {
+    return resumeAtError;
+  }
   const classified = [structuredError, ...candidates]
     .flatMap((candidate) => (candidate ? [coerceToFailoverError(candidate, params.context)] : []))
     .find((error) => error !== null);
-  const message = structuredError || classified?.message || candidates[0] || params.fallbackMessage;
-  const reason =
-    classified?.reason ?? (candidates.length === 0 ? params.emptyReason : undefined) ?? "unknown";
+  const message = structuredError || classified?.message || candidates[0] || "CLI failed.";
+  const reason = classified?.reason ?? "unknown";
   const code =
     reason === "context_overflow"
       ? "cli_context_overflow"
       : candidates.length === 0 && params.retryEmptyFailure
         ? "cli_unknown_empty_failure"
-        : undefined;
+        : params.classifyErrorCode?.(message);
   return createCliFailoverError(message, reason, params.context, { code });
 }

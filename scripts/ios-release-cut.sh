@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 usage() {
@@ -22,7 +22,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLAN_FILE="$(mktemp "${TMPDIR:-/tmp}/openclaw-ios-release-cut.XXXXXX")"
 trap 'rm -f "${PLAN_FILE}"' EXIT
 
-bash "${ROOT_DIR}/scripts/ios-release-plan.sh" --json "$@" >"${PLAN_FILE}"
+/bin/bash "${ROOT_DIR}/scripts/ios-release-plan.sh" --json "$@" >"${PLAN_FILE}"
 (
   cd "${ROOT_DIR}"
   node --import tsx scripts/ios-release-cut.ts --plan "${PLAN_FILE}"

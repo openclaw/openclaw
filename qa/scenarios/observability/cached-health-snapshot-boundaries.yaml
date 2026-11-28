@@ -25,7 +25,9 @@ scenario:
     - test/e2e/qa-lab/runtime/cached-health-snapshot-boundaries.ts
   execution:
     kind: script
-    parallelSafe: true
+    # This proof launches the repository CLI, whose stale-dist guard may rebuild
+    # shared runtime artifacts. Keep it in the suite's exclusive script phase.
+    parallelSafe: false
     path: test/e2e/qa-lab/runtime/cached-health-snapshot-boundaries.ts
     summary: Exercises the production health handler cache boundary and crosses a real authenticated Gateway plugin-tool invocation.
     args:

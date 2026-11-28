@@ -1,68 +1,246 @@
-import type { AssistantMessage, ProviderReplayState } from "@openclaw/llm-core";
+import type { Model } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getAiTransportHost } from "../host.js";
+import { resolveNewestAnthropicCompaction } from "./anthropic-compaction-replay.js";
+import { resolveAnthropicServerCompactionPlan } from "./anthropic-payload-policy.js";
+import {
+  CompactionReplayRefreshRequiredError,
+  resolveNewestOpenAIResponsesCompactionReplay,
+} from "./openai-responses-compaction-replay.js";
+import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
+import { readResponsesInputReplayState } from "./openai-responses-input-replay.js";
+import {
+  createCompactionReplayWindowFactCollector as createWindowFactCollector,
+  isAssistantReplayMessage,
+  preserveCompactionReplayWindow as preserveWindow,
+  type ReplayIdentity,
+  type ReplayMessage,
+} from "./provider-compaction-replay-kernel.js";
 
-/** Whether provider replay state is a prefix-bound server compaction checkpoint. */
-export function isCompactionReplayCheckpoint(replay: unknown): replay is ProviderReplayState {
-  const type =
-    replay && typeof replay === "object" ? (replay as { type?: unknown }).type : undefined;
+export {
+  isCompactionReplayCheckpoint,
+  resolveCompactionReplayContentRewrite,
+  stripCompactionReplayCheckpoint,
+  stripCompactionReplayCheckpointInPlace,
+  replaceCompactionReplayOwnerContent,
+} from "./provider-compaction-checkpoint.js";
+export {
+  replaceCompactionReplayWindowFactContent,
+  resolveCompactionReplayWindow,
+  type CompactionReplayWindowFact,
+} from "./provider-compaction-replay-kernel.js";
+export {
+  CompactionReplayRefreshRequiredError,
+  readOpenAIResponsesItemRecoveryAnchor,
+} from "./openai-responses-compaction-checkpoint.js";
+
+type ReplayPressureEstimator = {
+  text(value: string): number;
+  image(): number;
+  json(value: unknown): number;
+  toolResult?(value: string): number;
+};
+
+/** Resolve from prepared transport facts; never retain or return credential material. */
+export function resolveCompactionReplayEligibility(
+  model: Model,
+  options: { extraParams?: Record<string, unknown>; apiKey?: string },
+): boolean {
+  if (OPENAI_RESPONSES_APIS.has(model.api)) {
+    return true;
+  }
   return (
-    type === "anthropic-compaction" ||
-    type === "openai-responses-compaction" ||
-    type === "openai-responses-retained-compaction"
+    Boolean(options.apiKey?.trim()) &&
+    resolveAnthropicServerCompactionPlan(model, options.extraParams, options.apiKey).enabled
   );
 }
 
-/** Strip prefix-bound checkpoints after local history rewrites. */
-export function stripCompactionReplayCheckpoint(message: AssistantMessage): AssistantMessage {
-  if (!isCompactionReplayCheckpoint(message.providerReplay)) {
-    return message;
+function resolveCompactionSource<T extends ReplayMessage>(
+  messages: readonly T[],
+  model: Model,
+  identity: ReplayIdentity,
+) {
+  if (identity.enabled === false) {
+    return undefined;
   }
-  const replaySafeMessage = { ...message };
-  delete replaySafeMessage.providerReplay;
-  return replaySafeMessage;
+  const assistants = messages.filter(isAssistantReplayMessage);
+  const selected = (() => {
+    if (OPENAI_RESPONSES_APIS.has(model.api)) {
+      const responses = resolveNewestOpenAIResponsesCompactionReplay(assistants, model, identity);
+      return responses && responses.mode !== "item-recovery"
+        ? { family: "responses" as const, ...responses }
+        : undefined;
+    }
+    if (identity.enabled !== true) {
+      return undefined;
+    }
+    const anthropic = resolveNewestAnthropicCompaction(assistants, model, identity);
+    return anthropic ? { family: "anthropic" as const, ...anthropic } : undefined;
+  })();
+  if (!selected) {
+    return undefined;
+  }
+  const owner = assistants.find((message) => message === selected.owner);
+  return owner ? { ...selected, owner } : undefined;
 }
 
-/** Strip prefix-bound checkpoint state from an in-place message rewrite. */
-export function stripCompactionReplayCheckpointInPlace(message: {
-  providerReplay?: unknown;
-}): void {
-  if (isCompactionReplayCheckpoint(message.providerReplay)) {
-    delete message.providerReplay;
-  }
+/** Manual recovery uses the durable client compactor, never a guessed retained-user prefix. */
+export function requiresCompactionReplayRefresh(
+  messages: readonly ReplayMessage[],
+  model: Model,
+  identity: ReplayIdentity,
+): boolean {
+  const checkpoint = resolveCompactionSource(messages, model, identity);
+  return checkpoint?.family === "responses" && checkpoint.mode === "refresh-required";
 }
 
-/** Reindex a prefix-bound checkpoint after known content removals. */
-export function replaceCompactionReplayOwnerContent(
-  message: AssistantMessage,
-  content: AssistantMessage["content"],
-): AssistantMessage {
-  const next = { ...message, content };
-  const replay = message.providerReplay;
-  if (!isCompactionReplayCheckpoint(replay)) {
-    return next;
+/** Validate replay facts with the active transport's immutable publication contract. */
+export function createCompactionReplayWindowFactCollector(model: Model, identity: ReplayIdentity) {
+  return createWindowFactCollector(model, identity, () => getAiTransportHost().immutableData);
+}
+
+/** Carry a checkpoint after reference-preserving history limiting, before transport repair. */
+export function preserveCompactionReplayWindow<T extends ReplayMessage>(
+  source: readonly T[],
+  windowed: T[],
+  model: Model,
+  identity: ReplayIdentity,
+): T[] {
+  return preserveWindow(
+    source,
+    windowed,
+    model,
+    identity,
+    () => getAiTransportHost().immutableData,
+  );
+}
+
+function estimateResponsesContent(
+  content: unknown,
+  estimate: ReplayPressureEstimator,
+  text: (value: string) => number,
+): number {
+  if (typeof content === "string") {
+    return text(content);
   }
-  if (replay.type === "openai-responses-retained-compaction") {
-    // This checkpoint is anchored to retained user turns, not assistant content indexes.
-    return next;
+  if (!Array.isArray(content)) {
+    return estimate.json(content);
   }
-  const replayIndex = replay.replayIndex ?? 0;
-  if (
-    (content.length === 0 && message.content.length > 0) ||
-    replayIndex > message.content.length
-  ) {
-    return stripCompactionReplayCheckpoint(next);
+  return content.reduce<number>((tokens, block: unknown) => {
+    if (!isRecord(block)) {
+      return tokens + estimate.json(block);
+    }
+    if (
+      (block.type === "input_text" || block.type === "output_text") &&
+      typeof block.text === "string"
+    ) {
+      const { text: value, ...metadata } = block;
+      return tokens + text(value) + estimate.json(metadata);
+    }
+    if (block.type === "input_image") {
+      const { image_url: url, ...metadata } = block;
+      return (
+        tokens +
+        estimate.image() +
+        estimate.json(typeof url === "string" && url.startsWith("data:") ? metadata : block)
+      );
+    }
+    return tokens + estimate.json(block);
+  }, 0);
+}
+
+function estimateResponsesInput(
+  input: readonly unknown[],
+  estimate: ReplayPressureEstimator,
+  compactionOutputTokens?: number,
+): number {
+  return input.reduce<number>((tokens, entry) => {
+    if (!isRecord(entry)) {
+      return tokens + estimate.json(entry);
+    }
+    if (entry.type === "compaction" && typeof entry.encrypted_content === "string") {
+      const { encrypted_content, ...metadata } = entry;
+      return (
+        tokens +
+        (compactionOutputTokens ?? estimate.text(encrypted_content)) +
+        estimate.json(metadata)
+      );
+    }
+    if (entry.type === "message") {
+      const { content, ...metadata } = entry;
+      return (
+        tokens +
+        estimate.json(metadata) +
+        estimateResponsesContent(content, estimate, (value) => estimate.text(value))
+      );
+    }
+    if (entry.type === "function_call_output" || entry.type === "custom_tool_call_output") {
+      const { output, ...metadata } = entry;
+      return (
+        tokens +
+        estimate.json(metadata) +
+        estimateResponsesContent(output, estimate, (value) =>
+          estimate.toolResult ? estimate.toolResult(value) : estimate.text(value),
+        )
+      );
+    }
+    return tokens + estimate.json(entry);
+  }, 0);
+}
+
+/** Estimate the canonical prefix; later same-route usage anchors the measured window. */
+export function resolveCompactionReplayPressure<T extends ReplayMessage>(
+  messages: T[],
+  model: Model,
+  identity: ReplayIdentity,
+  estimate: ReplayPressureEstimator,
+): { messages: T[]; prefixTokens: number } | undefined {
+  const checkpoint = resolveCompactionSource(messages, model, identity);
+  if (!checkpoint) {
+    return undefined;
   }
-  let sourceIndex = 0;
-  let nextReplayIndex = 0;
-  const unambiguous = content.every((block) => {
-    const index = message.content.indexOf(block, sourceIndex);
-    sourceIndex = index + 1;
-    nextReplayIndex += index >= 0 && index < replayIndex ? 1 : 0;
-    return index >= 0;
-  });
-  if (!unambiguous) {
-    return stripCompactionReplayCheckpoint(next);
+  if (checkpoint.family === "responses" && checkpoint.mode === "refresh-required") {
+    throw new CompactionReplayRefreshRequiredError();
   }
-  return nextReplayIndex === replayIndex
-    ? next
-    : { ...next, providerReplay: { ...replay, replayIndex: nextReplayIndex } };
+  const ownerIndex = messages.findIndex((message) => message === checkpoint.owner);
+  const owner = messages[ownerIndex];
+  if (!owner) {
+    return undefined;
+  }
+  const prefixTokens =
+    checkpoint.family === "anthropic"
+      ? estimate.text(checkpoint.summary)
+      : checkpoint.mode === "complete-window"
+        ? estimateResponsesInput(checkpoint.output, estimate, checkpoint.outputTokens)
+        : estimate.text(checkpoint.item.encrypted_content);
+  // The checkpoint-producing request predates its replacement window, another route
+  // measured its own window, and a response whose input order was rewritten (deferred
+  // results delivered after it) did not see everything before it. Only the rest anchor.
+  const { contextUsage: _staleContextUsage, ...usage } = checkpoint.owner.usage;
+  const tail: T[] = [];
+  for (const message of messages.slice(ownerIndex + 1)) {
+    if (!isAssistantReplayMessage(message) || message.usage.contextUsage === undefined) {
+      tail.push(message);
+      continue;
+    }
+    const deferred = readResponsesInputReplayState(message)?.after;
+    if (
+      message.provider === model.provider &&
+      message.api === model.api &&
+      message.model === model.id &&
+      !(Array.isArray(deferred) && deferred.length > 0)
+    ) {
+      tail.push(message);
+      continue;
+    }
+    const { contextUsage: _unmeasuredContextUsage, ...billedUsage } = message.usage;
+    tail.push({ ...message, usage: billedUsage });
+  }
+  return {
+    messages: [
+      { ...owner, content: checkpoint.owner.content.slice(checkpoint.replayIndex), usage },
+      ...tail,
+    ],
+    prefixTokens,
+  };
 }

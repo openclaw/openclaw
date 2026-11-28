@@ -1,40 +1,23 @@
 #!/usr/bin/env node
 
 // Ensures memory extension runtime entries are built before checks.
-import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  collectBundledPluginBuildEntries,
-  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
-} from "./lib/bundled-plugin-build-entries.mjs";
+import { resolvePluginRootPublicSurfaceLocation } from "../src/plugins/public-surface-runtime.js";
+import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../src/shared/non-packaged-plugin-dirs.js";
+import { runCliStartupBuild, type StartupBuildParams } from "./ensure-cli-startup-build.mts";
+import { collectBundledPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const DEFAULT_BUILD_TIMEOUT_MS = 10 * 60 * 1000;
 
-type ExtensionMemoryBuildParams = {
-  env?: NodeJS.ProcessEnv;
-  existsSync?: (path: string) => boolean;
-  killSignal?: NodeJS.Signals;
-  nodeExecPath?: string;
-  readdirSync?: (path: string) => string[];
+type ExtensionMemoryBuildParams = Omit<StartupBuildParams, "existsSync"> & {
   requiredExtensionIds?: string[];
-  rootDir?: string;
-  spawnSync?: (
-    command: string,
-    args: string[],
-    options: Record<string, unknown>,
-  ) => { error?: Error; signal?: NodeJS.Signals | null; status: number | null };
-  stdio?: "inherit" | "pipe";
-  timeoutMs?: number;
 };
 
-/**
- * Resolves the extension memory build timeout from environment.
- */
-export function resolveExtensionMemoryBuildTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
+function resolveExtensionMemoryBuildTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
   return readPositiveEnvInt(
     "OPENCLAW_EXTENSION_MEMORY_BUILD_TIMEOUT_MS",
     env,
@@ -59,76 +42,66 @@ function collectExpectedExtensionMemoryEntryIds(rootDir: string, env: NodeJS.Pro
   }
 }
 
-/**
- * Reports whether built memory extension entries exist.
- */
+/** Discovers built index entries for readiness checks and RSS profiling. */
+export function findBuiltExtensionMemoryEntries(rootDir: string = repoRoot) {
+  const entries = new Map<string, string>();
+  // Prefer canonical root output over package-local builds; source-only entries
+  // returned by the public-surface resolver must never enter a built-RSS run.
+  for (const extensionsDir of [
+    path.join(rootDir, "dist", "extensions"),
+    path.join(rootDir, "extensions"),
+  ]) {
+    let extensionIds: string[];
+    try {
+      extensionIds = readdirSync(extensionsDir);
+    } catch {
+      continue;
+    }
+    for (const dir of extensionIds) {
+      if (entries.has(dir)) {
+        continue;
+      }
+      const location = resolvePluginRootPublicSurfaceLocation({
+        pluginRoot: path.join(extensionsDir, dir),
+        artifactBasename: "index.js",
+      });
+      if (location && /\.[cm]?js$/u.test(location.modulePath)) {
+        entries.set(dir, location.modulePath);
+      }
+    }
+  }
+  return [...entries]
+    .map(([dir, file]) => ({ dir, file }))
+    .toSorted((a, b) => a.dir.localeCompare(b.dir));
+}
+
 export function hasBuiltExtensionMemoryEntries(params: ExtensionMemoryBuildParams = {}) {
   const rootDir = params.rootDir ?? repoRoot;
-  const exists = params.existsSync ?? existsSync;
-  const readDir = params.readdirSync ?? readdirSync;
-  const extensionsDir = path.join(rootDir, "dist", "extensions");
-  if (!exists(extensionsDir)) {
-    return false;
-  }
-  let extensionIds: string[];
-  try {
-    extensionIds = readDir(extensionsDir);
-  } catch {
-    return false;
-  }
+  const builtIds = new Set(findBuiltExtensionMemoryEntries(rootDir).map((entry) => entry.dir));
   const requiredExtensionIds =
     (params.requiredExtensionIds?.length ?? 0) > 0
       ? params.requiredExtensionIds
       : collectExpectedExtensionMemoryEntryIds(rootDir, params.env ?? process.env);
   if (!requiredExtensionIds || requiredExtensionIds.length === 0) {
-    return extensionIds.some((extensionId) =>
-      exists(path.join(extensionsDir, extensionId, "index.js")),
-    );
+    return builtIds.size > 0;
   }
-  return requiredExtensionIds.every((extensionId) =>
-    exists(path.join(extensionsDir, extensionId, "index.js")),
-  );
+  return requiredExtensionIds.every((id) => builtIds.has(id));
 }
 
-/**
- * Builds memory extension entries when required outputs are missing.
- */
 export function ensureExtensionMemoryBuild(params: ExtensionMemoryBuildParams = {}) {
   const rootDir = params.rootDir ?? repoRoot;
-  if (
-    hasBuiltExtensionMemoryEntries({
-      rootDir,
-      existsSync: params.existsSync,
-      readdirSync: params.readdirSync,
-      requiredExtensionIds: params.requiredExtensionIds,
-      env: params.env,
-    })
-  ) {
+  if (hasBuiltExtensionMemoryEntries(params)) {
     return { built: false };
   }
 
-  const nodeExecPath = params.nodeExecPath ?? process.execPath;
-  const spawn = params.spawnSync ?? spawnSync;
-  const buildScript = path.join(rootDir, "scripts", "build-all.mts");
-
   console.error(
-    "[extension-memory-build] dist/extensions missing; running cliStartup build profile",
+    "[extension-memory-build] required built plugin entries missing; running cliStartup build profile",
   );
-  const result = spawn(nodeExecPath, ["--import", "tsx", buildScript, "cliStartup"], {
-    cwd: rootDir,
-    env: params.env ?? process.env,
-    killSignal: params.killSignal ?? "SIGKILL",
-    stdio: params.stdio ?? "inherit",
-    timeout: params.timeoutMs ?? resolveExtensionMemoryBuildTimeoutMs(params.env ?? process.env),
+  return runCliStartupBuild({
+    ...params,
+    rootDir,
+    timeoutMs: params.timeoutMs ?? resolveExtensionMemoryBuildTimeoutMs(params.env ?? process.env),
   });
-  if (result.error) {
-    throw result.error;
-  }
-  const status = result.status ?? (result.signal ? 1 : 0);
-  if (status !== 0) {
-    throw new Error(`cliStartup build profile failed with exit code ${status}`);
-  }
-  return { built: true };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -1,61 +1,21 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import { isMessageActionTurnCurrent } from "../message-action-turn-capability.js";
+import type { GatewayClient } from "./types.js";
 
-export function hasActiveAgentRuntimeAuthority(
-  client: GatewayClient | null,
-  context: Pick<GatewayRequestContext, "validateAgentRuntimeApprovalAuthority">,
-): boolean {
+/**
+ * The caller's message-action turn, checked where its effects happen. Run authority is
+ * checked once at request start (authorizeGatewayRequestPreDispatch); the turn-capability
+ * re-check is a separate check-once chain.
+ */
+export function captureAgentRuntimeTurnAssertion(
+  client: GatewayClient | null | undefined,
+): (() => void) | undefined {
   const identity = client?.internal?.agentRuntimeIdentity;
-  const validate = context.validateAgentRuntimeApprovalAuthority;
-  // Production dispatch always supplies the validator. Lightweight direct-handler
-  // contexts have no live authority owner and therefore no identity to invalidate.
-  return !identity || !validate || validate(identity);
-}
-
-export function assertActiveAgentRuntimeAuthority(
-  client: GatewayClient | null,
-  context: Pick<GatewayRequestContext, "validateAgentRuntimeApprovalAuthority">,
-): void {
-  if (!hasActiveAgentRuntimeAuthority(client, context)) {
-    throw new TypeError("agent runtime authority is no longer active");
+  if (!identity?.messageActionContext) {
+    return undefined;
   }
-}
-
-function ensureActiveAgentRuntimeAuthority(params: {
-  client: GatewayClient | null;
-  context: GatewayRequestContext;
-  respond: RespondFn;
-}): boolean {
-  if (hasActiveAgentRuntimeAuthority(params.client, params.context)) {
-    return true;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
-  );
-  return false;
-}
-
-export function createAgentRuntimeAuthorityGuard(
-  client: GatewayClient | null,
-  context: GatewayRequestContext,
-  respond: RespondFn,
-) {
-  const hasActive = () => hasActiveAgentRuntimeAuthority(client, context);
-  return {
-    commitGuard:
-      client?.internal?.agentRuntimeIdentity && context.validateAgentRuntimeApprovalAuthority
-        ? () => assertActiveAgentRuntimeAuthority(client, context)
-        : undefined,
-    ensureActive: () => ensureActiveAgentRuntimeAuthority({ client, context, respond }),
-    handleClosedError(error: unknown): undefined {
-      if (error instanceof TypeError && !hasActive()) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
-        return undefined;
-      }
-      throw error;
-    },
-    hasActive,
+  return () => {
+    if (!isMessageActionTurnCurrent(identity)) {
+      throw new TypeError("The message turn has ended. Start a new turn to retry.");
+    }
   };
 }

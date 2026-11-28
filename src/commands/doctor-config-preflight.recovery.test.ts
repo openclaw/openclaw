@@ -1,0 +1,436 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { expect, it as baseIt, vi } from "vitest";
+import {
+  patchConfigHealthEntryToStore,
+  readConfigHealthStateFromStore,
+} from "../config/io.health-state.js";
+import { createConfigIO } from "../config/io.js";
+import { createConfigHealthFingerprint } from "../config/io.observe-state.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
+import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import type { DoctorConfigPreflightOptions } from "./doctor/shared/config-migration-result.js";
+
+const repairOptions = {
+  observe: false,
+  migrateState: false,
+  migrateLegacyConfig: false,
+  repairPrefixedConfig: true,
+  invalidConfigNote: false,
+} satisfies DoctorConfigPreflightOptions;
+
+const it = baseIt.extend<{ home: string; configPath: string }>({
+  home: ({ task: _task }, use) => withDoctorConfigPreflightHome(use),
+  configPath: ({ home }, use) => use(path.join(home, ".openclaw", "openclaw.json")),
+});
+async function expectFiles(files: Record<string, string>) {
+  for (const [filename, content] of Object.entries(files)) {
+    expect(await fs.readFile(filename, "utf8")).toBe(content);
+  }
+}
+async function expectClobbered(configPath: string, original?: string) {
+  const stateDir = path.dirname(configPath);
+  const files = (await fs.readdir(stateDir)).filter((name) => name.includes(".clobbered."));
+  expect(files).toHaveLength(original === undefined ? 0 : 1);
+  if (original !== undefined) {
+    await expectFiles({ [path.join(stateDir, files[0]!)]: original });
+  }
+}
+
+it.for([
+  "intact-backup",
+  "newer-backup",
+  "last-good-only",
+  "edited-truncation",
+  "repeated-edited-truncation",
+  "observed-repeated-truncation",
+] as const)(
+  "explicitly repairs an already-observed valid truncation using %s",
+  async (candidate, { configPath, home }) => {
+    const healthy = JSON.stringify({
+      gateway: {
+        mode: "local",
+        port: 19201,
+        trustedProxies: Array.from(
+          {
+            length:
+              candidate === "repeated-edited-truncation"
+                ? 34
+                : candidate === "observed-repeated-truncation"
+                  ? 46
+                  : 80,
+          },
+          (_, index) => `192.0.2.${index}`,
+        ),
+      },
+      plugins: { enabled: false },
+    });
+    await fs.writeFile(configPath, healthy);
+    const io = createConfigIO({ configPath });
+    const baseline = await io.readConfigFileSnapshot();
+    expect(await io.promoteConfigSnapshotToLastKnownGood(baseline)).toBe(true);
+    let expected = healthy;
+    if (candidate === "newer-backup") {
+      await io.writeConfigFile(
+        { ...baseline.sourceConfig, update: { channel: "beta" } },
+        { baseSnapshot: baseline },
+      );
+      expected = await fs.readFile(configPath, "utf8");
+    }
+    if (candidate !== "last-good-only") {
+      await fs.writeFile(`${configPath}.bak`, expected);
+    }
+    const truncated = '{"gateway":{"mode":"local","port":19202}}\n';
+    await fs.writeFile(configPath, truncated);
+    const observed = await io.readConfigFileSnapshot();
+    expect(observed.valid).toBe(true);
+    const entry = readConfigHealthStateFromStore({
+      env: process.env,
+      homedir: () => home,
+      logger: console,
+    }).entries?.[configPath];
+    expect(entry?.lastObservedSuspiciousSignature).toContain(`${observed.hash}:size-drop-`);
+
+    // Observation deduplication still governs passive recovery and startup previews.
+    expect(await io.prepareConfigRecovery(observed)).toBeNull();
+    await io.readConfigFileSnapshot({ recoverSuspicious: true });
+    await expectFiles({ [configPath]: truncated });
+    let rejected = truncated;
+    const baselineBytes = Buffer.byteLength(healthy);
+    const sizeDropThreshold = Math.floor(baselineBytes / 2);
+    const edits: { port: number; trustedProxies?: string[] }[] =
+      candidate === "observed-repeated-truncation"
+        ? [
+            // Put the stamped backup and the final edit on opposite sides of the size threshold
+            // with enough margin for both stable and prerelease writer metadata.
+            { port: 19203, trustedProxies: ["198.51.100.1", "198.51.100.2", "198.51.100.3"] },
+            { port: 19204, trustedProxies: undefined },
+          ]
+        : candidate === "repeated-edited-truncation"
+          ? [{ port: 19203 }, { port: 19204 }]
+          : candidate === "edited-truncation" || candidate === "newer-backup"
+            ? [{ port: 19203 }]
+            : [];
+    for (const gatewayEdit of edits) {
+      const before = await io.readConfigFileSnapshot();
+      const predecessor = rejected;
+      await io.writeConfigFile(
+        { ...before.sourceConfig, gateway: { ...before.sourceConfig.gateway, ...gatewayEdit } },
+        { baseSnapshot: before },
+      );
+      rejected = await fs.readFile(configPath, "utf8");
+      // Later metadata-stamped predecessors can hide the original size reduction.
+      await expectFiles({ [`${configPath}.bak`]: predecessor });
+      if (gatewayEdit.trustedProxies) {
+        expect(Buffer.byteLength(rejected)).toBeGreaterThanOrEqual(sizeDropThreshold);
+      }
+    }
+    if (candidate === "observed-repeated-truncation") {
+      const rejectedBytes = Buffer.byteLength(rejected);
+      expect(rejectedBytes).toBeLessThan(sizeDropThreshold);
+      const reread = await io.readConfigFileSnapshot();
+      expect(
+        readConfigHealthStateFromStore({ env: process.env, homedir: () => home, logger: console })
+          .entries?.[configPath]?.lastObservedSuspiciousSignature,
+      ).toBe(`${reread.hash}:size-drop-vs-last-good:${baselineBytes}->${rejectedBytes}`);
+    }
+    if (candidate === "newer-backup") {
+      // The health owner witnessed this newer backup before the loss was inherited.
+      await fs.writeFile(`${configPath}.bak`, expected);
+    }
+    await runDoctorConfigPreflight({ ...repairOptions, repairPrefixedConfig: false });
+    await expectFiles({ [configPath]: rejected });
+    await expectClobbered(configPath);
+
+    const result = await runDoctorConfigPreflight(repairOptions);
+    expect(result.snapshot.valid).toBe(true);
+    await expectFiles({
+      [configPath]: expected,
+      [`${configPath}.last-good`]: healthy,
+    });
+    await expectClobbered(configPath, rejected);
+  },
+);
+
+it.for(["healthy-reseed", "tampered-promotion", "intentional-reduction"] as const)(
+  "does not roll back valid config for %s during explicit repair",
+  async (scenario, { configPath }) => {
+    const config = {
+      gateway: {
+        mode: "local" as const,
+        trustedProxies: Array.from({ length: 80 }, (_, index) => `192.0.2.${index}`),
+      },
+      plugins: { enabled: false },
+    };
+    const healthy = JSON.stringify(config);
+    await fs.writeFile(configPath, healthy);
+    const io = createConfigIO({ configPath });
+    const baseline = await io.readConfigFileSnapshot();
+    expect(await io.promoteConfigSnapshotToLastKnownGood(baseline)).toBe(true);
+    let original = JSON.stringify({
+      ...config,
+      gateway: { ...config.gateway, port: 19202 },
+    });
+    if (scenario === "intentional-reduction") {
+      await io.writeConfigFile(
+        { gateway: { mode: "local", port: 19202 }, plugins: { enabled: false } },
+        { baseSnapshot: baseline, allowConfigSizeDrop: true },
+      );
+      original = await fs.readFile(configPath, "utf8");
+      // Leave only the older promotion: a healthy accepted reduction is not loss.
+      await fs.unlink(`${configPath}.bak`);
+    } else {
+      if (scenario === "tampered-promotion") {
+        original = '{"gateway":{"mode":"local","port":19202}}\n';
+        await fs.writeFile(`${configPath}.last-good`, healthy + "\n");
+      }
+      await fs.writeFile(configPath, original);
+    }
+    await io.readConfigFileSnapshot();
+    const result = await runDoctorConfigPreflight(repairOptions);
+    expect(result.snapshot.valid).toBe(true);
+    await expectFiles({ [configPath]: original });
+    await expectClobbered(configPath);
+  },
+);
+
+it.for([true, false])(
+  "keeps the active included prompt grant %s ahead of an opposite older backup",
+  async (grant, { configPath, home }) => {
+    const backup = JSON.stringify({
+      gateway: { mode: "local" },
+      plugins: {
+        enabled: false,
+        entries: { example: { hooks: { allowPromptInjection: !grant } } },
+      },
+    });
+    const lastGoodPath = configPath + ".last-good";
+    await fs.writeFile(lastGoodPath, backup);
+    const fingerprint = createConfigHealthFingerprint({
+      raw: backup,
+      parsed: JSON.parse(backup),
+      stat: await fs.stat(lastGoodPath),
+    });
+    patchConfigHealthEntryToStore(
+      { env: process.env, homedir: () => home, logger: { warn() {} } },
+      configPath,
+      { lastKnownGood: fingerprint, lastPromotedGood: fingerprint },
+    );
+    const includePath = path.join(path.dirname(configPath), "active-policy.json");
+    const included = JSON.stringify({
+      enabled: false,
+      entries: { example: { hooks: { allowPromptInjection: grant } } },
+    });
+    const original = JSON.stringify({
+      gateway: { mode: "local" },
+      plugins: { $include: "active-policy.json" },
+      update: { channel: "beta" },
+    });
+    await fs.writeFile(includePath, included);
+    await fs.writeFile(configPath, original);
+    const result = await runDoctorConfigPreflight(repairOptions);
+    expect(result.snapshot.sourceConfig.plugins?.entries?.example?.hooks).toMatchObject({
+      allowPromptInjection: grant,
+    });
+    await expectFiles({ [configPath]: original, [includePath]: included, [lastGoodPath]: backup });
+    await expectClobbered(configPath);
+  },
+);
+
+it("preserves an invalid future-writer config instead of restoring an older backup", async ({
+  configPath,
+}) => {
+  const original = '{ meta: { lastTouchedVersion: "9999.1.1" }, gateway: { mode: "invalid" } }\n';
+  const backup = '{ gateway: { mode: "local", port: 19091 }, plugins: { enabled: false } }\n';
+
+  await fs.writeFile(configPath, backup);
+  const io = createConfigIO({ configPath });
+  expect(await io.promoteConfigSnapshotToLastKnownGood(await io.readConfigFileSnapshot())).toBe(
+    true,
+  );
+
+  await fs.writeFile(configPath, original);
+
+  const result = await withEnvAsync(
+    { OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: undefined },
+    () => runDoctorConfigPreflight(repairOptions),
+  );
+
+  await expectFiles({ [configPath]: original, [`${configPath}.last-good`]: backup });
+  expect(result.snapshot.valid).toBe(false);
+  expect(result.snapshot.config.gateway?.port).toBeUndefined();
+  await expectClobbered(configPath);
+});
+
+it.for(["authored", "env", "include"] as const)(
+  "Doctor repairs only authored OTel backups without flattening %s ownership",
+  async (owner, { configPath }) => {
+    const includePath = path.join(path.dirname(configPath), "otel.json5");
+    const includeRaw = '{ enabled: true, protocol: "grpc", traces: true }\n';
+    const original = '{"update":{"channel":"stable"}}\n';
+    const otel = {
+      enabled: true,
+      protocol: owner === "env" ? "${OTEL_PROTOCOL}" : "grpc",
+      traces: true,
+    };
+    const backup = JSON.stringify({
+      gateway: { mode: "local" },
+      plugins: { enabled: false },
+      diagnostics: { otel: owner === "include" ? { $include: "./otel.json5" } : otel },
+    });
+    await fs.writeFile(configPath, original);
+    await fs.writeFile(`${configPath}.bak`, backup);
+    if (owner === "include") {
+      await fs.writeFile(includePath, includeRaw);
+    }
+
+    const result = await withEnvAsync({ OTEL_PROTOCOL: "grpc" }, () =>
+      runDoctorConfigPreflight(repairOptions),
+    );
+    await expectFiles({ [`${configPath}.bak`]: backup });
+    if (owner === "authored") {
+      expect(result.snapshot).toMatchObject({ valid: true, legacyIssues: [] });
+      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toMatchObject({
+        gateway: { mode: "local" },
+        diagnostics: { otel: { enabled: false, traces: true } },
+      });
+      expect(result.snapshot.config.diagnostics?.otel?.protocol).toBeUndefined();
+    } else {
+      await expectFiles({ [configPath]: original });
+    }
+    if (owner === "include") {
+      expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
+    }
+    await expectClobbered(configPath, owner === "authored" ? original : undefined);
+  },
+);
+
+it("recovers roster ownership and the legacy default after runtime recovery refuses it", async ({
+  configPath,
+  home,
+}) => {
+  const entries = Object.fromEntries(
+    ["alpha", "beta", "gamma"].map((id) => [id, { workspace: path.join(home, `workspace-${id}`) }]),
+  );
+  const bindings = [{ agentId: "beta", match: { channel: "discord" } }];
+  const backup = JSON.stringify({
+    gateway: { mode: "local" },
+    plugins: { enabled: false },
+    agents: {
+      list: Object.entries(entries).map(([id, config]) =>
+        Object.assign({ id }, config, id === "alpha" ? { default: true } : {}),
+      ),
+    },
+    bindings,
+  });
+  const lastGoodPath = `${configPath}.last-good`;
+  await fs.writeFile(lastGoodPath, backup);
+  const fingerprint = createConfigHealthFingerprint({
+    raw: backup,
+    parsed: JSON.parse(backup),
+    stat: await fs.stat(lastGoodPath),
+  });
+  // This promotion predates canonical rosters; runtime recovery must not normalize the backup.
+  patchConfigHealthEntryToStore(
+    { env: process.env, homedir: () => home, logger: { warn() {} } },
+    configPath,
+    { lastKnownGood: fingerprint, lastPromotedGood: fingerprint },
+  );
+  const original = '{ "gateway": { "mode": "local" },';
+  await fs.writeFile(configPath, original);
+  const warn = vi.fn();
+  const io = createConfigIO({
+    configPath,
+    env: process.env,
+    observe: false,
+    logger: { warn, error() {} },
+  });
+  const restored = await io.recoverConfigFromLastKnownGood({
+    snapshot: await io.readConfigFileSnapshot(),
+    reason: "doctor-invalid-config",
+  });
+  expect(restored).toBe(false);
+  await expectFiles({ [configPath]: original, [lastGoodPath]: backup });
+  expect(warn).toHaveBeenCalledWith(
+    expect.stringContaining("Config last-known-good recovery skipped"),
+  );
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining("agents.list"));
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+  await expectClobbered(configPath);
+  const snapshot = (await runDoctorConfigPreflight(repairOptions)).snapshot;
+  expect(snapshot.valid).toBe(true);
+  expect(snapshot.config.bindings).toEqual(bindings);
+  expect(snapshot.config.agents?.defaults?.systemAgent?.agentId).toBe("alpha");
+  expect(snapshot.config.agents?.entries).toEqual(entries);
+  await expectFiles({ [lastGoodPath]: backup });
+  await expectClobbered(configPath, original);
+});
+
+it("keeps a custom cron locator until state repair can preserve its retired data", async ({
+  configPath,
+  home,
+}) => {
+  const storePath = path.join(home, "custom-cron", "jobs.json");
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  const original = JSON.stringify({ cron: { store: storePath }, update: { channel: "stable" } });
+  const backup = '{"gateway":{"mode":"local"},"plugins":{"enabled":false}}\n';
+  const retired = '{"version":1,"jobs":[{"id":"retained"}]}\n';
+  await fs.writeFile(configPath, original);
+  await fs.writeFile(`${configPath}.bak`, backup);
+  await fs.writeFile(storePath, retired);
+
+  await expect(runDoctorConfigPreflight(repairOptions)).rejects.toThrow(/openclaw doctor --fix/);
+
+  await expectFiles({
+    [configPath]: original,
+    [`${configPath}.bak`]: backup,
+    [storePath]: retired,
+  });
+  await expectClobbered(configPath);
+});
+
+it.for([
+  "none",
+  "both-roots",
+  "OPENCLAW_HOME",
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_CONFIG_PATH",
+] as const)(
+  "renames legacy config only without a relocation control (%s), then stays unchanged",
+  async (selector, { configPath: target, home }) => {
+    const stateDir = path.dirname(target);
+    const source = path.join(stateDir, "clawdbot.json");
+    await fs.writeFile(source, "{}\n");
+    const original = await fs.stat(source, { bigint: true });
+    if (selector === "both-roots") {
+      await fs.mkdir(path.join(home, ".clawdbot"));
+    }
+    await withEnvAsync(
+      {
+        OPENCLAW_HOME: selector === "OPENCLAW_HOME" ? home : undefined,
+        OPENCLAW_STATE_DIR: selector === "OPENCLAW_STATE_DIR" ? stateDir : undefined,
+        OPENCLAW_CONFIG_PATH: selector === "OPENCLAW_CONFIG_PATH" ? target : undefined,
+      },
+      async () => {
+        await runDoctorConfigPreflight({ migrateState: false, invalidConfigNote: false });
+        if (selector !== "none") {
+          await expect(fs.readFile(source, "utf8")).resolves.toBe("{}\n");
+          await expect(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
+        } else {
+          const renamed = await fs.stat(target, { bigint: true });
+          expect([renamed.dev, renamed.ino]).toEqual([original.dev, original.ino]);
+          await expect(fs.readFile(target, "utf8")).resolves.toBe("{}\n");
+          await expect(fs.stat(source)).rejects.toMatchObject({ code: "ENOENT" });
+          await runDoctorConfigPreflight({ migrateState: false, invalidConfigNote: false });
+          const again = await fs.stat(target, { bigint: true });
+          expect(again).toMatchObject({
+            dev: renamed.dev,
+            ino: renamed.ino,
+            mtimeNs: renamed.mtimeNs,
+          });
+        }
+      },
+    );
+  },
+);

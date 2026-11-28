@@ -1,14 +1,9 @@
 /**
- * Plugin Command Registry
- *
  * Compatibility wrappers for plugin command registration, matching, and execution.
  */
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginCommands, registerPluginCommand } from "./command-registration.js";
 import {
   listRegisteredPluginAgentPromptGuidance,
-  pluginCommands,
-  resolveCompatibilityPluginCommandRegistry,
   type RegisteredPluginCommand,
 } from "./command-registry-state.js";
 import {
@@ -17,7 +12,8 @@ import {
 } from "./plugin-command-execution.js";
 import { matchRegisteredPluginCommand } from "./plugin-command-matcher.js";
 import { listRegisteredPluginCommands } from "./plugin-command-registry.js";
-import type { PluginCommandContext, PluginCommandResult } from "./types.js";
+import { requireActivePluginRegistry } from "./runtime.js";
+import type { PluginCommandResult } from "./types.js";
 
 export { clearPluginCommands, listRegisteredPluginAgentPromptGuidance, registerPluginCommand };
 
@@ -26,7 +22,7 @@ export function matchPluginCommand(
   commandBody: string,
   options: { channel?: string } = {},
 ): { command: RegisteredPluginCommand; args?: string } | null {
-  const registry = resolveCompatibilityPluginCommandRegistry();
+  const registry = requireActivePluginRegistry();
   return matchRegisteredPluginCommand({
     commands: listRegisteredPluginCommands(registry),
     commandBody,
@@ -36,38 +32,14 @@ export function matchPluginCommand(
 }
 
 export function executePluginCommand(params: {
-  command: RegisteredPluginCommand;
-  args?: string;
-  senderId?: string;
-  channel: string;
-  channelId?: PluginCommandContext["channelId"];
-  isAuthorizedSender: boolean;
-  senderIsOwner?: boolean;
-  gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
-  /** Host-resolved agent authority for plugin-owned or non-agent-shaped session keys. */
-  agentId?: string;
-  sessionKey?: PluginCommandContext["sessionKey"];
-  sessionId?: PluginCommandContext["sessionId"];
-  sessionTarget?: PluginCommandContext["sessionTarget"];
-  sessionFile?: PluginCommandContext["sessionFile"];
-  authProfileId?: string;
-  commandBody: string;
-  config: OpenClawConfig;
-  from?: PluginCommandContext["from"];
-  to?: PluginCommandContext["to"];
-  originatingTo?: string;
-  accountId?: PluginCommandContext["accountId"];
-  messageThreadId?: PluginCommandContext["messageThreadId"];
-  threadParentId?: PluginCommandContext["threadParentId"];
-  diagnosticsSessions?: PluginCommandContext["diagnosticsSessions"];
-  diagnosticsUploadApproved?: PluginCommandContext["diagnosticsUploadApproved"];
-  diagnosticsPreviewOnly?: PluginCommandContext["diagnosticsPreviewOnly"];
-  diagnosticsPrivateRouted?: PluginCommandContext["diagnosticsPrivateRouted"];
+  -readonly [
+    Key in keyof PluginCommandExecutionParams as Exclude<Key, "runtimeContext">
+  ]: PluginCommandExecutionParams[Key];
 }): Promise<PluginCommandResult>;
 export async function executePluginCommand(
   params: PluginCommandExecutionParams,
 ): Promise<PluginCommandResult> {
-  return await executeRegisteredPluginCommand(resolveCompatibilityPluginCommandRegistry(), params);
+  return await executeRegisteredPluginCommand(requireActivePluginRegistry(), params);
 }
 
 /** List registered plugin commands for help and command discovery. */
@@ -77,7 +49,7 @@ export function listPluginCommands(): Array<{
   pluginId: string;
   acceptsArgs: boolean;
 }> {
-  return Array.from(pluginCommands.values()).map((command) => ({
+  return listRegisteredPluginCommands(requireActivePluginRegistry()).map((command) => ({
     name: command.name,
     description: command.description,
     pluginId: command.pluginId,

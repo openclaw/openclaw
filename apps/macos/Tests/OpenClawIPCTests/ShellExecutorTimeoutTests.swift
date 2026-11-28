@@ -16,6 +16,40 @@ private actor ShellLineRecorder {
 }
 
 struct ShellExecutorTimeoutTests {
+    /// The executor's deadline starts at spawn, so allow ample process startup time.
+    /// This is a fixture budget, not the timeout behavior under test.
+    private static let fixtureTimeout: TimeInterval = 1.0
+
+    @Test(arguments: [false, true])
+    func `parallel instant exits preserve their exit status`(streaming: Bool) async {
+        await withTaskGroup(of: Void.self) { group in
+            for index in 0..<32 {
+                group.addTask {
+                    let exitCode = index.isMultiple(of: 2) ? 0 : 7
+                    let command = ["/bin/sh", "-c", "exit \(exitCode)"]
+                    // Process startup under concurrent load is not a latency assertion.
+                    let result = if streaming {
+                        await ShellExecutor.runStreamingDetailed(
+                            command: command,
+                            cwd: nil,
+                            env: nil,
+                            timeout: 30,
+                            onStandardOutputLine: { _ in })
+                    } else {
+                        await ShellExecutor.runDetailed(
+                            command: command,
+                            cwd: nil,
+                            env: nil,
+                            timeout: 30)
+                    }
+                    #expect(!result.timedOut)
+                    #expect(result.exitCode == exitCode)
+                    #expect(result.success == (exitCode == 0))
+                }
+            }
+        }
+    }
+
     @Test func `streaming captures both streams while delivering stdout lines`() async {
         let recorder = ShellLineRecorder()
         let result = await ShellExecutor.runStreamingDetailed(
@@ -69,14 +103,14 @@ struct ShellExecutorTimeoutTests {
                 command: command,
                 cwd: nil,
                 env: environment,
-                timeout: 0.1,
+                timeout: Self.fixtureTimeout,
                 onStandardOutputLine: { _ in })
         } else {
             await ShellExecutor.runDetailed(
                 command: command,
                 cwd: nil,
                 env: environment,
-                timeout: 0.1)
+                timeout: Self.fixtureTimeout)
         }
 
         #expect(result.timedOut)
@@ -116,14 +150,14 @@ struct ShellExecutorTimeoutTests {
                 command: command,
                 cwd: nil,
                 env: environment,
-                timeout: 0.2,
+                timeout: Self.fixtureTimeout,
                 onStandardOutputLine: { _ in })
         } else {
             await ShellExecutor.runDetailed(
                 command: command,
                 cwd: nil,
                 env: environment,
-                timeout: 0.2)
+                timeout: Self.fixtureTimeout)
         }
 
         #expect(result.timedOut)
@@ -139,6 +173,9 @@ struct ShellExecutorTimeoutTests {
     }
 
     private func readPID(from file: URL) throws -> pid_t {
+        try #require(
+            FileManager.default.fileExists(atPath: file.path),
+            "Timeout fixture did not publish its PID file: \(file.path)")
         let value = try String(contentsOf: file, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return try #require(pid_t(value))

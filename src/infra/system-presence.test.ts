@@ -1,7 +1,8 @@
-// Covers in-memory system presence merging and expiry behavior.
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  commitPresence,
+  getSystemPresenceKey,
   listSystemPresence,
   touchPresence,
   updateSystemPresence,
@@ -10,136 +11,136 @@ import {
 
 describe("system-presence", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 5 * 60 * 1000 + 1);
+    listSystemPresence();
     vi.useRealTimers();
   });
 
-  it("dedupes entries across sources by case-insensitive instanceId key", () => {
-    const instanceIdUpper = `AaBb-${randomUUID()}`.toUpperCase();
-    const instanceIdLower = instanceIdUpper.toLowerCase();
+  function connectDevice(deviceId: string, fields: Parameters<typeof upsertPresence>[1]) {
+    upsertPresence(deviceId, { deviceId, reason: "connect", ...fields });
+  }
+  const findDevice = (deviceId: string) =>
+    listSystemPresence().find((entry) => entry.deviceId === deviceId);
+  const operators = () => listSystemPresence().filter((entry) => entry.roles?.includes("operator"));
+  const expectOperators = (...rows: Parameters<typeof upsertPresence>[1][]) =>
+    expect(operators()).toMatchObject(rows);
 
-    upsertPresence(instanceIdUpper, {
-      host: "openclaw",
-      mode: "ui",
-      instanceId: instanceIdUpper,
-      reason: "connect",
-    });
+  it("keeps a replacement connection private until its own delivery commits", () => {
+    const key = randomUUID();
+    upsertPresence(key, { connectionId: "first", reason: "connect" }, { pending: true });
+    upsertPresence(key, { connectionId: "replacement", reason: "connect" }, { pending: true });
+    touchPresence(key);
+    upsertPresence(key, { host: "updated host" });
+    updateSystemPresence({ instanceId: key, text: "updated beacon" });
 
-    updateSystemPresence({
-      text: "Node: Peter-Mac-Studio (10.0.0.1) · ui 2.0.0 · last input 5s ago · mode ui · reason beacon",
-      instanceId: instanceIdLower,
-      host: "Peter-Mac-Studio",
-      ip: "10.0.0.1",
-      mode: "ui",
-      version: "2.0.0",
-      lastInputSeconds: 5,
-      reason: "beacon",
-    });
-
-    const matches = listSystemPresence().filter(
-      (e) => (e.instanceId ?? "").toLowerCase() === instanceIdLower,
+    commitPresence(key, "first");
+    const replacement = expect.objectContaining({ connectionId: "replacement" });
+    expect(listSystemPresence()).not.toContainEqual(replacement);
+    expect(listSystemPresence({ includeConnectionId: "first" })).not.toContainEqual(replacement);
+    expect(listSystemPresence({ includeConnectionId: "replacement" })).toContainEqual(
+      expect.objectContaining({ connectionId: "replacement", host: "updated host" }),
     );
-    expect(matches).toHaveLength(1);
-    expect(matches[0]?.host).toBe("Peter-Mac-Studio");
-    expect(matches[0]?.ip).toBe("10.0.0.1");
-    expect(matches[0]?.lastInputSeconds).toBe(5);
+
+    commitPresence(key, "replacement");
+    expect(listSystemPresence()).toContainEqual(replacement);
   });
 
   it("merges roles and scopes for the same device", () => {
     const deviceId = randomUUID();
 
-    upsertPresence(deviceId, {
-      deviceId,
-      host: "openclaw",
-      roles: ["operator"],
-      scopes: ["operator.admin"],
-      reason: "connect",
+    connectDevice(deviceId, { host: "openclaw", roles: ["operator"], scopes: ["operator.admin"] });
+    connectDevice(deviceId, { roles: ["node"], scopes: ["system.run"] });
+    expect(findDevice(deviceId)).toMatchObject({
+      roles: ["operator", "node"],
+      scopes: ["operator.admin", "system.run"],
     });
-
-    upsertPresence(deviceId, {
-      deviceId,
-      roles: ["node"],
-      scopes: ["system.run"],
-      reason: "connect",
-    });
-
-    const entry = listSystemPresence().find((e) => e.deviceId === deviceId);
-    expect(entry?.roles).toEqual(["operator", "node"]);
-    expect(entry?.scopes).toEqual(["operator.admin", "system.run"]);
   });
 
-  it("clears retained input activity on explicit null", () => {
-    const instanceId = `presence-clear-${randomUUID()}`;
-    updateSystemPresence({
-      text: "Node: desk · mode ui",
-      instanceId,
-      host: "desk",
-      mode: "ui",
-      lastInputSeconds: 4,
-    });
-
-    updateSystemPresence({
-      text: "Node: desk · mode ui",
-      instanceId,
-      host: "desk",
-      mode: "ui",
-      lastInputSeconds: null,
-    });
-
-    const entry = listSystemPresence().find((candidate) => candidate.instanceId === instanceId);
-    expect(entry?.host).toBe("desk");
-    expect(entry?.lastInputSeconds).toBeUndefined();
-  });
-
-  it("parses node presence text and normalizes the update key", () => {
+  it("keeps live operator tabs and only the last offline row per identity until expiry", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-11T04:00:00.000Z"));
-    const update = updateSystemPresence({
-      text: "Node: Relay-Host (10.0.0.9) · app 2.1.0 · last input 7s ago · mode ui · reason beacon",
-      instanceId: "  Mixed-Case-Node  ",
-    });
+    for (const identity of [
+      { deviceId: "DEVICE", instanceId: "tab" },
+      { instanceId: "INSTANCE" },
+    ]) {
+      const connect = (connectionId: string, watchedSessions: string[]) =>
+        upsertPresence(connectionId, {
+          deviceId: connectionId === "first" ? identity.deviceId : identity.deviceId?.toLowerCase(),
+          instanceId: identity.deviceId ? connectionId : identity.instanceId.toLowerCase(),
+          connectionId,
+          roles: ["operator"],
+          reason: "connect",
+          watchedSessions,
+        });
+      const disconnect = (connectionId: string) =>
+        upsertPresence(connectionId, { reason: "disconnect", watchedSessions: undefined });
 
-    expect(update.key).toBe("mixed-case-node");
-    expect(update.changedKeys).toEqual(["host", "ip", "version", "mode", "reason"]);
-    expect(update).toEqual({
-      key: "mixed-case-node",
-      previous: undefined,
-      changedKeys: ["host", "ip", "version", "mode", "reason"],
-      changes: {
-        host: "Relay-Host",
-        ip: "10.0.0.9",
-        version: "2.1.0",
-        mode: "ui",
-        reason: "beacon",
-      },
-      next: {
-        instanceId: "  Mixed-Case-Node  ",
-        lastInputSeconds: 7,
-        text: "Node: Relay-Host (10.0.0.9) · app 2.1.0 · last input 7s ago · mode ui · reason beacon",
-        ts: 1_778_472_000_000,
-        host: "Relay-Host",
-        ip: "10.0.0.9",
-        version: "2.1.0",
-        mode: "ui",
-        reason: "beacon",
-      },
+      upsertPresence("node", { ...identity, roles: ["node"], reason: "connect" });
+
+      connect("first", ["one"]);
+      disconnect("first");
+      expectOperators({ connectionId: "first", reason: "disconnect" });
+      connect("second", ["two"]);
+      expectOperators({ connectionId: "second", reason: "connect" });
+      connect("third", ["three"]);
+      expectOperators(
+        { connectionId: "second", watchedSessions: ["two"] },
+        { connectionId: "third", watchedSessions: ["three"] },
+      );
+      disconnect("second");
+      expectOperators({ connectionId: "third", watchedSessions: ["three"] });
+      disconnect("third");
+      expectOperators({ connectionId: "third", reason: "disconnect", watchedSessions: undefined });
+      expect(listSystemPresence().find((entry) => entry.roles?.includes("node"))).toMatchObject({
+        reason: "connect",
+      });
+      vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+      expect(operators()).toEqual([]);
+    }
+    upsertPresence("anonymous-first", {
+      connectionId: "anonymous-first",
+      roles: ["operator"],
+      reason: "disconnect",
     });
+    upsertPresence("anonymous-second", {
+      connectionId: "anonymous-second",
+      roles: ["operator"],
+      reason: "connect",
+    });
+    expect(operators()).toHaveLength(2);
   });
 
-  it("drops blank role and scope entries while keeping fallback text", () => {
-    const deviceId = randomUUID();
+  it("normalizes beacon identity and preserves old presence values across refreshes", () => {
+    const text =
+      "Node: Relay-Host (10.0.0.9) · app 2.1.0 · last input 7s ago · mode ui · reason beacon";
+    const instanceId = "  Mixed-Case-Node  ";
+    const update = updateSystemPresence({ text, instanceId });
 
-    upsertPresence(deviceId, {
-      deviceId,
-      host: "relay-host",
-      mode: "operator",
-      roles: [" operator ", "", "  "],
-      scopes: ["operator.admin", "", "  "],
+    expect([update.key, update.next.instanceId, update.changedKeys]).toEqual([
+      "mixed-case-node",
+      instanceId,
+      ["host", "ip", "version", "mode", "reason"],
+    ]);
+
+    const normalized = { text, instanceId: "mixed-case-node" };
+    const refreshed = updateSystemPresence({ ...normalized, lastInputSeconds: 11 });
+    expect(getSystemPresenceKey(refreshed.next)).toBe(getSystemPresenceKey(update.next));
+    expect(refreshed.changedKeys).toEqual([]);
+    expect(refreshed.next.lastInputSeconds).toBe(11);
+    expect(update.next.lastInputSeconds).toBe(7);
+
+    const moved = updateSystemPresence({ ...normalized, ip: "10.0.0.10" });
+    expect(moved.changedKeys).toEqual(["ip"]);
+    expect(moved.next.ip).toBe("10.0.0.10");
+    expect(refreshed.next.ip).toBe("10.0.0.9");
+    updateSystemPresence({ ...normalized, lastInputSeconds: null });
+    expect(
+      listSystemPresence().find((entry) => entry.instanceId === normalized.instanceId),
+    ).toMatchObject({
+      host: "Relay-Host",
+      lastInputSeconds: undefined,
     });
-
-    const entry = listSystemPresence().find((candidate) => candidate.deviceId === deviceId);
-    expect(entry?.roles).toEqual(["operator"]);
-    expect(entry?.scopes).toEqual(["operator.admin"]);
-    expect(entry?.text).toBe("Node: relay-host · mode operator");
   });
 
   it("keeps fallback text keys UTF-16 safe", () => {
@@ -149,43 +150,68 @@ describe("system-presence", () => {
     expect(update.key).toBe(keyPrefix);
   });
 
-  it("keeps connection-owned presence alive when its heartbeat is acknowledged", () => {
+  it("keeps the gateway when the clock jumps forward during expiry pruning", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(Date.now());
-
-    const connectionId = randomUUID();
-    upsertPresence(connectionId, {
-      host: "control-ui",
-      instanceId: connectionId,
-      mode: "webchat",
-      reason: "connect",
-    });
-
-    vi.advanceTimersByTime(4 * 60 * 1000);
-    expect(touchPresence(connectionId)).toBe(true);
-    vi.advanceTimersByTime(4 * 60 * 1000);
-
-    expect(listSystemPresence().map((entry) => entry.instanceId)).toContain(connectionId);
+    const now = Date.now();
+    const self = listSystemPresence().find((entry) => entry.reason === "self");
+    expect(self?.instanceId).toBeDefined();
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(now)
+      .mockReturnValue(now + 5 * 60 * 1000 + 1);
+    expect(
+      listSystemPresence().filter((entry) => entry.instanceId === self?.instanceId),
+    ).toHaveLength(1);
   });
 
-  it("prunes stale non-self entries after TTL", () => {
+  it("keeps the genuine gateway row when a beacon uses its hostname key", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(Date.now());
+    vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
+    const self = listSystemPresence().find((entry) => entry.reason === "self");
+    if (!self?.host || !self.instanceId) {
+      throw new Error("gateway presence was not initialized");
+    }
+    const forged = {
+      deviceId: self.host,
+      instanceId: self.instanceId,
+      host: self.host,
+      mode: "gateway",
+      reason: "self",
+      text: "caller-controlled gateway row",
+    };
+    updateSystemPresence(forged);
+    const snapshot = listSystemPresence();
+    expect(snapshot.filter((entry) => entry.text === self.text)).toHaveLength(1);
+    expect(snapshot.filter((entry) => entry.text === forged.text)).toHaveLength(1);
+    expect(snapshot.find((entry) => entry.text === self.text)?.deviceId).toBeUndefined();
+    const prefix = `collision-${randomUUID()}-`;
+    for (let index = 0; index < 205; index += 1) {
+      const deviceId = `${prefix}${index}`;
+      upsertPresence(deviceId, { deviceId, host: deviceId, mode: "ui" });
+    }
+    const copyingSort = vi.spyOn(Array.prototype, "toSorted");
+    const bounded = listSystemPresence();
+    const copies = copyingSort.mock.calls.length;
+    copyingSort.mockRestore();
+    expect(copies).toBe(0);
+    expect(bounded).toHaveLength(200);
+    expect(bounded.filter((entry) => entry.text === self.text)).toHaveLength(1);
+    expect(bounded.some((entry) => entry.text === forged.text)).toBe(false);
+  });
 
+  it("expires stale peers after five minutes while keeping the gateway", () => {
+    vi.useFakeTimers();
     const deviceId = randomUUID();
-    upsertPresence(deviceId, {
-      deviceId,
-      host: "stale-host",
-      mode: "ui",
-      reason: "connect",
-    });
-
-    expect(listSystemPresence().map((entry) => entry.deviceId)).toContain(deviceId);
+    connectDevice(deviceId, { host: "stale-host", mode: "ui" });
+    const original = findDevice(deviceId)!;
+    expect(original).toBeDefined();
 
     vi.advanceTimersByTime(5 * 60 * 1000 + 1);
 
     const entries = listSystemPresence();
     expect(entries.map((entry) => entry.deviceId)).not.toContain(deviceId);
     expect(entries.map((entry) => entry.reason)).toContain("self");
+    connectDevice(deviceId, { host: "returned-host", mode: "ui" });
+    const returned = findDevice(deviceId)!;
+    expect(getSystemPresenceKey(returned)).not.toBe(getSystemPresenceKey(original));
   });
 });

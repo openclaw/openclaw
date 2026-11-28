@@ -1,11 +1,13 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "jsx": "preserve",
+    "jsxImportSource": "@solidjs/web",
     // Control UI indexed reads must account for missing entries.
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "tsBuildInfoFile": ".artifacts/tsgo-cache/ui.tsbuildinfo"
   },
-  "include": ["ui/**/*", "src/**/*.d.ts", "packages/**/*.d.ts"],
-  "exclude": ["node_modules", "dist", "**/dist/**", "**/*.test.ts", "**/*.test.tsx", "test/**"]
+  "include": ["ui/**/*", "packages/mermaid-renderer/**/*", "src/plugin-sdk/control-ui*.ts", "src/**/*.d.ts", "packages/**/*.d.ts"],
+  "exclude": ["node_modules", "dist", "**/dist/**", "**/*.test.ts", "**/*.test.tsx", "**/*test-helpers.ts", "**/*test-harness.ts", "**/*test-support.ts", "test/**"]
 }

@@ -1,0 +1,241 @@
+import {
+  commitCompactionSummary,
+  resolveSummaryFloorChars,
+  type PreparedCompactionFloor,
+} from "../../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
+import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction-summary-budget.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import type { AgentMessage } from "../../runtime/index.js";
+import type { PromptOptions } from "../agent-session-types.js";
+import {
+  SAFETY_MARGIN,
+  createFreshLlmBoundaryTokenEstimator,
+  estimateCompactionHistoryTokens,
+  estimateVariableRequestTokens,
+  type FixedRequestTokenPressure,
+} from "../context-token-pressure.js";
+import type { CompactionRequestBudget } from "./preparation.types.js";
+
+const log = createSubsystemLogger("agents/session");
+const promptRequestBudgets = new WeakMap<PromptOptions, CompactionRequestBudget>();
+
+/** Bind prepared foreground facts to the exact owned prompt invocation, outside public options. */
+export function attachPromptCompactionRequestBudget(
+  options: PromptOptions,
+  budget: CompactionRequestBudget | undefined,
+): void {
+  if (budget) {
+    promptRequestBudgets.set(options, budget);
+  }
+}
+
+export function takePromptCompactionRequestBudget(
+  options?: PromptOptions,
+): CompactionRequestBudget | undefined {
+  if (!options) {
+    return undefined;
+  }
+  const budget = promptRequestBudgets.get(options);
+  // Consume before preflight can handle, reject, or queue this prompt.
+  promptRequestBudgets.delete(options);
+  return budget;
+}
+
+export function createCompactionRequestBudget(params: {
+  contextWindow: number;
+  reserveTokens: number;
+  systemPrompt?: string;
+  tools?: readonly { name: string; description: string; parameters: unknown }[];
+  fixedTokenPressure?: FixedRequestTokenPressure;
+  pendingPrompt?: string;
+  pendingImageCount?: number;
+  pendingUserIdempotencyKey?: string;
+  pendingContextMessages?: AgentMessage[];
+  pendingQueuedContextMessages?: AgentMessage[];
+  pendingAdditivePrompt?: string;
+}): CompactionRequestBudget {
+  const estimateTokens = createFreshLlmBoundaryTokenEstimator(params);
+  const fixedTokens = estimateTokens({
+    messages: [],
+    prompt: "",
+  });
+  const pendingUserTokens =
+    (params.pendingPrompt ?? "") === "" && (params.pendingImageCount ?? 0) === 0
+      ? 0
+      : estimateTokens({
+          messages: [],
+          prompt: params.pendingPrompt ?? "",
+          imageCount: params.pendingImageCount,
+        }) - fixedTokens;
+  const pendingQueuedContextTokens = estimateCompactionHistoryTokens(
+    params.pendingQueuedContextMessages ?? [],
+  );
+  const additionalContextTokens =
+    estimateCompactionHistoryTokens(params.pendingContextMessages ?? []) +
+    pendingQueuedContextTokens;
+  const additiveTokens = params.pendingAdditivePrompt
+    ? estimateVariableRequestTokens([], params.pendingAdditivePrompt)
+    : 0;
+  return {
+    contextWindow: params.contextWindow,
+    reserveTokens: params.reserveTokens,
+    fixedTokens,
+    pendingUserIdempotencyKey: params.pendingUserIdempotencyKey,
+    pendingTokens: pendingUserTokens + additionalContextTokens,
+    pendingQueuedContextTokens,
+    ...(additionalContextTokens || additiveTokens
+      ? { pendingUserTokens: Math.max(0, pendingUserTokens - additiveTokens) }
+      : {}),
+  };
+}
+
+/** Legacy standalone compaction relies on its fixed ceiling; opt-in growth needs a window budget. */
+export function createStandaloneCompactionRequestBudget(
+  params: Parameters<typeof createCompactionRequestBudget>[0] & { maxSummaryChars?: number },
+): CompactionRequestBudget | undefined {
+  return (params.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS) > MAX_COMPACTION_SUMMARY_CHARS
+    ? createCompactionRequestBudget(params)
+    : undefined;
+}
+
+/** Reconcile only queued context; prepared user, image, and transient costs stay owned upstream. */
+export function withCompactionQueuedContext(
+  budget: CompactionRequestBudget,
+  messages: AgentMessage[],
+): CompactionRequestBudget {
+  const pendingQueuedContextTokens = estimateCompactionHistoryTokens(messages);
+  const previousQueuedTokens = budget.pendingQueuedContextTokens ?? 0;
+  if (pendingQueuedContextTokens === previousQueuedTokens) {
+    return budget;
+  }
+  return {
+    ...budget,
+    pendingTokens: budget.pendingTokens - previousQueuedTokens + pendingQueuedContextTokens,
+    pendingQueuedContextTokens,
+    // Newly queued context is never overlap credit for a recorded user.
+    pendingUserTokens: budget.pendingUserTokens ?? budget.pendingTokens - previousQueuedTokens,
+  };
+}
+
+export function estimateCompactedRequestTokens(
+  messages: AgentMessage[],
+  budget: CompactionRequestBudget,
+): number {
+  return (
+    budget.fixedTokens + budget.pendingTokens + estimateCompactionHistoryTokens(messages, budget)
+  );
+}
+
+/**
+ * Summary tokens a replacement without a foreground budget may spend in the window beside its
+ * fixed prompt, tools and retained history, in the same units as the foreground summary budget.
+ * An unknown window yields no limit.
+ */
+export function replayTokenBudget(
+  session: {
+    agent: {
+      state: Pick<
+        Parameters<typeof createCompactionRequestBudget>[0],
+        "systemPrompt" | "tools" | "fixedTokenPressure"
+      >;
+    };
+  },
+  model: { contextWindow?: number },
+  settings: { reserveTokens: number },
+  messages: AgentMessage[],
+): number | undefined {
+  if (!model.contextWindow || model.contextWindow <= 0) {
+    return undefined;
+  }
+  const { systemPrompt, tools, fixedTokenPressure } = session.agent.state;
+  const budget = createCompactionRequestBudget({
+    contextWindow: 0,
+    reserveTokens: 0,
+    systemPrompt,
+    tools,
+    fixedTokenPressure,
+  });
+  const remaining =
+    model.contextWindow - settings.reserveTokens - estimateCompactedRequestTokens(messages, budget);
+  // The estimator above carries the safety margin; the summary is fitted without it.
+  return Math.floor(remaining / SAFETY_MARGIN) - 1;
+}
+
+/** Commits the harness summary; a floor the token budget shrank or dropped gets one warning. */
+export function commitSessionCompactionSummary(
+  result: Parameters<typeof commitCompactionSummary>[0],
+  preparation: Parameters<typeof commitCompactionSummary>[1],
+  withoutSummary: boolean,
+  replayBudget: () => number | undefined,
+  preparedFloor?: PreparedCompactionFloor,
+): string {
+  return commitCompactionSummary(
+    result,
+    preparation,
+    withoutSummary,
+    replayBudget,
+    (reduction) =>
+      log.warn(
+        `[compaction] summary floor ${reduction.keptChars ? "shrunk" : "dropped"} for the ` +
+          `${reduction.source} token budget: kept ${reduction.keptChars}/${reduction.floorChars} ` +
+          `floor chars; summaryTokenBudget=${reduction.tokenBudget}`,
+      ),
+    preparedFloor,
+  );
+}
+
+/** Lazy scalar estimates preserve the public array estimator's short-circuit call order. */
+export function assertCompactionRequestCanFitFromTokens(
+  historyTokens: number | (() => number),
+  budget: CompactionRequestBudget | undefined,
+  hasCompactableHistory: boolean,
+): void {
+  // Try useful history reduction for pending input; only fixed overhead is unreclaimable here.
+  if (budget && (!hasCompactableHistory || budget.fixedTokens > budget.contextWindow)) {
+    const requestTokens =
+      budget.fixedTokens +
+      budget.pendingTokens +
+      (typeof historyTokens === "function" ? historyTokens() : historyTokens);
+    if (requestTokens > budget.contextWindow) {
+      const retainedTokens = requestTokens - budget.fixedTokens - budget.pendingTokens;
+      throw new Error(
+        `The estimated foreground request budget still exceeds the ${budget.contextWindow}-token model window ` +
+          `(fixed instructions and tools: ${budget.fixedTokens}; pending input: ${budget.pendingTokens}; retained history: ${retainedTokens}). ` +
+          "No further history compaction can make this request fit. Use /context detail to reduce fixed context, shorten the request, or select a larger-context model.",
+      );
+    }
+  }
+}
+
+export function resolveCompactionRetentionBudgetFromTokens(
+  budget: CompactionRequestBudget,
+  historyTokens: number | (() => number),
+  maxSummaryChars = MAX_COMPACTION_SUMMARY_CHARS,
+) {
+  const preferredTokens =
+    budget.contextWindow - budget.reserveTokens - budget.fixedTokens - budget.pendingTokens;
+  // Fixed prompt and pending input cannot be reclaimed. An approximate reserve
+  // target must not prevent useful history reduction for an accepted request.
+  const maxTokens =
+    preferredTokens <= 0
+      ? (typeof historyTokens === "function" ? historyTokens() : historyTokens) - 1
+      : preferredTokens;
+  const summaryTokens = estimateCompactionHistoryTokens([
+    {
+      role: "compactionSummary",
+      // The cut keeps room for the floor committed beside a full summary.
+      summary: "x".repeat(maxSummaryChars + resolveSummaryFloorChars(maxSummaryChars)),
+      tokensBefore: 0,
+      timestamp: 0,
+    },
+  ]);
+  return {
+    // The legacy fallback can prefer useful reduction over fitting in one pass.
+    // A raised artifact ceiling must not use that fallback to exceed the window.
+    maxTokens:
+      maxSummaryChars > MAX_COMPACTION_SUMMARY_CHARS
+        ? Math.min(maxTokens, budget.contextWindow - budget.fixedTokens - budget.pendingTokens)
+        : maxTokens,
+    reserveTokens: summaryTokens,
+  };
+}

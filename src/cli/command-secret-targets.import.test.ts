@@ -1,71 +1,106 @@
 // Command secret target import tests cover lazy import safety for secret target metadata.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
+
+function secretTarget(
+  id: string,
+  overrides: {
+    targetType?: string;
+    pathPattern?: string;
+    refPathPattern?: string;
+    secretShape?: "secret_input" | "sibling_ref";
+  } = {},
+) {
+  return {
+    id,
+    targetType: id,
+    configFile: "openclaw.json",
+    pathPattern: id,
+    secretShape: "secret_input",
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+    ...overrides,
+  };
+}
 
 describe("command secret targets module import", () => {
-  let lazyImportProbe: {
-    channelsError: unknown;
-    listSecretTargetRegistryEntries: ReturnType<typeof vi.fn>;
-    modelsHasApiKey: boolean;
-    qrRemoteHasToken: boolean;
-  };
-
-  beforeAll(async () => {
-    const listSecretTargetRegistryEntries = vi.fn(() => {
-      throw new Error("registry touched too early");
-    });
-
-    vi.doMock("../secrets/target-registry.js", () => ({
-      discoverConfigSecretTargetsByIds: vi.fn(() => []),
-      listSecretTargetRegistryEntries,
-    }));
-
-    const mod = await import("./command-secret-targets.js");
-    let channelsError: unknown;
-    try {
-      mod.getChannelsCommandSecretTargetIds();
-    } catch (error) {
-      channelsError = error;
-    }
-    lazyImportProbe = {
-      channelsError,
-      listSecretTargetRegistryEntries,
-      modelsHasApiKey: mod.getModelsCommandSecretTargetIds().has("models.providers.*.apiKey"),
-      qrRemoteHasToken: mod.getQrRemoteCommandSecretTargetIds().has("gateway.remote.token"),
-    };
-  });
-
   beforeEach(() => {
     vi.resetModules();
   });
 
-  it("does not touch the registry during module import", async () => {
-    expect(lazyImportProbe.modelsHasApiKey).toBe(true);
-    expect(lazyImportProbe.qrRemoteHasToken).toBe(true);
-    expect(lazyImportProbe.channelsError).toEqual(new Error("registry touched too early"));
-    expect(lazyImportProbe.listSecretTargetRegistryEntries).toHaveBeenCalledTimes(1);
+  it("reads independent model credential target sets without channel or web discovery", async () => {
+    const denyUnrelatedImport = () => {
+      throw new Error("Model targets loaded channel or web discovery");
+    };
+    // mock-isolation: Channel metadata must throw on import to detect eager channel discovery.
+    vi.doMock("../channels/plugins/read-only.js", denyUnrelatedImport);
+    // mock-isolation: The web fetch provider runtime must throw on import to detect eager discovery.
+    vi.doMock("../plugins/web-fetch-providers.runtime.js", denyUnrelatedImport);
+    // mock-isolation: The web search provider runtime must throw on import to detect eager discovery.
+    vi.doMock("../plugins/web-search-providers.runtime.js", denyUnrelatedImport);
+    try {
+      const { getModelsCommandSecretTargetIds } = await import("./model-secret-targets.js");
+      const ids = getModelsCommandSecretTargetIds();
+      ids.clear();
+      expect(getModelsCommandSecretTargetIds()).toEqual(
+        new Set([
+          "models.providers.*.apiKey",
+          "models.providers.*.headers.*",
+          "models.providers.*.request.headers.*",
+          "models.providers.*.request.auth.token",
+          "models.providers.*.request.auth.value",
+          "models.providers.*.request.proxy.tls.ca",
+          "models.providers.*.request.proxy.tls.cert",
+          "models.providers.*.request.proxy.tls.key",
+          "models.providers.*.request.proxy.tls.passphrase",
+          "models.providers.*.request.tls.ca",
+          "models.providers.*.request.tls.cert",
+          "models.providers.*.request.tls.key",
+          "models.providers.*.request.tls.passphrase",
+        ]),
+      );
+    } finally {
+      vi.doUnmock("../channels/plugins/read-only.js");
+      vi.doUnmock("../plugins/web-fetch-providers.runtime.js");
+      vi.doUnmock("../plugins/web-search-providers.runtime.js");
+    }
   });
 
-  it("loads registry lazily for agent runtime plugin credential targets", async () => {
-    const listSecretTargetRegistryEntries = vi.fn(() => [
-      { id: "plugins.entries.example.config.webSearch.apiKey" },
-      { id: "plugins.entries.example.config.other.apiKey" },
-      { id: "channels.telegram.botToken" },
-    ]);
-
-    vi.doMock("../secrets/target-registry.js", () => ({
-      discoverConfigSecretTargetsByIds: vi.fn(() => []),
-      listSecretTargetRegistryEntries,
-    }));
-
-    const mod = await import("./command-secret-targets.js");
-
-    expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
-    const ids = mod.getAgentRuntimeCommandSecretTargetIds();
-    expect(ids.has("memory.search.remote.apiKey")).toBe(true);
-    expect(ids.has("plugins.entries.example.config.webSearch.apiKey")).toBe(true);
-    expect(ids.has("plugins.entries.example.config.other.apiKey")).toBe(false);
-    expect(ids.has("channels.telegram.botToken")).toBe(false);
-    expect(listSecretTargetRegistryEntries).toHaveBeenCalledTimes(1);
+  it("resolves model credentials without loading the web-tool runtime", async () => {
+    // mock-isolation: A model-only command must not initialize the web provider runtime.
+    vi.doMock("../secrets/runtime-web-tools.js", () => {
+      throw new Error("Model credential resolution loaded the web runtime");
+    });
+    vi.stubEnv("OPENCLAW_TEST_MODEL_KEY", "fixture-model-key");
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
+    vi.stubEnv("OPENCLAW_GATEWAY_PORT", undefined);
+    try {
+      const { resolveCommandSecretRefsViaGateway } = await import("./command-secret-gateway.js");
+      const { getModelsCommandSecretTargetIds } = await import("./model-secret-targets.js");
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: {
+          models: {
+            providers: {
+              fixture: {
+                baseUrl: "https://provider.example/v1",
+                apiKey: { source: "env", provider: "default", id: "OPENCLAW_TEST_MODEL_KEY" },
+                models: [],
+              },
+            },
+          },
+        },
+        commandName: "infer model run",
+        targetIds: getModelsCommandSecretTargetIds(),
+        localGatewayAbsent: true,
+      });
+      expect(result.resolvedConfig.models?.providers?.fixture?.apiKey).toBe("fixture-model-key");
+      expect(result.hadUnresolvedTargets).toBe(false);
+    } finally {
+      vi.doUnmock("../secrets/runtime-web-tools.js");
+      vi.unstubAllEnvs();
+    }
   });
 
   it("can resolve configured-channel status targets without the full registry", async () => {
@@ -77,70 +112,24 @@ describe("command secret targets module import", () => {
         id: "telegram",
         secrets: {
           secretTargetRegistryEntries: [
-            {
-              id: "channels.telegram.botToken",
-              targetType: "channels.telegram.botToken",
-              configFile: "openclaw.json",
-              pathPattern: "channels.telegram.botToken",
-              secretShape: "secret_input",
-              expectedResolvedValue: "string",
-              includeInPlan: true,
-              includeInConfigure: true,
-              includeInAudit: true,
-            },
-            {
-              id: "channels.telegram.gatewayToken",
+            secretTarget("channels.telegram.botToken"),
+            secretTarget("channels.telegram.gatewayToken", {
               targetType: "gateway.auth.token",
-              configFile: "openclaw.json",
               pathPattern: "gateway.auth.token",
-              secretShape: "secret_input",
-              expectedResolvedValue: "string",
-              includeInPlan: true,
-              includeInConfigure: true,
-              includeInAudit: true,
-            },
-            {
-              id: "channels.telegram.gatewayTokenRef",
-              targetType: "channels.telegram.gatewayTokenRef",
-              configFile: "openclaw.json",
+            }),
+            secretTarget("channels.telegram.gatewayTokenRef", {
               pathPattern: "channels.telegram.gatewayToken",
               refPathPattern: "gateway.auth.token",
               secretShape: "sibling_ref",
-              expectedResolvedValue: "string",
-              includeInPlan: true,
-              includeInConfigure: true,
-              includeInAudit: true,
-            },
-            {
-              id: "channels.discord.token",
-              targetType: "channels.discord.token",
-              configFile: "openclaw.json",
-              pathPattern: "channels.discord.token",
-              secretShape: "secret_input",
-              expectedResolvedValue: "string",
-              includeInPlan: true,
-              includeInConfigure: true,
-              includeInAudit: true,
-            },
+            }),
+            secretTarget("channels.discord.token"),
           ],
         },
       },
       {
         id: "external-chat",
         secrets: {
-          secretTargetRegistryEntries: [
-            {
-              id: "channels.external-chat.token",
-              targetType: "channels.external-chat.token",
-              configFile: "openclaw.json",
-              pathPattern: "channels.external-chat.token",
-              secretShape: "secret_input",
-              expectedResolvedValue: "string",
-              includeInPlan: true,
-              includeInConfigure: true,
-              includeInAudit: true,
-            },
-          ],
+          secretTargetRegistryEntries: [secretTarget("channels.external-chat.token")],
         },
       },
     ]);
@@ -176,43 +165,6 @@ describe("command secret targets module import", () => {
       | undefined;
     expect(typeof pluginCall?.[0]).toBe("object");
     expect(pluginCall?.[1]?.includePersistedAuthState).toBe(false);
-    expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
-  });
-
-  it("can omit channel targets from status targets without plugin discovery", async () => {
-    const listSecretTargetRegistryEntries = vi.fn(() => {
-      throw new Error("registry touched too early");
-    });
-    const listReadOnlyChannelPluginsForConfig = vi.fn(() => {
-      throw new Error("channel plugin metadata touched too early");
-    });
-
-    vi.doMock("../secrets/target-registry.js", () => ({
-      discoverConfigSecretTargetsByIds: vi.fn(() => []),
-      listSecretTargetRegistryEntries,
-    }));
-    vi.doMock("../channels/plugins/read-only.js", () => ({
-      listReadOnlyChannelPluginsForConfig,
-    }));
-
-    const mod = await import("./command-secret-targets.js");
-    const targets = mod.getStatusCommandSecretTargetIds(
-      {
-        channels: {
-          telegram: { botToken: "123456:ABCDEF" },
-        },
-      },
-      process.env,
-      { includeChannelTargets: false },
-    );
-
-    expect(targets.has("memory.search.remote.apiKey")).toBe(true);
-    expect(targets.has("gateway.auth.token")).toBe(true);
-    expect(targets.has("gateway.auth.password")).toBe(true);
-    expect(targets.has("gateway.remote.token")).toBe(true);
-    expect(targets.has("gateway.remote.password")).toBe(true);
-    expect(targets.has("channels.telegram.botToken")).toBe(false);
-    expect(listReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
     expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
   });
 });

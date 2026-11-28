@@ -375,52 +375,49 @@ internal fun codeHighlightTokens(
   while (i < code.length) {
     val c = code[i]
     val lineComment = spec.lineComment
+    val blockComment = spec.blockComment
     // Shell comments open at word boundaries: start, whitespace, or after control operators.
     // '{' is deliberately not a boundary so ${#items[@]} expansions stay code.
     val prev = if (i == 0) ' ' else code[i - 1]
     val atCommentBoundary = !spec.lineCommentNeedsBoundary || prev.isWhitespace() || prev in ";&|()"
-    if (lineComment != null && atCommentBoundary && code.startsWith(lineComment, i)) {
-      val end = code.indexOf('\n', i).let { if (it == -1) code.length else it }
-      tokens.add(CodeToken(i, end, CodeTokenKind.COMMENT))
-      i = end
-      continue
-    }
-    val blockComment = spec.blockComment
-    if (blockComment != null && code.startsWith(blockComment.first, i)) {
-      val end = scanBlockComment(code, i, blockComment, spec.nestedBlockComments)
-      tokens.add(CodeToken(i, end, CodeTokenKind.COMMENT))
-      i = end
-      continue
-    }
-    if (c in spec.quoteChars) {
-      val end = scanString(code, i, spec)
-      tokens.add(CodeToken(i, end, CodeTokenKind.STRING))
-      i = end
-      continue
-    }
-    if (c.isDigit()) {
-      var end = i + 1
-      while (end < code.length && (code[end].isLetterOrDigit() || code[end] == '.' || code[end] == '_')) end++
-      tokens.add(CodeToken(i, end, CodeTokenKind.NUMBER))
-      i = end
-      continue
-    }
-    if (c.isLetter() || c == '_') {
-      var end = i + 1
-      while (end < code.length && isIdentifierPart(code[end])) end++
-      if (code.substring(i, end) in spec.keywords) {
-        tokens.add(CodeToken(i, end, CodeTokenKind.KEYWORD))
+    var end = i + 1
+    val kind =
+      when {
+        lineComment != null && atCommentBoundary && code.startsWith(lineComment, i) -> {
+          end = code.indexOf('\n', i).let { if (it == -1) code.length else it }
+          CodeTokenKind.COMMENT
+        }
+
+        blockComment != null && code.startsWith(blockComment.first, i) -> {
+          end = scanBlockComment(code, i, blockComment, spec.nestedBlockComments)
+          CodeTokenKind.COMMENT
+        }
+
+        c in spec.quoteChars -> {
+          end = scanString(code, i, spec)
+          CodeTokenKind.STRING
+        }
+
+        c.isLetterOrDigit() || c == '_' -> {
+          val number = c.isDigit()
+          // Consume the whole identifier so "value1" cannot start a number mid-word.
+          while (end < code.length && (code[end].isLetterOrDigit() || code[end] == '_' || (number && code[end] == '.'))) end++
+          when {
+            number -> CodeTokenKind.NUMBER
+            code.substring(i, end) in spec.keywords -> CodeTokenKind.KEYWORD
+            else -> null
+          }
+        }
+
+        else -> {
+          null
+        }
       }
-      i = end
-      continue
-    }
-    i++
+    if (kind != null) tokens.add(CodeToken(i, end, kind))
+    i = end
   }
   return tokens
 }
-
-// Identifier scan must also swallow digits so "value1" never re-enters the number branch mid-word.
-private fun isIdentifierPart(c: Char): Boolean = c.isLetterOrDigit() || c == '_'
 
 private fun scanBlockComment(
   code: String,
@@ -438,11 +435,15 @@ private fun scanBlockComment(
         i += close.length
         if (depth == 0) return i
       }
+
       nested && code.startsWith(open, i) -> {
         depth++
         i += open.length
       }
-      else -> i++
+
+      else -> {
+        i++
+      }
     }
   }
   return code.length
@@ -455,25 +456,14 @@ private fun scanString(
 ): Int {
   val quote = code[start]
   val triple = spec.tripleQuotes && code.startsWith("$quote$quote$quote", start)
-  if (triple) {
-    val delimiter = "$quote$quote$quote"
-    var i = start + delimiter.length
-    while (i < code.length) {
-      if (code.startsWith(delimiter, i)) return i + delimiter.length
-      i += if (spec.tripleQuoteEscapes && code[i] == '\\') 2 else 1
-    }
-    return code.length
-  }
-  var i = start + 1
+  val delimiter = if (triple) "$quote$quote$quote" else quote.toString()
+  val escapes = if (triple) spec.tripleQuoteEscapes else spec.singleQuoteEscapes || quote != '\''
+  val multiline = triple || quote == '`' || spec.multilineStrings
+  var i = start + delimiter.length
   while (i < code.length) {
-    when (code[i]) {
-      // Python/TS single-quoted strings keep backslash escapes; only shell 'strings' have none.
-      '\\' -> if (spec.singleQuoteEscapes || quote != '\'') i++
-      quote -> return i + 1
-      // TS/JS template literals and shell strings are multiline; other quotes end at end of line.
-      '\n' -> if (quote != '`' && !spec.multilineStrings) return i
-    }
-    i++
+    if (code.startsWith(delimiter, i)) return i + delimiter.length
+    if (!multiline && code[i] == '\n') return i
+    i += if (escapes && code[i] == '\\') 2 else 1
   }
   return code.length
 }

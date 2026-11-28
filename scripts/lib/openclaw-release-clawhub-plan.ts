@@ -1,5 +1,5 @@
-// OpenClaw release ClawHub plan script supports release workflow routing.
 import { resolve } from "node:path";
+import { resolvePreparedClawHubMatrix } from "../clawhub-prepared-artifact.mjs";
 import {
   collectPluginClawHubReleasePlan,
   type PublishablePluginPackage,
@@ -7,6 +7,7 @@ import {
 import {
   parsePluginReleaseSelection,
   parsePluginReleaseSelectionMode,
+  type NpmLatestVersionResolver,
   type PluginReleaseSelectionMode,
 } from "./plugin-npm-release.ts";
 
@@ -28,13 +29,17 @@ type OpenClawReleaseClawHubPlanArgs = {
   releaseTag: string;
   releaseSha: string;
   releasePublishBranch: string;
+  releasePublishFullRef: string;
   releasePublishRunAttempt: string;
   releasePublishRunId: string;
   pluginPublishScope: PluginReleaseSelectionMode;
   plugins: string[];
+  skipClawHub?: boolean;
+  preparedArtifact?: string;
 };
 
 type OpenClawReleaseClawHubPlan = {
+  warnings: string[];
   bootstrapWorkflowSha: string;
   clawHubWorkflowRef: string;
   releasePublishBranch: string;
@@ -53,23 +58,6 @@ type OpenClawReleaseClawHubPlan = {
   };
 };
 
-type OpenClawReleaseClawHubRuntimeStateArgs = {
-  repository: string;
-  waitForClawHub: boolean;
-  forceSkipClawHub: boolean;
-  normalRunId?: string;
-  bootstrapRunId?: string;
-  bootstrapCompleted: boolean;
-};
-
-type OpenClawReleaseClawHubRuntimeState = {
-  verifierArgs: string[];
-  proofLines: {
-    normal: string;
-    bootstrap: string;
-  };
-};
-
 function requireArg(value: string | undefined, label: string): string {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -80,15 +68,6 @@ function requireArg(value: string | undefined, label: string): string {
 
 function packageNames(packages: readonly ClawHubPlanPackage[]): string[] {
   return packages.map((plugin) => plugin.packageName);
-}
-
-function joinPackageNames(packages: readonly string[]): string {
-  return packages.join(",");
-}
-
-function optionalArg(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
 }
 
 function requireCommitSha(value: string | undefined, label: string): string {
@@ -115,10 +94,6 @@ function requirePositiveInteger(value: string | undefined, label: string): strin
   return result;
 }
 
-function runUrl(repository: string, runId: string): string {
-  return `https://github.com/${repository}/actions/runs/${runId}`;
-}
-
 function assertNoPackageOverlap(
   normalPackages: readonly string[],
   bootstrapPackages: readonly string[],
@@ -132,100 +107,6 @@ function assertNoPackageOverlap(
   }
 }
 
-function createDispatchTarget(params: {
-  workflow: ClawHubDispatchTarget["workflow"];
-  ref: string;
-  packages: readonly string[];
-  releasePublishRunId: string;
-  releasePublishBranch: string;
-  includePublishScope: boolean;
-  bootstrapWorkflowSha?: string;
-  releaseTag?: string;
-  releasePublishRunAttempt?: string;
-  targetRef?: string;
-}): ClawHubDispatchTarget {
-  if (params.packages.length === 0) {
-    return {
-      workflow: params.workflow,
-      ref: params.ref,
-      shouldDispatch: false,
-      packages: [],
-      inputs: {},
-    };
-  }
-
-  const plugins = joinPackageNames(params.packages);
-  return {
-    workflow: params.workflow,
-    ref: params.ref,
-    shouldDispatch: true,
-    packages: [...params.packages],
-    inputs: {
-      ...(params.includePublishScope ? { publish_scope: "selected" } : {}),
-      ...(params.targetRef ? { ref: params.targetRef } : {}),
-      ...(params.bootstrapWorkflowSha
-        ? { bootstrap_workflow_sha: params.bootstrapWorkflowSha }
-        : {}),
-      ...(params.releaseTag ? { release_tag: params.releaseTag } : {}),
-      ...(params.releasePublishRunAttempt
-        ? { release_publish_run_attempt: params.releasePublishRunAttempt }
-        : {}),
-      plugins,
-      release_publish_run_id: params.releasePublishRunId,
-      release_publish_branch: params.releasePublishBranch,
-    },
-  };
-}
-
-export function buildOpenClawReleaseClawHubRuntimeState(
-  args: OpenClawReleaseClawHubRuntimeStateArgs,
-): OpenClawReleaseClawHubRuntimeState {
-  const repository = requireArg(args.repository, "repository");
-  const normalRunId = optionalArg(args.normalRunId);
-  const bootstrapRunId = optionalArg(args.bootstrapRunId);
-
-  const shouldIncludeNormalRun =
-    !args.forceSkipClawHub && normalRunId !== undefined && args.waitForClawHub;
-  const shouldIncludeBootstrapRun =
-    !args.forceSkipClawHub && bootstrapRunId !== undefined && args.bootstrapCompleted;
-  const shouldVerifyClawHubPackages =
-    bootstrapRunId !== undefined &&
-    args.bootstrapCompleted &&
-    (normalRunId === undefined || args.waitForClawHub);
-  const shouldSkipClawHubPackages =
-    args.forceSkipClawHub || !(shouldIncludeNormalRun || shouldVerifyClawHubPackages);
-
-  const verifierArgs = shouldSkipClawHubPackages ? ["--skip-clawhub"] : [];
-  if (shouldIncludeNormalRun) {
-    verifierArgs.push("--plugin-clawhub-run", normalRunId);
-  }
-  if (shouldIncludeBootstrapRun) {
-    verifierArgs.push("--plugin-clawhub-bootstrap-run", bootstrapRunId);
-  }
-
-  let normalProofLine = "- plugin ClawHub publish: no normal OIDC candidates";
-  if (normalRunId !== undefined && args.waitForClawHub) {
-    normalProofLine = `- plugin ClawHub publish: ${runUrl(repository, normalRunId)}`;
-  } else if (normalRunId !== undefined) {
-    normalProofLine = `- plugin ClawHub publish: dispatched separately, not awaited by this proof: ${runUrl(repository, normalRunId)}`;
-  }
-
-  let bootstrapProofLine = "- plugin ClawHub bootstrap: not needed";
-  if (bootstrapRunId !== undefined && (args.bootstrapCompleted || args.waitForClawHub)) {
-    bootstrapProofLine = `- plugin ClawHub bootstrap: ${runUrl(repository, bootstrapRunId)}`;
-  } else if (bootstrapRunId !== undefined) {
-    bootstrapProofLine = `- plugin ClawHub bootstrap: dispatched separately, not awaited by this proof: ${runUrl(repository, bootstrapRunId)}`;
-  }
-
-  return {
-    verifierArgs,
-    proofLines: {
-      normal: normalProofLine,
-      bootstrap: bootstrapProofLine,
-    },
-  };
-}
-
 export function parseOpenClawReleaseClawHubPlanArgs(
   argv: string[],
 ): OpenClawReleaseClawHubPlanArgs {
@@ -234,16 +115,22 @@ export function parseOpenClawReleaseClawHubPlanArgs(
     values.shift();
   }
 
-  let releaseTag: string | undefined;
-  let releaseSha: string | undefined;
-  let bootstrapWorkflowRef: string | undefined;
-  let bootstrapWorkflowSha: string | undefined;
-  let releasePublishBranch: string | undefined;
-  let releasePublishRunAttempt: string | undefined;
-  let releasePublishRunId: string | undefined;
+  const stringFlags = new Set([
+    "--prepared-artifact",
+    "--bootstrap-workflow-ref",
+    "--bootstrap-workflow-sha",
+    "--release-tag",
+    "--release-sha",
+    "--release-publish-branch",
+    "--release-publish-full-ref",
+    "--release-publish-run-attempt",
+    "--release-publish-run-id",
+  ]);
+  const strings = new Map<string, string>();
   let pluginPublishScope: PluginReleaseSelectionMode | undefined;
   let plugins: string[] = [];
   let pluginsFlagProvided = false;
+  let skipClawHub = false;
 
   for (let index = 0; index < values.length; index += 1) {
     const arg = values[index];
@@ -256,34 +143,20 @@ export function parseOpenClawReleaseClawHubPlanArgs(
       return value;
     };
 
+    if (arg && stringFlags.has(arg)) {
+      strings.set(arg, next());
+      continue;
+    }
     switch (arg) {
-      case "--bootstrap-workflow-ref":
-        bootstrapWorkflowRef = next();
-        break;
-      case "--bootstrap-workflow-sha":
-        bootstrapWorkflowSha = next();
-        break;
-      case "--release-tag":
-        releaseTag = next();
-        break;
-      case "--release-sha":
-        releaseSha = next();
-        break;
-      case "--release-publish-branch":
-        releasePublishBranch = next();
-        break;
-      case "--release-publish-run-attempt":
-        releasePublishRunAttempt = next();
-        break;
-      case "--release-publish-run-id":
-        releasePublishRunId = next();
-        break;
       case "--plugin-publish-scope":
         pluginPublishScope = parsePluginReleaseSelectionMode(next());
         break;
       case "--plugins":
         plugins = parsePluginReleaseSelection(next());
         pluginsFlagProvided = true;
+        break;
+      case "--skip-clawhub":
+        skipClawHub = true;
         break;
       default:
         throw new Error(`Unknown argument: ${arg}`);
@@ -301,19 +174,35 @@ export function parseOpenClawReleaseClawHubPlanArgs(
     throw new Error("plugin-publish-scope=all-publishable must not be combined with --plugins.");
   }
 
+  const preparedArtifact = strings.get("--prepared-artifact");
   return {
-    bootstrapWorkflowRef: requireBootstrapWorkflowRef(bootstrapWorkflowRef),
-    bootstrapWorkflowSha: requireCommitSha(bootstrapWorkflowSha, "--bootstrap-workflow-sha"),
-    releaseTag: requireArg(releaseTag, "--release-tag"),
-    releaseSha: requireCommitSha(releaseSha, "--release-sha"),
-    releasePublishBranch: requireArg(releasePublishBranch, "--release-publish-branch"),
+    bootstrapWorkflowRef: requireBootstrapWorkflowRef(strings.get("--bootstrap-workflow-ref")),
+    bootstrapWorkflowSha: requireCommitSha(
+      strings.get("--bootstrap-workflow-sha"),
+      "--bootstrap-workflow-sha",
+    ),
+    releaseTag: requireArg(strings.get("--release-tag"), "--release-tag"),
+    releaseSha: requireCommitSha(strings.get("--release-sha"), "--release-sha"),
+    releasePublishBranch: requireArg(
+      strings.get("--release-publish-branch"),
+      "--release-publish-branch",
+    ),
+    releasePublishFullRef: requireArg(
+      strings.get("--release-publish-full-ref"),
+      "--release-publish-full-ref",
+    ),
     releasePublishRunAttempt: requirePositiveInteger(
-      releasePublishRunAttempt,
+      strings.get("--release-publish-run-attempt"),
       "--release-publish-run-attempt",
     ),
-    releasePublishRunId: requireArg(releasePublishRunId, "--release-publish-run-id"),
+    releasePublishRunId: requireArg(
+      strings.get("--release-publish-run-id"),
+      "--release-publish-run-id",
+    ),
     pluginPublishScope: resolvedPluginPublishScope,
     plugins,
+    skipClawHub,
+    ...(preparedArtifact ? { preparedArtifact } : {}),
   };
 }
 
@@ -323,6 +212,7 @@ export async function buildOpenClawReleaseClawHubPlan(
     rootDir?: string;
     fetchImpl?: typeof fetch;
     registryBaseUrl?: string;
+    resolveLatestVersion?: NpmLatestVersionResolver;
   } = {},
 ): Promise<OpenClawReleaseClawHubPlan> {
   const bootstrapWorkflowRef = requireBootstrapWorkflowRef(args.bootstrapWorkflowRef);
@@ -330,18 +220,43 @@ export async function buildOpenClawReleaseClawHubPlan(
   const releaseTag = requireArg(args.releaseTag, "releaseTag");
   const releaseSha = requireCommitSha(args.releaseSha, "releaseSha");
   const releasePublishBranch = requireArg(args.releasePublishBranch, "releasePublishBranch");
+  const releasePublishFullRef = requireArg(args.releasePublishFullRef, "releasePublishFullRef");
   const releasePublishRunAttempt = requirePositiveInteger(
     args.releasePublishRunAttempt,
     "releasePublishRunAttempt",
   );
   const releasePublishRunId = requireArg(args.releasePublishRunId, "releasePublishRunId");
-  const plan = await collectPluginClawHubReleasePlan({
-    rootDir: options.rootDir ?? resolve("."),
-    selection: args.plugins,
-    selectionMode: args.pluginPublishScope,
-    fetchImpl: options.fetchImpl,
-    registryBaseUrl: options.registryBaseUrl,
-  });
+  const prepared =
+    !args.skipClawHub && args.preparedArtifact
+      ? await resolvePreparedClawHubMatrix({
+          descriptor: JSON.parse(args.preparedArtifact),
+          candidateSha: releaseSha,
+          toolingSha: bootstrapWorkflowSha,
+          selectionMode: args.pluginPublishScope,
+          plugins: args.plugins,
+          sourceRoot: options.rootDir ?? resolve("."),
+          token: process.env.GH_TOKEN,
+          fetchImpl: options.fetchImpl,
+        })
+      : undefined;
+  // Prepared publication requires established normal trusted publishers;
+  // the resolver rejects bootstrap/repair needs before this routing.
+  const plan =
+    args.skipClawHub || prepared
+      ? {
+          candidates: prepared ?? [],
+          bootstrapCandidates: [],
+          missingTrustedPublisher: [],
+          warnings: [],
+        }
+      : await collectPluginClawHubReleasePlan({
+          rootDir: options.rootDir ?? resolve("."),
+          selection: args.plugins,
+          selectionMode: args.pluginPublishScope,
+          fetchImpl: options.fetchImpl,
+          registryBaseUrl: options.registryBaseUrl,
+          resolveLatestVersion: options.resolveLatestVersion,
+        });
 
   const normalPackages = packageNames(plan.candidates);
   const bootstrapPackages = [
@@ -351,40 +266,61 @@ export async function buildOpenClawReleaseClawHubPlan(
   const missingTrustedPlugins = packageNames(plan.missingTrustedPublisher);
   assertNoPackageOverlap(normalPackages, bootstrapPackages);
 
-  return {
+  const dispatchTarget = (
+    kind: "normal" | "bootstrap",
+    packages: readonly string[],
+  ): ClawHubDispatchTarget => ({
+    workflow: kind === "normal" ? "plugin-clawhub-release.yml" : "plugin-clawhub-new.yml",
+    ref: bootstrapWorkflowRef,
+    shouldDispatch: packages.length > 0,
+    packages: [...packages],
+    inputs: packages.length
+      ? {
+          ...(kind === "normal" ? { publish_scope: "selected" } : {}),
+          ref: releaseSha,
+          ...(kind === "bootstrap" ? { bootstrap_workflow_sha: bootstrapWorkflowSha } : {}),
+          release_tag: releaseTag,
+          release_publish_run_attempt: releasePublishRunAttempt,
+          ...(kind === "normal"
+            ? {
+                release_publish_full_ref: releasePublishFullRef,
+                release_publish_workflow_sha: bootstrapWorkflowSha,
+              }
+            : {}),
+          plugins: packages.join(","),
+          release_publish_run_id: releasePublishRunId,
+          release_publish_branch: releasePublishBranch,
+        }
+      : {},
+  });
+  const result = {
+    warnings: plan.warnings,
     bootstrapWorkflowSha,
-    clawHubWorkflowRef: releaseTag,
+    clawHubWorkflowRef: bootstrapWorkflowRef,
     releasePublishBranch,
-    normal: createDispatchTarget({
-      workflow: "plugin-clawhub-release.yml",
-      ref: releaseTag,
-      packages: normalPackages,
-      releasePublishRunId,
-      releasePublishBranch,
-      includePublishScope: true,
-    }),
-    bootstrap: createDispatchTarget({
-      workflow: "plugin-clawhub-new.yml",
-      ref: bootstrapWorkflowRef,
-      packages: bootstrapPackages,
-      releasePublishRunId,
-      releasePublishBranch,
-      includePublishScope: false,
-      bootstrapWorkflowSha,
-      releaseTag,
-      releasePublishRunAttempt,
-      targetRef: releaseSha,
-    }),
+    normal: dispatchTarget("normal", normalPackages),
+    bootstrap: dispatchTarget("bootstrap", bootstrapPackages),
     summary: {
       normalCount: normalPackages.length,
       bootstrapCount: bootstrapPackages.length,
       missingTrustedPublisherCount: missingTrustedPlugins.length,
-      normalPlugins: joinPackageNames(normalPackages),
-      bootstrapPlugins: joinPackageNames(bootstrapPackages),
-      missingTrustedPlugins: joinPackageNames(missingTrustedPlugins),
+      normalPlugins: normalPackages.join(","),
+      bootstrapPlugins: bootstrapPackages.join(","),
+      missingTrustedPlugins: missingTrustedPlugins.join(","),
     },
     verifier: {
-      clawHubWorkflowRef: releaseTag,
+      clawHubWorkflowRef: bootstrapWorkflowRef,
     },
   };
+  if (args.preparedArtifact && result.normal.shouldDispatch) {
+    // The receipt authorizes the whole frozen roster, including exact versions
+    // already present. Mutable registry candidates must not narrow that set.
+    result.normal.inputs.publish_scope = args.pluginPublishScope;
+    delete result.normal.inputs.plugins;
+    if (args.plugins.length > 0) {
+      result.normal.inputs.plugins = args.plugins.join(",");
+    }
+    result.normal.inputs.prepared_artifact = args.preparedArtifact;
+  }
+  return result;
 }

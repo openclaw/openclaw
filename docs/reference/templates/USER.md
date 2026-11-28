@@ -12,19 +12,18 @@ Store stable user preferences and profile facts as directives that can guide fut
 Use one directive per entry:
 
 ```md
-<!-- observed: YYYY-MM-DD | status: active -->
-
 - Prefer concise progress updates during implementation work.
 ```
 
 - Begin each directive with an imperative such as `Always`, `Never`, or `Prefer`.
-- Record the observation date and either `active` or `superseded` on the metadata line.
-- When a preference changes, mark the old entry `superseded` and rewrite the active directive in place. Never append a contradictory active directive.
+- Keep only current directives; no date or status metadata is required.
+- When a preference changes, replace the old directive in place. If history matters, record it with its observation date in `memory/YYYY-MM-DD.md`, not here.
 - Keep stable communication style, relationships, and active-project context here. Put durable non-profile facts and decisions in `MEMORY.md`.
+- Save this file at the workspace root as `USER.md`. It loads every session with a separate 4,000-character budget. All text counts, including comments and history; the loader does not filter them.
 
 ## Directives
 
-<!-- observed: YYYY-MM-DD | status: active -->
+Replace the example below with a real directive before you save this file. Never leave a placeholder directive.
 
 - Prefer ...
 

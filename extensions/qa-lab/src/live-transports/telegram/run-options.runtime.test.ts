@@ -17,5 +17,20 @@ describe("resolveTelegramQaRunOptions", () => {
     expect(options.primaryModel).toBeUndefined();
     expect(options.alternateModel).toBeUndefined();
     expect(options.listScenarios).toBe(true);
+    expect(options.credentialSource).toBe("convex");
+  });
+
+  it("rejects the retired static credential source", () => {
+    expect(() => resolveTelegramQaRunOptions({ credentialSource: "env" })).toThrow(
+      "supports only --credential-source convex",
+    );
+  });
+
+  it("preserves the private production credential descriptor", () => {
+    expect(
+      resolveTelegramQaRunOptions({
+        credentialFile: "/private/telegram-production.json",
+      }),
+    ).toMatchObject({ credentialFile: "/private/telegram-production.json" });
   });
 });

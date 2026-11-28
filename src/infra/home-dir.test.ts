@@ -1,9 +1,12 @@
 // Tests OpenClaw home directory resolution.
+import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   expandHomePrefix,
   resolveEffectiveHomeDir,
+  resolveFilesystemPath,
   resolveHomeRelativePath,
   resolveOsHomeDir,
   resolveOsHomeRelativePath,
@@ -131,42 +134,27 @@ describe("resolveEffectiveHomeDir", () => {
     ).toBe(path.resolve("/data/data/com.termux/files/home/workspace"));
   });
 
-  it("expands OPENCLAW_HOME when set to ~", () => {
+  it("does not interpret $ patterns in HOME when expanding OPENCLAW_HOME tilde", () => {
     const env = {
-      OPENCLAW_HOME: "~/svc",
-      HOME: "/home/alice",
+      OPENCLAW_HOME: "~/state",
+      HOME: "/home/$&user",
     } as NodeJS.ProcessEnv;
 
-    expect(resolveEffectiveHomeDir(env)).toBe(path.resolve("/home/alice/svc"));
+    expect(resolveEffectiveHomeDir(env)).toBe(path.resolve("/home/$&user/state"));
   });
 });
 
 describe("resolveRequiredHomeDir", () => {
   it.each([
-    {
-      name: "returns cwd when no home source is available",
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => {
+    ["no home source", {}, process.cwd()],
+    ["an explicit home", { OPENCLAW_HOME: "/custom/home" }, path.resolve("/custom/home")],
+    ["tilde without a fallback home", { OPENCLAW_HOME: "~" }, process.cwd()],
+  ] as const)("resolves required home with %s", (_name, env, expected) => {
+    expect(
+      resolveRequiredHomeDir(env, () => {
         throw new Error("no home");
-      },
-      expected: process.cwd(),
-    },
-    {
-      name: "returns a fully resolved path for OPENCLAW_HOME",
-      env: { OPENCLAW_HOME: "/custom/home" } as NodeJS.ProcessEnv,
-      homedir: () => "/fallback",
-      expected: path.resolve("/custom/home"),
-    },
-    {
-      name: "returns cwd when OPENCLAW_HOME is tilde-only and no fallback home exists",
-      env: { OPENCLAW_HOME: "~" } as NodeJS.ProcessEnv,
-      homedir: () => {
-        throw new Error("no home");
-      },
-      expected: process.cwd(),
-    },
-  ])("$name", ({ env, homedir, expected }) => {
-    expect(resolveRequiredHomeDir(env, homedir)).toBe(expected);
+      }),
+    ).toBe(expected);
   });
 
   it("fails clearly when both home and cwd are unavailable", () => {
@@ -229,6 +217,12 @@ describe("expandHomePrefix", () => {
       name: "keeps non-tilde values unchanged",
       input: "/tmp/x",
       expected: "/tmp/x",
+    },
+    {
+      name: "does not interpret $ patterns in home when expanding tilde",
+      input: "~/x",
+      opts: { home: "/home/$&user" },
+      expected: "/home/$&user/x",
     },
   ])("$name", ({ input, opts, expected }) => {
     expect(expandHomePrefix(input, opts)).toBe(expected);
@@ -293,5 +287,28 @@ describe("resolveOsHomeRelativePath", () => {
         } as NodeJS.ProcessEnv,
       }),
     ).toBe(path.resolve("/home/alice/docs"));
+  });
+});
+
+describe.skipIf(process.platform === "win32")("resolveFilesystemPath", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("follows a symlink before `..` like the OS and keeps every other segment as typed", () => {
+    const root = fs.realpathSync(tempDirs.make("filesystem-path-"));
+    fs.mkdirSync(path.join(root, "physical", "nested"), { recursive: true });
+    fs.symlinkSync(path.join(root, "physical", "nested"), path.join(root, "selected"));
+    fs.symlinkSync("plugin-real", path.join(root, "physical", "plugin-link"));
+
+    expect(resolveFilesystemPath(`${root}/selected/../plugin-link`)).toBe(
+      path.join(root, "physical", "plugin-link"),
+    );
+    expect(resolveFilesystemPath(`${root}/selected/nested-file`)).toBe(
+      path.join(root, "selected", "nested-file"),
+    );
+    // The OS cannot apply `..` to a missing directory or a file, so no neighbor is offered.
+    fs.writeFileSync(path.join(root, "physical", "nested", "file"), "");
+    fs.symlinkSync(path.join(root, "physical", "nested", "file"), path.join(root, "file-link"));
+    expect(() => resolveFilesystemPath(`${root}/missing/../plugin-link`)).toThrow("ENOENT");
+    expect(() => resolveFilesystemPath(`${root}/file-link/../plugin-link`)).toThrow("ENOTDIR");
   });
 });

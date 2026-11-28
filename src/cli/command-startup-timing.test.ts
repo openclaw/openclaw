@@ -1,13 +1,16 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { cleanupTempDirs } from "../../test/helpers/temp-dir.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { measureCliCommandStartup } from "./command-startup-timing.js";
 
 const tempDirs: string[] = [];
 
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+afterEach(() => {
+  flushDiagnosticsTimeline();
+  cleanupTempDirs(tempDirs);
 });
 
 describe("measureCliCommandStartup", () => {
@@ -34,6 +37,7 @@ describe("measureCliCommandStartup", () => {
       measureCliCommandStartup("config-ready", async () => "ready", { env }),
     ).resolves.toBe("ready");
 
+    flushDiagnosticsTimeline();
     const events = (await readFile(path, "utf8"))
       .trim()
       .split("\n")

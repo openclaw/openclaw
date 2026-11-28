@@ -2,29 +2,12 @@
 import type { Command } from "commander";
 import { inheritOptionFromParent } from "../command-options.js";
 
-export type GatewayRunOpts = {
-  port?: unknown;
-  bind?: unknown;
-  token?: unknown;
-  auth?: unknown;
-  password?: unknown;
-  passwordFile?: unknown;
-  tailscale?: unknown;
-  tailscaleResetOnExit?: boolean;
-  allowUnconfigured?: boolean;
-  force?: boolean;
-  verbose?: boolean;
-  cliBackendLogs?: boolean;
+export type GatewayRunOpts = Partial<
+  Record<(typeof GATEWAY_RUN_VALUE_KEYS)[number], unknown> &
+    Record<Exclude<(typeof GATEWAY_RUN_BOOLEAN_KEYS)[number], "claudeCliLogs">, boolean>
+> & {
   /** @deprecated Use cliBackendLogs. */
   claudeCliLogs?: boolean;
-  wsLog?: unknown;
-  compact?: boolean;
-  rawStream?: boolean;
-  rawStreamPath?: unknown;
-  dev?: boolean;
-  ambientChannels?: boolean;
-  devAmbientChannels?: boolean;
-  reset?: boolean;
 };
 
 const GATEWAY_RUN_VALUE_KEYS = [
@@ -46,6 +29,10 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
   "ambientChannels",
   "devAmbientChannels",
   "reset",
+  // Internal Windows Task Scheduler bridge; hidden from normal CLI help.
+  "taskSupervisor",
+  // Internal isolated update rehearsal, hidden from operator help.
+  "updateCanary",
   "force",
   "verbose",
   "cliBackendLogs",
@@ -59,12 +46,8 @@ export function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command
 
   for (const key of GATEWAY_RUN_VALUE_KEYS) {
     const inherited = inheritOptionFromParent(command, key);
-    if (key === "wsLog") {
-      // wsLog has a child default ("auto"), so prefer inherited parent CLI value when present.
-      resolved[key] = inherited ?? resolved[key];
-      continue;
-    }
-    resolved[key] = resolved[key] ?? inherited;
+    // wsLog has a child default ("auto"), so prefer an explicit parent CLI value.
+    resolved[key] = key === "wsLog" ? (inherited ?? resolved[key]) : (resolved[key] ?? inherited);
   }
 
   for (const key of GATEWAY_RUN_BOOLEAN_KEYS) {

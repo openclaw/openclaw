@@ -2,8 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import {
-  loadBundledWebFetchProviderEntriesFromDir,
-  loadBundledWebSearchProviderEntriesFromDir,
+  resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "./web-provider-public-artifacts.explicit.js";
 
 const registry = loadPluginManifestRegistryCore();
@@ -29,13 +29,19 @@ describe("web provider public artifacts", () => {
 
   it.each(webSearchPluginIds)("loads public web-search artifacts for %s", (pluginId) => {
     expect(
-      loadBundledWebSearchProviderEntriesFromDir({ dirName: pluginId, pluginId }),
-    ).not.toBeNull();
+      resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+        onlyPluginIds: [pluginId],
+        manifestRecords: registry.plugins,
+      }),
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ pluginId })]));
   });
 
   it.each(webFetchPluginIds)("loads public web-fetch artifacts for %s", (pluginId) => {
     expect(
-      loadBundledWebFetchProviderEntriesFromDir({ dirName: pluginId, pluginId }),
-    ).not.toBeNull();
+      resolveBundledExplicitWebFetchProvidersFromPublicArtifacts({
+        onlyPluginIds: [pluginId],
+        manifestRecords: registry.plugins,
+      }),
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ pluginId })]));
   });
 });

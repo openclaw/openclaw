@@ -1,0 +1,60 @@
+{
+  "id": "kie",
+  "categories": [
+    "media"
+  ],
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "setup": {
+    "providers": [
+      {
+        "id": "kie",
+        "envVars": [
+          "KIE_API_KEY"
+        ]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "kie",
+      "method": "api-key",
+      "choiceId": "kie-api-key",
+      "choiceLabel": "Kie AI API key",
+      "groupId": "kie",
+      "groupLabel": "Kie AI",
+      "groupHint": "Video generation",
+      "onboardingScopes": [
+        "image-generation"
+      ],
+      "optionKey": "kieApiKey",
+      "cliFlag": "--kie-api-key",
+      "cliOption": "--kie-api-key <key>",
+      "cliDescription": "Kie AI API key"
+    }
+  ],
+  "contracts": {
+    "videoGenerationProviders": [
+      "kie"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "providers": [
+    "kie"
+  ],
+  "videoGenerationProviderMetadata": {
+    "kie": {
+      "authSignals": [
+        {
+          "provider": "kie"
+        }
+      ]
+    }
+  }
+}

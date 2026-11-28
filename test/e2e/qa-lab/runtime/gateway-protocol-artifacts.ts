@@ -5,37 +5,27 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { x as extractTar } from "tar";
+import { x as extractTar } from "tar/raw";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import { ProtocolSchemas } from "../../../../packages/gateway-protocol/src/schema/protocol-schemas.js";
 import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
-import { listCoreGatewayMethodMetadata } from "../../../../src/gateway/methods/core-descriptors.js";
+import {
+  assertProtocolSchemaDocument,
+  buildProtocolSchemaDocument,
+  type ProtocolSchemaDocument,
+  REQUIRED_PROTOCOL_DEFINITIONS,
+} from "../../../../scripts/lib/protocol-schema-document.mts";
+import { listCoreGatewayMethodMetadata } from "../../../../src/gateway/methods/core-method-policy.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/gateway-protocol-artifacts.ts";
-const REQUIRED_DEFINITIONS = [
-  "ConnectParams",
-  "RequestFrame",
-  "ResponseFrame",
-  "EventFrame",
-] as const;
 
 type ProducerOptions = {
   artifactBase: string;
   repoRoot: string;
-};
-
-type ProtocolSchemaDocument = {
-  definitions: Record<string, unknown>;
-  discriminator: {
-    mapping: Record<string, string>;
-    propertyName: string;
-  };
-  methods: Record<string, { scope: string; since: number }>;
-  oneOf: Array<{ $ref: string }>;
 };
 
 type ProtocolArtifactSummary = {
@@ -114,7 +104,7 @@ await fs.writeFile(
 `;
 }
 
-export function buildSwiftProtocolCompatibilityHarness() {
+function buildSwiftProtocolCompatibilityHarness() {
   return `import Foundation
 
 enum GatewayProtocolArtifactError: Error {
@@ -184,10 +174,6 @@ struct GatewayProtocolArtifactHarness {
 `;
 }
 
-export function buildPortableSwiftAnyCodableSource(source: string) {
-  return source.includes("import CoreFoundation") ? source : `import CoreFoundation\n${source}`;
-}
-
 export function parseGatewayProtocolArtifactOptions(
   args: readonly string[],
   cwd = process.cwd(),
@@ -217,49 +203,13 @@ export function parseGatewayProtocolArtifactOptions(
   };
 }
 
-export function buildCanonicalProtocolSchema(
-  schemas: Record<string, unknown> = ProtocolSchemas,
-  methodMetadata = listCoreGatewayMethodMetadata(),
-): ProtocolSchemaDocument {
-  return structuredClone({
-    $schema: "http://json-schema.org/draft-07/schema#",
-    $id: "https://openclaw.ai/protocol.schema.json",
-    title: "OpenClaw Gateway Protocol",
-    description: "Handshake, request/response, and event frames for the Gateway WebSocket.",
-    oneOf: [
-      { $ref: "#/definitions/RequestFrame" },
-      { $ref: "#/definitions/ResponseFrame" },
-      { $ref: "#/definitions/EventFrame" },
-    ],
-    discriminator: {
-      propertyName: "type",
-      mapping: {
-        req: "#/definitions/RequestFrame",
-        res: "#/definitions/ResponseFrame",
-        event: "#/definitions/EventFrame",
-      },
-    },
-    methods: Object.fromEntries(
-      // Omit undefined `since` so structuredClone matches the prior JSON
-      // round-trip byte shape and the document satisfies the schema type.
-      methodMetadata.map(({ name, scope, since }) => [
-        name,
-        { ...(since === undefined ? {} : { since }), scope },
-      ]),
-    ),
-    definitions: schemas,
-    // The runtime consumers validate this JSON document; the literal cannot
-    // structurally satisfy ProtocolSchemaDocument's stricter schema shapes.
-  }) as unknown as ProtocolSchemaDocument;
-}
-
 export function assertPublishedProtocolSchema(params: {
   builtSchemas: Record<string, unknown>;
   canonical: ProtocolSchemaDocument;
   published: ProtocolSchemaDocument;
 }) {
   assert.deepEqual(
-    structuredClone(params.builtSchemas),
+    params.builtSchemas,
     params.canonical.definitions,
     "built package schema registry differs from the canonical TypeBox registry",
   );
@@ -268,16 +218,7 @@ export function assertPublishedProtocolSchema(params: {
     params.canonical,
     "published protocol.schema.json differs from the canonical TypeBox registry",
   );
-  for (const definition of REQUIRED_DEFINITIONS) {
-    assert.ok(
-      Object.hasOwn(params.published.definitions, definition),
-      `published protocol schema is missing ${definition}`,
-    );
-  }
-  assert.deepEqual(
-    params.published.oneOf.map((entry) => entry.$ref),
-    ["#/definitions/RequestFrame", "#/definitions/ResponseFrame", "#/definitions/EventFrame"],
-  );
+  assertProtocolSchemaDocument(params.published);
 }
 
 async function runCommand(params: {
@@ -429,7 +370,10 @@ async function packAndInspectProtocol(params: {
       await fs.rm(consumerRoot, { force: true, recursive: true });
     }
   })();
-  const canonical = buildCanonicalProtocolSchema();
+  const canonical = buildProtocolSchemaDocument({
+    methods: listCoreGatewayMethodMetadata(),
+    schemas: ProtocolSchemas,
+  });
   assertPublishedProtocolSchema({
     builtSchemas: inspection.schemas,
     canonical,
@@ -451,7 +395,7 @@ async function packAndInspectProtocol(params: {
       packageSpecifier: "@openclaw/gateway-protocol",
       schemaSpecifier: "@openclaw/gateway-protocol/schema",
     },
-    definitions: REQUIRED_DEFINITIONS.filter((definition) =>
+    definitions: REQUIRED_PROTOCOL_DEFINITIONS.filter((definition) =>
       Object.hasOwn(published.definitions, definition),
     ),
     package: {
@@ -478,20 +422,22 @@ async function compileAndRunSwiftProtocolModels(params: {
   const executablePath = path.join(swiftArtifactDir, "gateway-protocol-artifact-harness");
   await fs.rm(swiftArtifactDir, { force: true, recursive: true });
   await fs.mkdir(swiftArtifactDir, { recursive: true });
+  await runCommand({
+    args: ["scripts/prepare-native-protocol.mjs", "--language", "swift", "--out", swiftArtifactDir],
+    appendLog: params.appendLog,
+    command: "node",
+    cwd: params.repoRoot,
+  });
   const anyCodableSource = await fs.readFile(
     path.join(params.repoRoot, "apps/shared/OpenClawKit/Sources/OpenClawProtocol/AnyCodable.swift"),
     "utf8",
   );
-  // Linux Foundation does not re-export the CoreFoundation type-ID helpers.
-  await fs.writeFile(anyCodablePath, buildPortableSwiftAnyCodableSource(anyCodableSource), "utf8");
+  await fs.writeFile(anyCodablePath, anyCodableSource, "utf8");
   await fs.writeFile(harnessPath, buildSwiftProtocolCompatibilityHarness(), "utf8");
   await runCommand({
     args: [
       anyCodablePath,
-      path.join(
-        params.repoRoot,
-        "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
-      ),
+      path.join(swiftArtifactDir, "GatewayModels.swift"),
       harnessPath,
       "-o",
       executablePath,
@@ -526,7 +472,9 @@ async function runGatewayProtocolArtifactsProducer(
         "scripts/protocol-gen-swift.ts",
         "apps/shared/OpenClawKit/Tests/OpenClawKitTests/GatewayProtocolGeneratedModelsTests.swift",
       ],
-      docsRefs: ["docs/gateway/protocol.md", "docs/reference/test.md"],
+      // The testing reference is an index over docs/reference/test/*; point at
+      // the page that owns the commands this proof runs, not the index.
+      docsRefs: ["docs/gateway/protocol.md", "docs/reference/test/local.md"],
       id: "gateway-protocol-artifacts",
       sourcePath: SOURCE_PATH,
       title: "Gateway published protocol artifacts",

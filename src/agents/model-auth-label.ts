@@ -1,58 +1,100 @@
-/**
- * Formats user-facing auth labels for resolved provider/model credentials.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionEntry } from "../config/sessions.js";
+import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import {
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
   loadAuthProfileStoreWithoutExternalProfiles,
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
-import {
-  readClaudeCliCredentialsCached,
-  readCodexCliCredentialsCached,
-} from "./cli-credentials.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { readCodexCliCredentialsCached } from "./cli-credentials.js";
 import {
   resolveEnvApiKey,
   resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,
+  shouldPreferExplicitConfigApiKeyAuth,
 } from "./model-auth.js";
 
-// Builds concise auth labels for UI/status surfaces without exposing credential
-// values. Resolution follows profile override, provider profiles, env, CLI, then
-// custom provider config.
-/** Resolve the display label that describes how a provider is authenticated. */
-export function resolveModelAuthLabel(params: {
+type ModelAuthLabelParams = {
   provider?: string;
   cfg?: OpenClawConfig;
-  sessionEntry?: Partial<Pick<SessionEntry, "authProfileOverride">>;
+  sessionEntry?: Partial<
+    Pick<
+      SessionEntry,
+      "authProfileOverride" | "authProfileOverrideSource" | "authProfileOverrideCompactionCount"
+    >
+  >;
   agentDir?: string;
   workspaceDir?: string;
   codexCliCredentialsHome?: string;
   includeExternalProfiles?: boolean;
   acceptedProviderIds?: readonly string[];
-}): string | undefined {
+  authStore?: AuthProfileStore;
+};
+
+/** @deprecated Retained for the synchronous Plugin SDK model-header API. Use resolveModelAuthLabelAsync. */
+export function resolveModelAuthLabel(params: ModelAuthLabelParams): string | undefined {
+  if (!params.provider?.trim()) {
+    return undefined;
+  }
+  const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
+  const store =
+    params.authStore ??
+    (params.includeExternalProfiles === false
+      ? loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, { profileId: profileOverride })
+      : ensureAuthProfileStore(params.agentDir, {
+          profileId: profileOverride,
+          externalCli: externalCliDiscoveryForProviderAuth({
+            cfg: params.cfg,
+            provider: normalizeProviderId(params.provider ?? ""),
+            preferredProfile: profileOverride,
+          }),
+        }));
+  return resolveModelAuthLabelFromStore(params, store);
+}
+
+export async function resolveModelAuthLabelAsync(
+  params: ModelAuthLabelParams,
+): Promise<string | undefined> {
+  if (!params.provider?.trim()) {
+    return undefined;
+  }
+  const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
+  const store =
+    params.authStore ??
+    (params.includeExternalProfiles === false
+      ? await ensureAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir, {
+          profileId: profileOverride,
+        })
+      : await ensureAuthProfileStoreAsync(params.agentDir, {
+          profileId: profileOverride,
+          externalCli: externalCliDiscoveryForProviderAuth({
+            cfg: params.cfg,
+            provider: normalizeProviderId(params.provider),
+            preferredProfile: profileOverride,
+          }),
+        }));
+  return resolveModelAuthLabelFromStore(params, store);
+}
+
+function resolveModelAuthLabelFromStore(
+  params: ModelAuthLabelParams,
+  store: AuthProfileStore,
+): string | undefined {
   const resolvedProvider = params.provider?.trim();
   if (!resolvedProvider) {
     return undefined;
   }
 
   const providerKey = normalizeProviderId(resolvedProvider);
-  const store =
-    params.includeExternalProfiles === false
-      ? loadAuthProfileStoreWithoutExternalProfiles(params.agentDir)
-      : ensureAuthProfileStore(params.agentDir, {
-          externalCli: externalCliDiscoveryForProviderAuth({
-            cfg: params.cfg,
-            provider: providerKey,
-            preferredProfile: params.sessionEntry?.authProfileOverride,
-          }),
-        });
   const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
   const acceptedProviderKeys = uniqueStrings(
     [...(params.acceptedProviderIds ?? []).map(normalizeProviderId), providerKey].filter(Boolean),
@@ -68,6 +110,20 @@ export function resolveModelAuthLabel(params: {
     ),
   );
   const candidates = [profileOverride, ...order].filter(Boolean) as string[];
+  const providerEntryProfileRef = resolveProviderEntryApiKeyProfileReference({
+    cfg: params.cfg,
+    provider: providerKey,
+    store,
+  });
+  // Inference sends an explicit api-key provider's own key before stored
+  // profiles; only a user-pinned session profile outranks it.
+  if (
+    resolveCollapsedSessionAuthPinSource(params.sessionEntry) !== "user" &&
+    providerEntryProfileRef.kind === "literal" &&
+    shouldPreferExplicitConfigApiKeyAuth(params.cfg, providerKey)
+  ) {
+    return "api-key (models.json)";
+  }
 
   for (const profileId of candidates) {
     const profile = store.profiles[profileId];
@@ -83,35 +139,22 @@ export function resolveModelAuthLabel(params: {
     ) {
       continue;
     }
-    const label = resolveAuthProfileDisplayLabel({
-      cfg: params.cfg,
-      store,
-      profileId,
-    });
-    if (profile.type === "oauth") {
-      return `oauth${label ? ` (${label})` : ""}`;
-    }
-    if (profile.type === "token") {
-      return `token${label ? ` (${label})` : ""}`;
-    }
-    return `api-key${label ? ` (${label})` : ""}`;
+    // Status can be visible to collaborators; personal credential metadata stays private.
+    const label = isUserModelAuthProfileId(profileId)
+      ? "personal account"
+      : resolveAuthProfileDisplayLabel({ cfg: params.cfg, store, profileId });
+    const mode = profile.type === "api_key" ? "api-key" : profile.type;
+    return `${mode}${label ? ` (${label})` : ""}`;
   }
 
-  const providerEntryProfileRef = resolveProviderEntryApiKeyProfileReference({
-    cfg: params.cfg,
-    provider: providerKey,
-    store,
-  });
   if (providerEntryProfileRef.kind === "profile") {
     const label = resolveAuthProfileDisplayLabel({
       cfg: params.cfg,
       store,
       profileId: providerEntryProfileRef.profileId,
     });
-    if (providerEntryProfileRef.mode === "token") {
-      return `token${label ? ` (${label})` : ""}`;
-    }
-    return `api-key${label ? ` (${label})` : ""}`;
+    const mode = providerEntryProfileRef.mode === "token" ? "token" : "api-key";
+    return `${mode}${label ? ` (${label})` : ""}`;
   }
   if (providerEntryProfileRef.kind === "profile-incompatible") {
     // Preserve the fact that config pointed at a profile while avoiding a
@@ -136,10 +179,8 @@ export function resolveModelAuthLabel(params: {
     workspaceDir: params.workspaceDir,
   });
   if (envKey?.apiKey) {
-    if (envKey.source.includes("OAUTH_TOKEN")) {
-      return `oauth (${envKey.source})`;
-    }
-    return `api-key (${envKey.source})`;
+    const mode = envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
+    return `${mode} (${envKey.source})`;
   }
 
   if (
@@ -149,16 +190,7 @@ export function resolveModelAuthLabel(params: {
     return "oauth (codex-cli)";
   }
   if (providerKey === "claude-cli") {
-    const auth = readClaudeCliCredentialsCached({
-      ttlMs: 5_000,
-      allowKeychainPrompt: false,
-    });
-    if (auth?.type === "api_key_helper") {
-      return "api-key-helper (claude-cli)";
-    }
-    if (auth) {
-      return "oauth (claude-cli)";
-    }
+    return "native (claude-cli)";
   }
 
   const customKey = resolveUsableCustomProviderApiKey({

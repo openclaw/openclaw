@@ -1,60 +1,11 @@
-// Transcript provider contracts for external and manual transcript sources.
 import type { Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-
-/**
- * Public contracts for transcript source providers.
- *
- * Providers can stream live utterances, import post-hoc transcript text, expose
- * status, and stop active sessions using shared session/source descriptors.
- */
-/** Supported source families for transcript providers. */
-export type TranscriptSourceKind =
-  | "live-audio"
-  | "live-caption"
-  | "posthoc-transcript"
-  | "recording-stt";
-
-/** Provider-specific locator for a live, recorded, or imported transcript source. */
-export type TranscriptSourceLocator = {
-  providerId: string;
-  kind?: TranscriptSourceKind;
-  accountId?: string;
-  guildId?: string;
-  channelId?: string;
-  meetingUrl?: string;
-  threadTs?: string;
-  fileId?: string;
-  [key: string]: string | undefined;
-};
-
-/** Speaker/participant identity attached to an utterance. */
-export type TranscriptParticipant = {
-  id?: string;
-  label: string;
-};
-
-/** One captured or imported transcript utterance. */
-export type TranscriptUtterance = {
-  id?: string;
-  sessionId?: string;
-  startedAt?: string;
-  endedAt?: string;
-  speaker?: TranscriptParticipant;
-  text: string;
-  final?: boolean;
-  metadata?: Record<string, unknown>;
-};
-
-/** Durable transcript session metadata. */
-export type TranscriptSessionDescriptor = {
-  sessionId: string;
-  title?: string;
-  source: TranscriptSourceLocator;
-  startedAt: string;
-  stoppedAt?: string;
-  metadata?: Record<string, unknown>;
-};
+import type {
+  TranscriptSourceKind,
+  TranscriptSourceLocator,
+  TranscriptUtterance,
+  TranscriptSessionDescriptor,
+} from "./types.js";
 
 /** Request passed to providers that can start live transcript capture. */
 export type TranscriptStartRequest = {
@@ -63,8 +14,28 @@ export type TranscriptStartRequest = {
   abortSignal?: AbortSignal;
   startupWaitMs?: number;
   onUtterance: (utterance: TranscriptUtterance) => void | Promise<void>;
+  /**
+   * `active: false` permanently ends this exact capture subscription, including
+   * replacement or detach; transient transport disconnects must not emit it.
+   * Deliver final utterances first. Callback payload ids/source are descriptive;
+   * consumers retain their admitted session identity and ownership metadata.
+   */
   onStatus?: (status: TranscriptSourceStatus) => void | Promise<void>;
 };
+
+/** Request to watch whether a live source currently has human participants. */
+export type TranscriptOccupancyWatchRequest = {
+  cfg?: OpenClawConfig;
+  source: TranscriptSourceLocator;
+  abortSignal?: AbortSignal;
+  startupWaitMs?: number;
+  /** Emitted on 0 -> >0 humans, and once on subscription if already occupied. */
+  onOccupied: () => void;
+  /** Emitted on >0 -> 0 humans. Bots never count; callbacks preserve observed order. */
+  onEmpty: () => void;
+};
+
+export type TranscriptOccupancyWatchHandle = { stop: () => void | Promise<void> };
 
 /**
  * Result from starting a transcript source provider.
@@ -90,7 +61,7 @@ export type TranscriptStopRequest = {
   reason?: string;
 };
 
-/** Result from stopping a transcript source provider. */
+/** Failure does not prove release; only success or a terminal onStatus ends cleanup custody. */
 export type TranscriptsStopResult =
   | {
       ok: true;
@@ -134,7 +105,14 @@ export type TranscriptToolCaller =
       roleIds: readonly string[];
     };
 
-export type TranscriptToolAction = "import" | "start" | "status" | "stop" | "summarize";
+export type TranscriptToolAction =
+  | "import"
+  | "start"
+  | "status"
+  | "stop"
+  | "summarize"
+  | "list"
+  | "show";
 
 export type TranscriptSourceAccessControl = {
   /** Ingress channel whose trusted account owns this provider's account namespace. */
@@ -162,6 +140,9 @@ export type TranscriptSourceProvider = {
   name: string;
   sourceKinds: readonly TranscriptSourceKind[];
   start?: (request: TranscriptStartRequest) => Promise<TranscriptsStartResult>;
+  watchOccupancy?: (
+    request: TranscriptOccupancyWatchRequest,
+  ) => Promise<Result<TranscriptOccupancyWatchHandle, string>>;
   stop?: (request: TranscriptStopRequest) => Promise<TranscriptsStopResult>;
   status?: (
     source: TranscriptSourceLocator,

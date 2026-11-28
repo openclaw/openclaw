@@ -1,28 +1,279 @@
-export const DERIVED_WORKSPACE_DIRECTORY_NAMES = [
+import { compileFunction } from "node:vm";
+import { STAGED_INPUT_PATHS_JS } from "../../media/staged-inputs.js";
+import {
+  MATERIALIZED_SANDBOX_SKILLS_WORKSPACE,
+  MANAGED_SANDBOX_SKILLS_PATH_JS,
+} from "../../shared/sandbox-workspace-paths.js";
+
+const AGP_BUILD_OUTPUT_SEGMENTS = [
+  // AGP output subtrees match at any module depth; authored build/ paths remain eligible.
+  "build/intermediates",
+  "build/outputs/apk",
+  "build/outputs/bundle",
+] as const;
+const DOTNET_BUILD_OUTPUT_SEGMENTS = [
+  "bin/Debug",
+  "bin/Release",
+  "obj/Debug",
+  "obj/Release",
+] as const;
+export type LegacyDerivedEligibilitySubset = readonly ("agp" | "pnpm" | "dotnet")[];
+// Three independent families bound this repair-only search to 8 eligibility candidates.
+export const LEGACY_DERIVED_ELIGIBILITY_SUBSETS = (["pnpm", "agp", "dotnet"] as const)
+  .reduce<LegacyDerivedEligibilitySubset[]>(
+    (subsets, family) => subsets.concat(subsets.map((subset) => [...subset, family])),
+    [[]],
+  )
+  .toSorted((left, right) => left.length - right.length);
+const DERIVED_WORKSPACE_DIRECTORY_NAMES = [
   "__pycache__",
   ".pytest_cache",
   ".mypy_cache",
   ".ruff_cache",
   "node_modules",
+  ...AGP_BUILD_OUTPUT_SEGMENTS,
+  ...DOTNET_BUILD_OUTPUT_SEGMENTS,
 ] as const;
 
-export const DERIVED_WORKSPACE_FILE_NAMES = [".DS_Store"] as const;
-export const DERIVED_WORKSPACE_FILE_SUFFIXES = [".pyc", ".pyo"] as const;
+// These producers own exact checkout-relative roots, not every .cache or .artifacts path.
+const BUILD_CACHE_ROOT_PATHS = [
+  ".artifacts/build-all-cache",
+  ".artifacts/build-cache-inputs",
+] as const;
+const PNPM_FALLBACK_STORE_ROOT_PATH = ".openclaw/.pnpm-store";
+// Exact tool-owned roots also cover workspaces populated before cache relocation.
+const TOOL_CACHE_ROOTS = [
+  [".npm/_cacache", "npm cache", "npm_config_cache"],
+  [".npm/_logs", "npm logs", "npm_config_cache"],
+  [".cache/pip", "pip cache", "PIP_CACHE_DIR"],
+  [".cache/uv", "uv cache", "UV_CACHE_DIR"],
+  [".pnpm-store", "pnpm store", "PNPM_CONFIG_STORE_DIR"],
+  [".bun/install/cache", "Bun cache", "BUN_INSTALL_CACHE_DIR"],
+  [".cargo/registry", "Cargo registry cache", "CARGO_HOME"],
+  [".cargo/git", "Cargo Git cache", "CARGO_HOME"],
+  [".gradle/caches", "Gradle cache", "GRADLE_USER_HOME"],
+  [".local/share/NuGet/http-cache", "NuGet HTTP cache", "NUGET_HTTP_CACHE_PATH"],
+  [".local/share/NuGet/v3-cache", "NuGet HTTP cache", "NUGET_HTTP_CACHE_PATH"],
+  [".nuget/packages", "NuGet global packages", "NUGET_PACKAGES"],
+] as const;
 
-// Derived caches must never fence workspace reconciliation. Keep every sync,
-// manifest, divergence, apply, and recovery path on this single predicate.
-export function isDerivedWorkspacePath(relativePath: string): boolean {
-  const segments = relativePath.split("/");
-  return segments.some(
-    (segment) =>
-      (DERIVED_WORKSPACE_DIRECTORY_NAMES as readonly string[]).includes(segment) ||
-      (DERIVED_WORKSPACE_FILE_NAMES as readonly string[]).includes(segment) ||
-      DERIVED_WORKSPACE_FILE_SUFFIXES.some((suffix) => segment.endsWith(suffix)),
-  );
+export function workspaceToolCacheHint(entryPath: string): string {
+  const cache = TOOL_CACHE_ROOTS.find(([root]) => `/${entryPath}/`.includes(`/${root}/`));
+  return cache
+    ? `\nCache guidance: Directory class: ${cache[1]}. Set ${cache[2]} to a writable path outside the workspace, move the cache there, and retry recovery.`
+    : "";
 }
 
+const DERIVED_WORKSPACE_ROOT_PATHS = [
+  ...TOOL_CACHE_ROOTS.map(([root]) => root),
+  ".cache/vitest",
+  ".cache/bun-transpiler",
+  ".cache/openclaw/bun",
+  ".cache/ms-playwright",
+  ".cache/convex/binaries",
+  ".local/share/pnpm/store",
+  "artifacts/task-environment/local/share/pnpm/store",
+  // pnpm falls back here for projects beneath the protected .openclaw self-bind.
+  PNPM_FALLBACK_STORE_ROOT_PATH,
+  // Managed binary installers keep re-downloadable tools beneath the state directory.
+  ".openclaw/tools",
+  ".artifacts/vitest-workers",
+  ".artifacts/vitest-worker-cache",
+  ".artifacts/vitest-shard-timings.json",
+] as const;
+const RUNTIME_WORKSPACE_ROOT_PATHS = [".artifacts/dist-artifacts.lock", ".openclaw/tmp"] as const;
+
+const DERIVED_WORKSPACE_FILE_NAMES = [".DS_Store"] as const;
+const DERIVED_WORKSPACE_FILE_SUFFIXES = [".pyc", ".pyo"] as const;
+export const WORKER_ATTACHMENT_DIRECTORY_PREFIX = "openclaw-inbound-";
+const UUID_HEX = "[0-9a-f]";
+// randomUUID creates lowercase UUIDv4 names. This exact character-class pattern
+// has the same meaning in a regular expression and an rsync exclusion glob.
+export const WORKER_ATTACHMENT_DIRECTORY_PATTERN =
+  WORKER_ATTACHMENT_DIRECTORY_PREFIX +
+  [
+    UUID_HEX.repeat(8),
+    UUID_HEX.repeat(4),
+    `4${UUID_HEX.repeat(3)}`,
+    `[89ab]${UUID_HEX.repeat(3)}`,
+    UUID_HEX.repeat(12),
+  ].join("-");
+
+// Match a whole segment without splitting each inventory path. The negative
+// class ends at a slash or the actual end, unlike "$" before a final newline.
+function derivedWorkspaceSegmentPattern(includeLegacyAgp: boolean, includeLegacyDotnet: boolean) {
+  return `(?:^|/)(?:${[
+    ...DERIVED_WORKSPACE_DIRECTORY_NAMES.filter(
+      (name) =>
+        (!includeLegacyAgp || !AGP_BUILD_OUTPUT_SEGMENTS.some((segment) => segment === name)) &&
+        (!includeLegacyDotnet || !DOTNET_BUILD_OUTPUT_SEGMENTS.some((segment) => segment === name)),
+    ).map((name) => name.replaceAll(".", "\\.")),
+    ...DERIVED_WORKSPACE_FILE_NAMES.map((name) => name.replaceAll(".", "\\.")),
+    ...DERIVED_WORKSPACE_FILE_SUFFIXES.map((suffix) => `[^/]*${suffix.replaceAll(".", "\\.")}`),
+    WORKER_ATTACHMENT_DIRECTORY_PATTERN,
+  ].join("|")})(?![^/])`;
+}
+
+// Git ignores make only known build roots disposable, never arbitrary authored
+// reports. The Bun staging owner downloads its runtime under .cache/openclaw-bun.
+export const IGNORED_WORKSPACE_BUILD_OUTPUT_ROOTS = ["dist", ".cache/openclaw-bun"] as const;
+
+export function isIgnoredWorkspaceBuildOutput(relative: string, ignored: ReadonlySet<string>) {
+  const buildOutput = IGNORED_WORKSPACE_BUILD_OUTPUT_ROOTS.some(
+    (root) => relative === root || relative.startsWith(root + "/"),
+  );
+  if (!buildOutput) {
+    return false;
+  }
+  let candidate = relative;
+  while (candidate) {
+    if (ignored.has(candidate) || ignored.has(candidate + "/")) {
+      return true;
+    }
+    candidate = candidate.slice(0, Math.max(0, candidate.lastIndexOf("/")));
+  }
+  return false;
+}
+
+// Derived caches and runtime attachment copies are not workspace edits. Keep
+// sync, manifest, divergence, apply, and recovery on this single predicate.
+export const WORKSPACE_PATH_EXCLUSIONS_JS = `
+${STAGED_INPUT_PATHS_JS}
+${MANAGED_SANDBOX_SKILLS_PATH_JS}
+const DERIVED_WORKSPACE_ROOT_PATHS = ${JSON.stringify(DERIVED_WORKSPACE_ROOT_PATHS)};
+const PNPM_FALLBACK_STORE_ROOT_PATH = ${JSON.stringify(PNPM_FALLBACK_STORE_ROOT_PATH)};
+const BUILD_CACHE_ROOT_PATHS = ${JSON.stringify(BUILD_CACHE_ROOT_PATHS)};
+function isBuildCacheWorkspacePath(relativePath) {
+  return BUILD_CACHE_ROOT_PATHS.some((root) => relativePath === root || relativePath.startsWith(root + "/"));
+}
+function buildCacheInputPaths(paths = []) {
+  const retained = new Set();
+  for (const entryPath of paths) {
+    if (!isBuildCacheWorkspacePath(entryPath)) continue;
+    const segments = entryPath.split("/");
+    for (let index = 1; index <= segments.length; index++) retained.add(segments.slice(0, index).join("/"));
+  }
+  return retained;
+}
+const RUNTIME_WORKSPACE_ROOT_PATHS = ${JSON.stringify(RUNTIME_WORKSPACE_ROOT_PATHS)};
+const DERIVED_WORKSPACE_SEGMENT_RES = ${JSON.stringify(
+  [false, true].flatMap((agp) =>
+    [false, true].map((dotnet) => derivedWorkspaceSegmentPattern(agp, dotnet)),
+  ),
+)}.map((pattern) => new RegExp(pattern));
+function isRuntimeOwnedWorkspacePath(relativePath) {
+  return relativePath === ".git" || relativePath.startsWith(".git/") ||
+    relativePath.endsWith("/.git") || relativePath.includes("/.git/") ||
+    isManagedSandboxSkillsPath(relativePath) || RUNTIME_WORKSPACE_ROOT_PATHS.some(
+    (root) => relativePath === root || relativePath.startsWith(root + "/"),
+  );
+}
+function isDerivedWorkspacePath(relativePath, retainedInput, excludeBuildCaches, legacyDerivedEligibilitySubset) {
+  if (isRuntimeOwnedWorkspacePath(relativePath)) {
+    return true;
+  }
+  if (retainedInput) {
+    return false;
+  }
+  if (excludeBuildCaches && isBuildCacheWorkspacePath(relativePath)) return true;
+  if (DERIVED_WORKSPACE_ROOT_PATHS.some(
+    (root) => (root !== PNPM_FALLBACK_STORE_ROOT_PATH || !legacyDerivedEligibilitySubset?.includes("pnpm")) &&
+      (relativePath === root || relativePath.startsWith(root + "/")),
+  )) {
+    return true;
+  }
+  const legacySegments = (legacyDerivedEligibilitySubset?.includes("agp") ? 2 : 0) +
+    (legacyDerivedEligibilitySubset?.includes("dotnet") ? 1 : 0);
+  return DERIVED_WORKSPACE_SEGMENT_RES[legacySegments].test(relativePath);
+}
+function projectWorkspaceEntries(entries, isRetainedInput, excludeBuildCaches = false) {
+  const nonemptyDirectories = new Set();
+  const retainedParents = new Set();
+  const parent = (entryPath) => entryPath.slice(0, Math.max(0, entryPath.lastIndexOf("/")));
+  for (const entry of entries) nonemptyDirectories.add(parent(entry.path));
+  const eligible = [];
+  // Children precede parents in this reverse walk of the sorted inventory.
+  // Prune ancestry created only by excluded contents, but retain original empty directories.
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (
+      isDerivedWorkspacePath(entry.path, isRetainedInput(entry.path), excludeBuildCaches) ||
+      (entry.type === "directory" && nonemptyDirectories.has(entry.path) && !retainedParents.has(entry.path))
+    ) continue;
+    eligible.push(entry);
+    retainedParents.add(parent(entry.path));
+  }
+  return eligible.toReversed();
+}`;
+
+export const {
+  isDerivedWorkspacePath,
+  isRuntimeOwnedWorkspacePath,
+  projectWorkspaceEntries,
+  buildCacheInputPaths,
+}: {
+  isDerivedWorkspacePath: (
+    relativePath: string,
+    retainedInput?: boolean,
+    excludeBuildCaches?: boolean,
+    legacyDerivedEligibilitySubset?: LegacyDerivedEligibilitySubset,
+  ) => boolean;
+  isRuntimeOwnedWorkspacePath: (relativePath: string) => boolean;
+  buildCacheInputPaths: (paths?: Iterable<string>) => Set<string>;
+  projectWorkspaceEntries: <T extends { path: string; type: string }>(
+    entries: readonly T[],
+    isRetainedInput: (relativePath: string) => boolean,
+    excludeBuildCaches?: boolean,
+  ) => T[];
+} = compileFunction(
+  `${WORKSPACE_PATH_EXCLUSIONS_JS}\nreturn { isDerivedWorkspacePath, isRuntimeOwnedWorkspacePath, projectWorkspaceEntries, buildCacheInputPaths };`,
+)();
+
 export const DERIVED_WORKSPACE_RSYNC_EXCLUDES = [
+  `/${MATERIALIZED_SANDBOX_SKILLS_WORKSPACE}`,
+  ...DERIVED_WORKSPACE_ROOT_PATHS.map((root) => `/${root}`),
+  ...RUNTIME_WORKSPACE_ROOT_PATHS.map((root) => `/${root}`),
   ...DERIVED_WORKSPACE_DIRECTORY_NAMES,
   ...DERIVED_WORKSPACE_FILE_NAMES,
   ...DERIVED_WORKSPACE_FILE_SUFFIXES.map((suffix) => `*${suffix}`),
+  WORKER_ATTACHMENT_DIRECTORY_PATTERN,
 ] as const;
+
+// Standalone node capture/reset scripts cannot import fs-safe. Read only the
+// bounded regular marker, rejecting parent aliases and binding bytes to its inode.
+export const WORKSPACE_STAGED_INPUT_OWNERSHIP_JS = String.raw`
+const stagedInputOwnership = new Map();
+function isStagedInput(relativePath) {
+  const directory = stagedInputPathDirectory(relativePath);
+  if (!directory) return false;
+  if (stagedInputOwnership.has(directory)) return stagedInputOwnership.get(directory);
+  let owned = false;
+  let descriptor;
+  try {
+    let parent = root;
+    for (const segment of directory.split("/")) {
+      parent = path.join(parent, segment);
+      const stats = fs.lstatSync(parent);
+      if (!stats.isDirectory() || stats.isSymbolicLink()) return false;
+    }
+    const marker = path.join(parent, ".gitignore");
+    const before = fs.lstatSync(marker);
+    if (!before.isFile() || before.nlink !== 1 || before.size !== STAGED_INPUT_GITIGNORE.length) return false;
+    descriptor = fs.openSync(marker, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const opened = fs.fstatSync(descriptor);
+    if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== before.dev || opened.ino !== before.ino) return false;
+    const bytes = Buffer.alloc(STAGED_INPUT_GITIGNORE.length + 1);
+    const length = fs.readSync(descriptor, bytes, 0, bytes.length, 0);
+    const after = fs.lstatSync(marker);
+    owned = after.isFile() && after.nlink === 1 && after.dev === opened.dev && after.ino === opened.ino &&
+      after.mtimeMs === opened.mtimeMs && after.ctimeMs === opened.ctimeMs &&
+      fs.realpathSync(marker) === marker && length === STAGED_INPUT_GITIGNORE.length &&
+      bytes.subarray(0, length).toString("utf8") === STAGED_INPUT_GITIGNORE;
+  } catch {
+    // An ignored project directory with an absent or unsafe marker is not an input.
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+    stagedInputOwnership.set(directory, owned);
+  }
+  return owned;
+}`;

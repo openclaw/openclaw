@@ -6,7 +6,7 @@ import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   selectApplicableRuntimeConfig,
-} from "../config/config.js";
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   findActiveDegradedSecretOwner,
@@ -24,30 +24,29 @@ export function resolveManagedSecretRefRuntimeProviderAuth(params: {
 }): ResolvedProviderAuth | undefined {
   const runtimeConfig = getRuntimeConfigSnapshot();
   const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
-  if (params.cfg && params.cfg !== runtimeConfig && !runtimeSourceConfig) {
+  const sourceConfig = runtimeSourceConfig ?? undefined;
+  if (!runtimeConfig || !authConfig.hasSecretRefProviderApiKey(sourceConfig, params.provider)) {
     return undefined;
   }
-  const applicableConfig = selectApplicableRuntimeConfig({
-    inputConfig: params.cfg,
-    runtimeConfig,
-    runtimeSourceConfig,
-  });
+  // Captured runtime providers usually match even though their full config differs from source.
+  // Check that narrow boundary before comparing the entire fleet config.
   const usesRuntimeProvider =
-    applicableConfig === runtimeConfig ||
     authConfig.providerConfigMatchesRuntimeSnapshot({
       inputConfig: params.cfg,
       runtimeConfig,
       provider: params.provider,
-    });
-  const sourceConfig = usesRuntimeProvider ? (runtimeSourceConfig ?? undefined) : params.cfg;
-  if (!authConfig.hasSecretRefProviderApiKey(sourceConfig, params.provider)) {
+    }) ||
+    selectApplicableRuntimeConfig({
+      inputConfig: params.cfg,
+      runtimeConfig,
+      runtimeSourceConfig,
+    }) === runtimeConfig;
+  if (!usesRuntimeProvider) {
     return undefined;
   }
-  if (!runtimeConfig || !usesRuntimeProvider) {
-    return undefined;
-  }
-  const resolved = authConfig.resolveLiteralProviderConfigApiKeyAuth({
+  const resolved = authConfig.resolveRuntimeProviderConfigApiKeyAuth({
     cfg: runtimeConfig,
+    sourceConfig,
     provider: params.provider,
   });
   if (!resolved?.apiKey) {

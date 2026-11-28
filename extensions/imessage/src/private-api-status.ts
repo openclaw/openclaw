@@ -1,6 +1,3 @@
-// Imessage plugin module implements private api status behavior.
-import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-
 export type IMessagePrivateApiStatus = {
   available: boolean;
   v2Ready: boolean;
@@ -67,12 +64,21 @@ export function getCachedIMessagePrivateApiStatus(
   if (entry.expiresAt === 0) {
     return entry.status;
   }
-  const now = asDateTimestampMs(Date.now());
-  if (now === undefined || entry.expiresAt <= now) {
+  if (entry.expiresAt <= Date.now()) {
     bridgeStatusCache.delete(key);
     return undefined;
   }
   return entry.status;
+}
+
+// cacheIMessagePrivateApiStatus caches successful probes without expiry, which is
+// right for the hot path but leaves no way back once the bridge dies: the
+// helper dylib can stop answering while Messages.app stays alive and the
+// injection stays mapped, and nothing about that is observable from the cache.
+// The RPC client calls this when the bridge stops answering, so the stale
+// "available" verdict cannot outlive the bridge it describes.
+export function invalidateCachedIMessagePrivateApiStatus(cliPath?: string | null): void {
+  bridgeStatusCache.delete(normalizeCliPath(cliPath));
 }
 
 export function setCachedIMessagePrivateApiStatus(
@@ -80,8 +86,5 @@ export function setCachedIMessagePrivateApiStatus(
   status: IMessagePrivateApiStatus,
   expiresAt = 0,
 ): void {
-  if (expiresAt !== 0 && asDateTimestampMs(expiresAt) === undefined) {
-    return;
-  }
   bridgeStatusCache.set(normalizeCliPath(cliPath), { status, expiresAt });
 }

@@ -1,57 +1,184 @@
-// Builds structured context reports for context command responses.
+import { formatCompactTokenCount } from "@openclaw/normalization-core";
 import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
-import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";
-import { isRealConversationMessage } from "../../agents/compaction-real-conversation.js";
+import {
+  analyzeBootstrapBudget,
+  buildBootstrapInjectionStats,
+} from "../../agents/bootstrap-budget.js";
+import { createRealConversationClassifier } from "../../agents/compaction-real-conversation.js";
+import { resolveModelContextTokenProjection } from "../../agents/context.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../../agents/embedded-agent-helpers/bootstrap.js";
-import {
-  createMessageCharEstimateCache,
-  estimateMessageCharsCached,
-} from "../../agents/embedded-agent-runner/tool-result-char-estimator.js";
+import { estimateMessageChars } from "../../agents/embedded-agent-runner/tool-result-char-estimator.js";
+import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
+import { selectModelCatalogRuntimeEntry } from "../../agents/model-catalog-view.js";
+import { resolveModelContextWindowProfile } from "../../agents/model-context-window.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import {
+  resolveProjectedSessionContextBudgetStatus,
+  resolveProjectedSessionContextTokens,
+} from "../../config/sessions/context-token-provenance.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { formatInjectedWorkspaceFileLabel } from "../../config/sessions/session-system-prompt-report.js";
 import {
   resolveFreshSessionTotalTokens,
   type SessionEntry,
   type SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
-import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
+import type { SessionTranscriptReadScope } from "../../gateway/session-transcript-read.types.js";
+import {
+  readSessionMessagesAsync,
+  readSessionMessagesWithSourceAsync,
+} from "../../gateway/session-transcript-readers.js";
+import { iterateSessionTranscriptSourcePages } from "../../gateway/session-transcript-source-pages.js";
+import type { SessionCostSummary } from "../../infra/session-cost-usage.types.js";
+import {
+  buildContextBudgetCategories,
+  type ContextCategory,
+} from "../../shared/context-budget-categories.js";
+import {
+  formatPromptCacheHitRate,
+  latestRunCacheHitRate,
+  promptCacheHitRate,
+} from "../../shared/prompt-cache-hit-rate.js";
+import { formatUsd } from "../../utils/usage-format.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { renderContextTreemapPng } from "./context-treemap.js";
 
-function formatInt(n: number): string {
-  return new Intl.NumberFormat("en-US").format(n);
-}
+const numberFormat = new Intl.NumberFormat("en-US");
+const formatInt = (value: number) => numberFormat.format(value);
 
 function formatCharsAndTokens(chars: number): string {
   return `${formatInt(chars)} chars (~${formatInt(estimateTokensFromChars(chars))} tok)`;
 }
 
-function parseContextArgs(commandBodyNormalized: string): string {
-  if (commandBodyNormalized === "/context") {
-    return "";
-  }
-  if (commandBodyNormalized.startsWith("/context ")) {
-    return commandBodyNormalized.slice(8).trim();
-  }
-  return "";
+function formatListTop(entries: Array<{ name: string; value: number }>, noun = "tools"): string[] {
+  const top = entries.toSorted((a, b) => b.value - a.value).slice(0, 30);
+  const omitted = entries.length - top.length;
+  return [
+    ...top.map((entry) => `- ${entry.name}: ${formatCharsAndTokens(entry.value)}`),
+    ...(omitted ? [`… (+${omitted} more ${noun})`] : []),
+  ];
 }
 
-function formatListTop(
-  entries: Array<{ name: string; value: number }>,
-  cap: number,
-): { lines: string[]; omitted: number } {
-  const sorted = [...entries].toSorted((a, b) => b.value - a.value);
-  const top = sorted.slice(0, cap);
-  const omitted = Math.max(0, sorted.length - top.length);
-  const lines = top.map((e) => `- ${e.name}: ${formatCharsAndTokens(e.value)}`);
-  return { lines, omitted };
+const CONTEXT_BUDGET_LABELS: Record<ContextCategory["id"], { swatch: string; label: string }> = {
+  messages: { swatch: "🟦", label: "Messages & other" },
+  files: { swatch: "🟧", label: "Workspace files" },
+  tools: { swatch: "🟩", label: "Tool schemas" },
+  skills: { swatch: "🟨", label: "Skills catalog" },
+  system: { swatch: "🟪", label: "System instructions" },
+};
+const CONTEXT_BUDGET_BAR_CELLS = 20;
+// Bounds the tail read; a run longer than this reports the rate of its latest calls.
+const LATEST_RUN_MAX_MESSAGES = 200;
+const LATEST_RUN_MAX_BYTES = 1024 * 1024;
+const formatBudgetTokens = (tokens: number) =>
+  formatCompactTokenCount(tokens, { trimTrailingZero: true });
+
+/** Text form of the Control UI prompt-budget popover, shared by every chat channel. */
+function formatContextBudget(params: {
+  report: SessionSystemPromptReport;
+  used: number | null;
+  limit: number | null;
+  entry?: SessionEntry;
+  /** Recent transcript messages; the latest run's cache rate comes from its model calls. */
+  recentMessages?: readonly unknown[];
+  /** Lifetime usage of this session instance; null when it has no recorded usage. */
+  sessionUsage?: SessionCostSummary | null;
+}): string {
+  const { report, limit } = params;
+  // A fresh session reports zero before its first run; that is no measurement.
+  const used = params.used || null;
+  // Without a fresh usage total, "messages" is unknown rather than a negative remainder.
+  const categories = buildContextBudgetCategories(report, used ?? -1);
+  const known = categories.reduce((sum, category) => sum + (category.tokens ?? 0), 0);
+  const header = [
+    "🧠 Prompt budget",
+    `${used == null ? "?" : formatBudgetTokens(used)} / ${limit ? formatBudgetTokens(limit) : "?"}`,
+    ...(used != null && limit ? [`${Math.min(100, Math.round((used / limit) * 100))}%`] : []),
+  ].join(" · ");
+
+  const lines = [header];
+  if (limit && known > 0) {
+    // Each visible category keeps at least one cell, like the UI's sliver, so a small
+    // share stays legible; the header and legend carry the exact numbers. The cells left
+    // after that minimum go by largest remainder, so the bar never overflows.
+    const shown = categories.filter((category) => (category.tokens ?? 0) > 0);
+    const filled = Math.min(
+      CONTEXT_BUDGET_BAR_CELLS,
+      Math.max(shown.length, Math.round((known / limit) * CONTEXT_BUDGET_BAR_CELLS)),
+    );
+    const exact = shown.map(
+      (category) => ((category.tokens ?? 0) / known) * (filled - shown.length),
+    );
+    const cells = exact.map((value) => 1 + Math.floor(value));
+    for (let spare = filled - cells.reduce((sum, value) => sum + value, 0); spare > 0; spare -= 1) {
+      const next = exact.reduce(
+        (best, value, index) =>
+          value + 1 - cells[index]! > exact[best]! + 1 - cells[best]! ? index : best,
+        0,
+      );
+      cells[next]! += 1;
+    }
+    lines.push(
+      shown
+        .map((category, index) => CONTEXT_BUDGET_LABELS[category.id].swatch.repeat(cells[index]!))
+        .join("") + "⬜".repeat(CONTEXT_BUDGET_BAR_CELLS - filled),
+    );
+  }
+  lines.push("");
+  for (const category of categories) {
+    const { swatch, label } = CONTEXT_BUDGET_LABELS[category.id];
+    const value =
+      category.tokens === null
+        ? category.id === "messages"
+          ? "unknown"
+          : "unverified"
+        : `~${formatBudgetTokens(category.tokens)}`;
+    lines.push(`${swatch} ${label} · ${value}`);
+  }
+
+  const entry = params.entry;
+  const latestRate = latestRunCacheHitRate(params.recentMessages);
+  const latestRun = [
+    latestRate === null ? null : `${formatPromptCacheHitRate(latestRate)} cache`,
+    formatUsd(entry?.estimatedCostUsd),
+  ].filter(Boolean);
+  const total = params.sessionUsage;
+  // Same rules as the Control UI: an unfinished or partly unpriced total is a lower bound,
+  // and usage without any price is never shown as $0.
+  const partial = total ? total.staleSince !== undefined || total.missingCostEntries > 0 : false;
+  const totalRate = total && total.staleSince === undefined ? promptCacheHitRate(total) : null;
+  const sessionTotal = total
+    ? [
+        totalRate === null ? null : `${formatPromptCacheHitRate(totalRate)} cache`,
+        total.totalCost === 0 && total.missingCostEntries > 0
+          ? "unpriced"
+          : `${partial ? "≥ " : ""}${formatUsd(total.totalCost)}`,
+      ].filter(Boolean)
+    : [];
+  if (latestRun.length || sessionTotal.length) {
+    lines.push("");
+    if (latestRun.length) {
+      lines.push(`Latest run: ${latestRun.join(" · ")}`);
+    }
+    if (sessionTotal.length) {
+      lines.push(`Session total: ${sessionTotal.join(" · ")}`);
+    }
+  }
+  if (report.source === "estimate") {
+    lines.push("", "Estimated: no run has been recorded for this session yet.");
+  }
+  lines.push("", "More: /context list · /context detail · /context map · /context json");
+  return lines.join("\n");
 }
 
 function resolveRunContextReport(params: HandleCommandsParams): SessionSystemPromptReport | null {
@@ -68,64 +195,87 @@ function resolveContextReportAgentId(params: HandleCommandsParams): string {
   }).sessionAgentId;
 }
 
-type TranscriptCompactabilityReport =
-  | {
-      available: true;
-      totalMessages: number;
-      realConversationMessages: number;
-    }
-  | {
-      available: false;
-      reason: string;
-    };
-
-async function readContextTranscriptMessages(
+function resolveContextTranscriptScope(
   params: HandleCommandsParams,
   targetSessionEntry: SessionEntry | undefined,
-): Promise<AgentMessage[]> {
+): SessionTranscriptReadScope | null {
   const sessionId = targetSessionEntry?.sessionId?.trim();
   if (!sessionId) {
-    return [];
+    return null;
   }
   const agentId = resolveContextReportAgentId(params);
-  return (await readSessionMessagesAsync(
-    {
+  return {
+    agentId,
+    sessionId,
+    sessionKey: params.sessionKey,
+    storePath: resolveSessionStorePathForScope({
       agentId,
-      sessionId,
       sessionKey: params.sessionKey,
-      storePath: resolveSessionStorePathForScope({
-        agentId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      }),
-    },
-    { mode: "full", reason: "context-report" },
-  )) as AgentMessage[];
+      storePath: params.storePath,
+    }),
+  };
 }
 
-async function resolveTranscriptCompactabilityReport(
+async function* readContextTranscriptPages(
   params: HandleCommandsParams,
   targetSessionEntry: SessionEntry | undefined,
-): Promise<TranscriptCompactabilityReport> {
+): AsyncGenerator<AgentMessage[]> {
+  const scope = resolveContextTranscriptScope(params, targetSessionEntry);
+  if (!scope) {
+    return;
+  }
+  for await (const page of iterateSessionTranscriptSourcePages(
+    readSessionMessagesWithSourceAsync,
+    scope,
+  )) {
+    yield page.messages as AgentMessage[];
+  }
+}
+
+/** Bounded tail read: the latest run's model calls sit after the last user message. */
+async function readLatestRunMessages(
+  params: HandleCommandsParams,
+  targetSessionEntry: SessionEntry | undefined,
+): Promise<unknown[]> {
+  const scope = resolveContextTranscriptScope(params, targetSessionEntry);
+  return scope
+    ? await readSessionMessagesAsync(scope, {
+        mode: "recent",
+        maxMessages: LATEST_RUN_MAX_MESSAGES,
+        maxBytes: LATEST_RUN_MAX_BYTES,
+      })
+    : [];
+}
+
+async function buildTranscriptCompactabilityLines(
+  params: HandleCommandsParams,
+  targetSessionEntry: SessionEntry | undefined,
+): Promise<string[]> {
   if (!targetSessionEntry?.sessionId?.trim()) {
-    return { available: false, reason: "no active transcript session" };
+    return ["Compactable chat history: unavailable (no active session)"];
   }
 
-  const messages = await readContextTranscriptMessages(params, targetSessionEntry);
-  if (!messages.length) {
-    return { available: false, reason: "no transcript messages found" };
+  const isRealConversation = createRealConversationClassifier();
+  let totalMessages = 0;
+  let realConversationMessages = 0;
+  for await (const messages of readContextTranscriptPages(params, targetSessionEntry)) {
+    totalMessages += messages.length;
+    for (const message of messages) {
+      realConversationMessages += isRealConversation(message) ? 1 : 0;
+    }
+  }
+  if (!totalMessages) {
+    return ["Compactable chat history: unavailable (no messages found)"];
   }
 
-  const realConversationMessages = messages.reduce(
-    (count, message, index) =>
-      count + (isRealConversationMessage(message, messages, index) ? 1 : 0),
-    0,
-  );
-  return {
-    available: true,
-    totalMessages: messages.length,
-    realConversationMessages,
-  };
+  return [
+    `Compactable chat history: ${formatInt(realConversationMessages)} real conversation message(s) / ${formatInt(totalMessages)} history entries`,
+    ...(realConversationMessages === 0
+      ? [
+          "Compaction note: prompt/cache usage may be high even when there are no compactable conversation messages.",
+        ]
+      : []),
+  ];
 }
 
 async function resolveContextReport(
@@ -144,6 +294,7 @@ async function resolveContextReport(
   const { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime } =
     await resolveCommandsSystemPromptBundle(params);
 
+  const injectedWorkspaceFiles = buildBootstrapInjectionStats({ bootstrapFiles, injectedFiles });
   return buildSystemPromptReport({
     source: "estimate",
     generatedAt: Date.now(),
@@ -156,8 +307,7 @@ async function resolveContextReport(
     bootstrapTotalMaxChars,
     sandbox: { mode: sandboxRuntime.mode, sandboxed: sandboxRuntime.sandboxed },
     systemPrompt,
-    bootstrapFiles,
-    injectedFiles,
+    injectedWorkspaceFiles,
     skillsPrompt,
     tools,
   });
@@ -165,10 +315,11 @@ async function resolveContextReport(
 
 export async function buildContextReply(params: HandleCommandsParams): Promise<ReplyPayload> {
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const args = parseContextArgs(params.command.commandBodyNormalized);
+  const commandBody = params.command.commandBodyNormalized;
+  const args = commandBody.startsWith("/context ") ? commandBody.slice(8).trim() : "";
   const sub = normalizeLowercaseStringOrEmpty(args.split(/\s+/).find(Boolean));
 
-  if (!sub || sub === "help") {
+  if (sub === "help") {
     return {
       text: [
         "🧠 /context",
@@ -176,8 +327,9 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         "What counts as context (high-level), plus a breakdown mode.",
         "",
         "Try:",
+        "- /context        (prompt budget: where the context window is going)",
         "- /context list   (short breakdown)",
-        "- /context detail (per-file + per-tool + per-skill + system prompt size + compactable transcript counts)",
+        "- /context detail (per-file + per-tool + per-skill + system prompt size + compactable chat history counts)",
         "- /context map    (WinDirStat-style treemap image)",
         "- /context json   (same, machine-readable)",
         "",
@@ -186,13 +338,72 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     };
   }
 
+  const model = params.model;
+  if (!model) {
+    return { text: NO_MODEL_CONFIGURED_MESSAGE };
+  }
   const cachedContextUsageTokens = resolveFreshSessionTotalTokens(targetSessionEntry);
+  const agentId = resolveContextReportAgentId(params);
+  const runtime = resolveEffectiveAgentRuntime({
+    cfg: params.cfg,
+    agentId,
+    sessionKey: params.sessionKey,
+    sessionEntry: targetSessionEntry,
+    provider: params.provider,
+    modelId: model,
+  });
+  const { getPreparedModelCatalogSnapshot } =
+    await import("../../agents/prepared-model-catalog.js");
+  const catalog = getPreparedModelCatalogSnapshot({
+    config: params.cfg,
+    agentId,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+  });
+  const entry = findModelInCatalog(catalog?.entries ?? [], params.provider, model);
+  const modelEntry = entry
+    ? selectModelCatalogRuntimeEntry({
+        entry,
+        routeVariants: catalog?.routeVariants ?? [],
+        runtimeId: runtime,
+        allowApiFallback: false,
+      }).entry
+    : catalog
+      ? undefined
+      : findModelInCatalog(
+          (params.thinkingCatalog ?? []).filter((candidate) =>
+            candidate.nativeRuntime
+              ? candidate.nativeRuntime === runtime
+              : ["openclaw", "auto", candidate.provider].includes(runtime),
+          ),
+          params.provider,
+          model,
+        );
+  const modelContext = resolveModelContextTokenProjection({
+    cfg: params.cfg,
+    provider: params.provider,
+    model,
+    modelContextTokens: modelEntry?.contextTokens,
+    modelContextWindow: resolveModelContextWindowProfile({
+      catalogEntry: modelEntry,
+      selected: targetSessionEntry?.contextWindow,
+    }).contextTokens,
+    allowCacheLookup: false,
+  });
   const session = {
     totalTokens: cachedContextUsageTokens ?? null,
     totalTokensFresh: targetSessionEntry ? cachedContextUsageTokens !== undefined : null,
     inputTokens: targetSessionEntry?.inputTokens ?? null,
     outputTokens: targetSessionEntry?.outputTokens ?? null,
-    contextTokens: params.contextTokens ?? null,
+    contextTokens:
+      resolveProjectedSessionContextTokens({
+        entry: targetSessionEntry,
+        provider: params.provider,
+        model,
+        agentHarnessId: runtime,
+        resolvedContextTokens: modelContext.contextTokens,
+        authoredContextTokens: modelContext.authoredContextTokens,
+      }) ?? null,
   } as const;
 
   if (sub === "map") {
@@ -206,13 +417,12 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         ].join("\n"),
       };
     }
-    const messages = await readContextTranscriptMessages(params, targetSessionEntry);
-    const estimateCache = createMessageCharEstimateCache();
-    const conversationTotals = messages.reduce(
-      (totals, message) => {
-        const chars = estimateMessageCharsCached(message, estimateCache);
+    const totals = { user: 0, assistant: 0, toolResults: 0, summaries: 0, other: 0 };
+    for await (const messages of readContextTranscriptPages(params, targetSessionEntry)) {
+      for (const message of messages) {
+        const chars = estimateMessageChars(message);
         if (chars === 0) {
-          return totals;
+          continue;
         }
         if (message.role === "user") {
           totals.user += chars;
@@ -225,16 +435,14 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         } else {
           totals.other += chars;
         }
-        return totals;
-      },
-      { user: 0, assistant: 0, toolResults: 0, summaries: 0, other: 0 },
-    );
+      }
+    }
     const conversation = [
-      { name: "User", value: conversationTotals.user },
-      { name: "Assistant", value: conversationTotals.assistant },
-      { name: "Tool results", value: conversationTotals.toolResults },
-      { name: "Summaries", value: conversationTotals.summaries },
-      { name: "Other", value: conversationTotals.other },
+      { name: "User", value: totals.user },
+      { name: "Assistant", value: totals.assistant },
+      { name: "Tool results", value: totals.toolResults },
+      { name: "Summaries", value: totals.summaries },
+      { name: "Other", value: totals.other },
       // Runtime context and hook prompt additions reach only the model, never
       // the transcript; without these leaves the map undercounts model-visible
       // context. The persisted turn prompt is already counted above.
@@ -259,6 +467,35 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
 
   const report = await resolveContextReport(params);
 
+  if (!sub) {
+    const { loadCurrentSessionCostSummary } = await import("./commands-session-cost.runtime.js");
+    return {
+      text: formatContextBudget({
+        report,
+        used: cachedContextUsageTokens ?? null,
+        // Same limit as the Control UI: the last run's validated prompt budget, else the window.
+        limit:
+          asPositiveFiniteNumber(
+            resolveProjectedSessionContextBudgetStatus({
+              entry: targetSessionEntry,
+              provider: params.provider,
+              model,
+              contextTokens: session.contextTokens ?? undefined,
+            })?.promptBudgetBeforeReserve,
+          ) ?? session.contextTokens,
+        entry: targetSessionEntry,
+        recentMessages: await readLatestRunMessages(params, targetSessionEntry),
+        sessionUsage: await loadCurrentSessionCostSummary({
+          cfg: params.cfg,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          sessionEntry: targetSessionEntry,
+          storePath: params.storePath,
+        }),
+      }),
+    };
+  }
+
   if (sub === "json") {
     return { text: JSON.stringify({ report, session }, null, 2) };
   }
@@ -273,6 +510,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   }
 
   const fileLines = report.injectedWorkspaceFiles.map((f) => {
+    const label = formatInjectedWorkspaceFileLabel(f, report.injectedWorkspaceFiles);
     const nativeUnverified = f.injectionStatus === "native_unverified";
     const status = nativeUnverified
       ? "NATIVE/UNVERIFIED"
@@ -287,41 +525,33 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       : f.missing
         ? "0"
         : formatCharsAndTokens(f.injectedChars);
-    return `- ${f.name}: ${status} | raw${nativeUnverified ? "(local)" : ""} ${raw} | injected ${injected}`;
+    return `- ${label}: ${status} | raw${nativeUnverified ? "(local)" : ""} ${raw} | injected ${injected}`;
   });
 
   const sandboxLine = `Sandbox: mode=${report.sandbox?.mode ?? "unknown"} sandboxed=${report.sandbox?.sandboxed ?? false}`;
   const toolSchemaLine = `Tool schemas (JSON): ${formatCharsAndTokens(report.tools.schemaChars)} (counts toward context; not shown as text)`;
   const toolListLine = `Tool list (system prompt text): ${formatCharsAndTokens(report.tools.listChars)}`;
-  const skillNameSet = new Set(report.skills.entries.map((s) => s.name));
-  const skillNames = Array.from(skillNameSet);
+  const skillNames = [...new Set(report.skills.entries.map((s) => s.name))];
   const toolNames = report.tools.entries.map((t) => t.name);
   const formatNameList = (names: string[], cap: number) =>
-    names.length <= cap
-      ? names.join(", ")
-      : `${names.slice(0, cap).join(", ")}, … (+${names.length - cap} more)`;
-  const skillsLine = `Skills list (system prompt text): ${formatCharsAndTokens(report.skills.promptChars)} (${skillNameSet.size} skills)`;
-  const skillsNamesLine = skillNameSet.size
-    ? `Skills: ${formatNameList(skillNames, 20)}`
-    : "Skills: (none)";
-  const toolsNamesLine = toolNames.length
-    ? `Tools: ${formatNameList(toolNames, 30)}`
-    : "Tools: (none)";
-  const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)})`;
+    names.length === 0
+      ? "(none)"
+      : names.length <= cap
+        ? names.join(", ")
+        : `${names.slice(0, cap).join(", ")}, … (+${names.length - cap} more)`;
+  const skillsLine = `Skills list (system prompt text): ${formatCharsAndTokens(report.skills.promptChars)} (${skillNames.length} skills)`;
+  const skillsNamesLine = `Skills: ${formatNameList(skillNames, 20)}`;
+  const toolsNamesLine = `Tools: ${formatNameList(toolNames, 30)}`;
+  const estimatedChars = report.systemPrompt.estimatedChars;
+  const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)}${estimatedChars ? `; estimated ${formatCharsAndTokens(estimatedChars)}` : ""})`;
   const workspaceLabel = report.workspaceDir ?? params.workspaceDir;
   const sessionAgentId = resolveContextReportAgentId(params);
   const bootstrapMaxChars =
-    typeof report.bootstrapMaxChars === "number" &&
-    Number.isFinite(report.bootstrapMaxChars) &&
-    report.bootstrapMaxChars > 0
-      ? report.bootstrapMaxChars
-      : resolveBootstrapMaxChars(params.cfg, sessionAgentId);
+    asPositiveFiniteNumber(report.bootstrapMaxChars) ??
+    resolveBootstrapMaxChars(params.cfg, sessionAgentId);
   const bootstrapTotalMaxChars =
-    typeof report.bootstrapTotalMaxChars === "number" &&
-    Number.isFinite(report.bootstrapTotalMaxChars) &&
-    report.bootstrapTotalMaxChars > 0
-      ? report.bootstrapTotalMaxChars
-      : resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
+    asPositiveFiniteNumber(report.bootstrapTotalMaxChars) ??
+    resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
   const bootstrapMaxLabel = `${formatInt(bootstrapMaxChars)} chars`;
   const bootstrapTotalLabel = `${formatInt(bootstrapTotalMaxChars)} chars`;
   const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -332,24 +562,15 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     bootstrapTotalMaxChars,
   });
   const truncatedBootstrapFiles = bootstrapAnalysis.truncatedFiles;
-  const truncationCauseCounts = truncatedBootstrapFiles.reduce(
-    (acc, file) => {
-      for (const cause of file.causes) {
-        if (cause === "per-file-limit") {
-          acc.perFile += 1;
-        } else if (cause === "total-limit") {
-          acc.total += 1;
-        }
-      }
-      return acc;
-    },
-    { perFile: 0, total: 0 },
-  );
+  const perFile = truncatedBootstrapFiles.filter((file) =>
+    file.causes.includes("per-file-limit"),
+  ).length;
+  const total = truncatedBootstrapFiles.filter((file) =>
+    file.causes.includes("total-limit"),
+  ).length;
   const truncationCauseParts = [
-    truncationCauseCounts.perFile > 0
-      ? `${truncationCauseCounts.perFile} file(s) exceeded max/file`
-      : null,
-    truncationCauseCounts.total > 0 ? `${truncationCauseCounts.total} file(s) hit max/total` : null,
+    perFile > 0 ? `${perFile} file(s) exceeded max/file` : null,
+    total > 0 ? `${total} file(s) hit max/total` : null,
   ].filter(Boolean);
   const bootstrapWarningLines =
     truncatedBootstrapFiles.length > 0
@@ -370,11 +591,10 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     : [];
 
   const contextWindowLabel = session.contextTokens != null ? formatInt(session.contextTokens) : "?";
-  const totalsLine =
-    cachedContextUsageTokens != null
-      ? `Session tokens (cached): ${formatInt(cachedContextUsageTokens)} total / ctx=${contextWindowLabel}`
-      : `Session tokens (cached): unknown / ctx=${contextWindowLabel}`;
-  const sharedContextLines = [
+  const totalsLine = `Session tokens (cached): ${cachedContextUsageTokens != null ? `${formatInt(cachedContextUsageTokens)} total` : "unknown"} / ctx=${contextWindowLabel}`;
+  const detailed = sub === "detail" || sub === "deep";
+  const lines = [
+    detailed ? "🧠 Context breakdown (detailed)" : "🧠 Context breakdown",
     `Workspace: ${workspaceLabel}`,
     `Bootstrap max/file: ${bootstrapMaxLabel}`,
     `Bootstrap max/total: ${bootstrapTotalLabel}`,
@@ -390,18 +610,16 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     skillsNamesLine,
   ];
 
-  if (sub === "detail" || sub === "deep") {
+  if (detailed) {
     const perSkill = formatListTop(
       report.skills.entries.map((s) => ({ name: s.name, value: s.blockChars })),
-      30,
+      "skills",
     );
     const perToolSchema = formatListTop(
       report.tools.entries.map((t) => ({ name: t.name, value: t.schemaChars })),
-      30,
     );
     const perToolSummary = formatListTop(
       report.tools.entries.map((t) => ({ name: t.name, value: t.summaryChars })),
-      30,
     );
     const toolPropsLines = report.tools.entries
       .filter((t) => t.propertiesCount != null)
@@ -431,65 +649,40 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         : overheadTokens > 0
           ? `Untracked provider/runtime overhead: ~${formatInt(overheadTokens)} tok`
           : "Untracked provider/runtime overhead: not observed in cached usage";
-    const transcriptCompactability = await resolveTranscriptCompactabilityReport(
+    const transcriptCompactabilityLines = await buildTranscriptCompactabilityLines(
       params,
       targetSessionEntry,
     );
-    const transcriptCompactabilityLines = transcriptCompactability.available
-      ? [
-          `Compactable transcript: ${formatInt(transcriptCompactability.realConversationMessages)} real conversation message(s) / ${formatInt(transcriptCompactability.totalMessages)} transcript message(s)`,
-          ...(transcriptCompactability.realConversationMessages === 0
-            ? [
-                "Compaction note: prompt/cache usage may be high even when there are no compactable conversation messages.",
-              ]
-            : []),
-        ]
-      : [`Compactable transcript: unavailable (${transcriptCompactability.reason})`];
 
-    return {
-      text: [
-        "🧠 Context breakdown (detailed)",
-        ...sharedContextLines,
-        ...(perSkill.lines.length ? ["Top skills (prompt entry size):", ...perSkill.lines] : []),
-        ...(perSkill.omitted ? [`… (+${perSkill.omitted} more skills)`] : []),
-        "",
-        toolListLine,
-        toolSchemaLine,
-        toolsNamesLine,
-        "Top tools (schema size):",
-        ...perToolSchema.lines,
-        ...(perToolSchema.omitted ? [`… (+${perToolSchema.omitted} more tools)`] : []),
-        "",
-        "Top tools (summary text size):",
-        ...perToolSummary.lines,
-        ...(perToolSummary.omitted ? [`… (+${perToolSummary.omitted} more tools)`] : []),
-        ...(toolPropsLines.length ? ["", "Tools (param count):", ...toolPropsLines] : []),
-        "",
-        trackedPromptLine,
-        actualContextLine,
-        ...(overheadLine ? [overheadLine] : []),
-        ...transcriptCompactabilityLines,
-        "",
-        totalsLine,
-        "",
-        "Inline shortcut: a command token inside normal text (e.g. “hey /status”) that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    };
-  }
-
-  return {
-    text: [
-      "🧠 Context breakdown",
-      ...sharedContextLines,
+    lines.push(
+      ...(perSkill.length ? ["Top skills (prompt entry size):", ...perSkill] : []),
+      "",
       toolListLine,
       toolSchemaLine,
       toolsNamesLine,
+      "Top tools (schema size):",
+      ...perToolSchema,
       "",
-      totalsLine,
+      "Top tools (summary text size):",
+      ...perToolSummary,
+      ...(toolPropsLines.length ? ["", "Tools (param count):", ...toolPropsLines] : []),
       "",
-      "Inline shortcut: a command token inside normal text (e.g. “hey /status”) that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
-    ].join("\n"),
+      trackedPromptLine,
+      actualContextLine,
+      ...(overheadLine ? [overheadLine] : []),
+      ...transcriptCompactabilityLines,
+    );
+  } else {
+    lines.push(toolListLine, toolSchemaLine, toolsNamesLine);
+  }
+
+  lines.push(
+    "",
+    totalsLine,
+    "",
+    "Inline shortcut: a command token inside normal text (e.g. “hey /status”) that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
+  );
+  return {
+    text: (detailed ? lines.filter(Boolean) : lines).join("\n"),
   };
 }

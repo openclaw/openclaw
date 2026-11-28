@@ -1,45 +1,60 @@
-import { html } from "lit";
-import { icons } from "../components/icons.ts";
-import { t } from "../i18n/index.ts";
-import type { ApplicationGatewaySnapshot } from "./gateway.ts";
-import { hasOperatorAdminAccess } from "./operator-access.ts";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
+import {
+  readScopeUpgradeAvailability,
+  type ScopeUpgradeState,
+} from "./device-scope-upgrade-availability.ts";
+import type { ScopeUpgradeOwner } from "./device-scope-upgrade-owner.runtime.ts";
+import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 
-export const SCOPE_UPGRADE_DETAILS_EVENT = "openclaw:scope-upgrade-details";
-export const SCOPE_UPGRADE_TRIGGER_ID = "scope-upgrade-trigger";
-const SCOPE_UPGRADE_SURFACE_SELECTOR = "openclaw-device-scope-upgrade-banner";
+export type ScopeUpgradeCapability = ReturnType<typeof createScopeUpgradeCapability>;
 
-export function openScopeUpgradeDetails(event?: Event): void {
-  event?.stopImmediatePropagation();
-  const surface = globalThis.document?.querySelector(SCOPE_UPGRADE_SURFACE_SELECTOR);
-  surface?.setAttribute("data-open-requested", "");
-  globalThis.dispatchEvent(new Event(SCOPE_UPGRADE_DETAILS_EVENT));
-}
+/** App-lifetime state shared by every Inbox presenter and settings takeover. */
+export function createScopeUpgradeCapability(gateway: ApplicationGateway) {
+  const listeners = createChangeListeners();
+  let snapshot = gateway.snapshot;
+  let owner: ScopeUpgradeOwner | null = null;
+  let state = readScopeUpgradeAvailability(snapshot);
 
-export function renderScopeUpgradeTrigger(
-  className: string,
-  onClick: (event: Event) => void = openScopeUpgradeDetails,
-) {
-  return html`<button
-    id=${SCOPE_UPGRADE_TRIGGER_ID}
-    type="button"
-    class=${className}
-    aria-label=${t("connection.scopeUpgrade.showDetails")}
-    aria-haspopup="dialog"
-    @click=${onClick}
-  >
-    ${icons.shieldQuestion}
-  </button>`;
-}
+  const publish = (next: ScopeUpgradeState) => {
+    if (JSON.stringify(state) === JSON.stringify(next)) {
+      return;
+    }
+    state = next;
+    listeners.publish();
+  };
+  const syncOwner = () => {
+    if (owner) {
+      publish(owner.state);
+    }
+  };
+  const syncGateway = (next: ApplicationGatewaySnapshot) => {
+    snapshot = next;
+    owner?.sync(snapshot);
+    publish(owner?.state ?? readScopeUpgradeAvailability(snapshot));
+  };
+  // Refresh upgrade authority even while the lazy prompt is not mounted.
+  const stopGateway = gateway.subscribe(syncGateway);
 
-function scopeUpgradeStatusVisible(snapshot: ApplicationGatewaySnapshot): boolean {
-  const auth = snapshot.hello?.auth;
-  return !(
-    snapshot.phase !== "connected" ||
-    auth?.scopes === undefined ||
-    hasOperatorAdminAccess(auth)
-  );
-}
-
-export function scopeUpgradeStatusUsesSessionHeader(snapshot: ApplicationGatewaySnapshot): boolean {
-  return scopeUpgradeStatusVisible(snapshot) && snapshot.client?.scopeUpgradeReady === true;
+  return {
+    get state() {
+      return state;
+    },
+    activate(
+      Owner: new (initial: ApplicationGatewaySnapshot, onChange: () => void) => ScopeUpgradeOwner,
+    ) {
+      owner ??= new Owner(snapshot, syncOwner);
+      owner.sync(snapshot);
+      publish(owner.state);
+    },
+    request: (): void => owner?.request(),
+    retry: (): void => owner?.retry(),
+    cancel: (): void => owner?.cancel(),
+    subscribe: listeners.subscribe,
+    dispose() {
+      stopGateway();
+      owner?.dispose();
+      owner = null;
+      listeners.clear();
+    },
+  };
 }

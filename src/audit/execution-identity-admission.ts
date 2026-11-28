@@ -6,6 +6,7 @@ import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { sortUniqueExecutionIdentityEntries } from "./execution-identity-ordering.js";
 import { executionIdentitySpawnAdmission } from "./execution-identity-spawn-admission.js";
 
 const EXECUTION_IDENTITY_ADMISSION_MAX_BYTES = 16 * 1024;
@@ -97,6 +98,12 @@ const ExecutionIdentityAdmissionInvokerSchema = Type.Union([
   closedObject({ state: Type.Literal("unknown") }),
 ]);
 
+const ExecutionIdentityRepresentedSubjectSchema = closedObject({
+  state: Type.Literal("present"),
+  kind: Type.Literal("person"),
+  rawPrincipalRef: rawRef(),
+});
+
 const ExecutionIdentityAdmissionEnvelopeSchema = closedObject({
   envelopeVersion: Type.Literal(1),
   contextId: boundedRef(),
@@ -115,6 +122,7 @@ const ExecutionIdentityAdmissionEnvelopeSchema = closedObject({
     kind: runtimeKind(),
   }),
   invoker: Type.Optional(ExecutionIdentityAdmissionInvokerSchema),
+  representedSubject: Type.Optional(ExecutionIdentityRepresentedSubjectSchema),
   applicableGrants: admissionGrants(),
   assurance: admissionAssurance(),
 });
@@ -130,6 +138,7 @@ const ExecutionIdentityAdmissionFactsSchema = closedObject({
   }),
   runtime: closedObject({ kind: runtimeKind() }),
   invoker: Type.Optional(ExecutionIdentityAdmissionInvokerSchema),
+  representedSubject: Type.Optional(ExecutionIdentityRepresentedSubjectSchema),
   applicableGrants: Type.Optional(admissionGrants()),
   assurance: Type.Optional(admissionAssurance()),
 });
@@ -170,14 +179,6 @@ type ExecutionIdentityAdmissionSink = (work: ExecutionIdentityAdmissionWork) => 
 
 let admissionSink: ExecutionIdentityAdmissionSink | undefined;
 let admissionFailureWarned = false;
-
-function uniqueSorted<T>(values: readonly T[], key: (value: T) => string): T[] {
-  return [...new Map(values.map((value) => [key(value), value])).values()].toSorted((a, b) => {
-    const left = key(a);
-    const right = key(b);
-    return left < right ? -1 : left > right ? 1 : 0;
-  });
-}
 
 function freezeEnvelope<T>(value: T, seen = new WeakSet<object>()): T {
   if (!value || typeof value !== "object" || seen.has(value)) {
@@ -368,11 +369,12 @@ function captureExecutionIdentityAdmissionEnvelope(
       : facts.invoker?.state === "unknown"
         ? { invoker: { state: "unknown" as const } }
         : {}),
-    applicableGrants: uniqueSorted(
+    ...(facts.representedSubject ? { representedSubject: { ...facts.representedSubject } } : {}),
+    applicableGrants: sortUniqueExecutionIdentityEntries(
       facts.applicableGrants ?? [],
       (grant) => `${grant.rawGrantRef}\0${grant.state}`,
     ).map((grant) => ({ rawGrantRef: grant.rawGrantRef, state: grant.state })),
-    assurance: uniqueSorted(
+    assurance: sortUniqueExecutionIdentityEntries(
       assurance,
       (item) => `${item.kind}\0${item.rawEvidenceRef}\0${item.strength}`,
     ).map((item) => ({
@@ -390,7 +392,7 @@ function captureExecutionIdentityAdmissionEnvelope(
 }
 
 /** Revalidate a structured-cloned queue payload before any persistence work. */
-export function parseExecutionIdentityAdmissionEnvelope(
+function parseExecutionIdentityAdmissionEnvelope(
   value: unknown,
 ): ExecutionIdentityAdmissionEnvelope {
   const envelope = validateEnvelope(value);

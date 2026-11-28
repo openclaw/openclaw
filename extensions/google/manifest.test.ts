@@ -30,11 +30,25 @@ type GoogleManifest = {
     >;
   };
   modelCatalog?: {
+    discovery?: Record<string, string>;
     suppressions?: Array<{
       provider?: string;
       model?: string;
       reason?: string;
     }>;
+    providers?: Record<
+      string,
+      {
+        api?: string;
+        baseUrl?: string;
+        models?: Array<{
+          id?: string;
+          name?: string;
+          status?: string;
+          statusReason?: string;
+        }>;
+      }
+    >;
   };
   configSchema?: JsonSchemaObject;
   configContracts?: {
@@ -112,14 +126,48 @@ describe("google manifest model catalog", () => {
     ]);
   });
 
-  it("offers Google AI Studio API keys without consumer CLI OAuth", () => {
+  it("owns the canonical Google model catalog and runtime discovery declaration", () => {
+    const catalog = loadManifest().modelCatalog;
+    const provider = catalog?.providers?.google;
+    const modelIds = provider?.models?.map((model) => model.id) ?? [];
+
+    expect(catalog?.discovery?.google).toBe("runtime");
+    expect(provider).toMatchObject({
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    });
+    expect(modelIds).toHaveLength(14);
+    expect(modelIds.slice(0, 2)).toEqual(["gemini-4-argon", "gemini-4-hydrogen"]);
+    expect(
+      modelIds.slice(
+        modelIds.indexOf("gemini-3.7-flash"),
+        modelIds.indexOf("gemini-3.7-flash") + 2,
+      ),
+    ).toEqual(["gemini-3.7-flash", "gemini-3.8-flash"]);
+    expect(modelIds).not.toContain(undefined);
+    expect(new Set(modelIds).size).toBe(modelIds.length);
+  });
+
+  it("keeps legacy Google chat providers out of the canonical manifest catalog", () => {
+    const manifest = loadManifest();
+
+    // google-gemini-cli references must stay unknown-model so Doctor keeps
+    // emitting its migration hint, and neither CLI nor Vertex declares runtime
+    // discovery, so manifest rows for them would leak into runtime catalog
+    // planning. Only the canonical google provider owns manifest rows.
+    expect(manifest.modelCatalog?.providers?.["google-gemini-cli"]).toBeUndefined();
+    expect(manifest.modelCatalog?.providers?.["google-vertex"]).toBeUndefined();
+  });
+
+  it("offers Gemini API keys without consumer CLI OAuth", () => {
     const choices = loadManifest().providerAuthChoices ?? [];
 
     expect(choices).toEqual([
       expect.objectContaining({
         provider: "google",
         method: "api-key",
-        choiceLabel: "Google AI Studio API key",
+        choiceLabel: "Gemini API key",
+        groupLabel: "Gemini API key",
         choiceHint: "Supported API-key access from aistudio.google.com/apikey",
         groupHint: "Supported API-key setup",
       }),
@@ -160,6 +208,23 @@ describe("google manifest model catalog", () => {
     expect(suppressionRefs).not.toContain("google/gemini-3.1-pro-preview");
   });
 
+  it("marks rerouted Gemini 2.5 rows deprecated without aliasing their ids", () => {
+    const manifest = loadManifest();
+    const rows = manifest.modelCatalog?.providers?.google?.models ?? [];
+    const aliases = manifest.modelIdNormalization?.providers?.google?.aliases ?? {};
+
+    for (const [id, servedAs] of [
+      ["gemini-2.5-pro", "gemini-3.8-flash"],
+      ["gemini-2.5-flash", "gemini-3.5-flash-lite"],
+    ] as const) {
+      const row = rows.find((model) => model.id === id);
+      expect(row?.status).toBe("deprecated");
+      expect(row?.statusReason).toContain(`as ${servedAs} from Dec 1, 2026`);
+      expect(aliases[id]).toBeUndefined();
+    }
+    expect(rows.find((model) => model.id === "gemini-2.5-flash-lite")?.status).toBeUndefined();
+  });
+
   it("normalizes retired Gemini 3 Pro aliases for all Google chat providers", () => {
     const manifest = loadManifest();
 
@@ -168,6 +233,14 @@ describe("google manifest model catalog", () => {
       expect(aliases?.["gemini-3-pro"]).toBe("gemini-3.1-pro-preview");
       expect(aliases?.["gemini-3-pro-preview"]).toBe("gemini-3.1-pro-preview");
     }
+  });
+
+  it("normalizes the Gemini 4 shorthand only for API providers", () => {
+    const providers = loadManifest().modelIdNormalization?.providers;
+
+    expect(providers?.google?.aliases?.["gemini-4"]).toBe("gemini-4-argon");
+    expect(providers?.["google-vertex"]?.aliases?.["gemini-4"]).toBe("gemini-4-argon");
+    expect(providers?.["google-gemini-cli"]?.aliases?.["gemini-4"]).toBeUndefined();
   });
 });
 

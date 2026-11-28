@@ -1,21 +1,84 @@
 import type { lookup as dnsLookupCb } from "node:dns";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
+import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
-import WebSocket from "ws";
-import { formatErrorMessage } from "../infra/errors.js";
-import { openCdpWebSocket } from "./cdp.helpers.js";
+import { cdpNetworkLogs, createCdpNetworkLog } from "./cdp-network-log.js";
+import { isLoopbackHost, isWebSocketUrl, openCdpWebSocket } from "./cdp.helpers.js";
+import { resolveBrowserEngine } from "./engines/registry.js";
+import type { BrowserEngineId } from "./engines/types.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
 type CdpSocketLookup = typeof dnsLookupCb;
+// Playwright allocates positive command IDs and reserves -9999 for Browser.close.
+// Keep transport-owned replies below that range so Playwright never consumes them.
+const FIRST_INTERNAL_COMMAND_ID = -10_000;
+const MAX_DIAGNOSTIC_TARGETS = 3;
+const MAX_DIAGNOSTIC_TARGET_ID_CHARS = 128;
 
-export async function connectOverCdpPinnedTransport(
+export class UnresponsiveCdpTargetError extends Error {
+  constructor(targetIds: string[]) {
+    const targets = targetIds.map((targetId) => JSON.stringify(targetId)).join(", ");
+    const suffix = targetIds.length === 1 ? "" : "s";
+    super(
+      `Playwright connection timed out while page target${suffix} ${targets} did not respond during initialization. Close the target in the browser or provider dashboard, then retry. If it cannot be closed there, restart the affected browser profile.`,
+    );
+    this.name = "UnresponsiveCdpTargetError";
+  }
+}
+
+function isConnectTimeout(error: unknown): boolean {
+  if (error instanceof Error && error.name === "TimeoutError") {
+    return true;
+  }
+  const message = formatErrorMessage(error).toLowerCase();
+  return message.includes("timeout") || message.includes("timed out");
+}
+
+// Playwright's browser-root handler requires browserContextId for non-browser targets.
+// Release only those root targets; nested sessions belong to Playwright's frame handler.
+function contextlessTargetParams(
+  message: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (readStringField(message, "method") !== "Target.attachedToTarget") {
+    return undefined;
+  }
+  const params = asOptionalRecord(message.params);
+  const targetInfo = asOptionalRecord(params?.targetInfo);
+  if (
+    readStringField(message, "sessionId") ||
+    readStringField(targetInfo, "type") === "browser" ||
+    readStringField(targetInfo, "browserContextId")
+  ) {
+    return undefined;
+  }
+  return params ?? {};
+}
+
+type CdpTransportOptions = {
+  timeout: number;
+  headers: Record<string, string>;
+  lookup?: CdpSocketLookup;
+  resolveWebSocketUrl?: () => Promise<string | undefined>;
+  preparedTransport?: ConnectOverCDPTransport;
+  engine?: BrowserEngineId;
+  /** Leave a user's own browser alone: no default color-scheme or focus emulation. */
+  noDefaults?: boolean;
+};
+
+async function openCdpTransportSocket(
   connectionUrl: string,
-  opts: {
-    timeout: number;
-    headers: Record<string, string>;
-    lookup: CdpSocketLookup;
-  },
-): Promise<Browser> {
-  const ws = openCdpWebSocket(connectionUrl, {
+  opts: CdpTransportOptions,
+): Promise<ConnectOverCDPTransport> {
+  const resolvedConnectionUrl = isWebSocketUrl(connectionUrl)
+    ? connectionUrl
+    : await opts.resolveWebSocketUrl?.();
+  if (!resolvedConnectionUrl) {
+    throw new Error("CDP endpoint did not expose a usable WebSocket URL.");
+  }
+  const ws = openCdpWebSocket(resolvedConnectionUrl, {
     headers: opts.headers,
     handshakeTimeoutMs: opts.timeout,
     lookup: opts.lookup,
@@ -27,17 +90,69 @@ export async function connectOverCdpPinnedTransport(
       ws.once("error", reject);
       ws.once("close", () => reject(new Error("CDP socket closed")));
     });
+  } catch (error) {
+    ws.close();
+    throw error;
+  }
+  const wire: ConnectOverCDPTransport = {
+    send: (message) => ws.send(JSON.stringify(message)),
+    close: () => {
+      ws.close();
+      setTimeout(() => {
+        if (ws.readyState !== WebSocket.CLOSED) {
+          ws.terminate();
+        }
+      }, 100).unref();
+    },
+  };
+  ws.on("message", (raw) => {
+    try {
+      const parsed = asOptionalRecord(JSON.parse(rawDataToString(raw)));
+      if (!parsed) {
+        wire.close();
+        return;
+      }
+      wire.onmessage?.(parsed);
+    } catch {
+      wire.close();
+    }
+  });
+  ws.on("close", () => wire.onclose?.("CDP socket closed"));
+  ws.on("error", (error) => wire.onclose?.(formatErrorMessage(error)));
+  return wire;
+}
+
+export async function connectOverCdpTransport(
+  connectionUrl: string,
+  opts: CdpTransportOptions,
+): Promise<Browser> {
+  const networkLog = createCdpNetworkLog();
+  const normalizer = resolveBrowserEngine(opts.engine).createCdpNormalizer?.();
+  const translateLocalDownloads =
+    !opts.preparedTransport && isWSL2Sync() && isLoopbackHost(new URL(connectionUrl).hostname);
+  const wire = opts.preparedTransport ?? (await openCdpTransportSocket(connectionUrl, opts));
+  let versionCommandId: number | undefined;
+  let windowsBrowser = false;
+  const pageTargetIdsBySession = new Map<string, string>();
+  const pendingTargetCommands = new Map<number, string>();
+  let trackInitializationCommands = true;
+  try {
     let onMessage: ((message: object) => void) | undefined;
     let onClose: ((reason?: string) => void) | undefined;
     const pendingMessages: object[] = [];
     let pendingCloseReason: string | undefined;
     let transportClosed = false;
+    let closingReason: string | undefined;
     let transportCloseScheduled = false;
+    let nextInternalCommandId = FIRST_INTERNAL_COMMAND_ID;
+    const pendingContextlessTargetResumes = new Map<number, string>();
     const notifyTransportClosed = (reason: string) => {
       if (transportClosed) {
         return;
       }
       transportClosed = true;
+      networkLog.clear();
+      normalizer?.clear();
       if (onClose) {
         onClose(reason);
         return;
@@ -55,18 +170,36 @@ export async function connectOverCdpPinnedTransport(
       });
     };
     const closeTransportSocket = (reason = "CDP socket closed") => {
-      notifyTransportClosed(reason);
-      ws.close();
-      const terminateTimer = setTimeout(() => {
-        if (ws.readyState !== WebSocket.CLOSED) {
-          ws.terminate();
-        }
-      }, 100);
-      terminateTimer.unref?.();
+      closingReason = reason;
+      normalizer?.clear();
+      // Borrowed streams close only after the real owner acknowledges native cleanup.
+      wire.close();
+    };
+    const sendInternalCommand = (
+      method: string,
+      params: Record<string, unknown> | undefined,
+      sessionId?: string,
+    ): number => {
+      const id = nextInternalCommandId--;
+      wire.send({ id, method, ...(params ? { params } : {}), sessionId });
+      return id;
+    };
+    const releaseContextlessTarget = (params: Record<string, unknown>) => {
+      const sessionId = readStringField(params, "sessionId");
+      if (!sessionId) {
+        // A root attach without a session cannot use the session command path.
+        // Consume only that malformed event so Playwright cannot crash before the
+        // shared browser transport handles the next valid message.
+        return;
+      }
+      // Chrome dispatches session and root commands independently. Wait for the
+      // resume response before detach so the hidden target cannot stay paused.
+      const resumeId = sendInternalCommand("Runtime.runIfWaitingForDebugger", undefined, sessionId);
+      pendingContextlessTargetResumes.set(resumeId, sessionId);
     };
     const scheduleMessage = (message: object) => {
       setImmediate(() => {
-        if (transportClosed) {
+        if (transportClosed || closingReason) {
           return;
         }
         if (!onMessage) {
@@ -74,7 +207,9 @@ export async function connectOverCdpPinnedTransport(
           return;
         }
         try {
-          onMessage(message);
+          void Promise.resolve(onMessage(message)).catch((error: unknown) => {
+            closeTransportSocket(formatErrorMessage(error));
+          });
         } catch (error) {
           closeTransportSocket(formatErrorMessage(error));
         }
@@ -82,7 +217,51 @@ export async function connectOverCdpPinnedTransport(
     };
     const transport: ConnectOverCDPTransport = {
       send: (message) => {
-        ws.send(JSON.stringify(message));
+        if (closingReason || transportClosed) {
+          throw new Error("CDP transport closed");
+        }
+        const command = asOptionalRecord(message);
+        const id = command?.id;
+        const sessionId = readStringField(command, "sessionId");
+        if (trackInitializationCommands && typeof id === "number" && id > 0 && sessionId) {
+          pendingTargetCommands.set(id, sessionId);
+        }
+        const method = readStringField(command, "method");
+        if (translateLocalDownloads && method === "Browser.getVersion" && typeof id === "number") {
+          versionCommandId = id;
+        }
+        if (windowsBrowser && method === "Browser.setDownloadBehavior") {
+          const params = asOptionalRecord(command?.params);
+          const downloadPath = readStringField(params, "downloadPath");
+          if (downloadPath) {
+            // Windows Chrome cannot write to a WSL path; Playwright keeps reading and
+            // cleaning up the original directory. Without wslpath, send it unchanged.
+            void runExec("wslpath", ["-w", downloadPath], 1000)
+              .then(
+                ({ stdout }) => ({
+                  ...command,
+                  params: { ...params, downloadPath: stdout.trim() },
+                }),
+                () => message,
+              )
+              .then((next) => {
+                if (!closingReason && !transportClosed) {
+                  wire.send(normalizer?.send(next) ?? next);
+                }
+              })
+              .catch((error: unknown) => closeTransportSocket(formatErrorMessage(error)));
+            return;
+          }
+        }
+        try {
+          wire.send(normalizer?.send(message) ?? message);
+        } catch (error) {
+          if (typeof id === "number") {
+            pendingTargetCommands.delete(id);
+          }
+          closeTransportSocket(formatErrorMessage(error));
+          throw error;
+        }
       },
       close: () => {
         closeTransportSocket();
@@ -114,23 +293,103 @@ export async function connectOverCdpPinnedTransport(
         }
       },
     };
-    ws.on("message", (raw) => {
-      try {
-        const parsed = JSON.parse(rawDataToString(raw)) as object;
-        scheduleMessage(parsed);
-      } catch {
-        closeTransportSocket();
-      }
+    Object.assign(wire, {
+      onmessage: (message: object) => {
+        try {
+          const received = asOptionalRecord(message);
+          if (!received) {
+            closeTransportSocket();
+            return;
+          }
+          const messages = normalizer ? normalizer.receive(received) : [received];
+          for (const parsed of messages) {
+            const id = parsed.id;
+            if (typeof id === "number" && id <= FIRST_INTERNAL_COMMAND_ID) {
+              const targetSessionId = pendingContextlessTargetResumes.get(id);
+              if (targetSessionId) {
+                pendingContextlessTargetResumes.delete(id);
+                sendInternalCommand("Target.detachFromTarget", { sessionId: targetSessionId });
+              }
+              continue;
+            }
+            if (versionCommandId !== undefined && id === versionCommandId) {
+              versionCommandId = undefined;
+              const userAgent = readStringField(asOptionalRecord(parsed.result), "userAgent");
+              windowsBrowser = userAgent?.includes("Windows NT") ?? false;
+            }
+            if (typeof id === "number") {
+              pendingTargetCommands.delete(id);
+            }
+            const method = readStringField(parsed, "method");
+            const params = asOptionalRecord(parsed.params);
+            if (trackInitializationCommands && method === "Target.attachedToTarget") {
+              const sessionId = readStringField(params, "sessionId");
+              const targetInfo = asOptionalRecord(params?.targetInfo);
+              const targetId = readStringField(targetInfo, "targetId");
+              if (
+                sessionId &&
+                targetId &&
+                targetId.length <= MAX_DIAGNOSTIC_TARGET_ID_CHARS &&
+                readStringField(targetInfo, "type") === "page"
+              ) {
+                pageTargetIdsBySession.set(sessionId, targetId);
+              }
+            } else if (trackInitializationCommands && method === "Target.detachedFromTarget") {
+              const sessionId = readStringField(params, "sessionId");
+              if (sessionId) {
+                pageTargetIdsBySession.delete(sessionId);
+                for (const [commandId, pendingSessionId] of pendingTargetCommands) {
+                  if (pendingSessionId === sessionId) {
+                    pendingTargetCommands.delete(commandId);
+                  }
+                }
+              }
+            }
+            const contextlessParams = contextlessTargetParams(parsed);
+            if (contextlessParams) {
+              releaseContextlessTarget(contextlessParams);
+              continue;
+            }
+            networkLog.receive(parsed);
+            scheduleMessage(parsed);
+          }
+        } catch {
+          closeTransportSocket();
+        }
+      },
+      onclose: (reason?: string) =>
+        scheduleTransportClosed(closingReason ?? reason ?? "CDP socket closed"),
     });
-    ws.on("close", () => {
-      scheduleTransportClosed("CDP socket closed");
+    const browser = await getPlaywrightCore().chromium.connectOverCDP(transport, {
+      timeout: opts.timeout,
+      noDefaults: opts.noDefaults,
     });
-    ws.on("error", (error) => {
-      scheduleTransportClosed(formatErrorMessage(error));
-    });
-    return await getPlaywrightCore().chromium.connectOverCDP(transport, { timeout: opts.timeout });
+    // Target-command state diagnoses only the cold attach. Stop retaining
+    // traffic once Playwright owns a usable browser for the cached session.
+    cdpNetworkLogs.set(browser, networkLog);
+    trackInitializationCommands = false;
+    pageTargetIdsBySession.clear();
+    pendingTargetCommands.clear();
+    return browser;
   } catch (error) {
-    ws.close();
+    networkLog.clear();
+    normalizer?.clear();
+    wire.close();
+    if (isConnectTimeout(error)) {
+      // Playwright waits for every attached page to initialize. Preserve the
+      // target/session facts already observed on this transport so operators
+      // can remove only the renderer that blocked a cold connection.
+      const targetIds = [
+        ...new Set(
+          [...pendingTargetCommands.values()]
+            .map((sessionId) => pageTargetIdsBySession.get(sessionId))
+            .filter((targetId): targetId is string => Boolean(targetId)),
+        ),
+      ].slice(0, MAX_DIAGNOSTIC_TARGETS);
+      if (targetIds.length > 0) {
+        throw new UnresponsiveCdpTargetError(targetIds);
+      }
+    }
     throw error;
   }
 }

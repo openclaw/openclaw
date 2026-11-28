@@ -1,4 +1,5 @@
-// Wizard prompt types abstract selectable, confirm, and text prompts.
+import type { ProviderAuthFailureReason } from "../plugins/provider-auth-failure.js";
+
 export type WizardSelectOption<T = string> = {
   value: T;
   label: string;
@@ -46,7 +47,11 @@ type WizardConfirmParams = {
 };
 
 export type WizardProgress = {
-  update: (message: string) => void;
+  /**
+   * `reason` marks a recoverable sign-in failure reported while the step stays open, such as a
+   * browser refusal; it still reaches the open prompt after `stop`.
+   */
+  update: (message: string, reason?: ProviderAuthFailureReason) => void;
   stop: (message?: string) => void;
 };
 
@@ -66,6 +71,8 @@ type WizardDeviceCodeParams = {
 };
 
 export type WizardPrompter = {
+  /** End a hosted flow after a required choice is declined. */
+  cancel?: (message: string) => never;
   intro: (title: string) => Promise<void>;
   outro: (message: string) => Promise<void>;
   note: (message: string, title?: string) => Promise<void>;
@@ -77,7 +84,7 @@ export type WizardPrompter = {
   text: (params: WizardTextParams) => Promise<string>;
   confirm: (params: WizardConfirmParams) => Promise<boolean>;
   progress: (label: string) => WizardProgress;
-  /** Queue an explicit browser destination for the next interactive client step. */
+  /** Queue an explicit browser destination for the next client step or browser-wait progress. */
   openUrl?: (url: string) => Promise<void>;
   disableBackNavigation?: () => void;
 };

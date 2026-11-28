@@ -1,6 +1,2 @@
-// Memory Core plugin entrypoint registers its OpenClaw integration.
-export {
-  closeAllMemorySearchManagers,
-  closeMemorySearchManager,
-  getMemorySearchManager,
-} from "./search-manager.js";
+export { closeAllMemorySearchManagers } from "./manager-runtime-loader.js";
+export { closeMemorySearchManager, getMemorySearchManager } from "./search-manager.js";

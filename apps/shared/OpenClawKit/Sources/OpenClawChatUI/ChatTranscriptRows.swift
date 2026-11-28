@@ -4,6 +4,7 @@ enum ChatTranscriptRow: Hashable, Identifiable {
     enum SystemNoticeKind: Hashable {
         case restartRecovery
         case gatewayRestarted
+        case disclosure(label: String)
         case generic
     }
 
@@ -19,6 +20,8 @@ enum ChatTranscriptRow: Hashable, Identifiable {
                 String(localized: "System · restart recovery")
             case .gatewayRestarted:
                 String(localized: "System · gateway restarted")
+            case let .disclosure(label):
+                label
             case .generic:
                 String(localized: "System")
             }
@@ -26,6 +29,11 @@ enum ChatTranscriptRow: Hashable, Identifiable {
 
         var systemImage: String {
             "cpu"
+        }
+
+        var collapsesBody: Bool {
+            if case .disclosure = self.kind { return true }
+            return false
         }
     }
 
@@ -78,22 +86,36 @@ enum ChatTranscriptRow: Hashable, Identifiable {
     case message(OpenClawChatMessage)
     case systemNotice(SystemNotice)
     case historyDivider(HistoryDivider)
+    case completedWork(CompletedWork)
 
     var id: UUID {
         switch self {
-        case let .message(message): message.id
+        case let .message(message): message.presentationID
         case let .systemNotice(notice): notice.id
         case let .historyDivider(divider): divider.id
+        case let .completedWork(work): work.id
+        }
+    }
+
+    var timestamp: Double? {
+        switch self {
+        case let .message(message): message.timestamp
+        case let .systemNotice(notice): notice.timestamp
+        case let .historyDivider(divider): divider.timestamp
+        case .completedWork: nil
         }
     }
 
     var startsTurn: Bool {
         switch self {
         case let .message(message):
-            message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user"
+            // A continuation keeps the turn it resumes, even where it also carries `turnBoundary`
+            // (web chat-turn-boundary.ts:88-102).
+            message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user" ||
+                (message.turnBoundary == true && !message.resumesProjectedTurn) || message.isForwardedTurnBoundary
         case .systemNotice:
             true
-        case .historyDivider:
+        case .historyDivider, .completedWork:
             false
         }
     }
@@ -135,6 +157,16 @@ enum ChatTranscriptRow: Hashable, Identifiable {
             case "restart-sentinel":
                 kind = .gatewayRestarted
                 body = Self.strippingSystemPrefix(from: ChatMessageVisibleText.visibleText(in: message))
+            case "cli_harness_context":
+                #if os(iOS)
+                return nil
+                #else
+                kind = .disclosure(label: String(localized: "System · injected context"))
+                body = Self.strippingSystemPrefix(from: ChatMessageVisibleText.visibleText(in: message))
+                #endif
+            case "claude_cli_task_notification":
+                kind = .disclosure(label: String(localized: "System · background task"))
+                body = Self.strippingSystemPrefix(from: ChatMessageVisibleText.visibleText(in: message))
             default:
                 kind = .generic
                 body = Self.strippingSystemPrefix(from: ChatMessageVisibleText.visibleText(in: message))
@@ -170,5 +202,64 @@ enum ChatTranscriptRow: Hashable, Identifiable {
     private static func strippingSystemPrefix(from text: String) -> String {
         let prefix = "[System] "
         return text.hasPrefix(prefix) ? String(text.dropFirst(prefix.count)) : text
+    }
+}
+
+extension ChatTranscriptRow {
+    static func mergeToolResults(in messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
+        var result: [OpenClawChatMessage] = []
+        result.reserveCapacity(messages.count)
+        var callIndexes: [String: Int] = [:]
+
+        for message in messages {
+            // Narration can separate calls from results, but an input or history
+            // boundary ends their lookup scope even when a run ID is reused.
+            if Self(message)?.startsTurn == true || message.historyMarker != nil {
+                callIndexes.removeAll(keepingCapacity: true)
+            }
+            guard message.isToolResult,
+                  let toolCallId = message.toolCallId,
+                  let index = callIndexes[toolCallId],
+                  (message.workRunID != nil && message.workRunID == result[index].workRunID) ||
+                  (index == result.count - 1 &&
+                      (message.workRunID == nil || result[index].workRunID == nil))
+            else {
+                if !message.isForwardedTurnBoundary {
+                    for block in message.content where block.isToolCall {
+                        if let id = block.id { callIndexes[id] = result.count }
+                    }
+                    if let id = message.toolCallId { callIndexes[id] = result.count }
+                }
+                result.append(message)
+                continue
+            }
+
+            var merged = result[index]
+            let toolText = ChatMessageVisibleText.displayText(in: message, includeThinking: false)
+            // Preserve empty results too: receiving a result owns the outcome,
+            // independently of whether it contains display text.
+            merged.content.append(
+                OpenClawChatMessageContent(
+                    type: "tool_result",
+                    text: toolText,
+                    id: toolCallId,
+                    name: message.toolName,
+                    details: message.details,
+                    isError: message.isError))
+
+            if let terminal = message.activity {
+                merged.activity = (merged.activity ?? []).filter { $0.toolCallId != toolCallId } + terminal
+            }
+            result[index] = merged
+        }
+
+        return result
+    }
+}
+
+extension OpenClawChatMessage {
+    /// A row woken by its own exec, a restart, or a subagent: it resumes this session's work.
+    var resumesProjectedTurn: Bool {
+        ["exec", "restart", "subagent"].contains(self.sourceMetadata?.continuation?.source ?? "")
     }
 }

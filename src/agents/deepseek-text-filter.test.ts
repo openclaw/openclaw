@@ -20,6 +20,27 @@ describe("createDeepSeekTextFilter", () => {
       expected: "before  after",
     },
     {
+      name: "doubled full-width streamed error",
+      chunks: Array.from(
+        "before <｜｜DSML｜｜tool_use_error>hidden</｜｜DSML｜｜tool_use_error> after",
+      ),
+      expected: "before  after",
+    },
+    {
+      name: "foreign close stays inside the filtered block",
+      chunks: Array.from(
+        "before <｜DSML｜tool_use_error>hidden</|DSML|tool_use_error>still hidden</｜DSML｜tool_use_error> after",
+      ),
+      expected: "before  after",
+    },
+    {
+      name: "doubled open ignores a single close",
+      chunks: Array.from(
+        "before <｜｜DSML｜｜tool_use_error>hidden</｜DSML｜tool_use_error>still hidden</｜｜DSML｜｜tool_use_error> after",
+      ),
+      expected: "before  after",
+    },
+    {
       name: "split open token",
       chunks: ["before ", "<｜DS", "ML｜tool_calls>body</｜DSML｜tool_calls>", " after"],
       expected: "before  after",
@@ -49,7 +70,6 @@ describe("createDeepSeekTextFilter", () => {
   ])("drops DSML: $name", ({ chunks, expected }) => {
     const text = filteredText(chunks);
     expect(text).toBe(expected);
-    expect(text).not.toContain("DSML");
   });
 
   it("holds a partial open token until it can classify it", () => {

@@ -1,9 +1,10 @@
 {
   "id": "elevenlabs",
+  "categories": ["voice"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {
     "configRepair": true
   },
-  "icon": "https://cdn.simpleicons.org/elevenlabs",
   "activation": {
     "onStartup": false
   },

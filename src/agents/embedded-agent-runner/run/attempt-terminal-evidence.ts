@@ -1,10 +1,29 @@
-/** Records attempt replay safety and terminal side-effect evidence. */
-import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import {
-  hasCommittedMessagingToolDeliveryEvidence,
+  hasAcceptedSessionSpawn,
+  hasCompletionMessageSessionSpawn,
+} from "../../accepted-session-spawn.js";
+import {
+  findMediaGenerationOperation,
+  isTerminalMediaGenerationStatus,
+} from "../../media-generation-activity.js";
+import {
   hasMessagingToolDeliveryEvidence,
+  resolveSourceReplyDelivery,
 } from "../delivery-evidence.js";
+import type { RunEmbeddedAgentParams } from "./params.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
+
+/** Reads this attempt's response without reviving an older transcript turn. */
+export function resolveCurrentAttemptAssistant(
+  attempt: Pick<
+    EmbeddedRunAttemptResult,
+    "currentAttemptAssistant" | "currentAttemptCompletedAssistant"
+  >,
+) {
+  // The completed event survives transcript projection and is cleared before a
+  // compaction retry. Historical lastAssistant is not evidence of a new response.
+  return attempt.currentAttemptAssistant ?? attempt.currentAttemptCompletedAssistant;
+}
 
 type ReplayMetadataAttempt = Pick<
   EmbeddedRunAttemptResult,
@@ -32,11 +51,8 @@ export function isCurrentAttemptReplaySafe(
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
-  const hadUnsafeTools = params.toolMetas.some((entry) => entry.replaySafe !== true);
-  const hadAsyncStartedTool = params.toolMetas.some((t) => t.asyncStarted === true);
   const hadPotentialSideEffects =
-    hadUnsafeTools ||
-    hadAsyncStartedTool ||
+    params.toolMetas.some((entry) => entry.replaySafe !== true || entry.asyncStarted === true) ||
     hasMessagingToolDeliveryEvidence(params) ||
     hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
     (params.successfulCronAdds ?? 0) > 0;
@@ -51,8 +67,6 @@ type TerminalAttemptState = Pick<
   | "clientToolCalls"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
-  | "heartbeatToolResponse"
-  | "lastToolError"
   | "toolMediaUrls"
   | "toolAudioAsVoice"
   | "toolTrustedLocalMedia"
@@ -65,6 +79,7 @@ type TerminalAttemptState = Pick<
     Pick<
       EmbeddedRunAttemptResult,
       | "acceptedSessionSpawns"
+      | "didSendViaMessagingTool"
       | "messagingToolSentTexts"
       | "messagingToolSentMediaUrls"
       | "messagingToolSentTargets"
@@ -73,24 +88,19 @@ type TerminalAttemptState = Pick<
     toolMetas?: readonly { asyncStarted?: boolean }[];
   };
 
+/** A failed tool is not delivery or durable progress for the turn. */
 export function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean {
   return Boolean(
     attempt.clientToolCalls ||
     attempt.yieldDetected ||
     attempt.didSendDeterministicApprovalPrompt ||
-    attempt.heartbeatToolResponse ||
-    attempt.lastToolError ||
     attempt.toolMediaUrls?.some((url) => url.trim().length > 0) ||
     attempt.toolAudioAsVoice ||
     attempt.toolTrustedLocalMedia ||
     attempt.hasToolMediaBlockReply ||
     attempt.didDeliverSourceReplyViaMessageTool ||
     attempt.messagingToolSourceReplyPayloads?.length ||
-    hasCommittedMessagingToolDeliveryEvidence({
-      messagingToolSentTexts: attempt.messagingToolSentTexts ?? [],
-      messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls ?? [],
-      messagingToolSentTargets: attempt.messagingToolSentTargets ?? [],
-    }) ||
+    hasMessagingToolDeliveryEvidence(attempt) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
     hasAsyncActivity(attempt.toolMetas) ||
     (attempt.successfulCronAdds ?? 0) > 0,
@@ -99,4 +109,66 @@ export function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean 
 
 export function hasAsyncActivity(toolMetas?: readonly { asyncStarted?: boolean }[]): boolean {
   return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
+}
+
+/**
+ * A visible parent that delegates its entire response to completion children or
+ * to a still-running detached media run must remain alive for completion delivery.
+ * Existing output, explicit silence, and non-user turns keep their established
+ * terminal ownership instead.
+ */
+export function shouldContinueInteractiveAcceptedSessionSpawns(params: {
+  attempt: Pick<
+    EmbeddedRunAttemptResult,
+    | Exclude<keyof TerminalAttemptState, "hasToolMediaBlockReply">
+    | "assistantTexts"
+    | "terminal"
+    | "sourceReplyDelivered"
+    | "preparedTerminalReply"
+    | "sourceReplyDeliveryState"
+  >;
+  run: Pick<
+    RunEmbeddedAgentParams,
+    "currentInboundEventKind" | "inputProvenance" | "replyOperation" | "silentExpected"
+  >;
+}): boolean {
+  const { attempt, run } = params;
+  // Only an in-flight media run still owes this turn its result.
+  const delegatedToMediaRun =
+    resolveSourceReplyDelivery(attempt) === "missing" &&
+    attempt.toolMetas.some((entry) => {
+      const runId = entry.asyncStarted === true ? entry.asyncTaskRunId?.trim() : undefined;
+      const operation = runId ? findMediaGenerationOperation(runId) : undefined;
+      return operation !== undefined && !isTerminalMediaGenerationStatus(operation.status);
+    });
+  if (
+    !(hasCompletionMessageSessionSpawn(attempt.acceptedSessionSpawns) || delegatedToMediaRun) ||
+    attempt.terminal.kind !== "ok" ||
+    attempt.yieldDetected === true ||
+    run.replyOperation?.turnKind !== "visible" ||
+    run.currentInboundEventKind === "room_event" ||
+    run.silentExpected === true ||
+    (run.inputProvenance?.kind !== undefined && run.inputProvenance.kind !== "external_user")
+  ) {
+    return false;
+  }
+  if (attempt.preparedTerminalReply?.terminalReply.disposition === "visible") {
+    return false;
+  }
+  // The media run delivers the result, so progress sends do not replace the owed reply.
+  return !hasAttemptTerminalState({
+    ...attempt,
+    acceptedSessionSpawns: [],
+    ...(delegatedToMediaRun
+      ? {
+          toolMetas: [],
+          didSendViaMessagingTool: false,
+          didDeliverSourceReplyViaMessageTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          messagingToolSentTargets: [],
+          messagingToolSourceReplyPayloads: [],
+        }
+      : {}),
+  });
 }

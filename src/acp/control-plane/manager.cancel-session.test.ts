@@ -1,95 +1,91 @@
-/** Tests ACP manager cancellation of active turns and idle sessions. */
-import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
-import { describe, expect, it, vi } from "vitest";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  requireTaskByRunId,
-  withAcpManagerTaskStateDir,
-} from "../../../test/helpers/acp-manager-task-state.js";
-import {
-  AcpSessionManager,
-  baseCfg,
-  createRuntime,
-  expectRecordFields,
   extractStatesFromUpserts,
-  hoisted,
   installAcpSessionManagerTestLifecycle,
-  mockParentedAcpSessionEntries,
-  mockCallArg,
+  managerFixture,
+  mockMutableSession,
+  readySessionMeta,
 } from "./manager.test-helpers.js";
 
-describe("AcpSessionManager cancelSession", () => {
-  installAcpSessionManagerTestLifecycle();
+// Load manager defaults only after the unit fixture registers its module mocks.
+const { createGate } = await import("./manager.cancellation-locator.test-support.js");
+const sessionKey = "agent:codex:acp:child-1";
 
-  it("preempts an active turn on cancel and returns to idle state", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const runtimeState = createRuntime();
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      mockParentedAcpSessionEntries({
-        childSessionKey: "agent:codex:acp:child-1",
-        parentSessionKey: "agent:main:main",
-      });
+function fixture() {
+  const state = managerFixture(sessionKey);
+  mockMutableSession(sessionKey, { currentMeta: readySessionMeta() });
+  return state;
+}
 
-      let enteredRun = false;
-      runtimeState.runTurn.mockImplementation(async function* (input: { signal?: AbortSignal }) {
-        enteredRun = true;
-        await new Promise<void>((resolve) => {
-          if (input.signal?.aborted) {
-            resolve();
-            return;
-          }
+installAcpSessionManagerTestLifecycle();
+
+it("records idle cancellation failure and preserves its cause", async () => {
+  const { runtimeState: runtime, manager, target } = fixture();
+  const error = new Error("Cancel transport failed");
+  runtime.cancel.mockRejectedValue(error);
+  await expect(manager.cancelSession({ ...target, reason: "manual-cancel" })).rejects.toMatchObject(
+    {
+      code: "ACP_TURN_FAILED",
+      message: error.message,
+      cause: error,
+    },
+  );
+  expect(runtime.cancel).toHaveBeenCalledOnce();
+  expect(runtime.cancel.mock.calls[0]?.[0].reason).toBe("manual-cancel");
+  expect(extractStatesFromUpserts().at(-1)).toBe("error");
+});
+
+it("cancels an active controller turn through the manager API", async () => {
+  const { runtimeState: runtime, manager, run, target } = fixture();
+  const entered = createDeferred();
+  const release = createDeferred();
+  runtime.runTurn.mockImplementationOnce(async function* (input) {
+    entered.resolve();
+    await Promise.race([
+      release.promise,
+      new Promise<void>((resolve) => {
+        if (input.signal?.aborted) {
+          resolve();
+        } else {
           input.signal?.addEventListener("abort", () => resolve(), { once: true });
-        });
-        yield { type: "done" as const, stopReason: "cancel" };
-      });
-
-      const manager = new AcpSessionManager();
-      const events: AcpRuntimeEvent[] = [];
-      const runPromise = manager.runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:child-1",
-        text: "long task",
-        mode: "prompt",
-        requestId: "run-1",
-        onEvent: (event) => {
-          events.push(event);
-        },
-      });
-      await vi.waitFor(
-        () => {
-          expect(enteredRun).toBe(true);
-        },
-        { interval: 1 },
-      );
-
-      await manager.cancelSession({
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:child-1",
-        reason: "manual-cancel",
-      });
-      await runPromise;
-
-      expect(runtimeState.cancel).toHaveBeenCalledTimes(1);
-      expectRecordFields(mockCallArg(runtimeState.cancel), {
-        reason: "manual-cancel",
-      });
-      expectRecordFields(requireTaskByRunId("run-1"), {
-        ownerKey: "agent:main:main",
-        childSessionKey: "agent:codex:acp:child-1",
-        status: "cancelled",
-      });
-      expect(events.at(-1)).toEqual({
-        type: "done",
-        status: "cancelled",
-        stopReason: "cancel",
-      });
-      const states = extractStatesFromUpserts();
-      expect(states).toContain("running");
-      expect(states).toContain("idle");
-      expect(states).not.toContain("error");
-    });
+        }
+      }),
+    ]);
+    yield { type: "done", status: "cancelled", stopReason: "cancel" };
   });
+  const turn = run({ requestId: "active", text: "active" });
+  const turnResult = Promise.allSettled([turn]);
+  try {
+    await entered.promise;
+    await manager.cancelSession({ ...target, reason: "manual-cancel" });
+    expect(await turnResult).toEqual([{ status: "fulfilled", value: undefined }]);
+    expect(runtime.cancel).toHaveBeenCalledOnce();
+    expect(runtime.cancel.mock.calls[0]?.[0].reason).toBe("manual-cancel");
+  } finally {
+    release.resolve();
+    await turnResult;
+  }
+});
+
+it("holds new controller turns until the idle backend cancellation settles", async () => {
+  const { runtimeState: runtime, manager, run, target } = fixture();
+  const backend = createGate("Idle cancellation settled before entering the backend.");
+  runtime.cancel.mockImplementationOnce(backend.wait);
+  const cancellation = manager.cancelSession(target);
+  let turn: Promise<void> | undefined;
+  try {
+    await backend.reached(cancellation);
+    turn = run({ requestId: "after-idle-cancel", text: "after idle cancel" });
+    await nextTurn();
+    expect(runtime.runTurn).not.toHaveBeenCalled();
+    backend.open();
+    await Promise.all([cancellation, turn]);
+    expect(runtime.cancel).toHaveBeenCalledOnce();
+    expect(runtime.runTurn).toHaveBeenCalledOnce();
+  } finally {
+    backend.open();
+    await Promise.allSettled([cancellation, turn]);
+  }
 });

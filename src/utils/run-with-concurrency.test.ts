@@ -1,180 +1,177 @@
-// Concurrency runner tests cover bounded parallel task execution.
-import { describe, expect, it, vi } from "vitest";
+import { AsyncLocalStorage, createHook } from "node:async_hooks";
+import { setTimeout as delay } from "node:timers/promises";
+import { expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runTasksWithConcurrency } from "./run-with-concurrency.js";
 
-function createDeferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
+const failTask = (error: Error) => () => Promise.reject(error);
+function heldTask(value: number) {
+  const started = createDeferred();
+  const release = createDeferred();
+  const run = vi.fn(() => {
+    started.resolve();
+    return release.promise.then(() => value);
   });
-  return { promise, resolve };
+  return { run, started: started.promise, release: release.resolve };
 }
 
-describe("runTasksWithConcurrency", () => {
-  it("preserves task order with bounded worker count", async () => {
-    let running = 0;
-    let peak = 0;
-    const resolvers: Array<(() => void) | undefined> = [];
-    const tasks = [0, 1, 2, 3].map((index) => async (): Promise<number> => {
-      running += 1;
-      peak = Math.max(peak, running);
-      await new Promise<void>((resolve) => {
-        resolvers[index] = resolve;
-      });
-      running -= 1;
-      return index + 1;
-    });
-
-    const resultPromise = runTasksWithConcurrency({ tasks, limit: 2 });
-    const takeResolver = async (index: number): Promise<() => void> => {
-      await vi.waitFor(() => {
-        expect(resolvers[index]).toBeTypeOf("function");
-      });
-      const resolver = resolvers[index];
-      if (!resolver) {
-        throw new Error(`expected task ${index} to be running`);
+it("keeps pending promise allocation bounded when the task list grows", async ({ signal }) => {
+  async function countPendingPromises(taskCount: number): Promise<number> {
+    const limit = 8;
+    const started = createDeferred();
+    const release = createDeferred();
+    let startedCount = 0;
+    let promiseCount = 0;
+    const tasks = Array.from({ length: taskCount }, (_, index) => async () => {
+      if (++startedCount === limit) {
+        started.resolve();
       }
-      return resolver;
-    };
-
-    const resolveFirst = await takeResolver(0);
-    const resolveSecond = await takeResolver(1);
-
-    resolveSecond();
-    const resolveThird = await takeResolver(2);
-
-    resolveFirst();
-    const resolveFourth = await takeResolver(3);
-
-    resolveThird();
-    resolveFourth();
-
-    const result = await resultPromise;
-    expect(result.hasError).toBe(false);
-    expect(result.firstError).toBeUndefined();
-    expect(result.results).toEqual([1, 2, 3, 4]);
-    expect(peak).toBeLessThanOrEqual(2);
-  });
-
-  it("stops scheduling after first failure in stop mode", async () => {
-    const err = new Error("boom");
-    const seen: number[] = [];
-    const tasks = [
-      async () => {
-        seen.push(0);
-        return 10;
-      },
-      async () => {
-        seen.push(1);
-        throw err;
-      },
-      async () => {
-        seen.push(2);
-        return 30;
-      },
-    ];
-
-    const result = await runTasksWithConcurrency({
-      tasks,
-      limit: 1,
-      errorMode: "stop",
+      await release.promise;
+      return index;
     });
-    expect(result.hasError).toBe(true);
-    expect(result.firstError).toBe(err);
-    expect(result.results[0]).toBe(10);
-    expect(result.results[2]).toBeUndefined();
-    expect(seen).toEqual([0, 1]);
-  });
-
-  it("continues after failures and reports the first one", async () => {
-    const firstErr = new Error("first");
-    const secondErr = new Error("second");
-    const onTaskError = vi.fn();
-    const tasks = [
-      async () => {
-        throw firstErr;
+    const scope = new AsyncLocalStorage<boolean>();
+    const hook = createHook({
+      init(_id, type) {
+        if (type === "PROMISE" && scope.getStore()) {
+          promiseCount += 1;
+        }
       },
-      async () => 20,
-      async () => {
-        throw secondErr;
-      },
-      async () => 40,
-    ];
-
-    const result = await runTasksWithConcurrency({
-      tasks,
-      limit: 1,
-      errorMode: "continue",
-      onTaskError,
     });
-    expect(result.hasError).toBe(true);
-    expect(result.firstError).toBe(firstErr);
-    expect(result.results[1]).toBe(20);
-    expect(result.results[3]).toBe(40);
-    expect(onTaskError).toHaveBeenCalledTimes(2);
-    expect(onTaskError).toHaveBeenNthCalledWith(1, firstErr, 0);
-    expect(onTaskError).toHaveBeenNthCalledWith(2, secondErr, 2);
-  });
+    hook.enable();
+    const run = scope.run(true, () => runTasksWithConcurrency({ tasks, limit }));
+    try {
+      await withinTest(started.promise, signal);
+      return promiseCount;
+    } finally {
+      hook.disable();
+      scope.disable();
+      release.resolve();
+      expect((await run).results).toEqual(Array.from({ length: taskCount }, (_, index) => index));
+    }
+  }
 
-  it("rejects early and stops scheduling new work in stop mode", async () => {
-    const err = new Error("boom");
-    const releaseInFlight = createDeferred();
-    const inFlightSettled = createDeferred();
-    const started: number[] = [];
-    const run = runTasksWithConcurrency({
-      tasks: [
-        async () => {
-          started.push(0);
-          await releaseInFlight.promise;
-          inFlightSettled.resolve();
-          return 10;
-        },
-        async () => {
-          started.push(1);
-          throw err;
-        },
-        async () => {
-          started.push(2);
-          return 30;
-        },
-      ],
-      limit: 2,
-      errorMode: "stop",
-      throwOnError: true,
-    });
+  const smallQueue = await countPendingPromises(32);
+  const largeQueue = await countPendingPromises(4_096);
+  // Pending async resources follow concurrency, not the number of unstarted tasks.
+  expect(largeQueue).toBeLessThanOrEqual(smallQueue * 2);
+});
 
-    await expect(run).rejects.toBe(err);
-    releaseInFlight.resolve();
-    await inFlightSettled.promise;
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    expect(started).toEqual([0, 1]);
-  });
-
-  it("keeps scheduling after an early rejection in continue mode", async () => {
-    const err = new Error("boom");
+it.for([
+  [false, false],
+  [true, false],
+  [true, true],
+])("isolates failures (%s, %s)", async ([hookThrows, throwOnError], { signal }) => {
+  const scope = new AsyncLocalStorage<string>();
+  async function runCaller(caller: string) {
+    const taskError = new Error("task failed");
+    const secondError = new Error("second failure");
+    const hookError = new Error("error hook failed");
     const completed = createDeferred();
-    const started: number[] = [];
-    const run = runTasksWithConcurrency({
-      tasks: [
-        async () => {
-          started.push(0);
-          throw err;
-        },
-        async () => {
-          started.push(1);
-          completed.resolve();
-          return 20;
-        },
-      ],
-      limit: 1,
-      errorMode: "continue",
-      throwOnError: true,
+    const taskContext = `${caller}/task`;
+    const contexts: Array<string | undefined> = [];
+    const onTaskError = vi.fn(() => {
+      contexts.push(scope.getStore());
+      scope.enterWith(`${caller}/hook`);
+      if (hookThrows) {
+        throw hookError;
+      }
     });
+    const run = scope.run(caller, () =>
+      runTasksWithConcurrency({
+        tasks: [
+          async () => {
+            contexts.push(scope.getStore());
+            scope.enterWith(taskContext);
+            await Promise.resolve();
+            contexts.push(scope.getStore());
+            throw taskError;
+          },
+          failTask(secondError),
+          async () => {
+            contexts.push(scope.getStore());
+            completed.resolve();
+            return 20;
+          },
+        ],
+        limit: 1,
+        throwOnError,
+        onTaskError,
+      }),
+    );
+    const observed = scope.run(`${caller}/observer`, () =>
+      run.finally(() => expect(scope.getStore()).toBe(`${caller}/observer`)),
+    );
+    if (throwOnError) {
+      await expect(observed).rejects.toBe(hookError);
+    } else {
+      const result = await observed;
+      expect(result).toMatchObject({ results: [undefined, undefined, 20], hasError: true });
+      expect(result.firstError).toBe(taskError);
+    }
+    await withinTest(completed.promise, signal);
+    expect(contexts).toEqual([caller, taskContext, taskContext, caller, caller]);
+    expect(onTaskError).toHaveBeenNthCalledWith(1, taskError, 0);
+    expect(onTaskError).toHaveBeenNthCalledWith(2, secondError, 1);
+  }
+  try {
+    await Promise.all([runCaller("first"), runCaller("second")]);
+  } finally {
+    scope.disable();
+  }
+});
 
-    await expect(run).rejects.toBe(err);
-    await completed.promise;
-    expect(started).toEqual([0, 1]);
+it("preserves submitted factories and task order with bounded worker count", async ({ signal }) => {
+  const jobs = [heldTask(1), heldTask(2), heldTask(3), heldTask(4)] as const;
+  const [first, second, third, fourth] = jobs;
+  const tasks = jobs.map((job) => job.run);
+  const resultPromise = runTasksWithConcurrency({ tasks, limit: 2 });
+  const resultSettled = Promise.allSettled([resultPromise]);
+  try {
+    await withinTest(Promise.all([first.started, second.started]), signal);
+    expect(jobs.map((job) => job.run.mock.calls.length)).toEqual([1, 1, 0, 0]);
+    tasks[2] = vi.fn(async () => 30);
+    tasks.push(vi.fn(async () => 50));
+    second.release();
+    await withinTest(third.started, signal);
+    expect(fourth.run).not.toHaveBeenCalled();
+    first.release();
+    await withinTest(fourth.started, signal);
+    third.release();
+    fourth.release();
+    const { hasError, firstError, results } = await withinTest(resultPromise, signal);
+    expect([hasError, firstError, results]).toEqual([false, undefined, [1, 2, 3, 4]]);
+  } finally {
+    jobs.forEach((job) => job.release());
+    await resultSettled;
+    // An aggregate rejection can precede settlement of already-started tasks.
+    await Promise.allSettled(jobs.flatMap((job) => job.run.mock.results.map(({ value }) => value)));
+  }
+});
+
+it("rejects early and stops scheduling new work in stop mode", async ({ signal }) => {
+  const err = new Error("boom");
+  const first = heldTask(10);
+  const fail = vi.fn(failTask(err));
+  const queued = vi.fn(async () => 30);
+  const tasks = [first.run, fail, queued];
+  const run = runTasksWithConcurrency({
+    tasks,
+    limit: 2,
+    errorMode: "stop",
+    throwOnError: true,
   });
+
+  const runSettled = Promise.allSettled([run]);
+  try {
+    await withinTest(expect(run).rejects.toBe(err), signal);
+    first.release();
+    await withinTest(first.run.mock.results[0]!.value, signal);
+    await withinTest(delay(0), signal);
+    expect(tasks.map((task) => task.mock.calls.length)).toEqual([1, 1, 0]);
+    expect(first.run).toHaveBeenCalledBefore(fail);
+  } finally {
+    first.release();
+    await runSettled;
+    await Promise.allSettled(tasks.flatMap((task) => task.mock.results.map(({ value }) => value)));
+  }
 });

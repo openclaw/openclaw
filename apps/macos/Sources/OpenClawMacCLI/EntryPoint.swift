@@ -1,12 +1,11 @@
 import Foundation
-
-struct RootCommand: Equatable {
-    var name: String
-    var args: [String]
-}
+import OpenClawIPC
+import OpenClawKit
+import OpenClawNativeState
 
 enum RootCommandAction: Equatable {
     case usage
+    case control([String])
     case connect([String])
     case configureRemote([String])
     case discover([String])
@@ -18,17 +17,34 @@ enum RootCommandAction: Equatable {
 struct OpenClawMacCLI {
     static func main() async {
         let args = Array(CommandLine.arguments.dropFirst())
-        switch resolveRootCommandAction(args) {
+        let context: MacCLIContext
+        do {
+            context = try MacCLIContext(arguments: args)
+        } catch {
+            exitMacCLI(error, json: args.contains("--json"))
+        }
+        let directory = context.profile
+            .stateDirectoryURL(homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
+        var credentialOptions = MacControlOptions(
+            request: MacControlRequest(operation: "client.credentials"), profile: context.profile)
+        credentialOptions.launch = false
+        let credentialClient = MacControlClient(options: credentialOptions, directory: directory)
+        DeviceCredentialAccess.install { root, operation in
+            try executeMacClientCredentials(root: root, operation: operation, client: credentialClient)
+        }
+        switch resolveRootCommandAction(context.arguments) {
         case .usage:
             printUsage()
+        case .control:
+            runMacControl(context, directory: directory)
         case let .connect(commandArgs):
-            await runConnect(commandArgs)
+            await runConnect(commandArgs, configURL: context.configURL)
         case let .configureRemote(commandArgs):
-            runConfigureRemote(commandArgs)
+            runConfigureRemote(commandArgs, context: context)
         case let .discover(commandArgs):
             await runDiscover(commandArgs)
         case let .wizard(commandArgs):
-            await runWizardCommand(commandArgs)
+            await runWizardCommand(commandArgs, configURL: context.configURL)
         case let .unknown(exitCode):
             fputs("openclaw-mac: unknown command\n", stderr)
             printUsage()
@@ -37,27 +53,56 @@ struct OpenClawMacCLI {
     }
 }
 
-func parseRootCommand(_ args: [String]) -> RootCommand? {
-    guard let first = args.first else { return nil }
-    return RootCommand(name: first, args: Array(args.dropFirst()))
+func executeMacClientCredentials(
+    root: URL,
+    operation: ClientCredentialOperation,
+    client: MacControlClient) throws -> ClientCredentialResult
+{
+    let socket = client.directory.appendingPathComponent(MacControlCredentials.socketFilename)
+    guard FileManager.default.fileExists(atPath: socket.path) else {
+        return try DeviceCredentialAccess.executeOffline(root: root, operation: operation)
+    }
+    var request = MacControlRequest(operation: "client.credentials")
+    request.credentialRoot = root.standardizedFileURL.path
+    request.credentialOperation = operation
+    let data: Data
+    do {
+        data = try client.send(request)
+    } catch is MacControlConnectionRefused {
+        // The kernel refused the connection before dispatch; no remote operation can be replayed.
+        return try DeviceCredentialAccess.executeOffline(root: root, operation: operation)
+    }
+    let response = try JSONDecoder().decode(MacControlResponse<ClientCredentialResult>.self, from: data)
+    if !response.ok, response.error?.code == "credential_root_unowned" {
+        return try DeviceCredentialAccess.executeOffline(root: root, operation: operation)
+    }
+    guard response.ok, let result = response.result else {
+        throw response.error ?? MacControlError(
+            code: "unavailable",
+            message: "Use a compatible running app for local credentials.")
+    }
+    return result
 }
 
 func resolveRootCommandAction(_ args: [String]) -> RootCommandAction {
-    guard let command = parseRootCommand(args) else {
-        return .usage
+    guard let command = args.first else {
+        return .control(args)
     }
 
-    switch command.name {
+    let commandArgs = Array(args.dropFirst())
+    switch command {
+    case "status", "primary", "gateway", "--profile", "--json", "--timeout", "--launch", "--no-launch":
+        return .control(args)
     case "-h", "--help", "help":
         return .usage
     case "connect":
-        return .connect(command.args)
+        return .connect(commandArgs)
     case "configure-remote":
-        return .configureRemote(command.args)
+        return .configureRemote(commandArgs)
     case "discover":
-        return .discover(command.args)
+        return .discover(commandArgs)
     case "wizard":
-        return .wizard(command.args)
+        return .wizard(commandArgs)
     default:
         return .unknown(exitCode: 1)
     }
@@ -68,6 +113,10 @@ private func printUsage() {
     openclaw-mac
 
     Usage:
+      openclaw-mac status [--json] [--profile <name>] [--no-launch]
+      openclaw-mac primary show|set|clear [options]
+      openclaw-mac gateway list|add|remove|reconnect [options]
+        Run openclaw-mac primary --help for app control options.
       openclaw-mac connect [--url <ws://host:port>] [--token <token>] [--password <password>]
                            [--mode <local|remote>] [--timeout <ms>] [--probe] [--json]
                            [--client-id <id>] [--client-mode <mode>] [--display-name <name>]
@@ -79,6 +128,8 @@ private func printUsage() {
       openclaw-mac discover [--timeout <ms>] [--json] [--include-local]
       openclaw-mac wizard [--url <ws://host:port>] [--token <token>] [--password <password>]
                           [--mode <local|remote>] [--workspace <path>] [--json]
+
+    All commands accept --profile <name>; overrides OPENCLAW_PROFILE (default: default).
 
     Examples:
       openclaw-mac connect

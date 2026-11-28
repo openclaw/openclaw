@@ -4,6 +4,7 @@ export * from "./agent.js";
 export * from "./agent-loop.js";
 export * from "./errors.js";
 export * from "./runtime-deps.js";
+export * from "./tool-repeat-guard.js";
 export * from "./types.js";
 export * from "./validation.js";
 export * from "./harness/env/kill-tree.js";
@@ -44,6 +45,7 @@ export {
   type CompactionPreparation,
   type CompactionResult,
   type CompactionSettings,
+  type CompactionSummaryPrompt,
   type ContextUsageEstimate,
 } from "./harness/compaction/compaction.js";
 export * from "./harness/utils/truncate.js";

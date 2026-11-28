@@ -130,15 +130,17 @@ private actor OnboardingEndpointRevisionGate {
 private func onboardingAgentsResponse(
     id: String,
     defaultAgentID: String = "main",
-    model: String? = "openai/gpt-5.5") -> Data
+    model: String? = "openai/gpt-5.5",
+    utilityModel: String? = nil) -> Data
 {
     let modelJSON = model.map { #", "model": { "primary": "\#($0)" }"# } ?? ""
+    let utilityJSON = utilityModel.map { #", "utilityModel": "\#($0)""# } ?? ""
     let agentsJSON = if defaultAgentID == "main" {
-        #"{ "id": "main"\#(modelJSON) }"#
+        #"{ "id": "main"\#(modelJSON)\#(utilityJSON) }"#
     } else {
         """
         { "id": "main", "model": { "primary": "anthropic/claude-opus-4-8" } },
-        { "id": "\(defaultAgentID)"\(modelJSON) }
+        { "id": "\(defaultAgentID)"\(modelJSON)\(utilityJSON) }
         """
     }
     return Data(
@@ -151,7 +153,7 @@ private func onboardingProbeErrorResponse(id: String) -> Data {
 }
 
 private enum OnboardingProbeReply: Sendable {
-    case agents(defaultAgentID: String, model: String?)
+    case agents(defaultAgentID: String, model: String?, utilityModel: String? = nil)
     case error
     case failure
     case none
@@ -167,13 +169,14 @@ private func onboardingProbeTaskFactory(
         GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
             guard sendIndex > 0 else { return }
             switch reply {
-            case let .agents(defaultAgentID, model):
+            case let .agents(defaultAgentID, model, utilityModel):
                 guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
                 await beforeReply?()
                 task.emitReceiveSuccess(.data(onboardingAgentsResponse(
                     id: id,
                     defaultAgentID: defaultAgentID,
-                    model: model)))
+                    model: model,
+                    utilityModel: utilityModel)))
             case .error:
                 guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
                 await beforeReply?()
@@ -256,7 +259,7 @@ private func runOnboardingProbe(
 private func configuredModel(
     _ outcome: OnboardingConfiguredGatewayProbe.Outcome) -> String?
 {
-    guard case let .configured(modelRef, _) = outcome else { return nil }
+    guard case let .configured(modelRef, _, _) = outcome else { return nil }
     return modelRef
 }
 
@@ -270,15 +273,25 @@ private func isMissing(_ outcome: OnboardingConfiguredGatewayProbe.Outcome) -> B
 @Suite(.serialized)
 @MainActor
 struct OnboardingConfiguredGatewayProbeTests {
-    @Test func `reachable gateway uses its configured default agent model`() async throws {
+    @Test(arguments: ["primary", "utility", "both"])
+    func `reachable gateway preserves its configured default agent model role`(selection: String) async throws {
         let url = try #require(URL(string: "ws://example.invalid"))
         let fixture = onboardingProbeFixture(
             url: url,
-            reply: .agents(defaultAgentID: "work", model: "openai/gpt-5.5"))
+            reply: .agents(
+                defaultAgentID: "work",
+                model: selection == "utility" ? nil : "openai/gpt-5.5",
+                utilityModel: selection == "primary" ? nil : "apple-fm/system"))
         let session = fixture.session
         let probe = fixture.probe
 
-        #expect(await configuredModel(runOnboardingProbe(probe, connectionMode: .remote)) == "openai/gpt-5.5")
+        let outcome = await runOnboardingProbe(probe, connectionMode: .remote)
+        guard case let .configured(modelRef, modelTarget, _) = outcome else {
+            Issue.record("Expected the selected agent's configured inference route")
+            return
+        }
+        #expect(modelRef == (selection == "utility" ? "apple-fm/system" : "openai/gpt-5.5"))
+        #expect(modelTarget == (selection == "utility" ? .utility : nil))
         #expect(session.snapshotMakeCount() == 1)
         #expect(session.latestTask()?.snapshotSendCount() == 2)
     }
@@ -370,7 +383,7 @@ struct OnboardingConfiguredGatewayProbeTests {
             connectionMode: .remote,
             attempt: attempt,
             routeIdentity: "remote:id:gateway-a")
-        guard case let .configured(_, route) = outcome else {
+        guard case let .configured(_, _, route) = outcome else {
             Issue.record("expected configured route")
             return
         }
@@ -394,7 +407,7 @@ struct OnboardingConfiguredGatewayProbeTests {
             connectionMode: .remote,
             attempt: firstAttempt,
             routeIdentity: "remote:id:gateway-a")
-        guard case let .configured(_, firstRoute) = first else {
+        guard case let .configured(_, _, firstRoute) = first else {
             Issue.record("expected first configured route")
             return
         }
@@ -405,7 +418,7 @@ struct OnboardingConfiguredGatewayProbeTests {
             connectionMode: .remote,
             attempt: secondAttempt,
             routeIdentity: "remote:id:gateway-b")
-        guard case let .configured(_, secondRoute) = second else {
+        guard case let .configured(_, _, secondRoute) = second else {
             Issue.record("expected replacement configured route")
             return
         }
@@ -423,7 +436,7 @@ struct OnboardingConfiguredGatewayProbeTests {
         let currentURL = try #require(URL(string: "ws://current.example.invalid"))
         let endpoints = OnboardingEndpointRevisionGate(staleURL: staleURL, currentURL: currentURL)
         let gateway = GatewayConnection(
-            endpointProvider: { await endpoints.snapshot() },
+            testEndpointProvider: { await endpoints.snapshot() },
             sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
                 GatewayTestWebSocketTask()
             })))

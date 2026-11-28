@@ -1,15 +1,10 @@
-// Slack plugin module implements channel.setup behavior.
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { isSlackSetupAccountConfigured } from "./account-configured.js";
 import type { ResolvedSlackAccount } from "./accounts.js";
-import type { ChannelPlugin } from "./channel-api.js";
 import { slackBaseConfigAdapter } from "./config-adapter.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
 import { slackSetupContract, createSlackSetupWizardProxy } from "./setup-core.js";
 import { describeSlackSetupAccount, SLACK_CHANNEL } from "./setup-shared.js";
-
-const slackSetupWizard = createSlackSetupWizardProxy(async () => ({
-  slackSetupWizard: (await import("./setup-surface.js")).slackSetupWizard,
-}));
 
 export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   id: SLACK_CHANNEL,
@@ -25,7 +20,7 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     markdownCapable: true,
     preferSessionLookupForAnnounceTarget: true,
   },
-  setupWizard: slackSetupWizard,
+  setupWizard: createSlackSetupWizardProxy(() => import("./setup-surface.js")),
   capabilities: {
     chatTypes: ["direct", "channel", "thread"],
     reactions: true,
@@ -42,7 +37,52 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   streaming: {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
   },
-  reload: { configPrefixes: ["channels.slack"] },
+  reload: {
+    configPrefixes: ["channels.slack", "approvals.plugin.slack"],
+    noopPrefixes: [
+      "messages.inbound",
+      "messages.ackReactionScope",
+      ...["channels.slack", "channels.slack.accounts.*"].flatMap((prefix) =>
+        [
+          "dm.enabled",
+          "dm.groupEnabled",
+          "dm.groupChannels",
+          "dmPolicy",
+          "allowFrom",
+          "groupPolicy",
+          "requireMention",
+          "implicitMentions",
+          "allowBots",
+          "botLoopProtection",
+          "replyToMode",
+          "replyToModeByChatType",
+          "thread",
+          "historyLimit",
+          "dmHistoryLimit",
+          "dms",
+          "textChunkLimit",
+          "streaming",
+          "typingReaction",
+          "ackReaction",
+          "unfurlLinks",
+          "unfurlMedia",
+          "reactionNotifications",
+          "reactionAllowlist",
+          "channels.*.enabled",
+          "channels.*.requireMention",
+          "channels.*.ignoreOtherMentions",
+          "channels.*.replyToMode",
+          "channels.*.users",
+          "channels.*.allowBots",
+          "channels.*.botLoopProtection",
+          "channels.*.skills",
+          "channels.*.systemPrompt",
+          "channels.*.tools",
+          "channels.*.toolsBySender",
+        ].map((key) => `${prefix}.${key}`),
+      ),
+    ],
+  },
   configSchema: SlackChannelConfigSchema,
   config: {
     ...slackBaseConfigAdapter,
@@ -50,8 +90,8 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"].some(
         (key) => typeof env?.[key] === "string" && env[key]?.trim().length > 0,
       ),
-    isConfigured: (account) => isSlackSetupAccountConfigured(account),
-    describeAccount: (account) => describeSlackSetupAccount(account),
+    isConfigured: isSlackSetupAccountConfigured,
+    describeAccount: describeSlackSetupAccount,
   },
   setupContract: slackSetupContract,
 };

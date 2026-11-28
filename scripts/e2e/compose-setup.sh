@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SOURCE_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-docker-e2e-functional:local")"
@@ -17,7 +22,7 @@ COMPOSE=(
   docker compose
   --project-name "$PROJECT_NAME"
   --project-directory "$PROJECT_DIR"
-  -f "$ROOT_DIR/docker-compose.yml"
+  -f "$SOURCE_ROOT/docker-compose.yml"
   -f "$HEALTH_OVERRIDE_PATH"
 )
 
@@ -56,7 +61,7 @@ NODE
 }
 
 assert_dockerfile_healthcheck() {
-  node - "$ROOT_DIR/Dockerfile" <<'NODE'
+  node - "$SOURCE_ROOT/Dockerfile" <<'NODE'
 const fs = require("node:fs");
 const dockerfilePath = process.argv[2];
 const dockerfile = fs.readFileSync(dockerfilePath, "utf8").replace(/\\\r?\n[ \t]*/g, " ");
@@ -203,11 +208,15 @@ EOF
 cat >"$HEALTH_OVERRIDE_PATH" <<'EOF'
 services:
   openclaw-gateway:
+    # The E2E runner defaults to appuser; documented Compose uses the node home.
+    user: node
     healthcheck:
       interval: 1s
       timeout: 5s
       retries: 3
       start_period: 5s
+  openclaw-cli:
+    user: node
 EOF
 
 export OPENCLAW_IMAGE="$IMAGE_NAME"
@@ -215,13 +224,25 @@ export OPENCLAW_CONFIG_DIR="$PROJECT_DIR/config"
 export OPENCLAW_WORKSPACE_DIR="$PROJECT_DIR/config/workspace"
 export OPENCLAW_AUTH_PROFILE_SECRET_DIR="$PROJECT_DIR/auth-profile"
 export OPENCLAW_GATEWAY_TOKEN="$TOKEN"
-export OPENCLAW_GATEWAY_PORT=0
 export OPENCLAW_BRIDGE_PORT=0
 export OPENCLAW_MSTEAMS_PORT=0
 export OPENCLAW_DISABLE_BONJOUR=1
 export OPENCLAW_CURRENT_PACKAGE_TGZ="$PACKAGE_TGZ"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" compose-setup "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" functional
+
+# Allocate after image preparation to minimize the release-to-bind race with Compose.
+# Persist the host port like setup.sh so env_file exercises both internal-port overrides.
+OPENCLAW_GATEWAY_PORT="$(node <<'NODE'
+const server = require("node:net").createServer();
+server.listen(0, "0.0.0.0", () => {
+  console.log(server.address().port);
+  server.close();
+});
+NODE
+)"
+export OPENCLAW_GATEWAY_PORT
+printf 'OPENCLAW_GATEWAY_PORT=%s\n' "$OPENCLAW_GATEWAY_PORT" >"$PROJECT_DIR/.env"
 
 assert_dockerfile_healthcheck
 "${COMPOSE[@]}" config --format json >"$PROJECT_DIR/compose-config.json"
@@ -273,6 +294,16 @@ docker inspect --format '{{json .State.Health}}' "$GATEWAY_ID" >"$PROJECT_DIR/he
 assert_health_state "recovered healthy state" healthy "$PROJECT_DIR/health-recovered.json"
 assert_probe_endpoints "recovered probes" "$PROJECT_DIR/probes-recovered.json"
 
+echo "Writing config through the CLI sidecar while the Gateway runs..."
+"${COMPOSE[@]}" run -T --rm --no-deps openclaw-cli config set agents.defaults.sandbox.mode off
+CLI_WRITTEN_SANDBOX_MODE="$("${COMPOSE[@]}" exec -T openclaw-gateway node dist/index.js config get agents.defaults.sandbox.mode)"
+if [ "$CLI_WRITTEN_SANDBOX_MODE" != "off" ]; then
+  echo "CLI sidecar config write was not visible to the Gateway: $CLI_WRITTEN_SANDBOX_MODE" >&2
+  exit 1
+fi
+wait_for_gateway_health healthy 60
+echo "CLI sidecar config write reached the running Gateway."
+
 "${COMPOSE[@]}" logs --no-color openclaw-gateway >"$PROJECT_DIR/gateway-compose.log"
 if [ ! -s "$PROJECT_DIR/gateway-compose.log" ]; then
   echo "Compose gateway logs were empty" >&2
@@ -307,6 +338,7 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identit
   --detail "gateway:healthJsonEnvelope=passed" \
   --detail "cli:wrongTokenRejected=passed" \
   --detail "cli:correctTokenAccepted=passed" \
-  --detail "cli:healthJsonEnvelope=passed"
+  --detail "cli:healthJsonEnvelope=passed" \
+  --detail "cli:configWriteWhileGatewayRuns=passed"
 
 echo "Docker Compose setup proof passed."

@@ -28,6 +28,7 @@ import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { formatHumanList } from "../shared/human-list.js";
 
 const DEFAULT_AUDIT_LIMIT = 100;
@@ -67,7 +68,7 @@ type AuditCliEvent = {
 
 function parseAuditTimestamp(value: string | undefined, flag: string): number | undefined {
   const trimmed = value?.trim();
-  if (!trimmed) {
+  if (trimmed === undefined) {
     return undefined;
   }
   if (/^\d+$/.test(trimmed)) {
@@ -83,26 +84,14 @@ function parseAuditTimestamp(value: string | undefined, flag: string): number | 
   throw new Error(`${flag} must be an ISO timestamp or Unix milliseconds.`);
 }
 
-function parseAuditLimit(value: string | undefined): number {
-  if (!value) {
-    return DEFAULT_AUDIT_LIMIT;
+function parseAuditLimit(value: string | undefined, explain = false): number {
+  if (value === undefined) {
+    return explain ? DEFAULT_AUDIT_DECISION_LIMIT : DEFAULT_AUDIT_LIMIT;
   }
+  const max = explain ? MAX_AUDIT_DECISION_LIMIT : MAX_AUDIT_LIMIT;
   const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined || parsed > MAX_AUDIT_LIMIT) {
-    throw new Error(`--limit must be between 1 and ${MAX_AUDIT_LIMIT}.`);
-  }
-  return parsed;
-}
-
-function parseAuditDecisionLimit(value: string | undefined): number {
-  if (!value) {
-    return DEFAULT_AUDIT_DECISION_LIMIT;
-  }
-  const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined || parsed > MAX_AUDIT_DECISION_LIMIT) {
-    throw new Error(
-      `--limit must be between 1 and ${String(MAX_AUDIT_DECISION_LIMIT)} with --explain.`,
-    );
+  if (parsed === undefined || parsed > max) {
+    throw new Error(`--limit must be between 1 and ${max}${explain ? " with --explain" : ""}.`);
   }
   return parsed;
 }
@@ -139,27 +128,17 @@ function formatAuditRows(events: readonly AuditCliEvent[]): string[] {
   return rows;
 }
 
-function isUnsupportedActivityMethodError(value: unknown): value is Error {
-  // Frozen shipped-gateway strings: pre-activity gateways answer unknown
-  // methods with "unknown method: ..." or fail closed to operator.admin. A
-  // current gateway registers audit.activity.list at operator.read, so it can
-  // never emit these for this method; matching them only triggers the legacy
-  // audit.list fallback.
+function isUnsupportedAuditMethodError(
+  value: unknown,
+  method: "audit.activity.list" | "audit.run.inspect",
+): value is Error {
+  // Older gateways reject unknown methods directly or require operator.admin.
+  // These frozen replies select the legacy list or unsupported-inspection result.
   return (
     value instanceof Error &&
     value.name === "GatewayClientRequestError" &&
     (value as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
-    (value.message === "unknown method: audit.activity.list" ||
-      value.message === "missing scope: operator.admin")
-  );
-}
-
-function isUnsupportedRunInspectMethodError(value: unknown): value is Error {
-  return (
-    value instanceof Error &&
-    value.name === "GatewayClientRequestError" &&
-    (value as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
-    (value.message === "unknown method: audit.run.inspect" ||
+    (value.message === `unknown method: ${method}` ||
       value.message === "missing scope: operator.admin")
   );
 }
@@ -229,14 +208,20 @@ function toLegacyAuditListParams(params: AuditActivityListParams): AuditListPara
 async function queryAuditActivity(
   params: AuditActivityListParams,
   options: AuditListCommandOptions,
-): Promise<AuditActivityListResult | AuditListResult> {
+): Promise<AuditActivityListResult | AuditListResult | undefined> {
+  const signal = getAsyncWorkSignal();
   try {
     return await callGateway<AuditActivityListResult>({
       method: "audit.activity.list",
       params,
+      signal,
     });
   } catch (error) {
-    if (!isUnsupportedActivityMethodError(error)) {
+    // An accepted interrupt owns the exit status; skip the error and the legacy fallback.
+    if (signal?.aborted) {
+      return undefined;
+    }
+    if (!isUnsupportedAuditMethodError(error, "audit.activity.list")) {
       throw formatAuditGatewayError(error);
     }
     if (hasMessageSpecificFilters(options)) {
@@ -248,6 +233,12 @@ async function queryAuditActivity(
     return await callGateway<AuditListResult>({
       method: "audit.list",
       params: toLegacyAuditListParams(params),
+      signal,
+    }).catch((fallbackError: unknown) => {
+      if (signal?.aborted) {
+        return undefined;
+      }
+      throw fallbackError;
     });
   }
 }
@@ -277,11 +268,19 @@ function unsupportedRunInspection(
 
 async function queryAuditRunInspection(
   params: AuditRunInspectParams,
-): Promise<AuditRunInspectResult> {
+): Promise<AuditRunInspectResult | undefined> {
+  const signal = getAsyncWorkSignal();
   try {
-    return await callGateway<AuditRunInspectResult>({ method: "audit.run.inspect", params });
+    return await callGateway<AuditRunInspectResult>({
+      method: "audit.run.inspect",
+      params,
+      signal,
+    });
   } catch (error) {
-    if (!isUnsupportedRunInspectMethodError(error)) {
+    if (signal?.aborted) {
+      return undefined;
+    }
+    if (!isUnsupportedAuditMethodError(error, "audit.run.inspect")) {
       throw formatAuditGatewayError(error);
     }
     return unsupportedRunInspection(
@@ -374,23 +373,18 @@ function contextLineageLines(context: ExecutionIdentityContextV1): string[] {
     return [fieldLine("Parent", "absent")];
   }
   return [
-    fieldLine(
-      "Parent context",
-      lineage.parentContextId ? "present" : "unknown",
-      lineage.parentContextId,
-    ),
-    fieldLine(
-      "Parent execution",
-      lineage.parentExecutionId ? "present" : "unknown",
-      lineage.parentExecutionId,
-    ),
-    fieldLine("Parent run", lineage.parentRunId ? "present" : "unknown", lineage.parentRunId),
-    fieldLine(
-      "Parent agent",
-      lineage.parentAgentPrincipal ? "present" : "unknown",
-      lineage.parentAgentPrincipal ? principalText(lineage.parentAgentPrincipal) : undefined,
-    ),
-    fieldLine("Delegation", lineage.delegationRef ? "present" : "unknown", lineage.delegationRef),
+    ...(
+      [
+        ["Parent context", lineage.parentContextId],
+        ["Parent execution", lineage.parentExecutionId],
+        ["Parent run", lineage.parentRunId],
+        [
+          "Parent agent",
+          lineage.parentAgentPrincipal ? principalText(lineage.parentAgentPrincipal) : undefined,
+        ],
+        ["Delegation", lineage.delegationRef],
+      ] as const
+    ).map(([label, value]) => fieldLine(label, value ? "present" : "unknown", value)),
     fieldLine("Depth", "present", String(lineage.depth)),
   ];
 }
@@ -421,6 +415,9 @@ function decisionLines(receipt: DecisionReceiptDisplayV1): string[] {
     `    Reason: ${safe(receipt.decision.reasonCode)}`,
     `    Display producer: ${safe(producer)}`,
     `    Evidence: ${evidence}`,
+    ...(receipt.representedSubject
+      ? [`    Recorded authority subject: ${principalText(receipt.representedSubject.principal)}`]
+      : []),
     `    Policy refs: ${receipt.enforcement.policyCount}`,
     `    Grant refs: ${receipt.enforcement.grantCount}`,
     `    Context used: ${receipt.enforcement.contextFieldsUsed.length > 0 ? receipt.enforcement.contextFieldsUsed.map(safe).join(", ") : "none"}`,
@@ -438,20 +435,7 @@ function formatAuditRunInspection(result: AuditRunInspectResult): string[] {
     "",
     "Identity",
   ];
-  if (result.identity.state === "present") {
-    const identityLines = contextIdentityLines(result.identity.context);
-    lines.push(
-      `  Context: ${safe(result.identity.context.contextId)}`,
-      `  Created: ${timestampMsToIsoString(result.identity.context.createdAt) ?? String(result.identity.context.createdAt)}`,
-      ...identityLines.slice(0, 8),
-      "",
-      "Authority",
-      ...identityLines.slice(8),
-      "",
-      "Lineage",
-      ...contextLineageLines(result.identity.context),
-    );
-  } else if (result.identity.state === "ambiguous") {
+  if (result.identity.state === "ambiguous") {
     lines.push(
       `  Reason: ${safe(result.identity.reasonCode)}`,
       ...result.identity.candidates.map(
@@ -466,15 +450,29 @@ function formatAuditRunInspection(result: AuditRunInspectResult): string[] {
       fieldLine("Parent", "unknown"),
     );
   } else {
+    const identity = result.identity;
+    const identityLines =
+      identity.state === "present"
+        ? contextIdentityLines(identity.context)
+        : unavailableIdentityLines(identity.state);
+    if (identity.state === "present") {
+      lines.push(
+        `  Context: ${safe(identity.context.contextId)}`,
+        `  Created: ${timestampMsToIsoString(identity.context.createdAt) ?? String(identity.context.createdAt)}`,
+      );
+    } else {
+      lines.push(`  Reason: ${safe(identity.reasonCode)}`);
+    }
     lines.push(
-      `  Reason: ${safe(result.identity.reasonCode)}`,
-      ...unavailableIdentityLines(result.identity.state).slice(0, 8),
+      ...identityLines.slice(0, 8),
       "",
       "Authority",
-      ...unavailableIdentityLines(result.identity.state).slice(8),
+      ...identityLines.slice(8),
       "",
       "Lineage",
-      fieldLine("Parent", result.identity.state),
+      ...(identity.state === "present"
+        ? contextLineageLines(identity.context)
+        : [fieldLine("Parent", identity.state)]),
     );
   }
   lines.push("", "Decisions");
@@ -541,7 +539,7 @@ export async function auditListCommand(
         "--explain accepts only --run or --execution, plus --limit, --cursor, and --json; remove activity-list filters.",
       );
     }
-    const decisionLimit = parseAuditDecisionLimit(options.limit);
+    const decisionLimit = parseAuditLimit(options.limit, true);
     const cursor = options.cursor;
     const numericCursor = parsePositiveAuditCursor(cursor);
     const runExecutionCursor =
@@ -560,6 +558,9 @@ export async function auditListCommand(
             ...decisionPage,
           },
     );
+    if (result === undefined) {
+      return;
+    }
     if (options.json) {
       writeRuntimeJson(runtime, result);
       return;
@@ -595,6 +596,9 @@ export async function auditListCommand(
     ...(options.cursor ? { cursor: options.cursor } : {}),
   };
   const result = await queryAuditActivity(params, options);
+  if (result === undefined) {
+    return;
+  }
   if (options.json) {
     writeRuntimeJson(runtime, result);
     return;

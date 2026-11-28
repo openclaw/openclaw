@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 public struct ChatModelProviderSection: Identifiable, Sendable, Equatable {
     public let id: String
@@ -11,6 +12,39 @@ public struct ChatModelPickerSections: Sendable, Equatable {
     public let pinned: [OpenClawChatModelChoice]
     public let recent: [OpenClawChatModelChoice]
     public let providers: [ChatModelProviderSection]
+}
+
+/// The phone picker's catalog. Unlike the menu sections, every provider keeps all of its models in catalog
+/// order, so a pinned or recent model still appears under its provider.
+public struct ChatModelPickerCatalog: Sendable, Equatable {
+    public static let maxRecents = 5
+
+    public let favorites: [OpenClawChatModelChoice]
+    public let recents: [OpenClawChatModelChoice]
+    public let providers: [ChatModelProviderSection]
+
+    /// The provider that serves a choice, for its mark and secondary text.
+    public func provider(for choice: OpenClawChatModelChoice) -> ChatModelProviderSection? {
+        self.providers.first { $0.models.contains { $0.selectionID == choice.selectionID } }
+    }
+
+    /// Flat results across every provider, in picker order. A query matches a model's name, its id or its
+    /// provider's name.
+    public func search(_ query: String) -> [OpenClawChatModelChoice] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+        return self.providers.flatMap { provider in
+            let providerMatches = provider.displayName.localizedStandardContains(query) ||
+                provider.id.localizedStandardContains(query)
+            return provider.models.filter { model in
+                providerMatches || model.modelID.localizedStandardContains(query) ||
+                    OpenClawChatViewModel.shortModelLabel(
+                        name: model.name,
+                        provider: model.provider,
+                        modelID: model.modelID).localizedStandardContains(query)
+            }
+        }
+    }
 }
 
 @MainActor
@@ -59,6 +93,7 @@ public final class ChatModelPickerStore {
         recents: [String],
         defaultProvider: String? = nil) -> ChatModelPickerSections
     {
+        let choices = choices.filter { $0.manualSelectionAllowed != false }
         var choicesByID: [String: OpenClawChatModelChoice] = [:]
         for choice in choices where choicesByID[choice.selectionID] == nil {
             choicesByID[choice.selectionID] = choice
@@ -74,18 +109,77 @@ public final class ChatModelPickerStore {
             return choicesByID[selectionID]
         }
         let remaining = choices.filter { included.insert($0.selectionID).inserted }
-        let normalizedDefaultProvider = self.normalizedProviderIfPresent(defaultProvider)
-        let grouped = Dictionary(grouping: remaining) { choice in
-            let metadataProvider = self.normalizedProvider(choice.provider)
-            if metadataProvider != "other" {
-                return metadataProvider
+        return ChatModelPickerSections(
+            pinned: pinned,
+            recent: recent,
+            providers: self.providerSections(remaining, defaultProvider: defaultProvider))
+    }
+
+    /// Models used lately, most recent first: each chat's model as the chat list reports it, from any device,
+    /// then picks made on this device that no listed chat shows. Each model once, at most `limit`.
+    public static func recentModelIDs(
+        chats: [(selectionID: String?, activeAt: Double)],
+        picks: [String],
+        limit: Int = ChatModelPickerCatalog.maxRecents) -> [String]
+    {
+        var seen = Set<String>()
+        let fromChats = chats.enumerated()
+            .sorted {
+                $0.element.activeAt != $1.element.activeAt ? $0.element.activeAt > $1.element.activeAt : $0.offset < $1
+                    .offset
             }
-            return self.providerFromQualifiedModelID(choice.modelID) ?? metadataProvider
+            .compactMap(\.element.selectionID)
+        return Array((fromChats + picks).filter { !$0.isEmpty && seen.insert($0).inserted }.prefix(limit))
+    }
+
+    /// The phone picker: favorites, at most five recents, and every provider with all of its models.
+    /// The current model always sits on the root: in Favorites when it is one, otherwise first in Recent.
+    /// With one provider the root already lists its models with the check, so Recent leaves the current one
+    /// out. Models that cannot be used right now are left out of Recent. The stored recents are not changed.
+    public static func catalog(
+        choices: [OpenClawChatModelChoice],
+        favorites: [String],
+        recents: [String],
+        current: String? = nil,
+        defaultProvider: String? = nil) -> ChatModelPickerCatalog
+    {
+        let providers = self.providerSections(
+            choices.filter { $0.manualSelectionAllowed != false },
+            defaultProvider: defaultProvider)
+        let recents: [String] = if let current {
+            providers.count > 1 ? [current] + recents.filter { $0 != current } : recents.filter { $0 != current }
+        } else {
+            recents
         }
-        let providers = grouped.map { provider, models in
+        let sections = self.sections(
+            choices: choices,
+            favorites: favorites,
+            recents: recents,
+            defaultProvider: defaultProvider)
+        return ChatModelPickerCatalog(
+            favorites: sections.pinned,
+            recents: Array(sections.recent
+                .filter { $0.selectionID == current || $0.available != false }
+                .prefix(ChatModelPickerCatalog.maxRecents)),
+            providers: providers)
+    }
+
+    /// Models grouped by provider in catalog order; the default provider first, then by name.
+    private static func providerSections(
+        _ models: [OpenClawChatModelChoice],
+        defaultProvider: String?) -> [ChatModelProviderSection]
+    {
+        let normalizedDefaultProvider = self.normalizedProviderIfPresent(defaultProvider)
+        var seen = Set<String>()
+        let grouped = Dictionary(grouping: models.filter { seen.insert($0.selectionID).inserted }) {
+            self.effectiveProvider($0)
+        }
+        return grouped.map { provider, models in
             ChatModelProviderSection(
                 id: provider,
-                displayName: self.providerDisplayName(provider),
+                // A name the operator configured for the provider wins over the built-in one.
+                displayName: models.lazy.compactMap { $0.providerName?.trimmedNonEmpty }.first
+                    ?? self.providerDisplayName(provider),
                 models: models,
                 isDefaultProvider: normalizedDefaultProvider.map { provider == $0 } ?? false)
         }.sorted { lhs, rhs in
@@ -98,7 +192,6 @@ public final class ChatModelPickerStore {
             }
             return lhs.id < rhs.id
         }
-        return ChatModelPickerSections(pinned: pinned, recent: recent, providers: providers)
     }
 
     static func isDefaultModel(
@@ -106,7 +199,7 @@ public final class ChatModelPickerStore {
         defaultProvider: String?,
         defaultModel: String?) -> Bool
     {
-        guard let rawDefaultModel = self.trimmedValue(defaultModel) else { return false }
+        guard let rawDefaultModel = ChatPayloadDecoding.trimmedNonEmptyString(defaultModel) else { return false }
         let qualifiedDefault = self.splitQualifiedModelID(rawDefaultModel)
         let expectedProvider = self.normalizedProviderIfPresent(defaultProvider)
             ?? qualifiedDefault.map { self.normalizedProvider($0.provider) }
@@ -123,13 +216,11 @@ public final class ChatModelPickerStore {
     }
 
     private static func normalizedProvider(_ provider: String?) -> String {
-        let normalized = self.trimmedValue(provider)?.lowercased() ?? ""
-        return normalized.isEmpty ? "other" : normalized
+        self.normalizedProviderIfPresent(provider) ?? "other"
     }
 
     private static func normalizedProviderIfPresent(_ provider: String?) -> String? {
-        guard let provider = self.trimmedValue(provider) else { return nil }
-        return self.normalizedProvider(provider)
+        provider?.trimmedNonEmpty?.lowercased()
     }
 
     private static func effectiveProvider(_ choice: OpenClawChatModelChoice) -> String {
@@ -138,12 +229,6 @@ public final class ChatModelPickerStore {
             return metadataProvider
         }
         return self.providerFromQualifiedModelID(choice.modelID) ?? metadataProvider
-    }
-
-    private static func trimmedValue(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let trimmed, !trimmed.isEmpty else { return nil }
-        return trimmed
     }
 
     private static func splitQualifiedModelID(_ modelID: String) -> (provider: String, modelID: String)? {
@@ -158,6 +243,14 @@ public final class ChatModelPickerStore {
         return normalized == "other" ? nil : normalized
     }
 
+    /// Brand names whose title-cased id reads wrong, as the Control UI writes them (provider-icon-data.ts).
+    private nonisolated static let brandNames: [String: String] = [
+        "byteplus": "BytePlus", "claude-cli": "Claude CLI", "clawrouter": "ClawRouter", "deepinfra": "DeepInfra",
+        "deepseek": "DeepSeek", "github-copilot": "GitHub Copilot", "huggingface": "Hugging Face",
+        "litellm": "LiteLLM", "llama-cpp": "llama.cpp", "lmstudio": "LM Studio", "moonshot": "Moonshot AI",
+        "nvidia": "NVIDIA", "opencode": "OpenCode", "openrouter": "OpenRouter", "vllm": "vLLM", "zai": "Z.AI",
+    ]
+
     private static func providerDisplayName(_ provider: String) -> String {
         switch provider {
         case "anthropic": "Anthropic"
@@ -167,7 +260,7 @@ public final class ChatModelPickerStore {
         case "xai": "xAI"
         case "other": String(localized: "Other")
         default:
-            provider
+            self.brandNames[provider] ?? provider
                 .split(separator: "-")
                 .map(\.capitalized)
                 .joined(separator: " ")

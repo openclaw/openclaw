@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { tokTypes } from "acorn";
-import type { CatalogSource } from "./tool-search-types.js";
+import type { CatalogSource } from "./tool-search-protocol.js";
 
 type CompactCatalogEntry = {
   id: string;
@@ -10,6 +10,8 @@ type CompactCatalogEntry = {
   description: string;
   input?: string;
   output?: string;
+  /** Set for on-demand tools, which run only as their own top-level call. */
+  call?: string;
 };
 
 export type CodeModeCatalogBinding = Omit<CompactCatalogEntry, "id"> & {
@@ -18,7 +20,7 @@ export type CodeModeCatalogBinding = Omit<CompactCatalogEntry, "id"> & {
 };
 
 const RESERVED_GLOBAL_NAMES = new Set(
-  "ALL_TOOLS API MCP agents catalog clearTimeout globalThis json log namespaces nodes phase setTimeout skills text tools yield_control AggregateError Array ArrayBuffer Atomics BigInt BigInt64Array BigUint64Array Boolean DataView Date Error EvalError FinalizationRegistry Float32Array Float64Array Function Infinity Int16Array Int32Array Int8Array Intl JSON Map Math NaN Number Object Promise Proxy RangeError ReferenceError Reflect RegExp Set SharedArrayBuffer String Symbol SyntaxError TypeError URIError Uint16Array Uint32Array Uint8Array Uint8ClampedArray WeakMap WeakRef WeakSet WebAssembly console decodeURI decodeURIComponent encodeURI encodeURIComponent escape eval isFinite isNaN parseFloat parseInt undefined unescape".split(
+  "ALL_TOOLS API MCP agents catalog clearTimeout globalThis json load log namespaces nodes phase results setTimeout skills store text tools yield_control AggregateError Array ArrayBuffer Atomics BigInt BigInt64Array BigUint64Array Boolean DataView Date Error EvalError FinalizationRegistry Float32Array Float64Array Function Infinity Int16Array Int32Array Int8Array Intl JSON Map Math NaN Number Object Promise Proxy RangeError ReferenceError Reflect RegExp Set SharedArrayBuffer String Symbol SyntaxError TextDecoder TextEncoder TypeError URIError Uint16Array Uint32Array Uint8Array Uint8ClampedArray WeakMap WeakRef WeakSet WebAssembly console decodeURI decodeURIComponent encodeURI encodeURIComponent escape eval isFinite isNaN parseFloat parseInt undefined unescape".split(
     " ",
   ),
 );
@@ -69,11 +71,11 @@ function selectEffectiveEntries(entries: readonly CompactCatalogEntry[]): Compac
   return [...winners.values()];
 }
 
-/** Canonical host projection shared by the prompt, guest bindings, and bridge routing. */
-export function createCodeModeCatalogProjection(
+/** Canonical callable names shared by the prompt, guest bindings, and bridge routing. */
+export function createCodeModeCatalogBindings(
   entries: readonly CompactCatalogEntry[],
   options?: { reservedNames?: Iterable<string> },
-) {
+): CodeModeCatalogBinding[] {
   const used = new Set([...RESERVED_GLOBAL_NAMES, ...(options?.reservedNames ?? [])]);
   const candidates = selectEffectiveEntries(entries)
     .map((entry) => {
@@ -95,15 +97,35 @@ export function createCodeModeCatalogProjection(
       callableName = suffixedCallableName(candidate.base, candidate.entry.id, used);
     }
     used.add(callableName);
-    const { id, source, name, label, description, input, output } = candidate.entry;
-    bindings.push({ id, source, name, label, description, input, output, callableName });
+    const { id, source, name, label, description, input, output, call } = candidate.entry;
+    const binding: CodeModeCatalogBinding = {
+      id,
+      source,
+      name,
+      label,
+      description,
+      input,
+      output,
+      callableName,
+    };
+    bindings.push(call ? { ...binding, call } : binding);
   }
   bindings.sort((left, right) => left.callableName.localeCompare(right.callableName));
+  return bindings;
+}
+
+/** Execution owns guest copies and routing maps; prompt construction needs only bindings. */
+export function createCodeModeCatalogProjection(
+  entries: readonly CompactCatalogEntry[],
+  options?: { reservedNames?: Iterable<string>; mcpIds?: Iterable<string> },
+) {
+  const bindings = createCodeModeCatalogBindings(entries, options);
   return {
     bindings,
     guestBindings: bindings.map(({ id: _id, ...binding }) => binding),
     byCallableName: new Map(bindings.map((binding) => [binding.callableName, binding])),
     byId: new Map(bindings.map((binding) => [binding.id, binding])),
+    searchableIds: new Set([...bindings.map((binding) => binding.id), ...(options?.mcpIds ?? [])]),
   };
 }
 

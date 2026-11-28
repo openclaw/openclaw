@@ -87,6 +87,12 @@ Use this when you want Tavily-specific search controls instead of generic `web_s
 | `include_domains` | string array | (none)                                 | Only include results from these domains.      |
 | `exclude_domains` | string array | (none)                                 | Exclude results from these domains.           |
 
+For publication metadata, use `topic: "news"`. When Tavily supplies a
+`published_date`, OpenClaw returns it as `published`; GMT news timestamps are
+converted to ISO 8601. Missing dates, relative ages, and arbitrary text stay
+absent. A `time_range` filter is not evidence of a publication date, and returned
+dates still need source verification for freshness-sensitive workflows.
+
 Search depth tradeoff:
 
 | Depth      | Speed  | Relevance | Best for                             |
@@ -131,6 +137,12 @@ The generic `web_search` tool with Tavily as provider supports `query` and `coun
 
 ## Advanced configuration
 
+Tavily `web_search` and `tavily_search` use `tools.web.search.cacheTtlMinutes`
+for OpenClaw's local result cache (default: 15 minutes). Set it to `0` to bypass
+cache reads and writes. A shorter TTL limits reuse of existing entries; a
+longer TTL does not extend their original expiry. This setting does not control
+the separate `tavily_extract` cache.
+
 <AccordionGroup>
   <Accordion title="API key resolution order">
     The Tavily client looks up its API key in this order:
@@ -143,7 +155,8 @@ The generic `web_search` tool with Tavily as provider supports `query` and `coun
   </Accordion>
 
   <Accordion title="Custom base URL">
-    Override `plugins.entries.tavily.config.webSearch.baseUrl`, or set `TAVILY_BASE_URL`, if you front Tavily through a proxy. Config takes priority over the env var. The default is `https://api.tavily.com`.
+    Override `plugins.entries.tavily.config.webSearch.baseUrl`, or set `TAVILY_BASE_URL`, if you front Tavily through a proxy. Config takes priority over the env var. The default is `https://api.tavily.com`. A non-default `baseUrl` is honored as typed, including a private, internal or loopback host, and requests are permitted to that host only. Cloud-metadata destinations are always refused, as is a hostname whose DNS answer is a loopback, link-local or cloud-metadata address; with an HTTP(S) proxy in the environment, the proxy resolves the hostname.
+    An invalid custom URL fails before sending a request; it does not fall back to hosted Tavily.
   </Accordion>
 
   <Accordion title="`chunks_per_source` requires `query`">

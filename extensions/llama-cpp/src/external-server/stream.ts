@@ -2,8 +2,9 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { setQwenChatTemplateThinking } from "openclaw/plugin-sdk/provider-stream-shared";
+import { createProviderWaitObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { LLAMA_CPP_PROVIDER_ID } from "../defaults.js";
+import { LLAMA_CPP_SERVER, type LlamaServerIdentity } from "./defaults.js";
 
 /** Maps shared structured-output requests to the shape accepted by older llama-server builds. */
 function normalizeLlamaServerResponseFormat(
@@ -30,25 +31,61 @@ function normalizeLlamaServerResponseFormat(
 }
 
 /** Keeps the shared OpenAI transport and adjusts llama-server request compatibility. */
-export function wrapLlamaServerStream(ctx: ProviderWrapStreamFnContext): StreamFn {
+export function wrapLlamaServerStream(
+  ctx: ProviderWrapStreamFnContext,
+  server: LlamaServerIdentity = LLAMA_CPP_SERVER,
+): StreamFn {
   const underlying = ctx.streamFn ?? streamSimple;
   return (model, context, options) => {
-    if (model.provider !== LLAMA_CPP_PROVIDER_ID) {
+    if (model.provider !== server.id) {
       return underlying(model, context, options);
     }
     const onPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: async (payload, requestModel) => {
-        const customized = (await onPayload?.(payload, requestModel)) ?? payload;
-        if (isRecord(customized)) {
-          if (ctx.thinkingLevel === "off") {
-            setQwenChatTemplateThinking(customized, false);
+    // /slots exposes running tasks, not request-correlated queue state.
+    const wait = createProviderWaitObserver(options);
+    try {
+      const source = underlying(model, context, {
+        ...options,
+        onPayload: async (payload, requestModel) => {
+          const customized = (await onPayload?.(payload, requestModel)) ?? payload;
+          if (isRecord(customized)) {
+            if ((options?.reasoning ?? ctx.thinkingLevel) === "off") {
+              setQwenChatTemplateThinking(customized, false);
+            }
+            normalizeLlamaServerResponseFormat(customized, options?.responseFormat);
           }
-          normalizeLlamaServerResponseFormat(customized, options?.responseFormat);
-        }
-        return customized;
-      },
-    });
+          wait.start();
+          return customized;
+        },
+      });
+      if (!options?.onProviderWait) {
+        return source;
+      }
+      return Promise.resolve(source).then(
+        (stream) => {
+          void stream.result().then(wait.stop, wait.stop);
+          return {
+            async *[Symbol.asyncIterator]() {
+              try {
+                for await (const event of stream) {
+                  wait.stop();
+                  yield event;
+                }
+              } finally {
+                wait.stop();
+              }
+            },
+            result: () => stream.result(),
+          };
+        },
+        (error: unknown) => {
+          wait.stop();
+          throw error;
+        },
+      );
+    } catch (error) {
+      wait.stop();
+      throw error;
+    }
   };
 }

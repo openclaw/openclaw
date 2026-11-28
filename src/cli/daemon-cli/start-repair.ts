@@ -1,18 +1,35 @@
 // Start-time service repair: rebuilds stale service definitions before starting Gateway.
 import path from "node:path";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
-import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../../commands/daemon-runtime.js";
+import { resolveGatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
-import { readConfigFileSnapshotForWrite } from "../../config/io.js";
+import { createConfigIO, readConfigFileSnapshotForWrite } from "../../config/io.js";
 import {
   resolveConfigPathCandidate,
   resolveGatewayPort,
   resolveStateDir,
 } from "../../config/paths.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
-import type { GatewayServiceEnv } from "../../daemon/service-types.js";
+import {
+  resolveBunRuntimeInfo,
+  resolvePinnedDaemonRuntimePath,
+} from "../../daemon/runtime-paths.js";
+import {
+  withDaemonRuntimePinMigration,
+  readDaemonRuntimePin,
+} from "../../daemon/runtime-pin-state.js";
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
+import type { GatewayServiceEnvironmentValueSource } from "../../daemon/service-types.js";
+import {
+  assertServiceDefinitionWritable,
+  hasGatewayServiceEnvironmentDifference,
+  hasGatewayServiceEnvironmentOverride,
+  hasGatewayServiceLauncherOverride,
+  resolveManagedGatewayServiceCommand,
+} from "../../daemon/service-types.js";
 import type {
   GatewayService,
+  GatewayServiceCommandConfig,
   GatewayServiceStartRepairIssue,
   GatewayServiceState,
 } from "../../daemon/service.js";
@@ -21,14 +38,16 @@ import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervi
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mergeInstallInvocationEnv } from "./install.js";
+import type { GatewayLifecycleFacts } from "./lifecycle-context.js";
 
 type GatewayServiceRepairParams = {
-  service: GatewayService;
+  service: Pick<GatewayService, "install" | "isLoaded" | "readDefinitionMutationCapability">;
   state: GatewayServiceState;
   issues: GatewayServiceStartRepairIssue[];
   json: boolean;
   stdout: NodeJS.WritableStream;
   warn?: (message: string) => void;
+  beforeServiceMutation?: () => void | Promise<void>;
 };
 
 type GatewayServiceRepairResult<TResult extends "restarted" | "started"> = {
@@ -36,6 +55,7 @@ type GatewayServiceRepairResult<TResult extends "restarted" | "started"> = {
   message: string;
   warnings?: string[];
   loaded: boolean;
+  lifecycle: GatewayLifecycleFacts;
 };
 
 const GATEWAY_TARGET_ENV_KEYS = [
@@ -136,19 +156,36 @@ export function repairLoadedGatewayServiceForStart(
 ): Promise<GatewayServiceRepairResult<"started">>;
 export async function repairLoadedGatewayServiceForStart(
   params: GatewayServiceRepairParams & { action?: "restart" | "start" },
-): Promise<{
-  result: "restarted" | "started";
-  message: string;
-  warnings?: string[];
-  loaded: boolean;
-}> {
+): Promise<GatewayServiceRepairResult<"restarted" | "started">> {
   assertGatewayServiceMutationAllowed("repair the gateway service");
+  // Repair can persist a generated token; check definition authority before planning it.
+  const capability = await params.service
+    .readDefinitionMutationCapability?.({ env: process.env, environment: params.state.env })
+    .catch(() => ({ kind: "unknown", reason: "inspection-failed" }) as const);
+  if (capability) {
+    assertServiceDefinitionWritable(capability);
+  }
+  if (
+    hasGatewayServiceLauncherOverride(params.state.command) ||
+    hasGatewayServiceEnvironmentDifference(params.state.command, GATEWAY_TARGET_ENV_KEYS)
+  ) {
+    if (process.platform === "win32") {
+      throw new Error(
+        "Refusing to repair the managed Gateway service because an operator-owned Scheduled Task override changes its command, working directory, or Gateway target environment. Inspect the task's registered action and working directory in Task Scheduler, then resolve the override before retrying.",
+      );
+    }
+    const unitName = path.basename(params.state.command?.sourcePath ?? "<unit>");
+    throw new Error(
+      `Refusing to repair the managed Gateway service because a systemd drop-in overrides its command, working directory, or Gateway target environment. Inspect the unit with \`systemctl --user cat ${unitName}\`, then update or remove the operator-owned drop-in before retrying.`,
+    );
+  }
+  const managedCommand = resolveManagedGatewayServiceCommand(params.state.command);
   const { snapshot: configSnapshot, writeOptions: configWriteOptions } =
     await readConfigFileSnapshotForWrite();
   const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
-  const existingEnvironment = params.state.command?.environment;
-  const existingEnvironmentValueSources = params.state.command?.environmentValueSources;
-  const installedPort = parseTcpPortFromArgs(params.state.command?.programArguments);
+  const existingEnvironment = managedCommand?.environment;
+  const existingEnvironmentValueSources = managedCommand?.environmentValueSources;
+  const installedPort = parseTcpPortFromArgs(managedCommand?.programArguments);
   const port = assertGatewayRepairTargetMatches({
     action: params.action ?? "start",
     config: cfg,
@@ -160,14 +197,45 @@ export async function repairLoadedGatewayServiceForStart(
     existingServiceEnv: existingEnvironment,
   });
   const wrapperPath = await resolveOpenClawWrapperPath(installEnv[OPENCLAW_WRAPPER_ENV_KEY]);
+  const pinSnapshot = await withDaemonRuntimePinMigration(installEnv, () =>
+    readDaemonRuntimePin({ kind: "gateway", env: installEnv }, params.state.command),
+  );
+  const pinnedRuntime = wrapperPath ? undefined : pinSnapshot.pin?.path;
+  const installedRuntime =
+    (!wrapperPath && pinSnapshot.pin?.runtime) ||
+    resolveGatewayDaemonRuntime(pinnedRuntime ? [pinnedRuntime] : managedCommand?.programArguments);
+  if (!wrapperPath) {
+    await resolvePinnedDaemonRuntimePath(pinnedRuntime, installedRuntime, installEnv);
+  }
+  const installedRuntimePath =
+    installedRuntime === "bun" || installedRuntime === "standalone"
+      ? (pinnedRuntime ?? managedCommand?.programArguments[0])
+      : undefined;
+  if (installedRuntime === "standalone" && !pinnedRuntime) {
+    await resolvePinnedDaemonRuntimePath(installedRuntimePath, "standalone", installEnv);
+  }
+  const runtimeInfo =
+    installedRuntimePath && installedRuntime === "bun"
+      ? await resolveBunRuntimeInfo(installedRuntimePath)
+      : undefined;
+  if (runtimeInfo?.status === "probe-failed") {
+    throw runtimeInfo.error;
+  }
+  // An invalid OPENCLAW_SQLITE_LIBRARY is operator state to fix, not grounds to rewrite the service to Node.
+  if (runtimeInfo?.status === "unsupported" && runtimeInfo.sqliteSelectionError) {
+    throw new Error(runtimeInfo.sqliteSelectionError);
+  }
+  const runtime =
+    pinnedRuntime || installedRuntime === "standalone"
+      ? installedRuntime
+      : runtimeInfo?.status === "supported"
+        ? "bun"
+        : "node";
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
-    configSnapshot,
-    configWriteOptions,
     env: installEnv,
-    autoGenerateWhenMissing: true,
-    persistGeneratedToken: true,
+    generateIfMissing: { snapshot: configSnapshot, writeOptions: configWriteOptions },
   });
   if (tokenResolution.unavailableReason) {
     throw new Error(tokenResolution.unavailableReason);
@@ -188,8 +256,11 @@ export async function repairLoadedGatewayServiceForStart(
     await buildGatewayInstallPlan({
       env: installEnv,
       port,
-      runtime: DEFAULT_GATEWAY_DAEMON_RUNTIME,
+      runtime,
+      runtimePath: runtime === "bun" || runtime === "standalone" ? installedRuntimePath : undefined,
+      pinnedRuntimePath: pinSnapshot.pin?.path,
       wrapperPath,
+      existingCommand: params.state.command,
       existingEnvironment,
       existingEnvironmentValueSources,
       config: cfg,
@@ -201,21 +272,76 @@ export async function repairLoadedGatewayServiceForStart(
       },
     });
 
+  const plannedCommand = {
+    programArguments,
+    workingDirectory,
+    environment: Object.fromEntries(
+      Object.entries(environment).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    ),
+    environmentValueSources: Object.fromEntries(
+      Object.entries(environmentValueSources ?? {}).filter(
+        (entry): entry is [string, GatewayServiceEnvironmentValueSource] => entry[1] !== undefined,
+      ),
+    ),
+  };
+  let command: GatewayServiceCommandConfig = plannedCommand;
+  const previousCommand = params.state.command;
+  if (previousCommand?.managedOverrides?.environment) {
+    const effectiveEnvironment = { ...plannedCommand.environment };
+    const effectiveSources = { ...plannedCommand.environmentValueSources };
+    for (const key of new Set([
+      ...Object.keys(plannedCommand.environment),
+      ...Object.keys(previousCommand.environment ?? {}),
+    ])) {
+      if (!hasGatewayServiceEnvironmentOverride(previousCommand, [key])) {
+        continue;
+      }
+      const value = previousCommand.environment?.[key];
+      if (value === undefined) {
+        delete effectiveEnvironment[key];
+        delete effectiveSources[key];
+      } else {
+        effectiveEnvironment[key] = value;
+        effectiveSources[key] = previousCommand.environmentValueSources?.[key] ?? "inline";
+      }
+    }
+    command = {
+      ...plannedCommand,
+      environment: effectiveEnvironment,
+      environmentValueSources: effectiveSources,
+      managedDefinition: plannedCommand,
+      managedOverrides: previousCommand.managedOverrides,
+    };
+  }
+  const env = mergeGatewayServiceEnv(installEnv, command);
+  // Token preparation can persist fresh auth; capture it before install activates the Gateway.
+  const config = await createConfigIO({
+    env,
+    observe: false,
+    pluginValidation: "skip",
+    suppressFutureVersionWarning: true,
+  })
+    .readBestEffortConfig()
+    .catch(() => undefined);
+  const lifecycle: GatewayLifecycleFacts = { command, env, config };
+
   await params.service.install({
-    env: installEnv as GatewayServiceEnv,
+    runtimePinUpdate: { expected: pinSnapshot, pin: pinSnapshot.pin },
+    env: installEnv,
     stdout: params.stdout,
     warn: params.warn,
+    beforeMutation: params.beforeServiceMutation,
     programArguments,
     workingDirectory,
     environment,
     environmentValueSources,
   });
 
-  let loaded;
-  try {
-    loaded = await params.service.isLoaded({ env: installEnv });
-  } catch {
-    loaded = true;
+  const loaded = await params.service.isLoaded({ env: installEnv });
+  if (!loaded) {
+    throw new Error("Gateway service is not loaded after repair.");
   }
 
   return {
@@ -226,5 +352,6 @@ export async function repairLoadedGatewayServiceForStart(
         : "Gateway service definition repaired and started. Reopen the Control UI with `openclaw dashboard` or copy a fresh auth URL with `openclaw dashboard --no-open`.",
     warnings: warnings.length ? warnings : undefined,
     loaded,
+    lifecycle,
   };
 }

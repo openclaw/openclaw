@@ -5,8 +5,97 @@ import OpenClawKit
 import OpenClawProtocol
 
 struct ChatSessionRosterSnapshot: Sendable {
+    private static let maximumPageCount = 50
+    private static let maximumSessionCount = 10000
+
     let sessions: [OpenClawChatSessionEntry]
     let isCached: Bool
+    let totalCount: Int?
+    let isComplete: Bool
+
+    init(
+        sessions: [OpenClawChatSessionEntry],
+        isCached: Bool,
+        totalCount: Int? = nil,
+        isComplete: Bool = true)
+    {
+        self.sessions = sessions
+        self.isCached = isCached
+        self.totalCount = totalCount
+        self.isComplete = isComplete
+    }
+
+    /// User-facing notice for a partial roster (a later page failed or a scan bound was hit),
+    /// letting consumers keep the retained rows visible while offering a refresh path.
+    /// `nil` when the snapshot is complete or served from cache. Completeness compares the rows the
+    /// Gateway returned with its total, before lists hide subagent runs. The sentence carries no count:
+    /// that total includes hidden runs, so no number in it would be about sessions a person can see.
+    var incompleteLoadMessage: String? {
+        guard !self.isComplete, !self.isCached else { return nil }
+        return String(localized: "Couldn’t load some sessions. Try again.")
+    }
+
+    @MainActor
+    static func collect(
+        fetchPage: @MainActor (Int) async throws -> OpenClawChatSessionsListResponse) async throws -> Self
+    {
+        var sessions: [OpenClawChatSessionEntry] = []
+        var rowIndices: [String: Int] = [:]
+        var totalCount: Int?
+        var offset = 0
+        var pageCount = 0
+
+        while true {
+            try Task.checkCancellation()
+            // Match sessions.list's bounded scan so a changing Gateway snapshot
+            // cannot keep a sidebar refresh alive forever.
+            guard pageCount < Self.maximumPageCount, sessions.count < Self.maximumSessionCount else {
+                return Self(sessions: sessions, isCached: false, totalCount: totalCount, isComplete: false)
+            }
+            pageCount += 1
+            let response: OpenClawChatSessionsListResponse
+            do {
+                response = try await fetchPage(offset)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                guard !sessions.isEmpty else { throw error }
+                return Self(sessions: sessions, isCached: false, totalCount: totalCount, isComplete: false)
+            }
+            try Task.checkCancellation()
+
+            if let count = response.totalCount {
+                totalCount = count
+            }
+            for session in response.sessions {
+                if let index = rowIndices[session.key] {
+                    sessions[index] = session
+                } else {
+                    guard sessions.count < Self.maximumSessionCount else {
+                        return Self(sessions: sessions, isCached: false, totalCount: totalCount, isComplete: false)
+                    }
+                    rowIndices[session.key] = sessions.count
+                    sessions.append(session)
+                }
+            }
+
+            let advancedOffset = offset + response.sessions.count
+            let hasMore = response.hasMore ?? totalCount.map { advancedOffset < $0 } ?? false
+            guard hasMore else {
+                let isComplete = totalCount.map { sessions.count >= $0 } ?? true
+                return Self(sessions: sessions, isCached: false, totalCount: totalCount, isComplete: isComplete)
+            }
+
+            let nextOffset = response.nextOffset ?? advancedOffset
+            guard !response.sessions.isEmpty,
+                  nextOffset > offset,
+                  totalCount.map({ nextOffset < $0 }) ?? true
+            else {
+                return Self(sessions: sessions, isCached: false, totalCount: totalCount, isComplete: false)
+            }
+            offset = nextOffset
+        }
+    }
 }
 
 extension NodeAppModel {
@@ -15,25 +104,90 @@ extension NodeAppModel {
         archived: Bool = false,
         allowCachedFallback: Bool = true) async throws -> ChatSessionRosterSnapshot
     {
+        let sourceGatewayID = self.chatTranscriptCacheGatewayID
+        let sourceAgentID = self.chatDeliveryAgentId
         guard self.isLocalChatFixtureEnabled || self.isOperatorGatewayConnected else {
             guard allowCachedFallback else { throw URLError(.notConnectedToInternet) }
             return await ChatSessionRosterSnapshot(
-                sessions: archived ? [] : self.loadCachedChatSessions(),
-                isCached: true)
+                sessions: archived ? [] : self.loadCachedChatSessions(
+                    gatewayID: sourceGatewayID,
+                    agentID: sourceAgentID),
+                isCached: true,
+                isComplete: false)
         }
 
         do {
-            let response = try await self.makeChatTransport().listSessions(limit: limit, archived: archived)
-            if !archived {
-                self.reconcileChatSessionReadState(response.sessions)
-                await self.storeCachedChatSessions(response.sessions)
+            let snapshot: ChatSessionRosterSnapshot
+            if self.isLocalChatFixtureEnabled {
+                let response = try await self.makeChatTransport().listSessions(limit: limit, archived: archived)
+                snapshot = ChatSessionRosterSnapshot(
+                    sessions: response.sessions,
+                    isCached: false,
+                    totalCount: response.totalCount,
+                    isComplete: response.hasMore != true)
+            } else {
+                guard let sourceGatewayID,
+                      let route = await self.operatorSession.currentRoute(ifGatewayID: sourceGatewayID)
+                else { throw URLError(.notConnectedToInternet) }
+
+                // Every page belongs to one physical authenticated Gateway route;
+                // reconnects and gateway switches must never splice two rosters.
+                snapshot = try await ChatSessionRosterSnapshot.collect { offset in
+                    let base = OpenClawChatGatewayRequests.sessionsList(
+                        limit: limit,
+                        search: nil,
+                        archived: archived,
+                        agentID: sourceAgentID,
+                        offset: offset)
+                    // ui/src/lib/sessions/session-list-query.ts:54: lists ask for titles derived from the first message.
+                    var params = base.params
+                    params["includeDerivedTitles"] = AnyCodable(true)
+                    let request = OpenClawChatGatewayRequest(
+                        method: base.method, params: params, timeoutMs: base.timeoutMs)
+                    let data = try await self.operatorSession.request(request, ifCurrentRoute: route)
+                    let response: Result<OpenClawChatSessionsListResponse, Error>
+                    do {
+                        response = try await .success(GatewayPayloadDecoding.decode(
+                            OpenClawChatSessionsListResponse.self, from: data))
+                    } catch {
+                        response = .failure(error)
+                    }
+                    // Decoding suspends this owner; a retired page or error cannot publish a partial roster.
+                    guard await self.operatorSession.currentRoute(ifGatewayID: sourceGatewayID) == route else {
+                        throw CancellationError()
+                    }
+                    return try response.get()
+                }
+                guard GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID),
+                      self.chatDeliveryAgentId == sourceAgentID
+                else {
+                    throw CancellationError()
+                }
             }
-            return ChatSessionRosterSnapshot(sessions: response.sessions, isCached: false)
+
+            // An interrupted page must not replace a more complete offline roster.
+            if !archived, snapshot.isComplete {
+                await self.storeCachedChatSessions(
+                    snapshot.sessions,
+                    gatewayID: sourceGatewayID,
+                    agentID: sourceAgentID)
+                if let sourceGatewayID,
+                   !GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID) ||
+                   self.chatDeliveryAgentId != sourceAgentID
+                {
+                    throw CancellationError()
+                }
+            }
+            return snapshot
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             guard allowCachedFallback, !archived else { throw error }
-            let cached = await self.loadCachedChatSessions()
+            let cached = await self.loadCachedChatSessions(
+                gatewayID: sourceGatewayID,
+                agentID: sourceAgentID)
             guard !cached.isEmpty else { throw error }
-            return ChatSessionRosterSnapshot(sessions: cached, isCached: true)
+            return ChatSessionRosterSnapshot(sessions: cached, isCached: true, isComplete: false)
         }
     }
 }
@@ -48,23 +202,62 @@ final class RootSidebarModel {
         let isPartial: Bool
     }
 
-    struct SessionObserverDeclaration<Route: Equatable>: Equatable {
-        let route: Route
-        let visible: Bool
-        let generation: UInt64
+    private(set) var sessions: [OpenClawChatSessionEntry] = [] {
+        didSet {
+            self.resolvedSessionKeys = [:]
+            self.updateSnoozeWakeDeadline()
+        }
     }
 
-    private(set) var sessions: [OpenClawChatSessionEntry] = []
+    /// The drawer asks for the selected and main keys once per row, and each answer scans the roster.
+    @ObservationIgnored private var resolvedSessionKeys: [[String?]: String] = [:]
+    /// Last seen run state of hidden subagent sessions, so only their start and stop reload the roster.
+    @ObservationIgnored private var hiddenRunActivity: [String: Bool] = [:]
+
+    func resolvedSessionKey(
+        current: String,
+        mainSessionKey: String,
+        activeAgentID: String?,
+        sessionRoutingContract: String?) -> String
+    {
+        let sessions = self.sessions
+        let inputs = [current, mainSessionKey, activeAgentID, sessionRoutingContract]
+        if let key = self.resolvedSessionKeys[inputs] { return key }
+        let key = ChatSessionSidebarModel.selectedSessionKey(
+            sessions: sessions,
+            currentSessionKey: current,
+            mainSessionKey: mainSessionKey,
+            activeAgentID: activeAgentID,
+            sessionRoutingContract: sessionRoutingContract)
+        // A disconnected roster can stay unchanged across many session switches.
+        if self.resolvedSessionKeys.count >= 32 { self.resolvedSessionKeys.removeAll(keepingCapacity: true) }
+        self.resolvedSessionKeys[inputs] = key
+        return key
+    }
+
+    private(set) var now: Date = .now
     private(set) var usage: CostUsageSummaryLite?
     private(set) var cronJobs: [CronJob] = []
     private(set) var isRefreshing = false
     private(set) var sessionErrorText: String?
+    private(set) var isSessionRosterComplete = false
     private var rosterGeneration = 0
-    private var dashboardGeneration = 0
     private var sessionObserverVisibility = false
-    private var sessionObserverGeneration: UInt64 = 0
-    private var sessionObserverDeclaration: SessionObserverDeclaration<GatewayNodeSessionRoute>?
-    private var sessionObserverSync: (id: UUID, task: Task<Void, Never>)?
+    private var sessionObserverSync: Task<Void, Never>?
+    @ObservationIgnored private var snoozeWakeUpdatesActive = false
+    @ObservationIgnored private var snoozeWakeTask: Task<Void, Never>?
+
+    @ObservationIgnored private let sessionRefreshCoordinator = OpenClawChatSessionRefreshCoordinator()
+    private var sessionChangesDuringLoad: [String: OpenClawChatSessionsChangedEvent] = [:]
+    @ObservationIgnored var sessionRefreshSleep: @MainActor (Duration) async throws -> Void = { delay in
+        try await Task.sleep(for: delay)
+    }
+
+    #if DEBUG
+    @ObservationIgnored var testRosterLoad: (@MainActor () async throws -> ChatSessionRosterSnapshot)?
+    #endif
+
+    isolated deinit { self.sessionRefreshCoordinator.cancel() }
 
     var failedCronJobCount: Int {
         self.cronJobs.count { Self.isFailedCronJob($0) }
@@ -77,32 +270,81 @@ final class RootSidebarModel {
         }
     }
 
-    func sections(
+    static func sections(
+        sessions: [OpenClawChatSessionEntry],
         query: String,
         currentSessionKey: String,
         mainSessionKey: String,
         activeAgentID: String?,
-        groups: [OpenClawChatSessionGroup]) -> [ChatSessionSidebarModel.Section]
+        groups: [OpenClawChatSessionGroup],
+        rosterIsComplete: Bool = false,
+        sessionRoutingContract: String? = nil,
+        now: Date = .now,
+        personalPins: IOSSidebarPins? = nil) -> [ChatSessionSidebarModel.Section]
     {
-        ChatSessionSidebarModel.sections(
-            sessions: self.sessions,
+        let selectedSessionKey = ChatSessionSidebarModel.selectedSessionKey(
+            sessions: sessions,
             currentSessionKey: currentSessionKey,
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
+            sessionRoutingContract: sessionRoutingContract)
+        let selectedIsHidden = sessions.first { $0.key == selectedSessionKey }
+            .map { $0.isArchived || $0.isSnoozed(at: now) } ?? rosterIsComplete
+        // Resolve aliases before keeping the selected automation reachable.
+        let isSearching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let projected = personalPins.map { sessions.map($0.project) } ?? sessions
+        let browsingSessions = projected.filter {
+            !$0.isArchived && !$0.isSnoozed(at: now) && (isSearching || $0.isPinned || $0.key == selectedSessionKey ||
+                !OpenClawChatSessionListVisibility.isAutomationSession($0))
+        }
+        return ChatSessionSidebarModel.sections(
+            sessions: browsingSessions,
+            // Keep missing-selection placeholders only until the active roster is complete.
+            currentSessionKey: selectedIsHidden ? "" : currentSessionKey,
+            mainSessionKey: mainSessionKey,
+            activeAgentID: activeAgentID,
             groups: groups,
+            pinnedOrder: personalPins?.positions,
             excludesMainSession: true,
-            query: query)
+            // Empty headers are move targets while browsing, not search results.
+            includeEmptyGroups: !isSearching,
+            query: query,
+            sessionRoutingContract: sessionRoutingContract)
+    }
+
+    func setSnoozeWakeUpdatesActive(_ active: Bool) {
+        self.snoozeWakeUpdatesActive = active
+        self.updateSnoozeWakeDeadline()
+    }
+
+    private func updateSnoozeWakeDeadline() {
+        self.snoozeWakeTask?.cancel()
+        self.snoozeWakeTask = nil
+        self.now = .now
+        guard self.snoozeWakeUpdatesActive,
+              let wakeAt = OpenClawChatSessionSnooze.nextWake(in: self.sessions, now: self.now)
+        else { return }
+
+        self.snoozeWakeTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(max(0, wakeAt.timeIntervalSinceNow) + 0.001))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            self?.updateSnoozeWakeDeadline()
+        }
     }
 
     func refresh(appModel: NodeAppModel) async {
         self.rosterGeneration &+= 1
+        self.sessionChangesDuringLoad = [:]
         let rosterGeneration = self.rosterGeneration
-        self.dashboardGeneration &+= 1
-        let dashboardGeneration = self.dashboardGeneration
         self.isRefreshing = true
         defer {
             if rosterGeneration == self.rosterGeneration {
                 self.isRefreshing = false
+                self.sessionRefreshCoordinator.finishLoad()
             }
         }
 
@@ -113,18 +355,18 @@ final class RootSidebarModel {
         if rosterGeneration == self.rosterGeneration {
             switch loadedRoster {
             case let .success(loadedRoster):
-                self.sessions = loadedRoster.sessions
-                self.sessionErrorText = nil
+                self.applyRoster(loadedRoster, activeAgentID: appModel.chatDeliveryAgentId)
             case let .failure(message):
                 self.sessionErrorText = message
             case .cancelled:
                 return
             }
             self.isRefreshing = false
+            self.sessionRefreshCoordinator.finishLoad()
         }
 
         let loadedDashboard = await dashboard
-        guard !Task.isCancelled, dashboardGeneration == self.dashboardGeneration else { return }
+        guard !Task.isCancelled else { return }
         if let usage = loadedDashboard.usage {
             self.usage = usage
         }
@@ -134,12 +376,15 @@ final class RootSidebarModel {
     }
 
     func refreshSessions(appModel: NodeAppModel) async {
+        await appModel.sessionGroups.refresh(appModel: appModel)
         self.rosterGeneration &+= 1
+        self.sessionChangesDuringLoad = [:]
         let rosterGeneration = self.rosterGeneration
         self.isRefreshing = true
         defer {
             if rosterGeneration == self.rosterGeneration {
                 self.isRefreshing = false
+                self.sessionRefreshCoordinator.finishLoad()
             }
         }
 
@@ -147,8 +392,8 @@ final class RootSidebarModel {
         guard !Task.isCancelled, rosterGeneration == self.rosterGeneration else { return }
         switch loadedRoster {
         case let .success(roster):
-            self.sessions = roster.sessions
-            self.sessionErrorText = nil
+            self.applyRoster(roster, activeAgentID: appModel.chatDeliveryAgentId)
+            appModel.sessionGroups.pruneCollapsed(for: self.sessions)
         case let .failure(message):
             self.sessionErrorText = message
         case .cancelled:
@@ -158,99 +403,45 @@ final class RootSidebarModel {
 
     func setSessionObserverVisibility(appModel: NodeAppModel, visible: Bool) async {
         self.sessionObserverVisibility = visible
-        let observerGeneration = self.sessionObserverGeneration
-        let previous = self.sessionObserverSync?.task
-        let syncID = UUID()
+        let previous = self.sessionObserverSync
         let task = Task { @MainActor [weak self, weak appModel] in
             await previous?.value
             guard let self,
                   let appModel,
-                  self.sessionObserverGeneration == observerGeneration,
                   self.sessionObserverVisibility == visible,
-                  let route = await appModel.operatorSession.currentRoute(),
-                  self.sessionObserverGeneration == observerGeneration,
-                  self.sessionObserverVisibility == visible
-            else {
-                self?.finishSessionObserverSync(id: syncID)
-                return
-            }
+                  let route = await appModel.operatorSession.currentRoute()
+            else { return }
 
-            if let declaration = self.sessionObserverDeclaration,
-               declaration.route == route,
-               declaration.visible == visible,
-               declaration.generation == observerGeneration
-            {
-                self.finishSessionObserverSync(id: syncID)
-                return
-            }
-
-            // The Gateway may apply a change before its reply times out. An old
-            // confirmation must never suppress the next recovery declaration.
-            self.sessionObserverDeclaration = nil
+            // Visibility is best effort: serialize sends and replay on every subscription,
+            // rather than caching ACKs that need their own reconnect lifecycle.
             let request = OpenClawChatGatewayRequests.setSessionObserverVisibility(
                 visible,
                 timeoutMs: 12000)
-            do {
-                _ = try await appModel.operatorSession.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs,
-                    ifCurrentRoute: route)
-                if let declaration = Self.confirmedSessionObserverDeclaration(
-                    route: route,
-                    visible: visible,
-                    generation: observerGeneration,
-                    currentGeneration: self.sessionObserverGeneration,
-                    currentVisibility: self.sessionObserverVisibility)
-                {
-                    self.sessionObserverDeclaration = declaration
-                }
-            } catch {
-                // Reconnect replays visibility on its own physical operator route.
-            }
-            self.finishSessionObserverSync(id: syncID)
+            _ = try? await appModel.operatorSession.request(request, ifCurrentRoute: route)
         }
-        self.sessionObserverSync = (id: syncID, task: task)
+        self.sessionObserverSync = task
         await task.value
     }
 
-    static func confirmedSessionObserverDeclaration<Route: Equatable>(
-        route: Route,
-        visible: Bool,
-        generation: UInt64,
-        currentGeneration: UInt64,
-        currentVisibility: Bool) -> SessionObserverDeclaration<Route>?
-    {
-        guard generation == currentGeneration, visible == currentVisibility else { return nil }
-        return SessionObserverDeclaration(route: route, visible: visible, generation: generation)
-    }
-
-    private func finishSessionObserverSync(id: UUID) {
-        guard self.sessionObserverSync?.id == id else { return }
-        self.sessionObserverSync = nil
-    }
-
     func observeSessionEvents(appModel: NodeAppModel) async {
+        var subscription: GatewayServerEventSubscription?
+        defer {
+            subscription?.cancel()
+            self.sessionRefreshCoordinator.cancel()
+        }
         await Self.consumeSubscribedSessionEvents(
             makeStream: {
-                await appModel.operatorSession.subscribeServerEvents(bufferingNewest: 200)
+                subscription?.cancel()
+                let current = await Self.makeSessionEventSubscription(gateway: appModel.operatorSession)
+                subscription = current
+                return current.events
             },
             subscribe: {
                 let request = OpenClawChatGatewayRequests.subscribeSessions(timeoutMs: 12000)
-                _ = try await appModel.operatorSession.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs)
+                _ = try await appModel.operatorSession.request(request)
             },
             onEvent: { [weak self] frame in
                 await self?.handleSessionEvent(frame, appModel: appModel) ?? false
-            },
-            invalidateObserverDeclaration: { [weak self] in
-                guard let self else { return }
-                // Subscription generations prevent a delayed old-socket ACK from
-                // satisfying the visibility replay queued for the new socket.
-                self.sessionObserverGeneration &+= 1
-                self.sessionObserverDeclaration = nil
             },
             observerVisibility: { [weak self] in
                 self?.sessionObserverVisibility ?? false
@@ -260,11 +451,21 @@ final class RootSidebarModel {
             })
     }
 
+    static func makeSessionEventSubscription(gateway: GatewayNodeSession) async -> GatewayServerEventSubscription {
+        // Filter on the Gateway actor, before unrelated chat payloads enter this
+        // MainActor consumer or displace a roster update in its bounded buffer.
+        await gateway.makeServerEventSubscription(bufferingNewest: 200, matching: { frame in
+            switch frame.event {
+            case "sessions.changed", "session.observer", "seqGap": true
+            default: false
+            }
+        })
+    }
+
     static func consumeSubscribedSessionEvents(
         makeStream: @MainActor () async -> AsyncStream<EventFrame>,
         subscribe: @MainActor () async throws -> Void,
         onEvent: @MainActor (EventFrame) async -> Bool,
-        invalidateObserverDeclaration: @MainActor () -> Void = {},
         observerVisibility: @MainActor () -> Bool = { false },
         declareObserverVisibility: @MainActor (Bool) async -> Void = { _ in },
         retryDelays: [Duration] = [
@@ -286,30 +487,21 @@ final class RootSidebarModel {
             let stream = await makeStream()
             do {
                 try await subscribe()
-                // Subscriptions are socket-owned; a successful replay invalidates
-                // an old visibility ACK even when the logical route is unchanged.
-                invalidateObserverDeclaration()
                 await declareObserverVisibility(observerVisibility())
                 failureCount = 0
+
+                for await frame in stream {
+                    guard !Task.isCancelled else { return }
+                    if await onEvent(frame) {
+                        break
+                    }
+                }
+                guard !Task.isCancelled else { return }
             } catch is CancellationError {
                 return
             } catch {
-                failureCount += 1
-                guard await self.waitForSessionEventRetry(
-                    failureCount: failureCount,
-                    retryDelays: retryDelays,
-                    sleep: sleep)
-                else { return }
-                continue
+                // Failed subscriptions and ended streams use the same retry budget.
             }
-
-            for await frame in stream {
-                guard !Task.isCancelled else { return }
-                if await onEvent(frame) {
-                    break
-                }
-            }
-            guard !Task.isCancelled else { return }
             failureCount += 1
             guard await self.waitForSessionEventRetry(
                 failureCount: failureCount,
@@ -335,15 +527,52 @@ final class RootSidebarModel {
         }
     }
 
-    private func handleSessionEvent(_ frame: EventFrame, appModel: NodeAppModel) async -> Bool {
-        guard let event = OpenClawChatGatewayPayloadCodec.event(from: frame) else { return false }
+    func handleSessionEvent(_ frame: EventFrame, appModel: NodeAppModel) async -> Bool {
+        guard let event = OpenClawChatGatewayPayloadCodec.event(from: frame) else {
+            if frame.event == "sessions.changed" {
+                self.scheduleSessionRefresh(appModel: appModel)
+            }
+            return false
+        }
         switch event {
-        case .sessionsChanged:
-            await self.refreshSessions(appModel: appModel)
+        case let .sessionsChanged(change):
+            if let key = change.session?.key ?? change.sessionKey, CommandCenterTab.isSubagentSessionKey(key) {
+                // A hidden run never becomes a row. When it starts or stops, reload so the parent's working
+                // state follows it; streaming updates in between change nothing on screen.
+                let running = change.session.map { $0.hasActiveRun == true || $0.hasActiveSubagentRun == true } ?? false
+                if change.reason == "delete" || running != (self.hiddenRunActivity[key] ?? false) {
+                    self.hiddenRunActivity[key] = running
+                    self.scheduleSessionRefresh(appModel: appModel)
+                }
+            } else if change.reason != "delete", let row = change.session,
+                      row.key == change.sessionKey, row.sessionId != nil, row.kind != nil, !row.isArchived,
+                      ChatSessionSidebarModel.isSessionInActiveAgentScope(
+                          key: row.key, agentID: row.agentId, activeAgentID: appModel.chatDeliveryAgentId),
+                      let updated = ChatSessionSidebarModel.applying(
+                          sessionChange: change, to: self.sessions, activeAgentId: appModel.chatDeliveryAgentId)
+            {
+                self.sessions = updated
+                // Replay rows received after an in-flight roster took its snapshot.
+                if self.isRefreshing, let projected = updated.first(where: { $0.key == row.key }) {
+                    // Retain the cumulative projection, not just the latest partial event.
+                    self.sessionChangesDuringLoad[row.key] = .init(
+                        sessionKey: projected.key, agentId: projected.agentId, session: projected)
+                }
+                // Child lifecycle rows cannot clear omitted activity flags on ancestors.
+                if change.reason == "lifecycle" || change.reason == "subagent-status",
+                   (change.parentSessionKey ?? row.parentSessionKey) != nil
+                {
+                    self.scheduleSessionRefresh(appModel: appModel)
+                }
+            } else {
+                if let key = change.sessionKey { self.sessionChangesDuringLoad[key] = nil }
+                self.scheduleSessionRefresh(appModel: appModel)
+            }
         case let .sessionObserver(digest):
             self.sessions = ChatSessionSidebarModel.applying(
                 observerDigest: digest,
-                to: self.sessions)
+                to: self.sessions,
+                activeAgentId: appModel.chatDeliveryAgentId)
         case .seqGap:
             await self.refreshSessions(appModel: appModel)
             return true
@@ -353,15 +582,64 @@ final class RootSidebarModel {
         return false
     }
 
+    private func scheduleSessionRefresh(appModel: NodeAppModel) {
+        self.sessionRefreshCoordinator.scheduleLoad(
+            isLoading: self.isRefreshing,
+            coalescing: true,
+            debounce: .milliseconds(200),
+            sleep: self.sessionRefreshSleep)
+        { [weak self, weak appModel] in
+            guard let self, let appModel else { return }
+            if self.isRefreshing {
+                self.scheduleSessionRefresh(appModel: appModel)
+                return
+            }
+            await self.refreshSessions(appModel: appModel)
+        }
+    }
+
     func reportSessionError(_ error: any Error) {
         self.sessionErrorText = error.localizedDescription
     }
 
-    static func tokenUsageSummary(for sessions: [OpenClawChatSessionEntry]) -> TokenUsageSummary {
+    static func tokenUsageSummary(
+        for sessions: [OpenClawChatSessionEntry],
+        rosterIsComplete: Bool = true) -> TokenUsageSummary
+    {
         let knownTotals = sessions.compactMap(\.totalTokens)
         return TokenUsageSummary(
             total: knownTotals.isEmpty ? nil : knownTotals.reduce(0, +),
-            isPartial: knownTotals.count < sessions.count || sessions.contains { $0.totalTokensFresh == false })
+            isPartial: !rosterIsComplete || knownTotals.count < sessions.count ||
+                sessions.contains { $0.totalTokensFresh == false })
+    }
+
+    func applyRoster(_ roster: ChatSessionRosterSnapshot, activeAgentID: String? = nil) {
+        var sessions = roster.sessions
+        for change in self.sessionChangesDuringLoad.values {
+            if let row = change.session, !sessions.contains(where: { $0.key == row.key }) {
+                sessions.append(row)
+            }
+            sessions = ChatSessionSidebarModel.applying(
+                sessionChange: change, to: sessions, activeAgentId: activeAgentID) ?? sessions
+        }
+        self.sessionChangesDuringLoad = [:]
+        // The one roster owner for the sidebar, the Sessions list and search: hidden runs never list.
+        // Their run state seeds the baseline that decides when a later event needs a reload.
+        self.hiddenRunActivity = Dictionary(
+            sessions.filter { CommandCenterTab.isSubagentSessionKey($0.key) }
+                .map { ($0.key, $0.hasActiveRun == true || $0.hasActiveSubagentRun == true) },
+            uniquingKeysWith: { first, _ in first })
+        sessions = CommandCenterTab.listedSessions(sessions)
+        let heldRows = Dictionary(self.sessions.map { ($0.key, $0) }, uniquingKeysWith: { _, latest in latest })
+        self.sessions = sessions.map { row in
+            guard row.sessionId != nil, row.kind != nil, let held = heldRows[row.key] else { return row }
+            return ChatSessionSidebarModel.applying(
+                sessionChange: .init(sessionKey: row.key, agentId: row.agentId ?? activeAgentID, session: row),
+                to: [held],
+                activeAgentId: activeAgentID)?.first ?? held
+        }
+        self.isSessionRosterComplete = roster.isComplete
+        self.sessionErrorText = roster.incompleteLoadMessage
     }
 
     private func loadRoster(
@@ -369,6 +647,9 @@ final class RootSidebarModel {
         allowCachedFallback: Bool = true) async -> RosterLoadResult
     {
         do {
+            #if DEBUG
+            if let testRosterLoad { return try await .success(testRosterLoad()) }
+            #endif
             return try await .success(appModel.loadChatSessionRoster(
                 limit: Self.sessionLimit,
                 allowCachedFallback: allowCachedFallback))
@@ -395,51 +676,19 @@ final class RootSidebarModel {
     }
 
     private func loadCronJobs(appModel: NodeAppModel) async -> [CronJob]? {
-        let pageLimit = 5
-        let jobLimit = 1000
-        var jobs: [CronJob] = []
-        var seenJobIDs: Set<String> = []
-        var expectedIdentity: CronJobsSnapshotIdentity?
-        var offset = 0
-        for _ in 0..<pageLimit {
+        let snapshot = await CronJobsListLite.collect(maximumPageCount: 5, maximumJobCount: 1000) { offset in
             let paramsJSON = "{\"includeDisabled\":true,\"limit\":200,\"offset\":\(offset)," +
                 "\"sortBy\":\"name\",\"sortDir\":\"asc\"}"
-            let page = await self.request(
+            return await self.request(
                 CronJobsListLite.self,
                 appModel: appModel,
                 method: "cron.list",
                 paramsJSON: paramsJSON)
-            guard let page,
-                  let identity = cronJobsSnapshotIdentity(page: page, maximumCount: jobLimit)
-            else { return nil }
-            if let expectedIdentity, identity != expectedIdentity {
-                return nil
-            }
-            expectedIdentity = identity
-            let pageJobIDs = Set(page.jobs.map(\.id))
-            guard pageJobIDs.count == page.jobs.count,
-                  seenJobIDs.isDisjoint(with: pageJobIDs)
-            else { return nil }
-            seenJobIDs.formUnion(pageJobIDs)
-            jobs.append(contentsOf: page.jobs)
-            guard jobs.count <= jobLimit else { return nil }
-            if let total = identity.total {
-                guard total >= jobs.count else { return nil }
-                if jobs.count == total {
-                    guard !page.hasMore else { return nil }
-                    return jobs
-                }
-            }
-            guard page.hasMore else { return jobs }
-            guard let nextOffset = nextCronJobsListOffset(page: page, currentOffset: offset),
-                  nextOffset <= jobLimit
-            else { return nil }
-            offset = nextOffset
         }
-        return nil
+        return snapshot?.jobs
     }
 
-    private func request<T: Decodable>(
+    private func request<T: Decodable & Sendable>(
         _ type: T.Type,
         appModel: NodeAppModel,
         method: String,
@@ -450,7 +699,7 @@ final class RootSidebarModel {
                 method: method,
                 paramsJSON: paramsJSON,
                 timeoutSeconds: 12)
-            return try JSONDecoder().decode(type, from: data)
+            return try await GatewayPayloadDecoding.decode(type, from: data)
         } catch {
             return nil
         }

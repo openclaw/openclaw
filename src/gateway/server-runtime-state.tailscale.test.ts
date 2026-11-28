@@ -1,8 +1,11 @@
 import { request as httpRequest, type RequestOptions } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { createAuthRateLimiter } from "./auth-rate-limit.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
+import { createPreparedReadinessFixture } from "./server/readiness.test-support.js";
 import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
 
 async function requestStatus(options: RequestOptions): Promise<{ status: number; body: string }> {
@@ -79,10 +82,7 @@ describe("managed Tailscale gateway ingress", () => {
   });
 
   it("keeps ordinary ingress closed until the managed route is claimed", async () => {
-    let releaseRouteClaim: () => void = () => {};
-    const routeClaim = new Promise<void>((resolve) => {
-      releaseRouteClaim = resolve;
-    });
+    const { promise: routeClaim, resolve: releaseRouteClaim } = createDeferred();
     const prepareManagedTailscaleIngress = vi.fn(async () => await routeClaim);
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "serve",
@@ -101,10 +101,35 @@ describe("managed Tailscale gateway ingress", () => {
     expect(runtime.httpServer.listening).toBe(true);
   });
 
+  it.each(["serve", "funnel"] as const)(
+    "does not bind or claim managed %s ingress while validating an update",
+    async (tailscaleMode) => {
+      // The live Gateway still owns the route; the candidate must not race it for the claim.
+      const prepareManagedTailscaleIngress = vi.fn(async () => {});
+      const runtime = await createGatewayRuntimeStateForTest(undefined, {
+        tailscaleMode,
+        updateCanary: true,
+        prepareManagedTailscaleIngress,
+      });
+      openServers.push(runtime);
+
+      await runtime.startListening();
+
+      expect(prepareManagedTailscaleIngress).not.toHaveBeenCalled();
+      expect(runtime.getTailscaleIngressEndpoint()).toBeUndefined();
+      expect(runtime.httpServer.listening).toBe(true);
+    },
+  );
+
   it("binds a distinct private listener and rejects the same headers on the ordinary listener", async () => {
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "serve",
-      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
+      getReadiness: createPreparedReadinessFixture(() => ({
+        ready: true,
+        coreReady: true,
+        failing: [],
+        uptimeMs: 1,
+      })),
     });
     openServers.push(runtime);
     await runtime.startListening();
@@ -148,7 +173,12 @@ describe("managed Tailscale gateway ingress", () => {
   it("accepts tailnet and public ingress on the dedicated Funnel listener", async () => {
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "funnel",
-      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
+      getReadiness: createPreparedReadinessFixture(() => ({
+        ready: true,
+        coreReady: true,
+        failing: [],
+        uptimeMs: 1,
+      })),
     });
     openServers.push(runtime);
     await runtime.startListening();
@@ -220,12 +250,15 @@ describe("managed Tailscale gateway ingress", () => {
   });
 
   it("isolates protected Funnel auth lockout by the validated source", async () => {
-    const limiter = createAuthRateLimiter({
-      maxAttempts: 1,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-      pruneIntervalMs: 0,
-    });
+    const limiter = createGatewayAuthRateLimiter(
+      {
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        pruneIntervalMs: 0,
+      },
+      { scheduler: createTestGatewayScheduler() },
+    );
     const auth = { mode: "token" as const, token: "secret", allowTailscale: false };
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "funnel",
@@ -295,7 +328,12 @@ describe("managed Tailscale gateway ingress", () => {
     });
     const runtime = await createGatewayRuntimeStateForTest(registry, {
       tailscaleMode: "serve",
-      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
+      getReadiness: createPreparedReadinessFixture(() => ({
+        ready: true,
+        coreReady: true,
+        failing: [],
+        uptimeMs: 1,
+      })),
     });
     openServers.push(runtime);
     await runtime.startListening();
@@ -333,61 +371,5 @@ describe("managed Tailscale gateway ingress", () => {
     });
     expect(rejectedGatewayUpgrade.status).toBe(403);
     expect(rejectedGatewayUpgrade.body).toContain("proxy_attribution_required");
-  });
-
-  it("reports HTTP and WebSocket proxy ingress once without warning for attributable traffic", async () => {
-    const log = { info: vi.fn(), warn: vi.fn() };
-    const runtime = await createGatewayRuntimeStateForTest(undefined, {
-      tailscaleMode: "serve",
-      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
-      log,
-    });
-    openServers.push(runtime);
-    await runtime.startListening();
-    const ordinaryAddress = runtime.httpServer.address();
-    const endpoint = runtime.getTailscaleIngressEndpoint();
-    if (!ordinaryAddress || typeof ordinaryAddress === "string" || !endpoint) {
-      throw new Error("expected both gateway listeners");
-    }
-
-    await expect(
-      requestStatus({
-        host: "127.0.0.1",
-        port: ordinaryAddress.port,
-        path: "/ready",
-      }),
-    ).resolves.toMatchObject({ status: 200 });
-    await expect(
-      requestStatus({
-        host: endpoint.host,
-        port: endpoint.port,
-        path: "/ready",
-        headers: {
-          "x-forwarded-for": "100.64.0.10",
-          "x-forwarded-proto": "https",
-          "x-forwarded-host": "gateway.tailnet.ts.net",
-        },
-      }),
-    ).resolves.toMatchObject({ status: 200 });
-    expect(log.warn).not.toHaveBeenCalled();
-
-    const proxyRequest = {
-      host: "127.0.0.1",
-      port: ordinaryAddress.port,
-      path: "/ready",
-      headers: {
-        "x-forwarded-for": "203.0.113.10",
-        "x-forwarded-proto": "https",
-        "x-forwarded-host": "gateway.example",
-      },
-    } satisfies RequestOptions;
-    const rejectedHttp = await requestStatus(proxyRequest);
-    const rejectedWebSocket = await requestUpgrade(proxyRequest);
-
-    expect(rejectedHttp.status).toBe(403);
-    expect(rejectedHttp.body).toContain("proxy_attribution_required");
-    expect(rejectedWebSocket.status).toBe(403);
-    expect(log.warn).toHaveBeenCalledOnce();
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("gateway.trustedProxies"));
   });
 });

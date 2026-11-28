@@ -1,35 +1,74 @@
+import type { DatabaseSync } from "node:sqlite";
+import { compareReleaseVersions } from "../../scripts/lib/release-version.mjs";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../state/openclaw-state-db-contract.js";
-import { VERSION } from "../version.js";
-import { resolveCommitHash } from "./git-commit.js";
+import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
+import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
-
-type SqliteUserVersionReader = {
-  prepare: (sql: string) => { get: () => unknown };
-};
+import type { EngineConnection } from "./sql-connection.js";
+import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
 
 const SQLITE_SCHEMA_VERSION_ERROR_NAME = "SqliteSchemaVersionError";
+export type SqliteSchemaErrorContext = "runtime" | "doctor-maintenance";
 
-export function isSqliteSchemaVersionError(error: unknown): error is Error {
-  return error instanceof Error && error.name === SQLITE_SCHEMA_VERSION_ERROR_NAME;
+export class SqliteSchemaVersionError extends StartupMaintenanceRequiredError {
+  override name = SQLITE_SCHEMA_VERSION_ERROR_NAME;
+
+  constructor(message: string) {
+    super("newer-schema", message);
+  }
 }
 
-export function readSqliteUserVersion(db: SqliteUserVersionReader): number {
-  const row = db.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
+export function isSqliteSchemaVersionError(error: unknown): error is Error {
+  return (
+    error instanceof SqliteSchemaVersionError ||
+    (error instanceof Error && error.name === SQLITE_SCHEMA_VERSION_ERROR_NAME)
+  );
+}
+
+export function readSqliteUserVersion(db: DatabaseSync): number {
+  const row = executeWithCachedStatement(db, "PRAGMA user_version", [], (statement) =>
+    statement.get(),
+  );
   return Number(row?.user_version ?? 0);
 }
 
+export function readSqliteWriterAppVersion(database: EngineConnection): string | undefined {
+  try {
+    // Schema inspection stays independent of Kysely's runtime graph so even native startup can refuse.
+    const row = executeWithCachedStatement(
+      database,
+      "SELECT app_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+      [],
+      (statement) => statement.get(),
+    );
+    return typeof row?.app_version === "string" && row.app_version.length > 0
+      ? row.app_version
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function writeSqliteUserVersion(db: DatabaseSync, version: number): void {
+  if (!Number.isInteger(version) || version < 0 || version > 2147483647) {
+    throw new RangeError("SQLite user_version must be an integer from 0 through 2147483647.");
+  }
+  db.exec(`PRAGMA user_version = ${version}`);
+}
+
 /**
- * Name the refusing install the way `--version` does, plus the root it runs from.
- * The path is the only part an operator can always act on: one release version
- * string spans many commits, and a linked source checkout reports its git HEAD
- * even when the built output actually executing is older.
+ * Name the refusing build from immutable loaded metadata, plus its install root.
+ * The path remains actionable when multiple installs share a version or build.
  */
 export function describeRunningOpenClawBuild(): string {
-  const moduleUrl = import.meta.url;
-  const commit = resolveCommitHash({ moduleUrl });
-  const root = resolveOpenClawPackageRootSync({ moduleUrl });
+  const commit = resolveRuntimeServiceCommit();
+  const root = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
   const identity = commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`;
   return root ? `${identity} installed at ${root}` : identity;
+}
+
+export function isNewerSqliteWriterVersion(writerAppVersion: string | undefined): boolean {
+  return (compareReleaseVersions(writerAppVersion ?? "", VERSION) ?? 0) > 0;
 }
 
 export function createNewerSqliteSchemaVersionError(
@@ -37,14 +76,25 @@ export function createNewerSqliteSchemaVersionError(
   pathname: string,
   schemaVersion: number,
   supportedVersion: number,
+  writerAppVersion?: string,
+  context: SqliteSchemaErrorContext = "runtime",
 ): Error {
-  const error = new Error(
-    `${databaseLabel} ${pathname} uses newer schema version ${schemaVersion}; this build supports ${supportedVersion}. ` +
-      `Refused by ${describeRunningOpenClawBuild()}. ` +
-      "Identify installs by that path: one version string spans many builds, and a linked source checkout reports its git HEAD even when its built output is older. " +
-      `Run a build that supports schema ${schemaVersion} or newer against this state directory — rebuild or update the install above — or point this build at a different OPENCLAW_STATE_DIR. ` +
+  const newerWriter = isNewerSqliteWriterVersion(writerAppVersion);
+  const writerDetail = newerWriter
+    ? `; it is newer than this Gateway (${VERSION}).`
+    : context === "runtime"
+      ? "; run openclaw doctor --fix to inspect this database."
+      : ".";
+  return new SqliteSchemaVersionError(
+    "This OpenClaw build cannot open your existing data.\n" +
+      `${databaseLabel} ${pathname} uses newer schema version ${schemaVersion}; this build supports ${supportedVersion}.\n` +
+      (writerAppVersion && (context === "runtime" || writerAppVersion !== VERSION)
+        ? `It was written by OpenClaw ${writerAppVersion}${writerDetail}\n`
+        : "") +
+      `Refused by ${describeRunningOpenClawBuild()}.\n` +
+      (newerWriter
+        ? `Use the newer install that supports schema ${schemaVersion} or newer, or run openclaw update to update this Gateway service before restarting. To use an older build, restore your pre-update backup created with openclaw backup create.\n`
+        : `Use a build that supports schema ${schemaVersion} or newer with this state directory. To use an older build, restore your pre-update backup created with openclaw backup create.\n`) +
       `See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
   );
-  error.name = SQLITE_SCHEMA_VERSION_ERROR_NAME;
-  return error;
 }

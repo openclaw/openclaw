@@ -1,12 +1,111 @@
 import Foundation
 
 extension OpenClawChatViewModel {
+    public nonisolated static let defaultModelSelectionID = "__default__"
+    public nonisolated static let inheritedThinkingSelectionID = "__inherited__"
+
+    func projectedModelSelectionID(_ requested: String) -> String {
+        guard !self.modelCatalogInvalidated else { return Self.defaultModelSelectionID }
+        guard self.modelSelectionPolicy?.restricted == true else { return requested }
+        return self.modelChoices.contains(where: { $0.selectionID == requested || $0.modelID == requested })
+            ? requested : Self.defaultModelSelectionID
+    }
+
+    public var defaultModelLabel: String {
+        let defaults = self.modelPickerDefault
+        guard let defaultModelID = normalizedModelSelectionID(defaults.model, provider: defaults.provider) else {
+            return "Default"
+        }
+        return "Default: \(defaultModelID)"
+    }
+
+    func invalidateModelChoices() {
+        self.nextModelCatalogRequestID &+= 1
+        self.modelCatalogInvalidated = true
+        self.hasReceivedModelCatalog = false
+        self.modelChoices = []
+    }
+
+    func fetchModels(sessionSnapshot: SessionSnapshot? = nil) async {
+        self.nextModelCatalogRequestID &+= 1
+        let requestID = self.nextModelCatalogRequestID
+        let session = sessionSnapshot ?? self.currentSessionSnapshot()
+        let target = self.currentModelPatchTarget()
+        let settingsRevision = self.settingsPatchRevisionsByTarget[target, default: 0]
+        // Show the last list this server sent at once; the answer below replaces it if it changed.
+        let cacheKey = self.modelCatalogCacheKey
+        if self.modelChoices.isEmpty, let cacheKey, let cached = ChatModelCatalogCache.load(cacheKey) {
+            self.modelChoices = cached
+            self.syncSelectedModel()
+            self.syncThinkingLevelOptions()
+        }
+        do {
+            let catalog = try await transport.loadModelCatalog(
+                sessionKey: session.key,
+                agentID: session.deliveryAgentID)
+            guard self.isCurrentSession(session), requestID == self.nextModelCatalogRequestID else {
+                return
+            }
+            if self.modelChoices != catalog.choices {
+                self.modelChoices = catalog.choices
+            }
+            if let cacheKey { ChatModelCatalogCache.store(catalog.choices, key: cacheKey) }
+            self.modelSelectionPolicy = catalog.modelSelectionPolicy
+            self.modelCatalogInvalidated = false
+            self.hasReceivedModelCatalog = true
+            self.modelAvailabilityIsSessionScoped = catalog.availabilityIsSessionScoped
+            self.modelCatalogMessage = catalog.message
+            if target == self.currentModelPatchTarget(),
+               settingsRevision == self.settingsPatchRevisionsByTarget[target, default: 0],
+               self.inFlightSettingsPatchCountsByTarget[target] == nil
+            {
+                self.syncSelectedModel()
+            }
+            syncThinkingLevelOptions()
+        } catch {
+            guard self.isCurrentSession(session), requestID == self.nextModelCatalogRequestID else { return }
+            #if os(iOS)
+            // With a list on screen a failed refresh says nothing; with none, the model sheet says so with
+            // its own Try again row, and tries again when it opens.
+            guard self.modelChoices.isEmpty else { return }
+            self.modelCatalogMessage = String(localized: "Couldn’t load models.")
+            #else
+            self.modelCatalogMessage = String(localized: "Model choices could not load. Reconnect and try again.")
+            #endif
+            self.syncThinkingLevelOptions()
+        }
+    }
+
     public static let verboseLevelOptions = ["off", "on", "full"]
 
+    public func modelSignInContext() async -> OpenClawChatModelSignInContext? {
+        let session = self.currentSessionSnapshot()
+        let agentID = session.deliveryAgentID ?? OpenClawChatSessionKey.agentID(from: session.key) ?? self.activeAgentId
+        guard let context = await self.transport.acquireModelSignInContext(agentID: agentID) else {
+            guard self.isCurrentSession(session) else { return nil }
+            self.errorText = String(localized: "Model sign-in needs a newer Gateway. Update it or use /login.")
+            return nil
+        }
+        guard self.isCurrentSession(session) else { return nil }
+        return OpenClawChatModelSignInContext(
+            agentID: context.agentID,
+            request: context.request,
+            isCurrent: { [weak self] in
+                guard let self, self.isCurrentSession(session) else { return false }
+                let current = await context.isCurrent()
+                return current && self.isCurrentSession(session)
+            })
+    }
+
+    public func refreshModelSignIn() async {
+        await self.fetchModels()
+    }
+
     public var modelPickerSections: ChatModelPickerSections {
+        let defaults = self.modelPickerDefault
         let defaultProvider = ChatModelPickerStore.resolvedDefaultProvider(
-            provider: self.sessionDefaults?.modelProvider,
-            model: self.sessionDefaults?.model)
+            provider: defaults.provider,
+            model: defaults.model)
         return ChatModelPickerStore.sections(
             choices: self.modelChoices,
             favorites: self.modelPickerFavorites,
@@ -14,11 +113,177 @@ extension OpenClawChatViewModel {
             defaultProvider: defaultProvider)
     }
 
+    /// The models of the chats in the chat list, most recently active first, merged with this device's picks.
+    public var modelPickerRecentIDs: [String] {
+        ChatModelPickerStore.recentModelIDs(
+            chats: self.sessions.filter { $0.archived != true }.map {
+                (self.sessionModelChoice(for: $0)?.selectionID, $0.lastActivityAt ?? $0.updatedAt ?? 0)
+            },
+            picks: self.modelPickerRecents)
+    }
+
+    /// The phone picker's catalog: every provider with all of its models, and the current model on the root.
+    /// `recentOrder` holds Recent still while the sheet is open.
+    public func modelPickerCatalog(recentOrder: [String]? = nil) -> ChatModelPickerCatalog {
+        let defaults = self.modelPickerDefault
+        return ChatModelPickerStore.catalog(
+            choices: self.modelChoices,
+            favorites: self.modelPickerFavorites,
+            recents: recentOrder ?? self.modelPickerRecentIDs,
+            current: self.selectedModelChoice(for: self.currentSessionEntry())?.selectionID,
+            defaultProvider: ChatModelPickerStore.resolvedDefaultProvider(
+                provider: defaults.provider,
+                model: defaults.model))
+    }
+
+    /// The model the session runs on right now, however it got there, so the picker can mark it.
+    public func isCurrentPickerModel(_ model: OpenClawChatModelChoice) -> Bool {
+        self.selectedModelChoice(for: self.currentSessionEntry())?.selectionID == model.selectionID
+    }
+
+    /// On the Mac picking a model waits while settings save. A running reply does not lock it: the new model answers
+    /// from the next message, as in the Control UI.
+    var composerModelChoicesLocked: Bool {
+        #if os(iOS)
+        // A pick saves in the background: nothing waits for the previous save.
+        return !self.composerModelMutationAvailable || !self.showsModelPicker
+        #else
+        return !self.composerModelMutationAvailable || self.isUpdatingSessionSettings
+        #endif
+    }
+
+    public var modelSelectionTargetDescription: String? {
+        switch self.sessionDefaults?.modelSelectionTarget {
+        case "agent": String(localized: "Changes this agent's default")
+        case "global": String(localized: "Changes the global default")
+        default: nil
+        }
+    }
+
+    public func isModelUnavailable(_ model: OpenClawChatModelChoice) -> Bool {
+        self.modelAvailabilityIsSessionScoped && model.available == false
+    }
+
+    var modelPickerDefault: (model: String?, provider: String?) {
+        guard !self.modelCatalogInvalidated else { return (nil, nil) }
+        if let policy = self.modelSelectionPolicy, policy.restricted {
+            return (policy.defaultModel, nil)
+        }
+        return (self.sessionDefaults?.model, self.sessionDefaults?.modelProvider)
+    }
+
+    public var canSelectDefaultModel: Bool {
+        !self.modelCatalogInvalidated &&
+            (self.modelSelectionPolicy?.restricted != true || self.modelSelectionPolicy?.defaultModel != nil)
+    }
+
+    public func canSelectModel(_ selectionID: String) -> Bool {
+        guard !self.modelCatalogInvalidated else { return false }
+        if selectionID == Self.defaultModelSelectionID { return self.canSelectDefaultModel }
+        guard let model = self.modelChoices.first(where: { $0.selectionID == selectionID }) else {
+            return self.modelSelectionPolicy?.restricted != true
+        }
+        return model.manualSelectionAllowed != false && !self.isModelUnavailable(model)
+    }
+
+    public func modelUnavailableDescription(_ model: OpenClawChatModelChoice) -> String? {
+        guard self.isModelUnavailable(model) else { return nil }
+        return model.availabilityReason?.pickerDescription ?? String(localized: "Unavailable")
+    }
+
+    public var selectedModelUnavailableReason: OpenClawChatModelUnavailableReason? {
+        guard self.modelAvailabilityIsSessionScoped,
+              let selectedKey = self.selectedModelAvailabilityKey()
+        else { return nil }
+        let matches = self.modelChoices.filter {
+            Self.modelAvailabilityKey(modelID: $0.modelID, provider: $0.provider) == selectedKey
+        }
+        guard !matches.isEmpty,
+              matches.allSatisfy({ $0.available == false && $0.availabilityReason != nil })
+        else { return nil }
+        let reasons = matches.compactMap(\.availabilityReason)
+        if reasons.contains(.cooldown) {
+            return .cooldown
+        }
+        if let unknown = reasons.first(where: {
+            if case .unknown = $0 { return true }
+            return false
+        }) {
+            return unknown
+        }
+        return reasons.contains(.authFailed) ? .authFailed : .missingAuth
+    }
+
+    public var composerModelAvailabilityMessage: String? {
+        guard self.healthOK,
+              !self.currentDraftUsesDurableQueue,
+              let reason = self.selectedModelUnavailableReason,
+              reason.blocksSend
+        else { return nil }
+        switch reason {
+        case .missingAuth:
+            return String(localized: "No provider credential is configured for this model. Set it up in Model Setup.")
+        case .authFailed:
+            return String(localized: "Authentication failed. Review the provider credential or sign-in, then retry.")
+        case .cooldown, .unknown:
+            return nil
+        }
+    }
+
+    private var currentDraftUsesDurableQueue: Bool {
+        self.outbox != nil && (!self.attachments.isEmpty || self.hasPendingOutboxCommandsForCurrentSession)
+    }
+
+    private func selectedModelAvailabilityKey() -> String? {
+        if self.modelSelectionID != Self.defaultModelSelectionID {
+            return Self.modelAvailabilityKey(modelID: self.canonicalModelSelectionID, provider: nil)
+        }
+        if self.modelSelectionPolicy?.restricted == true {
+            let defaults = self.modelPickerDefault
+            return self.resolvedModelAvailabilityKey(modelID: defaults.model, provider: defaults.provider)
+        }
+        let session = self.currentSessionEntry()
+        if let model = session?.model {
+            return self.resolvedModelAvailabilityKey(modelID: model, provider: session?.modelProvider)
+        }
+        return self.resolvedModelAvailabilityKey(
+            modelID: self.sessionDefaults?.model,
+            provider: self.sessionDefaults?.modelProvider)
+    }
+
+    private func resolvedModelAvailabilityKey(modelID: String?, provider: String?) -> String? {
+        guard let direct = Self.modelAvailabilityKey(modelID: modelID, provider: provider) else { return nil }
+        if direct.contains("/") {
+            return direct
+        }
+        let matches = Set(self.modelChoices.compactMap { choice -> String? in
+            guard choice.modelID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == direct else {
+                return nil
+            }
+            return Self.modelAvailabilityKey(modelID: choice.modelID, provider: choice.provider)
+        })
+        return matches.count == 1 ? matches.first : direct
+    }
+
+    private static func modelAvailabilityKey(modelID: String?, provider: String?) -> String? {
+        guard let modelID = modelID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !modelID.isEmpty
+        else { return nil }
+        if let separator = modelID.firstIndex(of: "/"), separator != modelID.startIndex {
+            return modelID
+        }
+        guard let provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !provider.isEmpty
+        else { return modelID }
+        return "\(provider.lowercased())/\(modelID)"
+    }
+
     public func isDefaultModel(_ model: OpenClawChatModelChoice) -> Bool {
-        ChatModelPickerStore.isDefaultModel(
+        let defaults = self.modelPickerDefault
+        return ChatModelPickerStore.isDefaultModel(
             model,
-            defaultProvider: self.sessionDefaults?.modelProvider,
-            defaultModel: self.sessionDefaults?.model)
+            defaultProvider: defaults.provider,
+            defaultModel: defaults.model)
     }
 
     public var isSelectedModelPinned: Bool {
@@ -28,7 +293,11 @@ extension OpenClawChatViewModel {
 
     public func toggleSelectedModelPinned() {
         guard self.modelSelectionID != Self.defaultModelSelectionID else { return }
-        self.modelPickerStore.toggleFavorite(self.modelSelectionID)
+        self.toggleModelPinned(self.modelSelectionID)
+    }
+
+    public func toggleModelPinned(_ selectionID: String) {
+        self.modelPickerStore.toggleFavorite(selectionID)
         self.modelPickerFavorites = self.modelPickerStore.favorites
     }
 
@@ -53,17 +322,157 @@ extension OpenClawChatViewModel {
             : Self.inheritedThinkingSelectionID
     }
 
-    public var fastModeSelectionID: String {
-        guard let session = self.currentSessionEntry(), session.fastMode != nil else {
-            return Self.inheritedThinkingSelectionID
-        }
-        return (session.effectiveFastMode ?? session.fastMode)?.isEnabled == true ? "on" : "off"
+    private var fastModeProfile: OpenClawChatFastModeProfile {
+        let session = self.currentSessionEntry()
+        return OpenClawChatFastModeProfile.resolve(session: session, model: self.selectedModelChoice(for: session))
     }
 
-    /// `models.list` currently has no fast-support capability field. Keep the
-    /// control available and let the gateway validate the session patch.
+    public var fastModeSelectionID: String {
+        let profile = self.fastModeProfile
+        guard profile.override != nil else {
+            return Self.inheritedThinkingSelectionID
+        }
+        return profile.isEnabled ? "on" : "off"
+    }
+
+    public var fastModeIsEnabled: Bool {
+        self.fastModeProfile.isEnabled
+    }
+
+    /// Ultrafast is offered only when the selected model's account advertises the tier.
+    public var selectedModelSupportsUltrafast: Bool {
+        let model = self.selectedModelChoice(for: self.currentSessionEntry())
+        return self.selectedModelSupportsFastMode && model?.available != false &&
+            model?.serviceTiers?.contains("ultrafast") == true
+    }
+
+    /// Speed choices for the phone effort bar: Standard and Fast, and Ultrafast where offered.
+    public var composerSpeedOptions: [String] {
+        self.selectedModelSupportsUltrafast ? ["off", "on", "ultrafast"] : ["off", "on"]
+    }
+
+    /// The speed the next reply runs at, inherited or chosen.
+    public var composerSpeedSelection: String {
+        let profile = self.fastModeProfile
+        if profile.override == .ultrafast || (profile.override == nil && profile.effective == .ultrafast) {
+            return self.selectedModelSupportsUltrafast ? "ultrafast" : "on"
+        }
+        return profile.isEnabled ? "on" : "off"
+    }
+
+    #if os(iOS)
+    /// On first load, show a cached name immediately, but never paint a provisional raw ID.
+    /// An empty or failed catalog still gets the usual label, including on background refresh.
+    var isWaitingForComposerModelName: Bool {
+        self.isLoading && !self.hasReceivedModelCatalog && self.modelCatalogMessage == nil &&
+            self.selectedModelChoice(for: self.currentSessionEntry()) == nil
+    }
+    #endif
+
+    public var composerInlineModelLabel: String {
+        let selectionID = self.modelSelectionID
+        let defaults = self.modelPickerDefault
+        let resolvedID: String? = if selectionID == Self.defaultModelSelectionID {
+            self.normalizedModelSelectionID(defaults.model, provider: defaults.provider)
+        } else {
+            selectionID
+        }
+        #if os(iOS)
+        // Without the model list or the chat defaults, the chat's own model still names the chip.
+        guard let resolvedID = resolvedID ?? self.currentSessionEntry()?.model?.trimmedNonEmpty else {
+            return String(localized: "Model")
+        }
+        #else
+        guard let resolvedID else { return "Default" }
+        #endif
+        guard let choice = self.modelChoice(modelID: resolvedID, provider: nil) else {
+            return resolvedID.split(separator: "/").last.map(String.init) ?? resolvedID
+        }
+        return Self.shortModelLabel(name: choice.name, provider: choice.provider, modelID: choice.modelID)
+    }
+
+    /// Catalog name without a repeated provider, like web `formatModelLabel`
+    /// (ui/src/pages/chat/components/chat-model-picker-options.ts:92-110, provider-icon-data.ts:174-180).
+    /// Catalog rows without a real name fall back to the bare model id.
+    nonisolated static func shortModelLabel(name: String, provider: String, modelID: String) -> String {
+        let bareID = modelID.split(separator: "/").last.map(String.init) ?? modelID
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != modelID, trimmed != bareID, trimmed != "\(provider)/\(bareID)" else {
+            return bareID
+        }
+        let providerLabel = provider
+            .split(whereSeparator: { $0 == "-" || $0 == "_" })
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+        guard !providerLabel.isEmpty else { return trimmed }
+        let lowered = trimmed.lowercased()
+        if lowered.hasPrefix(providerLabel.lowercased() + " ") {
+            return String(trimmed.dropFirst(providerLabel.count + 1))
+        }
+        let suffix = " (\(providerLabel.lowercased()))"
+        if lowered.hasSuffix(suffix) {
+            return String(trimmed.dropLast(suffix.count))
+        }
+        return trimmed
+    }
+
+    public var canonicalModelSelectionID: String {
+        let selectionID = self.modelSelectionID
+        if selectionID == Self.defaultModelSelectionID {
+            return Self.defaultModelSelectionID
+        }
+        return self.normalizedModelSelectionID(selectionID) ?? selectionID
+    }
+
+    public func isSelectedModel(_ selectionID: String) -> Bool {
+        Self.modelSelectionMatches(
+            selectionID: selectionID,
+            currentSelectionID: self.modelSelectionID,
+            choices: self.modelChoices)
+    }
+
+    static func modelSelectionMatches(
+        selectionID: String,
+        currentSelectionID: String,
+        choices: [OpenClawChatModelChoice]) -> Bool
+    {
+        if selectionID == self.defaultModelSelectionID {
+            return currentSelectionID == self.defaultModelSelectionID
+        }
+        guard let choice = choices.first(where: { $0.selectionID == selectionID }) else {
+            return currentSelectionID == selectionID
+        }
+        return currentSelectionID == choice.selectionID || currentSelectionID == choice.modelID
+    }
+
+    public var composerInlineEffortLabel: String {
+        let effort = self.thinkingOverrideIsInherited
+            ? String(
+                format: String(localized: "Inherited %@"),
+                self.thinkingLevel)
+            : self.thinkingLevel
+        return self.fastModeIsEnabled
+            ? String(
+                format: String(localized: "%@, Fast"),
+                effort)
+            : effort
+    }
+
+    public var composerInlineEffortAngle: Double {
+        guard self.thinkingLevel != "off",
+              let index = self.thinkingLevelOptions.firstIndex(where: { $0.id == self.thinkingLevel })
+        else { return -120 }
+        guard self.thinkingLevelOptions.count > 1 else { return 120 }
+        let fraction = Double(index) / Double(self.thinkingLevelOptions.count - 1)
+        return -120 + fraction * 240
+    }
+
     public var selectedModelSupportsFastMode: Bool {
-        true
+        self.fastModeProfile.supportsFastMode
+    }
+
+    public var showsFastModeControls: Bool {
+        self.fastModeProfile.showsControls
     }
 
     public var isUpdatingSessionSettings: Bool {
@@ -85,6 +494,7 @@ extension OpenClawChatViewModel {
         guard clearsOverride ? baselineSessionLevel != nil : Self.normalizedVerboseLevel(baselineSessionLevel) != next
         else { return }
 
+        self.errorText = nil
         if self.acceptedVerboseLevelsByTarget[target] == nil {
             self.acceptedVerboseLevelsByTarget[target] = baselineSessionLevel.map(VerboseLevelState.value)
                 ?? VerboseLevelState.none
@@ -93,7 +503,7 @@ extension OpenClawChatViewModel {
         self.updateCurrentSessionVerboseLevel(next, sessionKey: sessionKey)
         self.nextVerboseSelectionRequestID &+= 1
         let verboseRequestID = self.nextVerboseSelectionRequestID
-        let requestedPreference = VerbosePreferenceState(
+        let requestedPreference = PreferenceState(
             level: next ?? self.preferredVerboseLevel,
             isExplicit: !clearsOverride)
         self.verbosePreferenceRequests[verboseRequestID] = .pending(requestedPreference)
@@ -104,9 +514,9 @@ extension OpenClawChatViewModel {
             do {
                 guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
                 let result = try await routeLease.patchSessionSettings(
-                    sessionKey: target.canonicalSessionKey,
-                    agentID: target.agentID,
-                    patch: OpenClawChatSessionSettingsPatch(verboseLevel: .some(next)))
+                    target.canonicalSessionKey,
+                    target.agentID,
+                    OpenClawChatSessionSettingsPatch(verboseLevel: .some(next)))
                 let accepted = clearsOverride ? nil : (Self.normalizedVerboseLevel(result?.verboseLevel) ?? next)
                 self.acceptedVerboseLevelsByTarget[target] = accepted.map(VerboseLevelState.value)
                     ?? VerboseLevelState.none
@@ -115,7 +525,7 @@ extension OpenClawChatViewModel {
                     requestID: requestID,
                     target: target,
                     verboseLevelOverride: .some(accepted))
-                self.verbosePreferenceRequests[verboseRequestID] = .succeeded(VerbosePreferenceState(
+                self.verbosePreferenceRequests[verboseRequestID] = .succeeded(PreferenceState(
                     level: accepted ?? requestedPreference.level,
                     isExplicit: !clearsOverride))
                 self.reconcileVerbosePreferenceRequests()
@@ -133,19 +543,16 @@ extension OpenClawChatViewModel {
                         self.acceptedVerboseLevelsByTarget[target]?.level,
                         sessionKey: state.key,
                         exactMatchOnly: state.exactMatchOnly)
+                    if !state.exactMatchOnly { self.errorText = error.localizedDescription }
                 }
             }
         }
     }
 
     private func reconcileVerbosePreferenceRequests() {
-        let resolved = self.verbosePreferenceRequests.keys.sorted(by: >).compactMap { requestID
-            -> VerbosePreferenceState? in
-            switch self.verbosePreferenceRequests[requestID] {
-            case let .pending(state), let .succeeded(state): state
-            case .failed, .none: nil
-            }
-        }.first ?? self.confirmedVerbosePreference
+        let resolved = self.verbosePreferenceRequests.keys.sorted(by: >)
+            .compactMap { self.verbosePreferenceRequests[$0]?.state }
+            .first ?? self.confirmedVerbosePreference
         if resolved.level != self.preferredVerboseLevel {
             self.preferredVerboseLevel = resolved.level
             self.onVerboseLevelChanged?(resolved.level)
@@ -169,14 +576,18 @@ extension OpenClawChatViewModel {
         case Self.inheritedThinkingSelectionID: next = nil
         case "on": next = .on
         case "off": next = .off
+        case "ultrafast": next = .ultrafast
         default: return
         }
+        guard next == nil || self.selectedModelSupportsFastMode else { return }
+        guard next != .ultrafast || self.selectedModelSupportsUltrafast else { return }
         let target = self.currentModelPatchTarget()
         let sessionKey = self.sessionKey
         let baselineFastMode = self.currentSessionEntry()?.fastMode
         let baselineEffectiveFastMode = self.currentSessionEntry()?.effectiveFastMode
         guard baselineFastMode != next else { return }
 
+        self.errorText = nil
         if self.acceptedFastModesByTarget[target] == nil {
             self.acceptedFastModesByTarget[target] = FastModeState(
                 override: baselineFastMode,
@@ -188,14 +599,19 @@ extension OpenClawChatViewModel {
             effective: next ?? baselineEffectiveFastMode,
             sessionKey: sessionKey)
         let requestID = self.reserveSessionSettingsRequest(for: target)
+        self.optimisticSettingsLanes[target, default: .init()].latestFastModeRequestID = requestID
         self.enqueueSessionSettingsPatch(requestID: requestID, target: target) { [weak self] routeLease in
             guard let self else { return }
+            // Latest wins: a speed that a newer pick replaced before its turn is never sent.
+            guard requestID == self.optimisticSettingsLanes[target]?.latestFastModeRequestID else { return }
             do {
                 guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
-                let result = try await routeLease.patchSessionSettings(
-                    sessionKey: target.canonicalSessionKey,
-                    agentID: target.agentID,
-                    patch: OpenClawChatSessionSettingsPatch(fastMode: .some(next)))
+                let result = try await Self.retryingOnce {
+                    try await routeLease.patchSessionSettings(
+                        target.canonicalSessionKey,
+                        target.agentID,
+                        OpenClawChatSessionSettingsPatch(fastMode: .some(next)))
+                }
                 let acceptedOverride = next == nil ? nil : (result?.fastMode ?? next)
                 let acceptedEffective = result?.effectiveFastMode
                     ?? result?.fastMode
@@ -210,7 +626,10 @@ extension OpenClawChatViewModel {
                     target: target,
                     fastModeOverride: .some(acceptedOverride),
                     effectiveFastMode: acceptedEffective)
-                if let state = self.modelControlState(for: target, originalSessionKey: sessionKey) {
+                // A newer pick made while this one was saving keeps the screen.
+                if requestID == self.optimisticSettingsLanes[target]?.latestFastModeRequestID,
+                   let state = self.modelControlState(for: target, originalSessionKey: sessionKey)
+                {
                     self.updateCurrentSessionFastMode(
                         acceptedOverride,
                         effective: acceptedEffective,
@@ -218,13 +637,23 @@ extension OpenClawChatViewModel {
                         exactMatchOnly: state.exactMatchOnly)
                 }
             } catch {
-                if let state = self.modelControlState(for: target, originalSessionKey: sessionKey) {
+                if requestID == self.optimisticSettingsLanes[target]?.latestFastModeRequestID,
+                   let state = self.modelControlState(for: target, originalSessionKey: sessionKey)
+                {
                     let accepted = self.acceptedFastModesByTarget[target]
                     self.updateCurrentSessionFastMode(
                         accepted?.override,
                         effective: accepted?.effective,
                         sessionKey: state.key,
                         exactMatchOnly: state.exactMatchOnly)
+                    guard !state.exactMatchOnly else { return }
+                    #if os(iOS)
+                    self.reportSettingsChangeFailure(String(localized: "Couldn’t change effort")) { [weak self] in
+                        self?.selectFastMode(selectionID)
+                    }
+                    #else
+                    self.errorText = error.localizedDescription
+                    #endif
                 }
             }
         }
@@ -237,20 +666,10 @@ extension OpenClawChatViewModel {
         verboseOverrideCleared: Bool = false)
     {
         let session = self.currentSessionEntry()
-        if fastOverrideCleared {
+        if fastOverrideCleared || result.fastMode != nil || result.effectiveFastMode != nil {
             self.updateCurrentSessionFastMode(
-                nil,
+                fastOverrideCleared ? nil : result.fastMode ?? session?.fastMode,
                 effective: result.effectiveFastMode ?? result.fastMode ?? session?.effectiveFastMode,
-                sessionKey: sessionKey)
-        } else if let fastMode = result.fastMode {
-            self.updateCurrentSessionFastMode(
-                fastMode,
-                effective: result.effectiveFastMode ?? fastMode,
-                sessionKey: sessionKey)
-        } else if let effectiveFastMode = result.effectiveFastMode {
-            self.updateCurrentSessionFastMode(
-                session?.fastMode,
-                effective: effectiveFastMode,
                 sessionKey: sessionKey)
         }
         if verboseOverrideCleared {
@@ -297,7 +716,7 @@ extension OpenClawChatViewModel {
             verboseLevel: recordedVerboseLevel)
     }
 
-    private func modelControlState(for target: ModelPatchTarget, originalSessionKey: String)
+    func modelControlState(for target: ModelPatchTarget, originalSessionKey: String)
         -> (key: String, exactMatchOnly: Bool)?
     {
         if target == self.currentModelPatchTarget() {
@@ -312,10 +731,8 @@ extension OpenClawChatViewModel {
         sessionKey: String,
         exactMatchOnly: Bool = false)
     {
-        let index = exactMatchOnly
-            ? self.sessions.firstIndex(where: { $0.key == sessionKey })
-            : self.sessionIndexForModelState(sessionKey: sessionKey)
-        guard let index else { return }
+        guard let index = self.sessionIndexForModelState(sessionKey: sessionKey, exactMatchOnly: exactMatchOnly)
+        else { return }
         self.sessions[index].verboseLevel = level
     }
 
@@ -325,10 +742,8 @@ extension OpenClawChatViewModel {
         sessionKey: String,
         exactMatchOnly: Bool = false)
     {
-        let index = exactMatchOnly
-            ? self.sessions.firstIndex(where: { $0.key == sessionKey })
-            : self.sessionIndexForModelState(sessionKey: sessionKey)
-        guard let index else { return }
+        guard let index = self.sessionIndexForModelState(sessionKey: sessionKey, exactMatchOnly: exactMatchOnly)
+        else { return }
         self.sessions[index].fastMode = mode
         self.sessions[index].effectiveFastMode = effective
     }

@@ -1,16 +1,13 @@
-// Covers assistant error formatting for streaming, sandbox, and context errors.
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
+import { resolvePreparedSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import { formatAssistantErrorText } from "./error-text.js";
+import { formatAssistantErrorText, formatUserFacingAssistantErrorText } from "./error-text.js";
 
-const { toolPolicyAuditInfo } = vi.hoisted(() => ({
-  toolPolicyAuditInfo: vi.fn(),
-}));
+const { toolPolicyAuditInfo } = vi.hoisted(() => ({ toolPolicyAuditInfo: vi.fn() }));
 
-vi.mock("../../logging/subsystem.js", () => ({
+vi.mock("../../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../logging/subsystem.js")>()),
   createSubsystemLogger: () => ({
     debug: vi.fn(),
     error: vi.fn(),
@@ -24,76 +21,78 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
     toolPolicyAuditInfo.mockClear();
   });
 
-  const makeAssistantError = (errorMessage: string): AssistantMessage =>
-    makeAssistantMessageFixture({
-      errorMessage,
-      content: [{ type: "text", text: errorMessage }],
-    });
-
-  it("suppresses transport-classified malformed streaming fragments", () => {
-    // Transport JSON fragmentation is not user-authored content and should get
-    // stable retry copy instead of raw parser text.
-    const msg = makeAssistantError(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
-    expect(formatAssistantErrorText(msg)).toBe(
-      "LLM streaming response contained a malformed fragment. Please try again.",
-    );
+  const repeatLimitFallback =
+    "OpenClaw stopped this turn: the model repeated the same tool call too many times. Send a new message to continue.";
+  const namedRepeatLimit =
+    "OpenClaw stopped this turn: the model called probe with the same arguments 20 times in a row. Send a new message to continue.";
+  it.each([
+    [namedRepeatLimit, "tool_repeat_limit", namedRepeatLimit],
+    [namedRepeatLimit + "\n", "tool_repeat_limit", repeatLimitFallback],
+    ["private tool diagnostics", "tool_repeat_limit", repeatLimitFallback],
+    ["HTTP 503 temporary failure", "tool_repeat_limit", repeatLimitFallback],
+    [
+      "HTTP 503 temporary failure",
+      "openclaw_repetitive_output",
+      "Repetitive output stopped. Shorten or rephrase your request before retrying.",
+    ],
+    ["request timed out", undefined, "LLM request timed out."],
+    ["LLM request timed out.", undefined, "LLM request timed out."],
+  ])("preserves safe user-facing copy for %s (%s)", (errorMessage, errorCode, expected) => {
+    const message = makeAssistantMessageFixture({ errorMessage, errorCode });
+    expect(formatUserFacingAssistantErrorText(message)).toBe(expected);
   });
 
-  it("does not suppress unclassified JSON.parse text", () => {
-    const msg = makeAssistantError(
-      "Expected ',' or '}' after property value in JSON at position 334 (line 1 column 335)",
-    );
-    expect(formatAssistantErrorText(msg)).toBe(
-      "Expected ',' or '}' after property value in JSON at position 334 (line 1 column 335)",
-    );
-  });
-
-  it("keeps non-streaming provider request-validation syntax diagnostics", () => {
-    const msg = makeAssistantError(
+  const parseError =
+    "Expected ',' or '}' after property value in JSON at position 334 (line 1 column 335)";
+  it.each([
+    [parseError, parseError],
+    [
       '{"type":"error","error":{"type":"invalid_request_error","message":"Expected value in JSON at position 12 for messages.0.content"}}',
-    );
-    expect(formatAssistantErrorText(msg)).toBe(
       "LLM request rejected: Expected value in JSON at position 12 for messages.0.content",
-    );
+    ],
+  ])("preserves non-streaming syntax diagnostics for %s", (errorMessage, expected) => {
+    expect(formatAssistantErrorText(makeAssistantMessageFixture({ errorMessage }))).toBe(expected);
   });
 
-  it("audits a sandbox tool-policy block once per assistant error", () => {
-    // Formatting may be called multiple times for the same error; audit logs
-    // should stay deduplicated per blocked assistant error.
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "non-main", scope: "agent" },
+  it.each([
+    { sessionKey: "agent:main:mobilechat:g1", agentId: "main", mode: "non-main" as const },
+    { sessionKey: "global", agentId: "worker", mode: "all" as const },
+  ])(
+    "audits a sandbox tool-policy block once per assistant error for $sessionKey",
+    ({ sessionKey, agentId, mode }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { sandbox: { mode, scope: "agent" } },
+          entries: { main: {}, worker: {} },
         },
-      },
-      tools: {
-        sandbox: {
-          tools: {
-            deny: ["browser"],
-          },
+        tools: { sandbox: { tools: { deny: ["browser"] } } },
+      };
+      const msg = makeAssistantMessageFixture({ errorMessage: "unknown tool: browser" });
+      const sandboxRuntime = resolvePreparedSandboxRuntimeStatus({
+        cfg,
+        sessionKey,
+        agentId,
+        preparedSessionEntry: null,
+      });
+      const options = { cfg, sessionKey, agentId, sandboxRuntime };
+
+      expect(formatAssistantErrorText(msg, options)).toContain(`--agent ${agentId}`);
+      expect(formatAssistantErrorText(msg, options)).toContain(
+        'Tool "browser" blocked by sandbox tool policy',
+      );
+
+      expect(toolPolicyAuditInfo).toHaveBeenCalledTimes(1);
+      expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+        "sandbox tool policy blocked browser via tools.sandbox.tools.deny; matched browser",
+        {
+          tool: "browser",
+          ruleKind: "deny",
+          ruleSource: "global",
+          configKey: "tools.sandbox.tools.deny",
+          matchedRule: "browser",
+          sandboxMode: mode,
         },
-      },
-    };
-    const msg = makeAssistantError("unknown tool: browser");
-
-    expect(
-      formatAssistantErrorText(msg, { cfg, sessionKey: "agent:main:mobilechat:g1" }),
-    ).toContain('Tool "browser" blocked by sandbox tool policy');
-    expect(
-      formatAssistantErrorText(msg, { cfg, sessionKey: "agent:main:mobilechat:g1" }),
-    ).toContain('Tool "browser" blocked by sandbox tool policy');
-
-    expect(toolPolicyAuditInfo).toHaveBeenCalledTimes(1);
-    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
-      "sandbox tool policy blocked browser via tools.sandbox.tools.deny; matched browser",
-      {
-        tool: "browser",
-        ruleKind: "deny",
-        ruleSource: "global",
-        configKey: "tools.sandbox.tools.deny",
-        matchedRule: "browser",
-        sandboxMode: "non-main",
-      },
-    );
-  });
+      );
+    },
+  );
 });

@@ -3,12 +3,16 @@ import { resolveExecutableFromUserShellPath as resolveExecutableFromUserShellPat
 
 export {
   decodeNodePtyResumeParams,
+  decodeNodePtyStartParams,
   runNodePtyCommand,
   type NodePtyCommandResult,
   type NodePtyResumeParams,
 } from "../node-host/pty-command.js";
 export { validateClaudeSessionId } from "../node-host/invoke-agent-cli-claude-params.js";
-export type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
+export type {
+  OpenClawPluginNodeHostCommandIo,
+  OpenClawPluginNodeWorkspaceLease,
+} from "../plugins/types.node-host.js";
 
 /** Resolve a node-host executable using the selected PATH source policy. */
 export function resolveNodeHostExecutable(
@@ -17,6 +21,8 @@ export function resolveNodeHostExecutable(
     env?: NodeJS.ProcessEnv;
     pathEnv?: string;
     includeExtensionless?: boolean;
+    /** Direct lifecycle probes can bypass the request-time PATH cache. */
+    useCache?: false;
     strategy: "direct" | "fallback" | "prefer";
   },
 ): { executable: string; pathEnv?: string } | undefined {
@@ -27,7 +33,7 @@ export function resolveNodeHostExecutable(
         executable,
         options.pathEnv ?? env.PATH ?? env.Path ?? "",
         env,
-        { includeExtensionless },
+        { includeExtensionless, useCache: options.useCache },
       );
       return resolved ? { executable: resolved } : undefined;
     }

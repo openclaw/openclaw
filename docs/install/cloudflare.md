@@ -17,7 +17,8 @@ Run one OpenClaw installation behind a Cloudflare Worker and a named Durable Obj
 
 - A Cloudflare account with Workers, Containers, and R2 available
 - Docker Buildx with `linux/amd64` support
-- A public Docker Hub repository for the derived image
+- A public Docker Hub repository for the derived image, and a `docker login` session that can push to it
+- An S3-compatible CLI such as the AWS CLI, used later to verify Litestream replication
 - Node.js and npm
 - Provider and channel credentials for your OpenClaw setup
 
@@ -179,7 +180,7 @@ Measured on this template against a real R2 bucket: about 2.4 seconds from write
 
 Run these checks after the first bootstrap, before you depend on this deployment.
 
-Confirm the Gateway answers. `/healthz` reports that the listener is up. `/startupz` additionally reports that startup work finished while ignoring channel health, so it stays green when one channel account is broken; it is served only by images built from the release that added it:
+Confirm the Gateway answers. `/healthz` reports that the listener is up. `/startupz` additionally reports that startup work finished while ignoring channel health, so it stays green when one channel account is broken; it is served only by images built from v2026.8.1 or newer:
 
 ```bash
 curl -sS https://<worker-subdomain>.workers.dev/healthz
@@ -271,7 +272,7 @@ Test updates and rollbacks against a separate R2 bucket first. Preserve current 
 
 **Deployment succeeds but every request times out** -- The Container helper waits for `GET /healthz`. Check that the Gateway inside the Container listens on port `8080` and that no bootstrap step changed the port.
 
-**A probe passes but the Gateway is not actually serving** -- The Control UI answers unknown paths with a catch-all `200`, so probing a route your image does not serve looks permanently healthy. Verify the response body is JSON, not HTML, before trusting a probe.
+**A check passes but the Gateway is not actually serving** -- The Control UI answers unknown paths with a catch-all `200`, so checking a route your image does not serve looks permanently healthy. Verify the response body is JSON, not HTML, before trusting a check.
 
 **Litestream logs authentication or signature errors** -- Litestream needs R2 S3 API credentials, which are not the same as a Cloudflare API token. Create an R2 API token and use its access key ID and secret access key, and confirm `LITESTREAM_ENDPOINT` contains your account ID.
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { slugifyWorktreeTitle, worktreeNameAllocationFamily } from "./name.js";
+import { appendWorktreeIdSuffix, slugifyWorktreeTitle } from "./name.js";
 
 describe("slugifyWorktreeTitle", () => {
   it.each([
@@ -20,13 +20,20 @@ describe("slugifyWorktreeTitle", () => {
   it("returns undefined when a title has no ASCII slug characters", () => {
     expect(slugifyWorktreeTitle("🦞 日本語")).toBeUndefined();
   });
+});
 
-  it("joins numeric and dash-truncated names into the same allocation family", () => {
-    const base = `${"a".repeat(58)}-${"b".repeat(5)}`;
-    const thousandthCandidate = `${"a".repeat(58)}-1000`;
+describe("appendWorktreeIdSuffix", () => {
+  const id = "AB38B4C2-0000-4000-8000-000000000000";
 
-    expect(worktreeNameAllocationFamily(base)).toBe("a".repeat(58));
-    expect(worktreeNameAllocationFamily(thousandthCandidate)).toBe("a".repeat(58));
-    expect(worktreeNameAllocationFamily("task-2-3")).toBe("task");
+  it("ends the name with the first six ID characters and any local ordinal", () => {
+    expect(appendWorktreeIdSuffix("release-planning", id)).toBe("release-planning-ab38b4");
+    expect(appendWorktreeIdSuffix("release-planning", id, 2)).toBe("release-planning-ab38b4-2");
+  });
+
+  it("shortens the readable name, not the ID, to fit the name limit", () => {
+    const name = "a".repeat(64);
+
+    expect(appendWorktreeIdSuffix(name, id)).toBe(`${"a".repeat(57)}-ab38b4`);
+    expect(appendWorktreeIdSuffix(name, id, 12)).toBe(`${"a".repeat(54)}-ab38b4-12`);
   });
 });

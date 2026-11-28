@@ -17,35 +17,28 @@ const BoundedIdentifierSchema = z
 const ManifestRefsSchema = z
   .array(z.string().regex(MANIFEST_REF_PATTERN))
   .max(MANIFEST_REFS_MAX_ENTRIES)
-  .superRefine((refs, context) => {
-    if (new Set(refs).size !== refs.length) {
-      context.addIssue({ code: "custom", message: "manifestRefs must not contain duplicates" });
-    }
-  })
+  .refine((refs) => new Set(refs).size === refs.length, "manifestRefs must not contain duplicates")
   .transform((refs) => refs.toSorted())
   .nullable();
 
-const RetainEntrySchema = z
-  .object({
-    environmentId: BoundedIdentifierSchema,
-    sessionId: BoundedIdentifierSchema,
-    generation: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
-    manifestRefs: ManifestRefsSchema,
-  })
-  .strict();
+const RetainEntrySchema = z.strictObject({
+  environmentId: BoundedIdentifierSchema,
+  sessionId: BoundedIdentifierSchema,
+  generation: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  manifestRefs: ManifestRefsSchema,
+});
 
 const BundleHashesSchema = z
   .array(z.string().regex(BUNDLE_HASH_PATTERN))
   .max(NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES)
-  .superRefine((hashes, context) => {
-    if (new Set(hashes).size !== hashes.length) {
-      context.addIssue({ code: "custom", message: "bundleHashes must not contain duplicates" });
-    }
-  })
+  .refine(
+    (hashes) => new Set(hashes).size === hashes.length,
+    "bundleHashes must not contain duplicates",
+  )
   .transform((hashes) => hashes.toSorted());
 
 const RetainInputSchema = z
-  .object({
+  .strictObject({
     version: z.literal(1),
     gatewayNamespace: BoundedIdentifierSchema.regex(GATEWAY_NAMESPACE_PATTERN),
     controllerId: BoundedIdentifierSchema.max(128),
@@ -55,7 +48,6 @@ const RetainInputSchema = z
     acknowledgedBundleGeneration: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
     bundleStatusHash: z.string().regex(BUNDLE_HASH_PATTERN).optional(),
   })
-  .strict()
   .superRefine((input, context) => {
     if (input.acknowledgedBundleGeneration !== undefined && input.bundleHashes === undefined) {
       context.addIssue({
@@ -74,23 +66,19 @@ const RetainInputSchema = z
     }
   });
 
-const BundleStatusSchema = z
-  .object({
-    bundleHash: z.string().regex(BUNDLE_HASH_PATTERN),
-    status: z.enum(["installed", "missing"]),
-  })
-  .strict();
+const BundleStatusSchema = z.strictObject({
+  bundleHash: z.string().regex(BUNDLE_HASH_PATTERN),
+  status: z.enum(["installed", "missing"]),
+});
 
-const RetainResultSchema = z
-  .object({
-    applied: z.boolean(),
-    deleted: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-    hasMore: z.boolean(),
-    bundleDeleted: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
-    bundleGeneration: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
-    bundleStatus: BundleStatusSchema.optional(),
-  })
-  .strict();
+const RetainResultSchema = z.strictObject({
+  applied: z.boolean(),
+  deleted: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  hasMore: z.boolean(),
+  bundleDeleted: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+  bundleGeneration: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+  bundleStatus: BundleStatusSchema.optional(),
+});
 
 export type NodeWorkerWorkspaceRetainEntry = z.infer<typeof RetainEntrySchema>;
 export type NodeWorkerWorkspaceRetainInput = z.infer<typeof RetainInputSchema>;

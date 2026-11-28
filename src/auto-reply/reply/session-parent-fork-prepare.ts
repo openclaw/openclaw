@@ -1,5 +1,3 @@
-// Prepares parent-context fork metadata for guarded reply session initialization.
-import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import { forkSessionFromParent, resolveParentForkDecision } from "./session-fork.js";
 
@@ -24,11 +22,14 @@ export async function prepareReplySessionParentFork(params: {
   if (!parentEntry?.sessionId) {
     return params.sessionEntry;
   }
-  const decision = await resolveParentForkDecision({
+  const forkParams = {
+    parentSessionKey: params.parentSessionKey,
     parentEntry,
     agentId: params.agentId,
+    sessionKey: params.sessionKey,
     storePath: params.storePath,
-  });
+  };
+  const decision = await resolveParentForkDecision(forkParams);
   if (decision.status === "skip") {
     // The parent branch is too large to inherit usefully. Start fresh and
     // mark as handled so the thread does not retry this decision every turn.
@@ -38,13 +39,7 @@ export async function prepareReplySessionParentFork(params: {
     );
     return { ...params.sessionEntry, forkedFromParent: true };
   }
-  const fork = await forkSessionFromParent({
-    parentEntry,
-    agentId: params.agentId,
-    parentSessionKey: params.parentSessionKey,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-  });
+  const fork = await forkSessionFromParent(forkParams);
   if (!fork) {
     return params.sessionEntry;
   }
@@ -52,12 +47,13 @@ export async function prepareReplySessionParentFork(params: {
     `forking from parent session: parentKey=${params.parentSessionKey} → sessionKey=${params.sessionKey} ` +
       `parentTokens=${decision.parentTokens ?? "unknown"}`,
   );
-  // The fork replaces this thread's transcript identity; recovery state from
-  // the preseed row must not govern a later interruption of the fork.
+  // A fork replaces the incarnation; its pending resume marker and native grant do not carry over.
   const forkedEntry: InternalSessionEntry = {
     ...params.sessionEntry,
-    ...buildMainSessionRecoveryClearPatch(params.sessionEntry),
+    resumeAfterRestart: undefined,
+    abortedLastRun: false,
     sessionId: fork.sessionId,
+    nativeRuntimeConsent: undefined,
     lifecycleRunId: undefined,
     lastRunId: undefined,
     forkSource: {

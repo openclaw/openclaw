@@ -5,6 +5,7 @@ import { parseArgs, promisify } from "node:util";
 import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
 import { createComputerTool } from "../../src/agents/tools/computer-tool.js";
 import { listNodes } from "../../src/agents/tools/nodes-utils.js";
+import { captureRuntimeConfigAsyncReader } from "../../src/config/config.js";
 
 const execFileAsync = promisify(execFile);
 const { values } = parseArgs({
@@ -48,6 +49,8 @@ type JsonRecord = Record<string, unknown>;
 type ActionOutcome = { kind: "result"; result: ToolResult } | { kind: "error"; error: JsonRecord };
 
 const expectedProviderId = provider === "cua" ? "cua-computer" : "peekaboo";
+// Gateway helpers read the published runtime config instead of cold-loading it.
+await captureRuntimeConfigAsyncReader()();
 const computerNodes = (await listNodes({ timeoutMs: 30_000 })).filter(
   (node) =>
     node.connected === true &&
@@ -65,7 +68,7 @@ if (advertisedProvider.id !== expectedProviderId) {
     `expected provider ${expectedProviderId}, but node advertised ${advertisedProvider.id}`,
   );
 }
-const tool = createComputerTool({ modelHasVision: true });
+const tool = createComputerTool();
 let callSequence = 0;
 
 async function call(action: string, fields: JsonRecord = {}): Promise<ToolResult> {
@@ -111,14 +114,15 @@ function resultText(result: ToolResult): string {
 
 function wireResult(result: ToolResult): JsonRecord {
   const details = result.details as { result?: unknown } | undefined;
-  if (details?.result && typeof details.result === "object" && !Array.isArray(details.result)) {
-    return details.result as JsonRecord;
+  const structured = record(details?.result);
+  if (structured) {
+    return structured;
   }
   for (const line of resultText(result).split("\n")) {
     try {
-      const parsed = JSON.parse(line) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as JsonRecord;
+      const parsed = record(JSON.parse(line));
+      if (parsed) {
+        return parsed;
       }
     } catch {
       // Mutating actions prefix their follow-up screenshot with one JSON result line.
@@ -170,7 +174,7 @@ function summarizeOutcome(outcome: ActionOutcome): JsonRecord {
 
 async function saveImage(name: string, result: ToolResult): Promise<string> {
   const image = result.content.find((block) => block.type === "image");
-  if (!image || image.type !== "image") {
+  if (!image) {
     throw new Error(`missing model-visible image in ${name}`);
   }
   const extension = image.mimeType === "image/jpeg" ? "jpeg" : "png";
@@ -183,10 +187,19 @@ type FrontmostState = { kind: "application" | "window"; name: string };
 
 async function frontmostState(): Promise<FrontmostState> {
   if (process.platform === "darwin") {
-    const script =
-      'tell application "System Events" to get name of first application process whose frontmost is true';
-    const { stdout } = await execFileAsync("/usr/bin/osascript", ["-e", script]);
-    return { kind: "application", name: stdout.trim() };
+    // LaunchServices answers without the Automation consent that System Events requires.
+    const { stdout: asn } = await execFileAsync("/usr/bin/lsappinfo", ["front"]);
+    const { stdout } = await execFileAsync("/usr/bin/lsappinfo", [
+      "info",
+      "-only",
+      "name",
+      asn.trim(),
+    ]);
+    const name = /"LSDisplayName"="([^"]*)"/u.exec(stdout)?.[1];
+    if (name === undefined) {
+      throw new Error(`frontmost application has no display name: ${stdout.trim()}`);
+    }
+    return { kind: "application", name };
   }
   if (process.platform === "linux") {
     if (process.env.XDG_SESSION_TYPE === "wayland" || process.env.WAYLAND_DISPLAY) {
@@ -220,7 +233,10 @@ function observation(result: ToolResult): JsonRecord {
 function selectElement(result: ToolResult): JsonRecord {
   const elements = records(observation(result).elements);
   const editable = elements.filter((element) =>
-    ["AXTextArea", "AXTextField", "text_area", "text_field"].includes(stringValue(element.role)),
+    // Peekaboo reports ElementType raw values; text areas collapse into textField.
+    ["AXTextArea", "AXTextField", "text_area", "text_field", "textField"].includes(
+      stringValue(element.role),
+    ),
   );
   const selected = elementLabel
     ? editable.find((element) => stringValue(element.label).toLowerCase().includes(elementLabel))

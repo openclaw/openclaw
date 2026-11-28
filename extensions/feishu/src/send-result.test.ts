@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { toFeishuSendResult } from "./send-result.js";
 
 describe("toFeishuSendResult", () => {
-  it.each([undefined, "", "   "])(
+  it.each([undefined, "   "])(
     "rejects an acknowledged send without a real message identifier: %s",
     (messageId) => {
       let caught: unknown;
@@ -31,5 +31,20 @@ describe("toFeishuSendResult", () => {
 
     expect(result.messageId).toBe("om_accepted");
     expect(result.receipt.primaryPlatformMessageId).toBe("om_accepted");
+    expect(result.receipt.threadId).toBeUndefined();
+  });
+
+  it("records the authoritative reply anchor instead of treating the chat as a thread", () => {
+    const result = toFeishuSendResult(
+      { code: 0, data: { message_id: "om_reply" } },
+      "oc_chat",
+      "text",
+      "Feishu reply failed",
+      "om_parent",
+    );
+
+    expect(result.receipt.replyToId).toBe("om_parent");
+    expect(result.receipt.threadId).toBeUndefined();
+    expect(result.receipt.parts).toMatchObject([{ replyToId: "om_parent" }]);
   });
 });

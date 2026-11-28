@@ -1,20 +1,29 @@
-// Diagnostic memory tests cover memory snapshot capture and diagnostic log output.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+// Diagnostic memory tests cover pressure events and diagnostic log output.
+import { channel } from "node:diagnostics_channel";
+import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
+import * as workerMemory from "../infra/worker-cpu.js";
+import * as workerMessages from "../infra/worker-message-metrics.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import {
+  emitDiagnosticMemorySample,
+  createDiagnosticMemorySampler,
+  resetDiagnosticMemoryForTest,
+} from "./diagnostic-memory.js";
 import {
   readLatestDiagnosticStabilityBundleSync,
-  resetDiagnosticStabilityBundleForTest,
+  uninstallDiagnosticStabilityFatalHook,
 } from "./diagnostic-stability-bundle.js";
 import {
+  getDiagnosticStabilitySnapshot,
   resetDiagnosticStabilityRecorderForTest,
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
@@ -36,512 +45,576 @@ function memoryUsage(overrides: Partial<NodeJS.MemoryUsage>): NodeJS.MemoryUsage
   };
 }
 
+const workerLifecycle: ReturnType<
+  typeof workerMemory.sampleTrackedWorkerMemory
+>["workerLifecycle"] = [
+  { script: "sqlite-store.worker.js", started: 3, retired: [{ reason: "closed", count: 3 }] },
+];
+
 describe("diagnostic memory", () => {
+  let events: DiagnosticEventPayload[];
+  let stopEvents: () => void;
+  function expectCapacityPressure(
+    field: "rss" | "heapUsed",
+    limitBytes: number,
+    options: Parameters<typeof emitDiagnosticMemorySample>[0],
+  ) {
+    for (const [index, ratio] of [0.5, 0.8, 0.9].entries()) {
+      emitDiagnosticMemorySample({
+        ...options,
+        now: index * 1000,
+        emitSample: false,
+        memoryUsage: memoryUsage({ [field]: Math.floor(limitBytes * ratio) }),
+      });
+    }
+    expect(events).toEqual(
+      ["warning", "critical"].map((level, index) =>
+        expect.objectContaining({
+          level,
+          reason: field === "rss" ? "rss_threshold" : "heap_threshold",
+          limitBytes,
+          usedBytes: Math.floor(limitBytes * (index === 0 ? 0.8 : 0.9)),
+          thresholdBytes: Math.floor(limitBytes * (index === 0 ? 0.8 : 0.9)),
+        }),
+      ),
+    );
+  }
+
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.spyOn(process, "availableMemory").mockReturnValue(Number.MAX_SAFE_INTEGER);
     vi.setSystemTime(new Date("2026-04-22T12:00:00.000Z"));
     resetDiagnosticEventsForTest();
+    events = [];
+    stopEvents = onDiagnosticEvent((event) => events.push(event));
     resetDiagnosticMemoryForTest();
-    resetDiagnosticStabilityBundleForTest();
+    uninstallDiagnosticStabilityFatalHook();
     resetDiagnosticStabilityRecorderForTest();
     resetLogger();
+    vi.spyOn(workerMessages, "getWorkerMessageMetrics").mockReturnValue([]);
+    // Cumulative Worker history survives earlier test files even when no Worker remains alive.
+    vi.spyOn(workerMemory, "sampleTrackedWorkerMemory").mockReturnValue({
+      workerCount: 0,
+      sqliteReaderMetrics: [],
+      postgresBridgeCount: 0,
+      postgresPoolSelfRootCount: 0,
+      workerHeapSampledCount: 0,
+      workerHeapTotalBytes: 0,
+      workerHeapUsedBytes: 0,
+      workerExternalBytes: 0,
+      workerArrayBuffersBytes: 0,
+      workerArrayBuffersSampledCount: 0,
+      workerMemoryScope: "direct",
+      workerMemoryCoverage: "complete",
+      workerMemoryMissing: [],
+      workerHeaps: [],
+      workerTaskMetrics: [],
+      workerLifecycle: structuredClone(workerLifecycle),
+    });
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     stopDiagnosticStabilityRecorder();
     vi.useRealTimers();
     resetDiagnosticEventsForTest();
     resetDiagnosticMemoryForTest();
-    resetDiagnosticStabilityBundleForTest();
+    uninstallDiagnosticStabilityFatalHook();
     resetDiagnosticStabilityRecorderForTest();
     setLoggerOverride(null);
     resetLogger();
   });
 
-  it("emits memory samples with byte counts", () => {
-    const events: DiagnosticEventPayload[] = [];
-    const stop = onDiagnosticEvent((event) => events.push(event));
+  it("publishes Linux anonymous pages in bytes and omits unavailable later samples", async () => {
+    vi.stubGlobal("process", Object.create(process, { platform: { value: "linux" } }));
+    const readFile = vi
+      .spyOn(fs, "readFile")
+      .mockResolvedValue("Name:\topenclaw\nVmRSS:\t9000 kB\nRssAnon:\t1234 kB\nVmSwap:\t0 kB\n");
+    const { sampleMemory } = createDiagnosticMemorySampler(() => true);
+    sampleMemory(true);
+    await flushDiagnosticEvents();
+    expect(events[0]).toMatchObject({
+      type: "diagnostic.memory.sample",
+      memory: { anonymousRssBytes: 1_263_616, anonymousSwapBytes: 0 },
+    });
 
-    emitDiagnosticMemorySample({
-      now: 1000,
+    for (const result of ["unreadable", "Name:\topenclaw\nRssAnon:\tunknown kB\n"]) {
+      if (result === "unreadable") {
+        readFile.mockRejectedValueOnce(new Error("proc unavailable"));
+      } else {
+        readFile.mockResolvedValueOnce(result);
+      }
+      events.length = 0;
+      sampleMemory(true);
+      await flushDiagnosticEvents();
+      const sample = events.find((event) => event.type === "diagnostic.memory.sample");
+      expect(sample).toBeDefined();
+      expect(sample?.memory).not.toHaveProperty("anonymousRssBytes");
+      expect(sample?.memory).not.toHaveProperty("anonymousSwapBytes");
+    }
+  });
+
+  it("publishes a clone-free memory snapshot isolated across listeners", () => {
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    const mutate = vi.fn((event: DiagnosticEventPayload) => {
+      if (event.type === "diagnostic.memory.sample") {
+        return Reflect.set(event.memory.workerLifecycle![0]!.retired[0]!, "count", 0);
+      }
+      return undefined;
+    });
+    const read = vi.fn();
+    const filter = { include: ["diagnostic.memory.sample"] } as const;
+    const stopMutation = onInternalDiagnosticEvent(mutate, filter);
+    const stopRead = onTrustedInternalDiagnosticEvent(read, filter, { includePrivateData: false });
+    try {
+      emitDiagnosticMemorySample({ memoryUsage: memoryUsage({}) });
+      expect(mutate).toHaveReturnedWith(false);
+      expect(read).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          type: "diagnostic.memory.sample",
+          memory: expect.objectContaining({ workerLifecycle }),
+        }),
+        { internal: true, trusted: false },
+        {},
+      );
+      expect(clone).not.toHaveBeenCalled();
+    } finally {
+      stopRead();
+      stopMutation();
+    }
+  });
+
+  it.each(["resolved", "rejected"])(
+    "preserves worker acquisition age when a delayed proc read is %s",
+    async (outcome) => {
+      vi.stubGlobal("process", Object.create(process, { platform: { value: "linux" } }));
+      vi.spyOn(process, "memoryUsage").mockReturnValue(memoryUsage({}));
+      vi.spyOn(process, "uptime").mockReturnValue(12.5);
+      const clock = vi.spyOn(performance, "now").mockReturnValue(1000);
+      const worker = {
+        script: "sqlite-store.worker.js",
+        threadId: 1,
+        heapUsed: 40,
+        heapTotal: 80,
+        sampleAgeMs: 42_000,
+      };
+      const sampleWorkers = vi.mocked(workerMemory.sampleTrackedWorkerMemory);
+      sampleWorkers.mockReturnValue({
+        ...sampleWorkers(),
+        workerCount: 1,
+        workerHeapSampledCount: 1,
+        workerHeapUsedBytes: 40,
+        workerHeapTotalBytes: 80,
+        workerMemoryCoverage: "partial",
+        workerHeaps: [worker],
+      });
+      const pending = Promise.withResolvers<string>();
+      vi.spyOn(fs, "readFile").mockReturnValue(pending.promise);
+      startDiagnosticStabilityRecorder();
+      createDiagnosticMemorySampler(() => true).sampleMemory(true);
+      expect(events).toEqual([]);
+      clock.mockReturnValue(1750);
+      vi.setSystemTime(new Date("2026-04-22T11:00:00.000Z"));
+      if (outcome === "resolved") {
+        pending.resolve("RssAnon:\t1234 kB\n");
+      } else {
+        pending.reject(new Error("proc unavailable"));
+      }
+      await flushDiagnosticEvents();
+      const sample = {
+        type: "diagnostic.memory.sample",
+        ts: Date.now(),
+        memory: { workerHeaps: [{ ...worker, sampleAgeMs: 42_750 }] },
+      };
+      expect(events).toMatchObject([{ ...sample, uptimeMs: 12_500 }]);
+      expect(getDiagnosticStabilitySnapshot().events).toMatchObject([sample]);
+      expect(worker.sampleAgeMs).toBe(42_000);
+    },
+  );
+
+  it("skips proc off Linux and discards a sample after its heartbeat retires", async () => {
+    vi.spyOn(process, "memoryUsage").mockReturnValue(memoryUsage({ rss: 2000 }));
+    vi.spyOn(process, "uptime").mockReturnValue(0.123);
+    const readFile = vi.spyOn(fs, "readFile").mockResolvedValue("RssAnon:\t1234 kB\n");
+    let current = true;
+    const { sampleMemory } = createDiagnosticMemorySampler(() => current);
+    vi.stubGlobal("process", Object.create(process, { platform: { value: "darwin" } }));
+    sampleMemory(true);
+    expect(readFile).not.toHaveBeenCalled();
+    expect(events[0]).toMatchObject({
+      type: "diagnostic.memory.sample",
       uptimeMs: 123,
-      memoryUsage: memoryUsage({ rss: 4096, heapUsed: 1024 }),
-    });
-    stop();
-
-    expect(events).toEqual([
-      {
-        seq: 1,
-        ts: 1_776_859_200_000,
-        trace: undefined,
-        type: "diagnostic.memory.sample",
-        uptimeMs: 123,
-        memory: {
-          arrayBuffersBytes: 5,
-          externalBytes: 10,
-          heapTotalBytes: 80,
-          rssBytes: 4096,
-          heapUsedBytes: 1024,
-        },
-      },
-    ]);
-  });
-
-  it("emits pressure when RSS crosses a threshold", () => {
-    const events: DiagnosticEventPayload[] = [];
-    const stop = onDiagnosticEvent((event) => events.push(event));
-
-    emitDiagnosticMemorySample({
-      now: 1000,
-      uptimeMs: 0,
-      isBunRuntime: true,
-      heapSizeLimitBytes: 280_657_920,
-      processMemoryLimitBytes: 512 * 1024 ** 3,
-      memoryUsage: memoryUsage({ rss: 2000 }),
-      thresholds: {
-        rssWarningBytes: 1000,
-        rssCriticalBytes: 3000,
-        pressureRepeatMs: 60_000,
+      memory: {
+        rssBytes: 2000,
+        heapUsedBytes: 40,
+        heapTotalBytes: 80,
+        externalBytes: 10,
+        arrayBuffersBytes: 5,
       },
     });
-    stop();
 
-    expect(events).toEqual([
-      {
-        seq: 1,
-        ts: 1_776_859_200_000,
-        trace: undefined,
-        type: "diagnostic.memory.sample",
-        uptimeMs: 0,
-        memory: {
-          arrayBuffersBytes: 5,
-          externalBytes: 10,
-          heapTotalBytes: 80,
-          heapUsedBytes: 40,
-          rssBytes: 2000,
-        },
-      },
-      {
-        seq: 2,
-        ts: 1_776_859_200_000,
-        trace: undefined,
-        type: "diagnostic.memory.pressure",
-        level: "warning",
-        reason: "rss_threshold",
-        thresholdBytes: 1000,
-        memory: {
-          arrayBuffersBytes: 5,
-          externalBytes: 10,
-          heapTotalBytes: 80,
-          heapUsedBytes: 40,
-          rssBytes: 2000,
-        },
-      },
-    ]);
-  });
-
-  it("can check pressure without recording an idle memory sample", () => {
-    const events: DiagnosticEventPayload[] = [];
-    const stop = onDiagnosticEvent((event) => events.push(event));
-
-    emitDiagnosticMemorySample({
-      now: 1000,
-      emitSample: false,
-      memoryUsage: memoryUsage({ rss: 2000 }),
-      thresholds: {
-        rssWarningBytes: 1000,
-        rssCriticalBytes: 3000,
-        pressureRepeatMs: 60_000,
-      },
-    });
-    stop();
-
-    expect(events.map((event) => event.type)).toEqual(["diagnostic.memory.pressure"]);
-  });
-
-  it("scales default heap pressure thresholds with enlarged V8 limits", () => {
-    const events: DiagnosticEventPayload[] = [];
-    const stop = onDiagnosticEvent((event) => events.push(event));
-    const gb = 1024 ** 3;
-
-    emitDiagnosticMemorySample({
-      now: 1000,
-      heapSizeLimitBytes: 8 * gb,
-      memoryUsage: memoryUsage({ heapUsed: 2.1 * gb }),
-    });
-    expect(events.filter((event) => event.type === "diagnostic.memory.pressure")).toEqual([]);
-
-    emitDiagnosticMemorySample({
-      now: 2000,
-      heapSizeLimitBytes: 8 * gb,
-      memoryUsage: memoryUsage({ heapUsed: 4.1 * gb }),
-    });
-    emitDiagnosticMemorySample({
-      now: 3000,
-      heapSizeLimitBytes: 8 * gb,
-      memoryUsage: memoryUsage({ heapUsed: 6.1 * gb }),
-    });
-    stop();
-
-    expect(
-      events
-        .filter((event) => event.type === "diagnostic.memory.pressure")
-        .map((event) => ({
-          level: event.level,
-          reason: event.reason,
-          threshold: event.thresholdBytes,
-        })),
-    ).toEqual([
-      { level: "warning", reason: "heap_threshold", threshold: 4 * gb },
-      { level: "critical", reason: "heap_threshold", threshold: 6 * gb },
-    ]);
+    vi.stubGlobal("process", Object.create(process, { platform: { value: "linux" } }));
+    events.length = 0;
+    sampleMemory(false);
+    expect(readFile).not.toHaveBeenCalled();
+    sampleMemory(true);
+    current = false;
+    await flushDiagnosticEvents();
+    expect(events).toEqual([]);
   });
 
   it.each([
-    {
-      name: "an enlarged V8 limit",
-      isBunRuntime: false,
-      heapSizeLimitBytes: 8 * 1024 ** 3,
-      processMemoryLimitBytes: 0,
-      samples: [{ rssGiB: 1.77, heapUsedMiB: 789.3 }, { rssGiB: 4.1 }, { rssGiB: 6.1 }],
-      expectedThresholdsGiB: { warning: 4, critical: 6 },
-    },
-    {
-      name: "a V8 limit above the pressure caps",
-      isBunRuntime: false,
-      heapSizeLimitBytes: 16 * 1024 ** 3,
-      processMemoryLimitBytes: 0,
-      samples: [{ rssGiB: 4.1 }, { rssGiB: 6.1 }],
-      expectedThresholdsGiB: { warning: 4, critical: 6 },
-    },
-    {
-      name: "a constrained process limit",
-      isBunRuntime: false,
-      heapSizeLimitBytes: 16 * 1024 ** 3,
-      processMemoryLimitBytes: 4 * 1024 ** 3,
-      samples: [{ rssGiB: 2.1 }, { rssGiB: 3.1 }],
-      expectedThresholdsGiB: { warning: 2, critical: 3 },
-    },
-    {
-      name: "an unlimited process sentinel",
-      isBunRuntime: false,
-      heapSizeLimitBytes: 16 * 1024 ** 3,
-      processMemoryLimitBytes: Number.MAX_SAFE_INTEGER,
-      physicalMemoryBytes: 4 * 1024 ** 3,
-      samples: [{ rssGiB: 2.1 }, { rssGiB: 3.1 }],
-      expectedThresholdsGiB: { warning: 2, critical: 3 },
-    },
-    {
-      name: "Bun compatibility heap statistics",
-      isBunRuntime: true,
-      heapSizeLimitBytes: 280_657_920,
-      processMemoryLimitBytes: 512 * 1024 ** 3,
-      physicalMemoryBytes: 512 * 1024 ** 3,
-      samples: [{ rssGiB: 500 / 1024, heapUsedMiB: 80 }, { rssGiB: 4.1 }, { rssGiB: 6.1 }],
-      expectedThresholdsGiB: { warning: 4, critical: 6 },
-    },
-    {
-      name: "Bun without a process limit",
-      isBunRuntime: true,
-      heapSizeLimitBytes: 280_657_920,
-      processMemoryLimitBytes: 0,
-      samples: [{ rssGiB: 1.4 }, { rssGiB: 1.6 }, { rssGiB: 3.1 }],
-      expectedThresholdsGiB: { warning: 1.5, critical: 3 },
-    },
-  ])("scales default RSS pressure thresholds with $name", (testCase) => {
-    const events: DiagnosticEventPayload[] = [];
-    const stop = onDiagnosticEvent((event) => events.push(event));
-    const gb = 1024 ** 3;
+    [3000, 2000, "critical"],
+    [1000, 500, "warning"],
+    [999, 499, null],
+  ] as const)("selects heap priority for RSS=%i, heap=%i: %s", (rss, heapUsed, level) => {
+    const memory = emitDiagnosticMemorySample({
+      now: 1000,
+      emitSample: false,
+      memoryUsage: memoryUsage({ rss, heapUsed }),
+      thresholds: {
+        rssCriticalBytes: 3000,
+        heapUsedCriticalBytes: 2000,
+        rssWarningBytes: 1000,
+        heapUsedWarningBytes: 500,
+      },
+    });
 
-    for (const [index, sample] of testCase.samples.entries()) {
-      const heapUsedMiB =
-        "heapUsedMiB" in sample && typeof sample.heapUsedMiB === "number"
-          ? sample.heapUsedMiB
-          : undefined;
+    expect(events).toEqual(
+      level
+        ? [
+            expect.objectContaining({
+              type: "diagnostic.memory.pressure",
+              level,
+              reason: "heap_threshold",
+              thresholdBytes: heapUsed,
+              memory,
+            }),
+          ]
+        : [],
+    );
+  });
+
+  it.each(["rss_threshold", "process_memory_threshold"] as const)(
+    "keeps %s retirement silent without consuming the report throttle",
+    async (reason) => {
+      setLoggerOverride({ level: "info", consoleLevel: "silent" });
+      stopEvents();
+      const stopInternal = onInternalDiagnosticEvent((event) => events.push(event));
+      const pressure = channel("openclaw.memory.critical");
+      const retireIdle = vi.fn();
+      pressure.subscribe(retireIdle);
+      mockProcessPlatform("linux");
+      const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(69_865_472);
+      const options =
+        reason === "process_memory_threshold"
+          ? {
+              memoryUsage: memoryUsage({ rss: 700_194_816 }),
+              processMemoryLimitBytes: 805_306_368,
+              physicalMemoryBytes: 4 * 1024 ** 3,
+              heapSizeLimitBytes: 512 * 1024 ** 2,
+              isBunRuntime: false,
+              thresholds: { pressureRepeatMs: 60_000 },
+            }
+          : {
+              memoryUsage: memoryUsage({ rss: 4000 }),
+              thresholds: {
+                rssWarningBytes: 10_000,
+                rssCriticalBytes: 3000,
+                pressureRepeatMs: 60_000,
+              },
+            };
+      try {
+        if (reason === "process_memory_threshold") {
+          availableMemory.mockReturnValue(805_306_368);
+          emitDiagnosticMemorySample(options, false);
+          expect(retireIdle).not.toHaveBeenCalled();
+          availableMemory.mockReturnValue(69_865_472);
+        }
+        for (const now of [1000, 6000]) {
+          emitDiagnosticMemorySample({ now, ...options }, false);
+        }
+        await flushDiagnosticEvents();
+        expect(retireIdle).toHaveBeenCalledTimes(2);
+        expect(workerMemory.sampleTrackedWorkerMemory).not.toHaveBeenCalled();
+        expect(workerMessages.getWorkerMessageMetrics).not.toHaveBeenCalled();
+        expect(events).toEqual([]);
+
+        // Silent samples must not suppress the first diagnostic warning after re-enable.
+        for (const now of [11_000, 16_000]) {
+          emitDiagnosticMemorySample({ now, ...options });
+        }
+        await flushDiagnosticEvents();
+        expect(retireIdle).toHaveBeenCalledTimes(4);
+        expect(events.filter((event) => event.type === "diagnostic.memory.pressure")).toEqual([
+          expect.objectContaining({
+            level: "critical",
+            reason,
+            ...(reason === "process_memory_threshold"
+              ? { usedBytes: 735_440_896, limitBytes: 805_306_368, thresholdBytes: 724_775_731 }
+              : {}),
+          }),
+        ]);
+        expect(events.filter((event) => event.type === "log.record")).toEqual([
+          expect.objectContaining({
+            level: "WARN",
+            message: expect.stringContaining(`memory pressure: level=critical reason=${reason}`),
+            attributes: expect.objectContaining({ subsystem: "gateway/diagnostics/memory" }),
+          }),
+        ]);
+      } finally {
+        pressure.unsubscribe(retireIdle);
+        stopInternal();
+      }
+    },
+  );
+
+  it.each([
+    [0, "critical"],
+    [100, "critical"],
+    [200, "warning"],
+    [500, null],
+    [-1, null],
+    [Number.NaN, null],
+    [Number.POSITIVE_INFINITY, null],
+    [1001, null],
+  ] as const)("classifies constrained available memory %s as %s", (available, level) => {
+    mockProcessPlatform("linux");
+    vi.spyOn(process, "availableMemory").mockReturnValue(available);
+    emitDiagnosticMemorySample({
+      emitSample: false,
+      isBunRuntime: false,
+      processMemoryLimitBytes: 1000,
+      physicalMemoryBytes: 4000,
+      heapSizeLimitBytes: 8000,
+      memoryUsage: memoryUsage({}),
+    });
+    expect(events).toEqual(
+      level
+        ? [
+            expect.objectContaining({
+              level,
+              reason: "process_memory_threshold",
+              limitBytes: 1000,
+              usedBytes: 1000 - available,
+              thresholdBytes: level === "critical" ? 900 : 800,
+            }),
+          ]
+        : [],
+    );
+  });
+
+  it("publishes retirement from the delegated leaf even when native availability describes a decoy", () => {
+    mockProcessPlatform("linux");
+    const native = vi.spyOn(process, "availableMemory").mockReturnValue(10);
+    const retire = vi.fn();
+    const pressure = channel("openclaw.memory.critical");
+    pressure.subscribe(retire);
+    try {
+      const options = {
+        isBunRuntime: false,
+        physicalMemoryBytes: 4000,
+        processMemoryLimitBytes: 1000,
+        heapSizeLimitBytes: 8000,
+        memoryUsage: memoryUsage({}),
+      };
+      const mapped = (usedBytes: number) => () => ({
+        limitBytes: 1000,
+        availableBytes: 1000 - usedBytes,
+      });
+      emitDiagnosticMemorySample(options, false, mapped(10));
+      expect(retire).not.toHaveBeenCalled();
+      native.mockReturnValue(990);
+      emitDiagnosticMemorySample(options, false, mapped(800));
+      emitDiagnosticMemorySample(options, false, mapped(950));
+      expect(retire.mock.calls.map(([critical]) => critical)).toEqual([false, true]);
+      expect(native).not.toHaveBeenCalled();
+    } finally {
+      pressure.unsubscribe(retire);
+    }
+  });
+
+  it.each([
+    [1000, 210, false, false],
+    [1000, 200, true, false],
+    [1000, 100, true, true],
+    [4000, 200, false, false],
+  ] as const)(
+    "reclaims constrained process headroom despite a heap warning: limit=%i available=%i reclaim=%s",
+    (processMemoryLimitBytes, available, reclaim, critical) => {
+      mockProcessPlatform("linux");
+      vi.spyOn(process, "availableMemory").mockReturnValue(available);
+      const pressure = channel("openclaw.memory.critical");
+      const retireIdle = vi.fn();
+      pressure.subscribe(retireIdle);
+      try {
+        const options = {
+          emitSample: false,
+          isBunRuntime: false,
+          processMemoryLimitBytes,
+          physicalMemoryBytes: 4000,
+          heapSizeLimitBytes: 1000,
+          memoryUsage: memoryUsage({ heapUsed: 850 }),
+        };
+        emitDiagnosticMemorySample(options, false);
+        expect(retireIdle).toHaveBeenCalledTimes(reclaim ? 1 : 0);
+        if (reclaim) {
+          expect(retireIdle.mock.calls[0]?.[0]).toBe(critical);
+        }
+        expect(events).toEqual([]);
+        emitDiagnosticMemorySample(options);
+        expect(retireIdle).toHaveBeenCalledTimes(reclaim ? 2 : 0);
+        expect(events).toEqual([
+          expect.objectContaining({
+            level: critical ? "critical" : "warning",
+            reason: critical ? "process_memory_threshold" : "heap_threshold",
+          }),
+        ]);
+      } finally {
+        pressure.unsubscribe(retireIdle);
+      }
+    },
+  );
+
+  it.each([
+    ["linux", false, 0, 4000],
+    ["linux", false, 4000, 4000],
+    ["linux", false, 8000, 4000],
+    ["linux", false, 1000, Number.NaN],
+    ["linux", true, 1000, 4000],
+    ["darwin", false, 1000, 4000],
+    ["win32", false, 1000, 4000],
+  ] as const)(
+    "ignores unrelated host availability on %s Bun=%s limit=%s host=%s",
+    (platform, isBunRuntime, processMemoryLimitBytes, physicalMemoryBytes) => {
+      mockProcessPlatform(platform);
+      const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(0);
       emitDiagnosticMemorySample({
-        now: (index + 1) * 11 * 60 * 1000,
-        heapSizeLimitBytes: testCase.heapSizeLimitBytes,
-        processMemoryLimitBytes: testCase.processMemoryLimitBytes,
-        physicalMemoryBytes:
-          "physicalMemoryBytes" in testCase ? testCase.physicalMemoryBytes : undefined,
-        isBunRuntime: testCase.isBunRuntime,
-        memoryUsage: memoryUsage({
-          rss: Math.round(sample.rssGiB * gb),
-          ...(heapUsedMiB === undefined ? {} : { heapUsed: Math.round(heapUsedMiB * 1024 ** 2) }),
-        }),
+        emitSample: false,
+        isBunRuntime,
+        processMemoryLimitBytes,
+        physicalMemoryBytes,
+        heapSizeLimitBytes: 8000,
+        memoryUsage: memoryUsage({}),
+      });
+      expect(availableMemory).not.toHaveBeenCalled();
+      expect(events).toEqual([]);
+    },
+  );
+
+  it.each([1, 16])("measures main heap pressure against a %i GiB V8 limit", (heapGiB) => {
+    const limitBytes = heapGiB * 1024 ** 3;
+    expectCapacityPressure("heapUsed", limitBytes, {
+      isBunRuntime: false,
+      heapSizeLimitBytes: limitBytes,
+    });
+  });
+
+  it.each([
+    [4, 64, 4],
+    [0, 32, 32],
+    [64, 4, 4],
+    [4, 0, 4],
+    [Number.NaN, 4, 4],
+  ])("bounds RSS with cgroup=%i GiB and host=%i GiB", (cgroup, host, limit) => {
+    const gb = 1024 ** 3;
+    expectCapacityPressure("rss", limit * gb, {
+      heapSizeLimitBytes: gb,
+      processMemoryLimitBytes: cgroup * gb,
+      physicalMemoryBytes: host * gb,
+    });
+  });
+
+  it.each([0, Number.NaN, Number.POSITIVE_INFINITY])(
+    "does not invent byte limits when capacity is %s",
+    (limit) => {
+      emitDiagnosticMemorySample({
+        emitSample: false,
+        heapSizeLimitBytes: limit,
+        processMemoryLimitBytes: limit,
+        physicalMemoryBytes: limit,
+        memoryUsage: memoryUsage({ rss: 6 * 1024 ** 3, heapUsed: 3 * 1024 ** 3 }),
+      });
+      expect(events).toEqual([]);
+    },
+  );
+
+  it("uses host capacity on Bun without treating compatibility heap metadata as a limit", () => {
+    for (const [index, rssGiB] of [6, 29].entries()) {
+      emitDiagnosticMemorySample({
+        now: index * 1000,
+        emitSample: false,
+        isBunRuntime: true,
+        heapSizeLimitBytes: 280_657_920,
+        processMemoryLimitBytes: 0,
+        physicalMemoryBytes: 32 * 1024 ** 3,
+        memoryUsage: memoryUsage({ rss: rssGiB * 1024 ** 3, heapUsed: 2 * 1024 ** 3 }),
       });
     }
-    stop();
-
-    expect(
-      events
-        .filter((event) => event.type === "diagnostic.memory.pressure")
-        .map((event) => ({
-          level: event.level,
-          reason: event.reason,
-          threshold: event.thresholdBytes,
-        })),
-    ).toEqual([
-      {
-        level: "warning",
-        reason: "rss_threshold",
-        threshold: testCase.expectedThresholdsGiB.warning * gb,
-      },
-      {
+    expect(events).toEqual([
+      expect.objectContaining({
         level: "critical",
         reason: "rss_threshold",
-        threshold: testCase.expectedThresholdsGiB.critical * gb,
-      },
+        limitBytes: 32 * 1024 ** 3,
+      }),
     ]);
   });
 
-  it("scales default heap pressure thresholds down for constrained V8 limits", () => {
-    const events: DiagnosticEventPayload[] = [];
-    const stop = onDiagnosticEvent((event) => events.push(event));
-    const mb = 1024 ** 2;
-
-    emitDiagnosticMemorySample({
-      now: 1000,
-      heapSizeLimitBytes: 1024 * mb,
-      memoryUsage: memoryUsage({ heapUsed: 600 * mb }),
+  it("detects a small worker near its own limit despite idle main and sibling heaps", () => {
+    const sampled = workerMemory.sampleTrackedWorkerMemory();
+    vi.mocked(workerMemory.sampleTrackedWorkerMemory).mockReturnValue({
+      ...sampled,
+      workerCount: 2,
+      workerHeaps: [
+        { script: "other", threadId: 1, heapUsed: 100, heapTotal: 200, heapSizeLimitBytes: 16_000 },
+        {
+          script: "sqlite-store.worker.js",
+          threadId: 2,
+          heapUsed: 900,
+          heapTotal: 950,
+          heapSizeLimitBytes: 1000,
+        },
+      ],
     });
     emitDiagnosticMemorySample({
-      now: 2000,
-      heapSizeLimitBytes: 1024 * mb,
-      memoryUsage: memoryUsage({ heapUsed: 800 * mb }),
+      emitSample: false,
+      memoryUsage: memoryUsage({}),
+      heapSizeLimitBytes: 16_000,
     });
-    stop();
-
-    expect(
-      events
-        .filter((event) => event.type === "diagnostic.memory.pressure")
-        .map((event) => ({
-          level: event.level,
-          reason: event.reason,
-          threshold: event.thresholdBytes,
-        })),
-    ).toEqual([
-      { level: "warning", reason: "heap_threshold", threshold: 512 * mb },
-      { level: "critical", reason: "heap_threshold", threshold: 768 * mb },
+    expect(events).toEqual([
+      expect.objectContaining({
+        level: "critical",
+        reason: "worker_heap_threshold",
+        usedBytes: 900,
+        limitBytes: 1000,
+        thresholdBytes: 900,
+        workerThreadId: 2,
+      }),
     ]);
   });
 
-  it("emits pressure when RSS grows quickly", () => {
-    const events: DiagnosticEventPayload[] = [];
-    const stop = onDiagnosticEvent((event) => events.push(event));
-
-    emitDiagnosticMemorySample({
-      now: 1000,
-      memoryUsage: memoryUsage({ rss: 1000 }),
-      thresholds: {
-        rssWarningBytes: 10_000,
-        heapUsedWarningBytes: 10_000,
-        rssGrowthWarningBytes: 500,
-        growthWindowMs: 10_000,
-      },
-    });
-    emitDiagnosticMemorySample({
-      now: 2000,
-      memoryUsage: memoryUsage({ rss: 1700 }),
-      thresholds: {
-        rssWarningBytes: 10_000,
-        heapUsedWarningBytes: 10_000,
-        rssGrowthWarningBytes: 500,
-        growthWindowMs: 10_000,
-      },
-    });
-    stop();
-
-    expect(events.at(-1)).toEqual({
-      seq: 3,
-      ts: 1_776_859_200_000,
-      trace: undefined,
-      type: "diagnostic.memory.pressure",
-      level: "warning",
-      reason: "rss_growth",
-      thresholdBytes: 500,
-      rssGrowthBytes: 700,
-      windowMs: 1000,
-      memory: {
-        arrayBuffersBytes: 5,
-        externalBytes: 10,
-        heapTotalBytes: 80,
-        heapUsedBytes: 40,
-        rssBytes: 1700,
-      },
-    });
-  });
-
-  it("throttles repeated pressure events by reason and level", () => {
-    const events: DiagnosticEventPayload[] = [];
-    const stop = onDiagnosticEvent((event) => events.push(event));
-
-    for (const now of [1000, 2000]) {
-      emitDiagnosticMemorySample({
-        now,
-        memoryUsage: memoryUsage({ rss: 2000 }),
-        thresholds: {
-          rssWarningBytes: 1000,
-          rssCriticalBytes: 3000,
-          pressureRepeatMs: 60_000,
-        },
-      });
-    }
-    stop();
-
-    expect(
-      events.reduce(
-        (count, event) => count + (event.type === "diagnostic.memory.pressure" ? 1 : 0),
-        0,
-      ),
-    ).toBe(1);
-  });
-
-  it("resolves session store paths only for enabled critical bundle writes", () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-pressure-lazy-"));
-    const resolveSessionStorePaths = vi.fn(() => []);
-    try {
-      emitDiagnosticMemorySample({
-        now: 1000,
-        stateDir,
-        resolveSessionStorePaths,
-        memoryUsage: memoryUsage({ rss: 500 }),
-        thresholds: {
-          rssWarningBytes: 1000,
-          rssCriticalBytes: 3000,
-        },
-      });
-      emitDiagnosticMemorySample({
-        now: 2000,
-        stateDir,
-        resolveSessionStorePaths,
-        memoryUsage: memoryUsage({ rss: 2000 }),
-        thresholds: {
-          rssWarningBytes: 1000,
-          rssCriticalBytes: 3000,
-        },
-      });
-
-      expect(resolveSessionStorePaths).not.toHaveBeenCalled();
-
-      emitDiagnosticMemorySample({
-        now: 3000,
-        stateDir,
-        writeCriticalBundle: true,
-        resolveSessionStorePaths,
-        memoryUsage: memoryUsage({ rss: 4000 }),
-        thresholds: {
-          rssWarningBytes: 1000,
-          rssCriticalBytes: 3000,
-        },
-      });
-
-      expect(resolveSessionStorePaths).toHaveBeenCalledTimes(1);
-    } finally {
-      fs.rmSync(stateDir, { recursive: true, force: true });
-    }
-  });
-
-  it("can disable critical pressure bundle writes", () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-pressure-disabled-"));
-    const resolveSessionStorePaths = vi.fn(() => []);
+  it("does not write bundles when critical pressure is emitted", async () => {
+    const state = await createOpenClawTestState({ label: "memory-pressure" });
     try {
       startDiagnosticStabilityRecorder();
-
-      emitDiagnosticMemorySample({
-        now: Date.parse("2026-04-22T12:00:00.000Z"),
-        stateDir,
-        writeCriticalBundle: false,
-        resolveSessionStorePaths,
-        memoryUsage: memoryUsage({ rss: 4000, heapUsed: 3000 }),
-        thresholds: {
-          rssWarningBytes: 1000,
-          rssCriticalBytes: 3000,
-          pressureRepeatMs: 60_000,
-        },
-      });
-
-      expect(resolveSessionStorePaths).not.toHaveBeenCalled();
-      expect(readLatestDiagnosticStabilityBundleSync({ stateDir }).status).toBe("missing");
-    } finally {
-      fs.rmSync(stateDir, { recursive: true, force: true });
-    }
-  });
-
-  it("leaves critical pressure bundle writes off by default", () => {
-    const stateDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "openclaw-memory-pressure-default-off-"),
-    );
-    const resolveSessionStorePaths = vi.fn(() => []);
-    try {
-      startDiagnosticStabilityRecorder();
-
-      emitDiagnosticMemorySample({
-        now: Date.parse("2026-04-22T12:00:00.000Z"),
-        stateDir,
-        resolveSessionStorePaths,
-        memoryUsage: memoryUsage({ rss: 4000, heapUsed: 3000 }),
-        thresholds: {
-          rssWarningBytes: 1000,
-          rssCriticalBytes: 3000,
-          pressureRepeatMs: 60_000,
-        },
-      });
-
-      expect(resolveSessionStorePaths).not.toHaveBeenCalled();
-      expect(readLatestDiagnosticStabilityBundleSync({ stateDir }).status).toBe("missing");
-    } finally {
-      fs.rmSync(stateDir, { recursive: true, force: true });
-    }
-  });
-
-  it("logs memory pressure events through the gateway subsystem", async () => {
-    setLoggerOverride({ level: "info", consoleLevel: "silent" });
-    const records: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
-    const stop = onInternalDiagnosticEvent((event) => {
-      if (event.type === "log.record") {
-        records.push(event);
-      }
-    });
-    try {
       emitDiagnosticMemorySample({
         now: Date.parse("2026-04-22T12:00:00.000Z"),
         memoryUsage: memoryUsage({ rss: 4000, heapUsed: 3000 }),
-        thresholds: {
-          rssWarningBytes: 1000,
-          rssCriticalBytes: 3000,
-          pressureRepeatMs: 60_000,
-        },
+        thresholds: { rssWarningBytes: 1000, rssCriticalBytes: 3000, pressureRepeatMs: 60_000 },
       });
-      await flushDiagnosticEvents();
+      expect(readLatestDiagnosticStabilityBundleSync({ stateDir: state.stateDir }).status).toBe(
+        "missing",
+      );
     } finally {
-      stop();
+      await state.cleanup();
     }
-
-    expect(records).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          level: "WARN",
-          message: expect.stringContaining("memory pressure: level=critical reason=rss_threshold"),
-          attributes: expect.objectContaining({
-            subsystem: "gateway/diagnostics/memory",
-          }),
-        }),
-        expect.objectContaining({
-          level: "WARN",
-          message: "critical memory pressure snapshot disabled",
-          attributes: expect.objectContaining({
-            subsystem: "gateway/diagnostics/memory",
-          }),
-        }),
-      ]),
-    );
   });
 
   it("logs warning pressure with readable units and operator guidance", async () => {
     setLoggerOverride({ level: "info", consoleLevel: "silent" });
     const records: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
-    const stop = onInternalDiagnosticEvent((event) => {
+    const stopInternal = onInternalDiagnosticEvent((event) => {
       if (event.type === "log.record") {
         records.push(event);
       }
@@ -549,6 +622,9 @@ describe("diagnostic memory", () => {
     try {
       emitDiagnosticMemorySample({
         now: Date.parse("2026-04-22T12:00:00.000Z"),
+        heapSizeLimitBytes: 16 * 1024 ** 3,
+        physicalMemoryBytes: 32 * 1024 ** 3,
+        processMemoryLimitBytes: 0,
         memoryUsage: memoryUsage({ rss: 2_012_905_472, heapUsed: 1_307_038_712 }),
         thresholds: {
           rssWarningBytes: 1_610_612_736,
@@ -558,7 +634,7 @@ describe("diagnostic memory", () => {
       });
       await flushDiagnosticEvents();
     } finally {
-      stop();
+      stopInternal();
     }
 
     expect(records).toEqual(
@@ -568,81 +644,16 @@ describe("diagnostic memory", () => {
           message: expect.stringContaining(
             "memory pressure: level=warning reason=rss_threshold rss=1.87 GiB heap=1.22 GiB threshold=1.5 GiB thresholdRatio=125%",
           ),
-          attributes: expect.objectContaining({
-            subsystem: "gateway/diagnostics/memory",
-          }),
+          attributes: expect.objectContaining({ subsystem: "gateway/diagnostics/memory" }),
         }),
       ]),
     );
+    expect(records.at(-1)?.message).toContain("limit=32 GiB used=1.87 GiB");
+    expect(records.at(-1)?.message).toContain("limitBytes=34359738368 usedBytes=2012905472");
     expect(records.at(-1)?.message).toContain("rssBytes=2012905472");
     expect(records.at(-1)?.message).toContain("heapUsedBytes=1307038712");
     expect(records.at(-1)?.message).toContain(
       "nextStep=run openclaw gateway status --deep and openclaw gateway diagnostics export; restart gateway if pressure persists",
     );
-  });
-
-  it("writes a stability bundle when critical pressure is emitted", () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-pressure-"));
-    const customRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-custom-sessions-"));
-    try {
-      const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
-      const customSessionsDir = path.join(customRoot, "custom-sessions");
-      fs.mkdirSync(sessionsDir, { recursive: true });
-      fs.mkdirSync(customSessionsDir, { recursive: true });
-      fs.writeFileSync(path.join(sessionsDir, "small.jsonl"), "small\n", "utf8");
-      fs.writeFileSync(path.join(sessionsDir, "large.jsonl"), "x".repeat(4096), "utf8");
-      fs.writeFileSync(path.join(customSessionsDir, "sessions.json"), "{}\n", "utf8");
-      fs.writeFileSync(
-        path.join(customSessionsDir, "custom-secret-session.jsonl"),
-        "x".repeat(8192),
-        "utf8",
-      );
-      startDiagnosticStabilityRecorder();
-
-      emitDiagnosticMemorySample({
-        now: Date.parse("2026-04-22T12:00:00.000Z"),
-        uptimeMs: 0,
-        stateDir,
-        writeCriticalBundle: true,
-        sessionStorePaths: [path.join(customSessionsDir, "sessions.json")],
-        memoryUsage: memoryUsage({ rss: 4000, heapUsed: 3000 }),
-        thresholds: {
-          rssWarningBytes: 1000,
-          rssCriticalBytes: 3000,
-          pressureRepeatMs: 60_000,
-        },
-      });
-
-      const latest = readLatestDiagnosticStabilityBundleSync({ stateDir });
-      expect(latest.status).toBe("found");
-      if (latest.status !== "found") {
-        return;
-      }
-      expect(latest.bundle.reason).toBe("diagnostic.memory.pressure.critical");
-      expect(latest.bundle.snapshot.summary.byType["diagnostic.memory.pressure"]).toBe(1);
-      expect(latest.bundle.evidence?.memoryPressure).toMatchObject({
-        level: "critical",
-        reason: "rss_threshold",
-        thresholdBytes: 3000,
-        memory: expect.objectContaining({
-          rssBytes: 4000,
-          heapUsedBytes: 3000,
-        }),
-      });
-      expect(latest.bundle.evidence?.memoryPressure?.heapStatistics?.heapSizeLimitBytes).toEqual(
-        expect.any(Number),
-      );
-      expect(latest.bundle.evidence?.memoryPressure?.activeResources?.total).toEqual(
-        expect.any(Number),
-      );
-      expect(latest.bundle.evidence?.memoryPressure?.topSessionFiles?.[0]).toMatchObject({
-        relativePath: "sessions/<session>.jsonl",
-        sizeBytes: 8192,
-      });
-      expect(JSON.stringify(latest.bundle)).not.toContain("custom-secret-session");
-    } finally {
-      fs.rmSync(stateDir, { recursive: true, force: true });
-      fs.rmSync(customRoot, { recursive: true, force: true });
-    }
   });
 });

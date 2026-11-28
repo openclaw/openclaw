@@ -1,31 +1,15 @@
-/**
- * OpenAI strict JSON-schema normalization for tool inventories and request payloads.
- *
- * Caches normalized object inputs by provider compatibility so repeated inventory builds preserve identity.
- */
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   normalizeToolParameterSchema,
-  shouldOmitEmptyArrayItems,
   type ToolSchemaModelCompat,
 } from "./agent-tools-parameter-schema.js";
-import type { OpenAIToolProjection } from "./openai-tool-projection.js";
-import { findOpenAIStrictSchemaViolations } from "./openai-tool-schema-compat.js";
 
 export { findOpenAIStrictSchemaViolations } from "./openai-tool-schema-compat.js";
 
-/**
- * OpenAI strict-tool-schema normalization and diagnostics.
- *
- * Strict schemas need all object properties required and `additionalProperties: false`; model
- * compatibility settings can also remove unsupported schema constructs before strict checks run.
- */
 type ToolSchemaCompatInput = {
   unsupportedToolSchemaKeywords?: unknown;
   omitEmptyArrayItems?: unknown;
 };
-
-const MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA = 8;
-const strictOpenAISchemaCache = new WeakMap<object, Array<{ key: string; value: unknown }>>();
 
 function resolveToolSchemaModelCompat(
   compat: ToolSchemaCompatInput | null | undefined,
@@ -33,11 +17,7 @@ function resolveToolSchemaModelCompat(
   if (!compat) {
     return undefined;
   }
-  const unsupportedToolSchemaKeywords = Array.isArray(compat.unsupportedToolSchemaKeywords)
-    ? compat.unsupportedToolSchemaKeywords.filter(
-        (keyword): keyword is string => typeof keyword === "string",
-      )
-    : [];
+  const unsupportedToolSchemaKeywords = filterStringEntries(compat.unsupportedToolSchemaKeywords);
   if (unsupportedToolSchemaKeywords.length === 0 && compat.omitEmptyArrayItems !== true) {
     return undefined;
   }
@@ -47,211 +27,24 @@ function resolveToolSchemaModelCompat(
   };
 }
 
-function resolveStrictOpenAISchemaCacheKey(
-  modelCompat: ToolSchemaCompatInput | null | undefined,
-): string {
-  const compat = resolveToolSchemaModelCompat(modelCompat);
-  return JSON.stringify([
-    [...(compat?.unsupportedToolSchemaKeywords ?? [])].toSorted(),
-    shouldOmitEmptyArrayItems(compat),
-  ]);
-}
-
-function readCachedStrictOpenAISchema(schema: object, key: string): unknown {
-  return strictOpenAISchemaCache.get(schema)?.find((entry) => entry.key === key)?.value;
-}
-
-function rememberStrictOpenAISchema(schema: object, key: string, value: unknown): unknown {
-  const entries = strictOpenAISchemaCache.get(schema) ?? [];
-  strictOpenAISchemaCache.set(
-    schema,
-    [{ key, value }, ...entries.filter((entry) => entry.key !== key)].slice(
-      0,
-      MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA,
-    ),
-  );
-  return value;
-}
-
-/** Normalizes a tool parameter schema into the OpenAI strict JSON-schema subset. */
-export function normalizeStrictOpenAIJsonSchema(
-  schema: unknown,
-  modelCompat?: ToolSchemaCompatInput | null,
-): unknown {
-  const schemaInput = schema ?? {};
-  if (!schemaInput || typeof schemaInput !== "object") {
-    return normalizeStrictOpenAIJsonSchemaRecursive(
-      normalizeToolParameterSchema(schemaInput, {
-        modelCompat: resolveToolSchemaModelCompat(modelCompat),
-      }),
-      0,
-    );
-  }
-  const cacheKey = resolveStrictOpenAISchemaCacheKey(modelCompat);
-  const cached = readCachedStrictOpenAISchema(schemaInput, cacheKey);
-  if (cached !== undefined) {
-    return cached;
-  }
-  return rememberStrictOpenAISchema(
-    schemaInput,
-    cacheKey,
-    // Cache by input object and compatibility key so repeated inventory generation preserves object
-    // identity without mixing schemas normalized for different provider limitations.
-    normalizeStrictOpenAIJsonSchemaRecursive(
-      normalizeToolParameterSchema(schemaInput, {
-        modelCompat: resolveToolSchemaModelCompat(modelCompat),
-      }),
-      0,
-    ),
-  );
-}
-
-function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number): unknown {
-  if (Array.isArray(schema)) {
-    let changed = false;
-    const normalized = schema.map((entry) => {
-      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry, depth);
-      changed ||= next !== entry;
-      return next;
-    });
-    return changed ? normalized : schema;
-  }
-  if (!schema || typeof schema !== "object") {
-    return schema;
-  }
-
-  const record = schema as Record<string, unknown>;
-  let changed = false;
-  const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(record)) {
-    const next = normalizeStrictOpenAIJsonSchemaRecursive(
-      value,
-      key === "properties" ? depth : depth + 1,
-    );
-    normalized[key] = next;
-    changed ||= next !== value;
-  }
-
-  if (normalized.type === "object") {
-    const properties =
-      normalized.properties &&
-      typeof normalized.properties === "object" &&
-      !Array.isArray(normalized.properties)
-        ? (normalized.properties as Record<string, unknown>)
-        : undefined;
-    if (properties && Object.keys(properties).length === 0 && !Array.isArray(normalized.required)) {
-      normalized.required = [];
-      changed = true;
-    }
-    if (depth === 0 && !("additionalProperties" in normalized)) {
-      normalized.additionalProperties = false;
-      changed = true;
-    }
-  }
-
-  return changed ? normalized : schema;
-}
-
-/** Normalizes tool parameters using strict OpenAI rules only when strict mode is active. */
-export function normalizeOpenAIStrictToolParameters<T>(
+/** Normalizes tool parameters for an OpenAI-protocol request under the model's schema compat. */
+export function normalizeOpenAIToolParameters<T>(
   schema: T,
-  strict: boolean,
   modelCompat?: ToolSchemaCompatInput | null,
 ): T {
-  const toolSchemaCompat = resolveToolSchemaModelCompat(modelCompat);
-  if (!strict) {
-    return normalizeToolParameterSchema(schema ?? {}, { modelCompat: toolSchemaCompat }) as T;
-  }
-  return normalizeStrictOpenAIJsonSchema(schema, toolSchemaCompat) as T;
+  return normalizeToolParameterSchema(schema ?? {}, {
+    modelCompat: resolveToolSchemaModelCompat(modelCompat),
+  }) as T;
 }
 
-/** Returns whether a schema already satisfies OpenAI strict tool-schema constraints. */
-export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
-  return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema));
-}
-
-type OpenAIStrictToolSchemaDiagnostic = {
-  toolIndex: number;
-  toolName?: string;
-  violations: string[];
-};
-
-/** Returns strict-schema diagnostics for an already materialized OpenAI tool projection. */
-export function findOpenAIStrictToolProjectionDiagnostics(
-  projection: OpenAIToolProjection,
-): OpenAIStrictToolSchemaDiagnostic[] {
-  return [
-    ...projection.diagnostics.map((diagnostic) => ({
-      toolIndex: diagnostic.toolIndex,
-      ...(diagnostic.toolName ? { toolName: diagnostic.toolName } : {}),
-      violations: [...diagnostic.violations],
-    })),
-    ...projection.tools.flatMap((tool) => {
-      const violations = findOpenAIStrictSchemaViolations(
-        normalizeStrictOpenAIJsonSchema(tool.parameters),
-        `${tool.name}.parameters`,
-      );
-      return violations.length > 0
-        ? [{ toolIndex: tool.toolIndex, toolName: tool.name, violations }]
-        : [];
-    }),
-  ];
-}
-
-function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
-  if (Array.isArray(schema)) {
-    return schema.every((entry) => isStrictOpenAIJsonSchemaCompatibleRecursive(entry));
-  }
-  if (!schema || typeof schema !== "object") {
-    return true;
-  }
-
-  const record = schema as Record<string, unknown>;
-  if ("anyOf" in record || "oneOf" in record || "allOf" in record) {
-    return false;
-  }
-  if (Array.isArray(record.type)) {
-    return false;
-  }
-  if (record.type === "object" && record.additionalProperties !== false) {
-    return false;
-  }
-  if (record.type === "object") {
-    const properties =
-      record.properties &&
-      typeof record.properties === "object" &&
-      !Array.isArray(record.properties)
-        ? (record.properties as Record<string, unknown>)
-        : {};
-    const required = Array.isArray(record.required)
-      ? record.required.filter((entry): entry is string => typeof entry === "string")
-      : undefined;
-    if (!required) {
-      return false;
-    }
-    const requiredSet = new Set(required);
-    if (Object.keys(properties).some((key) => !requiredSet.has(key))) {
-      return false;
-    }
-  }
-
-  return Object.entries(record).every(([key, entry]) => {
-    if (key === "properties" && entry && typeof entry === "object" && !Array.isArray(entry)) {
-      return Object.values(entry as Record<string, unknown>).every((value) =>
-        isStrictOpenAIJsonSchemaCompatibleRecursive(value),
-      );
-    }
-    return isStrictOpenAIJsonSchemaCompatibleRecursive(entry);
-  });
-}
-
-/** Resolves strict mode for the projected tools that will be emitted in the request payload. */
-export function resolveOpenAIProjectedToolsStrictToolFlag(
-  projection: OpenAIToolProjection,
-  strict: boolean | null | undefined,
-): boolean | undefined {
-  if (strict !== true) {
-    return strict === false ? false : undefined;
-  }
-  return projection.tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters));
+/**
+ * Strict field for one OpenAI-protocol route, from the resolved model compat only. A route
+ * that accepts the field gets explicit `strict: false` on every tool: OpenAI Responses treats
+ * an omitted field as strict, and strict tools measured slower with no gain. Other routes omit
+ * it. A provider plugin that wants strict tools sets them in its own payload hook.
+ */
+export function resolveOpenAIStrictToolSetting(compat: {
+  supportsStrictMode?: boolean;
+}): false | undefined {
+  return compat.supportsStrictMode === true ? false : undefined;
 }

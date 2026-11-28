@@ -1,14 +1,17 @@
 // ClickClack tests cover websocket constructor options.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { webSocketCtorCalls } = vi.hoisted(() => ({
-  webSocketCtorCalls: [] as Array<{ url: string; options: unknown }>,
-}));
+const { webSocketCtorCalls, MockWebSocket } = vi.hoisted(() => {
+  const calls: Array<{ url: string; options: unknown }> = [];
+  function StubWebSocket(url: string | URL, options?: unknown) {
+    calls.push({ url: String(url), options });
+  }
+  return { webSocketCtorCalls: calls, MockWebSocket: StubWebSocket };
+});
 
-vi.mock("ws", () => ({
-  WebSocket: function MockWebSocket(url: string | URL, options?: unknown) {
-    webSocketCtorCalls.push({ url: String(url), options });
-  },
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
+  WebSocket: MockWebSocket,
 }));
 
 import { createClickClackClient } from "./http-client.js";

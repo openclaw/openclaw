@@ -1,0 +1,661 @@
+#!/usr/bin/env node
+
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual, parseArgs } from "node:util";
+import {
+  downloadExactActionsArtifactArchive,
+  inspectActionsArtifactZipWithPolicy,
+} from "./lib/actions-artifact-archive.mjs";
+import { isRecord } from "./lib/record-shared.mjs";
+import {
+  retainedPublicationArtifactSource,
+  releaseEvidenceProducerTuple,
+} from "./lib/release-evidence-identity.mjs";
+import {
+  isBuildOnlyNpmPreflight,
+  SEALED_NPM_PREFLIGHT_SCHEMA,
+  verifyNpmBundleProducer,
+} from "./npm-prepared-bundle.mjs";
+import {
+  runReleaseToolingGh,
+  validateReleaseToolingIdentity,
+  verifyReleaseToolingIdentity,
+} from "./release-tooling-identity.mjs";
+
+const FULL_RELEASE_WORKFLOW = ".github/workflows/full-release-validation.yml";
+const ARTIFACT_WORKFLOW = ".github/workflows/full-release-artifacts.yml";
+const QUALIFIED_WORKFLOWS = new Set([FULL_RELEASE_WORKFLOW, ARTIFACT_WORKFLOW]);
+
+/**
+ * @typedef {object} NpmPreflightProducerOptions
+ * @property {unknown} manifest
+ * @property {unknown} [fastTrackRequest]
+ * @property {string} repository
+ * @property {string} workflowFullRef
+ * @property {string} workflowSha
+ * @property {string | number} runId
+ * @property {string | number} runAttempt
+ * @property {string} [workflowPath]
+ * @property {unknown} [fullReleaseManifest]
+ * @property {string | number} [fullReleaseRunId]
+ * @property {string | number} [fullReleaseRunAttempt]
+ */
+
+/**
+ * @typedef {object} FullReleaseNpmPreflightOptions
+ * @property {unknown} manifest
+ * @property {string} [repository]
+ * @property {string | number} runId
+ * @property {string | number} runAttempt
+ * @property {string} sourceSha
+ * @property {string} toolingSha
+ */
+
+function parseJson(raw, label) {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`${label} returned invalid JSON.`, { cause: error });
+  }
+}
+
+/** @param {NpmPreflightProducerOptions} options */
+export function validateNpmPreflightProducer({
+  manifest,
+  repository,
+  workflowFullRef,
+  workflowSha,
+  runId,
+  runAttempt,
+  workflowPath = ".github/workflows/openclaw-npm-release.yml",
+  fullReleaseManifest,
+  fullReleaseRunId,
+  fullReleaseRunAttempt,
+}) {
+  if (QUALIFIED_WORKFLOWS.has(workflowPath) && ![3, 4].includes(manifest?.version)) {
+    throw new Error("FRV npm preflight requires qualified version 3 producer evidence.");
+  }
+  // Published v1 preflights did not record the original ref qualifier. Keep
+  // their existing recovery contract without inferring historical provenance.
+  if (manifest?.version === 1 && !Object.hasOwn(manifest, "producer")) {
+    return { originalWorkflowRef: null, provenance: "legacy-unrecorded" };
+  }
+  if (
+    manifest?.version === 4 &&
+    (!QUALIFIED_WORKFLOWS.has(workflowPath) ||
+      !isBuildOnlyNpmPreflight(manifest) ||
+      fullReleaseManifest?.rerunGroup !== "build-only" ||
+      fullReleaseManifest?.publicationArtifacts?.npmPreflight?.schema !==
+        SEALED_NPM_PREFLIGHT_SCHEMA)
+  ) {
+    throw new Error("Build-only npm preflight requires its exact full release artifact binding.");
+  }
+  if (![2, 3, 4].includes(manifest?.version) || !isRecord(manifest.producer)) {
+    throw new Error("npm preflight producer metadata is missing or unsupported.");
+  }
+  if (
+    !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository ?? "") ||
+    !/^refs\/(?:heads|tags)\/.+$/u.test(workflowFullRef ?? "") ||
+    !/^[a-f0-9]{40}$/u.test(workflowSha ?? "") ||
+    !/^[1-9][0-9]*$/u.test(String(runId ?? "")) ||
+    !/^[1-9][0-9]*$/u.test(String(runAttempt ?? "")) ||
+    ![".github/workflows/openclaw-npm-release.yml", ...QUALIFIED_WORKFLOWS].includes(
+      workflowPath,
+    ) ||
+    (manifest.version === 2 && workflowPath !== ".github/workflows/openclaw-npm-release.yml")
+  ) {
+    throw new Error("npm preflight expected producer identity is invalid.");
+  }
+  const expected = {
+    repository,
+    workflowRef: `${repository}/${workflowPath}@${workflowFullRef}`,
+    workflowSha,
+    runId: String(runId),
+    runAttempt: String(runAttempt),
+    ...([3, 4].includes(manifest.version)
+      ? {
+          producerWorkflowPath: ".github/workflows/openclaw-npm-preflight.yml",
+          jobId: manifest.producer.jobId,
+          jobName: manifest.producer.jobName,
+        }
+      : {}),
+  };
+  if (
+    [3, 4].includes(manifest.version) &&
+    (!/^[1-9][0-9]*$/u.test(manifest.producer.jobId ?? "") ||
+      typeof manifest.producer.jobName !== "string" ||
+      !/(?:^| \/ )Qualify prepared npm package$/u.test(manifest.producer.jobName) ||
+      manifest.preparedBundle?.schema !== "openclaw.prepared-npm-bundle/v1" ||
+      manifest.preparedBundle.source?.sha !== manifest.releaseSha ||
+      manifest.preparedBundle.package?.sha256 !== manifest.tarballSha256 ||
+      manifest.preparedBundle.producer?.repository !== repository ||
+      manifest.preparedBundle.producer?.workflowSha !== workflowSha)
+  ) {
+    throw new Error("npm preflight qualification does not bind the prepared package producer.");
+  }
+  if (
+    Object.keys(manifest.producer).length !== Object.keys(expected).length ||
+    Object.entries(expected).some(([key, value]) => manifest.producer[key] !== value)
+  ) {
+    throw new Error("npm preflight immutable producer identity mismatch.");
+  }
+  if (workflowPath === ARTIFACT_WORKFLOW) {
+    const qualified = validateFullReleaseNpmPreflight({
+      manifest: fullReleaseManifest,
+      repository,
+      runId: fullReleaseRunId,
+      runAttempt: fullReleaseRunAttempt,
+      sourceSha: manifest.releaseSha,
+      toolingSha: workflowSha,
+    });
+    if (!isDeepStrictEqual(qualified.producer, manifest.producer)) {
+      throw new Error("npm artifact producer is not the selected full release qualification.");
+    }
+  }
+  return { originalWorkflowRef: expected.workflowRef, provenance: "immutable-manifest" };
+}
+
+/** @param {NpmPreflightProducerOptions & {manifestSha256?: string, runGh?: typeof runReleaseToolingGh}} options */
+export function verifyNpmPreflightProducer({
+  runGh = runReleaseToolingGh,
+  fastTrackRequest = process.env.FAST_TRACK_REQUEST_JSON,
+  ...options
+}) {
+  const identity = validateNpmPreflightProducer(options);
+  if (![3, 4].includes(options.manifest.version)) {
+    return identity;
+  }
+  const producer = options.manifest.producer;
+  if (QUALIFIED_WORKFLOWS.has(options.workflowPath)) {
+    const { descriptor: qualified } = resolveFullReleaseNpmPreflight({
+      fastTrackRequest,
+      manifest: options.fullReleaseManifest,
+      repository: options.repository,
+      runId: options.fullReleaseRunId ?? options.runId,
+      runAttempt: options.fullReleaseRunAttempt ?? options.runAttempt,
+      sourceSha: options.manifest.releaseSha,
+      toolingSha: options.workflowSha,
+      runGh,
+    });
+    if (
+      !isDeepStrictEqual(qualified.producer, producer) ||
+      qualified.manifestSha256 !== options.manifestSha256
+    ) {
+      throw new Error("npm preflight differs from the exact full release qualification.");
+    }
+    return identity;
+  }
+  verifyNpmBundleProducer({
+    producer,
+    repository: options.repository,
+    toolingSha: options.workflowSha,
+    qualified: true,
+    requireCompletedParent: true,
+    runGh,
+  });
+  return identity;
+}
+
+/** @param {FullReleaseNpmPreflightOptions} options */
+export function validateFullReleaseNpmPreflight({
+  manifest,
+  repository,
+  runId,
+  runAttempt,
+  sourceSha,
+  toolingSha,
+}) {
+  const evidenceProducer = releaseEvidenceProducerTuple(manifest ?? {});
+  const qualified = manifest?.publicationArtifacts?.npmPreflight;
+  const producer = qualified?.producer;
+  const producerRepository = repository ?? producer?.repository;
+  const retainedSource = retainedPublicationArtifactSource(manifest);
+  const independentProducer =
+    producer?.workflowRef ===
+      `${producerRepository}/${ARTIFACT_WORKFLOW}@${manifest?.workflowFullRef}` ||
+    (retainedSource !== null &&
+      producer?.workflowRef ===
+        `${producerRepository}/${ARTIFACT_WORKFLOW}@${retainedSource.workflow.ref}`);
+  const retainedParentProducer =
+    retainedSource !== null &&
+    producer?.runId === retainedSource.runId &&
+    producer?.workflowRef ===
+      `${producerRepository}/${FULL_RELEASE_WORKFLOW}@${retainedSource.workflow.ref}`;
+  if (
+    !/^[1-9][0-9]*$/u.test(String(runId ?? "")) ||
+    !/^[1-9][0-9]*$/u.test(String(runAttempt ?? "")) ||
+    manifest?.workflowName !== "Full Release Validation" ||
+    String(evidenceProducer.runId) !== String(runId) ||
+    String(evidenceProducer.runAttempt) !== String(runAttempt) ||
+    manifest.targetSha !== sourceSha ||
+    (manifest.workflowSha !== toolingSha &&
+      !(
+        (manifest.receiptRecovery || manifest.publicationArtifactSource) &&
+        retainedSource?.workflow.sha === toolingSha
+      )) ||
+    qualified?.schema !==
+      (manifest.rerunGroup === "build-only"
+        ? SEALED_NPM_PREFLIGHT_SCHEMA
+        : "openclaw.qualified-npm-preflight/v1") ||
+    qualified.source?.sha !== sourceSha ||
+    !/^[a-f0-9]{64}$/u.test(qualified.manifestSha256 ?? "") ||
+    !/^[1-9][0-9]*$/u.test(qualified.artifact?.id ?? "") ||
+    !/^[a-f0-9]{64}$/u.test(qualified.artifact?.digest ?? "") ||
+    !/^openclaw-npm-preflight-[A-Za-z0-9_.-]+$/u.test(qualified.artifact?.name ?? "") ||
+    !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(producerRepository ?? "") ||
+    producer?.repository !== producerRepository ||
+    !/^[1-9][0-9]*$/u.test(producer?.runId ?? "") ||
+    !/^[1-9][0-9]*$/u.test(producer?.runAttempt ?? "") ||
+    qualified.artifact.runId !== producer?.runId ||
+    qualified.artifact.runAttempt !== producer?.runAttempt ||
+    producer?.workflowSha !== (retainedSource?.workflow.sha ?? toolingSha) ||
+    (independentProducer
+      ? !/^refs\/(?:heads|tags)\/.+$/u.test(manifest.workflowFullRef ?? "")
+      : !retainedParentProducer &&
+        (producer?.runId !== String(runId) ||
+          producer?.runAttempt !== String(runAttempt) ||
+          !producer?.workflowRef?.startsWith(
+            `${producerRepository}/${FULL_RELEASE_WORKFLOW}@refs/`,
+          )))
+  ) {
+    throw new Error(
+      "Full Release Validation does not bind a qualified npm preflight for this exact release and attempt; obtain new admitted qualification.",
+    );
+  }
+  return qualified;
+}
+
+// The FRV run authorizes publication; its descriptor identifies the independent
+// producer whose immutable archive survives a rerun of that authorization.
+/** @param {FullReleaseNpmPreflightOptions & {repository: string, fastTrackRequest?: unknown, runGh?: typeof runReleaseToolingGh}} options */
+export function resolveFullReleaseNpmPreflight({
+  runGh = runReleaseToolingGh,
+  fastTrackRequest = process.env.FAST_TRACK_REQUEST_JSON,
+  ...options
+}) {
+  const descriptor = validateFullReleaseNpmPreflight(options);
+  const producer = descriptor.producer;
+  // This resolves transport and the exact successful seal only. Publication consumers
+  // must authenticate the packet through the full evidence owner before publishing.
+  const inlineException = Boolean(fastTrackRequest) && producer.runId === String(options.runId);
+  const { run } = verifyNpmBundleProducer({
+    producer,
+    repository: options.repository,
+    toolingSha: producer.workflowSha,
+    qualified: true,
+    requireCompletedParent: !inlineException,
+    runGh,
+  });
+  if (run.status !== "completed") {
+    throw new Error("npm qualification producer must be completed.");
+  }
+  const artifact = parseJson(
+    runGh(["api", `repos/${options.repository}/actions/artifacts/${descriptor.artifact.id}`]),
+    "qualified npm preflight artifact",
+  );
+  if (
+    String(artifact.id) !== descriptor.artifact.id ||
+    artifact.name !== descriptor.artifact.name ||
+    artifact.digest !== `sha256:${descriptor.artifact.digest}` ||
+    artifact.expired !== false ||
+    String(artifact.workflow_run?.id) !== producer.runId ||
+    artifact.workflow_run?.head_sha !== producer.workflowSha
+  ) {
+    throw new Error("Qualified npm preflight artifact identity changed.");
+  }
+  return { descriptor, producer, run, artifact };
+}
+
+/** @param {Parameters<typeof resolveFullReleaseNpmPreflight>[0] & {outputDir: string, token: string, fetchImpl?: typeof fetch, archivePath?: string, deadlineMs?: number}} options */
+export async function downloadFullReleaseNpmPreflight({
+  outputDir,
+  token,
+  fetchImpl,
+  archivePath,
+  deadlineMs,
+  ...options
+}) {
+  const resolved = resolveFullReleaseNpmPreflight(options);
+  const { descriptor, producer, artifact } = resolved;
+  const { archiveBytes } = await downloadExactActionsArtifactArchive({
+    token,
+    fetchImpl,
+    archivePath,
+    deadlineMs,
+    expected: {
+      repository: options.repository,
+      artifactId: Number(descriptor.artifact.id),
+      artifactName: descriptor.artifact.name,
+      artifactDigest: `sha256:${descriptor.artifact.digest}`,
+      artifactSizeBytes: artifact.size_in_bytes,
+      artifactExpiresAt: artifact.expires_at,
+      runId: Number(producer.runId),
+      workflowSha: producer.workflowSha,
+    },
+  });
+  const files = inspectActionsArtifactZipWithPolicy(archiveBytes, {
+    minEntries: 1,
+    maxEntries: 1024,
+    allowPath: (name) =>
+      /^[A-Za-z0-9_.-]+\.(?:tgz|json|txt)$|^core-packages-SHA256SUMS$|^dependency-evidence\/[A-Za-z0-9_.-]+\.(?:json|md)$/u.test(
+        name,
+      ),
+    maxEntryBytes: (name) => (name.endsWith(".tgz") ? 192 : 17) * 1024 * 1024,
+  });
+  const manifestBytes = files.get("preflight-manifest.json");
+  if (
+    !manifestBytes ||
+    createHash("sha256").update(manifestBytes).digest("hex") !== descriptor.manifestSha256
+  ) {
+    throw new Error("Downloaded npm preflight manifest differs from its qualified descriptor.");
+  }
+  const npmManifest = JSON.parse(manifestBytes.toString("utf8"));
+  if (
+    (descriptor.schema === SEALED_NPM_PREFLIGHT_SCHEMA) !== isBuildOnlyNpmPreflight(npmManifest) ||
+    (descriptor.schema === SEALED_NPM_PREFLIGHT_SCHEMA &&
+      npmManifest.npmDistTag !== options.manifest.sourceAdmission?.publicationSelection?.npmDistTag)
+  ) {
+    throw new Error(
+      "Npm preflight validation mode or exact publication channel differs from its descriptor.",
+    );
+  }
+  mkdirSync(outputDir, { recursive: true });
+  if (readdirSync(outputDir).length !== 0) {
+    throw new Error("Qualified npm preflight destination must be empty.");
+  }
+  for (const [name, bytes] of files) {
+    const path = join(outputDir, name);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, bytes, { flag: "wx" });
+  }
+  return resolved;
+}
+
+// Actions exposes a short head branch for tags too; a matching branch makes
+// producer provenance ambiguous even if both refs currently point at one SHA.
+export function validateReleasePreflightTagIdentity({ branches, ...identity }) {
+  if (
+    !Array.isArray(branches) ||
+    branches.some(
+      (branch) =>
+        !isRecord(branch) ||
+        typeof branch.ref !== "string" ||
+        branch.ref === `refs/heads/${identity.workflowRef}`,
+    )
+  ) {
+    throw new Error("npm preflight has ambiguous protected tag provenance.");
+  }
+  const validated = validateReleaseToolingIdentity(identity);
+  if (validated.route !== "protected-tag") {
+    throw new Error("npm preflight producer must use a protected tag.");
+  }
+  return validated;
+}
+
+// Structural binding only; the caller must authenticate the full qualification.
+export function validateNpmPreflightQualification({
+  manifest,
+  repository,
+  sourceSha,
+  toolingSha,
+  producerRunId,
+  producerRunAttempt,
+}) {
+  const evidenceProducer = releaseEvidenceProducerTuple(manifest);
+  const qualified = validateFullReleaseNpmPreflight({
+    manifest,
+    repository,
+    runId: evidenceProducer.runId,
+    runAttempt: evidenceProducer.runAttempt,
+    sourceSha,
+    toolingSha,
+  });
+  if (
+    qualified.producer.runId !== String(producerRunId) ||
+    qualified.producer.runAttempt !== String(producerRunAttempt)
+  ) {
+    throw new Error("Npm producer differs from the authenticated frozen qualification");
+  }
+  return qualified;
+}
+
+/**
+ * @param {{ manifest?: unknown, repository: string, sourceSha: string, toolingSha: string,
+ *   publisherSha: string, producerRunId: string | number, producerRunAttempt: string | number,
+ *   publisherFullRef?: string, runGh?: typeof runReleaseToolingGh,
+ *   publicationAuthority?: Parameters<typeof verifyReleaseToolingIdentity>[0],
+ *   fastTrackRequest?: unknown,
+ *   evidenceClient?: Parameters<typeof import("./release-ci-summary.mjs").validateReleaseRunEvidence>[1] }} options
+ */
+export async function verifyNpmPreflightPublicationLineage({
+  manifest,
+  repository,
+  sourceSha,
+  toolingSha,
+  publisherSha,
+  producerRunId,
+  producerRunAttempt,
+  evidenceClient,
+  fastTrackRequest,
+  publisherFullRef = "refs/heads/main",
+  publicationAuthority,
+}) {
+  const { authenticateCandidateOwnedArtifact } =
+    await import("./validate-full-release-validation-evidence.mjs");
+  const authenticated = await authenticateCandidateOwnedArtifact({
+    manifest,
+    repository,
+    candidateSha: sourceSha,
+    qualificationSha: toolingSha,
+    publisherSha,
+    publisherFullRef,
+    client: evidenceClient,
+    fastTrackRequest,
+  });
+  const qualified = validateNpmPreflightQualification({
+    manifest,
+    repository,
+    sourceSha,
+    toolingSha,
+    producerRunId,
+    producerRunAttempt,
+  });
+  if (publicationAuthority) {
+    verifyReleaseToolingIdentity(publicationAuthority);
+  }
+  // Refresh live admission after artifact/child acquisition and publisher checks.
+  authenticated.revalidateAuthority();
+  return qualified;
+}
+
+export function verifyReleasePreflightToolingIdentity({
+  repository,
+  publisherSha,
+  runGh = runReleaseToolingGh,
+  workflowFullRef,
+  workflowRef,
+  workflowSha,
+}) {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository ?? "")) {
+    throw new Error("npm preflight repository must be owner/name.");
+  }
+  if (!/^[a-f0-9]{40}$/u.test(publisherSha ?? "")) {
+    throw new Error("publisher workflow SHA must be a lowercase 40-character commit SHA.");
+  }
+  const normalizedRepository = repository;
+  const targetSha = publisherSha;
+  const identity = { workflowFullRef, workflowRef, workflowSha };
+  const tagRef = parseJson(
+    runGh(["api", `repos/${normalizedRepository}/git/ref/tags/${workflowRef}`, "--method", "GET"]),
+    "npm preflight producer tag",
+  );
+  const branches = parseJson(
+    runGh([
+      "api",
+      `repos/${normalizedRepository}/git/matching-refs/heads/${workflowRef}`,
+      "--method",
+      "GET",
+    ]),
+    "npm preflight producer branches",
+  );
+  const validated = validateReleasePreflightTagIdentity({ ...identity, tagRef, branches });
+  // Producer evidence and current publication authority are distinct. Require
+  // the producer on both trusted main and the current publisher's ancestry.
+  for (const target of ["main", targetSha]) {
+    const comparison = parseJson(
+      runGh([
+        "api",
+        `repos/${normalizedRepository}/compare/${validated.sha}...${target}`,
+        "--method",
+        "GET",
+        "--jq",
+        "{status}",
+      ]),
+      "npm preflight producer ancestry",
+    );
+    if (comparison?.status !== "ahead" && comparison?.status !== "identical") {
+      throw new Error(`npm preflight producer is not reachable from ${target}.`);
+    }
+  }
+  return validated;
+}
+
+async function main() {
+  try {
+    const { values } = parseArgs({
+      options: {
+        repository: { type: "string" },
+        "workflow-ref": { type: "string" },
+        "workflow-full-ref": { type: "string" },
+        "workflow-sha": { type: "string" },
+        "publisher-sha": { type: "string" },
+        "publisher-full-ref": { type: "string" },
+        manifest: { type: "string" },
+        "run-id": { type: "string" },
+        "run-attempt": { type: "string" },
+        "workflow-path": { type: "string" },
+        "full-release-manifest": { type: "string" },
+        "full-release-run-id": { type: "string" },
+        "full-release-run-attempt": { type: "string" },
+        "resolve-full-release-manifest": { type: "string" },
+        "source-sha": { type: "string" },
+        "output-dir": { type: "string" },
+        "verify-publication-lineage": { type: "boolean" },
+        "verify-publication-authority": { type: "boolean" },
+      },
+    });
+    const options = {
+      repository: values.repository,
+      workflowRef: values["workflow-ref"],
+      workflowFullRef: values["workflow-full-ref"],
+      workflowSha: values["workflow-sha"],
+      publisherSha: values["publisher-sha"],
+      workflowPath: values["workflow-path"],
+    };
+    let identity;
+    if (values["verify-publication-authority"]) {
+      const env = process.env;
+      const fullManifest = env.FULL_RELEASE_VALIDATION_RUN_ID
+        ? JSON.parse(
+            readFileSync("full-release-validation/full-release-validation-manifest.json", "utf8"),
+          )
+        : undefined;
+      if (
+        fullManifest &&
+        (String(fullManifest.runId) !== env.FULL_RELEASE_VALIDATION_RUN_ID ||
+          String(fullManifest.runAttempt) !== env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT)
+      ) {
+        throw new Error(
+          "Full release publication authority differs from the selected run and attempt",
+        );
+      }
+      const publicationAuthority = {
+        repository: env.GITHUB_REPOSITORY,
+        workflowRef: env.WORKFLOW_REF,
+        workflowFullRef: env.WORKFLOW_FULL_REF,
+        workflowSha: env.WORKFLOW_SHA,
+        releasePublishRunId: env.RELEASE_PUBLISH_RUN_ID,
+        releasePublishRunAttempt: env.RELEASE_PUBLISH_RUN_ATTEMPT,
+        releasePublishRef: env.RELEASE_PUBLISH_REF,
+        releasePublishFullRef: env.RELEASE_PUBLISH_FULL_REF,
+        releasePublishParentStatePolicy: env.RELEASE_PUBLISH_PARENT_STATE_POLICY,
+        allowPrevalidatedRef: true,
+      };
+      identity = await verifyNpmPreflightPublicationLineage({
+        manifest: fullManifest,
+        repository: env.GITHUB_REPOSITORY,
+        sourceSha: env.EXPECTED_RELEASE_SHA,
+        toolingSha: env.PREFLIGHT_WORKFLOW_SHA,
+        publisherSha: env.WORKFLOW_SHA,
+        publisherFullRef: env.WORKFLOW_FULL_REF,
+        producerRunId: env.PREFLIGHT_RUN_ID,
+        producerRunAttempt: env.PREFLIGHT_RUN_ATTEMPT,
+        publicationAuthority,
+      });
+    } else if (values["verify-publication-lineage"]) {
+      identity = await verifyNpmPreflightPublicationLineage({
+        manifest: values["full-release-manifest"]
+          ? JSON.parse(readFileSync(values["full-release-manifest"], "utf8"))
+          : undefined,
+        repository: values.repository,
+        sourceSha: values["source-sha"],
+        toolingSha: values["workflow-sha"],
+        publisherFullRef: values["publisher-full-ref"] ?? process.env.GITHUB_REF,
+        publisherSha: values["publisher-sha"],
+        producerRunId: values["run-id"],
+        producerRunAttempt: values["run-attempt"],
+      });
+    } else if (values["resolve-full-release-manifest"]) {
+      const resolution = {
+        manifest: parseJson(
+          readFileSync(values["resolve-full-release-manifest"], "utf8"),
+          "full release manifest",
+        ),
+        repository: values.repository,
+        runId: values["run-id"],
+        runAttempt: values["run-attempt"],
+        sourceSha: values["source-sha"],
+        toolingSha: values["workflow-sha"],
+      };
+      identity = values["output-dir"]
+        ? await downloadFullReleaseNpmPreflight({
+            ...resolution,
+            outputDir: values["output-dir"],
+            token: process.env.GH_TOKEN,
+          })
+        : resolveFullReleaseNpmPreflight(resolution);
+    } else {
+      identity = values.manifest
+        ? verifyNpmPreflightProducer({
+            ...options,
+            manifest: parseJson(readFileSync(values.manifest, "utf8"), "npm preflight manifest"),
+            manifestSha256: createHash("sha256")
+              .update(readFileSync(values.manifest))
+              .digest("hex"),
+            fullReleaseManifest: values["full-release-manifest"]
+              ? parseJson(
+                  readFileSync(values["full-release-manifest"], "utf8"),
+                  "full release manifest",
+                )
+              : undefined,
+            runId: values["run-id"],
+            runAttempt: values["run-attempt"],
+            fullReleaseRunId: values["full-release-run-id"],
+            fullReleaseRunAttempt: values["full-release-run-attempt"],
+          })
+        : verifyReleasePreflightToolingIdentity(options);
+    }
+    process.stdout.write(`${JSON.stringify(identity)}\n`);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  // Let this module finish evaluating before a lazy import cycles back to it.
+  void main();
+}

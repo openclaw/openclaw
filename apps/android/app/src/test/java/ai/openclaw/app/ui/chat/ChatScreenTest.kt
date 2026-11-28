@@ -1,23 +1,98 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.PendingAssistantAutoSend
+import ai.openclaw.app.SessionCatalog
+import ai.openclaw.app.SessionCatalogEntry
+import ai.openclaw.app.SessionCatalogHost
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatPlanStep
+import ai.openclaw.app.chat.ChatPlanStepStatus
+import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.SessionBranch
-import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 class ChatScreenTest {
   @Test
-  fun jumpToLatestReservesItsTouchTargetBelowMessages() {
-    assertEquals(0.dp, chatReaderListBottomInset(showJumpToLatest = false))
-    assertEquals(56.dp, chatReaderListBottomInset(showJumpToLatest = true))
+  fun thinkingGaugeSemanticsExposeEffortAndFastModeState() {
+    val options = listOf("off", "medium").map { ChatThinkingLevelOption(id = it, label = it) }
+
+    assertEquals(
+      "Medium, Fast mode: On",
+      chatThinkingChipStateDescription(fastMode = true, thinkingLevel = "medium", thinkingOptions = options),
+    )
+    assertEquals(
+      "High, Fast mode: Off",
+      chatThinkingChipStateDescription(fastMode = false, thinkingLevel = "high", thinkingOptions = emptyList()),
+    )
+  }
+
+  @Test
+  fun richAssistantContentKeepsRoomWhileUserBubblesReserveATrailingGutter() {
+    assertEquals(1f, chatBubbleWidthFraction(isUser = false), 0.0001f)
+    assertEquals(0.78f, chatBubbleWidthFraction(isUser = true), 0.0001f)
+    assertEquals(24, CHAT_BUBBLE_CORNER_RADIUS_DP)
+  }
+
+  @Test
+  fun detachedAttachmentsPreserveAudioVideoPrecedenceAndAssistantRuns() {
+    val image = ChatMessageContent(type = "image")
+    val file = ChatMessageContent(type = "file")
+    val text = ChatMessageContent(text = "Between images")
+    assertTrue(image.isDetachedChatAttachment())
+    assertTrue(file.isDetachedChatAttachment())
+    for (part in listOf(image, file)) {
+      assertFalse(part.copy(mimeType = "audio/mpeg").isDetachedChatAttachment())
+      assertFalse(part.copy(mimeType = "video/mp4").isDetachedChatAttachment())
+    }
+    assertEquals(listOf(listOf(image, file), listOf(text), listOf(image)), chatMessageContentGroups(listOf(image, file, text, image)))
+  }
+
+  @Test
+  fun progressCardCompletionControlsTheAttachedPanelState() {
+    val note = ChatProgressCard(revision = 1, updatedAt = 1L, markdown = "note", steps = emptyList())
+    val completed = note.copy(steps = listOf(ChatPlanStep("Done", ChatPlanStepStatus.Completed)))
+    val paused = note.copy(steps = listOf(ChatPlanStep("Waiting", ChatPlanStepStatus.InProgress)))
+
+    assertFalse(progressCardIsComplete(note, hasActiveRun = true))
+    assertTrue(progressCardIsComplete(note, hasActiveRun = false))
+    assertTrue(progressCardIsComplete(completed, hasActiveRun = true))
+    assertFalse(progressCardIsComplete(paused, hasActiveRun = false))
+  }
+
+  @Test
+  fun fastModeControlRequiresSupportAndAnIdleConnectedChat() {
+    fun enabled(
+      supported: Boolean = true,
+      writeAuthorized: Boolean = true,
+      connected: Boolean = true,
+      gatewayAvailable: Boolean = true,
+      loading: Boolean = false,
+      sending: Boolean = false,
+      activeRun: Boolean = false,
+      streaming: Boolean = false,
+      settingsMutationPending: Boolean = false,
+    ) = chatFastModeControlEnabled(supported, writeAuthorized, connected, gatewayAvailable, loading, sending, activeRun, streaming, settingsMutationPending)
+
+    assertTrue(enabled())
+    assertFalse(enabled(supported = false))
+    assertFalse(enabled(writeAuthorized = false))
+    assertFalse(enabled(connected = false))
+    assertFalse(enabled(gatewayAvailable = false))
+    assertFalse(enabled(loading = true))
+    assertFalse(enabled(sending = true))
+    assertFalse(enabled(activeRun = true))
+    assertFalse(enabled(streaming = true))
+    assertFalse(enabled(settingsMutationPending = true))
   }
 
   @Test
@@ -27,21 +102,6 @@ class ChatScreenTest {
     assertEquals(
       "Messages: 2",
       branchMetadataText(SessionBranch("leaf", "", 2, updatedAt = null, active = false)),
-    )
-  }
-
-  @Test
-  fun longUserMessagesProduceABoundedPlainTextPreview() {
-    assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview("Short prompt"))
-    assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview(List(12) { "line" }.joinToString("\n")))
-    assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview("a".repeat(700)))
-    assertEquals(
-      List(12) { "line" }.joinToString("\n") + "…",
-      ChatUserMessageDisclosurePolicy.collapsedPreview(List(13) { "line" }.joinToString("\n")),
-    )
-    assertEquals(
-      "a".repeat(700) + "…",
-      ChatUserMessageDisclosurePolicy.collapsedPreview("a".repeat(701)),
     )
   }
 
@@ -74,67 +134,31 @@ class ChatScreenTest {
   }
 
   @Test
-  fun composerTrailingActionPreservesTalkAndRunStopPrecedence() {
+  fun composerPrimaryActionSendsDraftsDuringRunsAndKeepsTalkStopIndependent() {
     assertEquals(
-      ChatComposerTrailingAction.StopTalk,
-      resolveChatComposerTrailingAction(talkActive = true, runActive = true, sendEnabled = true),
+      ChatComposerPrimaryAction.Stop,
+      resolveChatComposerPrimaryAction(talkActive = true, runActive = true, hasContent = true),
     )
     assertEquals(
-      ChatComposerTrailingAction.Stop,
-      resolveChatComposerTrailingAction(talkActive = false, runActive = true, sendEnabled = true),
+      ChatComposerPrimaryAction.None,
+      resolveChatComposerPrimaryAction(talkActive = true, runActive = false, hasContent = true),
     )
     assertEquals(
-      ChatComposerTrailingAction.Send,
-      resolveChatComposerTrailingAction(talkActive = false, runActive = false, sendEnabled = true),
+      ChatComposerPrimaryAction.Send,
+      resolveChatComposerPrimaryAction(talkActive = false, runActive = true, hasContent = true),
     )
     assertEquals(
-      ChatComposerTrailingAction.StartTalk,
-      resolveChatComposerTrailingAction(talkActive = false, runActive = false, sendEnabled = false),
-    )
-  }
-
-  @Test
-  fun agentChipUsesEmojiAndFallsBackToId() {
-    assertEquals(
-      "🦾 Scout",
-      chatAgentChipText(GatewayAgentSummary(id = "scout", name = "Scout", emoji = " 🦾 ")),
+      ChatComposerPrimaryAction.Send,
+      resolveChatComposerPrimaryAction(talkActive = false, runActive = false, hasContent = true),
     )
     assertEquals(
-      "ops",
-      chatAgentChipText(GatewayAgentSummary(id = "ops", name = " ", emoji = null)),
-    )
-  }
-
-  @Test
-  fun sessionChipUsesTheSharedDashboardTitlePrecedence() {
-    val dashboardKey = "agent:main:dashboard:fresh"
-
-    assertEquals(
-      "New chat",
-      chatSessionChipText(
-        entry = ChatSessionEntry(key = dashboardKey, updatedAtMs = 1),
-        mainSessionKey = "agent:main:node-phone",
-      ),
+      ChatComposerPrimaryAction.Stop,
+      resolveChatComposerPrimaryAction(talkActive = false, runActive = true, hasContent = false),
     )
     assertEquals(
-      "Manual bee research",
-      chatSessionChipText(
-        entry =
-          ChatSessionEntry(
-            key = dashboardKey,
-            updatedAtMs = 1,
-            label = "Manual bee research",
-            displayName = "Honeybee flower-location communication",
-          ),
-        mainSessionKey = "agent:main:node-phone",
-      ),
+      ChatComposerPrimaryAction.Talk,
+      resolveChatComposerPrimaryAction(talkActive = false, runActive = false, hasContent = false),
     )
-  }
-
-  @Test
-  fun agentSelectorUsesCanonicalMainSession() {
-    assertEquals("scout", selectedChatAgentId("agent:scout:node-phone", "main"))
-    assertEquals("main", selectedChatAgentId("main", "main"))
   }
 
   @Test
@@ -177,27 +201,6 @@ class ChatScreenTest {
   }
 
   @Test
-  fun initialChatLoadUsesMainWhenNoSessionIsSelected() {
-    assertEquals(
-      "agent:ops:device",
-      resolveInitialChatLoadSessionKey(
-        sessionKey = "main",
-        mainSessionKey = "agent:ops:device",
-      ),
-    )
-  }
-
-  @Test
-  fun initialChatLoadPreservesSelectedSession() {
-    assertNull(
-      resolveInitialChatLoadSessionKey(
-        sessionKey = "session:history",
-        mainSessionKey = "agent:ops:device",
-      ),
-    )
-  }
-
-  @Test
   fun healthyEmptyChatShowsStarterStateInsteadOfLoadingPlaceholder() {
     assertFalse(
       showChatLoadingPlaceholder(
@@ -213,5 +216,108 @@ class ChatScreenTest {
         gatewayOffline = false,
       ),
     )
+  }
+
+  @Test
+  fun headerSessionTitleNeverExposesRoutingKeys() {
+    assertEquals("New chat", chatHeaderSessionTitle(session = null) { "New chat" })
+    assertEquals(
+      "New chat",
+      chatHeaderSessionTitle(ChatSessionEntry(key = "agent:main:main", updatedAtMs = null)) { "New chat" },
+    )
+    assertEquals(
+      "Release planning",
+      chatHeaderSessionTitle(
+        ChatSessionEntry(
+          key = "agent:main:thread-1",
+          updatedAtMs = null,
+          displayName = "Release planning",
+        ),
+      ) {
+        "New chat"
+      },
+    )
+  }
+
+  @Test
+  fun headerProjectLabelComesOnlyFromTheMatchingCatalogSession() {
+    val matching =
+      SessionCatalogEntry(
+        catalogId = "codex",
+        hostId = "local",
+        threadId = "thread-1",
+        cwd = "/root/openclaw",
+        status = "idle",
+        archived = false,
+        sessionKey = "agent:main:thread-1",
+        canContinue = true,
+      )
+    val catalog =
+      SessionCatalog(
+        id = "codex",
+        label = "Codex",
+        hosts =
+          listOf(
+            SessionCatalogHost(
+              hostId = "local",
+              label = "Local",
+              connected = true,
+              sessions = listOf(matching),
+            ),
+          ),
+      )
+
+    assertEquals("openclaw", chatHeaderProjectLabel("agent:main:thread-1", listOf(catalog)))
+    assertNull(chatHeaderProjectLabel("agent:main:other", listOf(catalog)))
+    assertNull(chatHeaderProjectLabel("", listOf(catalog)))
+  }
+}
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], manifest = Config.NONE)
+class ChatUserMessageDisclosurePolicyTest {
+  @Test
+  fun longUserMessagesProduceABoundedPlainTextPreview() {
+    assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview("Short prompt"))
+    assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview(List(12) { "line" }.joinToString("\n")))
+    assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview("a".repeat(700)))
+    assertEquals(
+      List(12) { "line" }.joinToString("\n") + "…",
+      ChatUserMessageDisclosurePolicy.collapsedPreview(List(13) { "line" }.joinToString("\n")),
+    )
+    assertEquals(
+      "a".repeat(700) + "…",
+      ChatUserMessageDisclosurePolicy.collapsedPreview("a".repeat(701)),
+    )
+  }
+
+  @Test
+  fun collapsedPreviewDisplaysTwelveRowsAcrossLineEndings() {
+    val rows = List(12) { "- x" }
+    for ((sourceBreak, displayBreak) in listOf("\r" to "\n", "\r\n" to "\r\n")) {
+      val source = rows.joinToString(sourceBreak)
+      assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview(source))
+      assertEquals(
+        rows.joinToString(displayBreak) + "…",
+        ChatUserMessageDisclosurePolicy.collapsedPreview("$source$sourceBreak- x"),
+      )
+    }
+
+    val mixed = rows.joinToString("\n").replaceFirst("\n", "\r")
+    assertEquals(rows.joinToString("\n") + "…", ChatUserMessageDisclosurePolicy.collapsedPreview("$mixed\n- x"))
+  }
+
+  @Test
+  fun characterLimitPreservesWholeGraphemes() {
+    for (cluster in listOf("👍🏽", "🇳🇿", "👩‍👩‍👧‍👦", "e\u0301")) {
+      val exactFit = "a".repeat(700 - cluster.length) + cluster
+      assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview(exactFit))
+      assertEquals("$exactFit…", ChatUserMessageDisclosurePolicy.collapsedPreview(exactFit + "x"))
+
+      for (included in 1 until cluster.length) {
+        val prefix = "a".repeat(700 - included)
+        assertEquals("$prefix…", ChatUserMessageDisclosurePolicy.collapsedPreview(prefix + cluster))
+      }
+    }
   }
 }

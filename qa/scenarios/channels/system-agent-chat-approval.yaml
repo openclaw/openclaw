@@ -1,0 +1,152 @@
+title: OpenClaw change approved from the requesting chat
+
+scenario:
+  id: system-agent-chat-approval
+  surface: channel
+  coverage:
+    primary:
+      - agent-runtime.delegated-tool-access
+    secondary:
+      - channels.qa-channel-outbound
+  objective: Verify a restricted channel turn that asks OpenClaw for a config change receives the approval in the same chat and applies it after a /approve reply.
+  gatewayConfigPatch:
+    commands:
+      ownerAllowFrom: [qa-channel:alice]
+      # Bob may run commands but is not an owner.
+      allowFrom:
+        qa-channel: [alice, bob]
+    agents:
+      entries:
+        qa:
+          tools:
+            exec:
+              mode: ask
+            alsoAllow: [openclaw]
+  successCriteria:
+    - The delegated config change posts an approval prompt with an /approve reply in the requesting conversation.
+    - A command-authorized non-owner's /approve is refused and leaves the change pending and unapplied.
+    - The owner's /approve reply resolves the pending OpenClaw change from chat.
+    - The Gateway config shows the approved change and the agent finishes its turn with one visible reply.
+  docsRefs:
+    - docs/channels/qa-channel.md
+    - docs/cli/openclaw.md
+  codeRefs:
+    - src/gateway/server-methods/system-agent-approval.ts
+    - src/infra/exec-approval-forwarder.ts
+    - src/auto-reply/reply/commands-approve.ts
+  execution:
+    kind: flow
+    summary: Drive a restricted delegated config change through an ephemeral Gateway, qa-channel, and mock provider.
+    config:
+      requiredProviderMode: mock-openai
+      requiredProvider: mock-openai
+      conversationId: qa-system-agent-chat-approval
+      prompt: "@openclaw tool search qa check target=openclaw openclaw_fixture=logging-level-info. Call the openclaw tool exactly once, then reply exactly: QA-SYSTEM-AGENT-CHAT-APPROVAL-OK."
+      expectedMarker: QA-SYSTEM-AGENT-CHAT-APPROVAL-OK
+
+flow:
+  steps:
+    - name: approves a delegated OpenClaw change from the requesting chat
+      actions:
+        - assert:
+            expr: "env.providerMode === 'mock-openai'"
+            message: this boundary scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: conversation
+          value:
+            id:
+              expr: config.conversationId
+            kind: channel
+            title: QA System Agent Chat Approval
+        - set: levelBefore
+          value:
+            expr: "(await env.gateway.call('config.get', {}, { timeoutMs: 60000 })).config?.logging?.level ?? null"
+        - assert:
+            expr: "levelBefore !== 'info'"
+            message:
+              expr: "`fixture needs a non-info starting log level, saw ${levelBefore}`"
+        - sendInbound:
+            conversation:
+              ref: conversation
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.prompt
+        - call: waitForOutboundMessage
+          saveAs: approvalPrompt
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === conversation.id && String(candidate.text ?? '').includes('allow-once|deny') && String(candidate.text ?? '').includes('/approve system-agent:')"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - set: approvalId
+          value:
+            expr: "String(approvalPrompt.text).split('/approve ')[1].split(' ')[0]"
+        - assert:
+            expr: "String(approvalPrompt.text).includes('logging.level')"
+            message:
+              expr: "`approval prompt did not describe the change: ${approvalPrompt.text}`"
+        - sendInbound:
+            conversation:
+              ref: conversation
+            senderId: bob
+            senderName: Bob
+            text:
+              expr: "`/approve ${approvalId} allow-once`"
+            nativeCommand: { name: approve }
+        - call: waitForOutboundMessage
+          saveAs: nonOwnerReply
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === conversation.id && String(candidate.text ?? '').includes('Only the owner can approve OpenClaw changes')"
+            - 60000
+        - set: levelAfterNonOwner
+          value:
+            expr: "(await env.gateway.call('config.get', {}, { timeoutMs: 60000 })).config?.logging?.level ?? null"
+        - assert:
+            expr: "levelAfterNonOwner === levelBefore"
+            message:
+              expr: "`non-owner /approve changed logging.level to ${levelAfterNonOwner}`"
+        - sendInbound:
+            conversation:
+              ref: conversation
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: "`/approve ${approvalId} allow-once`"
+            # Slash commands arrive as native commands, ahead of the blocked turn.
+            nativeCommand: { name: approve }
+        - call: waitForOutboundMessage
+          saveAs: finalReply
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === conversation.id && String(candidate.text ?? '').includes(config.expectedMarker)"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - set: levelAfter
+          value:
+            expr: "(await env.gateway.call('config.get', {}, { timeoutMs: 60000 })).config?.logging?.level ?? null"
+        - assert:
+            expr: "levelAfter === 'info'"
+            message:
+              expr: "`approved change did not apply: logging.level=${levelAfter}`"
+        - set: outboundTexts
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === conversation.id).map((message) => String(message.text ?? ''))"
+        - assert:
+            expr: "outboundTexts.filter((text) => text.includes(config.expectedMarker)).length === 1"
+            message:
+              expr: "`expected one final reply, saw ${JSON.stringify(outboundTexts)}`"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'system-agent-chat-approval', provider: env.providerMode, transport: transport.id, approvalId, levelBefore, nonOwnerReply: nonOwnerReply.text, levelAfterNonOwner, levelAfter, outboundTexts }, null, 2)"

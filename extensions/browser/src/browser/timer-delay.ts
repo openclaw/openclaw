@@ -1,6 +1,3 @@
-/**
- * Timer delay normalization for Browser waits and cleanup loops.
- */
 /** Largest timeout delay accepted reliably by Node timers. */
 const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
 

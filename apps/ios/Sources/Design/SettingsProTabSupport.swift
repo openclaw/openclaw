@@ -1,4 +1,3 @@
-import Darwin
 import OpenClawKit
 import SwiftUI
 import UIKit
@@ -6,46 +5,334 @@ import UserNotifications
 
 enum SettingsRoute: Hashable {
     case gateway
-    case systemAgent
-    case appleWatch
-    case approvals
+    case gatewayDetails
+    case deviceSettings
+    case voiceAndTalk
     case permissions
-    case channels
+    case accessories
+    case chatPreferences
+    case storage
+    case sidebarPages
     case skills
-    case voice
+    case plugins
+    case advanced
+    case appleWatch
+    case espSetup
+    case approvals
     case diagnostics
-    case privacy
-    case notifications
     case licenses
     case about
 }
 
-enum SettingsLayout {
-    static let cardRadius: CGFloat = OpenClawProMetric.cardRadius
-    static let rowHeight: CGFloat = 58
+struct ManualGatewaySecurityRows: View {
+    let presentation: GatewayManualTransportPresentation
+    @Binding var useTLS: Bool
+    /// Settings shows the helper as the group footer; onboarding keeps it as a row.
+    var showsHelperRow = true
+
+    var body: some View {
+        Picker(selection: self.$useTLS) {
+            Text("Unencrypted")
+                .font(OpenClawType.body)
+                .tag(false)
+            Text("Secure (TLS)")
+                .font(OpenClawType.body)
+                .tag(true)
+        } label: {
+            Text("Connection security")
+                .font(SettingsType.label)
+        }
+        .settingsMenuPicker()
+        .disabled(self.presentation.requiresTLS)
+
+        if self.showsHelperRow, let helperText = self.presentation.helperText {
+            Text(helperText)
+                .font(OpenClawType.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
 }
 
-/// Canonical label/value list row for Settings and Talk surfaces. Keep every
-/// detail row on this view so row typography cannot drift between sections;
-/// plain `LabeledContent(String, value:)` renders unbranded system fonts.
-struct SettingsDetailRow: View {
-    let label: LocalizedStringKey
+/// One text style per role on every Settings page (F26). Each role is a Dynamic Type text
+/// style, so sizes follow the user's setting; pages never pick their own size.
+enum SettingsType {
+    /// Row labels and action rows.
+    static var label: Font {
+        OpenClawType.body
+    }
+
+    /// Current or read-only value at the trailing edge, in secondary ink.
+    static var value: Font {
+        OpenClawType.body
+    }
+
+    /// Second line of a row with a description, in secondary ink.
+    static var description: Font {
+        OpenClawType.subhead
+    }
+
+    /// Section titles, matching the header iOS 26+ draws for a plain titled `Section` in a
+    /// grouped list: Body size, regular, sentence case, secondary ink.
+    static var sectionTitle: Font {
+        OpenClawType.body
+    }
+
+    /// Group footers.
+    static var footnote: Font {
+        OpenClawType.footnote
+    }
+}
+
+/// The one secondary ink for Settings text: the system secondary label color, which menu pickers
+/// already draw their value in. SwiftUI's `.secondary` style resolves to a different gray in a
+/// list row (#7f7f7f against #8a8a8e on white), so values beside a picker would not match.
+enum SettingsInk {
+    static let secondary = Color(uiColor: .secondaryLabel)
+}
+
+/// Section title for every Settings group: the system header style in the brand font. Its ink is
+/// the header's own (secondary label); adding `.secondary` again would draw it a step lighter.
+struct SettingsSectionTitle: View {
+    private let text: Text
+
+    init(_ title: LocalizedStringKey) {
+        self.text = Text(title)
+    }
+
+    var body: some View {
+        self.text
+            .font(SettingsType.sectionTitle)
+            .textCase(nil)
+    }
+}
+
+/// Group footer text for every Settings group.
+struct SettingsFootnote: View {
+    private let text: Text
+
+    init(_ title: LocalizedStringKey) {
+        self.text = Text(title)
+    }
+
+    init(verbatim title: String) {
+        self.text = Text(verbatim: title)
+    }
+
+    var body: some View {
+        self.text
+            .font(SettingsType.footnote)
+    }
+}
+
+/// The second Settings row type: label with a description under it, and the trailing value
+/// or control centered on the row, where the short row puts it.
+struct SettingsDescriptionRow<Trailing: View>: View {
+    let label: OpenClawTextValue
+    let description: OpenClawTextValue
+    let trailing: Trailing
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    init(
+        _ label: OpenClawTextValue,
+        description: OpenClawTextValue,
+        @ViewBuilder trailing: () -> Trailing)
+    {
+        self.label = label
+        self.description = description
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        // Accessibility sizes stack the value or control under the text, so the label never
+        // breaks mid-word and the value never truncates beside it.
+        if self.dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 4) {
+                self.texts
+                self.trailing
+            }
+        } else {
+            HStack(spacing: 12) {
+                self.texts
+                Spacer(minLength: 8)
+                self.trailing
+            }
+        }
+    }
+
+    private var texts: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            self.label.text
+                .font(SettingsType.label)
+                .foregroundStyle(.primary)
+            self.description.text
+                .font(SettingsType.description)
+                .foregroundStyle(SettingsInk.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+extension SettingsDescriptionRow where Trailing == SettingsValueText {
+    init(_ label: OpenClawTextValue, description: OpenClawTextValue, value: OpenClawTextValue) {
+        self.init(label, description: description) { SettingsValueText(value) }
+    }
+}
+
+/// Trailing value text: the value role's font and ink.
+struct SettingsValueText: View {
     let value: OpenClawTextValue
 
-    init(_ label: LocalizedStringKey, value: OpenClawTextValue) {
+    init(_ value: OpenClawTextValue) {
+        self.value = value
+    }
+
+    var body: some View {
+        self.value.text
+            .font(SettingsType.value)
+            .foregroundStyle(SettingsInk.secondary)
+            .lineLimit(1)
+    }
+}
+
+extension View {
+    /// Menu pickers show their value like every other trailing value: secondary ink.
+    func settingsMenuPicker() -> some View {
+        self
+            .pickerStyle(.menu)
+            .tint(.secondary)
+    }
+}
+
+struct NativeSettingsRowIcon: View {
+    let systemName: String
+    @ScaledMetric(relativeTo: .body) private var scale = 1.0
+
+    var body: some View {
+        Image(systemName: self.systemName)
+            .font(.system(size: 15 * self.scale, weight: .regular))
+            .symbolRenderingMode(.monochrome)
+            .symbolVariant(.none)
+            .foregroundStyle(.secondary)
+            .opacity(0.88)
+            .frame(width: 24 * self.scale)
+    }
+}
+
+struct SettingsInputRow<Content: View>: View {
+    let title: LocalizedStringKey
+    let content: Content
+
+    init(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        LabeledContent {
+            self.content
+                .font(SettingsType.value)
+                .foregroundStyle(SettingsInk.secondary)
+                .multilineTextAlignment(.trailing)
+                .accessibilityLabel(Text(self.title))
+        } label: {
+            // The label never truncates; a long value gives way instead.
+            Text(self.title)
+                .font(SettingsType.label)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+}
+
+/// The short Settings row: label with its value at the trailing edge. A value too long for
+/// the row keeps one line and truncates in the middle (`LabeledContent` would wrap it under
+/// the label instead); accessibility sizes stack the full value under the label.
+struct SettingsDetailRow: View {
+    let label: OpenClawTextValue
+    let value: OpenClawTextValue
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    init(_ label: OpenClawTextValue, value: OpenClawTextValue) {
         self.label = label
         self.value = value
     }
 
     var body: some View {
-        LabeledContent {
+        if self.dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 2) {
+                self.label.text
+                    .font(SettingsType.label)
+                self.value.text
+                    .font(SettingsType.value)
+                    .foregroundStyle(SettingsInk.secondary)
+            }
+        } else {
+            HStack(spacing: 12) {
+                self.label.text
+                    .font(SettingsType.label)
+                    .fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 0)
+                self.value.text
+                    .font(SettingsType.value)
+                    .foregroundStyle(SettingsInk.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+    }
+}
+
+/// Trailing mark of a row that is itself the control: a chevron when it acts in the app, an
+/// arrow when it opens iOS Settings.
+struct SettingsRowAccessory: View {
+    let opensSystemSettings: Bool
+
+    var body: some View {
+        Image(systemName: self.opensSystemSettings ? "arrow.up.right" : "chevron.right")
+            .font(OpenClawType.footnoteSemiBold)
+            .foregroundStyle(.tertiary)
+            .accessibilityHidden(true)
+    }
+}
+
+/// A short row whose value is a state (never an action word) and whose whole row is the control.
+struct SettingsStateRow: View {
+    let label: OpenClawTextValue
+    let value: OpenClawTextValue
+    let opensSystemSettings: Bool
+    let action: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        Button(action: self.action) {
+            Group {
+                if self.dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 2) {
+                        self.label.text.font(SettingsType.label)
+                        self.trailing
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    HStack(spacing: 12) {
+                        self.label.text
+                            .font(SettingsType.label)
+                            .fixedSize(horizontal: true, vertical: false)
+                        Spacer(minLength: 0)
+                        self.trailing
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var trailing: some View {
+        HStack(spacing: 6) {
             self.value.text
-                .font(OpenClawType.subhead)
+                .font(SettingsType.value)
+                .foregroundStyle(SettingsInk.secondary)
                 .lineLimit(1)
-                .truncationMode(.middle)
-        } label: {
-            Text(self.label)
-                .font(OpenClawType.body)
+            SettingsRowAccessory(opensSystemSettings: self.opensSystemSettings)
         }
     }
 }
@@ -132,6 +419,7 @@ struct SettingsBuildMetadataStrip: View {
                 }
             }
         }
+        .tint(.primary)
     }
 
     private var metadataRow: some View {
@@ -141,7 +429,7 @@ struct SettingsBuildMetadataStrip: View {
                     Divider()
                         .frame(height: 30)
                 }
-                self.metadataField(field, alignment: .center)
+                self.metadataField(field)
                     .frame(minWidth: 72, maxWidth: .infinity)
                     .padding(.horizontal, 4)
             }
@@ -152,13 +440,13 @@ struct SettingsBuildMetadataStrip: View {
     private var metadataColumn: some View {
         VStack(alignment: .center, spacing: 8) {
             ForEach(self.fields) { field in
-                self.metadataField(field, alignment: .center)
+                self.metadataField(field)
             }
         }
     }
 
-    private func metadataField(_ field: Field, alignment: HorizontalAlignment) -> some View {
-        VStack(alignment: alignment, spacing: 1) {
+    private func metadataField(_ field: Field) -> some View {
+        VStack(alignment: .center, spacing: 1) {
             Text(field.title)
                 .font(OpenClawType.caption2SemiBold)
                 .textCase(.uppercase)
@@ -308,43 +596,10 @@ enum SettingsNotificationPresentation: Equatable {
         case .checking: String(localized: "Checking")
         case .enabled: String(localized: "Enabled")
         case .off: String(localized: "Off")
-        case .setup: String(localized: "Setup")
+        case .setup: String(localized: "Needs setup")
         case .denied: String(localized: "Denied")
-        case .notSet: String(localized: "Not Enabled")
+        case .notSet: String(localized: "Not enabled")
         case .unknown: String(localized: "Unknown")
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .checking:
-            String(localized: "Checking iOS notification permission.")
-        case .enabled:
-            String(
-                localized: "OpenClaw can show approval prompts and event alerts when the app is not active.")
-        case .off:
-            String(localized: "OpenClaw notifications are off.")
-        case .setup:
-            String(
-                localized: "Finish notification setup to receive alerts when the app is not active.")
-        case .denied:
-            String(localized: "Notifications have been denied. Enable them in iOS Settings.")
-        case .notSet:
-            String(
-                localized: "Enable notifications to receive approval prompts and event alerts outside the app.")
-        case .unknown:
-            String(localized: "OpenClaw cannot determine the current notification permission state.")
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .enabled:
-            OpenClawBrand.ok
-        case .denied, .setup, .unknown:
-            OpenClawBrand.warn
-        case .checking, .notSet, .off:
-            .secondary
         }
     }
 
@@ -378,229 +633,4 @@ enum SettingsDiagnostics {
         if !notificationsAllowed { issues.append(.notificationsUnavailable) }
         return issues
     }
-
-    static func issueCount(
-        gatewayConnected: Bool,
-        discoveredGatewayCount: Int,
-        talkConfigLoaded: Bool,
-        notificationsAllowed: Bool) -> Int
-    {
-        self.issues(
-            gatewayConnected: gatewayConnected,
-            discoveredGatewayCount: discoveredGatewayCount,
-            talkConfigLoaded: talkConfigLoaded,
-            notificationsAllowed: notificationsAllowed).count
-    }
-
-    static func timestamp(_ date: Date) -> String {
-        date.formatted(date: .omitted, time: .shortened)
-    }
 }
-
-extension SettingsProTab {
-    static func hasTailnetIPv4() -> Bool {
-        var addrList: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&addrList) == 0, let first = addrList else { return false }
-        defer { freeifaddrs(addrList) }
-        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
-            let flags = Int32(ptr.pointee.ifa_flags)
-            let isUp = (flags & IFF_UP) != 0
-            let isLoopback = (flags & IFF_LOOPBACK) != 0
-            guard let addrPtr = ptr.pointee.ifa_addr else { continue }
-            let family = addrPtr.pointee.sa_family
-            if !isUp || isLoopback || family != UInt8(AF_INET) { continue }
-            var addr = addrPtr.pointee
-            var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            let result = getnameinfo(
-                &addr,
-                socklen_t(addrPtr.pointee.sa_len),
-                &buffer,
-                socklen_t(buffer.count),
-                nil,
-                0,
-                NI_NUMERICHOST)
-            guard result == 0 else { continue }
-            let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-            guard let ip = String(bytes: bytes, encoding: .utf8) else { continue }
-            if self.isTailnetIPv4(ip) { return true }
-        }
-        return false
-    }
-
-    static func isTailnetHostOrIP(_ host: String) -> Bool {
-        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if trimmed.hasSuffix(".ts.net") || trimmed.hasSuffix(".ts.net.") { return true }
-        return self.isTailnetIPv4(trimmed)
-    }
-
-    static func isTailnetIPv4(_ ip: String) -> Bool {
-        let parts = ip.split(separator: ".")
-        guard parts.count == 4 else { return false }
-        let octets = parts.compactMap { Int($0) }
-        guard octets.count == 4 else { return false }
-        let a = octets[0]
-        let b = octets[1]
-        guard (0...255).contains(a), (0...255).contains(b) else { return false }
-        return a == 100 && b >= 64 && b <= 127
-    }
-}
-
-#if DEBUG
-#Preview("Gateway settings states") {
-    SettingsGatewayStatesPreview()
-}
-
-private struct SettingsGatewayStatesPreview: View {
-    var body: some View {
-        ZStack {
-            OpenClawProBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    self.stateSection("Connected") {
-                        self.gatewayStatusCard(
-                            title: "Gateway online",
-                            detail: "Connected to openclaw-gateway.tailnet.ts.net.",
-                            value: "online",
-                            color: OpenClawBrand.ok)
-                        self.gatewayFactsCard(
-                            address: "100.88.41.20:18789",
-                            server: "openclaw-gateway",
-                            discovered: "3",
-                            agent: "Aiden")
-                    }
-
-                    self.stateSection("Loading") {
-                        self.gatewayStatusCard(
-                            title: "Checking gateway",
-                            detail: "Refreshing connection, discovery, and device trust state.",
-                            value: "loading",
-                            color: OpenClawBrand.accent)
-                        self.gatewayActionsCard(isBusy: true)
-                    }
-
-                    self.stateSection("Empty") {
-                        self.gatewayStatusCard(
-                            title: "No gateway configured",
-                            detail: "Scan a setup QR code, paste a setup code, or choose a discovered gateway.",
-                            value: "setup",
-                            color: .secondary)
-                        self.setupActionsCard
-                    }
-
-                    self.stateSection("Error") {
-                        self.gatewayStatusCard(
-                            title: "Tailscale warning",
-                            detail: "Tailscale is off on this device. Turn it on, then try again.",
-                            value: "network",
-                            color: OpenClawBrand.warn)
-                    }
-                }
-                .padding(.horizontal, OpenClawProMetric.pagePadding)
-                .padding(.vertical, 18)
-            }
-        }
-    }
-
-    private func stateSection(
-        _ title: String,
-        @ViewBuilder content: () -> some View) -> some View
-    {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(OpenClawType.subheadSemiBold)
-                .foregroundStyle(.secondary)
-            content()
-        }
-    }
-
-    private func gatewayStatusCard(
-        title: String,
-        detail: String,
-        value: String,
-        color: Color) -> some View
-    {
-        ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
-            ProStatusRow(
-                icon: value == "online" ? "antenna.radiowaves.left.and.right" : "wifi.slash",
-                title: .localized(title),
-                detail: .localized(detail),
-                value: value,
-                color: color,
-                actionTitle: value == "setup" ? "Scan QR" : nil,
-                action: value == "setup" ? {} : nil)
-        }
-    }
-
-    private func gatewayFactsCard(
-        address: String,
-        server: String,
-        discovered: String,
-        agent: String) -> some View
-    {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(spacing: 0) {
-                self.factRow("Address", value: address)
-                Divider()
-                self.factRow("Server", value: server)
-                Divider()
-                self.factRow("Discovered", value: discovered)
-                Divider()
-                self.factRow("Default Agent", value: agent)
-            }
-        }
-    }
-
-    private func factRow(_ label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(OpenClawType.caption)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Text(value)
-                .font(OpenClawType.captionMedium)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
-        .frame(height: SettingsLayout.rowHeight)
-    }
-
-    private func gatewayActionsCard(isBusy: Bool) -> some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            HStack(spacing: 10) {
-                self.previewButton("Reconnect", systemImage: "arrow.triangle.2.circlepath", isBusy: isBusy)
-                self.previewButton("Diagnose", systemImage: "cross.case", isBusy: isBusy)
-            }
-        }
-    }
-
-    private var setupActionsCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
-                    self.previewButton("Scan QR", systemImage: "qrcode.viewfinder", isBusy: false)
-                    self.previewButton("Connect", systemImage: "link", isBusy: false)
-                }
-                Text("Discovered gateways and manual setup live here when the gateway has not connected yet.")
-                    .font(OpenClawType.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func previewButton(
-        _ title: String,
-        systemImage: String,
-        isBusy: Bool) -> some View
-    {
-        Button {} label: {
-            Label(title, systemImage: systemImage)
-                .font(OpenClawType.captionSemiBold)
-                .frame(maxWidth: .infinity)
-        }
-        .font(OpenClawType.captionSemiBold)
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .disabled(isBusy)
-    }
-}
-#endif

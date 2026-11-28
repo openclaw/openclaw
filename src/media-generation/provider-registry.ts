@@ -1,10 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as capabilityProviderRuntime from "../plugins/capability-provider-runtime.js";
 import {
-  buildCapabilityProviderMaps,
+  buildCapabilityProviderIndex,
   normalizeCapabilityProviderId,
 } from "../plugins/provider-registry-shared.js";
-import type { PluginRegistry } from "../plugins/registry-types.js";
 
 type MediaProviderRegistryKey =
   | "imageGenerationProviders"
@@ -13,25 +12,29 @@ type MediaProviderRegistryKey =
   | "realtimeTranscriptionProviders"
   | "transcriptSourceProviders";
 
-type MediaProvider<TKey extends MediaProviderRegistryKey> =
-  PluginRegistry[TKey][number]["provider"];
-
 /** Shares normalized provider listing while preserving targeted transcription lookup. */
 export function createMediaProviderRegistry<TKey extends MediaProviderRegistryKey>(
   key: TKey,
   options: { directLookup?: boolean } = {},
 ) {
-  const buildProviderMaps = (cfg?: OpenClawConfig) =>
-    buildCapabilityProviderMaps(
-      // The capability runtime's private provider type uses this same registry mapping.
+  const buildProviderIndex = (
+    mode: "canonical" | "aliases",
+    cfg?: OpenClawConfig,
+    additionalProviderIds?: readonly string[],
+  ) =>
+    buildCapabilityProviderIndex(
       capabilityProviderRuntime.resolvePluginCapabilityProviders({
         key,
         cfg,
-      }) as MediaProvider<TKey>[],
+        additionalProviderIds,
+      }),
+      mode,
     );
 
   return {
-    listProviders: (cfg?: OpenClawConfig) => [...buildProviderMaps(cfg).canonical.values()],
+    listProviders: (cfg?: OpenClawConfig, additionalProviderIds?: readonly string[]) => [
+      ...buildProviderIndex("canonical", cfg, additionalProviderIds).values(),
+    ],
     getProvider: (providerId: string | undefined, cfg?: OpenClawConfig) => {
       const normalized = normalizeCapabilityProviderId(providerId);
       if (!normalized) {
@@ -43,7 +46,7 @@ export function createMediaProviderRegistry<TKey extends MediaProviderRegistryKe
             providerId: normalized,
             cfg,
           })
-        : buildProviderMaps(cfg).aliases.get(normalized);
+        : buildProviderIndex("aliases", cfg).get(normalized);
     },
   };
 }

@@ -1,28 +1,29 @@
-// Base64 mime sniffing helpers infer media types from encoded payload bytes.
-import { canonicalizeBase64 } from "@openclaw/media-core/base64";
+import { inspectBase64, type Base64Facts } from "@openclaw/media-core/base64";
 import { detectMime } from "@openclaw/media-core/mime";
 
 const BASE64_SNIFF_PREFIX_CHARS = 256;
 
-/** Sniffs a MIME type from a small base64 prefix after validating the full payload. */
-export async function sniffMimeFromBase64(base64: string): Promise<string | undefined> {
-  const canonical = canonicalizeBase64(base64);
-  if (!canonical) {
+/** Validates the whole payload unless facts are prepared; only MIME decoding is prefix-bounded. */
+export async function sniffMimeFromBase64(
+  base64: string | (Base64Facts & { buffer?: Buffer }),
+  hints: Pick<
+    Parameters<typeof detectMime>[0],
+    "headerMime" | "filePath" | "additionalMimeHints"
+  > = {},
+): Promise<string | undefined> {
+  const facts = typeof base64 === "string" ? inspectBase64(base64, "canonical") : base64;
+  if (!facts?.canonicalPadBits) {
     return undefined;
   }
 
-  const take = Math.min(BASE64_SNIFF_PREFIX_CHARS, canonical.length);
+  const take = Math.min(BASE64_SNIFF_PREFIX_CHARS, facts.base64.length);
   const sliceLength = take - (take % 4);
   // Keep the existing minimum so short magic-byte prefixes are not treated as complete media.
-  if (sliceLength < 8) {
-    return undefined;
-  }
-
-  try {
-    const canonicalPrefix = canonical.slice(0, sliceLength);
-    const head = Buffer.from(canonicalPrefix, "base64");
-    return await detectMime({ buffer: head });
-  } catch {
-    return undefined;
-  }
+  const decoded = typeof base64 === "string" ? undefined : base64.buffer;
+  const head =
+    sliceLength < 8
+      ? undefined
+      : (decoded?.subarray(0, (sliceLength / 4) * 3) ??
+        Buffer.from(facts.base64.slice(0, sliceLength), "base64"));
+  return await detectMime({ ...hints, buffer: head });
 }

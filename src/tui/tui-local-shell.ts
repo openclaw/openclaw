@@ -1,4 +1,3 @@
-// Launches and manages the local shell process used by TUI local mode.
 import { randomUUID } from "node:crypto";
 import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tui";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -15,41 +14,24 @@ type LocalShellDeps = {
     requestRender: () => void;
   };
   openOverlay: (component: Component) => OverlayHandle;
-  closeOverlay: (handle?: OverlayHandle) => void;
-  createSelector?: (
-    items: SelectItem[],
-    maxVisible: number,
-  ) => Component & {
-    onSelect?: (item: SelectItem) => void;
-    onCancel?: () => void;
-  };
-  getCwd?: () => string | undefined;
-  env?: NodeJS.ProcessEnv;
-  maxOutputChars?: number;
+  closeOverlay: (handle: OverlayHandle) => void;
 };
 
 export function createLocalShellRunner(deps: LocalShellDeps) {
-  let localExecAsked = false;
-  let localExecAllowed = false;
+  let permission: "unasked" | "denied" | "allowed" = "unasked";
   let closing = false;
   let shutdownPromise: Promise<void> | undefined;
   let cancelPendingApproval: (() => void) | undefined;
   const supervisor = getProcessSupervisor();
-  const waitForScope = supervisor.waitForScope;
-  if (!waitForScope) {
-    throw new Error("process supervisor must support scope extinction before running local shells");
-  }
   const scopeKey = `tui-local:${randomUUID()}`;
-  const createSelector = deps.createSelector ?? createSearchableSelectList;
-  const getCwd = deps.getCwd ?? tryProcessCwd;
-  const env = deps.env ?? process.env;
-  const maxChars = deps.maxOutputChars ?? 40_000;
+  const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
+  const maxChars = 40_000;
 
   const ensureLocalExecAllowed = async (): Promise<boolean> => {
-    if (closing || localExecAsked) {
-      return localExecAllowed && !closing;
+    if (closing || permission !== "unasked") {
+      return permission === "allowed" && !closing;
     }
-    localExecAsked = true;
+    permission = "denied";
 
     return await new Promise<boolean>((resolve) => {
       let settled = false;
@@ -58,7 +40,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         "This runs commands on YOUR machine (not the gateway) and may delete files or reveal secrets.",
       );
       deps.chatLog.addSystem("Select Yes/No (arrows + Enter), Esc to cancel.");
-      const selector = createSelector(
+      const selector = createSearchableSelectList(
         [
           { value: "no", label: "No" },
           { value: "yes", label: "Yes" },
@@ -73,7 +55,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         deps.closeOverlay(overlayHandle);
         cancelPendingApproval = undefined;
         if (allowed) {
-          localExecAllowed = true;
+          permission = "allowed";
         }
         deps.chatLog.addSystem(message);
         deps.tui.requestRender();
@@ -101,7 +83,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       return;
     }
 
-    if (localExecAsked && !localExecAllowed) {
+    if (permission === "denied") {
       deps.chatLog.addSystem("local shell: not enabled for this session");
       deps.tui.requestRender();
       return;
@@ -113,7 +95,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
     }
 
     // A shell command's meaning depends on its directory; never retarget it implicitly.
-    const cwd = getCwd();
+    const cwd = tryProcessCwd();
     if (!cwd) {
       deps.chatLog.addSystem(
         "local shell: working directory was deleted; cd to an existing directory first",
@@ -134,11 +116,9 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       run = await supervisor.spawn({
         mode: "anchored-shell",
         command: cmd,
-        sessionId: scopeKey,
-        backendId: "tui-local-shell",
         scopeKey,
         cwd,
-        env: { ...env, OPENCLAW_SHELL: "tui-local" },
+        env: { ...process.env, OPENCLAW_SHELL: "tui-local" },
         captureOutput: false,
         onStdout: (chunk) => {
           stdout = sliceUtf16Safe(stdout + chunk, -maxChars);
@@ -180,8 +160,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
     (shutdownPromise ??= (async () => {
       closing = true;
       cancelPendingApproval?.();
-      supervisor.cancelScope(scopeKey);
-      await waitForScope(scopeKey);
+      await cleanupScope();
     })());
 
   return { runLocalShellLine, shutdown };

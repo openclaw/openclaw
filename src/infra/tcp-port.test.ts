@@ -5,6 +5,9 @@ import { parseTcpPort, parseTcpPortFromArgs } from "./tcp-port.js";
 describe("parseTcpPort", () => {
   it("accepts valid TCP port values", () => {
     expect(parseTcpPort(1)).toBe(1);
+    expect(parseTcpPort(8080)).toBe(8080);
+    expect(parseTcpPort("3000")).toBe(3000);
+    expect(parseTcpPort(65_535)).toBe(65_535);
     expect(parseTcpPort("8080")).toBe(8080);
     expect(parseTcpPort(" 65535 ")).toBe(65_535);
   });
@@ -13,16 +16,27 @@ describe("parseTcpPort", () => {
     expect(parseTcpPort(undefined)).toBeNull();
     expect(parseTcpPort(null)).toBeNull();
     expect(parseTcpPort(0)).toBeNull();
+    expect(parseTcpPort("0")).toBeNull();
     expect(parseTcpPort(-1)).toBeNull();
     expect(parseTcpPort(65_536)).toBeNull();
+    expect(parseTcpPort(99999)).toBeNull();
+    expect(parseTcpPort(Number.MAX_SAFE_INTEGER + 1)).toBeNull();
     expect(parseTcpPort("100000")).toBeNull();
     expect(parseTcpPort("8080ms")).toBeNull();
     expect(parseTcpPort("1.5")).toBeNull();
+    expect(parseTcpPort(1.5)).toBeNull();
+    expect(parseTcpPort(Number.NaN)).toBeNull();
+    expect(parseTcpPort(Number.POSITIVE_INFINITY)).toBeNull();
+    expect(parseTcpPort("abc")).toBeNull();
+    expect(parseTcpPort("0x10")).toBeNull();
+    expect(parseTcpPort("1e3")).toBeNull();
   });
 });
 
 describe("parseTcpPortFromArgs", () => {
-  it("uses the last valid port flag from repeated CLI arguments", () => {
+  it("accepts inline and spaced flags and uses the last valid port", () => {
+    expect(parseTcpPortFromArgs(["--port=14720"])).toBe(14_720);
+    expect(parseTcpPortFromArgs(["--port", "14721"])).toBe(14_721);
     expect(parseTcpPortFromArgs(["gateway", "--port", "18789", "--port", "19001"])).toBe(19001);
     expect(parseTcpPortFromArgs(["gateway", "--port=18789", "--port=19002"])).toBe(19002);
     expect(parseTcpPortFromArgs(["gateway", "--port", "18789", "--port=19003"])).toBe(19003);
@@ -31,6 +45,7 @@ describe("parseTcpPortFromArgs", () => {
   it("keeps best-effort parsing when repeated flags contain invalid values", () => {
     expect(parseTcpPortFromArgs(["gateway", "--port=invalid", "--port", "19004"])).toBe(19004);
     expect(parseTcpPortFromArgs(["gateway", "--port", "19005", "--port=invalid"])).toBe(19005);
+    expect(parseTcpPortFromArgs(["--port=123=bad"])).toBeNull();
   });
 
   it("does not reinterpret a consumed port value as another flag", () => {

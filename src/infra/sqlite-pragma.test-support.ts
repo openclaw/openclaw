@@ -1,5 +1,5 @@
 // Test helper for reading SQLite pragma state.
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "./sql-connection.js";
 
 // SQLite pragma test helpers normalize node:sqlite bigint/number outputs.
 type SqliteNumberPragma =
@@ -12,8 +12,8 @@ type SqliteNumberPragma =
   | "user_version"
   | "wal_autocheckpoint";
 
-/** Read a numeric SQLite pragma from a DatabaseSync instance. */
-export function readSqliteNumberPragma(db: DatabaseSync, pragma: SqliteNumberPragma): number {
+/** Read a numeric SQLite pragma from a database connection. */
+export function readSqliteNumberPragma(db: EngineConnection, pragma: SqliteNumberPragma): number {
   const row = db.prepare(`PRAGMA ${pragma}`).get() as Record<string, unknown> | undefined;
   const value = row?.[pragma] ?? row?.timeout;
   return typeof value === "bigint" ? Number(value) : Number(value);

@@ -1,162 +1,132 @@
-// State database permission hardening tests cover best-effort chmod on
-// filesystems without POSIX permission support (Azure Files, NFS, certain
-// Docker volume drivers).
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
-// The permission helper hardens via the named import `chmodSync` from node:fs.
-// A namespace `vi.spyOn(fs, ...)` cannot rebind an
-// already-captured named import, so we mock node:fs and route chmodSync
-// (named + default) through a single controllable failure hook.
-const chmodFailHook = vi.hoisted(() => ({
-  error: undefined as Error | undefined,
-  calls: 0,
-  failProbe: true,
-}));
+// Reset preloaded helpers and mock both import forms; a namespace spy cannot rebind them.
+const fault = vi.hoisted(() => {
+  vi.resetModules();
+  return {
+    error: undefined as Error | undefined,
+    failProbe: true,
+    removeSuffix: undefined as string | undefined,
+    opened: undefined as string[] | undefined,
+  };
+});
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  const chmodSync: typeof actual.chmodSync = ((target: unknown, mode: unknown) => {
-    chmodFailHook.calls += 1;
-    const isProbe = String(target).includes(".openclaw-chmod-probe-");
-    if (chmodFailHook.error && (chmodFailHook.failProbe || !isProbe)) {
-      throw chmodFailHook.error;
+  const chmodSync: typeof actual.chmodSync = (target, mode) => {
+    if (fault.removeSuffix && String(target).endsWith(fault.removeSuffix)) {
+      // Remove the file after existsSync reaches chmod to reproduce the exact race.
+      actual.unlinkSync(String(target));
     }
-    return (actual.chmodSync as (...args: unknown[]) => unknown)(target, mode);
-  }) as typeof actual.chmodSync;
-  return { ...actual, chmodSync, default: { ...actual, chmodSync } };
+    const isProbe = String(target).includes(".openclaw-chmod-probe-");
+    if (fault.error && (fault.failProbe || !isProbe)) {
+      throw fault.error;
+    }
+    return actual.chmodSync(target, mode);
+  };
+  const openSync: typeof actual.openSync = (...args) => {
+    fault.opened?.push(String(args[0]));
+    return actual.openSync(...args);
+  };
+  return { ...actual, chmodSync, openSync, default: { ...actual, chmodSync, openSync } };
 });
 
 const fs = await import("node:fs");
-const {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchema,
-  runOpenClawStateWriteTransaction,
-} = await import("./openclaw-state-db.js");
+const { closeOpenClawStateDatabaseForTest, openOpenClawStateDatabase } =
+  await import("./openclaw-state-db.js");
+const { ensureOpenClawStatePermissions } = await import("./openclaw-state-db-permissions.js");
+const { writeConfigMachineState } = await import("./config-machine-state-write.js");
+const { readConfigMachineState } = await import("./config-machine-state.js");
 
-function chmodError(code: string): Error {
-  const err = new Error(`${code}: chmod failed`) as NodeJS.ErrnoException;
-  err.code = code;
-  return err;
-}
-
-function enotsupError(): Error {
-  return chmodError("ENOTSUP");
-}
-
-describe("state database permission hardening without chmod support", () => {
-  let stateDir: string | undefined;
-
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
-    chmodFailHook.error = undefined;
-    chmodFailHook.calls = 0;
-    chmodFailHook.failProbe = true;
+    fault.error = undefined;
+    fault.failProbe = true;
+    fault.removeSuffix = undefined;
+    fault.opened = undefined;
     closeOpenClawStateDatabaseForTest();
-    if (stateDir) {
-      fs.rmSync(stateDir, { recursive: true, force: true });
-      stateDir = undefined;
+    cleanup();
+  }),
+);
+
+function fixture(initialize = true) {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-state-chmod-") };
+  const options = { env };
+  if (initialize) {
+    openOpenClawStateDatabase(options);
+    closeOpenClawStateDatabaseForTest();
+  }
+  return { options, env, pathname: join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite") };
+}
+
+it.skipIf(process.platform === "win32")("leaves already-private metadata unchanged", () => {
+  const { pathname, env } = fixture();
+  const before = fs.statSync(pathname, { bigint: true });
+
+  ensureOpenClawStatePermissions(pathname, env);
+
+  expect(fs.statSync(pathname, { bigint: true }).ctimeNs).toBe(before.ctimeNs);
+});
+
+it.skipIf(process.platform === "win32")(
+  "keeps shared-state commits out of sibling private stores",
+  () => {
+    const { options, env } = fixture();
+    const siblings = [
+      join(env.OPENCLAW_STATE_DIR, "client"),
+      join(env.OPENCLAW_STATE_DIR, "control"),
+    ];
+    for (const directory of siblings) {
+      fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     }
-  });
+    fs.writeFileSync(join(siblings[0]!, "credentials.sqlite"), "credential fixture", {
+      mode: 0o600,
+    });
+    fs.writeFileSync(join(siblings[1]!, "services.sqlite"), "service fixture", { mode: 0o600 });
+    writeConfigMachineState("permission-probe", 0, options);
+    fault.opened = [];
+    for (let value = 1; value <= 3; value++) {
+      writeConfigMachineState("permission-probe", value, options);
+    }
+    expect(readConfigMachineState("permission-probe", options)).toBe(3);
+    expect(
+      fault.opened.filter((file) => siblings.some((directory) => file.startsWith(directory))),
+    ).toEqual([]);
+  },
+);
 
-  it("opens the state database when chmodSync throws ENOTSUP", () => {
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
-    chmodFailHook.error = enotsupError();
+it.each([true, false])("handles EPERM with restrictive existing permissions=%s", (restrictive) => {
+  const { options, env } = fixture(restrictive);
+  if (!restrictive) {
+    const directory = join(env.OPENCLAW_STATE_DIR, "state");
+    fs.mkdirSync(directory);
+    fs.chmodSync(directory, 0o755);
+  }
+  fault.error = Object.assign(new Error("EPERM: chmod failed"), { code: "EPERM" });
+  fault.failProbe = restrictive;
+  if (restrictive) {
+    expect(openOpenClawStateDatabase(options).db.isOpen).toBe(true);
+  } else {
+    expect(() => openOpenClawStateDatabase(options)).toThrow(/EPERM/);
+  }
+});
 
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-
-    expect(database.db.isOpen).toBe(true);
-    // Hardening ran and failed; the failure must stay non-fatal.
-    expect(chmodFailHook.calls).toBeGreaterThan(0);
-  });
-
-  it("rethrows EPERM when existing permissions are too broad", () => {
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
-    fs.chmodSync(stateDir, 0o755);
-    chmodFailHook.error = chmodError("EPERM");
-    chmodFailHook.failProbe = false;
-
-    expect(() => openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } })).toThrow(
-      /EPERM/,
-    );
-  });
-
-  it("opens when EPERM leaves existing permissions restrictive", () => {
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
-    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-    closeOpenClawStateDatabaseForTest();
-    chmodFailHook.error = chmodError("EPERM");
-
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-
-    expect(database.db.isOpen).toBe(true);
-  });
-
-  it("opens when EROFS leaves existing permissions restrictive", () => {
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
-    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-    closeOpenClawStateDatabaseForTest();
-    chmodFailHook.error = chmodError("EROFS");
-
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-
-    expect(database.db.isOpen).toBe(true);
-  });
-
-  it("rethrows EROFS when existing permissions are too broad", () => {
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
-    fs.chmodSync(stateDir, 0o755);
-    chmodFailHook.error = chmodError("EROFS");
-
-    expect(() => openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } })).toThrow(
-      /EROFS/,
-    );
-  });
-
-  it("opens when the filesystem probe also rejects chmod with EPERM", () => {
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
-    fs.chmodSync(stateDir, 0o755);
-    chmodFailHook.error = chmodError("EPERM");
-
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-
-    expect(database.db.isOpen).toBe(true);
-  });
-
-  it("rethrows unexpected chmod errors at open", () => {
-    // EACCES is not in CHMOD_UNSUPPORTED_CODES: a real permission fault on a
-    // POSIX filesystem must keep the credentials-adjacent hardening fatal.
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
-    chmodFailHook.error = chmodError("EACCES");
-
-    expect(() => openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } })).toThrow(
-      /EACCES/,
-    );
-  });
-
-  it("repairs the schema when chmodSync throws ENOTSUP", () => {
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
-    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-    closeOpenClawStateDatabaseForTest();
-
-    chmodFailHook.error = enotsupError();
-
-    expect(() =>
-      repairOpenClawStateDatabaseSchema({ env: { OPENCLAW_STATE_DIR: stateDir } }),
-    ).not.toThrow();
-  });
-
-  it("commits write transactions when chmodSync throws ENOTSUP", () => {
-    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
-    chmodFailHook.error = enotsupError();
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-
-    const result = runOpenClawStateWriteTransaction((database) => {
-      expect(database.db.isOpen).toBe(true);
-      return "committed";
-    }, options);
-
-    expect(result).toBe("committed");
-  });
+it.each(["-wal", ""])("handles a database file vanishing before chmod (suffix=%s)", (suffix) => {
+  const { options, pathname } = fixture();
+  const target = `${pathname}${suffix}`;
+  if (suffix) {
+    fs.writeFileSync(target, "");
+  }
+  fs.chmodSync(target, 0o644);
+  fault.removeSuffix = suffix || "openclaw.sqlite";
+  if (suffix) {
+    ensureOpenClawStatePermissions(pathname, options.env);
+    expect(fs.existsSync(target)).toBe(false);
+    expect(openOpenClawStateDatabase(options).db.isOpen).toBe(true);
+  } else {
+    // Losing the main file must not silently create an empty replacement.
+    expect(() => openOpenClawStateDatabase(options)).toThrow(/ENOENT/);
+  }
 });

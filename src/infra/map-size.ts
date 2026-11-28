@@ -10,13 +10,24 @@ export function pruneMapToMaxSize<K, V>(map: Map<K, V>, maxSize: number): void {
     return;
   }
 
-  while (map.size > limit) {
-    // Map iteration is insertion ordered; deleting the first key preserves the newest tracked
-    // entries for request/memory guard caches.
-    const oldest = map.keys().next();
-    if (oldest.done) {
+  // Reuse the insertion-order cursor so bulk pruning does not restart at deleted entries.
+  for (const key of map.keys()) {
+    if (map.size <= limit) {
       break;
     }
-    map.delete(oldest.value);
+    map.delete(key);
+  }
+}
+
+/** Remembers a key as newest and evicts oldest keys beyond the caller's bound. */
+export function touchBoundedSet(keys: Set<string>, key: string, maxSize: number): void {
+  keys.delete(key);
+  keys.add(key);
+  while (keys.size > maxSize) {
+    const oldest = keys.values().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    keys.delete(oldest);
   }
 }

@@ -2,20 +2,60 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
-@Suite struct TalkSpeechLocaleTests {
-    @Test func localSelectionOverridesGatewayConfig() {
-        let locale = TalkSpeechLocale.resolvedLocaleID(
-            localSelection: "de-DE",
-            gatewaySelection: "ru-RU",
-            deviceLocaleID: "en-US",
-            supportedLocaleIDs: ["de-DE", "ru-RU", "en-US"])
+struct TalkSpeechLocaleTests {
+    @Test func `system voice keeps BCP 47 locale separate from provider language`() {
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: ["talk": ["speechLocale": "tr_TR"]],
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+        let configured = TalkSpeechLocale.resolvedLanguages(
+            directiveLanguage: nil,
+            gatewaySelection: parsed.snapshot.speechLocaleID,
+            isSystemVoiceAvailable: { _ in true })
+        let directive = TalkSpeechLocale.resolvedLanguages(
+            directiveLanguage: "de_DE",
+            gatewaySelection: parsed.snapshot.speechLocaleID,
+            isSystemVoiceAvailable: { _ in true })
+        let providerCompatible = TalkSpeechLocale.resolvedLanguages(
+            directiveLanguage: "tr",
+            gatewaySelection: parsed.snapshot.speechLocaleID,
+            isSystemVoiceAvailable: { _ in true })
+        let unavailableDirective = TalkSpeechLocale.resolvedLanguages(
+            directiveLanguage: "zz-ZZ",
+            gatewaySelection: parsed.snapshot.speechLocaleID,
+            isSystemVoiceAvailable: { $0 == "tr-TR" })
 
-        #expect(locale == "de-DE")
+        #expect(configured.provider == nil)
+        #expect(configured.systemVoice == "tr-TR")
+        #expect(directive.provider == nil)
+        #expect(directive.systemVoice == "de-DE")
+        #expect(providerCompatible.provider == "tr")
+        #expect(providerCompatible.systemVoice == "tr")
+        #expect(unavailableDirective.provider == nil)
+        #expect(unavailableDirective.systemVoice == "tr-TR")
     }
 
-    @Test func automaticLocalSelectionAllowsGatewayConfig() {
+    @Test @MainActor func `talk manager clears retired speech locale preference`() {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: "talk.speechLocale")
+        defaults.set("de-DE", forKey: "talk.speechLocale")
+        defer {
+            if let previous {
+                defaults.set(previous, forKey: "talk.speechLocale")
+            } else {
+                defaults.removeObject(forKey: "talk.speechLocale")
+            }
+        }
+
+        _ = TalkModeManager(allowSimulatorCapture: true)
+
+        #expect(defaults.object(forKey: "talk.speechLocale") == nil)
+    }
+
+    @Test func `gateway speech locale overrides device locale`() {
         let locale = TalkSpeechLocale.resolvedLocaleID(
-            localSelection: TalkSpeechLocale.automaticID,
             gatewaySelection: "ru_RU",
             deviceLocaleID: "en-US",
             supportedLocaleIDs: ["ru-RU", "en-US"])
@@ -23,15 +63,14 @@ import Testing
         #expect(locale == "ru-RU")
     }
 
-    @Test func unsupportedConfiguredLocaleFallsBackToDeviceThenEnglish() {
+    @Test(arguments: [nil, "auto", "zz-ZZ"] as [String?])
+    func `missing or unsupported gateway locale falls back to device then english`(gatewaySelection: String?) {
         let deviceLocale = TalkSpeechLocale.resolvedLocaleID(
-            localSelection: "zz-ZZ",
-            gatewaySelection: nil,
+            gatewaySelection: gatewaySelection,
             deviceLocaleID: "fr-FR",
             supportedLocaleIDs: ["fr-FR", "en-US"])
         let english = TalkSpeechLocale.resolvedLocaleID(
-            localSelection: "zz-ZZ",
-            gatewaySelection: nil,
+            gatewaySelection: gatewaySelection,
             deviceLocaleID: "yy-YY",
             supportedLocaleIDs: ["en-US"])
 
@@ -39,67 +78,46 @@ import Testing
         #expect(english == "en-US")
     }
 
-    @Test func speechSynthesisPrefersDirectiveLocale() {
+    @Test func `speech synthesis prefers directive locale`() {
         let locale = TalkSpeechLocale.resolvedSynthesisLocaleID(
             directiveLanguage: " tr_TR ",
-            localSelection: "de-DE",
             gatewaySelection: "ru-RU",
             isVoiceAvailable: { _ in true })
 
         #expect(locale == "tr-TR")
     }
 
-    @Test func speechSynthesisUsesLocalThenGatewayLocale() {
-        let local = TalkSpeechLocale.resolvedSynthesisLocaleID(
-            directiveLanguage: nil,
-            localSelection: "de_DE",
-            gatewaySelection: "ru-RU",
-            isVoiceAvailable: { _ in true })
+    @Test func `speech synthesis uses gateway locale`() {
         let gateway = TalkSpeechLocale.resolvedSynthesisLocaleID(
             directiveLanguage: nil,
-            localSelection: TalkSpeechLocale.automaticID,
             gatewaySelection: "ru_RU",
             isVoiceAvailable: { _ in true })
 
-        #expect(local == "de-DE")
         #expect(gateway == "ru-RU")
     }
 
-    @Test func automaticSpeechSynthesisUsesSystemDefaultWithoutGatewayLocale() {
+    @Test func `automatic speech synthesis uses system default without gateway locale`() {
         let locale = TalkSpeechLocale.resolvedSynthesisLocaleID(
             directiveLanguage: nil,
-            localSelection: TalkSpeechLocale.automaticID,
             gatewaySelection: nil,
             isVoiceAvailable: { _ in true })
 
         #expect(locale == nil)
     }
 
-    @Test func unavailableDirectiveFallsThroughToAvailableLocalVoice() {
+    @Test func `unavailable directive falls through to gateway voice`() {
         let locale = TalkSpeechLocale.resolvedSynthesisLocaleID(
             directiveLanguage: "zz-ZZ",
-            localSelection: "fr-FR",
-            gatewaySelection: "tr-TR",
-            isVoiceAvailable: { $0 == "fr-FR" })
-
-        #expect(locale == "fr-FR")
-    }
-
-    @Test func unavailableDirectiveAndLocalVoicesFallThroughToGatewayVoice() {
-        let locale = TalkSpeechLocale.resolvedSynthesisLocaleID(
-            directiveLanguage: "zz-ZZ",
-            localSelection: "yy-YY",
             gatewaySelection: "tr_TR",
             isVoiceAvailable: { $0 == "tr-TR" })
 
         #expect(locale == "tr-TR")
     }
 
-    @Test func unavailableCandidatesUseSystemDefaultOnlyAfterEveryCandidateFails() {
+    @Test func `unavailable candidates use system default only after every candidate fails`() {
         var checkedLocaleIDs: [String] = []
         let locale = TalkSpeechLocale.resolvedSynthesisLocaleID(
             directiveLanguage: "zz-ZZ",
-            localSelection: "fr-FR",
             gatewaySelection: "tr-TR",
             isVoiceAvailable: {
                 checkedLocaleIDs.append($0)
@@ -107,6 +125,6 @@ import Testing
             })
 
         #expect(locale == nil)
-        #expect(checkedLocaleIDs == ["zz-ZZ", "fr-FR", "tr-TR"])
+        #expect(checkedLocaleIDs == ["zz-ZZ", "tr-TR"])
     }
 }

@@ -1,0 +1,99 @@
+/* Knot palette; selected by index.html and app/theme.ts. */
+
+/* Theme families override accent tokens while keeping shared surfaces/layout. */
+:root[data-theme="openknot"] {
+  /*
+   * Accent — crimson red on true black
+   */
+  --ring: #e5243b;
+  --accent: #e5243b;
+  --accent-hover: #f03e52;
+  --accent-muted: #e5243b;
+  --accent-subtle: rgba(229, 36, 59, 0.12);
+  --accent-glow: rgba(229, 36, 59, 0.24);
+  --primary: #d92a3f;
+  --primary-hover: #c22537;
+  --primary-foreground: #fafafa;
+  --accent-foreground: #fafafa;
+
+  /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
+
+  /* Focus — crimson ring */
+  --focus: rgba(229, 36, 59, 0.2);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
+
+  --bg-content: #080808;
+
+  --card-highlight: rgba(255, 255, 255, 0.03);
+
+  /* Text — 11.8:1 on black: crisp without the glare a near-white (15:1+) body
+     face has on a true-black canvas; --text-strong keeps the bright step. */
+  --text: #c6c6cb;
+  --text-strong: #f5f5f7;
+  --chat-text: #c6c6cb;
+  --muted: #8a8a94;
+  --muted-strong: #898993;
+  --muted-foreground: #8a8a94;
+
+  /* Steel silver, not a second red: crimson stays the only warm voice, and the
+     silver reads at 10.6:1 where the old #8b1a2b maroon vanished (2.0:1). */
+  --accent-2: #b8bdc4;
+  --accent-2-muted: rgba(184, 189, 196, 0.7);
+  --accent-2-subtle: rgba(184, 189, 196, 0.1);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
+
+  --grid-line: rgba(255, 255, 255, 0.025);
+  /* Typography — Geist (fonts/geist.css): a sharp Swiss grotesque to match the
+     crimson-on-black identity. Fallbacks keep text painting if the face fails. */
+  --font-body: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --link: #f43747;
+  --link-on-tint: #ff575d;
+}
+
+:root[data-theme="openknot-light"] {
+  /*
+   * Accent — deep red on cool white
+   */
+  --ring: #c41e30;
+  --accent: #c41e30;
+  --accent-hover: #a8192a;
+  --accent-muted: #c41e30;
+  --accent-subtle: rgba(196, 30, 48, 0.08);
+  --accent-glow: rgba(196, 30, 48, 0.12);
+  --primary: #c41e30;
+  --primary-hover: var(--accent-hover);
+  --accent-foreground: var(--primary-foreground);
+
+  --bg-content: #f4f4f7;
+
+  --card-foreground: #18181b;
+  --card-highlight: rgba(0, 0, 0, 0.02);
+  --popover-foreground: #18181b;
+
+  /* Text — crisp dark on white */
+  --text: #3a3a42;
+  --text-strong: #18181b;
+  --chat-text: #3a3a42;
+  --muted: #68676f;
+  --muted-strong: #52525a;
+  --muted-foreground: #68676f;
+
+  --secondary-foreground: #3a3a42;
+  /* Slate steel mirrors the dark variant's silver second voice (5.9:1 on bg). */
+  --accent-2: #5a626e;
+  --accent-2-muted: rgba(90, 98, 110, 0.75);
+  --accent-2-subtle: rgba(90, 98, 110, 0.08);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.08);
+
+  --grid-line: rgba(0, 0, 0, 0.04);
+  /* Typography — Geist (fonts/geist.css); see the dark block. */
+  --font-body: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --link: #b80726;
+  --link-on-tint: #a90021;
+}

@@ -16,19 +16,64 @@ struct SwiftUIRenderSmokeTests {
         return window
     }
 
-    @Test @MainActor func `settings pro tab builds in light and dark mode`() {
+    @Test @MainActor func `Talk microphone states render on compact screens with large text`() {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
+        for muted in [false, true] {
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                let control = OpenClawChatTalkControl(
+                    isEnabled: true,
+                    isListening: false,
+                    isSpeaking: true,
+                    isGatewayConnected: true,
+                    statusText: "Speaking",
+                    providerLabel: "",
+                    isMicrophoneMuted: muted,
+                    toggleMicrophone: {},
+                    recentTranscript: ["A synthetic reply is still playing."],
+                    toggle: { _ in })
+                let root = ChatTalkActivityStrip(control: control)
+                    .environment(\.dynamicTypeSize, typeSize)
+                windows.append(Self.host(root, size: CGSize(width: 320, height: 240)))
+            }
+        }
+    }
+
+    @Test @MainActor func `settings hub fallback builds in light and dark mode`() {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
+
         for scheme in [ColorScheme.light, ColorScheme.dark] {
             let appModel = NodeAppModel()
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-            let root = SettingsProTab()
+            let root = SettingsHubScreen(navigationPath: .constant([]))
                 .environment(AppAppearanceModel())
                 .environment(appModel)
                 .environment(appModel.voiceWake)
                 .environment(gatewayController)
                 .preferredColorScheme(scheme)
 
-            _ = Self.host(root)
+            windows.append(Self.host(root))
+        }
+    }
+
+    @Test @MainActor func `local device settings build across device widths and text sizes`() {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
+        for width in [320.0, 768.0] {
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+                let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+                let root = NavigationStack {
+                    SettingsProTab(directRoute: .deviceSettings)
+                }
+                .environment(AppAppearanceModel())
+                .environment(appModel)
+                .environment(controller)
+                .environment(\.dynamicTypeSize, typeSize)
+                windows.append(Self.host(root, size: CGSize(width: width, height: 1024)))
+            }
         }
     }
 
@@ -38,34 +83,17 @@ struct SwiftUIRenderSmokeTests {
                 let appModel = NodeAppModel()
                 let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-                let root = SettingsProTab(directRoute: .about)
-                    .environment(AppAppearanceModel())
-                    .environment(appModel)
-                    .environment(appModel.voiceWake)
-                    .environment(gatewayController)
-                    .environment(\.dynamicTypeSize, typeSize)
-                    .preferredColorScheme(scheme)
+                let root = NavigationStack {
+                    SettingsProTab(directRoute: .about)
+                }
+                .environment(AppAppearanceModel())
+                .environment(appModel)
+                .environment(appModel.voiceWake)
+                .environment(gatewayController)
+                .environment(\.dynamicTypeSize, typeSize)
+                .preferredColorScheme(scheme)
 
                 _ = Self.host(root, size: CGSize(width: 320, height: 852))
-            }
-        }
-    }
-
-    @Test @MainActor func `settings Privacy destination builds across appearance and type size`() {
-        for scheme in [ColorScheme.light, ColorScheme.dark] {
-            for typeSize in [DynamicTypeSize.large, .accessibility2] {
-                let appModel = NodeAppModel()
-                let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
-
-                let root = SettingsProTab(directRoute: .privacy)
-                    .environment(AppAppearanceModel())
-                    .environment(appModel)
-                    .environment(appModel.voiceWake)
-                    .environment(gatewayController)
-                    .preferredColorScheme(scheme)
-                    .environment(\.dynamicTypeSize, typeSize)
-
-                _ = Self.host(root, size: CGSize(width: 393, height: 852))
             }
         }
     }
@@ -78,67 +106,16 @@ struct SwiftUIRenderSmokeTests {
             let appModel = NodeAppModel()
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-            let root = SettingsProTab(directRoute: .licenses)
-                .environment(AppAppearanceModel())
-                .environment(appModel)
-                .environment(appModel.voiceWake)
-                .environment(gatewayController)
-                .preferredColorScheme(scheme)
+            let root = NavigationStack {
+                SettingsProTab(directRoute: .licenses)
+            }
+            .environment(AppAppearanceModel())
+            .environment(appModel)
+            .environment(appModel.voiceWake)
+            .environment(gatewayController)
+            .preferredColorScheme(scheme)
 
             windows.append(Self.host(root, size: CGSize(width: 393, height: 852)))
-        }
-    }
-
-    @Test @MainActor func `settings OpenClaw destination builds access gate across appearance and type size`() {
-        var windows: [UIWindow] = []
-        defer { windows.forEach { $0.isHidden = true } }
-
-        for scheme in [ColorScheme.light, ColorScheme.dark] {
-            for typeSize in [DynamicTypeSize.large, .accessibility2] {
-                let appModel = NodeAppModel()
-                let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
-                let root = SettingsProTab(directRoute: .systemAgent)
-                    .environment(AppAppearanceModel())
-                    .environment(appModel)
-                    .environment(appModel.voiceWake)
-                    .environment(gatewayController)
-                    .environment(\.dynamicTypeSize, typeSize)
-                    .preferredColorScheme(scheme)
-
-                windows.append(Self.host(root, size: CGSize(width: 393, height: 852)))
-            }
-        }
-    }
-
-    @Test @MainActor func `settings pro tab appearance row builds for all preferences`() throws {
-        for preference in AppAppearancePreference.allCases {
-            let suiteName = "OpenClawTests.appearance.\(preference.rawValue).\(UUID().uuidString)"
-            let defaults = try #require(UserDefaults(suiteName: suiteName))
-            defer { defaults.removePersistentDomain(forName: suiteName) }
-            defaults.set(preference.rawValue, forKey: AppAppearancePreference.storageKey)
-
-            let appModel = NodeAppModel()
-            let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
-
-            let root = SettingsProTab()
-                .defaultAppStorage(defaults)
-                .environment(AppAppearanceModel(userDefaults: defaults))
-                .environment(appModel)
-                .environment(appModel.voiceWake)
-                .environment(gatewayController)
-
-            _ = Self.host(root)
-        }
-    }
-
-    @Test @MainActor func `hosted push relay disclosure builds A view hierarchy`() {
-        for typeSize in [DynamicTypeSize.large, .accessibility5] {
-            let root = HostedPushRelayDisclosureSheet(
-                message: "Enabling this sends delivery data through OpenClaw's hosted push relay.",
-                onContinue: {})
-                .environment(\.dynamicTypeSize, typeSize)
-
-            _ = Self.host(root, size: CGSize(width: 402, height: 450))
         }
     }
 
@@ -175,6 +152,17 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
+    @Test @MainActor func `transcript skeleton sits on the default rows and grows with dynamic type`() {
+        func height(_ typeSize: DynamicTypeSize) -> CGFloat {
+            let controller = UIHostingController(
+                rootView: ChatTranscriptSkeleton().environment(\.dynamicTypeSize, typeSize))
+            return controller.sizeThatFits(in: CGSize(width: 370, height: CGFloat.greatestFiniteMagnitude)).height
+        }
+        // Bubble, timestamp, three agent lines, bubble, two lines: the List rows measured at Large.
+        #expect(abs(height(.large) - 276.6) < 0.5)
+        #expect(height(.accessibility2) > height(.large) + 100)
+    }
+
     @Test @MainActor func `long user prompt disclosure builds across dynamic type sizes`() {
         let text = Array(repeating: "A long user-authored prompt line.", count: 13).joined(separator: "\n")
         let message = OpenClawChatMessage(
@@ -192,78 +180,104 @@ struct SwiftUIRenderSmokeTests {
                 message: message,
                 style: .standard,
                 markdownVariant: .standard,
-                userAccent: nil,
                 displayOptions: [],
-                assistantName: "OpenClaw",
-                assistantAvatarText: "OC",
-                assistantAvatarTint: nil,
                 showsAssistantAvatar: true,
-                isClean: false,
                 contextWindowTokens: nil,
                 userMessageExpanded: false,
                 onToggleUserMessageExpanded: {},
-                inlineWidgetResolverReady: true,
-                inlineWidgetResourceResolver: { _, _ in nil },
-                mediaArtifactResolverReady: false,
-                mediaPlaybackAllowed: { true },
-                loadMediaArtifact: { _, _, _ in nil })
+                inlineWidgetScope: ChatInlineWidgetScope(
+                    modelID: ObjectIdentifier(Self.self),
+                    sessionTarget: OpenClawChatSessionTarget(sessionKey: "main", agentID: nil),
+                    sessionGeneration: 0),
+                mediaPlaybackAllowed: { true })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 420))
         }
     }
 
-    @Test @MainActor func `managed assistant image starts its artifact load`() async throws {
-        let artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111"
+    @Test(.timeLimit(.minutes(1)), arguments: [
+        (OpenClawChatMediaKind.image, nil, nil),
+        (.audio, nil, .transcode),
+        (.video, nil, .transcode),
+        (.audio, .native, .native),
+        (.video, .native, .native),
+        (.audio, .transcode, .transcode),
+        (.video, .transcode, .transcode),
+    ] as [(OpenClawChatMediaKind, OpenClawChatPlaybackMode?, OpenClawChatPlaybackMode?)])
+    @MainActor func `managed previews use their playback route and audio waits for a tap`(
+        input: (OpenClawChatMediaKind, OpenClawChatPlaybackMode?, OpenClawChatPlaybackMode?)) async
+    {
+        let (kind, playback, expectedPlayback) = input
+        let prefix = kind == .image ? "artifact_managed_image_" : "artifact_managed_media_"
+        let artifactId = prefix + "11111111-1111-4111-8111-111111111111"
+        let mimeType = switch kind {
+        case .audio: "audio/x-ms-wma"
+        case .video: "video/x-matroska"
+        default: "image/png"
+        }
         let message = OpenClawChatMessage(
             role: "assistant",
             content: [OpenClawChatMessageContent(
-                type: "image",
+                type: kind.rawValue,
                 text: nil,
-                mimeType: "image/png",
+                mimeType: mimeType,
                 fileName: nil,
                 artifactId: artifactId,
                 url: "/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full",
                 alt: "Managed preview",
+                width: kind == .video ? 640 : nil,
+                height: kind == .video ? 360 : nil,
+                playback: playback,
                 content: nil)],
             timestamp: 1)
-        var requestedArtifactId: String?
+        let requests = AsyncStream<OpenClawChatPlaybackMode?>.makeStream()
+        defer { requests.continuation.finish() }
         let root = ChatMessageBubble(
             message: message,
             style: .standard,
             markdownVariant: .standard,
-            userAccent: nil,
             displayOptions: [],
-            assistantName: "OpenClaw",
-            assistantAvatarText: "OC",
-            assistantAvatarTint: nil,
             showsAssistantAvatar: true,
-            isClean: false,
             contextWindowTokens: nil,
             userMessageExpanded: false,
             onToggleUserMessageExpanded: {},
-            inlineWidgetResolverReady: true,
-            inlineWidgetResourceResolver: { _, _ in nil },
-            mediaArtifactResolverReady: true,
-            mediaPlaybackAllowed: { true },
-            loadMediaArtifact: { requested, kind, _ in
-                requestedArtifactId = requested
-                #expect(kind == .image)
-                return OpenClawChatLoadedMedia.data(OpenClawChatMediaData(
-                    data: Data(base64Encoded:
-                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8A" +
-                            "AusB9Y9Zl1sAAAAASUVORK5CYII=")!,
-                    mimeType: "image/png"))
-            })
+            inlineWidgetScope: ChatInlineWidgetScope(
+                modelID: ObjectIdentifier(Self.self),
+                sessionTarget: OpenClawChatSessionTarget(sessionKey: "main", agentID: nil),
+                sessionGeneration: 0),
+            mediaPlaybackAllowed: { true })
+            .environment(\.openClawChatGateway, ChatGatewayResources(
+                owner: ObjectIdentifier(Self.self),
+                isResolverReady: { true },
+                faviconContext: { nil },
+                loadFavicon: { _ in nil },
+                resolveWidgetResource: { _, _ in nil },
+                loadMedia: { requested, requestedKind, playback in
+                    #expect(requested == artifactId)
+                    #expect(requestedKind == kind)
+                    requests.continuation.yield(playback)
+                    guard kind == .image else { return nil }
+                    return OpenClawChatLoadedMedia.data(OpenClawChatMediaData(
+                        data: Data(base64Encoded:
+                            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8A" +
+                                "AusB9Y9Zl1sAAAAASUVORK5CYII=")!,
+                        mimeType: "image/png"))
+                }))
         let window = Self.host(root, size: CGSize(width: 393, height: 420))
         defer { window.isHidden = true }
 
-        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
-        while requestedArtifactId == nil, ContinuousClock().now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
+        var iterator = requests.stream.makeAsyncIterator()
+        if kind == .audio {
+            // An idle audio row must not download merely because it appeared in the transcript.
+            try? await Task.sleep(for: .milliseconds(150))
+            requests.continuation.finish()
+            let requestedPlayback = await iterator.next()
+            #expect(requestedPlayback == nil)
+        } else {
+            let requestedPlayback = await iterator.next()
+            #expect(requestedPlayback == .some(expectedPlayback))
         }
-
-        #expect(requestedArtifactId == artifactId)
     }
 
     @Test @MainActor func `streaming assistant bubble builds mixed prose and code`() {
@@ -278,14 +292,10 @@ struct SwiftUIRenderSmokeTests {
         """
 
         let root = ChatStreamingAssistantBubble(
-            text: text,
+            text: ChatStreamingAssistantText(sourceText: text, includesThinking: false),
             markdownVariant: .standard,
-            showsReasoning: false,
-            assistantName: "OpenClaw",
-            assistantAvatarText: "OC",
-            assistantAvatarTint: nil,
-            showsAssistantAvatar: true,
-            isClean: false)
+            showsAssistantAvatar: true)
+            .environment(\.openClawAssistantIdentity, ChatAssistantIdentity(name: "OpenClaw", avatarText: "OC"))
 
         _ = Self.host(root, size: CGSize(width: 393, height: 400))
     }
@@ -316,21 +326,16 @@ struct SwiftUIRenderSmokeTests {
                 message: message,
                 style: .standard,
                 markdownVariant: .standard,
-                userAccent: nil,
                 displayOptions: [],
-                assistantName: "OpenClaw",
-                assistantAvatarText: "OC",
-                assistantAvatarTint: nil,
                 showsAssistantAvatar: true,
-                isClean: false,
                 contextWindowTokens: 1_000_000,
                 userMessageExpanded: false,
                 onToggleUserMessageExpanded: {},
-                inlineWidgetResolverReady: true,
-                inlineWidgetResourceResolver: { _, _ in nil },
-                mediaArtifactResolverReady: false,
-                mediaPlaybackAllowed: { true },
-                loadMediaArtifact: { _, _, _ in nil })
+                inlineWidgetScope: ChatInlineWidgetScope(
+                    modelID: ObjectIdentifier(Self.self),
+                    sessionTarget: OpenClawChatSessionTarget(sessionKey: "main", agentID: nil),
+                    sessionGeneration: 0),
+                mediaPlaybackAllowed: { true })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 280))
@@ -400,7 +405,7 @@ struct SwiftUIRenderSmokeTests {
 
     @Test @MainActor func `root prompt alert stack still presents deep link prompt`() async throws {
         let appModel = NodeAppModel()
-        appModel.gatewayConnected = true
+        appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
         let gatewayController = Self.gatewayControllerWithCapturedTLSFingerprint(appModel: appModel)
         let root = Color.clear
             .gatewayTrustPromptAlert()
@@ -423,7 +428,7 @@ struct SwiftUIRenderSmokeTests {
         GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in .fingerprint("abc123") })
     }
 
@@ -443,5 +448,4 @@ struct SwiftUIRenderSmokeTests {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
-
 }

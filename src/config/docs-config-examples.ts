@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import { resolveRepoBundledPluginEnv } from "./repo-bundled-plugin-env.js";
 import { validateConfigObjectRaw, validateConfigObjectRawWithPlugins } from "./validation.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 
@@ -70,9 +72,8 @@ function extractMarkdownFences(markdown: string): MarkdownFence[] {
     if (!opening) {
       continue;
     }
-    const indent = opening[1];
     const marker = opening[2];
-    if (indent === undefined || !marker) {
+    if (!marker) {
       continue;
     }
     const body: string[] = [];
@@ -125,10 +126,9 @@ function stripIncludeKeys(value: unknown): unknown {
 }
 
 function createDocsConfigValidationContext(): DocsConfigValidationContext {
-  const env = {
-    ...process.env,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
-  };
+  const env = resolveRepoBundledPluginEnv(
+    fileURLToPath(new URL("../../extensions", import.meta.url)),
+  );
   return {
     env,
     pluginMetadataSnapshot: loadPluginMetadataSnapshot({
@@ -150,12 +150,10 @@ function auditConfigMarkdown(
   for (const fence of extractMarkdownFences(params.markdown)) {
     stats.fencesSeen += 1;
     if (!isConfigFence(fence.info)) {
-      stats.fencesSkipped += 1;
       stats.skippedUnsupportedLanguage += 1;
       continue;
     }
     if (/\bvalidate=false\b/iu.test(fence.info)) {
-      stats.fencesSkipped += 1;
       stats.skippedOptOut += 1;
       continue;
     }
@@ -164,17 +162,14 @@ function auditConfigMarkdown(
     try {
       parsed = JSON5.parse(fence.body);
     } catch {
-      stats.fencesSkipped += 1;
       stats.skippedParseFailure += 1;
       continue;
     }
     if (!isRecord(parsed)) {
-      stats.fencesSkipped += 1;
       stats.skippedNonObject += 1;
       continue;
     }
     if (!isWholeConfig(parsed)) {
-      stats.fencesSkipped += 1;
       stats.skippedFragment += 1;
       continue;
     }
@@ -213,6 +208,7 @@ function auditConfigMarkdown(
     }
   }
 
+  stats.fencesSkipped = stats.fencesSeen - stats.candidatesValidated;
   return {
     findings: findings.toSorted(
       (left, right) =>

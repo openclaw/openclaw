@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 
 set -euo pipefail
 
@@ -101,8 +105,6 @@ publish_tag="$(printf '%s\n' "${publish_plan_output}" | sed -n '2p')"
 mirror_dist_tags_csv="$(printf '%s\n' "${publish_plan_output}" | sed -n '3p')"
 mirror_auth_source="$(printf '%s\n' "${publish_plan_output}" | sed -n '4p')"
 mirror_auth_requirement="$(printf '%s\n' "${publish_plan_output}" | sed -n '5p')"
-mirror_auth_source="${mirror_auth_source:-none}"
-mirror_auth_requirement="${mirror_auth_requirement:-optional}"
 publish_cmd=(npm publish --access public --tag "${publish_tag}")
 if [[ "${OPENCLAW_NPM_PUBLISH_PROVENANCE:-1}" != "0" && "${OPENCLAW_NPM_PUBLISH_PROVENANCE:-1}" != "false" ]]; then
   publish_cmd+=(--provenance)
@@ -184,6 +186,8 @@ verify_release_tooling_identity() {
     --workflow-sha "${OPENCLAW_RELEASE_TOOLING_SHA:-}"
     --release-publish-run-id "${OPENCLAW_RELEASE_PUBLISH_RUN_ID:-}"
     --release-publish-run-attempt "${OPENCLAW_RELEASE_PUBLISH_RUN_ATTEMPT:-}"
+    --release-publish-ref "${OPENCLAW_RELEASE_PUBLISH_REF:-}"
+    --release-publish-full-ref "${OPENCLAW_RELEASE_PUBLISH_FULL_REF:-}"
     --release-publish-parent-state-policy "${OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY:-}"
   )
   if [[ "${OPENCLAW_RELEASE_TOOLING_ALLOW_PREVALIDATED_REF:-}" == "true" ]]; then
@@ -192,17 +196,8 @@ verify_release_tooling_identity() {
   node "${tooling_root}/scripts/release-tooling-identity.mjs" "${identity_args[@]}"
 }
 
-if [[ "${mode}" == "--pack" || "${mode}" == "--pack-dry-run" ]]; then
-  {
-    printf 'Publish command:'
-    printf ' %q' "${publish_cmd[@]}"
-    printf '\n'
-  } >&2
-else
-  printf 'Publish command:'
-  printf ' %q' "${publish_cmd[@]}"
-  printf '\n'
-fi
+printf -v publish_command ' %q' "${publish_cmd[@]}"
+log "Publish command:${publish_command}"
 
 if [[ "${mode}" == "--dry-run" ]]; then
   exit 0
@@ -232,7 +227,7 @@ fi
 
 (
   cleanup_files=()
-  trap 'rm -f "${cleanup_files[@]}"' EXIT
+  trap 'rm -f ${cleanup_files[@]+"${cleanup_files[@]}"}' EXIT
   run_with_manifest_overlay() {
     (
       cd "${repo_root}"

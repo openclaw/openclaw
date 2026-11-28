@@ -5,10 +5,13 @@ import {
   channelRegistryContractPatterns,
   channelSessionContractPatterns,
   channelSurfaceContractPatterns,
+  pluginContractPatterns,
 } from "./vitest.contracts-paths.mjs";
+import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
+import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import {
-  intersectIncludePatterns,
   loadPatternListFromEnv,
+  matchesVitestGlob,
   narrowIncludePatternsForCli,
 } from "./vitest.pattern-file.ts";
 import { nonIsolatedRunnerPath, sharedVitestConfig } from "./vitest.shared.config.ts";
@@ -18,39 +21,35 @@ export {
   channelRegistryContractPatterns,
   channelSessionContractPatterns,
   channelSurfaceContractPatterns,
+  pluginContractPatterns,
 };
 
 const base = sharedVitestConfig as Record<string, unknown>;
 const baseTest = sharedVitestConfig.test ?? {};
 
-export const pluginContractPatterns = ["src/plugins/contracts/**/*.test.ts"];
-
-function loadContractsIncludePatternsFromEnv(
-  env: Record<string, string | undefined> = process.env,
-): string[] | null {
-  return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-}
-
 export function createContractsVitestConfig(
   includePatterns: string[],
   env: Record<string, string | undefined> = process.env,
   argv: string[] = process.argv,
-  options: { name?: string } = {},
+  options: { name?: string; pool?: "forks" | "threads" } = {},
 ) {
   const cliIncludePatterns = narrowIncludePatternsForCli(includePatterns, argv);
   const envIncludePatterns = intersectIncludePatterns(
     includePatterns,
-    loadContractsIncludePatternsFromEnv(env),
+    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env),
+    matchesVitestGlob,
   );
   return defineConfig({
     ...base,
     test: {
       ...baseTest,
       name: options.name ?? "contracts",
+      pool: options.pool ?? baseTest.pool,
       isolate: false,
       runner: nonIsolatedRunnerPath,
       setupFiles: baseTest.setupFiles ?? [],
       include: envIncludePatterns ?? cliIncludePatterns ?? includePatterns,
+      exclude: [...(baseTest.exclude ?? []), ...databaseWorkerCoreTestFiles],
       passWithNoTests: true,
     },
   });

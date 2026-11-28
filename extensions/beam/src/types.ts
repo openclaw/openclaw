@@ -1,21 +1,40 @@
+import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import {
   isRecord,
   normalizeBoundedOptionalString as readBoundedString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const BEAM_HOST_ID = "gateway";
+export const BEAM_SESSION_SHARE_ROUTE = {
+  kind: "thread-id-prefix",
+  routeSegment: "beam",
+  hostId: BEAM_HOST_ID,
+  identifierAlphabet: "lowercase-hex",
+  fullLength: 32,
+  minPrefixLength: 12,
+  lookup: "catalog-list-search-by-thread-id-prefix",
+  ambiguity: "multiple-results-or-next-cursor",
+} as const satisfies NonNullable<SessionCatalogProvider["shareRoute"]>;
 export const BEAM_MAX_BODY_BYTES = 56 * 1024;
 export const BEAM_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const BEAM_MAX_SESSIONS = 500;
+export const BEAM_MAX_GUEST_SESSIONS = 20;
+export const BEAM_MAX_WRITE_RECEIPTS = 10_000;
+export const BEAM_MAX_GUEST_RECEIPTS = 400;
 export const BEAM_MAX_ITEMS = 200;
-export const BEAM_MAX_ITEM_CHARS = 6_000;
+const BEAM_MAX_ITEM_CHARS = 6_000;
 
-type BeamTranscriptItem = {
+export type BeamTranscriptItem = {
   type: "userMessage" | "agentMessage" | "other";
   text: string;
 };
 
-type BeamUpload = {
+export type BeamSourceModel = {
+  provider: string;
+  model: string;
+};
+
+export type BeamUpload = {
   version: 1;
   beamId: string;
   source: string;
@@ -24,13 +43,42 @@ type BeamUpload = {
   completed: boolean;
   truncated?: boolean;
   hookEvent?: string;
+  sourceModel?: BeamSourceModel;
+  /** Explicit source release; this generation can never accept another source snapshot. */
+  handoffId?: string;
   items: BeamTranscriptItem[];
 };
 
-export type BeamStoredSession = BeamUpload & {
+export type BeamStoredSession = Omit<BeamUpload, "items"> & {
+  items: Array<BeamTranscriptItem & { speaker?: string }>;
+  portable?: true;
+  presentationDigest?: string;
+  /** Receiver incarnation; a release retry must never recreate an expired publication. */
+  publicationId?: string;
+  /** Exact v2 JSON bytes (UTF-8) and packet-local authorship. Never retain these bytes with the binding. */
+  packetText?: string;
+  /** Changes on accepted writes, including v1 updates with the same source timestamp. */
+  revision?: string;
+  /** Receiver-owned handoff survives uploads, independently of provider runtime IDs. */
+  continuation?: {
+    id: string;
+    sessionKey: string;
+    agentId: string;
+    creating?: string;
+    ready?: true;
+  };
+  /** An accepted guarded release outlives the transcript and all later v1 retries. */
+  releaseReceipt?: { requestId: string; revision: string; digest: string };
+  /** Immutable verified initial publisher. Older ownerless live rows remain ownerless. */
+  publisherProfileId?: string;
+  /** Verified uploader of this accepted snapshot; never accepted from the upload body. */
+  uploaderProfileId?: string;
   createdAt: number;
   receivedAt: number;
 };
+
+/** Durable ownership metadata, independent of the seven-day transcript retention. */
+export type BeamHandoff = Omit<BeamStoredSession, "items" | "packetText" | "presentationDigest">;
 
 const TOP_LEVEL_KEYS = new Set([
   "version",
@@ -41,10 +89,12 @@ const TOP_LEVEL_KEYS = new Set([
   "completed",
   "truncated",
   "hookEvent",
+  "sourceModel",
+  "handoffId",
   "items",
 ]);
 const ITEM_KEYS = new Set(["type", "text"]);
-const ITEM_TYPES = new Set<BeamTranscriptItem["type"]>(["userMessage", "agentMessage", "other"]);
+const SOURCE_MODEL_KEYS = new Set(["provider", "model"]);
 
 function hasOnlyKeys(value: Record<string, unknown>, allowed: Set<string>): boolean {
   return Object.keys(value).every((key) => allowed.has(key));
@@ -58,27 +108,16 @@ function isIsoTimestamp(value: string): boolean {
   if (!match || !Number.isFinite(Date.parse(value))) {
     return false;
   }
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const hour = Number(match[4]);
-  const minute = Number(match[5]);
-  const second = Number(match[6]);
-  const offsetHour = Number(match[8] ?? 0);
-  const offsetMinute = Number(match[9] ?? 0);
-  if (hour > 23 || minute > 59 || second > 59 || offsetHour > 23 || offsetMinute > 59) {
-    return false;
-  }
-  const calendar = new Date(0);
-  calendar.setUTCFullYear(year, month - 1, day);
-  calendar.setUTCHours(hour, minute, second, 0);
+  // Date.parse normalizes impossible calendar days and 24:00. Check the date
+  // before its timezone offset and reject normalized next-day timestamps.
+  const calendar = new Date(`${match[1]}-${match[2]}-${match[3]}T00:00:00Z`);
   return (
-    calendar.getUTCFullYear() === year &&
-    calendar.getUTCMonth() === month - 1 &&
-    calendar.getUTCDate() === day &&
-    calendar.getUTCHours() === hour &&
-    calendar.getUTCMinutes() === minute &&
-    calendar.getUTCSeconds() === second
+    calendar.getUTCDate() === Number(match[3]) &&
+    Number(match[4]) < 24 &&
+    Number(match[5]) < 60 &&
+    Number(match[6]) < 60 &&
+    Number(match[8] ?? 0) < 24 &&
+    Number(match[9] ?? 0) < 60
   );
 }
 
@@ -110,6 +149,13 @@ export function parseBeamUpload(
   if (typeof value.completed !== "boolean") {
     return { ok: false, error: "completed must be a boolean" };
   }
+  const handoffId = value.handoffId;
+  if (
+    handoffId !== undefined &&
+    (typeof handoffId !== "string" || !/^[a-f0-9]{32}$/.test(handoffId))
+  ) {
+    return { ok: false, error: "handoffId must be a 32-character lowercase hex generation" };
+  }
   if (value.truncated !== undefined && typeof value.truncated !== "boolean") {
     return { ok: false, error: "truncated must be a boolean" };
   }
@@ -117,6 +163,18 @@ export function parseBeamUpload(
     value.hookEvent === undefined ? undefined : readBoundedString(value.hookEvent, 64);
   if (value.hookEvent !== undefined && !hookEvent) {
     return { ok: false, error: "hookEvent must be a short string" };
+  }
+  let sourceModel: BeamSourceModel | undefined;
+  if (value.sourceModel !== undefined) {
+    if (!isRecord(value.sourceModel) || !hasOnlyKeys(value.sourceModel, SOURCE_MODEL_KEYS)) {
+      return { ok: false, error: "sourceModel must be a closed object" };
+    }
+    const provider = readBoundedString(value.sourceModel.provider, 64);
+    const model = readBoundedString(value.sourceModel.model, 256);
+    if (!provider || !/^[a-z0-9._-]+$/i.test(provider) || !model || !/^\S+$/u.test(model)) {
+      return { ok: false, error: "sourceModel must contain a provider and model" };
+    }
+    sourceModel = { provider: provider.toLowerCase(), model };
   }
   if (
     !Array.isArray(value.items) ||
@@ -128,22 +186,23 @@ export function parseBeamUpload(
   const items: BeamTranscriptItem[] = [];
   for (const rawItem of value.items) {
     if (!isRecord(rawItem) || !hasOnlyKeys(rawItem, ITEM_KEYS)) {
-      return { ok: false, error: "each transcript item must be a closed object" };
+      return { ok: false, error: "each chat history item must be a closed object" };
     }
     if (
-      typeof rawItem.type !== "string" ||
-      !ITEM_TYPES.has(rawItem.type as BeamTranscriptItem["type"])
+      rawItem.type !== "userMessage" &&
+      rawItem.type !== "agentMessage" &&
+      rawItem.type !== "other"
     ) {
-      return { ok: false, error: "transcript item type is invalid" };
+      return { ok: false, error: "chat history item type is invalid" };
     }
     const text = readBoundedString(rawItem.text, BEAM_MAX_ITEM_CHARS);
     if (!text) {
       return {
         ok: false,
-        error: `transcript item text must be 1-${BEAM_MAX_ITEM_CHARS} characters`,
+        error: `chat history item text must be 1-${BEAM_MAX_ITEM_CHARS} characters`,
       };
     }
-    items.push({ type: rawItem.type as BeamTranscriptItem["type"], text });
+    items.push({ type: rawItem.type, text });
   }
 
   return {
@@ -157,6 +216,8 @@ export function parseBeamUpload(
       completed: value.completed,
       ...(value.truncated === true ? { truncated: true } : {}),
       ...(hookEvent ? { hookEvent } : {}),
+      ...(sourceModel ? { sourceModel } : {}),
+      ...(handoffId ? { handoffId } : {}),
       items,
     },
   };

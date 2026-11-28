@@ -1,17 +1,35 @@
-import { describe, expect, it } from "vitest";
+import * as authRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
+import { describe, expect, it, vi } from "vitest";
 import {
   hasLlamaServerAuthorizationHeader,
-  resolveLlamaServerProviderHeaders,
   shouldUseLlamaServerSyntheticAuth,
-} from "./auth.js";
+} from "./auth-policy.js";
+import { resolveLlamaServerProviderHeaders, resolveLlamaServerRuntimeApiKey } from "./auth.js";
+import { LLAMA_APP_SERVER, LLAMA_CPP_SERVER } from "./defaults.js";
 
 describe("llama-server auth", () => {
-  it.each([undefined, null, [], "Bearer proxy-token"])(
-    "rejects a non-record authorization header container: %j",
-    (headers) => {
-      expect(hasLlamaServerAuthorizationHeader(headers)).toBe(false);
+  it.each([LLAMA_APP_SERVER, LLAMA_CPP_SERVER])(
+    "keeps the $id synthetic auth marker out of runtime discovery",
+    async (server) => {
+      const resolve = vi.spyOn(authRuntime, "resolveApiKeyForProvider");
+      try {
+        resolve.mockResolvedValue({
+          mode: "api-key",
+          source: "synthetic",
+          apiKey: server.authMarker,
+        });
+        await expect(resolveLlamaServerRuntimeApiKey({ server })).resolves.toBeUndefined();
+        resolve.mockResolvedValue({ mode: "api-key", source: "profile", apiKey: "real-key" });
+        await expect(resolveLlamaServerRuntimeApiKey({ server })).resolves.toBe("real-key");
+      } finally {
+        resolve.mockRestore();
+      }
     },
   );
+
+  it("rejects an array authorization header container", () => {
+    expect(hasLlamaServerAuthorizationHeader([])).toBe(false);
+  });
 
   it("uses synthetic runtime auth for no-auth and header-only providers", () => {
     expect(

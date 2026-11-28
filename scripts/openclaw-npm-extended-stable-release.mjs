@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 
-import { execFileSync, spawnSync } from "node:child_process";
-import { appendFileSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
+import {
+  classifyReleaseTrain,
+  parseReleaseVersion,
+  validateRetiredLineReason,
+} from "./lib/release-version.mjs";
+import { decodePluginSdkApiArtifact } from "./plugin-sdk-api-release-evidence.mjs";
 
-const SUPPORTED_DIST_TAGS = new Set(["alpha", "beta", "latest", "extended-stable"]);
+const SUPPORTED_DIST_TAGS = new Set(["beta", "latest", "extended-stable"]);
 
 export function parseExtendedStableGuardBypass(value = "") {
   if (value === "" || value === "false") {
@@ -30,6 +35,9 @@ export function validateNpmPublishBoundary(
   npmDistTag,
   { bypassExtendedStableGuard = false } = {},
 ) {
+  if (npmDistTag === "alpha" || parseReleaseVersion(packageVersion)?.channel === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   if (!SUPPORTED_DIST_TAGS.has(npmDistTag)) {
     throw new Error(`Unsupported npm dist-tag "${npmDistTag}".`);
   }
@@ -40,12 +48,6 @@ export function validateNpmPublishBoundary(
   }
   const releaseTrain = classifyReleaseTrain(parsed);
 
-  if (releaseTrain === "alpha") {
-    if (npmDistTag !== "alpha") {
-      throw new Error("Alpha prereleases must publish to the alpha npm dist-tag.");
-    }
-    return parsed;
-  }
   if (releaseTrain === "beta") {
     if (npmDistTag !== "beta") {
       throw new Error("Beta prereleases must publish to the beta npm dist-tag.");
@@ -73,7 +75,64 @@ export function validateNpmPublishBoundary(
   return parsed;
 }
 
+export function resolveNpmPreflightSdkSelectors(packageVersion, npmDistTag) {
+  if (npmDistTag === "alpha" || parseReleaseVersion(packageVersion)?.channel === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
+  const parsed = parseReleaseVersion(packageVersion);
+  return parsed &&
+    classifyReleaseTrain(parsed) === "stable" &&
+    ["beta", "latest"].includes(npmDistTag)
+    ? ["beta", "latest"]
+    : [npmDistTag];
+}
+
+export function validateNpmPreflightDistTag({ manifest, npmDistTag }) {
+  if (
+    npmDistTag === "alpha" ||
+    manifest?.npmDistTag === "alpha" ||
+    parseReleaseVersion(manifest?.packageVersion ?? "")?.channel === "alpha"
+  ) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
+  if (SUPPORTED_DIST_TAGS.has(npmDistTag) && manifest?.npmDistTag === npmDistTag) {
+    return;
+  }
+  // Only the qualified package format proves both regular-release predecessors.
+  // Historical receipts and prerelease/extended-stable packages retain exact channels.
+  const pluginSdkApi = decodePluginSdkApiArtifact(manifest?.pluginSdkApi);
+  const selectors = pluginSdkApi?.selectors;
+  if (
+    manifest?.version === 3 &&
+    typeof manifest.packageVersion === "string" &&
+    resolveNpmPreflightSdkSelectors(manifest.packageVersion, manifest.npmDistTag).length === 2 &&
+    ["beta", "latest"].includes(npmDistTag) &&
+    [
+      "openclaw.plugin-sdk-api-release-evidence-set/v1",
+      "openclaw.plugin-sdk-api-release-evidence-set/v2",
+    ].includes(pluginSdkApi?.schema) &&
+    selectors &&
+    Object.keys(selectors).length === 2 &&
+    ["beta", "latest"].every(
+      (selector) => selectors[selector]?.schema === "openclaw.plugin-sdk-api-release-evidence/v1",
+    )
+  ) {
+    return;
+  }
+  throw new Error(
+    `npm preflight dist-tag mismatch: expected ${npmDistTag}, got ${manifest?.npmDistTag}`,
+  );
+}
+
 export function validateExtendedStableNpmReleaseRequest(request) {
+  if (
+    request.npmDistTag === "alpha" ||
+    request.releaseTag?.includes("-alpha.") ||
+    parseReleaseVersion(request.packageVersion ?? "")?.channel === "alpha" ||
+    request.npmWorkflowRef?.includes("tideclaw/alpha/")
+  ) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const bypassExtendedStableGuard = request.bypassExtendedStableGuard ?? false;
   requireExtendedStableBypassTag(request.npmDistTag, bypassExtendedStableGuard);
   const shaPreflight =
@@ -148,7 +207,22 @@ export function validateExtendedStableNpmReleaseRequest(request) {
     };
   }
 
-  const mainVersion = parseReleaseVersion(request.mainPackageVersion);
+  validateActiveExtendedStableLine(
+    releaseVersion,
+    request.mainPackageVersion,
+    request.retiredLineReason,
+  );
+  return { extendedStable: true, releaseVersion, extendedStableBranch };
+}
+
+// Core admission, parent dispatch, and plugin mutation share one retirement policy.
+export function validateActiveExtendedStableLine(
+  releaseVersion,
+  mainPackageVersion,
+  retiredLineReason,
+) {
+  const releaseVersionParsed = validateNpmPublishBoundary(releaseVersion, "extended-stable");
+  const mainVersion = parseReleaseVersion(mainPackageVersion);
   if (
     mainVersion === null ||
     mainVersion.channel !== "stable" ||
@@ -157,16 +231,65 @@ export function validateExtendedStableNpmReleaseRequest(request) {
     throw new Error("Protected main package version must be an exact final YYYY.M.P version.");
   }
   const mainCalendarMonth = mainVersion.year * 12 + mainVersion.month;
-  const releaseCalendarMonth = taggedVersion.year * 12 + taggedVersion.month;
-  if (mainCalendarMonth <= releaseCalendarMonth) {
+  const releaseCalendarMonth = releaseVersionParsed.year * 12 + releaseVersionParsed.month;
+  if (retiredLineReason !== undefined) {
+    validateRetiredLineReason(retiredLineReason);
+    if (mainCalendarMonth - releaseCalendarMonth <= 1) {
+      throw new Error("A retired-line decision is only valid for an older extended-stable line.");
+    }
+  }
+  // Keep one active trailing-month line; advancing main another month retires the older line.
+  if (mainCalendarMonth - releaseCalendarMonth !== 1 && retiredLineReason === undefined) {
+    const expectedYear = mainVersion.month === 1 ? mainVersion.year - 1 : mainVersion.year;
+    const expectedMonth = mainVersion.month === 1 ? 12 : mainVersion.month - 1;
     throw new Error(
-      `Protected main must be in a later calendar month than ${taggedVersion.year}.${taggedVersion.month}; got ${request.mainPackageVersion}.`,
+      `Extended-stable publishes only the trailing completed month: protected main ${mainPackageVersion} allows ${expectedYear}.${expectedMonth}.PATCH, not ${releaseVersion}. Retire the older line; publishing a retired line requires an explicit maintainer decision.`,
     );
   }
   if (classifyReleaseTrain(mainVersion) !== "stable") {
     throw new Error("Protected main must remain on a daily patch below 33.");
   }
-  return { extendedStable: true, releaseVersion, extendedStableBranch };
+}
+
+// Retirement is authorized only by the existing human-approved parent receipt.
+// Raw workflow inputs and the core testing bypass do not grant this right.
+async function retiredLineReasonFromParent(releaseVersion, mainPackageVersion) {
+  try {
+    validateActiveExtendedStableLine(releaseVersion, mainPackageVersion);
+    if (!process.env.RETIRED_LINE_PUBLICATION_REASON) {
+      return undefined;
+    }
+  } catch (error) {
+    const mainVersion = parseReleaseVersion(mainPackageVersion);
+    const release = parseReleaseVersion(releaseVersion);
+    if (
+      !mainVersion ||
+      !release ||
+      mainVersion.year * 12 + mainVersion.month - (release.year * 12 + release.month) <= 1 ||
+      !process.env.RELEASE_PUBLISH_RUN_ID
+    ) {
+      throw error;
+    }
+  }
+  const { downloadReleaseApprovalReceipt } = await import("./release-approval-receipt.mjs");
+  const env = process.env;
+  const { receipt } = await downloadReleaseApprovalReceipt({
+    expected: {
+      repository: env.GITHUB_REPOSITORY,
+      parentRunId: env.RELEASE_PUBLISH_RUN_ID,
+      parentRunAttempt: env.RELEASE_PUBLISH_RUN_ATTEMPT,
+      toolingRef: env.EXPECTED_WORKFLOW_BRANCH ?? env.GITHUB_REF_NAME,
+      toolingFullRef: env.EXPECTED_WORKFLOW_FULL_REF ?? env.GITHUB_REF,
+      toolingSha: env.EXPECTED_WORKFLOW_SHA ?? env.GITHUB_WORKFLOW_SHA,
+      releaseTag: "v" + releaseVersion,
+      targetSha: env.RELEASE_TARGET_SHA ?? git(["rev-parse", "HEAD"]),
+      npmDistTag: "extended-stable",
+      parentStatePolicy: "active",
+    },
+    token: env.GH_TOKEN,
+  });
+  validateActiveExtendedStableLine(releaseVersion, mainPackageVersion, receipt.retiredLineReason);
+  return receipt.retiredLineReason;
 }
 
 export function validateExtendedStableRunIdentity({
@@ -175,9 +298,32 @@ export function validateExtendedStableRunIdentity({
   npmDistTag,
   expectedBranch,
   expectedSha,
+  preflightRunId = "",
+  preflightRunAttempt = "",
+  fullReleaseRunId = "",
+  fullReleaseRunAttempt = "",
+  workflowPath = "",
+  expectedOrchestratorBranch = "",
+  expectedOrchestratorSha = "",
+  trustedPluginWorkflowSha = "",
 }) {
+  const fullReleasePreflight =
+    kind === "preflight" && run.workflowName === "Full Release Validation";
+  if (
+    fullReleasePreflight &&
+    (!/^[1-9][0-9]*$/u.test(preflightRunId) ||
+      !/^[1-9][0-9]*$/u.test(preflightRunAttempt) ||
+      preflightRunId !== fullReleaseRunId ||
+      preflightRunAttempt !== fullReleaseRunAttempt ||
+      String(run.databaseId) !== preflightRunId ||
+      String(run.attempt) !== preflightRunAttempt ||
+      workflowPath.split("@", 1)[0] !== ".github/workflows/full-release-validation.yml" ||
+      run.status !== "completed")
+  ) {
+    throw new Error("FRV npm preflight must be the exact selected full release run and attempt.");
+  }
   const expectedWorkflowName =
-    kind === "preflight"
+    kind === "preflight" && !fullReleasePreflight
       ? "OpenClaw NPM Release"
       : kind === "plugin"
         ? "Plugin NPM Release"
@@ -198,9 +344,34 @@ export function validateExtendedStableRunIdentity({
       );
     }
   }
-  if (
+  const directTargetIdentity = run.headBranch === expectedBranch && run.headSha === expectedSha;
+  const orchestratedPluginIdentity =
+    kind === "plugin" &&
+    typeof expectedOrchestratorBranch === "string" &&
+    expectedOrchestratorBranch.length > 0 &&
+    typeof expectedOrchestratorSha === "string" &&
+    expectedOrchestratorSha.length > 0 &&
+    run.headBranch === expectedOrchestratorBranch &&
+    run.headSha === expectedOrchestratorSha;
+  // FRV runs trusted tooling against a separately pinned release source; its
+  // qualified manifest, not the workflow head, binds that source SHA.
+  // A main-branch plugin recovery likewise separates tooling from source. The
+  // caller authenticates its tooling lineage; the immutable run title binds the
+  // exact candidate checked by that trusted workflow.
+  const trustedPluginRecovery =
+    kind === "plugin" &&
     npmDistTag === "extended-stable" &&
-    (run.headBranch !== expectedBranch || run.headSha !== expectedSha)
+    run.headBranch === "main" &&
+    /^[0-9a-f]{40}$/u.test(trustedPluginWorkflowSha) &&
+    run.headSha === trustedPluginWorkflowSha &&
+    /^extended-stable\/[0-9]{4}\.(?:[1-9]|1[0-2])\.33$/u.test(expectedBranch ?? "") &&
+    workflowPath.split("@", 1)[0] === ".github/workflows/plugin-npm-release.yml";
+  if (
+    !fullReleasePreflight &&
+    !trustedPluginRecovery &&
+    npmDistTag === "extended-stable" &&
+    !directTargetIdentity &&
+    !orchestratedPluginIdentity
   ) {
     throw new Error(
       `Referenced extended-stable ${kind} run must have headBranch=${expectedBranch} and headSha=${expectedSha}; got ${run.headBranch ?? "<missing>"} and ${run.headSha ?? "<missing>"}.`,
@@ -248,72 +419,6 @@ export function validateFullReleaseValidationManifest({
   return manifest;
 }
 
-export function parsePriorExtendedStableSelector(stdout) {
-  let tags;
-  try {
-    tags = JSON.parse(stdout);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`npm dist-tags query returned invalid JSON: ${message}`, {
-      cause: error,
-    });
-  }
-  if (tags === null || typeof tags !== "object" || Array.isArray(tags)) {
-    throw new Error("npm dist-tags query did not return a JSON object.");
-  }
-  if (!Object.hasOwn(tags, "extended-stable")) {
-    return "absent";
-  }
-  if (typeof tags["extended-stable"] !== "string" || tags["extended-stable"].trim() === "") {
-    throw new Error("npm extended-stable dist-tag was not a non-empty version string.");
-  }
-  return tags["extended-stable"];
-}
-
-export function capturePriorExtendedStableSelector({ query }) {
-  const result = query();
-  if (result.status !== 0) {
-    throw new Error(`npm dist-tags query failed with exit code ${result.status ?? "unknown"}.`);
-  }
-  return parsePriorExtendedStableSelector(result.stdout);
-}
-
-export async function verifyExtendedStableRegistryReadback({
-  expectedVersion,
-  query,
-  sleep,
-  attempts = 12,
-  delayMs = 10_000,
-}) {
-  let exactVersion = "missing";
-  let extendedStableSelector = "missing";
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const exactResult = await query(`openclaw@${expectedVersion}`);
-    const extendedStableResult = await query("openclaw@extended-stable");
-    exactVersion = exactResult.status === 0 ? exactResult.stdout.trim() : "missing";
-    extendedStableSelector =
-      extendedStableResult.status === 0 ? extendedStableResult.stdout.trim() : "missing";
-    if (exactVersion === expectedVersion && extendedStableSelector === expectedVersion) {
-      return { exactVersion, extendedStableSelector, attemptsUsed: attempt };
-    }
-    if (attempt < attempts) {
-      await sleep(delayMs);
-    }
-  }
-  throw new Error(
-    `npm registry did not converge to openclaw@${expectedVersion} and openclaw@extended-stable=${expectedVersion} after ${attempts} attempts (exact=${exactVersion}, extended-stable=${extendedStableSelector}).`,
-  );
-}
-
-export function extendedStableSelectorRepairCommand(expectedVersion) {
-  const normalizedVersion = (expectedVersion ?? "").replace(/^v/u, "");
-  const parsed = parseReleaseVersion(normalizedVersion);
-  if (parsed === null || parsed.channel !== "stable" || parsed.correctionNumber !== undefined) {
-    throw new Error("Extended-stable selector repair requires an exact final YYYY.M.P version.");
-  }
-  return `npm dist-tag add openclaw@${parsed.version} extended-stable`;
-}
-
 function git(args) {
   return execFileSync("git", args, { encoding: "utf8" }).trim();
 }
@@ -322,7 +427,7 @@ function packageVersionAt(ref) {
   return JSON.parse(git(["show", `${ref}:package.json`])).version;
 }
 
-function validateRequestFromRepository() {
+async function validateRequestFromRepository() {
   const npmDistTag = process.env.RELEASE_NPM_DIST_TAG ?? "";
   const releaseTag = process.env.RELEASE_TAG ?? "";
   const npmWorkflowRef = process.env.NPM_WORKFLOW_REF ?? "";
@@ -374,6 +479,9 @@ function validateRequestFromRepository() {
       );
     }
     const checkoutSha = git(["rev-parse", "HEAD"]);
+    const mainPackageVersion = bypassExtendedStableGuard
+      ? ""
+      : packageVersionAt("refs/remotes/origin/main");
     return validateExtendedStableNpmReleaseRequest({
       npmDistTag,
       bypassExtendedStableGuard,
@@ -384,37 +492,10 @@ function validateRequestFromRepository() {
       tagSha: checkoutSha,
       extendedStableBranchSha: "",
       packageVersion,
-      mainPackageVersion: bypassExtendedStableGuard
-        ? ""
-        : packageVersionAt("refs/remotes/origin/main"),
-    });
-  }
-  if (bypassExtendedStableGuard) {
-    execFileSync(
-      "git",
-      [
-        "fetch",
-        "--no-tags",
-        "origin",
-        `+refs/heads/${extendedStableBranch}:refs/remotes/origin/${extendedStableBranch}`,
-      ],
-      { stdio: "inherit" },
-    );
-    execFileSync(
-      "git",
-      ["fetch", "--no-tags", "origin", `+refs/tags/${releaseTag}:refs/tags/${releaseTag}`],
-      { stdio: "inherit" },
-    );
-    return validateExtendedStableNpmReleaseRequest({
-      npmDistTag,
-      bypassExtendedStableGuard,
-      releaseTag,
-      npmWorkflowRef,
-      checkoutSha: git(["rev-parse", "HEAD"]),
-      tagSha: git(["rev-parse", `${releaseTag}^{commit}`]),
-      extendedStableBranchSha: git(["rev-parse", `refs/remotes/origin/${extendedStableBranch}`]),
-      packageVersion,
-      mainPackageVersion: "",
+      mainPackageVersion,
+      retiredLineReason: bypassExtendedStableGuard
+        ? undefined
+        : await retiredLineReasonFromParent(packageVersion, mainPackageVersion),
     });
   }
   execFileSync(
@@ -424,7 +505,7 @@ function validateRequestFromRepository() {
       "--no-tags",
       "origin",
       `+refs/heads/${extendedStableBranch}:refs/remotes/origin/${extendedStableBranch}`,
-      "+refs/heads/main:refs/remotes/origin/main",
+      ...(bypassExtendedStableGuard ? [] : ["+refs/heads/main:refs/remotes/origin/main"]),
     ],
     { stdio: "inherit" },
   );
@@ -433,6 +514,9 @@ function validateRequestFromRepository() {
     ["fetch", "--no-tags", "origin", `+refs/tags/${releaseTag}:refs/tags/${releaseTag}`],
     { stdio: "inherit" },
   );
+  const mainPackageVersion = bypassExtendedStableGuard
+    ? ""
+    : packageVersionAt("refs/remotes/origin/main");
   return validateExtendedStableNpmReleaseRequest({
     npmDistTag,
     bypassExtendedStableGuard,
@@ -442,27 +526,36 @@ function validateRequestFromRepository() {
     tagSha: git(["rev-parse", `${releaseTag}^{commit}`]),
     extendedStableBranchSha: git(["rev-parse", `refs/remotes/origin/${extendedStableBranch}`]),
     packageVersion,
-    mainPackageVersion: packageVersionAt("refs/remotes/origin/main"),
+    mainPackageVersion,
+    retiredLineReason: bypassExtendedStableGuard
+      ? undefined
+      : await retiredLineReasonFromParent(packageVersion, mainPackageVersion),
   });
-}
-
-function appendOutput(values) {
-  const output = process.env.GITHUB_OUTPUT;
-  if (!output) {
-    throw new Error("GITHUB_OUTPUT is required.");
-  }
-  appendFileSync(
-    output,
-    Object.entries(values)
-      .map(([key, value]) => `${key}=${value}\n`)
-      .join(""),
-  );
 }
 
 async function main() {
   const command = process.argv[2];
+  if (command === "validate-active-line") {
+    const repository = process.env.GITHUB_REPOSITORY ?? "";
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)) {
+      throw new Error("GITHUB_REPOSITORY must identify the publication repository.");
+    }
+    const content = execFileSync(
+      "gh",
+      ["api", `repos/${repository}/contents/package.json?ref=refs/heads/main`, "--jq", ".content"],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    const mainPackageVersion = JSON.parse(Buffer.from(content, "base64").toString("utf8")).version;
+    const version = process.env.PACKAGE_VERSION ?? "";
+    validateActiveExtendedStableLine(
+      version,
+      mainPackageVersion,
+      await retiredLineReasonFromParent(version, mainPackageVersion),
+    );
+    return;
+  }
   if (command === "validate-request") {
-    const result = validateRequestFromRepository();
+    const result = await validateRequestFromRepository();
     console.log(
       result.extendedStable
         ? `Validated extended-stable npm release ${result.releaseVersion}.`
@@ -490,8 +583,23 @@ async function main() {
       npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
       expectedBranch: process.env.EXPECTED_EXTENDED_STABLE_BRANCH,
       expectedSha: process.env.EXPECTED_RELEASE_SHA,
+      preflightRunId: process.env.PREFLIGHT_RUN_ID,
+      preflightRunAttempt: process.env.PREFLIGHT_RUN_ATTEMPT,
+      fullReleaseRunId: process.env.FULL_RELEASE_VALIDATION_RUN_ID,
+      fullReleaseRunAttempt: process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
+      workflowPath: process.env.RUN_WORKFLOW_PATH,
+      expectedOrchestratorBranch: process.env.EXPECTED_ORCHESTRATOR_BRANCH,
+      expectedOrchestratorSha: process.env.EXPECTED_ORCHESTRATOR_SHA,
+      trustedPluginWorkflowSha: process.env.TRUSTED_PLUGIN_WORKFLOW_SHA,
     });
     console.log(`Verified referenced ${process.env.RUN_KIND} run.`);
+    return;
+  }
+  if (command === "verify-preflight-channel") {
+    validateNpmPreflightDistTag({
+      manifest: JSON.parse(readFileSync(0, "utf8")),
+      npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
+    });
     return;
   }
   if (command === "verify-manifest") {
@@ -504,34 +612,6 @@ async function main() {
       expectedRunId: process.env.FULL_RELEASE_VALIDATION_RUN_ID,
       expectedRunAttempt: process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
     });
-    return;
-  }
-  if (command === "capture-selector") {
-    const previous = capturePriorExtendedStableSelector({
-      query: () =>
-        spawnSync("npm", ["view", "openclaw", "dist-tags", "--json"], { encoding: "utf8" }),
-    });
-    appendOutput({ previous });
-    return;
-  }
-  if (command === "verify-readback") {
-    const expectedVersion = (process.env.EXPECTED_VERSION ?? "").replace(/^v/u, "");
-    const result = await verifyExtendedStableRegistryReadback({
-      expectedVersion,
-      query: (target) => spawnSync("npm", ["view", target, "version"], { encoding: "utf8" }),
-      sleep: (delayMs) =>
-        new Promise((resolve) => {
-          setTimeout(resolve, delayMs);
-        }),
-    });
-    appendOutput({
-      exact_version: result.exactVersion,
-      extended_stable_selector: result.extendedStableSelector,
-    });
-    return;
-  }
-  if (command === "repair-command") {
-    console.log(extendedStableSelectorRepairCommand(process.env.EXPECTED_VERSION));
     return;
   }
   throw new Error(`Unknown extended-stable npm release command: ${command ?? "<missing>"}.`);

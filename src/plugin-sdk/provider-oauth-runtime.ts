@@ -1,44 +1,60 @@
-// Provider OAuth runtime helpers expose shared browser/OAuth flows for provider plugins.
+import { randomBytes } from "node:crypto";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "../../packages/normalization-core/src/number-coercion.js";
-import type { Model } from "../llm/types.js";
-import { escapeHtml } from "../shared/html-escape.js";
+import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
+import {
+  ProviderAuthFailure,
+  providerAuthFailureFromOAuthError,
+} from "../plugins/provider-auth-failure.js";
+import { generatePkceVerifierChallenge } from "./oauth-utils.js";
+export { oauthErrorHtml, oauthSuccessHtml } from "../shared/oauth-page.js";
+export {
+  createOAuthRefreshError,
+  createOAuthRefreshResponseError,
+  isRecoverableOAuthRefreshFailure,
+  readOAuthRefreshErrorReason,
+  type OAuthRefreshOutcome,
+  type OAuthRefreshErrorReason,
+} from "../shared/oauth-refresh-outcome.js";
 
-// Static OpenClaw lobster mascot; keep shapes in sync with ui/public/favicon.svg.
-const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none" aria-hidden="true"><defs><linearGradient id="lobster-gradient" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient></defs><path fill="url(#lobster-gradient)" d="M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z"/><path fill="url(#lobster-gradient)" d="M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z"/><path fill="url(#lobster-gradient)" d="M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z"/><path stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" d="M45 15 Q35 5 30 8"/><path stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" d="M75 15 Q85 5 90 8"/><circle cx="45" cy="35" r="6" fill="#050810"/><circle cx="75" cy="35" r="6" fill="#050810"/><circle cx="46" cy="34" r="2.5" fill="#00e5cc"/><circle cx="76" cy="34" r="2.5" fill="#00e5cc"/></svg>`;
+export { CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/profile-ids.js";
+export { isFailedOAuthRefreshFence } from "../agents/auth-profiles/oauth-refresh-marker.js";
+export {
+  decodeOpenAICodexJwtPayload,
+  resolveOpenAICodexAuthIdentity,
+} from "./provider-openai-chatgpt-auth.js";
 
-/** Normalized OAuth credential bundle persisted by provider auth profiles. */
-export type OAuthCredentials = {
-  /** Refresh token or provider-equivalent long-lived credential. */
-  refresh: string;
-  /** Access token or provider-equivalent bearer credential. */
-  access: string;
-  /** Absolute epoch milliseconds when the access token should be considered expired. */
-  expires: number;
-  [key: string]: unknown;
-};
+export type {
+  OAuthCredentials,
+  OAuthProviderId,
+  OAuthProvider,
+  OAuthPrompt,
+  OAuthAuthInfo,
+  OAuthSelectOption,
+  OAuthSelectPrompt,
+  OAuthLoginCallbacks,
+  OAuthProviderInterface,
+  OAuthProviderInfo,
+} from "../llm/utils/oauth/types.js";
 
-/** Stable provider id used by OAuth credential and config routing. */
-export type OAuthProviderId = string;
+/** Generates an OAuth PKCE verifier and SHA-256 challenge using base64url encoding. */
+export async function generatePKCE(): Promise<{ verifier: string; challenge: string }> {
+  return generatePkceVerifierChallenge();
+}
 
-/** @deprecated Use OAuthProviderId instead. */
-export type OAuthProvider = OAuthProviderId;
+/** Generates a random base64url OAuth state value for CSRF protection. */
+export function generateOAuthState(): string {
+  return randomBytes(32).toString("base64url");
+}
 
-/** Manual input prompt shown during OAuth login flows. */
-export type OAuthPrompt = {
-  /** Prompt text shown to the operator. */
-  message: string;
-  /** Optional placeholder for manual text entry. */
-  placeholder?: string;
-  /** Whether empty input should be accepted instead of reprompting. */
-  allowEmpty?: boolean;
-};
-
-/** Parsed OAuth callback/code input accepted by manual and callback-server flows. */
+/**
+ * @deprecated Shipped public type (v2026.11.6); `parseOAuthAuthorizationInput` now always
+ * returns a code. Kept for existing plugin imports.
+ */
 export type OAuthAuthorizationInput = {
   /** Authorization code parsed from a callback URL, query string, or pasted code. */
   code?: string;
@@ -46,265 +62,65 @@ export type OAuthAuthorizationInput = {
   state?: string;
 };
 
-/** Authorization URL and optional instructions shown before OAuth completion. */
-export type OAuthAuthInfo = {
-  /** Provider authorization URL shown to the user. */
-  url: string;
-  /** Optional provider-specific instruction text for manual flows. */
-  instructions?: string;
-};
-
-/** One selectable OAuth login option. */
-export type OAuthSelectOption = {
-  /** Stable option id returned when the operator selects this entry. */
-  id: string;
-  /** Human-readable option label shown in the selector. */
-  label: string;
-};
-
-/** Selector prompt used when a provider offers multiple OAuth login choices. */
-export type OAuthSelectPrompt = {
-  /** Prompt text shown above the selectable options. */
-  message: string;
-  /** Options available for the operator to choose from. */
-  options: OAuthSelectOption[];
-};
-
-/** UI/runtime callbacks used by provider OAuth login implementations. */
-export interface OAuthLoginCallbacks {
-  /** Emits authorization URL/instructions to the UI before waiting for completion. */
-  onAuth: (info: OAuthAuthInfo) => void;
-  /** Prompts for manual input such as pasted callback URLs or authorization codes. */
-  onPrompt: (prompt: OAuthPrompt) => Promise<string>;
-  /** Reports human-readable login progress without exposing secrets. */
-  onProgress?: (message: string) => void;
-  /** Optional direct manual-code entry hook used when callback-server flows cannot complete. */
-  onManualCodeInput?: () => Promise<string>;
-  /** Show an interactive selector and return the selected option id, or undefined on cancel. */
-  onSelect?: (prompt: OAuthSelectPrompt) => Promise<string | undefined>;
-  /** Cancels pending OAuth waits and prompts when aborted. */
-  signal?: AbortSignal;
-}
-
-/** Provider OAuth contract implemented by provider plugins. */
-export interface OAuthProviderInterface {
-  /** Stable provider id used for credential and config routing. */
-  readonly id: OAuthProviderId;
-  /** Human-readable provider name shown in login flows. */
-  readonly name: string;
-
-  /** Run the login flow and return credentials to persist. */
-  login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials>;
-
-  /** Whether login uses a local callback server and supports manual code input. */
-  usesCallbackServer?: boolean;
-
-  /** Refresh expired credentials and return updated credentials to persist. */
-  refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials>;
-
-  /** Convert credentials to an API key string for the provider. */
-  getApiKey(credentials: OAuthCredentials): string;
-
-  /** Optionally adjust models for this provider, such as updating baseUrl. */
-  modifyModels?(models: Model[], credentials: OAuthCredentials): Model[];
-}
-
-/** @deprecated Use OAuthProviderInterface instead. */
-export interface OAuthProviderInfo {
-  /** Stable provider id used for credential and config routing. */
-  id: OAuthProviderId;
-  /** Human-readable provider name shown in login flows. */
-  name: string;
-  /** Whether this provider can currently start OAuth login. */
-  available: boolean;
-}
-
-function renderOAuthPage(options: {
-  title: string;
-  heading: string;
-  message: string;
-  details?: string;
-}): string {
-  const title = escapeHtml(options.title);
-  const heading = escapeHtml(options.heading);
-  const message = escapeHtml(options.message);
-  const details = options.details ? escapeHtml(options.details) : undefined;
-
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${title}</title>
-  <style>
-    :root {
-      --text: #fafafa;
-      --text-dim: #a1a1aa;
-      --page-bg: #09090b;
-      --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
-      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-    }
-    * { box-sizing: border-box; }
-    html { color-scheme: dark; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-      background: var(--page-bg);
-      color: var(--text);
-      font-family: var(--font-sans);
-      text-align: center;
-    }
-    main {
-      width: 100%;
-      max-width: 560px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-    }
-    .logo {
-      width: 72px;
-      height: 72px;
-      display: block;
-      margin-bottom: 24px;
-    }
-    h1 {
-      margin: 0 0 10px;
-      font-size: 28px;
-      line-height: 1.15;
-      font-weight: 650;
-      color: var(--text);
-    }
-    p {
-      margin: 0;
-      line-height: 1.7;
-      color: var(--text-dim);
-      font-size: 15px;
-    }
-    .details {
-      margin-top: 16px;
-      font-family: var(--font-mono);
-      font-size: 13px;
-      color: var(--text-dim);
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-  </style>
-</head>
-<body>
-  <main>
-    <div class="logo">${LOGO_SVG}</div>
-    <h1>${heading}</h1>
-    <p>${message}</p>
-    ${details ? `<div class="details">${details}</div>` : ""}
-  </main>
-</body>
-</html>`;
-}
-
 /**
- * Renders the local OAuth callback success page after provider authentication completes.
- */
-export function oauthSuccessHtml(
-  /** Success message rendered in the local OAuth completion page. */
-  message: string,
-): string {
-  return renderOAuthPage({
-    title: "Authentication successful",
-    heading: "Authentication successful",
-    message,
-  });
-}
-
-/**
- * Renders the local OAuth callback error page without exposing raw credential material.
- */
-export function oauthErrorHtml(
-  /** Error message rendered in the local OAuth completion page. */
-  message: string,
-  /** Optional provider-specific error details rendered below the message. */
-  details?: string,
-): string {
-  return renderOAuthPage({
-    title: "Authentication failed",
-    heading: "Authentication failed",
-    message,
-    details,
-  });
-}
-
-function base64urlEncode(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/[=]/g, "");
-}
-
-/** Generates an OAuth PKCE verifier and SHA-256 challenge using base64url encoding. */
-export async function generatePKCE(): Promise<{ verifier: string; challenge: string }> {
-  const verifierBytes = new Uint8Array(32);
-  crypto.getRandomValues(verifierBytes);
-  const verifier = base64urlEncode(verifierBytes);
-
-  const encoder = new TextEncoder();
-  const data = encoder.encode(verifier);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const challenge = base64urlEncode(new Uint8Array(hashBuffer));
-
-  return { verifier, challenge };
-}
-
-/** Generates a random base64url OAuth state value for CSRF protection. */
-function generateBase64UrlOAuthState(): string {
-  const stateBytes = new Uint8Array(32);
-  crypto.getRandomValues(stateBytes);
-  return base64urlEncode(stateBytes);
-}
-
-export { generateBase64UrlOAuthState as generateOAuthState };
-
-/**
- * Parses callback URLs, raw query strings, `code#state`, or plain pasted codes.
- * Empty input returns an empty object so callers can keep prompting.
+ * The one paste parser for browser sign-in. Accepts a full redirect address, its query
+ * string, `code#state` or a bare code. A pasted state must match `expected.state`; a bare
+ * code carries none, and PKCE still binds it to this attempt because only this attempt's
+ * verifier can exchange it. Throws `ProviderAuthFailure` for a refusal or a paste that
+ * cannot answer this sign-in, so prompt validators can show its message and stay open.
  */
 export function parseOAuthAuthorizationInput(
-  /** Raw callback URL, query string, `code#state`, or pasted code. */
   input: string,
+  expected: { state?: string; signInUrl?: string },
+): { code: string; state?: string };
+/**
+ * @deprecated Pass `expected` for validation. The shipped one-argument call (v2026.11.6) never
+ * throws: input without a usable code returns `{}` so existing callers keep prompting.
+ */
+export function parseOAuthAuthorizationInput(input: string): OAuthAuthorizationInput;
+export function parseOAuthAuthorizationInput(
+  input: string,
+  expected?: { state?: string; signInUrl?: string },
 ): OAuthAuthorizationInput {
+  if (!expected) {
+    try {
+      return parseOAuthAuthorizationInput(input, {});
+    } catch (error) {
+      if (error instanceof ProviderAuthFailure) {
+        return {};
+      }
+      throw error;
+    }
+  }
   const value = input.trim();
-  if (!value) {
-    return {};
+  const url = URL.parse(value);
+  const signIn = expected.signInUrl ? URL.parse(expected.signInUrl) : null;
+  if (url && signIn && url.origin === signIn.origin && url.pathname === signIn.pathname) {
+    throw new ProviderAuthFailure("paste_sign_in_page");
   }
-
-  try {
-    const url = new URL(value);
-    return {
-      code: url.searchParams.get("code") ?? undefined,
-      state: url.searchParams.get("state") ?? undefined,
-    };
-  } catch {
-    // Plain pasted code or query-string input.
+  let params = url?.searchParams;
+  let code: string | undefined;
+  let state: string | undefined;
+  if (url) {
+    // Redirect addresses carry the answer in the query string.
+  } else if (/(?:^|[?&])(?:code|state|error)=/.test(value)) {
+    params = new URLSearchParams(value);
+  } else {
+    [code, state] = value.split("#", 2);
   }
-
-  if (value.includes("#")) {
-    const [code, state] = value.split("#", 2);
-    return { code, state };
+  code = (params ? params.get("code") : code)?.trim() || undefined;
+  state = (params ? params.get("state") : state)?.trim() || undefined;
+  if (state && expected.state && state !== expected.state) {
+    throw new ProviderAuthFailure("paste_wrong_attempt");
   }
-
-  if (value.includes("code=")) {
-    const params = new URLSearchParams(value);
-    return {
-      code: params.get("code") ?? undefined,
-      state: params.get("state") ?? undefined,
-    };
+  const error = params?.get("error");
+  if (error) {
+    throw providerAuthFailureFromOAuthError(error);
   }
-
-  return { code: value };
+  if (!code) {
+    throw new ProviderAuthFailure("paste_no_code");
+  }
+  return state ? { code, state } : { code };
 }
 
 /** Converts provider `expires_in` seconds into safe positive milliseconds. */
@@ -365,34 +181,11 @@ export function withOAuthLoginAbort<T>(
     return promise;
   }
 
-  return new Promise<T>((resolve, reject) => {
-    const cleanup = () => {
-      signal.removeEventListener("abort", abort);
-    };
-    const abort = () => {
-      cleanup();
-      onAbort?.();
-      reject(createOAuthLoginCancelledError());
-    };
-
-    if (signal.aborted) {
-      abort();
-      return;
-    }
-
-    signal.addEventListener("abort", abort, { once: true });
-    promise.then(
-      (value) => {
-        // The login step won the race; remove abort listeners so long-lived prompts do not leak.
-        cleanup();
-        resolve(value);
-      },
-      (error: unknown) => {
-        // Preserve Error rejections but wrap non-Error provider/prompt values for lint-safe callers.
-        cleanup();
-        reject(toErrorObject(error, "Non-Error rejection"));
-      },
-    );
+  return racePromiseWithAbortSignal(promise, signal, () => {
+    onAbort?.();
+    return createOAuthLoginCancelledError();
+  }).catch((error: unknown) => {
+    throw toErrorObject(error, "Non-Error rejection");
   });
 }
 

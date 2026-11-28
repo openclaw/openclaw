@@ -1,0 +1,24 @@
+title: Archived managed worktree recovery across local clones
+
+scenario:
+  id: managed-worktrees-archive-restore
+  surface: runtime
+  category: agent-runtime.agent-turn-execution
+  coverage:
+    secondary:
+      - agent-runtime.managed-worktrees-session-lifecycle
+  objective: Compare ordinary snapshot restore with selecting a second local clone for the same archived conversation.
+  successCriteria:
+    - Both clones hold the exact dirty snapshot before the Gateway reopens with a different worktree root.
+    - Ordinary restore keeps the original checkout and recovers the saved note and provisioned input without unarchiving the conversation.
+    - The fixture reports whether managed clone selection retained the worktree ID and saved note without requiring a particular unsupported outcome.
+  docsRefs:
+    - docs/concepts/managed-worktrees.md
+  codeRefs:
+    - src/agents/worktrees/snapshot-restore.ts
+    - src/gateway/session-worktree-preparation.ts
+    - test/e2e/qa-lab/runtime/managed-worktrees-archive-restore.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/managed-worktrees-archive-restore.e2e.test.ts
+    summary: Run an isolated, provider-free Gateway against two local clones; no user turn or publication is requested.

@@ -6,14 +6,19 @@ import ai.openclaw.wear.shared.WearRealtimeTalkStatus
 import android.os.Parcel
 import com.google.android.gms.wearable.ChannelClient
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import org.junit.After
@@ -35,9 +40,34 @@ class WearRealtimeChannelRegistryTest {
   private val registry = WearRealtimeChannelRegistry(scope, transport)
 
   @After
-  fun cancelScope() {
+  fun cancelScope() =
+    runBlocking {
+      cancelAndJoinFixtureScope()
+    }
+
+  private suspend fun cancelAndJoinFixtureScope() {
     scope.cancel()
+    // Cancelling a coroutine does not release the fixture's blocking InputStream.
+    transport.closeInputs()
+    scope.coroutineContext.job.join()
   }
+
+  @Test
+  fun `fixture cancellation joins an activated blocking reader`() =
+    runBlocking {
+      val channel = FakeChannel("watch-cleanup", "channel-cleanup", "attempt-cleanup")
+      try {
+        registry.accept(channel, appendAudio = { _, _ -> }, stopTalk = {})
+        transport.awaitOpened(channel)
+        checkNotNull(registry.claim("watch-cleanup", "attempt-cleanup"))
+        withTimeout(1_000L) {
+          while (!transport.hasStartedReading(channel)) yield()
+        }
+        withTimeout(1_000L) { cancelAndJoinFixtureScope() }
+      } finally {
+        transport.finishInput(channel)
+      }
+    }
 
   @Test
   fun `replacement stops displaced owner once before its finalizer`() =
@@ -111,13 +141,17 @@ class WearRealtimeChannelRegistryTest {
                 createCount += 1
                 """{"relaySessionId":"relay-$createCount"}"""
               }
+
               "talk.session.close" -> {
                 closeStarted.complete(Unit)
                 releaseClose.await()
                 closeFinished.complete(Unit)
                 """{"ok":true}"""
               }
-              else -> """{"ok":true}"""
+
+              else -> {
+                """{"ok":true}"""
+              }
             }
           },
           sendGatewayFrame = { _, _, _, _ -> },
@@ -456,51 +490,82 @@ class WearRealtimeChannelRegistryTest {
       }
     }
 
+  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun `promotion reserved before discovery timeout commits after bounded cleanup`() =
     runBlocking {
+      val handoffDispatcher = UnconfinedTestDispatcher()
       val registry =
         WearRealtimeChannelRegistry(
-          scope = scope,
+          // Keep expiry and handoff timers virtual; channel readers still run on IO.
+          scope = CoroutineScope(scope.coroutineContext + handoffDispatcher),
           transport = transport,
           connectionReadyTimeoutMillis = 200L,
           pendingConnectionTimeoutMillis = 1_000L,
-          retireCallbackTimeoutMillis = 100L,
+          // Cleanup, not channel publication, crosses the discovery deadline.
+          retireCallbackTimeoutMillis = 300L,
         )
       val first = FakeChannel("watch-a", "channel-a", "attempt-a")
       val replacement = FakeChannel("watch-a", "channel-b", "attempt-b")
-      val releaseReplacement = transport.holdOpen(replacement)
+      val stopStarted = CompletableDeferred<Unit>()
+      val releaseStop = CompletableDeferred<Unit>()
+      val stopFinished = CompletableDeferred<Unit>()
       val stopTalk: suspend (WearRealtimeAttemptOwner) -> Unit = { owner ->
-        if (owner.attemptId == "attempt-a") awaitCancellation()
+        if (owner.attemptId == "attempt-a") {
+          stopStarted.complete(Unit)
+          try {
+            releaseStop.await()
+          } finally {
+            stopFinished.complete(Unit)
+          }
+        }
       }
 
       try {
         registry.accept(first, appendAudio = { _, _ -> }, stopTalk = stopTalk)
         transport.awaitOpened(first)
-        checkNotNull(registry.claim("watch-a", "attempt-a"))
+        val firstOwner = checkNotNull(registry.claim("watch-a", "attempt-a")).owner
         registry.accept(replacement, appendAudio = { _, _ -> }, stopTalk = stopTalk)
-        val replacementClaim = async { registry.claim("watch-a", "attempt-b") }
-        delay(150L)
-        releaseReplacement.complete(Unit)
         transport.awaitOpened(replacement)
+        val replacementClaim = async(handoffDispatcher) { registry.claim("watch-a", "attempt-b") }
+        // Transport open precedes publication; drive polling only until reservation owns the handoff.
+        withTimeout(1_000L) {
+          while (registry.isCurrent(firstOwner)) {
+            handoffDispatcher.scheduler.advanceTimeBy(1L)
+            handoffDispatcher.scheduler.runCurrent()
+            yield()
+          }
+        }
+        withTimeout(1_000L) { stopStarted.await() }
+        // Discovery uses monotonic wall time; let its deadline expire before virtual cleanup.
+        delay(250L)
+        assertFalse(replacementClaim.isCompleted)
+        handoffDispatcher.scheduler.advanceTimeBy(300L)
+        handoffDispatcher.scheduler.runCurrent()
 
         val replacementOwner =
           withTimeout(1_000L) {
             checkNotNull(replacementClaim.await()).owner
           }
         assertTrue(registry.isCurrent(replacementOwner))
+        assertFalse(stopFinished.isCompleted)
         registry.close(replacementOwner)
       } finally {
-        releaseReplacement.complete(Unit)
+        releaseStop.complete(Unit)
+        if (stopStarted.isCompleted) {
+          withTimeout(1_000L) { stopFinished.await() }
+        }
       }
     }
 
+  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun `claim keeps polling after an unclaimed channel expires`() =
     runBlocking {
+      val expiryDispatcher = UnconfinedTestDispatcher()
       val registry =
         WearRealtimeChannelRegistry(
-          scope = scope,
+          scope = CoroutineScope(scope.coroutineContext + expiryDispatcher),
           transport = transport,
           connectionReadyTimeoutMillis = 1_000L,
           pendingConnectionTimeoutMillis = 100L,
@@ -511,10 +576,16 @@ class WearRealtimeChannelRegistryTest {
       run {
         registry.accept(expired, appendAudio = { _, _ -> }, stopTalk = {})
         transport.awaitOpened(expired)
-        withTimeout(1_000L) { transport.awaitClosed(expired) }
+        withTimeout(1_000L) {
+          while (transport.closeCount(expired) == 0) {
+            expiryDispatcher.scheduler.advanceUntilIdle()
+            yield()
+          }
+          transport.awaitClosed(expired)
+        }
 
-        val claim = async { registry.claim("watch-a", "attempt-a") }
-        delay(100L)
+        // Keep the replacement alive while the real-time claim polls for publication.
+        val claim = async(start = CoroutineStart.UNDISPATCHED) { registry.claim("watch-a", "attempt-a") }
         assertFalse(claim.isCompleted)
         registry.accept(replacement, appendAudio = { _, _ -> }, stopTalk = {})
         transport.awaitOpened(replacement)
@@ -686,12 +757,14 @@ class WearRealtimeChannelRegistryTest {
       }
     }
 
+  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun `cancelled promotion retires its reserved channel before retry`() =
     runBlocking {
       val registry =
         WearRealtimeChannelRegistry(
-          scope = scope,
+          // Keep pending expiry on virtual time; this test drives cancellation explicitly.
+          scope = CoroutineScope(scope.coroutineContext + UnconfinedTestDispatcher()),
           transport = transport,
           connectionReadyTimeoutMillis = 500L,
           pendingConnectionTimeoutMillis = 1_000L,
@@ -936,6 +1009,10 @@ private class FakeChannelTransport : WearRealtimeChannelTransport {
   fun wasOpened(channel: ChannelClient.Channel): Boolean = openedResources.containsKey(channel)
 
   fun hasStartedReading(channel: ChannelClient.Channel): Boolean = (openedResources[channel]?.input as? ClosingInputStream)?.hasStartedReading() == true
+
+  fun closeInputs() {
+    openedResources.values.forEach { it.input.close() }
+  }
 }
 
 private class ClosingInputStream : InputStream() {

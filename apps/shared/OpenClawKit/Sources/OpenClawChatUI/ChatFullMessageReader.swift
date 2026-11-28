@@ -1,11 +1,28 @@
 import SwiftUI
 
 struct ChatFullMessageReaderRequest: Identifiable, Sendable {
-    let sessionKey: String
+    let target: OpenClawChatSessionTarget
     let messageID: String
+    private let transport: any OpenClawChatTransport
+
+    @MainActor
+    init(viewModel: OpenClawChatViewModel, messageID: String) {
+        self.target = viewModel.currentSessionTarget
+        self.messageID = messageID
+        let transport = viewModel.transport
+        self.transport = if viewModel.explicitSessionAgentID == nil, let agentID = self.target.agentID {
+            transport.scoped(toAgentID: agentID) ?? transport
+        } else {
+            transport
+        }
+    }
 
     var id: String {
-        "\(self.sessionKey)\u{0}\(self.messageID)"
+        "\(self.target.agentID ?? "")\u{0}\(self.target.sessionKey)\u{0}\(self.messageID)"
+    }
+
+    func load() async throws -> OpenClawChatMessage? {
+        try await self.transport.requestFullMessage(sessionKey: self.target.sessionKey, messageID: self.messageID)
     }
 }
 
@@ -19,7 +36,6 @@ struct ChatFullMessageReader: View {
 
     let request: ChatFullMessageReaderRequest
     let markdownVariant: ChatMarkdownVariant
-    let load: @MainActor @Sendable () async throws -> OpenClawChatMessage?
 
     @Environment(\.dismiss) private var dismiss
     @State private var phase: Phase = .loading
@@ -42,6 +58,7 @@ struct ChatFullMessageReader: View {
                             context: .assistant,
                             variant: self.markdownVariant,
                             textColor: OpenClawChatTheme.assistantText)
+                            .chatMarkdownFileLinks()
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(20)
@@ -56,13 +73,19 @@ struct ChatFullMessageReader: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle("Full Message")
             .toolbar {
+                #if os(iOS)
+                OpenClawSheetCloseItem { self.dismiss() }
+                #else
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Close") { self.dismiss() }
                 }
+                #endif
             }
         }
-        #if os(macOS)
-        .frame(minWidth: 560, minHeight: 420)
+        #if os(iOS)
+        .openClawSheetHeaderEdge()
+        #elseif os(macOS)
+            .frame(minWidth: 560, minHeight: 420)
         #endif
         .task(id: self.request.id) {
             await self.loadMessage()
@@ -72,7 +95,7 @@ struct ChatFullMessageReader: View {
     private func loadMessage() async {
         self.phase = .loading
         do {
-            guard let message = try await self.load() else {
+            guard let message = try await self.request.load() else {
                 self.phase = .failed(String(localized: "The full message is no longer available."))
                 return
             }

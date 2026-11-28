@@ -1,0 +1,69 @@
+import path from "node:path";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.types.js";
+import { rebasePluginMetadataSnapshotManifestRegistry } from "./plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+import { createIndexFixture } from "./test-helpers/installed-plugin-index-fixture.js";
+
+export function createPluginManifestRecordFixture(
+  overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
+): PluginManifestRecord {
+  const rootDir = overrides.rootDir ?? path.resolve("/tmp", overrides.id);
+  return {
+    channels: [],
+    cliBackends: [],
+    hooks: [],
+    manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+    origin: "bundled",
+    providers: [],
+    rootDir,
+    skills: [],
+    source: path.join(rootDir, "index.js"),
+    ...overrides,
+  };
+}
+
+/** Keeps fixture indexes and manifest-derived views on the same complete contract. */
+export function createPluginMetadataSnapshotFixture(
+  registry: {
+    plugins: Array<Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">>;
+    diagnostics?: PluginManifestRegistry["diagnostics"];
+  } = { plugins: [] },
+  policyHash = "test-policy",
+): PluginMetadataSnapshot {
+  const plugins = registry.plugins.map(createPluginManifestRecordFixture);
+  const manifestRegistry = { plugins, diagnostics: registry.diagnostics ?? [] };
+  const index: PluginMetadataSnapshot["index"] = createIndexFixture({
+    policyHash,
+    generatedAtMs: 0,
+    plugins: plugins.map((plugin) => ({
+      pluginId: plugin.id,
+      contextEngineIds: plugin.contextEngineIds,
+      origin: plugin.origin,
+      manifestPath: plugin.manifestPath,
+      manifestHash: "test-manifest",
+      rootDir: plugin.rootDir,
+      source: plugin.source,
+      enabled: true,
+      enabledByDefault: plugin.enabledByDefault ?? true,
+      startup: { sidecar: false, memory: false, agentHarnesses: [] },
+      compat: [],
+    })),
+    diagnostics: manifestRegistry.diagnostics,
+  });
+  const snapshot: Parameters<typeof rebasePluginMetadataSnapshotManifestRegistry>[0] = {
+    policyHash,
+    index,
+    registryIndex: index,
+    registryDiagnostics: [],
+    normalizePluginId: (pluginId) => pluginId.trim().toLowerCase(),
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: plugins.length,
+      manifestPluginCount: plugins.length,
+    },
+  };
+  return rebasePluginMetadataSnapshotManifestRegistry(snapshot, manifestRegistry);
+}

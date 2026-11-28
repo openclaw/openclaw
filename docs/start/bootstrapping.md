@@ -18,20 +18,38 @@ On the first run against a brand-new workspace (default `~/.openclaw/workspace`)
 OpenClaw:
 
 - Seeds `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`. Environment-specific tool notes belong in the `## Tools` section of `AGENTS.md`.
-- Has the agent follow a capped three-beat birth sequence: it asks what you want
-  to call it, shares one short soul/vibe line, and asks whether you want the
+- Has the agent follow a short birth sequence: it asks what you want
+  to call it, shares one short soul/vibe line, generates four avatar options
+  when `image_generate` is available, asks whether you want the
   minimal recommended plugin set or maximum convenience.
 - Persists the agreed identity twice: into `IDENTITY.md` and `SOUL.md` (what the
   agent reads about itself) and via `openclaw agents set-identity` (what channels
   and the UI display).
+- Presents four generated avatars in a numbered 2×2 choice sheet for you to
+  choose or skip, using the configured image-generation model or an available
+  provider such as OpenAI. The selected portrait is cropped from the sheet,
+  saved under the workspace's `avatars/` directory, and synced into identity.
+  Identity files are saved after this choice so an
+  asynchronous generation does not end hatching early. If generation is
+  unavailable or fails, hatching continues with the emoji.
 - Reads app recommendations already stored during onboarding without rescanning.
   Official plugins use `openclaw plugins install <id>`; third-party ClawHub
   skills remain explicit opt-ins. After the choice is handled, the agent
   acknowledges the stored offer so it never asks again.
 - Deletes `BOOTSTRAP.md` once the workspace looks configured, so the ritual only runs once.
 
-A workspace counts as configured once `SOUL.md`, `IDENTITY.md`, or `USER.md` has
-diverged from its starter template, or a `memory/` folder exists.
+With the stock `BOOTSTRAP.md`, a workspace counts as configured once `SOUL.md`,
+`IDENTITY.md`, or `USER.md` has diverged from its starter template, or a `memory/`
+folder exists. Custom `BOOTSTRAP.md` instructions stay pending until the file is
+removed after setup completes; preconfigured profiles and skills do not complete
+that onboarding.
+When OpenClaw has recorded a file as generated, an unchanged copy of that starter
+file keeps onboarding pending even if an update changes the bundled template.
+
+Once setup is recorded as complete, the main conversation's system prompt
+replaces the bootstrap instructions with a short note that setup finished and
+that the missing `BOOTSTRAP.md` is expected. The note reports OpenClaw's recorded
+state; it does not verify each bootstrap step.
 
 <Note>
 `BOOTSTRAP.md` covers the full identity conversation. See its contents at

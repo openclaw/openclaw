@@ -1,17 +1,19 @@
-import type { ExecHost } from "../infra/exec-approvals.js";
-import { requireValidExecTarget } from "../infra/exec-approvals.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
-import { renderExecOutputText } from "./bash-tools.exec-output.js";
-import type { ExecToolArgs } from "./bash-tools.exec-request-preparation.js";
-import { type ExecProcessOutcome, resolveExecTarget } from "./bash-tools.exec-runtime.js";
-import type {
-  ExecToolApprovalReview,
-  ExecToolDefaults,
-  ExecToolDetails,
-} from "./bash-tools.exec-types.js";
+import { listActiveProcessSessionReferences } from "./bash-process-references.js";
+import {
+  buildBackgroundExecFollowUp,
+  type ExecDroppedOutputFacts,
+  type ExecProcessOutcome,
+  renderExecDroppedOutputNote,
+  renderExecOutputText,
+} from "./bash-tools.exec-output.js";
+import type { ExecToolApprovalReview, ExecToolDetails } from "./bash-tools.exec-result.types.js";
+import type { ExecProcessHandle } from "./bash-tools.exec-runtime.js";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { failedTextResult, textResult } from "./tools/common.js";
+import { textResult } from "./tools/tool-results.js";
 
 export function attachExecApprovalReview(
   result: AgentToolResult<ExecToolDetails>,
@@ -24,16 +26,73 @@ export function attachExecApprovalReview(
   return result;
 }
 
+/** Report process ownership only when the foreground wait actually yielded. */
+export function buildExecRunningResult(
+  run: Pick<ExecProcessHandle, "session" | "startedAt">,
+  yieldMs: number | undefined,
+  warnings: readonly string[],
+): AgentToolResult<ExecToolDetails> {
+  const { session, startedAt } = run;
+  // A waiter started during this turn is absent from the turn-start snapshot.
+  const otherRunning = listActiveProcessSessionReferences({
+    scopeKey: session.scopeKey,
+    exclude: session,
+  }).map((other) => `${other.sessionId} (${other.name})`);
+  const followUp = buildBackgroundExecFollowUp(session, yieldMs, otherRunning);
+  const deadlineAtMs = session.processActivity?.deadlineAtMs;
+  const deadline =
+    deadlineAtMs === undefined
+      ? ""
+      : `, times out in ${formatDurationCompact(Math.max(1_000, deadlineAtMs - Date.now()))}`;
+  const warningText = warnings.join("\n");
+  return textResult(
+    `${warnings.length ? warningText + "\n\n" : ""}Command still running (session ${session.id}, pid ${session.pid ?? "n/a"})${deadline}. ${followUp}`,
+    {
+      status: "running",
+      sessionId: session.id,
+      pid: session.pid ?? undefined,
+      startedAt,
+      ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }),
+      cwd: session.cwd,
+      tail: session.tail,
+      ...(warnings.length ? { warningText } : {}),
+      followUp,
+    },
+  );
+}
+
 export function buildExecForegroundResult(params: {
   outcome: ExecProcessOutcome;
   cwd?: string;
   warningText?: string;
-  aggregateOutputDropped?: boolean;
+  session?: ExecDroppedOutputFacts & { readonly aggregated?: string };
 }): AgentToolResult<ExecToolDetails> {
-  const warningText = params.warningText?.trim() ? `${params.warningText}\n\n` : "";
-  const retentionCapNote = params.aggregateOutputDropped
-    ? "\n\n[earlier output was discarded at the retention cap and cannot be recovered]"
-    : "";
+  const warning = params.warningText?.trim();
+  const warningText = warning ? `${params.warningText}\n\n` : "";
+  const retentionCapNote = params.session ? renderExecDroppedOutputNote(params.session) : "";
+  const file = params.session?.outputFile;
+  const outcome = params.outcome;
+  const details: ExecToolDetails = {
+    status: outcome.status,
+    exitCode: outcome.status === "failed" ? (outcome.exitCode ?? null) : outcome.exitCode,
+    exitSignal: outcome.exitSignal,
+    ...(outcome.status === "failed" ? { failureKind: outcome.failureKind } : {}),
+    exitReason: outcome.exitReason,
+    durationMs: outcome.durationMs,
+    aggregated:
+      outcome.status === "completed" && outcome.exitCode === 0
+        ? (params.session?.aggregated ?? outcome.aggregated)
+        : outcome.aggregated,
+    ...(outcome.status === "failed" ? { timedOut: outcome.timedOut } : {}),
+    noOutputTimedOut: outcome.noOutputTimedOut,
+    cwd: params.cwd,
+    ...(warning ? { warningText: warning } : {}),
+    // Record-time truncation keeps this path visible when it cuts the result; a file cut at
+    // its limit stays marked partial through history elision.
+    ...(file
+      ? { spill: { path: file.path, ...(file.limitReached ? { truncated: true } : {}) } }
+      : {}),
+  };
   if (params.outcome.status === "failed") {
     const linuxOomGuidance =
       params.outcome.failureKind === "signal" &&
@@ -44,31 +103,12 @@ export function buildExecForegroundResult(params: {
           "SIGKILL alone does not identify whether the Linux OOM killer, an operator, or another process sent it. " +
           "Check cgroup memory events or kernel logs. If they show memory pressure, narrow the command or adjust memory, concurrency, or resource limits."
         : "";
-    const outputText = `${warningText}${params.outcome.reason}${linuxOomGuidance}${retentionCapNote}`;
-    return failedTextResult(outputText, {
-      status: "failed",
-      exitCode: params.outcome.exitCode ?? null,
-      exitSignal: params.outcome.exitSignal,
-      failureKind: params.outcome.failureKind,
-      exitReason: params.outcome.exitReason,
-      durationMs: params.outcome.durationMs,
-      aggregated: params.outcome.aggregated,
-      timedOut: params.outcome.timedOut,
-      noOutputTimedOut: params.outcome.noOutputTimedOut,
-      cwd: params.cwd,
-    });
+    const outputText = `${retentionCapNote}${warningText}${params.outcome.reason}${linuxOomGuidance}`;
+    const message = `${retentionCapNote}${warningText}${params.outcome.message}${linuxOomGuidance}`;
+    return textResult(outputText, { ...details, status: "failed", message });
   }
-  const outputText = `${warningText}${renderExecOutputText(params.outcome.aggregated)}${retentionCapNote}`;
-  return textResult(outputText, {
-    status: "completed",
-    exitCode: params.outcome.exitCode,
-    exitSignal: params.outcome.exitSignal,
-    exitReason: params.outcome.exitReason,
-    durationMs: params.outcome.durationMs,
-    aggregated: params.outcome.aggregated,
-    noOutputTimedOut: params.outcome.noOutputTimedOut,
-    cwd: params.cwd,
-  });
+  const outputText = `${retentionCapNote}${warningText}${renderExecOutputText(params.outcome.aggregated)}`;
+  return textResult(outputText, details);
 }
 
 export function resolveExecReviewerDefaults(params: {
@@ -82,35 +122,4 @@ export function resolveExecReviewerDefaults(params: {
   const agentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
   const agentExec = agentId && cfg ? resolveAgentConfig(cfg, agentId)?.tools?.exec : undefined;
   return agentExec?.reviewer ?? cfg?.tools?.exec?.reviewer;
-}
-
-export function createExecHostResolver(defaults?: ExecToolDefaults) {
-  return (params: ExecToolArgs): ExecHost => {
-    const elevatedDefaults = defaults?.elevated;
-    const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
-    const elevatedDefaultMode =
-      elevatedDefaults?.defaultLevel === "full"
-        ? "full"
-        : elevatedDefaults?.defaultLevel === "ask"
-          ? "ask"
-          : elevatedDefaults?.defaultLevel === "on"
-            ? "ask"
-            : "off";
-    const effectiveDefaultMode = elevatedAllowed ? elevatedDefaultMode : "off";
-    const elevatedMode =
-      typeof params.elevated === "boolean"
-        ? params.elevated
-          ? elevatedDefaultMode === "full"
-            ? "full"
-            : "ask"
-          : "off"
-        : effectiveDefaultMode;
-    const requestedTarget = requireValidExecTarget(params.host);
-    return resolveExecTarget({
-      configuredTarget: defaults?.host,
-      requestedTarget,
-      elevatedRequested: elevatedMode !== "off",
-      sandboxAvailable: Boolean(defaults?.sandbox),
-    }).effectiveHost;
-  };
 }

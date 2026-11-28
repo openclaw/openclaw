@@ -1,8 +1,10 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
-// Owns file-backed baseline loading, comparison, and deterministic failure/shrink guidance.
+// Owns file-backed baselines and the per-file count ratchet lifecycle, including
+// base allowances, verified renames, pruning, and deterministic failure/shrink guidance.
 // The chained-assertion ledger stays in type-assertion-guard-scope.mjs: it is live scope policy
 // loaded by plain-JS oxlint, not a baseline, and folding it here would couple oxlint to git/fs.
 
@@ -11,18 +13,62 @@ export type RatchetCountDelta = { allowed: number; current: number; entry: strin
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
 const compareEntries = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 
+export function parseRatchetArgs(argv: string[]) {
+  const args: { base?: string; mergeBase: boolean; prune: boolean; staged: boolean } = {
+    mergeBase: true,
+    prune: false,
+    staged: false,
+  };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--prune") {
+      args.prune = true;
+      continue;
+    }
+    if (arg === "--staged") {
+      args.staged = true;
+      continue;
+    }
+    if (arg === "--no-merge-base") {
+      args.mergeBase = false;
+      continue;
+    }
+    if (arg === "--base" && argv[index + 1]) {
+      args.base = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    throw new Error("Unknown or incomplete argument: " + arg);
+  }
+  if (!args.mergeBase && !args.base) {
+    throw new Error("--no-merge-base requires --base <prepared-ref>");
+  }
+  return args;
+}
+
 function readGitText(root: string, args: string[]) {
-  return execFileSync("git", args, {
-    cwd: root,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ratchet-git-"));
+  const output = path.join(temporary, "stdout");
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(output, "wx", 0o600);
+    // Baseline blobs can exceed execFileSync's pipe limit. Git writes directly
+    // to a file; only a successful command may supply the complete snapshot.
+    execFileSync("git", args, { cwd: root, stdio: ["ignore", descriptor, "ignore"] });
+    return fs.readFileSync(output, "utf8");
+  } finally {
+    if (descriptor !== undefined) {
+      fs.closeSync(descriptor);
+    }
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
 }
 
 function resolvesCommit(root: string, ref: string) {
   try {
     execFileSync("git", ["rev-parse", "--verify", ref + "^{commit}"], {
       cwd: root,
+      env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
       stdio: "ignore",
     });
     return true;
@@ -31,12 +77,26 @@ function resolvesCommit(root: string, ref: string) {
   }
 }
 
-export function resolveRatchetBase(root: string, options: { base?: string; staged: boolean }) {
+export function resolveRatchetBase(
+  root: string,
+  options: { base?: string; staged: boolean; mergeBase?: boolean },
+) {
+  if (options.mergeBase === false && !options.base) {
+    throw new Error("--no-merge-base requires --base <prepared-ref>");
+  }
   const resolved =
     options.base ??
     (options.staged ? ["HEAD"] : ["origin/main", "HEAD"]).find((ref) => resolvesCommit(root, ref));
-  if (!resolved || options.staged) {
-    return resolved ?? null;
+  if (!resolved) {
+    return null;
+  }
+  if (!resolvesCommit(root, resolved)) {
+    throw new Error(`Could not resolve ratchet base ref: ${resolved}`);
+  }
+  // CI owns an immutable comparison commit even when depth-one tips cannot
+  // traverse to it. Only an explicit prepared-base invocation skips ancestry.
+  if (options.staged || options.mergeBase === false) {
+    return resolved;
   }
 
   // Branches own their grandfathered debt from the fork. Comparing against a
@@ -44,7 +104,9 @@ export function resolveRatchetBase(root: string, options: { base?: string; stage
   try {
     return readGitText(root, ["merge-base", "HEAD", resolved]).trim();
   } catch {
-    return resolved;
+    throw new Error(
+      `Could not resolve ratchet merge base for ${resolved}; provide reachable history or --base <prepared-ref> --no-merge-base.`,
+    );
   }
 }
 
@@ -72,13 +134,13 @@ export function loadRatchetReference<T>(
     : null;
 }
 
-export function loadRatchetSources(root: string, filePaths: string[]) {
+export function loadRatchetSources(root: string, filePaths: string[], ref = "") {
   if (filePaths.length === 0) {
     return new Map<string, string>();
   }
   const output = execFileSync("git", ["cat-file", "--batch", "-z"], {
     cwd: root,
-    input: filePaths.map((filePath) => ":" + filePath).join("\0") + "\0",
+    input: filePaths.map((filePath) => ref + ":" + filePath).join("\0") + "\0",
     maxBuffer: GIT_MAX_BUFFER,
   });
   const sources = new Map<string, string>();
@@ -89,9 +151,12 @@ export function loadRatchetSources(root: string, filePaths: string[]) {
     if (headerEnd < 0) {
       throw new Error("Invalid git cat-file response for " + filePath);
     }
-    const size = Number(output.subarray(offset, headerEnd).toString("utf8").split(" ")[2]);
+    // Missing responses echo the requested path, whose spaces/newlines can spoof a size.
+    // Only a complete object header may frame source bytes.
+    const header = output.subarray(offset, headerEnd).toString("utf8");
+    const size = Number(/^[0-9a-f]+ (?:blob|tree|commit|tag) (\d+)$/u.exec(header)?.[1]);
     if (!Number.isSafeInteger(size)) {
-      throw new Error("Could not read staged source " + filePath);
+      throw new Error("Could not read " + (ref || "staged") + " source " + filePath);
     }
     const sourceStart = headerEnd + 1;
     const sourceEnd = sourceStart + size;
@@ -211,17 +276,13 @@ function collectRatchetDeltas(
     .toSorted((left, right) => compareEntries(left.entry, right.entry));
 }
 
-export function formatRatchetMessage(title: string, entries: readonly string[]) {
-  return [title, ...entries.map((entry) => "  " + entry)].join("\n");
-}
-
 export function reportRatchetFailures(
   groups: readonly { entries: readonly string[]; title: string }[],
   guidance?: string,
 ) {
   const active = groups.filter((group) => group.entries.length > 0);
   for (const group of active) {
-    console.error(formatRatchetMessage(group.title, group.entries));
+    console.error([group.title, ...group.entries.map((entry) => "  " + entry)].join("\n"));
   }
   if (active.length > 0 && guidance) {
     console.error(guidance);
@@ -229,18 +290,195 @@ export function reportRatchetFailures(
   return active.length > 0;
 }
 
-export function reportRatchetSuccess(message: string) {
-  console.log(message);
+type PerFileCountRatchetOptions = {
+  baselinePath: string;
+  baselineHeader: string;
+  renameSourceRoots: string[];
+  // Reviewed owner cutovers only; additions must be funded by a smaller total baseline.
+  approvedTransfers?: ReadonlyMap<string, number>;
+  collectCurrent: (options: { staged: boolean }) => ReadonlyMap<string, number>;
+  // Throws when the file is missing at ref.
+  countAtRef: (ref: string, filePath: string) => number;
+  messages: {
+    increaseTitle: string;
+    expansionTitle: string;
+    guidance: string;
+    countNoun: string;
+    successTitle: string;
+  };
+};
+
+function formatBaseline(counts: ReadonlyMap<string, number>, header: string) {
+  const entries = [...counts]
+    .filter(([, count]) => count > 0)
+    .toSorted(([left], [right]) => compareEntries(left, right))
+    .map(([filePath, count]) => `${filePath}\t${count}`);
+  return header + entries.join("\n") + (entries.length > 0 ? "\n" : "");
 }
 
-export function enforceRatchetScalar(
-  current: number,
-  allowed: number,
-  messages: { decreased?: string; increased?: string },
+function baselineWithVerifiedRenames(
+  baseline: ReadonlyMap<string, number>,
+  baseBaseline: ReadonlyMap<string, number>,
+  renames: readonly { from: string; to: string }[],
 ) {
-  const failure =
-    current > allowed ? messages.increased : current < allowed ? messages.decreased : undefined;
-  if (failure) {
-    throw new Error(failure);
+  const allowed = new Map(baseBaseline);
+  for (const { from, to } of renames) {
+    const oldCount = baseBaseline.get(from);
+    const newCount = baseline.get(to);
+    if (
+      oldCount !== undefined &&
+      newCount !== undefined &&
+      newCount <= oldCount &&
+      !baseline.has(from)
+    ) {
+      allowed.delete(from);
+      allowed.set(to, oldCount);
+    }
+  }
+  return allowed;
+}
+
+function allowanceWithExistingBaseCounts(
+  baseRef: string,
+  proposed: ReadonlyMap<string, number>,
+  allowed: ReadonlyMap<string, number>,
+  countAtRef: PerFileCountRatchetOptions["countAtRef"],
+) {
+  const effective = new Map(allowed);
+  for (const [filePath, count] of proposed) {
+    const allowedCount = effective.get(filePath) ?? 0;
+    if (count <= allowedCount) {
+      continue;
+    }
+    try {
+      effective.set(filePath, Math.max(allowedCount, countAtRef(baseRef, filePath)));
+    } catch {
+      // Missing base paths are branch additions and receive no allowance.
+    }
+  }
+  return effective;
+}
+
+function formatDeltas(entries: RatchetCountDelta[], comparison: ">" | "<") {
+  return entries.map((entry) => `${entry.entry}: ${entry.current} ${comparison} ${entry.allowed}`);
+}
+
+function totalCount(counts: ReadonlyMap<string, number>) {
+  return [...counts.values()].reduce((total, count) => total + count, 0);
+}
+
+export function runPerFileCountRatchet(
+  root: string,
+  argv: string[],
+  options: PerFileCountRatchetOptions,
+) {
+  const { baselinePath, messages } = options;
+  const parseBaseline = (source: string) => parseRatchetCounts(source, baselinePath);
+  const writeBaseline = (counts: ReadonlyMap<string, number>) =>
+    fs.writeFileSync(path.join(root, baselinePath), formatBaseline(counts, options.baselineHeader));
+  try {
+    const args = parseRatchetArgs(argv);
+    if (args.staged && args.prune) {
+      throw new Error("--prune cannot be combined with --staged");
+    }
+
+    const baseRef = resolveRatchetBase(root, args);
+    const baseBaseline = baseRef
+      ? loadRatchetReference(root, baseRef, baselinePath, parseBaseline)
+      : null;
+    const current = options.collectCurrent({ staged: args.staged });
+
+    if (args.prune && !args.staged && baseBaseline === null) {
+      writeBaseline(current);
+      console.log(
+        `Initialized ${baselinePath}: ${current.size} files, ${totalCount(current)} ${messages.countNoun}.`,
+      );
+      return 0;
+    }
+    const baseline = loadRatchetSnapshot(root, baselinePath, args.staged, parseBaseline);
+    const renames =
+      baseRef && baseBaseline
+        ? listRatchetRenames(root, baseRef, args.staged, options.renameSourceRoots)
+        : [];
+    const allowedBaseline =
+      baseRef && baseBaseline
+        ? baselineWithVerifiedRenames(baseline, baseBaseline, renames)
+        : baseBaseline;
+    if (options.approvedTransfers && baseRef && baseBaseline && allowedBaseline) {
+      const renamedPaths = new Map(renames.map(({ from, to }) => [from, to]));
+      const removed = [...baseBaseline].reduce((sum, [file, count]) => {
+        // A rename preserves the pins still present at its destination.
+        const currentPath = renamedPaths.get(file) ?? file;
+        return count > (baseline.get(currentPath) ?? 0)
+          ? sum + options.countAtRef(baseRef, file) - (current.get(currentPath) ?? 0)
+          : sum;
+      }, 0);
+      for (const [filePath, count] of options.approvedTransfers ?? []) {
+        const transferred = current.get(filePath) ?? 0;
+        if (removed > transferred && totalCount(baseline) < totalCount(baseBaseline)) {
+          allowedBaseline.set(filePath, Math.max(allowedBaseline.get(filePath) ?? 0, count));
+        }
+      }
+    }
+    const currentAllowance =
+      baseRef && baseBaseline
+        ? allowanceWithExistingBaseCounts(baseRef, current, baseline, options.countAtRef)
+        : baseline;
+    const expansionAllowance =
+      baseRef && allowedBaseline
+        ? allowanceWithExistingBaseCounts(baseRef, baseline, allowedBaseline, options.countAtRef)
+        : allowedBaseline;
+    const increases = compareRatchetCounts(current, currentAllowance).increased;
+    const expanded = expansionAllowance
+      ? compareRatchetCounts(baseline, expansionAllowance).increased
+      : [];
+
+    if (
+      reportRatchetFailures(
+        [
+          {
+            entries: formatDeltas(increases, ">"),
+            title: messages.increaseTitle,
+          },
+          {
+            entries: formatDeltas(expanded, ">"),
+            title: messages.expansionTitle,
+          },
+        ],
+        messages.guidance,
+      )
+    ) {
+      return 1;
+    }
+
+    if (args.prune) {
+      const oldFiles = baseline.size;
+      const oldCount = totalCount(baseline);
+      writeBaseline(current);
+      console.log(
+        `Pruned ${baselinePath}: ${oldFiles} -> ${current.size} files; ${oldCount} -> ${totalCount(current)} ${messages.countNoun}.`,
+      );
+      return 0;
+    }
+
+    const stale = compareRatchetCounts(current, baseline).decreased;
+    if (
+      reportRatchetFailures([
+        {
+          entries: formatDeltas(stale, "<"),
+          title: `Shrink ${baselinePath} entries (or run with --prune):`,
+        },
+      ])
+    ) {
+      return 1;
+    }
+
+    console.log(
+      `${messages.successTitle}: ${current.size} files, ${totalCount(current)} grandfathered ${messages.countNoun}.`,
+    );
+    return 0;
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
   }
 }

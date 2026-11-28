@@ -1,112 +1,392 @@
-import type {
-  SessionCatalogHost,
-  SessionCatalogSession,
+import { isDeepStrictEqual } from "node:util";
+import {
+  normalizeSessionColorValue,
+  type SessionCatalogHost,
+  type SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { SessionEntrySummary } from "../../config/sessions/session-accessor.js";
 import {
-  listSessionEntriesReadOnly,
-  type SessionEntrySummary,
-} from "../../config/sessions/session-accessor.js";
+  resolveSessionCreatorActor,
+  sessionCreatorProfileId,
+} from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SessionCatalogEntrySnapshot } from "../../plugins/session-catalog.js";
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import type {
+  SessionCatalogEntrySnapshot,
+  SessionCatalogProvider,
+} from "../../plugins/session-catalog.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { getPreparedAgentDeletionDiscovery } from "../../state/agent-deletion-journal-status.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { projectSessionActor } from "../session-identity-projection.js";
+import type { SessionEntryPair } from "../session-list-order.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
-import { projectSessionActor } from "../session-utils-row.js";
+import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
+import { prepareSessionRowSelection } from "../session-utils-list.js";
+
+export type SessionCatalogInstances = Map<
+  string,
+  Pick<SessionEntry, "sessionId" | "pluginOwnerId" | "createdActor">
+>;
 
 type SessionCatalogRequestEntrySnapshot = {
   sessionEntries: SessionCatalogEntrySnapshot;
-  projectHostCreatedActors: (host: SessionCatalogHost) => SessionCatalogHost;
+  freeze: () => void;
+  captureHostInstances: (host: SessionCatalogHost, instances: SessionCatalogInstances) => void;
+  entryForSession: (sessionKey: string) => SessionEntry | undefined;
+  isMember: (sessionKey: string, profileId: string) => boolean;
+  projectHostSessions: (
+    host: SessionCatalogHost,
+    instances: SessionCatalogInstances,
+    audience?: SessionCatalogProvider["audience"],
+  ) => SessionCatalogHost;
 };
+
+type CapturedAgentEntries = {
+  pairs: readonly SessionEntryPair[];
+  summaries?: readonly SessionEntrySummary[];
+  catalog?: CatalogEntries;
+  index?: ReadonlyMap<string, SessionEntry>;
+};
+
+type CatalogEntries = ReturnType<NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]>>;
+
+type PlanningEntries = {
+  revision: object;
+  entriesByAgentId: Map<string, CapturedAgentEntries>;
+  catalogEntries: CatalogEntries;
+};
+
+// Retire on accepted entry/roster changes, not unrelated runtime invalidations.
+const planningEntriesByProjection = new WeakMap<
+  SessionRowProjection,
+  {
+    configs: WeakMap<OpenClawConfig, Map<string, PlanningEntries>>;
+    agents: Map<string, CapturedAgentEntries>;
+  }
+>();
+
+// Keep the projection-lifetime listener outside the request's snapshot closure.
+function planningEntriesOwner(projection: SessionRowProjection) {
+  let owner = planningEntriesByProjection.get(projection);
+  if (!owner) {
+    owner = { configs: new WeakMap(), agents: new Map() };
+    planningEntriesByProjection.set(projection, owner);
+    const captured = owner;
+    projection.onSelectionChange((change) => {
+      captured.configs = new WeakMap();
+      // Per-agent selection uses the logical owner. Topology resets retire every capture.
+      if (change.kind === "row") {
+        captured.agents.delete(change.agentId);
+      } else {
+        captured.agents.clear();
+      }
+    });
+  }
+  return owner;
+}
+
+// Retain neutral displays within the row owner's lifetime; visibility is applied afterward.
+const projectedHosts = new WeakMap<
+  SessionRowProjection,
+  Map<
+    string,
+    {
+      revision: object | undefined;
+      identityRevision: object | undefined;
+      cfg: OpenClawConfig;
+      fallbackAgentId: string;
+      adoptionRevision: object | undefined;
+      audience: SessionCatalogProvider["audience"];
+      source: string;
+      host: SessionCatalogHost;
+    }
+  >
+>();
+const adoptionRevisions = new WeakMap<SessionCatalogInstances, object>();
 
 export function createSessionCatalogRequestEntrySnapshot(params: {
   cfg: OpenClawConfig;
   fallbackAgentId: string;
+  projection: SessionRowProjection;
+  /** Bound one delivery's lookups; provider planning retains the full snapshot. */
+  sessionKeys?: readonly string[];
 }): SessionCatalogRequestEntrySnapshot {
-  const entriesByAgentId = new Map<string, readonly SessionEntrySummary[]>();
-  const entryIndexByAgentId = new Map<string, ReadonlyMap<string, SessionEntry>>();
+  if (params.projection.needsSelectionPreparation({ metadataOnly: true })) {
+    throw new Error("Prepare current session metadata before capturing catalog entries");
+  }
+  const planningOwner =
+    params.sessionKeys === undefined ? planningEntriesOwner(params.projection) : undefined;
+  const cachedPlanning = planningOwner?.configs.get(params.cfg)?.get(params.fallbackAgentId);
+  const deletions = cachedPlanning
+    ? undefined
+    : getPreparedAgentDeletionDiscovery(resolveOpenClawStateSqlitePath());
+  // Retained provider pages must not keep the weak key for the full planning roster alive.
+  const planningRevision = cachedPlanning?.revision ?? {};
+  const entriesByAgentId =
+    cachedPlanning?.entriesByAgentId ?? new Map<string, CapturedAgentEntries>();
   const actorBySessionKey = new Map<string, SessionCatalogSession["createdActor"]>();
-  let catalogEntries:
-    | ReturnType<NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]>>
-    | undefined;
-
-  const entriesForAgent = (rawAgentId: string): readonly SessionEntrySummary[] => {
-    const agentId = normalizeAgentId(rawAgentId);
-    if (!entriesByAgentId.has(agentId)) {
-      entriesByAgentId.set(
-        agentId,
-        listSessionEntriesReadOnly({ agentId, clone: false, projection: "list" }),
-      );
+  let frozen = false;
+  // Hosts share human identities within this request; a new snapshot must see profile edits.
+  const userProfileIdentityById = new Map<string, SessionActorProfileIdentity | undefined>();
+  let catalogEntries = cachedPlanning?.catalogEntries;
+  const entryAgentId = (sessionKey: string) => {
+    const parsed = parseAgentSessionKey(sessionKey);
+    if (parsed?.agentId) {
+      return normalizeAgentId(parsed.agentId);
     }
-    return entriesByAgentId.get(agentId) ?? [];
+    return resolveAgentIdFromSessionKey(
+      sessionKey,
+      tryResolveSessionCompatibilityOwnerAgentId(params.cfg, sessionKey) ?? params.fallbackAgentId,
+    );
+  };
+  let selectedKeysByAgentId: Map<string, Set<string>> | undefined;
+
+  const captureAgentEntries = (rawAgentId: string): CapturedAgentEntries | undefined => {
+    const agentId = normalizeAgentId(rawAgentId);
+    const previous = entriesByAgentId.get(agentId);
+    // Catalog discovery omits deleted stores; targeted session reads retain their refusal.
+    if (
+      previous ||
+      frozen ||
+      (deletions?.status === "present" &&
+        deletions.entries.some((entry) => entry.agentId === agentId))
+    ) {
+      return previous;
+    }
+    let captured = planningOwner?.agents.get(agentId);
+    if (!captured) {
+      if (params.sessionKeys && !selectedKeysByAgentId) {
+        selectedKeysByAgentId = new Map();
+        for (const sessionKey of params.sessionKeys) {
+          const owner = entryAgentId(sessionKey);
+          let keys = selectedKeysByAgentId.get(owner);
+          if (!keys) {
+            keys = new Set();
+            selectedKeysByAgentId.set(owner, keys);
+          }
+          keys.add(sessionKey);
+          keys.add(
+            resolveStoredSessionKeyForAgentStore({ cfg: params.cfg, agentId: owner, sessionKey }),
+          );
+        }
+      }
+      const entries = prepareSessionRowSelection(
+        params.projection,
+        { agentId },
+        {
+          metadataPrepared: true,
+          // An empty canonical alias must not become an unscoped projection query.
+          candidateKeys: selectedKeysByAgentId
+            ? new Set([...(selectedKeysByAgentId.get(agentId) ?? [])].filter(Boolean))
+            : undefined,
+        },
+      ).entries("all");
+      captured = { pairs: entries };
+      planningOwner?.agents.set(agentId, captured);
+    }
+    entriesByAgentId.set(agentId, captured);
+    return captured;
+  };
+
+  const entriesForAgent = (agentId: string): readonly SessionEntrySummary[] => {
+    const captured = captureAgentEntries(agentId);
+    if (!captured) {
+      return [];
+    }
+    return (captured.summaries ??= Object.freeze(
+      captured.pairs.map(([sessionKey, entry]) => Object.freeze({ sessionKey, entry })),
+    ));
   };
 
   const entriesForCatalog: NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]> = () => {
     if (catalogEntries) {
       return catalogEntries;
     }
-    const agentIds = [
-      params.fallbackAgentId,
-      ...listAgentIds(params.cfg).filter((agentId) => agentId !== params.fallbackAgentId),
-    ];
-    catalogEntries = agentIds.flatMap((agentId) =>
-      entriesForAgent(agentId).map((entry) => Object.assign({}, entry, { agentId })),
-    );
-    return catalogEntries;
+    const flattened: CatalogEntries = [];
+    const append = (agentId: string) => {
+      const captured = captureAgentEntries(agentId);
+      if (captured) {
+        captured.catalog ??= captured.pairs.map(([sessionKey, entry]) =>
+          Object.freeze({ sessionKey, entry, agentId }),
+        );
+        for (const entry of captured.catalog) {
+          flattened.push(entry);
+        }
+      }
+    };
+    append(params.fallbackAgentId);
+    for (const agentId of listAgentIds(params.cfg)) {
+      if (agentId !== params.fallbackAgentId) {
+        append(agentId);
+      }
+    }
+    Object.freeze(flattened);
+    return (catalogEntries = flattened);
   };
 
-  const entryIndexForAgent = (agentId: string): ReadonlyMap<string, SessionEntry> => {
-    const normalizedAgentId = normalizeAgentId(agentId);
-    const cached = entryIndexByAgentId.get(normalizedAgentId);
-    if (cached) {
-      return cached;
+  const entryForSession = (sessionKey: string): SessionEntry | undefined => {
+    const agentId = entryAgentId(sessionKey);
+    const captured = captureAgentEntries(agentId);
+    if (!captured) {
+      return undefined;
     }
-    const index = new Map(
-      entriesForAgent(normalizedAgentId).map(({ sessionKey, entry }) => [sessionKey, entry]),
-    );
-    entryIndexByAgentId.set(normalizedAgentId, index);
-    return index;
-  };
-
-  const createdActorForSession = (sessionKey: string): SessionCatalogSession["createdActor"] => {
-    const agentId = resolveAgentIdFromSessionKey(
-      sessionKey,
-      tryResolveSessionCompatibilityOwnerAgentId(params.cfg, sessionKey) ?? params.fallbackAgentId,
-    );
-    const actorCacheKey = `${agentId}\0${sessionKey}`;
-    if (actorBySessionKey.has(actorCacheKey)) {
-      return actorBySessionKey.get(actorCacheKey);
-    }
-    const index = entryIndexForAgent(agentId);
+    const index = (captured.index ??= new Map(captured.pairs));
     const canonicalKey = resolveStoredSessionKeyForAgentStore({
       cfg: params.cfg,
       agentId,
       sessionKey,
     });
-    const candidates = new Set([sessionKey, canonicalKey]);
-    let freshest: SessionEntry | undefined;
-    for (const key of candidates) {
-      const entry = index.get(key);
-      if (entry && (!freshest || (entry.updatedAt ?? 0) > (freshest.updatedAt ?? 0))) {
-        freshest = entry;
-      }
+    const requested = index.get(sessionKey);
+    const canonical = index.get(canonicalKey);
+    return canonical && (!requested || (canonical.updatedAt ?? 0) > (requested.updatedAt ?? 0))
+      ? canonical
+      : requested;
+  };
+
+  const createdActorForSession = (sessionKey: string): SessionCatalogSession["createdActor"] => {
+    if (actorBySessionKey.has(sessionKey)) {
+      return actorBySessionKey.get(sessionKey);
     }
-    const actor = projectSessionActor(freshest?.createdActor, undefined, params.cfg);
-    actorBySessionKey.set(actorCacheKey, actor);
+    const entry = entryForSession(sessionKey);
+    const actor = projectSessionActor(
+      resolveSessionCreatorActor(entry?.createdActor),
+      userProfileIdentityById,
+      params.cfg,
+      Boolean(sessionCreatorProfileId(entry?.createdActor)),
+    );
+    actorBySessionKey.set(sessionKey, actor);
     return actor;
   };
 
+  const sessionEntries: SessionCatalogEntrySnapshot = { entriesForAgent, entriesForCatalog };
   return {
-    sessionEntries: { entriesForAgent, entriesForCatalog },
-    projectHostCreatedActors: (host) => ({
-      ...host,
-      sessions: host.sessions.map(({ createdActor: _providerCreatedActor, ...session }) => {
-        const createdActor = session.sessionKey
-          ? createdActorForSession(session.sessionKey)
-          : undefined;
-        return createdActor ? { ...session, createdActor } : session;
-      }),
-    }),
+    sessionEntries,
+    freeze: () => {
+      // Capture before provider admission/IO, even when a provider first reads after awaiting.
+      // A key first resolved after deletion/recreation cannot prove the original adoption.
+      const entries = entriesForCatalog();
+      if (planningOwner && !cachedPlanning) {
+        const configs = planningOwner.configs;
+        let agents = configs.get(params.cfg);
+        if (!agents) {
+          agents = new Map();
+          configs.set(params.cfg, agents);
+        }
+        agents.set(params.fallbackAgentId, {
+          revision: planningRevision,
+          entriesByAgentId,
+          catalogEntries: entries,
+        });
+      }
+      sessionEntries.revision = planningOwner ? planningRevision : undefined;
+      frozen = true;
+    },
+    captureHostInstances: (host, instances) => {
+      adoptionRevisions.set(instances, planningRevision);
+      for (const session of host.sessions) {
+        if (!session.sessionKey) {
+          continue;
+        }
+        const entry = entryForSession(session.sessionKey);
+        if (entry) {
+          const { sessionId, pluginOwnerId, createdActor } = entry;
+          instances.set(session.sessionKey, { sessionId, pluginOwnerId, createdActor });
+        }
+      }
+    },
+    entryForSession,
+    isMember: (sessionKey, profileId) => {
+      const target = params.projection.sharingTarget({
+        key: sessionKey,
+        agentId: entryAgentId(sessionKey),
+      });
+      return Boolean(
+        target && params.projection.hasMembership(target.storePath, target.storeKey, profileId),
+      );
+    },
+    projectHostSessions: (host, instances, audience) => {
+      const source = JSON.stringify(host);
+      const revision = params.projection.sharingRevision;
+      const identityRevision = params.projection.state.rowContext.identityProjection?.revision;
+      const adoptionRevision = adoptionRevisions.get(instances);
+      let hosts = projectedHosts.get(params.projection);
+      const cached = hosts?.get(host.hostId);
+      if (
+        revision &&
+        adoptionRevision &&
+        cached?.revision === revision &&
+        cached.identityRevision === identityRevision &&
+        cached.cfg === params.cfg &&
+        cached.fallbackAgentId === params.fallbackAgentId &&
+        cached.adoptionRevision === adoptionRevision &&
+        cached.audience === audience &&
+        cached.source === source
+      ) {
+        return cached.host;
+      }
+      // Providers can update returned objects in place; detach only changed publications.
+      const snapshot: SessionCatalogHost = JSON.parse(source);
+      for (const session of snapshot.sessions) {
+        const { sessionKey, color: rawColor } = session;
+        delete session.sessionKey;
+        delete session.color;
+        const color = typeof rawColor === "string" ? normalizeSessionColorValue(rawColor) : null;
+        if (color) {
+          session.color = color;
+        }
+        if (audience === "session-viewers") {
+          // Publication attribution belongs to the provider, not a local adoption claim.
+          continue;
+        }
+        delete session.createdActor;
+        const original = sessionKey ? instances.get(sessionKey) : undefined;
+        const current = sessionKey ? entryForSession(sessionKey) : undefined;
+        // Never attach a reusable key's new creator to the previous provider instance.
+        if (
+          !original ||
+          !current ||
+          original.sessionId !== current.sessionId ||
+          original.pluginOwnerId !== current.pluginOwnerId ||
+          current.initializationPending === true ||
+          !isDeepStrictEqual(original.createdActor, current.createdActor)
+        ) {
+          continue;
+        }
+        session.sessionKey = sessionKey;
+        const createdActor = sessionKey ? createdActorForSession(sessionKey) : undefined;
+        if (createdActor) {
+          session.createdActor = createdActor;
+        }
+      }
+      const projected = freezeJsonSnapshot(snapshot);
+      if (!hosts) {
+        hosts = new Map();
+        projectedHosts.set(params.projection, hosts);
+      }
+      hosts.delete(host.hostId);
+      hosts.set(host.hostId, {
+        revision,
+        identityRevision,
+        cfg: params.cfg,
+        fallbackAgentId: params.fallbackAgentId,
+        adoptionRevision,
+        audience,
+        source,
+        host: projected,
+      });
+      if (hosts.size > 128) {
+        hosts.delete(hosts.keys().next().value!);
+      }
+      return projected;
+    },
   };
 }
