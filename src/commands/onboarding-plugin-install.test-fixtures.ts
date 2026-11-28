@@ -71,3 +71,14 @@ export async function bundledDirectory(root: string, pluginId: string) {
   await fs.mkdir(dir, { recursive: true });
   return fs.realpath(dir);
 }
+
+export function requireCapturedPrompt<T>(captured: T | undefined): T {
+  if (!captured) {
+    throw new Error("expected captured install prompt");
+  }
+  return captured;
+}
+
+export function firstCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T {
+  return requireCapturedPrompt(mock.mock.calls[0]);
+}

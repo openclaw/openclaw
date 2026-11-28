@@ -143,11 +143,13 @@ import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js"
 import {
   bundledDirectory,
   clawHubRecord,
+  firstCall,
   installEntry,
   installedPlugin,
   installPolicyConfig,
   localWorkspace,
   notInstalled,
+  requireCapturedPrompt,
 } from "./onboarding-plugin-install.test-fixtures.js";
 import type { OnboardingPluginInstallOptions } from "./onboarding-plugin-install.types.js";
 
@@ -193,19 +195,8 @@ function expectDiscoveryInvalidated() {
   );
 }
 
-function requireCapturedPrompt<T>(captured: T | undefined): T {
-  if (!captured) {
-    throw new Error("expected captured install prompt");
-  }
-  return captured;
-}
-
 type InstallChoice = "clawhub" | "npm" | "local" | "skip";
 type InstallPrompt = Parameters<OnboardingPluginInstallOptions["prompter"]["select"]>[0];
-
-function firstCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T {
-  return requireCapturedPrompt(mock.mock.calls[0]);
-}
 
 type NpmPackInstallCall = Parameters<
   typeof import("../plugins/install.js").installPluginFromNpmPackArchive
