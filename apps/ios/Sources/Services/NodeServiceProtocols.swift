@@ -2,8 +2,19 @@ import CoreLocation
 import Foundation
 import OpenClawKit
 
-typealias OpenClawCameraSnapResult = (format: String, base64: String, width: Int, height: Int)
-typealias OpenClawCameraClipResult = (format: String, base64: String, durationMs: Int, hasAudio: Bool)
+struct OpenClawCameraSnapResult: Encodable, Sendable {
+    let format: String
+    let base64: String
+    let width: Int
+    let height: Int
+}
+
+struct OpenClawCameraClipResult: Encodable, Sendable {
+    let format: String
+    let base64: String
+    let durationMs: Int
+    let hasAudio: Bool
+}
 
 struct OpenClawCameraDeviceInfo: Codable, Sendable {
     var id: String
