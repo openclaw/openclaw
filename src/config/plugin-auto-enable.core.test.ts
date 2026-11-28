@@ -591,6 +591,23 @@ describe("applyPluginAutoEnable core", () => {
     },
   );
 
+  it("preserves the configured Gmail watcher without granting the hook to a replacement plugin", () => {
+    const config: OpenClawConfig = {
+      hooks: { enabled: true, gmail: { account: "reader@example.test" } },
+      plugins: { allow: ["other"] },
+    };
+    const activate = (origin: "bundled" | "global") =>
+      applyPluginAutoEnable({
+        config,
+        env,
+        manifestRegistry: makeRegistry([{ id: "gmail", channels: [], origin }]),
+      }).config;
+    expect(activate("bundled").plugins?.allow).toEqual(["other", "gmail"]);
+    expect(activate("global").plugins?.allow).toEqual(["other"]);
+    config.plugins = { ...config.plugins, deny: ["gmail"] };
+    expect(activate("bundled").plugins?.allow).toEqual(["other"]);
+  });
+
   it("loads one registry to detect and materialize configured plugins", () => {
     const config: OpenClawConfig = {
       agents: { defaults: { model: "fixture/model" } },

@@ -24,7 +24,7 @@ openclaw webhooks gmail run   [--account <email>] [...]
 | `gmail run`   | Run `gog gmail watch serve` plus the watch auto-renew loop in the foreground.         |
 
 <Note>
-The Gateway also auto-starts `gog gmail watch serve` on boot once `hooks.enabled=true` and `hooks.gmail.account` is set (set by `gmail setup`). `gmail run` provides a foreground watcher for debugging or when the Gateway watcher is disabled. Do not run both against the same listener. See [Gmail Pub/Sub integration](/automation/cron-jobs#gmail-pubsub-integration) for the auto-start details and `OPENCLAW_SKIP_GMAIL_WATCHER` opt-out.
+The bundled Gmail plugin starts `gog gmail watch serve` on Gateway boot when `hooks.enabled=true` and `hooks.gmail.account` is set by `gmail setup`. A restrictive `plugins.allow` can omit Gmail. An explicit plugin disable stops the Gateway-managed watcher. `gmail run` provides a foreground watcher for debugging or when the Gateway watcher is disabled. Do not run both against the same listener. See [Gmail Pub/Sub integration](/automation/cron-jobs#gmail-pubsub-integration) for the auto-start details and `OPENCLAW_SKIP_GMAIL_WATCHER` opt-out.
 </Note>
 
 ## `webhooks gmail setup`
