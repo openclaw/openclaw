@@ -92,11 +92,13 @@ enum RuntimeLocator {
 enum ExecutableVersionProbe {
     static func read(binary: String, pathEnv: String, logger: Logger, label: String) async -> String? {
         let start = Date()
+        var environment = ProcessInfo.processInfo.environment
+        environment["PATH"] = pathEnv
         do {
             let result = try await BoundedProcess.run(
                 path: binary,
                 arguments: ["--version"],
-                environment: ["PATH": pathEnv],
+                environment: environment,
                 timeout: CommandResolver.versionProbeTimeout)
             guard result.terminationStatus == 0 else { return nil }
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
