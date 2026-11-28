@@ -207,11 +207,9 @@ const searchTitles = [
   "Activity",
   "Navigation",
 ].map((title) => "iOS " + title);
-const searchRows = searchTitles.map((label, i) => ({
-  ...sessions[i + 1],
-  label,
-  sessionId: "search-" + i,
-}));
+const searchRows = searchTitles.map((label, i) =>
+  Object.assign({}, sessions[i + 1], { label, sessionId: "search-" + i }),
+);
 const archivedSearchRow = { ...sessions[15], label: "iOS Release archive", archived: true };
 const searchMessages = [
   { ...sessions[16], label: "Release discussion" },
@@ -406,8 +404,9 @@ const server = createServer((req, res) => {
       payload: { sessionKey: row.key, session: row },
     };
     for (const ws of wss.clients) {
-      if (ws.readyState === WebSocket.OPEN && ws.proofRole === "operator")
+      if (ws.readyState === WebSocket.OPEN && ws.proofRole === "operator") {
         ws.send(JSON.stringify(event));
+      }
     }
     res.end(JSON.stringify({ updated: row.key }));
     return;
@@ -742,11 +741,14 @@ wss.on("connection", (ws) => {
         });
         break;
       case "skills.status":
-        if (searchOrderMode) reply({ skills: [{ name: "iOS design" }, { name: "iOS builds" }] });
-        else fail("Unsupported synthetic method");
+        if (searchOrderMode) {
+          reply({ skills: [{ name: "iOS design" }, { name: "iOS builds" }] });
+        } else {
+          fail("Unsupported synthetic method");
+        }
         break;
       case "sessions.search":
-        if (searchOrderMode)
+        if (searchOrderMode) {
           reply({
             sessions: searchMessages,
             results: searchMessages.map((row, i) => ({
@@ -755,7 +757,9 @@ wss.on("connection", (ws) => {
               score: 2 - i,
             })),
           });
-        else fail("Unsupported synthetic method");
+        } else {
+          fail("Unsupported synthetic method");
+        }
         break;
       case "sessions.list": {
         if (searchOrderMode) {
