@@ -124,6 +124,76 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     });
   });
 
+  it("registers a directly declared Markdown command file outside the default directory", async () => {
+    for (const commands of ["./extra/review.md", ["./extra/review.md"]]) {
+      bundleCommandState.plugins = [];
+      const workspaceDir = tempDirs.make("openclaw-command-file-");
+      const pluginRoot = path.join(workspaceDir, "bundle-plugin");
+      const files = [
+        [".claude-plugin/plugin.json", JSON.stringify({ name: "bundle-plugin", commands })],
+        ["extra/review.md", "Review the change.\n"],
+      ] as const;
+      for (const [file, content] of files) {
+        const target = path.join(pluginRoot, file);
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.writeFile(target, content);
+      }
+      bundleCommandState.plugins = [
+        createPluginManifestRecordFixture({
+          id: "bundle-plugin",
+          format: "bundle",
+          bundleFormat: "claude",
+          bundleCapabilities: ["commands"],
+          origin: "global",
+          rootDir: pluginRoot,
+        }),
+      ];
+
+      const specs = buildWorkspaceSkillCommandSpecs(workspaceDir, {
+        entries: [],
+        config: { plugins: { entries: { "bundle-plugin": { enabled: true } } } },
+      });
+
+      // The filename supplies the fallback command name when frontmatter omits `name`.
+      expect(specs.map((spec) => spec.skillName)).toEqual(["review"]);
+      expect(specs[0]?.promptTemplate).toBe("Review the change.");
+    }
+  });
+
+  it("does not duplicate a file already selected through the default commands directory", async () => {
+    const workspaceDir = tempDirs.make("openclaw-command-file-dedupe-");
+    const pluginRoot = path.join(workspaceDir, "bundle-plugin");
+    const files = [
+      [
+        ".claude-plugin/plugin.json",
+        JSON.stringify({ name: "bundle-plugin", commands: "./commands/review.md" }),
+      ],
+      ["commands/review.md", "Review the change.\n"],
+    ] as const;
+    for (const [file, content] of files) {
+      const target = path.join(pluginRoot, file);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, content);
+    }
+    bundleCommandState.plugins = [
+      createPluginManifestRecordFixture({
+        id: "bundle-plugin",
+        format: "bundle",
+        bundleFormat: "claude",
+        bundleCapabilities: ["commands"],
+        origin: "global",
+        rootDir: pluginRoot,
+      }),
+    ];
+
+    const specs = buildWorkspaceSkillCommandSpecs(workspaceDir, {
+      entries: [],
+      config: { plugins: { entries: { "bundle-plugin": { enabled: true } } } },
+    });
+
+    expect(specs.map((spec) => spec.skillName)).toEqual(["review"]);
+  });
+
   it("bounds the skill command debug cache and re-logs evicted keys", () => {
     const entries = Array.from({ length: 1025 }, (_, index) =>
       createFixtureSkillEntry(`raw ${index}`),
