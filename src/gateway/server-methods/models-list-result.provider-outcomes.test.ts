@@ -282,7 +282,7 @@ it("does not apply one profile rejection to a different selected profile", () =>
   });
 });
 
-it("keeps a routed model's reset time off sibling ClawRouter models", async () => {
+it("keeps a routed model's timeout off sibling ClawRouter models", async () => {
   const limited = "anthropic/limited";
   const sibling = "openai/healthy";
   const catalog = [limited, sibling].map((id) => ({ id, name: id, provider: "clawrouter" }));
@@ -298,7 +298,8 @@ it("keeps a routed model's reset time off sibling ClawRouter models", async () =
         profiles: { shared: { provider: "clawrouter", type: "api_key", key: "fixture" } },
         usageStats: {
           shared: {
-            cooldownReason: "rate_limit",
+            // ClawRouter owns rate-limit recovery; timeouts remain locally enforced.
+            cooldownReason: "timeout",
             cooldownModel: limited,
             cooldownUntil: until,
             disabledReason: "billing",
