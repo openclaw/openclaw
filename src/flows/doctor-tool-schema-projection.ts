@@ -136,6 +136,10 @@ export async function collectAgentRuntimeToolSchemaFindings(
         modelContextWindowTokens: params.model.contextWindow,
         allowGatewaySubagentBinding: true,
         emitBeforeToolCallDiagnostics: false,
+        // Doctor inspects a synthetic primary session so session-gated tools
+        // (e.g. ask_user) are included in the projected inventory.
+        // Note: assembleOpenClawCodingTools reads `sessionKey`, not `agentSessionKey`.
+        sessionKey: `doctor-tool-schema-inspection-${params.agentId}`,
       }),
     );
   } catch (error) {
