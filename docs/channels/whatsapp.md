@@ -59,6 +59,8 @@ openclaw channels login --channel whatsapp
 
     Login is QR-only. On remote or headless hosts, have a reliable path to deliver the live QR to the phone before starting login; terminal-rendered QRs, screenshots, or chat attachments can expire in transit.
 
+    Login does not ask whether the number is personal or dedicated. When no `dmPolicy` is configured, it ends with a reminder that DMs use `pairing`, so anyone who messages the number gets a pairing code from it. On a personal number, run `openclaw channels add --channel whatsapp` and choose the personal phone setup to answer only yourself.
+
     For a specific account:
 
 ```bash
