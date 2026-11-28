@@ -59,7 +59,7 @@ function createStoreFixture(storePath: string) {
       }),
     fork: (options: Partial<Parameters<typeof buildCliSessionForkRunParams>[0]> = {}) =>
       buildCliSessionForkRunParams({ ...forkParams, ...options }, () => {}),
-    clear: (options: Partial<Parameters<typeof clearCliSessionInStore>[0]> = {}) =>
+    clear: (options: Partial<Parameters<typeof clearCliSessionInStore>[0]>) =>
       clearCliSessionInStore({ ...target, ...options }),
   };
 }

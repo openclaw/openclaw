@@ -26,18 +26,18 @@ function createExecutor(limit: number) {
 
 describe("Swarm pipeline backpressure", () => {
   it.each([
-    { limit: 3, count: 4, partial: true, followup: true },
-    { limit: 16, count: 4, partial: false, followup: true, refill: true },
+    { limit: 3, count: 4, partial: true },
+    { limit: 16, count: 4, partial: false, refill: true },
   ])(
-    "accounts for $count items with $limit slots, partial settlement $partial and follow-up tools $followup",
-    async ({ limit, count, partial, followup, refill = false }) => {
+    "accounts for $count items with $limit slots, partial settlement $partial and follow-up tools",
+    async ({ limit, count, partial, refill = false }) => {
       const executor = createExecutor(limit);
       const source = `
       const initial = ${refill} ? Array.from({ length: 16 }, (_, i) => progress({ value: "initial-" + i })) : [];
       const timers = ${refill} ? Array.from({ length: 128 }, () => setTimeout(() => { throw new Error("canceled queued timer fired"); }, 60_000)) : [];
       const collecting = Promise.allSettled(Array.from({ length: ${count} }, async (_, index) => {
         const next = await agents.run("first-" + index, { phase: "First" });
-        if (${followup}) await progress({ value: index });
+        await progress({ value: index });
         return await agents.run(next, { phase: "Second" });
       }));
       if (${refill}) {
@@ -108,11 +108,9 @@ describe("Swarm pipeline backpressure", () => {
       const spawnedPrompts = [...collectors.values()];
       expect(spawnedPrompts).toHaveLength(count * 2 - 1);
       expect(new Set(spawnedPrompts).size).toBe(spawnedPrompts.length);
-      const expectedProgress = followup
-        ? Array.from({ length: count }, (_, value) => ({ value })).filter(
-            ({ value }) => value !== 1,
-          )
-        : [];
+      const expectedProgress = Array.from({ length: count }, (_, value) => ({ value })).filter(
+        ({ value }) => value !== 1,
+      );
       const expectedRefills = refill
         ? [
             ...Array.from({ length: 16 }, (_, i) => ({ value: "initial-" + i })),
