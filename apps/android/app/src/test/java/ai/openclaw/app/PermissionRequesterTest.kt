@@ -201,6 +201,58 @@ class PermissionRequesterTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun composerMicrophoneWaitsForSlowSystemGrant() =
+    runTest {
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      val requests = FakePermissionRequests()
+      val requester = requester(activity(), requests)
+      try {
+        val pending = async { requester.requestRecordAudioFromComposer() }
+        runCurrent()
+        assertEquals(listOf(Manifest.permission.RECORD_AUDIO), requests[0].permissions)
+
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertFalse(pending.isCompleted)
+        assertTrue(requests.deliver(requester, 0, mapOf(Manifest.permission.RECORD_AUDIO to true)))
+        runCurrent()
+        assertTrue(pending.await())
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun composerMicrophoneKeepsSettingsDialogUntilUserDismissesIt() =
+    runTest {
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      val requests = FakePermissionRequests()
+      val requester = requester(activity(), requests)
+      try {
+        val pending = async { requester.requestRecordAudioFromComposer() }
+        runCurrent()
+        assertTrue(requests.deliver(requester, 0, mapOf(Manifest.permission.RECORD_AUDIO to false)))
+        runCurrent()
+
+        val dialog = checkNotNull(ShadowDialog.getLatestDialog())
+        assertTrue(dialog.isShowing)
+        advanceTimeBy(30_000)
+        shadowOf(Looper.getMainLooper()).idle()
+        runCurrent()
+        assertTrue(dialog.isShowing)
+        assertFalse(pending.isCompleted)
+
+        cancelDialog(dialog)
+        runCurrent()
+        assertFalse(pending.await())
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun optionalBatchWaitsForItsResultAndSerializesOtherRequests() =
     runTest {
       Dispatchers.setMain(StandardTestDispatcher(testScheduler))

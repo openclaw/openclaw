@@ -52,7 +52,6 @@ import ai.openclaw.app.voice.AndroidAudioInputSession
 import ai.openclaw.app.voice.AudioInputDeviceOption
 import ai.openclaw.app.voice.TalkFailureNotice
 import ai.openclaw.app.voice.VoiceWakePreferences
-import android.Manifest
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
@@ -1204,7 +1203,7 @@ class MainViewModel internal constructor(
   internal suspend fun requestRecordAudioPermission(): Boolean {
     val requester = permissionRequester ?: return false
     return runCatchingCancellable {
-      requester.requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO))[Manifest.permission.RECORD_AUDIO] == true
+      requester.requestRecordAudioFromComposer()
     }.getOrDefault(false)
   }
 
