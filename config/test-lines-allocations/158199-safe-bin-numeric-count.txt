@@ -1,0 +1,5 @@
+# Safe-bin numeric count: validator rows proving head/tail accept a standalone `-N` count while
+# file operands, letter clusters (`tail -5f`) and other bins stay denied, plus one allowlist
+# pipeline proving shell analysis keeps `head -1 | tail -5` auto-approved.
+# Exact net growth for PR #158199.
+18

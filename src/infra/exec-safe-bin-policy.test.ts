@@ -74,6 +74,14 @@ describe("exec safe bin policy", () => {
     ["grep", ["-e", "needle", "--", "../secret.txt"], false],
     ["grep", ["-e", "needle", "--", "*.txt"], false],
     ["grep", ["-e", "needle", "--", "-"], true],
+    // Digits-only `-N` counts: head/tail only, standalone, never freeing a file operand slot.
+    ["head", ["-1"], true],
+    ["head", ["-q", "-20"], true],
+    ["tail", ["-5"], true],
+    ["head", ["-1", "notes.txt"], false],
+    ["tail", ["-5f"], false],
+    ["head", ["-1v"], false],
+    ["wc", ["-1"], false],
   ])("%s validates %j as %s", (bin, argv, expected) => {
     expect(validateSafeBinArgv(argv, safeProfile(bin))).toBe(expected);
   });
