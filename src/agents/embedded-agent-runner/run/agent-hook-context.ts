@@ -1,5 +1,6 @@
 import {
   buildAgentHookContextChannelFields,
+  buildAgentHookContextCronFields,
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
 import type { PluginHookAgentContext } from "../../../plugins/hook-types.js";
@@ -38,6 +39,7 @@ export function buildEmbeddedAgentHookContext(
     workspaceDir: run.workspaceDir,
     trigger: run.trigger,
     ...(run.isTurnTainted ? { turnTainted: run.isTurnTainted() } : {}),
+    ...buildAgentHookContextCronFields({ runId: run.runId, agentId, trigger: run.trigger }),
     ...buildAgentHookContextChannelFields(run),
     ...buildAgentHookContextIdentityFields(run),
   };
