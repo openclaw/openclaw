@@ -19,6 +19,9 @@ const native = vi.hoisted(() => ({
   stopIgnored: false,
   scheduleFails: false,
   cgroupPopulated: false,
+  /** After start, the unit keeps exiting and systemd restarts it. */
+  crashLoop: false,
+  restarts: 0,
 }));
 // Unit selection and account resolution have their own tests in the admission suite.
 vi.mock("./update-command-admit-service-account.js", async (importOriginal) => ({
@@ -39,16 +42,23 @@ vi.mock("../../daemon/systemd-lifecycle.js", async (importOriginal) => ({
   },
   startSystemdService: async () => {
     native.events.push("start");
-    native.unit = { active: "active", pid: native.startPid };
+    native.unit = native.crashLoop
+      ? { active: "activating", pid: 0 }
+      : { active: "active", pid: native.startPid };
   },
 }));
 vi.mock("../../daemon/systemd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd-exec.js")>()),
-  execSystemctl: async () => ({
-    code: 0,
-    stdout: `ActiveState=${native.unit.active}\nMainPID=${native.unit.pid}\nControlGroup=${native.unit.active === "active" ? "/system.slice/openclaw-gateway.service" : ""}\n`,
-    stderr: "",
-  }),
+  execSystemctl: async () => {
+    if (native.crashLoop && native.unit.active === "activating") {
+      native.restarts += 2;
+    }
+    return {
+      code: 0,
+      stdout: `ActiveState=${native.unit.active}\nMainPID=${native.unit.pid}\nControlGroup=${native.unit.active === "active" ? "/system.slice/openclaw-gateway.service" : ""}\nNRestarts=${native.restarts}\n`,
+      stderr: "",
+    };
+  },
 }));
 vi.mock("../../daemon/systemd-cgroup.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd-cgroup.js")>()),
@@ -159,6 +169,8 @@ beforeEach(() => {
   native.stopIgnored = false;
   native.scheduleFails = false;
   native.cgroupPopulated = false;
+  native.crashLoop = false;
+  native.restarts = 0;
   root = dirs.make("service-account-release-");
   fs.mkdirSync(path.join(root, "dist"));
   fs.writeFileSync(path.join(root, "dist", "index.js"), "setInterval(() => {}, 1000);\n");
@@ -311,6 +323,21 @@ describe("system service update as the unit's account", () => {
     expect(result.status === "failed" && result.message).toContain(
       "did not come ready on 2026.11.16",
     );
+    expect(native.events).toEqual(["stop", "start", "stop"]);
+    expect(calls()).toEqual(["migrate", "restore"]);
+  });
+
+  it("restores without waiting out readiness when systemd keeps restarting the candidate", async () => {
+    native.crashLoop = true;
+    native.restarts = 3;
+    installAccount({ migrate: ok("migrated"), health: [0, "{}"], restore: ok("restored") });
+    const started = Date.now();
+
+    const result = await activate(10 * 60_000);
+
+    expect(result).toMatchObject({ status: "failed", stateRestored: true });
+    expect(result.status === "failed" && result.message).toContain("did not come ready");
+    expect(Date.now() - started).toBeLessThan(30_000);
     expect(native.events).toEqual(["stop", "start", "stop"]);
     expect(calls()).toEqual(["migrate", "restore"]);
   });

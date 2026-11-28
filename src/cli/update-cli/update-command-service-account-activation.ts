@@ -53,6 +53,8 @@ type Options = {
 
 const DEFAULT_MIGRATE_TIMEOUT_MS = 60 * 60_000;
 const DEFAULT_READY_TIMEOUT_MS = 10 * 60_000;
+/** systemd restarts of the started candidate that mean it will not come ready. */
+const CRASH_LOOP_RESTARTS = 5;
 const STOP_TIMEOUT_MS = 90_000;
 const ACCOUNT_RESULT_MAX_BYTES = 256 * 1024;
 
@@ -211,7 +213,7 @@ function readAccountStatus(stdout: Buffer): string | undefined {
 
 async function readUnit(unitName: string) {
   const result = await execSystemctl(
-    ["--system", "show", unitName, "--property=ActiveState,MainPID,ControlGroup"],
+    ["--system", "show", unitName, "--property=ActiveState,MainPID,ControlGroup,NRestarts"],
     undefined,
     5_000,
   );
@@ -221,6 +223,7 @@ async function readUnit(unitName: string) {
     active: properties.activestate ?? "",
     pid: Number(properties.mainpid ?? 0),
     controlGroup: properties.controlgroup ?? "",
+    restarts: Number(properties.nrestarts ?? 0),
   };
 }
 
@@ -228,12 +231,16 @@ async function waitForUnit(
   unitName: string,
   done: (unit: Awaited<ReturnType<typeof readUnit>>) => boolean | Promise<boolean>,
   timeoutMs: number,
+  giveUp?: (unit: Awaited<ReturnType<typeof readUnit>>) => boolean,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const unit = await readUnit(unitName);
     if (unit.ok && (await done(unit))) {
       return true;
+    }
+    if (unit.ok && giveUp?.(unit)) {
+      return false;
     }
     await delay(500);
   }
@@ -319,7 +326,6 @@ async function activateSystemServiceAsAccount(
       const args = { stdout: process.stderr, systemdIdentity: identity, warn: options.warn };
       await (action === "start" ? startSystemdService(args) : stopSystemdService(args));
     };
-    // Restoring is only safe with no Gateway writing; an unproven stop keeps the backup.
     // Restoring is only safe with no Gateway writing: systemd must report the unit stopped and
     // its cgroup empty, since KillMode= can leave processes behind. The cgroup is the one the
     // running unit had; without it a stop is not confirmed and the backup is kept.
@@ -431,6 +437,7 @@ async function activateSystemServiceAsAccount(
     ) {
       return await restore(`Migrating ${account}'s state as ${account} did not complete.`);
     }
+    const restartsBeforeStart = (await readUnit(unitName)).restarts;
     try {
       await control("start");
     } catch (error) {
@@ -447,6 +454,12 @@ async function activateSystemServiceAsAccount(
           (health) => health?.termination === "exit" && health.code === 0,
         )),
       Math.min(DEFAULT_READY_TIMEOUT_MS, budget(DEFAULT_READY_TIMEOUT_MS)),
+      // A candidate that keeps exiting under Restart= will not come ready; restore now rather
+      // than leave the service down for the whole readiness window.
+      (unit) =>
+        Number.isFinite(unit.restarts) &&
+        Number.isFinite(restartsBeforeStart) &&
+        unit.restarts - restartsBeforeStart >= CRASH_LOOP_RESTARTS,
     );
     if (!ready) {
       return await restore(`${unitName} did not come ready on ${options.candidateVersion}.`);
