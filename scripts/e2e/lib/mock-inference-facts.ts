@@ -14,6 +14,50 @@ export type MockInferenceFacts = {
   inputItems: number;
 };
 
+/** Opt-in native diagnostics ledger: fixed routes and synthetic correlation, never request bodies. */
+export function createMockNativeChatAccounting() {
+  const ordinals = { responses: 0, embeddings: 0, chatCompletions: 0, other: 0 };
+  type Route = keyof typeof ordinals;
+  const entries: Array<{
+    route: Route;
+    ordinal: number;
+    pid?: number;
+    runId?: string;
+    callId?: string;
+  }> = [];
+  let dropped = 0;
+  return {
+    record(route: Route, headers: Record<string, string | string[] | undefined>) {
+      const ordinal = ++ordinals[route];
+      if (entries.length >= 1000) {
+        dropped++;
+        return;
+      }
+      const pid = headers["x-openclaw-perf-pid"];
+      const runId = headers["x-openclaw-perf-run"];
+      const callId = headers["x-openclaw-perf-call"];
+      const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu;
+      const correlated =
+        typeof pid === "string" &&
+        /^[1-9]\d{0,8}$/u.test(pid) &&
+        typeof runId === "string" &&
+        uuid.test(runId) &&
+        typeof callId === "string" &&
+        (uuid.test(callId) ||
+          (callId.startsWith(`${runId}:model:`) &&
+            /^[1-9]\d*$/u.test(callId.slice(runId.length + 7))));
+      entries.push({
+        route,
+        ordinal,
+        ...(correlated ? { pid: Number(pid), runId, callId } : {}),
+      });
+    },
+    snapshot() {
+      return { version: 1, dropped, entries: entries.map((entry) => Object.assign({}, entry)) };
+    },
+  };
+}
+
 function contentText(content: unknown): string {
   if (typeof content === "string") {
     return content;

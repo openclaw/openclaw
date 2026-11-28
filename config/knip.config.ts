@@ -55,6 +55,9 @@ const repositoryScriptEntries = [
   "scripts/compose-installed-runtime.mts!",
   "scripts/finalize-installed-runtime.mjs!",
   // Performance drivers and their preloads are invoked directly from documented commands.
+  "scripts/perf/native-chat-start-measure.ts!",
+  "scripts/perf/native-chat-start-preload.mjs!",
+  "scripts/perf/native-chat-start-report.mjs!",
   "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
   "scripts/perf/decision-tool-catalog-measure.ts!",
   "scripts/perf/persisted-turn-admission-measure.ts!",

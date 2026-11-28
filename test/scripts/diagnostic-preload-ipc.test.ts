@@ -104,6 +104,43 @@ it("handles census start/stop before releasing the host's last resource", async 
   expect(profile.head).toBeDefined();
 });
 
+it("invalidates bounded native chat capture without interrupting the measured process", async () => {
+  const output = tempDirs.make("native-chat-capture-budget-");
+  const { child, closed, stderr } = childWithPreload(
+    "native-chat-start-preload.mjs",
+    `
+      const record = globalThis[Symbol.for("openclaw.perf.native-chat-start")];
+      record("provider-start", "unsupported-compaction-identity");
+      await record.withOwner("session-activity-summary", async () => {
+        await Promise.resolve();
+        record("provider-start", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+      });
+      for (let index = 0; index <= 10000; index++) {
+        record("acknowledged", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+      }
+    `,
+    {
+      OPENCLAW_PERF_CHAT_CAPTURE_DIR: output,
+      OPENCLAW_PERF_CHAT_OWNER_ROOT: path.resolve("src"),
+    },
+  );
+  expect(await closed, stderr()).toEqual([0, null]);
+  const capture = (await readFile(path.join(output, `native-chat-${child.pid}.jsonl`), "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  expect(capture.at(-1)).toMatchObject({
+    type: "capture-end",
+    droppedEvents: 2,
+    unclassifiedIdentities: 1,
+    writeFailures: 0,
+    exitCode: 0,
+  });
+  expect(capture).toHaveLength(10002);
+  expect(capture[1]).toMatchObject({ type: "mark", owner: "session-activity-summary" });
+});
+
 it.each([
   {
     name: "plugin-preparation-boot-preload.mjs",
