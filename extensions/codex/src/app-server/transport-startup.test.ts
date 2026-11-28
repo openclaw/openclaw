@@ -89,9 +89,84 @@ describe.skipIf(process.platform === "win32")("Codex failed launcher startup", (
     }
   });
 
+  it.skipIf(process.platform !== "linux")(
+    "preserves EOF grace and terminal output after a startup census retry",
+    async () => {
+      vi.useFakeTimers();
+      const child = Object.assign(new EventEmitter(), {
+        pid: 12345,
+        stdin: new PassThrough(),
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        exitCode: null as number | null,
+        kill: vi.fn(),
+      });
+      child.stdout.resume();
+      const output: string[] = [];
+      child.stderr.on("data", (chunk: Buffer) => output.push(chunk.toString()));
+      child.stdin.once("close", () => {
+        setTimeout(() => {
+          child.exitCode = 0;
+          child.emit("exit", 0, null);
+        }, 85);
+        setTimeout(() => {
+          child.stdout.end();
+          child.stderr.end("terminal diagnostic");
+        }, 185);
+      });
+      vi.spyOn(processSnapshot, "readCodexAppServerProcessSnapshot").mockImplementation(
+        async (deadline) => {
+          await new Promise((resolve) => {
+            setTimeout(resolve, Math.ceil(deadline! - performance.now()));
+          });
+          throw new processSnapshot.ProcessInspectionError("deadline");
+        },
+      );
+      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+      const close = closeCodexAppServerTransportAndWait(child, {
+        drainStdio: true,
+        forceKillDelayMs: 100,
+        exitTimeoutMs: 200,
+      });
+      await vi.advanceTimersByTimeAsync(2_300);
+      await expect(close).resolves.toEqual({ exited: true, cleanup: "uncertain" });
+      expect(kill).not.toHaveBeenCalledWith(-child.pid, "SIGKILL");
+      expect(output).toEqual(["terminal diagnostic"]);
+    },
+  );
+
+  it("keeps terminal output for a longer diagnostic waiter", async () => {
+    vi.useFakeTimers();
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: 1,
+    });
+    child.stdout.resume();
+    const output: string[] = [];
+    child.stderr.on("data", (chunk: Buffer) => output.push(chunk.toString()));
+    const short = closeCodexAppServerTransportAndWait(child, {
+      drainStdio: true,
+      exitTimeoutMs: 40,
+    });
+    const long = closeCodexAppServerTransportAndWait(child, {
+      drainStdio: true,
+      exitTimeoutMs: 500,
+    });
+    await vi.advanceTimersByTimeAsync(60);
+    await expect(short).resolves.toEqual({ exited: false, cleanup: "uncertain" });
+    child.stderr.end("late startup diagnostic");
+    child.stdout.end();
+    await expect(long).resolves.toEqual({ exited: true, cleanup: "uncertain" });
+    expect(output).toEqual(["late startup diagnostic"]);
+    expect(child.stderr.destroyed).toBe(true);
+  });
+
   it.for([
     ["available", "inspection"],
     ["unavailable", "commit"],
+    ...(process.platform === "linux" ? [["transient deadline", "inspection"] as const] : []),
   ] as const)(
     "reaps inherited-pipe descendants with %s containment after %s refusal",
     async ([containment, failure], { signal }) => {
@@ -123,7 +198,7 @@ sendReceipt(ready, "ready");
         `
 import { spawn } from "node:child_process";
 const [native, ready, input] = process.argv.slice(2);
-const child = spawn(process.execPath, [native, ready, input], { stdio: "inherit" });
+const child = spawn(process.execPath, [native, ready, input], { detached: ${containment === "transient deadline"}, stdio: "inherit" });
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => child.kill(signal));
 child.on("exit", (code, signal) => {
   if (signal) process.kill(process.pid, signal);
@@ -149,14 +224,17 @@ child.on("exit", (code, signal) => {
       const readCommand = processSnapshot.readCodexAppServerProcessCommand;
       const readSnapshot = processSnapshot.readCodexAppServerProcessSnapshot;
       let containmentRefused = false;
-      if (containment === "unavailable") {
+      if (containment !== "available") {
         vi.spyOn(processSnapshot, "readCodexAppServerProcessSnapshot").mockImplementation(
-          (deadline, pids) => {
-            if (pids === undefined) {
+          (deadline, pids, roots) => {
+            if (pids === undefined && (containment === "unavailable" || !containmentRefused)) {
               containmentRefused = true;
+              if (containment === "transient deadline") {
+                return readSnapshot(performance.now(), pids, roots);
+              }
               return Promise.reject(new processSnapshot.ProcessInspectionError("unavailable"));
             }
-            return readSnapshot(deadline, pids);
+            return readSnapshot(deadline, pids, roots);
           },
         );
       }
@@ -204,6 +282,14 @@ child.on("exit", (code, signal) => {
           ),
           signal,
         );
+        if (containment === "transient deadline") {
+          await withinTest(started, signal);
+          const rows = await readSnapshot(undefined, [nativePid!]);
+          const helper = rows.find((row) => row.pid === nativePid);
+          expect(helper === undefined || processSnapshot.isDeadProcessState(helper.state)).toBe(
+            true,
+          );
+        }
         // The injected inspection failure cannot certify physical descendant exit.
         await waitForNativeExit(nativePid!, readSnapshot, signal);
         nativeExited = true;
@@ -221,7 +307,7 @@ child.on("exit", (code, signal) => {
           exitCode: null,
           signalCode: "SIGKILL",
         });
-        expect(containmentRefused).toBe(containment === "unavailable");
+        expect(containmentRefused).toBe(containment !== "available");
       } finally {
         vi.restoreAllMocks();
         nativePid ??= Number(await fs.readFile(readyPath, "utf8").catch(() => "")) || undefined;

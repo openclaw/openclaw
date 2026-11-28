@@ -4,7 +4,7 @@ import type { ProviderUsageSnapshot } from "./provider-usage.types.js";
 
 const now = Date.UTC(2026, 0, 7, 12);
 const snapshot = (
-  windows: ProviderUsageSnapshot["windows"] = [],
+  windows: ProviderUsageSnapshot["windows"],
   fields: Partial<ProviderUsageSnapshot> = {},
 ): ProviderUsageSnapshot => ({
   provider: "anthropic",

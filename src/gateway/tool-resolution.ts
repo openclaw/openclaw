@@ -83,7 +83,6 @@ export async function resolveGatewayScopedTools(
     | "senderIsOwner"
     | "currentMessageId"
     | "nativeCronCreatorToolAllowlist"
-    | "nodeExecAllowed"
     | "cronCreatorCallerOrigin"
   > & {
     cfg: OpenClawConfig;
@@ -214,7 +213,9 @@ export async function resolveGatewayScopedTools(
   const requesterPolicies = await resolveGatewayRequesterToolPolicies(params, {
     runtimePolicySessionKey,
     policyAgentId,
-    nodeExecSurface,
+    // A capped tool set drops node exec; the CLI run's grant keeps the embedded sender policy.
+    embeddedRunPolicy:
+      nodeExecSurface || (surface === "loopback" && params.nodeExecAllowed === true),
     accountId: gatewayCaller.accountId,
   });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
@@ -354,6 +355,7 @@ export async function resolveGatewayScopedTools(
     currentInboundAudio: params.currentInboundAudio,
     sessionId: params.sessionId,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
+    toolBindings: params.toolBindings,
     senderIsOwner,
     gitContributorProfileId: params.gitContributorProfileId,
     config: params.cfg,

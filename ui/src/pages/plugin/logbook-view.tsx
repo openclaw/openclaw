@@ -85,9 +85,31 @@ function StatusChips(props: { status: LogbookStatusPayload; capturePending: bool
               : t("logbook.status.disabled")}
       </StatusChip>
       <Show when={props.status.nodeName || props.status.nodeId}>
-        <StatusChip title={t("logbook.status.nodeHelp")}>
-          <Icon name="monitor" /> {props.status.nodeName ?? props.status.nodeId}
-        </StatusChip>
+        {(device) => (
+          <Show
+            when={!props.status.nodeName && device().length > 20}
+            fallback={
+              <span class="logbook__chip logbook__device" title={t("logbook.status.nodeHelp")}>
+                <Icon name="monitor" />
+                <span>{device()}</span>
+              </span>
+            }
+          >
+            <details class="logbook__device-details">
+              <summary
+                class="logbook__chip logbook__device settings-disclosure__summary"
+                title={device()}
+              >
+                <Icon name="monitor" />
+                <span>
+                  {device().slice(0, 8)}…{device().slice(-8)}
+                </span>
+                <Icon name="chevronDown" />
+              </summary>
+              <code style={{ display: "block", padding: "4px 9px" }}>{device()}</code>
+            </details>
+          </Show>
+        )}
       </Show>
       <Show when={props.status.pendingFrames > 0}>
         <StatusChip title={t("logbook.status.pendingHelp")}>
@@ -161,17 +183,19 @@ function LogbookCard(props: {
           {props.formatClock(props.card.endMs, props.timeZone)}
         </span>
         <span class="logbook-card__stripe" aria-hidden="true" />
-        <span class="logbook-card__heading">
-          <span class="logbook-card__title">{props.card.title}</span>
-          <span class="logbook-card__summary">{props.card.summary}</span>
-        </span>
-        <span class="logbook-card__meta">
-          <span class="logbook-card__category">{props.card.category}</span>
-          <Show when={props.card.appPrimary}>
-            <span class="logbook-card__app">{props.card.appPrimary}</span>
-          </Show>
-          <span class="logbook-card__duration">
-            {formatDurationCompact(props.card.endMs - props.card.startMs) ?? "0s"}
+        <span class="logbook-card__content">
+          <span class="logbook-card__heading">
+            <span class="logbook-card__title">{props.card.title}</span>
+            <span class="logbook-card__summary">{props.card.summary}</span>
+          </span>
+          <span class="logbook-card__meta">
+            <span class="logbook-card__category">{props.card.category}</span>
+            <Show when={props.card.appPrimary}>
+              <span class="logbook-card__app">{props.card.appPrimary}</span>
+            </Show>
+            <span class="logbook-card__duration">
+              {formatDurationCompact(props.card.endMs - props.card.startMs) ?? "0s"}
+            </span>
           </span>
         </span>
       </button>

@@ -647,7 +647,7 @@ extension OpenClawSnapshotUITests {
             line: line)
     }
 
-    func sendFixtureChatMessage(_ text: String) {
+    func sendFixtureChatMessage(_ text: String) throws {
         guard let app else {
             XCTFail("Fixture app is unavailable")
             return
@@ -659,14 +659,13 @@ extension OpenClawSnapshotUITests {
 
         let send = app.buttons["chat-send-message"]
         XCTAssertTrue(send.waitForExistence(timeout: 3))
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
         send.tap()
 
         XCTAssertTrue(app.staticTexts[text].waitForExistence(timeout: 5))
         XCTAssertTrue(
             app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "I can help with"))
                 .firstMatch.waitForExistence(timeout: 5))
+        try self.dismissChatKeyboardThroughTranscript(in: app)
     }
 
     func attachScreenshot(named name: String) {

@@ -357,7 +357,7 @@ extension OpenClawChatView {
     private var subagentWaitRow: some View {
         if let wait = self.viewModel.subagentWait {
             HStack(spacing: 7) {
-                ChatWorkingClawView(seed: "subagent-wait", parked: true)
+                ChatWorkingClawView(parked: true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Waiting on subagents")
                         .font(OpenClawChatTypography.caption)
@@ -883,7 +883,6 @@ extension OpenClawChatView {
                 let name = pending?.addressedSessionKey.flatMap(transcript.tools.names.name(for:))
                 ChatTypingIndicatorBubble(
                     showsAssistantAvatar: self.showsAssistantAvatars,
-                    runIdentity: self.viewModel.workingIndicatorIdentity,
                     status: self.viewModel.runWorkingLabel,
                     toolLabel: pending?.stepTitle(chatName: name),
                     openTools: run.flatMap { id in items.isEmpty ? nil : { self.selectedWork = .run(id, items) } })

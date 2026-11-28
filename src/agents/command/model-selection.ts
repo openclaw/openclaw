@@ -648,11 +648,14 @@ export async function resolveEmbeddedModelSelection(params: {
   if (!primaryThinking.supported) {
     const explicitThink = Boolean(params.thinkOnce || params.thinkOverride);
     const isSubagentSpawnRun = params.isSubagentLane && isSubagentSessionKey(params.sessionKey);
-    // A machine-selected preference (Talk consult) falls back to a supported level per candidate.
+    const closestOnce =
+      params.opts.thinkingOnceClosest === true && params.thinkOnce && !params.thinkOverride;
+    // Machine-selected preferences fall back to a supported level per candidate.
     if (
       explicitThink &&
       !isSubagentSpawnRun &&
-      params.opts.normalizeThinkingLevelOverride !== true
+      params.opts.normalizeThinkingLevelOverride !== true &&
+      !closestOnce
     ) {
       throw new Error(
         `Thinking level "${primaryThinking.requestedLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog, thinkingRuntime)}.`,

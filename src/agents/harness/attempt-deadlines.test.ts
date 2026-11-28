@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 function createController(
-  overrides: Partial<Parameters<typeof createAgentHarnessAttemptDeadlineController>[0]> = {},
+  overrides: Partial<Parameters<typeof createAgentHarnessAttemptDeadlineController>[0]>,
 ) {
   const callbacks = { onTimeout: vi.fn(), onDeadlineChanged: vi.fn() };
   const controller = createAgentHarnessAttemptDeadlineController({

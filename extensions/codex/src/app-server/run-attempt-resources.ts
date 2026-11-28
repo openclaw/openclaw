@@ -205,9 +205,15 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       // Close the authorized node lease first; losing its socket first is a real disconnect.
       await releaseSandboxExecEnvironment();
       const ownedClient = state.releaseSharedClientLease ? state.client : undefined;
+      // Releasing an isolated lease calls close(). Start shutdown with the
+      // one-shot policy while this run still owns the first close.
+      const oneShotClose = params.oneShotCliRun
+        ? ownedClient?.closeAndWait(CODEX_ONE_SHOT_CLIENT_CLOSE_OPTIONS)
+        : undefined;
       releaseSharedClientLeaseOnce();
       if (ownedClient) {
-        const result = await ownedClient.closeAndWait(CODEX_ONE_SHOT_CLIENT_CLOSE_OPTIONS);
+        const result = await (oneShotClose ??
+          ownedClient.closeAndWait(CODEX_ONE_SHOT_CLIENT_CLOSE_OPTIONS));
         if (params.oneShotCliRun && result.cleanup === "uncertain") {
           throw new Error("Codex isolated client cleanup could not be confirmed");
         }

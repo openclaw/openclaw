@@ -46,7 +46,22 @@
   white-space: nowrap;
 }
 
+.logbook__device,
+.logbook__device-details {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.logbook__device {
+  white-space: normal;
+}
+
+.logbook__device-details[open] svg:last-child {
+  rotate: 180deg;
+}
+
 .logbook__chip svg {
+  flex: none;
   width: 12px;
   height: 12px;
 }
@@ -114,7 +129,7 @@
 
 .logbook-card {
   display: grid;
-  grid-template-columns: max-content 4px minmax(0, 1fr) auto;
+  grid-template-columns: max-content 4px minmax(0, 1fr);
   column-gap: 10px;
   border: 1px solid color-mix(in oklab, var(--muted) 18%, transparent);
   border-radius: var(--radius-md);
@@ -165,8 +180,17 @@
   background: hsl(var(--logbook-hue, 200) 65% 55%);
 }
 
+.logbook-card__content {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
 .logbook-card__heading {
   display: flex;
+  flex: 1 1 14rem;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
@@ -187,12 +211,15 @@
   white-space: nowrap;
 }
 
+.logbook-card--expanded .logbook-card__title,
 .logbook-card--expanded .logbook-card__summary {
+  overflow-wrap: anywhere;
   white-space: normal;
 }
 
 .logbook-card__meta {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 6px;
   white-space: nowrap;
@@ -210,6 +237,8 @@
 }
 
 .logbook-card__app {
+  overflow-wrap: anywhere;
+  white-space: normal;
   font-size: 11px;
   color: var(--muted);
 }
@@ -248,6 +277,7 @@
   font-size: 13px;
   line-height: 1.5;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .logbook-card__distractions {

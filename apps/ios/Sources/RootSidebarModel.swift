@@ -241,6 +241,9 @@ final class RootSidebarModel {
     private(set) var isRefreshing = false
     private(set) var sessionErrorText: String?
     private(set) var isSessionRosterComplete = false
+    private var loadedDrawerRosterAuthority: UInt64?
+    private var loadedDrawerPinsAuthority: UInt64?
+
     private var rosterGeneration = 0
     private var sessionObserverVisibility = false
     private var sessionObserverSync: Task<Void, Never>?
@@ -336,7 +339,21 @@ final class RootSidebarModel {
         }
     }
 
+    /// The offline roster is only a recent subset. Joining it with live placements would reveal
+    /// some pins now and move the other rows again when the first live roster arrives.
+    func isPreparingDrawerSessions(appModel: NodeAppModel) -> Bool {
+        guard !appModel.isLocalChatFixtureEnabled else { return false }
+        switch appModel.connection.operator {
+        case .connecting(reconnect: false): return true
+        case .connected:
+            let authority = appModel.operatorAuthorityGeneration
+            return self.loadedDrawerRosterAuthority != authority || self.loadedDrawerPinsAuthority != authority
+        case .idle, .paused, .connecting(reconnect: true): return false // Keep cached sessions usable offline.
+        }
+    }
+
     func refresh(appModel: NodeAppModel) async {
+        let authority = appModel.operatorAuthorityGeneration
         self.rosterGeneration &+= 1
         self.sessionChangesDuringLoad = [:]
         let rosterGeneration = self.rosterGeneration
@@ -348,6 +365,7 @@ final class RootSidebarModel {
             }
         }
 
+        async let pins: Void = appModel.refreshPersonalSidebarPins()
         async let roster = self.loadRoster(appModel: appModel)
         async let dashboard = self.loadDashboard(appModel: appModel)
         let loadedRoster = await roster
@@ -361,9 +379,14 @@ final class RootSidebarModel {
             case .cancelled:
                 return
             }
+            self.loadedDrawerRosterAuthority = authority
             self.isRefreshing = false
             self.sessionRefreshCoordinator.finishLoad()
         }
+
+        await pins
+        guard !Task.isCancelled, appModel.operatorAuthorityGeneration == authority else { return }
+        self.loadedDrawerPinsAuthority = authority
 
         let loadedDashboard = await dashboard
         guard !Task.isCancelled else { return }
@@ -377,6 +400,7 @@ final class RootSidebarModel {
 
     func refreshSessions(appModel: NodeAppModel) async {
         await appModel.sessionGroups.refresh(appModel: appModel)
+        let authority = appModel.operatorAuthorityGeneration
         self.rosterGeneration &+= 1
         self.sessionChangesDuringLoad = [:]
         let rosterGeneration = self.rosterGeneration
@@ -399,6 +423,7 @@ final class RootSidebarModel {
         case .cancelled:
             return
         }
+        self.loadedDrawerRosterAuthority = authority
     }
 
     func setSessionObserverVisibility(appModel: NodeAppModel, visible: Bool) async {

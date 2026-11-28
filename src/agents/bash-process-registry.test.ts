@@ -17,6 +17,7 @@ import {
   onBackgroundProcessesChanged,
   prepareSessionPoll,
   recordNotifyOnExitRemoval,
+  setDurableProcessObserver,
   tail,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
@@ -120,6 +121,25 @@ it("coalesces output without serializing a target for every chunk and preserves 
   } finally {
     unsubscribe();
   }
+});
+
+it("observes a durable process while unrelated background commands keep finishing", () => {
+  vi.useFakeTimers();
+  const observe = vi.fn(async () => {});
+  const session = makeSession({ id: "durable" });
+  session.durable = {
+    observe,
+    cancel: vi.fn(),
+    remove: vi.fn(),
+    finalize: observe,
+    drain: observe,
+  };
+  setDurableProcessObserver(observe);
+  for (let i = 0; i < 5; i++) {
+    vi.advanceTimersByTime(1_000);
+    markExited(makeSession({ id: `ordinary-${i}` }), 0, null, "completed");
+  }
+  expect(observe).toHaveBeenCalledOnce();
 });
 
 it("suppresses a notify-on-exit event when terminal poll acknowledgement wins the race", () => {

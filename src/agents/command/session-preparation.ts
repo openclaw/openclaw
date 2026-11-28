@@ -9,7 +9,11 @@ import {
 import { buildInboundMetaSystemPrompt } from "../../auto-reply/reply/inbound-meta.js";
 import { prepareReplyConversation } from "../../auto-reply/reply/prompt-session-context.js";
 import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
-import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
+import {
+  normalizeVerboseLevel,
+  type ThinkLevel,
+  type VerboseLevel,
+} from "../../auto-reply/thinking.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
@@ -84,8 +88,12 @@ export async function prepareEmbeddedSessionState(params: {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }) {
   const requestedThinkLevel = params.thinkOnce ?? params.thinkOverride ?? params.persistedThinking;
+  // A one-shot level shapes only this run; the session keeps its saved preference.
   const resolvedVerboseLevel =
-    params.verboseOverride ?? params.persistedVerbose ?? params.verboseDefault;
+    normalizeVerboseLevel(params.opts.verboseOnce) ??
+    params.verboseOverride ??
+    params.persistedVerbose ??
+    params.verboseDefault;
   // Matches Gateway admission so re-registration cannot publish private intake.
   const privateConversationWork =
     params.opts.privateCompletion === true ||

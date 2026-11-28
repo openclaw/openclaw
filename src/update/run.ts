@@ -12,7 +12,6 @@ import {
   UpdatePreMutationError,
 } from "../cli/update-cli/shared.js";
 import type { PostCorePluginUpdateResult } from "../cli/update-cli/update-command-plugins-internals.js";
-import { resolveStateDir } from "../config/paths.js";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
@@ -308,7 +307,7 @@ export async function prepareUpdate(params: {
         } catch {
           return await fail(
             "package-not-writable",
-            `The global package at ${params.runningRoot} is not writable. Update it as its owning user.`,
+            `The global package at ${params.runningRoot} is not writable. Run the update as the user that owns it, or, if OpenClaw runs as a system service, run: sudo openclaw update`,
           );
         }
       }
@@ -323,7 +322,6 @@ export async function prepareUpdate(params: {
         kind: install.kind,
         target,
         prefix,
-        stateDir: resolveStateDir(env),
         node,
         env,
       });

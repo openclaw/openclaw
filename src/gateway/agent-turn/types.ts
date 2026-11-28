@@ -51,6 +51,7 @@ export type AgentTurnContext = Pick<
   | "getSessionEventSubscriberConnIds"
   | "loadGatewayModelCatalog"
   | "loadGatewayModelCatalogSnapshot"
+  | "loadReplyDispatchRuntime"
   | "logGateway"
   | "nodeSendToSession"
   | "removeChatRun"

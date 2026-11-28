@@ -336,6 +336,14 @@ export function planCronJobMutation(
       // Native inference authority replaces, rather than supplements, host credentials.
       delete nextJob.inferenceBinding;
     }
+    if (
+      nextJob.payload.kind !== "systemEvent" ||
+      nextJob.inferenceBinding ||
+      nextJob.runtimeAuthority ||
+      nextJob.runtimeAuthorityRecoveryRequired
+    ) {
+      delete nextJob.systemEventAccount;
+    }
     reconcileCronChannelRequesterAuthority({
       job: nextJob,
       // Bind only records the parent link; the authenticated requester stays bound to an

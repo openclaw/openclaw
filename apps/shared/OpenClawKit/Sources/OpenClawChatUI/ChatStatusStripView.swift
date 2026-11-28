@@ -167,11 +167,10 @@ struct ChatStatusStripView: View {
         } label: {
             // Busy keeps the label's box: the spinner takes its place, the strip does not resize.
             Text(verbatim: action.title)
-                .font(OpenClawChatTypography.body(size: 15, weight: .semibold, relativeTo: .subheadline))
-                .underline()
+                .font(OpenClawChatTypography.body(size: 15, weight: .bold, relativeTo: .subheadline))
                 // The action keeps its one line; the sentence wraps instead.
                 .fixedSize()
-                .foregroundStyle(OpenClawChatTheme.assistantText)
+                .foregroundStyle(.primary)
                 .opacity(self.isPerforming ? 0 : 1)
                 .overlay {
                     if self.isPerforming {

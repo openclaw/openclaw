@@ -64,6 +64,10 @@ export function createSearxngWebSearchProvider(): WebSearchProviderPlugin {
           }),
           categories: readStringParam(args, "categories"),
           language: readStringParam(args, "language"),
+          country: readStringParam(args, "country"),
+          freshness: readStringParam(args, "freshness"),
+          date_after: readStringParam(args, "date_after"),
+          date_before: readStringParam(args, "date_before"),
           signal: context?.signal,
         });
       },

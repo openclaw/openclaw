@@ -82,14 +82,13 @@ extension OpenClawSnapshotUITests {
     func testOpenWorkingClawListKeepsCallsAcrossCommentary() throws {
         self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: [
             "--openclaw-tool-run-fixture", "--openclaw-tool-run-interval-ms", "3000",
-            // XCUITest waits for foreground and root readiness before looking for this early call.
+            // Let the app reach the foreground before the fixture starts its live calls.
             "--openclaw-tool-run-start-delay-ms", "12000",
         ])
         let app = try XCTUnwrap(self.app)
-        let current = app.buttons["chat-working-status"]
-        expectation(for: NSPredicate(format: "label == %@", "Running cat outline.txt"), evaluatedWith: current)
-        waitForExpectations(timeout: 20)
-        current.tap()
+        // The commentary stays in the transcript after the first call; the working label keeps changing.
+        XCTAssertTrue(app.staticTexts["I’ll check the components next."].waitForExistence(timeout: 20))
+        app.buttons["chat-working-status"].tap()
         XCTAssertTrue(app.buttons["chat-tool-step-slot-outline"].waitForExistence(timeout: 4))
         XCTAssertTrue(app.buttons["chat-tool-step-slot-index"].exists, "The list starts at the beginning of the run")
         XCTAssertTrue(app.buttons["chat-tool-step-slot-palette"].waitForExistence(timeout: 8))

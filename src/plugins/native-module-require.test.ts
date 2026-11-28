@@ -7,6 +7,7 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import {
+  clearNativeRepositorySourceModulesForTest,
   isJavaScriptModulePath,
   resolvePluginLoaderTryNative,
   tryNativeRequireJavaScriptModule,
@@ -121,6 +122,29 @@ it("uses source-transform fallback only when native TLA loading needs it", () =>
   } else {
     expect(result).toEqual({ ok: false });
   }
+});
+
+it("evicts native repository sources between test files but keeps dependencies", () => {
+  const root = tempDirs.make("openclaw-native-require-");
+  const source = writeFile(root, "state.cjs", "module.exports = { generation: {} };\n");
+  fs.mkdirSync(path.join(root, "node_modules"));
+  const dependency = writeFile(
+    path.join(root, "node_modules"),
+    "dependency.cjs",
+    "module.exports = { instance: {} };\n",
+  );
+  const load = (modulePath: string) => {
+    const result = tryNativeRequireJavaScriptModule(modulePath);
+    expect(result.ok).toBe(true);
+    return result.ok ? result.moduleExport : undefined;
+  };
+  const retiredSource = load(source);
+  const retainedDependency = load(dependency);
+
+  clearNativeRepositorySourceModulesForTest(root);
+
+  expect(load(source)).not.toBe(retiredSource);
+  expect(load(dependency)).toBe(retainedDependency);
 });
 
 it("declines an in-flight ESM require race for source-transform fallback", () => {
