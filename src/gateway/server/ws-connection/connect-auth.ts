@@ -321,11 +321,17 @@ async function authenticateGatewayConnectCore(
     if (decision.kind === "reject-control-ui-insecure-auth") {
       const errorMessage =
         "web app requires device identity (use HTTPS or localhost secure context)";
+      // Keep the rejected auth reason (for example a trusted-proxy check) visible.
+      const authReason = authOk ? undefined : authResult.reason;
       markHandshakeFailure("control-ui-insecure-auth", {
         insecureAuthConfigured: false,
+        ...(authReason ? { authReason } : {}),
       });
       sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage, {
-        details: { code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED },
+        details: {
+          code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+          ...(authReason ? { authReason } : {}),
+        },
       });
       close(1008, errorMessage);
       return false;

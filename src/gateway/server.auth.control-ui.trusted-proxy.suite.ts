@@ -31,6 +31,31 @@ export function registerControlUiTrustedProxySuite(): void {
         expect(res.ok).toBe(false);
         expect(res.error?.details).toMatchObject({
           code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+          authReason: "trusted_proxy_loopback_source",
+        });
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
+  test("reports the trusted-proxy reason when a required proxy header is missing", async () => {
+    await configureTrustedProxyControlUiAuth({ allowLoopback: true });
+    await withControlUiGatewayServer(async ({ port }) => {
+      const { "x-forwarded-proto": _omitted, ...headers } = TRUSTED_PROXY_CONTROL_UI_HEADERS;
+      const ws = await openWs(port, headers);
+      try {
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          role: "operator",
+          scopes: ["operator.admin"],
+          device: null,
+          client: CONTROL_UI_CLIENT,
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.details).toMatchObject({
+          code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+          authReason: "trusted_proxy_missing_header_x-forwarded-proto",
         });
       } finally {
         ws.close();
