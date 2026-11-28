@@ -39,7 +39,16 @@ describe("searxng web search provider", () => {
   });
 
   it("maps generic tool arguments into SearXNG search params", async () => {
-    const args = { query: "openclaw docs", count: 4, categories: "general,news", language: "en" };
+    const args = {
+      query: "openclaw docs",
+      count: 4,
+      categories: "general,news",
+      language: "en",
+      country: "DE",
+      freshness: "week",
+      date_after: "2026-01-01",
+      date_before: "2026-02-01",
+    };
     await createTool().execute(args);
     expect(runSearxngSearch).toHaveBeenCalledWith({ config: {}, ...args });
   });
@@ -48,17 +57,6 @@ describe("searxng web search provider", () => {
     await expect(createTool().execute({ query: "openclaw docs", count })).rejects.toThrow(
       "count must be an integer from 1 to 10.",
     );
-    expect(runSearxngSearch).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    [{ country: "DE" }, "unsupported_country"],
-    [{ freshness: "week" }, "unsupported_freshness"],
-    [{ date_after: "2026-01-01" }, "unsupported_date_filter"],
-  ])("reports unsupported filter %o instead of searching unfiltered", async (filter, error) => {
-    await expect(
-      createTool().execute({ query: "openclaw docs", ...filter }),
-    ).resolves.toMatchObject({ error });
     expect(runSearxngSearch).not.toHaveBeenCalled();
   });
 
