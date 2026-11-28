@@ -453,15 +453,9 @@ provider-neutral for CLI, app, and Control UI consumers.
   `user:profile` scope, falls back to a `claude.ai` web session (`CLAUDE_AI_SESSION_KEY`,
   `CLAUDE_WEB_SESSION_KEY`, or a `sessionKey=` cookie in `CLAUDE_WEB_COOKIE`) when set.
   Stored setup-token profiles never call the OAuth usage endpoint: they use that web
-  session, or the native Claude CLI login when none is set. A native Claude CLI
-  `claude.ai` login is also used when no other Anthropic credential reports usage:
-  `claude auth status --json` refreshes it under Claude's own lock, then OpenClaw reads
-  only the access token from Claude's `.credentials.json` (never the refresh token, and
-  never the macOS Keychain). A config that routes Claude through the `claude-cli`
-  backend counts as a credential source, so this works with no Anthropic env var or
-  auth profile. The native login is read only when a usage surface is requested (not
-  during agent turns), its token goes only to Anthropic's OAuth usage endpoint, and the
-  quota it returns stays local. Model-scoped limits and enabled extra-usage monthly spend/budgets are included
+  session, or fall back to a file-backed native Claude CLI login when configured.
+  Native Claude CLI quota is polled only on demand (`/status`, `openclaw status --usage`,
+  Control UI Usage) directly from Anthropic's usage endpoint and stays local. Model-scoped limits and enabled extra-usage monthly spend/budgets are included
   when Anthropic reports them. An explicit Anthropic Admin API key, or an
   auto-detected `sk-ant-admin...` provider profile, instead shows 30-day
   organization cost and Messages API history.
