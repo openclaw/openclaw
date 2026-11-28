@@ -353,6 +353,47 @@ Setup's connection check sends a short prompt without tools, so it can pass on a
 
 5. **Inspect the failing request and server logs.** Check the chat template, context window, memory pressure, and server errors. A successful text-only check does not prove that the model can reliably complete a multi-step agent task.
 
+### Verify a two-step tool task
+
+Before making a local model the default, run a task where the second tool call
+needs an opaque value from the first. For a read-only smoke test, put these two
+files in a disposable workspace:
+
+- `catalog.json`: `{"amber":"rec-41.json"}`
+- `rec-41.json`: `{"value":"VX-5904"}`
+
+Use a disposable config with your local provider, enough context for the agent
+prompt, and the following tool policy:
+
+```json5
+{
+  tools: { allow: ["read"], deny: ["skills_read"], toolSearch: false },
+}
+```
+
+Replace `local-provider/local-model` with your model and do not pass a fallback:
+
+```bash
+openclaw agent exec --config ./local-test.json --cwd ./fixture \
+  --model "local-provider/local-model" --code-mode direct --json \
+  "Read catalog.json to find amber's record file. Read that file and return only its exact value."
+```
+
+Check that the run reads the catalog, reads the file it points to, and returns
+`VX-5904`. A successful exit or a successful first tool call does not count. If
+the agent stops after the first call, check the next request received by the
+local server for the tool result. If it is present, inspect the server's rendered
+chat template and whether the next reply contains a second tool call. Use
+[raw assistant stream logging](/help/debugging#raw-stream-logging) to inspect
+what OpenClaw received, not to infer what it sent. Capture only synthetic runs;
+keep raw payloads private.
+
+For comparisons, start fresh runs and keep the model build, quantization,
+server template, context limit, and sampling settings fixed. Change one setting
+at a time and check a second record the model has not seen. Do not enable a
+compatibility flag globally just because the server accepts it: the template
+may ignore it.
+
 ## Output budgets and repetition stops
 
 OpenClaw sends the resolved model output limit to local model servers. Native
