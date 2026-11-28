@@ -200,4 +200,17 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     });
     expect(replaced.resolveLifecycle("orphan").ok).toBe(false);
   });
+
+  it("names the plugins.load.paths override when reload refuses its shadowed install", () => {
+    const localDir = makeTempDir();
+    const index = createIndex(localDir);
+    index.plugins[0] = { ...index.plugins[0]!, origin: "config" };
+    index.installRecords = { installed: pathInstall(makeTempDir()) };
+    expect(ownershipOf(index).resolveReload("installed")).toEqual({
+      ok: false,
+      error:
+        `Plugin "installed" at ${localDir} comes from plugins.load.paths and overrides its installed package "installed". ` +
+        "Refreshing the plugin registry keeps that override. To maintain the installed package, remove the plugins.load.paths entry that selects this plugin, then retry.",
+    });
+  });
 });
