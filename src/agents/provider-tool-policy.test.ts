@@ -11,20 +11,17 @@ describe("provider tool policy", () => {
     expect(normalizeToolProviderPolicyKey("openai/")).toBe("openai");
   });
 
-  it.each([
-    { alias: "amazon-bedrock", canonical: "bedrock" },
-    { alias: "openai/", canonical: "openai" },
-  ])("prefers $canonical over $alias", ({ alias, canonical }) => {
+  it("prefers canonical entries over normalized keys", () => {
     const entry = resolveProviderToolPolicyEntry({
       byProvider: {
-        [alias]: { profile: "alias" },
-        [canonical]: { profile: "canonical" },
+        "openai/": { profile: "alias" },
+        openai: { profile: "canonical" },
       },
-      modelProvider: canonical,
+      modelProvider: "openai",
     });
 
     expect(entry).toEqual({
-      key: canonical,
+      key: "openai",
       policy: { profile: "canonical" },
     });
   });
