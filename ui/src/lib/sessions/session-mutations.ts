@@ -4,6 +4,7 @@ import type {
   SessionsAssignOwnerResult,
   SessionsPatchManyParams,
   SessionsPatchManyResult,
+  SessionsSetInvolvementParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
@@ -41,6 +42,9 @@ import type {
   SessionResetResult,
 } from "./session-types.ts";
 
+type SessionInvolvementWrite =
+  typeof import("./session-involvement-write.runtime.ts").setSessionInvolvement;
+
 export function createSessionMutations(host: SessionMutationsHost) {
   const reportError = (scope: SessionConnectionScope, error: unknown) => {
     if (host.connection.isCurrent(scope)) {
@@ -65,6 +69,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     category: optimisticCategories,
   };
   const optimisticSnooze = createOptimisticRowField(host, "snoozedUntil");
+  const involvement = createOptimisticRowField(host, "hiddenFromInvolvingMe");
   const optimisticUnread = createOptimisticRowField(host, "unread");
   const acknowledgeHiddenRuns = createHiddenRunReads(host, optimisticUnread);
   const optimisticArchive = createOptimisticArchivePatches(host);
@@ -76,6 +81,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     >
   > = [
     optimisticPins,
+    involvement,
     optimisticUnread,
     optimisticSnooze,
     optimisticArchive,
@@ -464,6 +470,8 @@ export function createSessionMutations(host: SessionMutationsHost) {
       const conversation = resolvePendingConversation(host.snapshot(), key, agentId);
       return conversation ? settingsPatches.read(conversation.identity) : undefined;
     },
+    setInvolvement: (params: SessionsSetInvolvementParams, write: SessionInvolvementWrite) =>
+      write(host, involvement, params),
     patchMany,
     acknowledgeHiddenRuns,
     assignOwner,

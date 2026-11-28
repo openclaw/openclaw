@@ -112,3 +112,71 @@ it("keeps the facts beside the reading column on a wide page and under it on a p
     mounted.unmount();
   }
 });
+
+it("keeps long draft file choices compact and opens the exact selected file", async () => {
+  const { page } = await import("vitest/browser");
+  await page.viewport(390, 844);
+  const file =
+    "templates/account_receivables/regional_invoice_escalation_weekly_followup_reminder_for_accounts_overdue.md";
+  const draft = {
+    id: "reminders-1a2b3c4d",
+    skillName: "reminders",
+    summary: "Review the reminder.",
+    createdAtMs: 1,
+  };
+  const request = vi.fn(async (method: string, params: { agentId: string; filePath?: string }) => {
+    if (method === "skills.workshop.list") {
+      return {
+        agentId: params.agentId,
+        root: "/synthetic/workshop",
+        mode: "propose",
+        skills: [],
+        archived: [],
+        drafts: [draft],
+      };
+    }
+    if (method === "skills.workshop.changes") {
+      return { changes: [] };
+    }
+    if (method === "skills.workshop.read") {
+      return {
+        content: params.filePath === file ? "Please review the invoice." : "Use the reminder.",
+        files: ["SKILL.md", file],
+      };
+    }
+    throw new Error(`Unexpected method: ${method}`);
+  });
+  const mounted = mountSolid(() => <SkillWorkshopPage />, {
+    wrapper: createSolidApplicationContextProvider(
+      createContext(request, { search: "?draft=" + draft.id }),
+    ).wrapper,
+  });
+  try {
+    (await waitForSolid(() => mounted.getByRole("button", { name: file }))).click();
+    await waitForSolid(() =>
+      expect(
+        mounted.getByText("Please review the invoice.").getBoundingClientRect().height,
+      ).toBeGreaterThan(0),
+    );
+    const choice = mounted.getByRole("button", { name: file });
+    expect(choice.getAttribute("aria-current")).toBe("true");
+    const column = choice.closest(".sw-file-chips")!.getBoundingClientRect();
+    const box = choice.getBoundingClientRect();
+    expect(box.width).toBeGreaterThan(0);
+    expect(column.right).toBeLessThanOrEqual(window.innerWidth);
+    expect(box.right).toBeLessThanOrEqual(column.right + 1);
+    const instructions = mounted.getByRole("button", { name: "SKILL.md" });
+    expect(box.height).toBe(instructions.getBoundingClientRect().height);
+    expect(choice.getAttribute("title")).toBe(file);
+    expect(choice.scrollWidth).toBeGreaterThan(choice.clientWidth);
+    expect(getComputedStyle(choice).textOverflow).toBe("ellipsis");
+    expect(getComputedStyle(choice).direction).toBe("rtl");
+    instructions.click();
+    await waitForSolid(() => expect(mounted.getByText("Use the reminder.")).toBeTruthy());
+    expect(mounted.getByRole("button", { name: "SKILL.md" }).getAttribute("aria-current")).toBe(
+      "true",
+    );
+  } finally {
+    mounted.unmount();
+  }
+});
