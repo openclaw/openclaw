@@ -191,6 +191,14 @@ function renderInputDialog(
               disabled={saving()}
               aria-invalid={!saving() && invalid() ? "true" : undefined}
               onInput={(event) => setRawValue(event.currentTarget.value)}
+              onCompositionEnd={recordCompositionEnd}
+              onKeyUp={clearCompositionEnd}
+              onBlur={clearCompositionEnd}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && isComposingKeyboardEvent(event)) {
+                  event.preventDefault();
+                }
+              }}
               autofocus
             />
           </label>

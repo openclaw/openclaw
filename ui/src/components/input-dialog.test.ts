@@ -89,6 +89,25 @@ describe("showInputDialog", () => {
     expect(submit).toHaveBeenCalledExactlyOnceWith("Notes");
   });
 
+  it("leaves Enter to the IME while composing and lets ordinary Enter submit", async () => {
+    const { closed, modal } = await open({ title: "Rename group" });
+    const press = (init: KeyboardEventInit) => {
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+      dialogInput().dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    expect(press({ isComposing: true })).toBe(true);
+    expect(press({ keyCode: 229 })).toBe(true);
+    expect(press({})).toBe(false);
+    modal.dispatchEvent(new CustomEvent("modal-cancel"));
+    await closed;
+  });
+
   it("rejects a reentrant input request instead of stacking or replaying it", async () => {
     const first = showInputDialog({ title: "First" });
     const second = showInputDialog({ title: "Second" });
