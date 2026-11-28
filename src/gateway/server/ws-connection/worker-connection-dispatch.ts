@@ -93,7 +93,7 @@ export async function dispatchWorkerRequest(params: {
   identity: WorkerConnectionIdentity;
   connectionId: string;
   service: WorkerConnectionService | undefined;
-  send(frame: unknown): void;
+  send: (frame: unknown) => void;
   respond: WorkerRespond;
   close(code: number, reason: WorkerProtocolCloseReason): void;
   warn(message: string): void;
@@ -211,7 +211,11 @@ export async function dispatchWorkerRequest(params: {
       WORKER_INFERENCE_PROTOCOL_FEATURE,
       validateWorkerInferenceStartParams,
       operation
-        ? (request) => operation.call(service, params.identity, request, params)
+        ? (request) =>
+            operation.call(service, params.identity, request, {
+              connectionId: params.connectionId,
+              send: params.send,
+            })
         : unavailableInference,
       workerInferenceError("invalid-context"),
       (failure: WorkerServiceFailure<"startInference">) => workerInferenceError(failure.reason),
