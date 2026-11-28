@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import type * as PluginLifecycleClient from "../cli/plugins-lifecycle-client.js";
 import { resolvePluginBatchReload } from "../cli/plugins-lifecycle-client.js";
+import { createPostCorePluginUpdateResult } from "../cli/update-cli/update-command-plugins-internals.js";
 import type * as InspectionOwner from "../cli/update-cli/update-command-post-activation-inspections.js";
 import { runPostActivationInspections } from "../cli/update-cli/update-command-post-activation-inspections.js";
 import type * as DoctorContributions from "../flows/doctor-health-contributions.js";
@@ -20,7 +21,11 @@ import { PACKAGE_RELEASE_MIN_AGE_MS } from "../infra/package-release-retention.j
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import type * as UpdateInstallStatus from "../infra/update-install-status.js";
 import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
-import { getUpdateRunAsync, getUpdateRunStatusAsync } from "../infra/update-run-reader.js";
+import {
+  getUpdateRunAsync,
+  getUpdateRunStatusAsync,
+  listUpdateRunsAsync,
+} from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import {
   createUpdateRunAsync,
@@ -58,6 +63,17 @@ const notices = vi.hoisted(() => [] as Array<{ runId: string; kind: string; stat
 const backgroundWork = vi.hoisted(() => {
   const jobs: Promise<void>[] = [];
   return jobs;
+});
+const maintenanceWarning = vi.hoisted(() => vi.fn<(message: string) => void>());
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "gateway/update-run" ? { ...logger, warn: maintenanceWarning } : logger;
+    },
+  };
 });
 vi.mock("../gateway/update-run-notice.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof UpdateNotices>()),
@@ -184,6 +200,65 @@ it.each([undefined, "offline", "pending", "trial", "restoring"] as const)(
       expect(await readTrial()).toBeNull();
       expect(await getUpdateRunStatusAsync()).toEqual({});
     }
+    expect(runPostActivationInspections).not.toHaveBeenCalled();
+    expect(notices).toEqual([]);
+    if (phase === "offline") {
+      expect(maintenanceWarning).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("getaddrinfo ENOTFOUND registry.npmjs.org"),
+      );
+    } else {
+      expect(maintenanceWarning).not.toHaveBeenCalled();
+    }
+  },
+);
+
+it.each([false, true])(
+  "reports plugin repair advisories when history is absent or settled (settled=%s)",
+  async (settled) => {
+    const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-boot-plugin-advice-"));
+    directories.push(state);
+    vi.stubEnv("OPENCLAW_STATE_DIR", state);
+    openOpenClawStateDatabase({ env: process.env });
+    let before: UpdateRunRecord | undefined;
+    if (settled) {
+      const run = await createUpdateRunAsync({ trigger: "cli" });
+      await recordUpdateRunStepAsync(run.runId, {
+        step: "plugins",
+        status: "completed",
+        detail: "previously recorded plugin result",
+      });
+      before = await finishUpdateRunAsync(run.runId, {
+        status: "succeeded",
+        after: { version: VERSION },
+      });
+    }
+    const message =
+      "Plugin finalization deferred because config changed. Run `openclaw plugins doctor` or `openclaw doctor --fix` to finish plugin repair.";
+    vi.mocked(runCommandWithTimeout).mockResolvedValueOnce({
+      stdout: JSON.stringify(
+        createPostCorePluginUpdateResult({
+          status: "warning",
+          warnings: [
+            {
+              reason: "plugin-config-conflict",
+              message,
+              guidance: ["openclaw plugins doctor", "openclaw doctor --fix"],
+            },
+          ],
+        }),
+      ),
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    await bootReady();
+    await Promise.all(backgroundWork);
+
+    expect(maintenanceWarning).toHaveBeenCalledExactlyOnceWith(message);
+    expect(await listUpdateRunsAsync()).toEqual(before ? [before] : []);
     expect(runPostActivationInspections).not.toHaveBeenCalled();
     expect(notices).toEqual([]);
   },

@@ -208,7 +208,7 @@ export async function captureAuthProfileAuthorization(params: {
       const selected = effective.profiles[profileId];
       if (!Object.hasOwn(effective.profiles, profileId) || !selected) {
         retired = true;
-        throw new AuthProfileAuthorizationError("retired");
+        throw new AuthProfileAuthorizationError("retired", { accountGone: true });
       }
       // Legacy reconciliation can replace a local profile with the shared credential.
       const selectedPath =
@@ -244,7 +244,7 @@ export async function captureAuthProfileAuthorization(params: {
                 (fact.expires !== undefined && fact.expires <= Date.now())
               ) {
                 retired = true;
-                throw new AuthProfileAuthorizationError("retired");
+                throw new AuthProfileAuthorizationError("retired", { accountGone: true });
               }
               if (fact.status === "pending") {
                 throw new AuthProfileAuthorizationError("unavailable");

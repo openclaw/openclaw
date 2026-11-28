@@ -20,15 +20,16 @@ struct ChatActionsMenu: View {
     nonisolated static func sections(
         isMainChat: Bool,
         isSaved: Bool,
+        hasInfoPage: Bool,
         hasContextUsage: Bool,
         canArchive: Bool,
         canDelete: Bool) -> [[Item]]
     {
         let sections: [[Item]] = [
             isMainChat ? [] : [.newChat],
-            isSaved ? [.pin, .rename, .moveToGroup] : [],
-            hasContextUsage ? [.contextUsage] : [],
-            (isSaved && canArchive ? [.archive] : []) + (isSaved && canDelete ? [.delete] : []),
+            isSaved ? [.pin] + (isMainChat || !hasInfoPage ? [.rename] : []) + [.moveToGroup] : [],
+            !hasInfoPage && hasContextUsage ? [.contextUsage] : [],
+            (!hasInfoPage && isSaved && canArchive ? [.archive] : []) + (isSaved && canDelete ? [.delete] : []),
         ]
         return sections.filter { !$0.isEmpty }
     }
@@ -41,6 +42,7 @@ struct ChatActionsMenu: View {
     @Environment(NodeAppModel.self) private var appModel
     let viewModel: OpenClawChatViewModel?
     let isMainChat: Bool
+    let hasInfoPage: Bool
     let isDisabled: Bool
     let newChat: () -> Void
 
@@ -51,7 +53,8 @@ struct ChatActionsMenu: View {
 
     private var session: OpenClawChatSessionEntry? {
         guard let viewModel, !viewModel.isNewChatDraft else { return nil }
-        return viewModel.currentSessionEntry()
+        guard let row = viewModel.currentSessionEntry() else { return nil }
+        return self.appModel.displayedSidebarPins?.project(row) ?? row
     }
 
     private var sections: [[Item]] {
@@ -60,6 +63,7 @@ struct ChatActionsMenu: View {
         return Self.sections(
             isMainChat: self.isMainChat,
             isSaved: session != nil,
+            hasInfoPage: self.hasInfoPage,
             hasContextUsage: self.viewModel?.contextUsage != nil,
             canArchive: session.map { ChatSessionSidebarModel.canArchiveSession($0, mainSessionKey: mainKey) }
                 ?? false,
@@ -69,6 +73,7 @@ struct ChatActionsMenu: View {
 
     var body: some View {
         Menu {
+            if let viewModel { ChatPRRestoreMenu(viewModel: viewModel) }
             ForEach(Array(self.sections.enumerated()), id: \.offset) { _, section in
                 Section {
                     ForEach(section, id: \.self) { item in
@@ -129,7 +134,11 @@ struct ChatActionsMenu: View {
         case .pin:
             let isPinned = self.session?.pinned == true
             Button {
-                self.patch(pinned: !isPinned)
+                if let key = self.session?.key {
+                    self.perform(leavesChat: false) { _ in
+                        try await self.appModel.setPersonalSidebarPin(key, pinned: !isPinned)
+                    }
+                }
             } label: {
                 Label(
                     isPinned ? String(localized: "Unpin") : String(localized: "Pin"),
@@ -205,7 +214,7 @@ struct ChatActionsMenu: View {
         }
     }
 
-    private func patch(label: String?? = nil, category: String?? = nil, pinned: Bool? = nil, archived: Bool? = nil) {
+    private func patch(label: String?? = nil, category: String?? = nil, archived: Bool? = nil) {
         guard let session = self.session else { return }
         self.perform(leavesChat: archived == true) { transport in
             try await transport.patchSession(
@@ -214,7 +223,7 @@ struct ChatActionsMenu: View {
                 label: label,
                 category: category,
                 color: nil,
-                pinned: pinned,
+                pinned: nil,
                 archived: archived,
                 unread: nil)
         }

@@ -475,3 +475,27 @@ it("adds an actionable notice when configured browser is filtered by the tool pr
     },
   ]);
 });
+
+it.each([
+  [
+    "an empty allowlist with the plugin disabled",
+    { allow: [], entries: { browser: { enabled: false } } },
+    false,
+  ],
+  ["an allowlist without browser", { allow: ["web-fetch"] }, true],
+])(
+  "blames plugins.allow only when the allowlist excludes browser: %s (#205672)",
+  async (_, plugins, blamed) => {
+    await loadHarness({
+      tools: [
+        mockTool({ name: "web_fetch", label: "Web Fetch", description: "Fetch web content" }),
+      ],
+    });
+    const result = await resolveEffectiveToolInventory({
+      cfg: { tools: { profile: "full" }, browser: { enabled: true }, plugins } as never,
+    });
+    expect(
+      (result.notices ?? []).some((notice) => notice.id === "browser-plugin-not-allowed"),
+    ).toBe(blamed);
+  },
+);

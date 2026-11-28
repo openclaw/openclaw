@@ -179,6 +179,7 @@ function ambiguousSessionRouteData(
     return uuid ? [{ row, uuid }] : [];
   });
   const uuids = resolvedRows.map(({ uuid }) => uuid);
+  const draftSearch = draftSearchFromLocation(location);
   const candidates = resolvedRows.flatMap(({ row, uuid }) => {
     const prefix = uniqueShortIdPrefix(uuid, uuids, resolution.truncated);
     if (!prefix) {
@@ -196,7 +197,7 @@ function ambiguousSessionRouteData(
           {
             agentId,
             displayName: row.displayName?.trim() || row.key,
-            href: `${href}${draftSearchFromLocation(location)}`,
+            href: `${href}${draftSearch}`,
             idPrefix: prefix,
           },
         ]

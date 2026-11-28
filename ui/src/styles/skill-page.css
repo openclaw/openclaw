@@ -41,6 +41,26 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 10px;
+  overflow-wrap: anywhere;
+}
+
+.skill-page__publisher {
+  min-width: 0;
+  max-width: 100%;
+}
+.skill-page__publisher summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: var(--cursor-action);
+}
+.skill-page__publisher summary > .plugin-metadata__middle {
+  display: inline-flex;
+  max-width: calc(100% - 1.5em);
+  vertical-align: bottom;
+}
+.skill-page__publisher > :not(summary) {
+  display: block;
 }
 
 .skill-page__byline strong {
@@ -267,6 +287,15 @@ dl.skill-page__facts {
   margin: 0;
 }
 
+.skill-page__facts .plugin-metadata__link {
+  overflow-wrap: anywhere;
+}
+
+.skill-page__facts .plugin-metadata__link:hover span {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .skill-page__fact-stack.skill-page__fact-stack {
   flex-direction: column;
   align-items: flex-start;
@@ -310,10 +339,6 @@ dl.skill-page__facts {
     align-items: center;
   }
 
-  .skill-page .plugin-catalog-detail--rail .plugin-catalog-detail__title-row h1 {
-    overflow-wrap: anywhere;
-  }
-
   .skill-page .plugin-catalog-detail--rail .plugin-catalog-detail__actions {
     flex: none;
   }
@@ -323,27 +348,17 @@ dl.skill-page__facts {
     width: auto;
   }
 
-  /* The owner line stays one line: the name whole, the handle cut short when it must. */
-  .skill-page .skill-page__byline {
+  /* An installed skill keeps its source beside its readiness indicator. Registry publisher
+     names and handles wrap instead: neither label should disappear beside the Import action. */
+  .skill-page__byline:has(.settings-status) {
     flex-wrap: nowrap;
-    min-width: 0;
   }
 
-  .skill-page .skill-page__byline > * {
-    flex: none;
-  }
-
-  /* The owner or source gives way first; a display name only when the line still does not fit. */
-  .skill-page .skill-page__byline > :is(span, strong):not(.settings-status) {
-    flex: 0 1000 auto;
+  .skill-page__byline:has(.settings-status) > span:not(.settings-status) {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .skill-page .skill-page__byline > strong:not(.settings-status) {
-    flex-shrink: 1;
   }
 
   .skill-requirements {
@@ -371,10 +386,14 @@ dl.skill-page__facts {
   }
 
   .skill-requirement__link,
-  .skill-page .plugin-metadata__audit-link,
-  .skill-page .plugin-metadata__link {
+  .skill-page .plugin-metadata__audit-link {
     margin-block: -7px;
     padding-block: 7px;
+  }
+
+  /* The external-link focus outline must clear its fact label. Keep the full touch padding. */
+  .skill-page .plugin-metadata__link {
+    margin-block-start: 0;
   }
 
   .skill-page .plugin-catalog-detail__readme-toggle {

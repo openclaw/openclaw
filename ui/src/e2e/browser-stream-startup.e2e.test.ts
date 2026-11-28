@@ -5,12 +5,14 @@ import { promisify } from "node:util";
 import { expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.ts";
+import { nativePane, openChatPanels } from "../test-helpers/chat-layout-menu.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const resource = { targetId: "raw-startup", url: "https://startup.example/page" };
@@ -74,6 +76,54 @@ function frame(jpeg: string, viewport: Viewport): Buffer {
 }
 
 suite.define(() => {
+  it("keeps Browser discovery and panel modules open-only", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const requestedPaths: string[] = [];
+      page.on("request", (request) => requestedPaths.push(new URL(request.url()).pathname));
+      const browserPanelModule = controlUiE2eBuiltModuleRequest(
+        "ui/src/components/browser/browser-panel.ts",
+      );
+      const browserTabListModule = controlUiE2eBuiltModuleRequest(
+        "ui/src/components/browser/browser-session-tab-list.ts",
+      );
+      const browserModuleRequests = () =>
+        requestedPaths.filter(
+          (path) => browserPanelModule.test(path) || browserTabListModule.test(path),
+        );
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "browser.request"],
+        operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+        historyMessages: [{ role: "assistant", content: "Open-only browser proof." }],
+        methodResponses: {
+          "browser.request": {
+            cases: [
+              { match: { path: "/tabs" }, response: { running: true, tabs: [pageInfo] } },
+              { match: { path: "/screencast" }, response: { token: "unused", ...resource } },
+            ],
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByText("Open-only browser proof.", { exact: true }).waitFor();
+      await openChatPanels(page, "desktop");
+      const pane = nativePane(page);
+      const launcher = pane.locator(".side-panel-launcher").filter({ visible: true });
+      await launcher.waitFor();
+      const browserOption = launcher.getByRole("button", { name: /Browser/ });
+
+      await browserOption.hover();
+      await browserOption.focus();
+      await page.waitForTimeout(50);
+      expect(browserModuleRequests()).toEqual([]);
+      expect(await gateway.getRequests("browser.request")).toEqual([]);
+
+      await browserOption.click();
+      await gateway.waitForRequest("browser.request", { match: { path: "/tabs" } });
+      await gateway.waitForRequest("browser.request", { match: { path: "/screencast" } });
+      expect(browserModuleRequests().length).toBeGreaterThan(0);
+    });
+  });
+
   it.each(["mint", "upgrade", "ready", "frame", "timeout"] as const)(
     "owns slow %s startup through the actual auxiliary WebSocket",
     async (phase) => {

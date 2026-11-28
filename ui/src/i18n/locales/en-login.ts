@@ -175,6 +175,11 @@ const enLogin = {
           "Couldn’t connect because this browser’s access request expired. Request approval again to continue.",
         requestAgain: "Request again",
       },
+      browserBlocked: {
+        title: "Browser blocked the Gateway connection",
+        summary:
+          "Check the Gateway URL. If the Gateway uses HTTPS, use its wss:// address. If the address is already correct, open Show details.",
+      },
       insecure: {
         title: "Secure browser context required",
         summary:

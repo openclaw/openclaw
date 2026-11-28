@@ -482,7 +482,8 @@ export const streamGoogleInteractions: StreamFunction<
         } else if (eventType === "interaction.completed" || eventType === "interaction.complete") {
           sawCompletion = true;
           const interaction = asOptionalRecord(event.interaction) ?? event;
-          const usage = asOptionalRecord(interaction.usage) ?? latestUsage ?? {};
+          const interactionUsage = asOptionalRecord(interaction.usage);
+          const usage = interactionUsage ?? latestUsage ?? {};
           const promptTokens = Number(usage.total_input_tokens ?? 0);
           const cacheRead = Number(usage.total_cached_tokens ?? 0);
           const candidatesTokens = Number(usage.total_output_tokens ?? 0);
@@ -493,19 +494,29 @@ export const streamGoogleInteractions: StreamFunction<
             usage.total_tokens ?? promptTokens + outputTokens + toolUseTokens,
           );
 
+          const measured =
+            typeof usage.total_input_tokens === "number" &&
+            typeof usage.total_output_tokens === "number";
+          // `total_input_tokens` is the measured prompt, cached tokens included; tool-use
+          // prompt tokens are prompt too.
+          const contextPromptTokens = promptTokens + toolUseTokens;
           output.usage = {
-            usageReport: {
-              state:
-                typeof usage.total_input_tokens === "number" &&
-                typeof usage.total_output_tokens === "number"
-                  ? "available"
-                  : "unavailable",
-            },
+            usageReport: { state: measured ? "available" : "unavailable" },
             input: Math.max(0, promptTokens - cacheRead) + toolUseTokens,
             output: outputTokens,
             cacheRead,
             cacheWrite: 0,
             cacheTelemetry: { state: "available" },
+            // Only the completed interaction's own usage measures the whole request; a step's
+            // usage carried forward does not.
+            contextUsage:
+              interactionUsage && measured && promptTokens > 0
+                ? {
+                    state: "available",
+                    promptTokens: contextPromptTokens,
+                    totalTokens: contextPromptTokens + outputTokens,
+                  }
+                : { state: "unavailable" },
             totalTokens,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
           };

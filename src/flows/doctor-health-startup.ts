@@ -296,12 +296,14 @@ export function checkDoctorStateSchemaPending(
 export async function traceDoctorConfigFlowPending(
   trace: (step: string, check?: DoctorMaintenancePendingCheck) => Promise<boolean> | undefined,
   options: DoctorOptions,
+  schemas: DoctorDatabasePreflight,
 ): Promise<void> {
   const { traceConfigFlowPendingInputs } =
     await import("../commands/doctor-config-flow-pending.js");
   await traceConfigFlowPendingInputs(trace, {
     env: process.env,
     integrityCheck: options.fullIntegrityCheck ? "full" : "quick",
+    agentDatabaseMigrationDiscovery: schemas.agentDatabaseMigrationDiscovery,
   });
 }
 

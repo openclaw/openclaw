@@ -37,6 +37,7 @@ it("settles an aborted acquisition without waiting for an unrelated queued comma
       coordinationKey: "file:synthetic-lease",
       databasePath: "/synthetic-lease/state.sqlite",
       identity: { key: "file:synthetic-lease", canonicalPath: "/synthetic-lease/state.sqlite" },
+      isCurrent: () => true,
       assertCurrent() {},
     },
   };

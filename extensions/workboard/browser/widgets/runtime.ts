@@ -1,6 +1,10 @@
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { isActiveWorkboardCard, nextWorkboardCardPosition } from "../lib/workboard/card-state.ts";
+import {
+  cardsWithPendingDrops,
+  isActiveWorkboardCard,
+  nextWorkboardCardPosition,
+} from "../lib/workboard/card-state.ts";
 import { loadWorkboard } from "../lib/workboard/loading.ts";
 import { moveWorkboardCard } from "../lib/workboard/mutations.ts";
 import {
@@ -181,6 +185,11 @@ export class WorkboardWidgetModel {
   }
   get cards() {
     return getWorkboardState(this.runtime.owner).cards.filter(isActiveWorkboardCard);
+  }
+  get boardCards() {
+    return cardsWithPendingDrops(getWorkboardState(this.runtime.owner)).filter(
+      isActiveWorkboardCard,
+    );
   }
   get hasMore() {
     return Boolean(getWorkboardState(this.runtime.owner).nextCursor);
