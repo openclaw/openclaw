@@ -112,9 +112,7 @@ function hasGoogleVertexAdcSync(env: NodeJS.ProcessEnv = process.env): boolean {
   const credentialsPath = resolveGoogleApplicationCredentialsPath(env);
   if (credentialsPath) {
     const type = readGoogleAdcCredentialsTypeSync(credentialsPath);
-    if (type === "authorized_user" || type === "external_account" || type === "service_account") {
-      return true;
-    }
+    return type === "authorized_user" || type === "external_account" || type === "service_account";
   }
   if (normalizeOptionalString(env.GOOGLE_APPLICATION_CREDENTIALS)) {
     return false;

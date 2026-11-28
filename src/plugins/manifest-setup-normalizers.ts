@@ -152,11 +152,21 @@ export function normalizeManifestSetup(value: unknown): PluginManifestSetup | un
           authEvidence: normalizeManifestObjectList<PluginManifestSetupProviderAuthEvidence>(
             entry.authEvidence,
             (rawEvidence) => {
-              if (rawEvidence.type !== "local-file-with-env") {
-                return undefined;
-              }
               const credentialMarker = normalizeOptionalString(rawEvidence.credentialMarker);
               if (!credentialMarker) {
+                return undefined;
+              }
+              if (rawEvidence.type === "gce-metadata-with-env") {
+                return omitUndefinedFields<PluginManifestSetupProviderAuthEvidence>({
+                  type: "gce-metadata-with-env",
+                  blockedByEnv: normalizeOptionalTrimmedStringList(rawEvidence.blockedByEnv),
+                  requiresAnyEnv: normalizeOptionalTrimmedStringList(rawEvidence.requiresAnyEnv),
+                  requiresAllEnv: normalizeOptionalTrimmedStringList(rawEvidence.requiresAllEnv),
+                  credentialMarker,
+                  source: normalizeOptionalString(rawEvidence.source),
+                });
+              }
+              if (rawEvidence.type !== "local-file-with-env") {
                 return undefined;
               }
               const fileEnvVar = normalizeOptionalString(rawEvidence.fileEnvVar);

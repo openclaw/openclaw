@@ -1,5 +1,4 @@
 /** Pure, non-resolving credential availability checks shared by status and route selection. */
-import { readFileSync } from "node:fs";
 import { hasNonEmptyString as hasSecret } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -14,7 +13,6 @@ import {
   SINGLE_VALUE_FILE_REF_ID,
 } from "../../secrets/ref-contract.js";
 import {
-  GCP_VERTEX_CREDENTIALS_MARKER,
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   SECRETREF_ENV_HEADER_MARKER_PREFIX,
@@ -87,27 +85,6 @@ export function resolveSecretRefReadOnlyAvailability(
   return undefined;
 }
 
-function isGceMetadataEnvironmentSync(env: NodeJS.ProcessEnv): boolean {
-  if (hasSecret(env.GCE_METADATA_HOST) || hasSecret(env.GCE_METADATA_IP)) {
-    return true;
-  }
-  try {
-    if (readFileSync("/sys/class/dmi/id/product_name", "utf8").trim() === "Google Compute Engine") {
-      return true;
-    }
-  } catch {
-    // Non-Linux or restricted sysfs.
-  }
-  try {
-    if (readFileSync("/sys/class/dmi/id/sys_vendor", "utf8").trim() === "Google") {
-      return true;
-    }
-  } catch {
-    // Non-Linux or restricted sysfs.
-  }
-  return false;
-}
-
 function resolveSecretInputReadOnlyAvailability(
   value: unknown,
   refValue: unknown,
@@ -121,16 +98,6 @@ function resolveSecretInputReadOnlyAvailability(
   }
   if (!hasSecret(value) || hasMalformedSecretInputSyntax(value)) {
     return false;
-  }
-  if (
-    typeof value === "string" &&
-    value.trim() === GCP_VERTEX_CREDENTIALS_MARKER &&
-    (hasSecret(env.GOOGLE_CLOUD_PROJECT) || hasSecret(env.GCLOUD_PROJECT)) &&
-    hasSecret(env.GOOGLE_CLOUD_LOCATION) &&
-    !hasSecret(env.GOOGLE_APPLICATION_CREDENTIALS) &&
-    isGceMetadataEnvironmentSync(env)
-  ) {
-    return true;
   }
   return isKnownEnvApiKeyMarker(value)
     ? hasSecret(env[value.trim()])

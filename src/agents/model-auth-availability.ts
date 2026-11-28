@@ -16,6 +16,7 @@ import type {
 } from "../plugin-sdk/provider-model-types.js";
 import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import { createProviderModelRoutesResolver } from "../plugins/provider-model-routes.js";
+import { resolveLocalProviderAuthEvidence } from "../secrets/provider-auth-evidence.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import {
   listExternalCliSyncProviderIds,
@@ -67,7 +68,7 @@ import {
   resolveProviderEnvAuthLookupMaps,
 } from "./model-auth-env-vars.js";
 import { resolveProviderEnvAuthEvidence } from "./model-auth-env.js";
-import { isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
+import { isNonSecretApiKeyMarker, isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
 import {
   hasSyntheticLocalProviderAuthConfig,
@@ -234,6 +235,9 @@ export function createModelAuthAvailabilityResolver(
     const normalized = normalizeProviderIdForAuth(provider);
     return aliasMap[normalized] ?? normalized;
   };
+  const hasMatchingLocalAuthEvidenceMarker = (provider: string, marker: string) =>
+    resolveLocalProviderAuthEvidence(authEvidenceMap[normalizeProvider(provider)], env)
+      ?.credentialMarker === marker.trim();
   const canRefreshOAuth = createOAuthRefreshAuthority(external, params.canRefreshProviderOAuth);
   const providerInput = (provider: string) =>
     resolveProviderConfigSecretInput(params.cfg, provider, sourceConfig);
@@ -386,13 +390,24 @@ export function createModelAuthAvailabilityResolver(
         credential.type !== "token" || credential.expires === undefined || credential.expires > now
       );
     }
-    return resolveStoredCredentialReadOnlyAvailability({
+    const availability = resolveStoredCredentialReadOnlyAvailability({
       credential,
       cfg: params.cfg,
       env,
       now,
       canRefreshOAuth: canRefreshOAuth(provider, profileId),
     });
+    if (
+      availability === undefined &&
+      credential.type === "api_key" &&
+      !credential.keyRef &&
+      typeof credential.key === "string" &&
+      isNonSecretApiKeyMarker(credential.key) &&
+      hasMatchingLocalAuthEvidenceMarker(provider, credential.key)
+    ) {
+      return true;
+    }
+    return availability;
   };
   const profileInCooldown = (profileId: string, target: AuthTarget) => {
     const cooldownModel = target.modelId
@@ -526,6 +541,14 @@ export function createModelAuthAvailabilityResolver(
         return withMode(configuredBearerMode, binding.evidence, true);
       }
       const managed = typeof apiKey === "string" && isSecretRefHeaderValueMarker(apiKey);
+      if (
+        !managed &&
+        typeof apiKey === "string" &&
+        isNonSecretApiKeyMarker(apiKey) &&
+        hasMatchingLocalAuthEvidenceMarker(provider, apiKey)
+      ) {
+        return withMode(configuredBearerMode, binding.evidence, true);
+      }
       return {
         availability: managed
           ? Boolean(resolveManagedSecretRefRuntimeProviderAuth({ provider, cfg: params.cfg })) ||

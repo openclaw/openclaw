@@ -670,4 +670,68 @@ describe("credential readiness and retry reasons", () => {
       }
     },
   );
+
+  it("publishes GCE metadata readiness for google-vertex with and without a saved ADC marker", () => {
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "google",
+          origin: "bundled",
+          providers: ["google-vertex"],
+          setup: {
+            providers: [
+              {
+                id: "google-vertex",
+                authMethods: ["api-key"],
+                envVars: ["GOOGLE_CLOUD_API_KEY"],
+                authEvidence: [
+                  {
+                    type: "gce-metadata-with-env",
+                    blockedByEnv: ["GOOGLE_APPLICATION_CREDENTIALS"],
+                    requiresAnyEnv: ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+                    requiresAllEnv: ["GOOGLE_CLOUD_LOCATION"],
+                    credentialMarker: "gcp-vertex-credentials",
+                    source: "gce metadata",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const env = {
+      GOOGLE_CLOUD_PROJECT: "my-project",
+      GOOGLE_CLOUD_LOCATION: "global",
+      GCE_METADATA_HOST: "metadata.google.internal",
+    };
+
+    const profileFree = resolverWith({ env, metadataSnapshot }).evaluateModelAuth("google-vertex");
+    expect(profileFree).toMatchObject({
+      availability: true,
+      selectedAuthMode: "api-key",
+      evidence: "environment",
+    });
+
+    const savedMarker = resolverWith({
+      env,
+      metadataSnapshot,
+      authStore: profileStore(
+        "google-vertex:manual",
+        createApiKeyCredential("google-vertex", "gcp-vertex-credentials"),
+      ),
+    }).evaluateModelAuth("google-vertex");
+    expect(savedMarker).toMatchObject({
+      availability: true,
+      selectedProfileId: "google-vertex:manual",
+      selectedAuthMode: "api_key",
+      evidence: "profile",
+    });
+
+    const blocked = resolverWith({
+      env: { ...env, GOOGLE_APPLICATION_CREDENTIALS: "/nonexistent/adc.json" },
+      metadataSnapshot,
+    }).evaluateModelAuth("google-vertex");
+    expect(blocked.availability).toBeUndefined();
+  });
 });

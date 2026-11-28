@@ -50,7 +50,43 @@ function hasRequiredAuthEvidenceEnv(
   return true;
 }
 
-function hasLocalFileAuthEvidence(evidence: ProviderAuthEvidence, env: NodeJS.ProcessEnv): boolean {
+function hasBlockedAuthEvidenceEnv(
+  evidence: Extract<ProviderAuthEvidence, { type: "gce-metadata-with-env" }>,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  return Boolean(
+    evidence.blockedByEnv?.some((key) => Boolean(normalizeOptionalSecretInput(env[key]))),
+  );
+}
+
+function isGceMetadataEnvironment(env: NodeJS.ProcessEnv): boolean {
+  if (
+    normalizeOptionalPathInput(env.GCE_METADATA_HOST) ||
+    normalizeOptionalPathInput(env.GCE_METADATA_IP)
+  ) {
+    return true;
+  }
+  try {
+    if (fs.readFileSync("/sys/class/dmi/id/product_name", "utf8").trim() === "Google Compute Engine") {
+      return true;
+    }
+  } catch {
+    // Non-Linux or restricted sysfs.
+  }
+  try {
+    if (fs.readFileSync("/sys/class/dmi/id/sys_vendor", "utf8").trim() === "Google") {
+      return true;
+    }
+  } catch {
+    // Non-Linux or restricted sysfs.
+  }
+  return false;
+}
+
+function hasLocalFileAuthEvidence(
+  evidence: Extract<ProviderAuthEvidence, { type: "local-file-with-env" }>,
+  env: NodeJS.ProcessEnv,
+): boolean {
   if (evidence.fileEnvVar) {
     const explicitPath = normalizeOptionalPathInput(env[evidence.fileEnvVar]);
     if (explicitPath) {
@@ -78,11 +114,18 @@ export function resolveLocalProviderAuthEvidence(
   env: NodeJS.ProcessEnv,
 ) {
   for (const evidence of evidenceEntries ?? []) {
-    if (
-      evidence.type !== "local-file-with-env" ||
-      !hasRequiredAuthEvidenceEnv(evidence, env) ||
-      !hasLocalFileAuthEvidence(evidence, env)
-    ) {
+    if (!hasRequiredAuthEvidenceEnv(evidence, env)) {
+      continue;
+    }
+    if (evidence.type === "local-file-with-env") {
+      if (!hasLocalFileAuthEvidence(evidence, env)) {
+        continue;
+      }
+    } else if (evidence.type === "gce-metadata-with-env") {
+      if (hasBlockedAuthEvidenceEnv(evidence, env) || !isGceMetadataEnvironment(env)) {
+        continue;
+      }
+    } else {
       continue;
     }
     return {

@@ -123,6 +123,11 @@ describe("google manifest model catalog", () => {
           "${APPDATA}/gcloud/application_default_credentials.json",
         ],
       }),
+      expect.objectContaining({
+        type: "gce-metadata-with-env",
+        blockedByEnv: ["GOOGLE_APPLICATION_CREDENTIALS"],
+        credentialMarker: "gcp-vertex-credentials",
+      }),
     ]);
   });
 

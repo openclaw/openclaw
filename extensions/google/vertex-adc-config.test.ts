@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveGoogleVertexConfigApiKey } from "./vertex-adc-config.js";
 
@@ -31,5 +34,22 @@ describe("resolveGoogleVertexConfigApiKey", () => {
         GCE_METADATA_HOST: "metadata.google.internal",
       }),
     ).toBeUndefined();
+  });
+
+  it("returns undefined when an existing selected ADC file is malformed even on GCE", () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "vertex-adc-malformed-"));
+    try {
+      writeFileSync(path.join(tmpDir, "application_default_credentials.json"), "{not-valid-json");
+      expect(
+        resolveGoogleVertexConfigApiKey({
+          GOOGLE_CLOUD_PROJECT: "my-project",
+          GOOGLE_CLOUD_LOCATION: "global",
+          CLOUDSDK_CONFIG: tmpDir,
+          GCE_METADATA_HOST: "metadata.google.internal",
+        }),
+      ).toBeUndefined();
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
