@@ -46,6 +46,22 @@ describe("formatAssistantErrorText", () => {
     expect(formatUserFacingAssistantErrorText(msg)).toBe(expected);
   };
 
+  it("retains affordability from structured provider details without exposing the body", () => {
+    const message = makeAssistantMessageFixture({
+      errorMessage: "402 Payment Required",
+      errorBody: JSON.stringify({
+        error: {
+          message:
+            "This request requires more credits, or fewer max_tokens. You requested up to 217003 tokens, but can only afford 134896.",
+        },
+        request: "PRIVATE_CANARY",
+      }),
+    });
+    const copy = formatUserFacingAssistantErrorText(message);
+    expect(copy).toContain("Reduce the maximum output tokens (`max_tokens`)");
+    expect(copy).not.toContain("PRIVATE_CANARY");
+  });
+
   it.each([401, 403])(
     "does not treat an upstream %s with a colliding code as a deployment denial",
     (status) => {

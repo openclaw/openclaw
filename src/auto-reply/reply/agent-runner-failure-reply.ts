@@ -120,6 +120,7 @@ export function resolveReplyFailureSummary(params: {
             provider: failoverError?.provider,
             model: failoverError?.model,
             authMode: failoverError?.authMode,
+            rawError: failoverError?.rawError ?? params.message,
           })
         : kind === "overloaded"
           ? // A host-authored refusal names its own cause; overload copy would blame the AI service.
