@@ -332,7 +332,7 @@ describe("subagent announce seam flow", () => {
   );
 
   it("reports thrown announce failures to the delivery owner", async () => {
-    const error = "requester lookup unavailable";
+    const error = "Session transcript keyed user is outside the current turn: old-input";
     vi.spyOn(announceDelivery, "deliverSubagentAnnouncement").mockRejectedValueOnce(
       new Error(error),
     );
