@@ -18,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest, type SignalTransportKind } from "./client-adapter.js";
+import { filesToBase64DataUris } from "./client-container.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { normalizeSignalMessagingTarget } from "./normalize.js";
 import { isSignalQuoteMetadataRejection } from "./quote-rejection.js";
@@ -170,6 +171,7 @@ export async function sendMessageSignal(
     opts.maxBytes ??
     (accountInfo.config.mediaMaxMb ?? cfg.agents?.defaults?.mediaMaxMb ?? 8) * 1024 * 1024;
 
+  const transportKind = opts.transportKind ?? accountInfo.transport.kind;
   let attachments: string[] | undefined;
   if (opts.mediaUrl?.trim()) {
     const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes, {
@@ -177,7 +179,13 @@ export async function sendMessageSignal(
       localRoots: opts.mediaLocalRoots,
       readFile: opts.mediaReadFile,
     });
-    attachments = [resolved.path];
+    // External-native signal-cli can run as another uid and cannot traverse the
+    // private outbound store. Carry the already-authorized bytes over JSON-RPC.
+    // Container converts paths itself; managed-native shares the gateway uid.
+    attachments =
+      transportKind === "external-native"
+        ? await filesToBase64DataUris([resolved.path], maxBytes)
+        : [resolved.path];
     outboundMedia = {
       contentType: resolved.contentType,
       kind: kindFromMime(resolved.contentType ?? undefined) ?? "unknown",
@@ -240,7 +248,7 @@ export async function sendMessageSignal(
     timeoutMs:
       opts.timeoutMs ??
       (attachments?.length ? resolveSignalMediaSendTimeoutMs(maxBytes) : undefined),
-    transportKind: opts.transportKind ?? accountInfo.transport.kind,
+    transportKind,
     maxAttachmentBytes: maxBytes,
     assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
   };
