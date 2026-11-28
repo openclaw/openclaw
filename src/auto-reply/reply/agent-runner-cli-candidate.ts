@@ -223,6 +223,7 @@ export async function runCliFallbackCandidate(
       },
       async ({
         sessionEntry: initialSessionEntry,
+        publishContext,
         cliSessionBinding,
         assertSettlementCurrent,
         settleResult,
@@ -455,6 +456,7 @@ export async function runCliFallbackCandidate(
             ...buildFallbackCandidateTurnParams(params),
             ...buildReplyRunStateParams(turn.followupRun.run),
             diagnosticOwner,
+            publishContext,
             sessionId: turn.followupRun.run.sessionId,
             // The stranded-reply retry keeps the human turn's provenance and authority; only
             // its native input is host-generated, so the CLI must not save it as user text.

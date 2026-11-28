@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import type * as Cli from "./cli-output-contracts.js";
 import {
   createClaudeParser,
+  createPluginParser,
   joinJsonlFrames,
   claudeStreamEvent,
   claudeTextDelta,
@@ -32,6 +33,78 @@ function init(sessionId: string) {
 }
 const messageStart = claudeStreamEvent({ type: "message_start" });
 const messageStop = claudeStreamEvent({ type: "message_stop" });
+
+it("keeps the running parent call separate from child usage and whole-turn billing", () => {
+  const parser = createClaudeParser();
+  const parentUsage = { input_tokens: 10, cache_read_input_tokens: 19_288, output_tokens: 4 };
+  parser.push(
+    joinJsonlFrames(
+      claudeStreamEvent({ type: "message_start", message: { id: "parent", usage: parentUsage } }),
+      claudeTextDelta("Working"),
+      "",
+    ),
+  );
+  expect(parser.hasTerminalResult()).toBe(false);
+  expect.soft(parser.getOutput()?.usage).toMatchObject({ input: 10, cacheRead: 19_288, output: 4 });
+
+  parser.push(
+    joinJsonlFrames(
+      { type: "assistant", message: { id: "parent", usage: parentUsage, content: [] } },
+      {
+        type: "assistant",
+        parent_tool_use_id: "tool-1",
+        message: {
+          id: "child",
+          usage: { input_tokens: 950, output_tokens: 7 },
+          content: [],
+        },
+      },
+      "",
+    ),
+  );
+  expect(parser.hasTerminalResult()).toBe(false);
+  expect.soft(parser.getOutput()?.usage).toMatchObject({ input: 10, cacheRead: 19_288, output: 4 });
+  finishFrames(parser, result("Done", { usage: { input_tokens: 960, output_tokens: 11 } }));
+  expect(parser.getOutput()).toMatchObject({
+    usage: { input: 10, cacheRead: 19_288, output: 4 },
+    diagnosticUsage: { input: 960, output: 11 },
+  });
+});
+it("refines only the current parent call when Claude reports partial usage", () => {
+  const observed: number[] = [];
+  const parser = createClaudeParser({ onContextTokens: (tokens) => observed.push(tokens) });
+  const start = (id: string, usage?: Record<string, number>) =>
+    claudeStreamEvent({ type: "message_start", message: { id, usage } });
+  const delta = (usage: Record<string, number | null>) =>
+    claudeStreamEvent({ type: "message_delta", usage });
+  finishFrames(
+    parser,
+    start("first", { input_tokens: 100, cache_read_input_tokens: 900, output_tokens: 1 }),
+    delta({ input_tokens: 100, cache_read_input_tokens: null, output_tokens: 40 }),
+    delta({ output_tokens: 41 }),
+    delta({ cache_read_input_tokens: 0, output_tokens: 42 }),
+    start("second"),
+    delta({ output_tokens: 9 }),
+    result("Done", { usage: { input_tokens: 1100, output_tokens: 51 } }),
+  );
+  expect(observed).toEqual([1001, 1040, 1041, 142]);
+  expect(parser.getOutput()).toMatchObject({
+    usage: { input: 100, output: 42, cacheRead: undefined },
+    diagnosticUsage: { input: 1100, output: 51 },
+  });
+});
+
+it("keeps terminal-only usage available without publishing live context", () => {
+  const onContextTokens = vi.fn();
+  const parser = createPluginParser({
+    onContextTokens,
+    parseJsonlEvent: () => ({ kind: "result", text: "Done", usage: { input: 120, output: 5 } }),
+  });
+  finishFrames(parser, { type: "summary" });
+  expect(parser.getOutput()?.usage).toMatchObject({ input: 120, output: 5 });
+  expect(onContextTokens).not.toHaveBeenCalled();
+});
+
 function message(text: string) {
   return [messageStart, claudeTextDelta(text)];
 }

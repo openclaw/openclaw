@@ -485,6 +485,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
               bootstrapPromptWarningSignaturesSeen,
             }),
             diagnosticOwner,
+            publishContext: turn.publishContext,
             sessionEntry: params.sessionEntry,
             storePath: params.storePath,
             persistAssistantTranscript:

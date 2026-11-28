@@ -36,7 +36,6 @@ import {
   preferGeminiCliStreamJsonError,
   readClaudeAttributedSubagentProgressId,
   preferStreamedClaudeTextOverResult,
-  readCliUsage,
   readGeminiCliStreamJsonError,
   supportsCliJsonlToolEvents,
 } from "./cli-output-records.js";
@@ -48,6 +47,7 @@ import {
   streamJsonOutputLimitErrorText,
 } from "./cli-output-stream-limits.js";
 import { resolveCliStreamOutput } from "./cli-output-stream-output.js";
+import { createCliUsageObserver } from "./cli-output-usage.js";
 export { CLI_STREAM_JSON_MISSING_RESULT_ERROR } from "./cli-output-stream-output.js";
 const CLAUDE_SYNTHETIC_NO_RESPONSE_ERROR = "Claude CLI returned a synthetic no-response result.";
 
@@ -74,6 +74,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let resumeCheckpointId: string | undefined;
   let usage: CliUsage | undefined;
   let diagnosticUsage: CliUsage | undefined;
+  const observeUsage = createCliUsageObserver(params);
   let output: CliOutput | null = null;
   let parseErrorText = "";
   let rawChars = 0;
@@ -344,19 +345,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       sawTerminalResult = true;
     }
     observeSessionId(parsed);
-    const nextUsage = readCliUsage(parsed);
-    const isClaudeTerminalResult = claudeStreamJson && parsed.type === "result";
-    if (isClaudeTerminalResult && nextUsage && usage) {
-      diagnosticUsage = nextUsage;
-    }
-    if (nextUsage) {
-      params.onUsage?.(nextUsage, isClaudeTerminalResult);
-    }
-    const shouldUseUsage =
-      !supportsCliJsonlToolEvents(params) || parsed.type !== "result" || !usage;
-    if (shouldUseUsage) {
-      usage = nextUsage ?? usage;
-    }
+    ({ usage, diagnosticUsage } = observeUsage(parsed, usage, diagnosticUsage));
     if (
       parsed.type === "assistant" &&
       isRecord(parsed.message) &&

@@ -71,6 +71,8 @@ export type RunCliAgentParams = Pick<
   /** Core lifecycle owner; never forwarded to the plugin execution context. */
   diagnosticOwner?: DiagnosticEmbeddedRunOwner;
   sessionTarget?: SessionTranscriptRuntimeTarget;
+  /** Mid-turn occupancy sink issued by the admitted session owner. */
+  publishContext?: (tokens: number) => Promise<void>;
   /** Session identity used only for sandbox and tool-policy resolution. */
   runtimePolicySessionKey?: string;
   sessionEntry?: SessionEntry;

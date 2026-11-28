@@ -686,6 +686,7 @@ export const gatewayMethodsTestInclude = [
 export const gatewayServerIsolatedTestFiles = [
   // Real Gateway startup requires the host-owned shared-state broker.
   "src/gateway/operator-admission.table.test.ts",
+  "src/gateway/cli-context-usage.gateway.integration.test.ts",
   // Real provider and subagent lifecycle registrations must survive the whole scenario.
   "src/gateway/gateway.prompt-cache.test.ts",
   "src/gateway/gateway-plugin-notice.prompt-cache.test.ts",
