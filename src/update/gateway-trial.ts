@@ -126,7 +126,9 @@ export function schedulePluginMaintenance(): void {
       ) {
         await recordUpdateRunStepAsync(lastRun.runId, step);
         wakeUpdateRunWatcher(lastRun.runId);
-      } else if (step.status === "failed" && step.detail) {
+      } else if (step.detail) {
+        // A successful child can defer repair. With no writable history step,
+        // its warning detail is the operator's only recovery guidance.
         log.warn(step.detail);
       }
     }, getAsyncWorkSignal()),
