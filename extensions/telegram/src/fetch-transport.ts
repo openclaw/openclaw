@@ -646,14 +646,45 @@ export function createTelegramTransport(
         err = cooldownError;
         continue;
       }
+      let requestStarted = false;
+      let resetBeforeRequestStart = false;
       try {
-        const response = await requestFetch(input, init, attempt.createDispatcher(freshConnection));
+        const dispatcher = attempt.createDispatcher(freshConnection);
+        // Undici invokes onRequestStart before writing HTTP request bytes.
+        // Keep this flag across redirect hops so a later reset cannot replay an earlier write.
+        const requestDispatcher =
+          freshConnection && attempt.exportAttempt.dispatcherPolicy?.mode === "direct"
+            ? dispatcher.compose(
+                (dispatch) => (options, handler) =>
+                  dispatch(options, {
+                    ...handler,
+                    onRequestStart(controller, context) {
+                      requestStarted = true;
+                      handler.onRequestStart?.call(this, controller, context);
+                    },
+                    onResponseError(controller, error) {
+                      resetBeforeRequestStart =
+                        !requestStarted && collectErrorCodes(error).has("ECONNRESET");
+                      handler.onResponseError?.call(this, controller, error);
+                    },
+                  }),
+              )
+            : dispatcher;
+        const response = await requestFetch(input, init, requestDispatcher);
         signal?.throwIfAborted();
         captureResponse(response, attemptIndex === startIndex ? undefined : attemptIndex);
         recordSuccessfulAttempt(attemptIndex);
         return response;
       } catch (caught) {
         signal?.throwIfAborted();
+        if (resetBeforeRequestStart && !requestStarted) {
+          throw new TelegramRequestNotStartedError(
+            "Telegram connection reset before request start",
+            {
+              cause: caught,
+            },
+          );
+        }
         const tunnelFailure = describeProxyTunnelFailure(
           attempt.exportAttempt.dispatcherPolicy?.mode,
           caught,
