@@ -70,9 +70,14 @@ vi.mock("../../gateway/control-ui-links.js", () => ({
   resolveControlUiLinks: resolveControlUiLinksMock,
 }));
 
-vi.mock("../../daemon/inspect.js", () => ({
-  renderGatewayServiceCleanupHints: renderGatewayServiceCleanupHintsMock,
-}));
+vi.mock("../../daemon/inspect.js", async () => {
+  const hints = await import("../../daemon/inspect-cleanup-hints.js");
+  return {
+    renderGatewayServiceCleanupHints: renderGatewayServiceCleanupHintsMock,
+    formatGatewayServiceInspectionErrors: hints.formatGatewayServiceInspectionErrors,
+    gatewayServiceCleanupHintLabel: hints.gatewayServiceCleanupHintLabel,
+  };
+});
 
 vi.mock("../../daemon/restart-logs.js", () => ({
   resolveGatewayLogPaths: () => ({
@@ -603,6 +608,8 @@ describe("printDaemonStatus", () => {
   registerServiceInspectionHintTests({
     renderHints: renderGatewayServiceCleanupHintsMock,
     output,
+    errors: () => output(runtime.error),
+    jsonValue: () => runtime.writeJson.mock.calls.at(-1)?.[0],
   });
 
   it.each([

@@ -14,7 +14,28 @@ import type { gatherDaemonStatus } from "./status.gather.js";
 import {
   callGatewayStatusProbe,
   capturePrintedDaemonStatus,
+  findExtraGatewayServices,
 } from "./status.gather.probes.test-support.js";
+
+export const unreadableSystemdInspectionError = [
+  {
+    source: "/etc/systemd/system/openclaw-unreadable.service",
+    message: "Service path could not be inspected.",
+  },
+];
+
+export function expectObservedGatewayExtras(
+  status: {
+    extraServices: unknown;
+    service: { label: string };
+    extraServiceInspectionErrors?: unknown;
+  },
+  services: unknown,
+): void {
+  expect(status.extraServices).toEqual(services);
+  expect(status.service.label).toBe("systemd system");
+  expect(status.extraServiceInspectionErrors).toEqual(unreadableSystemdInspectionError);
+}
 
 export function createStatusCommand() {
   const program = new Command().enablePositionalOptions().exitOverride();
@@ -52,6 +73,21 @@ export function registerServiceInspectionStatusTests(params: {
     overrides?: Partial<Parameters<typeof gatherDaemonStatus>[0]>,
   ) => ReturnType<typeof gatherDaemonStatus>;
 }): void {
+  it("keeps a thrown gateway service inspection visible during deep status", async () => {
+    findExtraGatewayServices.mockRejectedValueOnce(new Error("schtasks inventory failed"));
+
+    const status = await params.gatherStatus({ probe: false, deep: true });
+
+    expect(status.extraServices).toEqual([]);
+    expect(status.extraServiceInspectionErrors).toEqual([
+      {
+        source: "gateway-services",
+        message: "Gateway service inspection failed.",
+      },
+    ]);
+    expect(JSON.stringify(status)).not.toContain("schtasks inventory failed");
+  });
+
   it("uses fallback network details when interface discovery throws during status inspection", async () => {
     params.setDaemonConfig({ gateway: { bind: "tailnet", tls: { enabled: true } } });
     params.resolveGatewayBindHost.mockImplementationOnce(async () => {

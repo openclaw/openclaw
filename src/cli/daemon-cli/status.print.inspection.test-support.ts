@@ -7,6 +7,8 @@ export function registerServiceInspectionHintTests(params: {
     mockImplementation(renderer: (services: readonly ExtraGatewayService[]) => string[]): unknown;
   };
   output: () => string;
+  errors: () => string;
+  jsonValue: () => unknown;
 }) {
   it.each([
     {
@@ -57,4 +59,49 @@ export function registerServiceInspectionHintTests(params: {
       }
     },
   );
+
+  it("prints query-only recovery guidance and sanitizes human inspection errors", async () => {
+    const { renderGatewayServiceCleanupHints } =
+      await vi.importActual<typeof import("../../daemon/inspect.js")>("../../daemon/inspect.js");
+    params.renderHints.mockImplementation(renderGatewayServiceCleanupHints);
+    const label = "\\OpenClaw Gateway Example";
+    const status = {
+      service: {
+        label: "Scheduled Task",
+        loaded: null,
+        loadState: { status: "unknown", detail: "ownership not verified" },
+        loadedText: "enabled",
+        notLoadedText: "disabled",
+      },
+      extraServices: [
+        {
+          platform: "win32",
+          scope: "system",
+          label,
+          detail: "missing recovery launcher: C:\\missing\\openclaw-gateway-recovery.exe",
+        },
+      ],
+      extraServiceInspectionErrors: [
+        {
+          source: "\\OpenClaw Gateway Unreadable\u001b[0m",
+          message: "Gateway recovery launcher could not be inspected.\n",
+        },
+      ],
+    } as Parameters<typeof printDaemonStatus>[0];
+    printDaemonStatus(status, { json: false, deep: true });
+
+    const output = params.output();
+    expect(output).toContain(`Inspection hint: schtasks /Query /TN "${label}" /V /FO LIST`);
+    expect(output).not.toContain("/Delete");
+    expect(params.errors()).toContain("Gateway service inspection failed:");
+    expect(params.errors()).toContain(
+      "- \\OpenClaw Gateway Unreadable: Gateway recovery launcher could not be inspected.\\n",
+    );
+    expect(params.errors()).not.toContain("\u001b");
+
+    printDaemonStatus(status, { json: true, deep: true });
+    expect(params.jsonValue()).toMatchObject({
+      extraServiceInspectionErrors: status.extraServiceInspectionErrors,
+    });
+  });
 }

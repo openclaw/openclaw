@@ -8,7 +8,6 @@ import {
   resolveGatewaySystemdServiceName,
 } from "../../daemon/constants.js";
 import { formatGatewayHeapLimitReport } from "../../daemon/gateway-heap.js";
-import { renderGatewayServiceCleanupHints } from "../../daemon/inspect.js";
 import { formatForeignLaunchdJobs } from "../../daemon/launchd-foreign-jobs.js";
 import {
   resolveGatewayRestartLogPath,
@@ -52,6 +51,7 @@ import {
   renderPortDiagnosticsForCli,
   resolvePortListeningAddresses,
 } from "./status.port-format.js";
+import { printExtraGatewayServices } from "./status.print-extra-services.js";
 
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; deep?: boolean }) {
   if (opts.json) {
@@ -620,21 +620,13 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
 
-  if (extraServices.length > 0) {
-    defaultRuntime.log(warnText("Other gateway-like services detected (best effort):"));
-    for (const svc of extraServices) {
-      defaultRuntime.log(
-        `- ${warnText(terminalText`${svc.label}`)} ${terminalText`(${svc.scope}, ${svc.detail})`}`,
-      );
-    }
-    for (const svc of extraServices) {
-      const hintLabel = svc.platform === "darwin" ? "Cleanup hint:" : "Inspection hint:";
-      for (const hint of renderGatewayServiceCleanupHints([svc])) {
-        defaultRuntime.log(`${infoText(hintLabel)} ${hint}`);
-      }
-    }
-    spacer();
-  }
+  printExtraGatewayServices(status, {
+    log: (line) => defaultRuntime.log(line),
+    error: (line) => defaultRuntime.error(line),
+    warnText,
+    infoText,
+    errorText,
+  });
 
   const drift = status.pluginVersionDrift;
   if (drift && drift.drifts.length > 0) {

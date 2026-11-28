@@ -721,6 +721,7 @@ describe("inventory projections", () => {
       expectedService("\\Custom Service"),
     ]);
     expect(renderGatewayServiceCleanupHints(result.services).join("\n")).not.toContain("Monitor");
+    expect(renderGatewayServiceCleanupHints(result.services).join("\n")).not.toContain("/Delete");
     const managed = await listManagedOpenClawGatewayServices(nativeEnv);
     expect(managed.errors).toEqual([]);
     expect(managed.services.map((service) => service.label)).toEqual([
@@ -788,4 +789,145 @@ describe("inventory projections", () => {
       expect(await listManagedOpenClawGatewayServices(env)).toEqual(result);
     }
   });
+
+  it("reports a recovery task only when its launcher file is gone", async () => {
+    const missing =
+      "C:\\WindowsApps\\OpenClawFoundation.OpenClawGateway_example\\openclaw-gateway-recovery.exe";
+    const present = path.join(
+      tempDirs.make("openclaw-recovery-present-"),
+      "openclaw-gateway-recovery.exe",
+    );
+    await fs.writeFile(present, "");
+    const orphan = "\\OpenClaw Gateway OpenClawFoundation.OpenClawGateway_example";
+    vi.mocked(taskProbe.listScheduledTasks).mockReturnValue([
+      task("\\OpenClaw Gateway"),
+      task(orphan, `"${missing}"`, ""),
+      task("\\OpenClaw Gateway Recovery Present", present, ""),
+      task("\\OpenClaw Gateway (dev)", missing, ""),
+    ]);
+
+    const result = await findExtraGatewayServices(nativeEnv, { deep: true });
+
+    expect(result.errors).toEqual([]);
+    expect(result.services).toEqual([
+      expect.objectContaining({
+        label: orphan,
+        marker: "openclaw",
+        legacy: false,
+        detail: `missing recovery launcher: ${missing}`,
+      }),
+    ]);
+    expect(renderGatewayServiceCleanupHints(result.services)).toEqual([
+      `schtasks /Query /TN "${orphan}" /V /FO LIST`,
+    ]);
+    const managed = await listManagedOpenClawGatewayServices(nativeEnv);
+    expect(managed.errors).toEqual([]);
+    expect(managed.services.map((service) => service.label)).toEqual(["\\OpenClaw Gateway"]);
+  });
+
+  it("keeps a mixed recovery task inspection-only", async () => {
+    const missing =
+      "C:\\WindowsApps\\OpenClawFoundation.OpenClawGateway_example\\openclaw-gateway-recovery.exe";
+    const label = "\\OpenClaw Gateway OpenClawFoundation.OpenClawGateway_example";
+    vi.mocked(taskProbe.listScheduledTasks).mockReturnValue([
+      task(label, [action(missing, ""), action("C:\\Tools\\backup.exe", "")]),
+    ]);
+
+    const result = await findExtraGatewayServices(nativeEnv, { deep: true });
+
+    expect(result.errors).toEqual([]);
+    expect(result.services).toEqual([
+      expect.objectContaining({
+        label,
+        detail: `missing recovery launcher: ${missing}`,
+      }),
+    ]);
+    expect(renderGatewayServiceCleanupHints(result.services)).toEqual([
+      `schtasks /Query /TN "${label}" /V /FO LIST`,
+    ]);
+  });
+
+  it("does not offer removal when the recovery launcher cannot be read", async () => {
+    const launcher =
+      "C:\\WindowsApps\\OpenClawFoundation.OpenClawGateway_example\\openclaw-gateway-recovery.exe";
+    const label = "\\OpenClaw Gateway OpenClawFoundation.OpenClawGateway_unreadable";
+    vi.spyOn(fs, "access").mockRejectedValue(
+      Object.assign(new Error("denied"), { code: "EACCES" }),
+    );
+    vi.mocked(taskProbe.listScheduledTasks).mockReturnValue([task(label, launcher, "")]);
+
+    await expect(findExtraGatewayServices(nativeEnv, { deep: true })).resolves.toEqual({
+      services: [],
+      errors: [{ source: label, message: "Gateway recovery launcher could not be inspected." }],
+    });
+  });
+
+  it.each([
+    "openclaw-gateway-recovery.exe",
+    ".\\openclaw-gateway-recovery.exe",
+    "%LOCALAPPDATA%\\Microsoft\\WindowsApps\\OpenClawFoundation.OpenClawGateway_example\\openclaw-gateway-recovery.exe",
+    "%TEMP%\\openclaw-gateway-recovery.exe",
+    "%LOCALAPPDATA%\\..\\openclaw-gateway-recovery.exe",
+    "\\\\server\\share\\openclaw-gateway-recovery.exe",
+  ])("does not confirm %s missing without a resolved local path", async (launcher) => {
+    const label = "\\OpenClaw Gateway Recovery Unresolved";
+    const access = vi
+      .spyOn(fs, "access")
+      .mockRejectedValue(Object.assign(new Error("missing"), { code: "ENOENT" }));
+    vi.mocked(taskProbe.listScheduledTasks).mockReturnValue([task(label, launcher, "")]);
+
+    const result = await findExtraGatewayServices(
+      { ...nativeEnv, LOCALAPPDATA: "C:\\AliasFixture" },
+      { deep: true },
+    );
+
+    expect(access).not.toHaveBeenCalled();
+    expect(result.services).toEqual([]);
+    expect(result.errors).toEqual([
+      {
+        source: label,
+        message:
+          "Gateway recovery launcher path is unresolved, so it was not classified as missing.",
+      },
+    ]);
+    expect(renderGatewayServiceCleanupHints(result.services)).toEqual([]);
+  });
+
+  it("ignores a recovery filename outside the supported alias names", async () => {
+    const launcher =
+      "C:\\WindowsApps\\OpenClawFoundation.OpenClawGateway_example\\openclaw-gateway-recovery-this-name-is-too-long.exe";
+    const access = vi.spyOn(fs, "access");
+    vi.mocked(taskProbe.listScheduledTasks).mockReturnValue([
+      task("\\OpenClaw Gateway Recovery Other", launcher, ""),
+    ]);
+
+    await expect(findExtraGatewayServices(nativeEnv, { deep: true })).resolves.toEqual({
+      services: [],
+      errors: [],
+    });
+    expect(access).not.toHaveBeenCalled();
+  });
+
+  it("finishes recovery inventory when the launcher probe never settles", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const launcher =
+      "C:\\WindowsApps\\OpenClawFoundation.OpenClawGateway_example\\openclaw-gateway-recovery.exe";
+    const label = "\\OpenClaw Gateway Recovery Slow";
+    vi.spyOn(fs, "access").mockImplementation(() => new Promise(() => {}));
+    vi.mocked(taskProbe.listScheduledTasks).mockReturnValue([task(label, launcher, "")]);
+
+    const inventory = findExtraGatewayServices(nativeEnv, { deep: true });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await expect(inventory).resolves.toEqual({
+      services: [],
+      errors: [
+        {
+          source: "schtasks",
+          message:
+            "Scheduled Task inventory deadline expired; some services could not be inspected.",
+        },
+      ],
+    });
+  }, 2_500);
 });
