@@ -212,9 +212,9 @@ it.each([
 ])("ClawHub beta channel with %s installs the newer release", async (_case, tags, beta) => {
   clawHubTags(tags);
   for (const spec of [clawSpec, clawSpec + "@latest"]) {
-    await expect(
-      resolveClawHubInstallSpecsForUpdateChannel({ spec, updateChannel: "beta" }),
-    ).resolves.toEqual(
+    expect(
+      await resolveClawHubInstallSpecsForUpdateChannel({ spec, updateChannel: "beta" }),
+    ).toEqual(
       beta
         ? {
             installSpec: clawSpec + "@beta",
