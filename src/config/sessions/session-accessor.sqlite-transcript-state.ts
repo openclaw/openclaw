@@ -558,6 +558,7 @@ export function advanceTranscriptMutationAtInTransaction(
         projection?.indexedSeq === actor.hot.transcript.version.rawSeq
           ? { projectionReady: true as const }
           : {}),
+        ...(options.destructiveRewrite ? { destructiveRewrite: true as const } : {}),
         ...publicationProjection,
       });
       return undefined;
@@ -582,6 +583,7 @@ export function advanceTranscriptMutationAtInTransaction(
       publishSessionTranscriptAuthority(database, {
         ...context,
         ...(options.projectionReady ? { projectionReady: true as const } : {}),
+        ...(options.destructiveRewrite ? { destructiveRewrite: true as const } : {}),
         ...publicationProjection,
       });
       return {
@@ -694,16 +696,16 @@ export function recordTranscriptReplacementMutation(
   database: OpenClawAgentDatabase,
   sessionId: string,
   preservedUpdatedAt: number | null | undefined,
-  projectionReady = false,
+  options: { projectionReady?: boolean; destructiveRewrite?: boolean } = {},
 ): void {
   if (preservedUpdatedAt === undefined || preservedUpdatedAt === null) {
-    touchTranscriptMutationInTransaction(database, sessionId, { projectionReady });
+    touchTranscriptMutationInTransaction(database, sessionId, options);
     return;
   }
   // Maintenance rewrites must invalidate in-flight projections without making an old session
   // look newly active. A one-tick advance preserves ordering while changing the snapshot key.
   advanceTranscriptMutationAtInTransaction(database, sessionId, preservedUpdatedAt, {
     strictly: true,
-    projectionReady,
+    ...options,
   });
 }

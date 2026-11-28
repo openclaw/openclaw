@@ -493,7 +493,10 @@ export function replaceSqliteTranscriptEventsInTransaction(
             database,
             resolved.sessionId,
             preservedTranscriptUpdatedAt,
-            true,
+            {
+              projectionReady: true,
+              destructiveRewrite: deleted,
+            },
           );
         }
         return;
@@ -605,7 +608,10 @@ export function replaceSqliteTranscriptEventsInTransaction(
           database,
           resolved.sessionId,
           preservedTranscriptUpdatedAt,
-          rebuildSynchronously,
+          {
+            projectionReady: rebuildSynchronously,
+            destructiveRewrite: deleted,
+          },
         );
       }
     },

@@ -16,6 +16,8 @@ export type SessionTranscriptAuthority = SessionTranscriptContextVersion & {
   needsRebuild: number | null;
   /** The projection writer established all rows, including context eligibility. */
   projectionReady?: true;
+  /** The mutation owner deleted or rewrote admitted content, certified without a summary watermark. */
+  destructiveRewrite?: true;
   hasMessages?: boolean;
   /** Absent needs a tail lookup; null is a known empty bounded preview. */
   lastMessagePreview?: string | null;

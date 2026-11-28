@@ -572,5 +572,8 @@ export function replaceSqliteTranscriptSuffixInTransaction(
   }
   touchTranscriptMutationInTransaction(database, resolved.sessionId, {
     projectionReady: projectionIsHealthy,
+    // Removing existing suffix rows is destructive even when a prefix survives; a pure
+    // append (no expected rows) keeps the recall revision.
+    destructiveRewrite: plan.expectedRows.length > 0,
   });
 }
