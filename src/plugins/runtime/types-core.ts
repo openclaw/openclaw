@@ -161,7 +161,8 @@ export type PluginRuntimeCore = {
      * tools the calling plugin declares.
      */
     runCommandFromIngress: (
-      opts: import("../../agents/command/types.js").AgentCommandPluginIngressOpts,
+      opts: import("../../agents/command/types.js").AgentCommandIngressOpts &
+        Pick<import("../../agents/command/types.js").AgentCommandOpts, "toolBindings">,
       runtime: import("../../runtime.js").RuntimeEnv,
     ) => ReturnType<typeof import("../../agents/agent-command.js").agentCommandFromIngress>;
     runEmbeddedAgent: (

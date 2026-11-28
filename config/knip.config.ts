@@ -477,6 +477,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs!",
   // The upgrade-survivor runner invokes the session-share baseline and checks by path.
   "scripts/e2e/lib/upgrade-survivor/session-share.mjs!",
+  // test:e2e:system-event-account drives the published CLI and a packed candidate.
+  "scripts/e2e/lib/upgrade-survivor/system-event-account.mjs!",
   // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
   "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs!",
   // The first-hop shell executes the packaged admission entry probe by path.

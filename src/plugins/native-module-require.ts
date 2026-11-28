@@ -366,7 +366,7 @@ export function clearPluginSourceCaptureModuleCache(directory: string): void {
 }
 
 /**
- * Non-isolated test workers retire each file's module generation. Natively required
+ * @internal Non-isolated test workers retire each file's module generation. Natively required
  * repository sources sit outside the test module graph, so evict them as well: a
  * later file must evaluate fresh copies bound to its own published singletons.
  */
