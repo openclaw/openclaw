@@ -7,6 +7,8 @@ import { isErrno } from "../infra/errno.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
+import { formatGatewayLockFailure } from "../infra/gateway-lock-diagnostics.js";
+import { GatewayLockNamespaceError } from "../infra/gateway-lock-payload.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
@@ -17,6 +19,7 @@ import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-messag
 import {
   DoctorMaintenanceRefusalError,
   type DoctorMaintenanceRefusal,
+  UpdateDoctorError,
 } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -101,6 +104,28 @@ export async function readDoctorGatewayOwnerLease(
         state: readStateLeaseProcessOwnerStatus(reply.lease, reply.lease.heartbeatAt),
       }
     : undefined;
+}
+
+export function createDoctorMaintenanceRefusal(
+  error: unknown,
+  env: NodeJS.ProcessEnv,
+  newerSchema: boolean,
+): DoctorMaintenanceRefusalError {
+  const legacyLock =
+    error instanceof GatewayLockError &&
+    error.cause instanceof GatewayLockNamespaceError &&
+    error.cause.legacyLock;
+  // Released Git drivers consume the original refusal prefix and recovery tail.
+  return error instanceof DoctorMaintenanceRefusalError
+    ? error
+    : new DoctorMaintenanceRefusalError(
+        `Doctor could not enter maintenance. ${error instanceof GatewayLockError ? formatGatewayLockFailure(error) : String(error)}${newerSchema || legacyLock || hasGatewayServiceStopUnsafeError(error) ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
+        classifyDoctorMaintenanceRefusal(error),
+        {
+          cause: error,
+          ...(error instanceof UpdateDoctorError ? { failureFacts: error.failureFacts } : {}),
+        },
+      );
 }
 
 /** Admission has not opened repair writers; deferral cannot authorize any later work. */

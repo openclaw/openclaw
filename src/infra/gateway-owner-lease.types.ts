@@ -12,6 +12,7 @@ export type GatewayOwnerLeaseIdentity = StateLeaseProcessOwner & {
   supervisor: GatewayOwnerSupervisor | null;
   state: "live" | "dead" | "unknown";
   expired: boolean;
+  expiresAt?: number | null;
   heartbeatAt?: number;
   listeningAt?: number;
   stateDatabaseProvenance?: string;

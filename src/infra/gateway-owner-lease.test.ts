@@ -33,16 +33,15 @@ import {
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
 import { parseShippedStateLeaseProcessOwner } from "./gateway-lock-rollback.test-support.js";
-import { acquireGatewayLock, resolveGatewayLockPaths } from "./gateway-lock.js";
-import {
-  acquireGatewayOwnerLease,
-  readGatewayOwnerLease,
-  readGatewayOwnerLeaseAsync,
-  type GatewayOwnerLease,
-} from "./gateway-owner-lease.js";
+import { resolveGatewayLockPaths } from "./gateway-lock.js";
+import { readGatewayOwnerLease, readGatewayOwnerLeaseAsync } from "./gateway-owner-lease.js";
 import * as ownerLeaseRead from "./gateway-owner-lease.read.js";
+import {
+  acquireLock,
+  createGatewayOwnerLeaseFixtures,
+} from "./gateway-owner-lease.test-support.js";
 import * as stateOwners from "./gateway-state-owner.js";
-import { acquireGatewayStateOwner, tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
+import { tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { writeGatewayServiceRestartIntentSync } from "./restart-intent.js";
 import {
@@ -56,124 +55,17 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import * as bootReader from "./update-managed-service-handoff-boot.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { fixture, seedOwner, seedClosedOwner } = createGatewayOwnerLeaseFixtures(tempDirs);
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
 
-function fixture() {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-gateway-owner-") };
-  const databasePath = resolveOpenClawStateSqlitePath(env);
-  const coordinator = acquireGatewayStateOwner({
-    databasePath,
-    payload: {
-      pid: process.pid,
-      createdAt: new Date().toISOString(),
-      configPath: path.join(env.OPENCLAW_STATE_DIR, "openclaw.json"),
-      role: "gateway",
-      processNamespace: readGatewayLockProcessNamespace(),
-    },
-  });
-  let lease: GatewayOwnerLease | undefined;
-  return {
-    env,
-    acquire(params: Partial<Omit<Parameters<typeof acquireGatewayOwnerLease>[0], "env">> = {}) {
-      lease = acquireGatewayOwnerLease({
-        env,
-        port: 19483,
-        mode: "foreground",
-        supervisor: null,
-        ...params,
-      });
-      return lease;
-    },
-    async [Symbol.asyncDispose]() {
-      try {
-        await lease?.ready;
-      } finally {
-        await lease?.release();
-        coordinator.release();
-      }
-    },
-  };
-}
-
-function seedOwner(
-  env: NodeJS.ProcessEnv,
-  {
-    pid = process.pid,
-    host = hostname(),
-    startedAt = pidAlive.getFileLockProcessStartTime(process.pid),
-    expiresAt = Date.now() + 300_000,
-    heartbeatAt = Date.now(),
-    processNamespace = readGatewayLockProcessNamespace(),
-    machineIdentity: ownerMachineIdentity,
-  }: {
-    pid?: number;
-    host?: string;
-    startedAt?: number | null;
-    expiresAt?: number | null;
-    heartbeatAt?: number;
-    processNamespace?: unknown;
-    machineIdentity?: string | null;
-  } = {},
-) {
-  withOpenClawStateStartupMigrationCheckpointDatabase(
-    (db) => {
-      db.prepare(
-        `INSERT INTO state_leases
-         (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
-         VALUES ('gateway-owner', 'global', 'previous-generation', ?, ?, ?, ?, ?)`,
-      ).run(
-        expiresAt,
-        heartbeatAt,
-        JSON.stringify({
-          owner: { pid, host, processNamespace, startedAt, machineIdentity: ownerMachineIdentity },
-          port: 19483,
-          mode: "foreground",
-          supervisor: null,
-        }),
-        Date.now(),
-        Date.now(),
-      );
-    },
-    { env },
-  );
-}
-
-async function seedClosedOwner(
-  params: Parameters<typeof seedOwner>[1] = {},
-  setup?: (env: NodeJS.ProcessEnv) => void,
-) {
-  let env: NodeJS.ProcessEnv;
-  {
-    await using owner = fixture();
-    env = owner.env;
-    seedOwner(env, params);
-    setup?.(env);
-  }
-  await closeOpenClawStateDatabaseAsync();
-  return env;
-}
-
 function quarantine(env: NodeJS.ProcessEnv, reason: string) {
   const databasePath = resolveOpenClawStateSqlitePath(env);
   seedOpenClawDatabaseQuarantine({ env, kind: "state", path: databasePath, reason });
   return () => readOpenClawDatabaseQuarantineFailure("state", databasePath, { env })?.message;
-}
-
-function acquireLock(
-  env: NodeJS.ProcessEnv,
-  params: Partial<Parameters<typeof acquireGatewayLock>[0]> = {},
-) {
-  return acquireGatewayLock({
-    env,
-    allowInTests: true,
-    port: 19483,
-    listenerMode: "foreground",
-    ...params,
-  });
 }
 
 function captureCoordinator() {

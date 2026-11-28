@@ -122,6 +122,7 @@ export async function recoverGatewayLock(options: { confirmation: string }) {
       process.platform,
       {
         lockPath: observed.path,
+        databasePath: inspection.databasePath,
       },
     );
     if (

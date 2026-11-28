@@ -2,14 +2,10 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { PreManagedServiceStop } from "../cli/update-cli/update-command-service-maintenance.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  findServiceOwnershipRefusal,
-  hasGatewayServiceStopUnsafeError,
-} from "../daemon/service-inspection-error.js";
+import { findServiceOwnershipRefusal } from "../daemon/service-inspection-error.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { acquireWithWait } from "../infra/acquire-with-wait.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { formatGatewayLockFailure } from "../infra/gateway-lock-diagnostics.js";
 import { assertLegacyGatewayStoppedForMaintenance } from "../infra/gateway-lock-legacy.js";
 import { GatewayLockError, readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
@@ -31,7 +27,7 @@ import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js"
 import { formatDoctorRecoveryHint, holdDoctorMaintenanceExit } from "./doctor-maintenance-exit.js";
 import {
   assertDoctorMaintenanceInspection,
-  classifyDoctorMaintenanceRefusal,
+  createDoctorMaintenanceRefusal,
   readDoctorGatewayOwnerLease,
   readOfflineAppOwnedDoctorInspection,
 } from "./doctor-maintenance-inspection.js";
@@ -387,18 +383,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       throw error;
     }
     const newerSchema = findStartupMaintenanceRequiredError(error)?.kind === "newer-schema";
-    // Released Git drivers consume the original refusal prefix and recovery tail.
-    const refusal =
-      error instanceof DoctorMaintenanceRefusalError
-        ? error
-        : new DoctorMaintenanceRefusalError(
-            `Doctor could not enter maintenance. ${error instanceof GatewayLockError ? formatGatewayLockFailure(error) : String(error)}${newerSchema || hasGatewayServiceStopUnsafeError(error) ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
-            classifyDoctorMaintenanceRefusal(error),
-            {
-              cause: error,
-              ...(error instanceof UpdateDoctorError ? { failureFacts: error.failureFacts } : {}),
-            },
-          );
+    const refusal = createDoctorMaintenanceRefusal(error, env, newerSchema);
     const recovery =
       inspectingActivation && !newerSchema
         ? await resolveUpdateDoctorGitRecovery({ root: params.root })

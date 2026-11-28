@@ -80,7 +80,14 @@ function resolveStoppedGatewayOwnerLease(previous: GatewayOwnerLeaseIdentity | u
   if (!previous) {
     return undefined;
   }
-  if (previous.state === "dead") {
+  if (
+    previous.state === "dead" ||
+    (process.platform === "linux" &&
+      !isStatePostgres() &&
+      previous.processNamespace === undefined &&
+      typeof previous.expiresAt === "number" &&
+      previous.expiresAt <= Date.now())
+  ) {
     return previous;
   }
   const namespace = classifyGatewayOwnerProcessNamespace(previous.processNamespace, {
