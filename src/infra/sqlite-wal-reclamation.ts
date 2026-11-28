@@ -83,6 +83,7 @@ export function reclaimSqliteWalFreePages(
       const mode = options.checkpointMode ?? "TRUNCATE";
       let completed = runCheckpoint(mode);
       result.checkpointCalls++;
+      result.checkpointIncomplete += Number(!completed);
       if (!completed && mode === "TRUNCATE") {
         // Readers can prevent WAL reset after every frame has been copied.
         // Require a fresh complete checkpoint, not an empty WAL file, before
@@ -90,9 +91,9 @@ export function reclaimSqliteWalFreePages(
         options.beforeMutation?.();
         completed = runCheckpoint("PASSIVE");
         result.checkpointCalls++;
+        result.checkpointIncomplete += Number(!completed);
       }
       result.checkpointCompleted = completed;
-      result.checkpointIncomplete += Number(!completed);
       return completed;
     } finally {
       const elapsed = performance.now() - startedAt;

@@ -74,6 +74,36 @@ it("keeps checkpoint-only reclamation nonblocking without changing the connectio
   ]);
 });
 
+it.each([
+  { laterWrite: false, completed: true, incomplete: 1 },
+  { laterWrite: true, completed: false, incomplete: 2 },
+])(
+  "counts incomplete checkpoint attempts when fallback completion is $completed",
+  ({ laterWrite, completed, incomplete }) => {
+    const { writer, maintenance, pathname } = fixture({
+      autoCheckpointPages: 0,
+      busyTimeoutMs: 5_000,
+    });
+    writer.exec("CREATE TABLE payload (value TEXT); INSERT INTO payload VALUES ('before');");
+    const reader = resources.open(pathname);
+    reader.exec("BEGIN");
+    reader.prepare("SELECT value FROM payload").all();
+    if (laterWrite) {
+      writer.exec("INSERT INTO payload VALUES ('after');");
+    }
+
+    // The reader prevents WAL reset. PASSIVE can copy all frames only when
+    // the reader's snapshot contains the last write.
+    expect(maintenance.reclaimFreePages({ maxPages: 0 })).toMatchObject({
+      checkpointCalls: 2,
+      checkpointIncomplete: incomplete,
+      checkpointCompleted: completed,
+      vacuumPasses: 0,
+    });
+    expect(writer.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5_000);
+  },
+);
+
 it("does not amplify a reader-held WAL on repeated periodic maintenance", async () => {
   const clock = sqliteSchedulerClock();
   const { writer, maintenance, pathname } = fixture(

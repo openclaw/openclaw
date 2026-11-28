@@ -455,7 +455,7 @@ it.each(["reader", "writer"] as const)(
       expect(peer.isTransaction).toBe(true);
       expect(freePages(database)).toBe(before);
       if (peerKind === "reader") {
-        expect(blocked).toMatchObject({ checkpointCalls: 2, checkpointIncomplete: 1 });
+        expect(blocked).toMatchObject({ checkpointCalls: 2, checkpointIncomplete: 2 });
       } else {
         expect(database.db.isTransaction).toBe(false);
       }
