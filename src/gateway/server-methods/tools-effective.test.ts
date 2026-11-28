@@ -305,6 +305,7 @@ describe("tools.effective handler", () => {
     runtimeMocks.resolveSessionMcpConfigSummary.mockImplementation(() => ({
       fingerprint: "mcp:1:test",
       serverNames: [],
+      pluginIdsByServer: new Map<string, string>(),
       policyBlockedServerNames: [],
     }));
   });
