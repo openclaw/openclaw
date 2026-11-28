@@ -18,6 +18,24 @@ import { textResult } from "./tool-results.js";
 
 const PLUGINS_TOOL_RESULT_MAX_BYTES = 3_840;
 
+function compactListPluginRuntime(runtime: unknown) {
+  if (!isRecord(runtime)) {
+    return undefined;
+  }
+  const state = typeof runtime.state === "string" ? runtime.state : undefined;
+  const error =
+    typeof runtime.error === "string" ? truncateUtf16Safe(runtime.error, 160) : undefined;
+  const generation = typeof runtime.generation === "number" ? runtime.generation : undefined;
+  if (state === undefined && error === undefined && generation === undefined) {
+    return undefined;
+  }
+  return {
+    ...(state !== undefined ? { state } : {}),
+    ...(generation !== undefined ? { generation } : {}),
+    ...(error !== undefined ? { error } : {}),
+  };
+}
+
 function pluginsToolResult(payload: Record<string, unknown>, refreshUnavailable = false) {
   const details = isRecord(payload.details) ? payload.details : undefined;
   const runtime = isRecord(payload.runtime) ? payload.runtime : details?.runtime;
@@ -262,7 +280,9 @@ export function createPluginsTool(options?: {
       }
       if (action === "list") {
         // SAFETY: The list action dispatches only plugins.list, whose handler returns listManagedPlugins.
-        const inventory = result as Awaited<ReturnType<typeof listManagedPlugins>>;
+        const inventory = result as Awaited<ReturnType<typeof listManagedPlugins>> & {
+          generation?: unknown;
+        };
         const query = readToolStringParam(params, "query")?.toLowerCase().normalize("NFC");
         const matching = inventory.plugins.filter(
           (plugin) =>
@@ -271,15 +291,34 @@ export function createPluginsTool(options?: {
               value?.toLowerCase().normalize("NFC").includes(query),
             ),
         );
-        return pluginsToolResult({
-          plugins: matching
-            .slice(0, 20)
-            .map(({ id, packageName, state, version }) => ({ id, packageName, state, version })),
+        const generation =
+          typeof inventory.generation === "number" ? inventory.generation : undefined;
+        const rows = matching.slice(0, 20).map((plugin) => {
+          const runtime = compactListPluginRuntime((plugin as { runtime?: unknown }).runtime);
+          return {
+            id: plugin.id,
+            packageName: plugin.packageName,
+            state: plugin.state,
+            version: plugin.version,
+            ...(runtime !== undefined ? { runtime } : {}),
+          };
+        });
+        const buildListPayload = (count: number) => ({
+          ...(generation !== undefined ? { generation } : {}),
+          plugins: rows.slice(0, count),
           matching: matching.length,
-          omitted: Math.max(0, matching.length - 20),
+          omitted: Math.max(0, matching.length - count),
           mutationAllowed: inventory.mutationAllowed,
           next: "Use query to narrow this inventory or inspect a pluginId for details.",
         });
+        let count = rows.length;
+        while (
+          count > 0 &&
+          !boundedJsonUtf8Bytes(buildListPayload(count), PLUGINS_TOOL_RESULT_MAX_BYTES).complete
+        ) {
+          count--;
+        }
+        return pluginsToolResult(buildListPayload(count));
       }
       const refresh = result.runtime && runtimeRefresh.request();
       return {
