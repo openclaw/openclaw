@@ -1,5 +1,6 @@
 /** Agent-run lease admission for lifecycle-owned prepared model runtimes. */
-import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
+import { isDeepStrictEqual } from "node:util";
+import { createRuntimeConfigReader, hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
@@ -10,7 +11,10 @@ import {
   prepareSharedAuthStoreOwnership,
 } from "./auth-profiles/path-resolve.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
-import { getPreparedModelRuntimePolicyConfigReader } from "./prepared-model-runtime-auth.js";
+import {
+  getPreparedModelFullCatalogAuth,
+  getPreparedModelRuntimePolicyConfigReader,
+} from "./prepared-model-runtime-auth.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
@@ -66,6 +70,67 @@ type PreparedModelRuntimeLeaseContext = {
   ): PreparedModelRuntimeReplacement | undefined;
   ensureReady(params: { agentId: string; abortSignal?: AbortSignal }): Promise<void>;
 };
+
+function modelCatalogConfigFingerprint(config: PreparedModelRuntimeInput["config"]): string {
+  return hashRuntimeConfigValue({
+    models: config.models,
+    auth: config.auth,
+    plugins: config.plugins,
+  });
+}
+
+/**
+ * When a prospective/unconfigured agent (e.g. `agents.create` onboarding
+ * preflight) has no configured owner yet, reuse the passive published model
+ * catalog from the unique configured owner matching its `inheritedAuthDir`
+ * when environment, credential mode, and provider/model config match.
+ */
+function effectiveAuthIdentityMatches(
+  candidate: PreparedModelRuntimeSnapshot,
+  target: PreparedModelRuntimeSnapshot,
+): boolean {
+  const candidateAuthData = candidate.createStores().authStorage.getAll();
+  const targetAuthData = target.createStores().authStorage.getAll();
+  if (!isDeepStrictEqual(candidateAuthData, targetAuthData)) {
+    return false;
+  }
+  const candidateCatalogAuth = getPreparedModelFullCatalogAuth(candidate);
+  const targetCatalogAuth = getPreparedModelFullCatalogAuth(target);
+  if (candidateCatalogAuth || targetCatalogAuth) {
+    return isDeepStrictEqual(
+      candidateCatalogAuth?.authStore?.profiles,
+      targetCatalogAuth?.authStore?.profiles,
+    );
+  }
+  return true;
+}
+
+function resolveInheritedCatalogOwner(
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  owner: PreparedModelRuntimeOwner,
+  snapshot: PreparedModelRuntimeSnapshot,
+): PreparedModelRuntimeOwner | undefined {
+  const inheritedAuthDir = owner.input.inheritedAuthDir;
+  if (inheritedAuthDir && inheritedAuthDir === owner.input.agentDir) {
+    return undefined;
+  }
+  const expectedConfig = modelCatalogConfigFingerprint(owner.input.config);
+  const candidates = [...owners.values()].filter(
+    (candidate) =>
+      candidate.provenance === "configured" &&
+      candidate.snapshot !== undefined &&
+      !candidate.pending &&
+      !candidate.needsRefresh &&
+      !candidate.refreshError &&
+      candidate.input.agentDir !== owner.input.agentDir &&
+      (!inheritedAuthDir || candidate.input.agentDir === inheritedAuthDir) &&
+      candidate.input.skipCredentials === owner.input.skipCredentials &&
+      candidate.environmentFingerprint === owner.environmentFingerprint &&
+      modelCatalogConfigFingerprint(candidate.input.config) === expectedConfig &&
+      effectiveAuthIdentityMatches(candidate.snapshot, snapshot),
+  );
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
 
 function createPreparedModelRuntimeAdmissionClaim(context: PreparedModelRuntimeLeaseContext) {
   let claimed: { key: string; owner: PreparedModelRuntimeOwner } | undefined;
@@ -461,7 +526,9 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
           runtimePluginSelections: undefined,
         })
         ? configuredOwner
-        : owner;
+        : !configuredOwner
+          ? (resolveInheritedCatalogOwner(context.owners, owner, snapshot) ?? owner)
+          : owner;
     snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);
     snapshot = withPreparedModelRuntimePolicyConfig(snapshot, input.readPolicyConfig);
     const pluginGeneration = owner.pluginGeneration!;
