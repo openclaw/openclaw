@@ -74,6 +74,20 @@ async function withAdminTool(
   );
 }
 
+it.each(["unknown", "channel-owner"] as const)(
+  "retains %s management authority when reading an existing job's runs",
+  async (origin) => {
+    await withAdminTool(origin, undefined, async (tool, calls) => {
+      await tool.execute("read-job", { action: "get", jobId });
+      await tool.execute("read-runs", { action: "runs", jobId, runId: "recorded-run" });
+      expect(calls).toEqual([
+        ["cron.get", { id: jobId }],
+        ["cron.runs", { id: jobId, runId: "recorded-run" }],
+      ]);
+    });
+  },
+);
+
 const command = { kind: "command", argv: ["printf", "proof"] };
 it.each([
   { origin: "channel-owner", input: { ...command, timeoutSeconds: 30 }, stored: undefined },
@@ -107,7 +121,7 @@ it("does not expose stream creation through a management grant", async () => {
           payload: { kind: "agentTurn", message: "handle events" },
         },
       }),
-    ).rejects.toThrow("can only list, get, update, run, remove, or bind automations");
+    ).rejects.toThrow("can only list, get, inspect runs, update, run, remove, or bind automations");
     expect(calls).toEqual([]);
   });
 });
@@ -166,8 +180,9 @@ it("limits management authority to its admitted actions", async () => {
     "unknown",
     undefined,
     async (tool, calls) => {
-      const actions = ["list", "get", "update", "run", "remove", "bind"];
+      const actions = ["list", "get", "runs", "update", "run", "remove", "bind"];
       expect(tool.parameters).toHaveProperty("properties.action.enum", actions);
+      expect(tool.parameters).toHaveProperty("properties.runId");
       for (const key of ["in", "text", "mode", "contextMessages", "sessionKey"]) {
         expect(tool.parameters).not.toHaveProperty(`properties.${key}`);
       }
@@ -187,9 +202,9 @@ it("limits management authority to its admitted actions", async () => {
       expect((await tool.execute("manager-get", { action: "get", jobId })).details).toMatchObject({
         id: jobId,
       });
-      for (const action of ["status", "runs"]) {
+      for (const action of ["status", "history"]) {
         await expect(tool.execute(`manager-${action}`, { action, jobId })).rejects.toThrow(
-          "can only list, get, update, run, remove, or bind automations",
+          "can only list, get, inspect runs, update, run, remove, or bind automations",
         );
       }
       expect(calls).toEqual([
