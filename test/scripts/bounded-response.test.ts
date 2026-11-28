@@ -4,6 +4,7 @@ import {
   readBoundedResponseBytes,
   readBoundedResponseText,
 } from "../../scripts/lib/bounded-response.mjs";
+import { createDeferred } from "../helpers/promise.js";
 
 function responseProbe(headers: Headers, readsBody = false) {
   const state = { readStarted: false, canceled: false };
@@ -58,6 +59,48 @@ describe("scripts bounded response reader", () => {
         timeoutPromise: Promise.reject(new Error("timeout")),
       }),
     ).rejects.toThrow("timeout");
+    expect(state.canceled).toBe(true);
+  });
+
+  it("normalizes parsed timeout failures without losing Error identity or diagnostics", async () => {
+    const value: unknown = JSON.parse(
+      '{"__proto__":{"tag":"remote"},"message":"read timed out","code":"ETIMEDOUT","status":504}',
+    );
+    const detail = Symbol("detail");
+    Object.defineProperty(value, detail, { value: "symbol detail", enumerable: true });
+    const timeout = createDeferred<never>();
+    const { response, state } = responseProbe(new Headers());
+    const pending = readBoundedResponseText(response, "probe", 1024, {
+      timeoutPromise: timeout.promise,
+    });
+    timeout.reject(value);
+
+    const error = await pending.catch((failure: unknown) => failure);
+
+    expect(error instanceof Error).toBe(true);
+    expect(Object.getPrototypeOf(error)).toBe(Error.prototype);
+    expect(error).toMatchObject({ message: "read timed out", code: "ETIMEDOUT", status: 504 });
+    expect(Object.getOwnPropertyDescriptor(error, "cause")?.value).toBe(value);
+    expect(Object.getOwnPropertyDescriptor(error, detail)?.value).toBe("symbol detail");
+    expect(state.canceled).toBe(true);
+  });
+
+  it("propagates a timeout payload getter failure while canceling the reader", async () => {
+    const failure = new Error("cannot read prototype detail");
+    const value = Object.defineProperty({}, "__proto__", {
+      enumerable: true,
+      get() {
+        throw failure;
+      },
+    });
+    const timeout = createDeferred<never>();
+    const { response, state } = responseProbe(new Headers());
+    const pending = readBoundedResponseText(response, "probe", 1024, {
+      timeoutPromise: timeout.promise,
+    });
+    timeout.reject(value);
+
+    await expect(pending).rejects.toBe(failure);
     expect(state.canceled).toBe(true);
   });
 
