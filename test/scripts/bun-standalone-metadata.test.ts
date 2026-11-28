@@ -30,6 +30,7 @@ import {
 import { resolveRuntimeWorkerArgv } from "../../src/infra/runtime-worker-url.ts";
 import { tryProcessCwd } from "../../src/infra/safe-cwd.js";
 import {
+  resolveInstallMetadata,
   resolveImmutableInstallIdentity,
   resolvePluginCandidateInstallOwner,
 } from "../../src/plugins/candidate-install-owner.js";
@@ -982,6 +983,7 @@ describe("standalone image metadata", () => {
     Object.assign(context, {
       performance,
       PluginDashboardDeclarationError,
+      resolveInstallMetadata,
       isMemoryBackendRequested,
       resolveImmutableInstallIdentity,
       resolvePluginCandidateInstallOwner,

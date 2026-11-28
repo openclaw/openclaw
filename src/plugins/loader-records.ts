@@ -225,6 +225,41 @@ function resolvePluginImportHint(
   }
 }
 
+function resolveDamagedNativeCaptureHint(
+  errorCandidates: readonly unknown[],
+  record: PluginRecord,
+  errorCode: string | undefined,
+  reinstall: { packageName: string; packageVersion: string } | undefined,
+): string | undefined {
+  if (record.origin !== "global" || errorCode !== "ENOENT" || !reinstall) {
+    return undefined;
+  }
+  const { packageName, packageVersion } = reinstall;
+  if (
+    !packageName ||
+    !/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i.test(packageName) ||
+    !packageVersion ||
+    !/^[a-z0-9][a-z0-9.+-]*$/i.test(packageVersion)
+  ) {
+    return undefined;
+  }
+  const missingManagedCapture = errorCandidates.some((node) => {
+    try {
+      const text = String(node).replaceAll("\\", "/");
+      return (
+        text.includes("Cannot capture plugin source ") &&
+        /\/tmp\/plugin-captures\/[^/]+\/native\/admission-[^/]+\/content\//.test(text)
+      );
+    } catch {
+      return false;
+    }
+  });
+  if (!missingManagedCapture) {
+    return undefined;
+  }
+  return `Managed native capture for plugin ${record.id} is missing bytes; reinstall it with \`openclaw plugins install npm:${packageName}@${packageVersion} --force --pin --no-enable\`, then restart the Gateway`;
+}
+
 /** Records a loader failure in the registry, diagnostics list, and operator log consistently. */
 export function recordPluginError(params: {
   logger?: PluginLogger;
@@ -238,6 +273,8 @@ export function recordPluginError(params: {
   diagnosticCode?: PluginDiagnosticCode;
   /** Shown when the failure is a missing module so operators learn the install path. */
   missingDependencyHint?: string;
+  /** Authoritative exact npm identity from the retained managed install record. */
+  damagedNativeCaptureReinstall?: { packageName: string; packageVersion: string };
 }) {
   const errorText =
     isPluginLifecycleTraceEnabled() &&
@@ -251,6 +288,12 @@ export function recordPluginError(params: {
       : null;
   const errorCandidates = collectErrorGraphCandidates(params.error, readCauseOrNothing);
   const errorCode = errorCandidates.map(extractErrorCode).find((code) => code !== undefined);
+  const damagedNativeCaptureHint = resolveDamagedNativeCaptureHint(
+    errorCandidates,
+    params.record,
+    errorCode,
+    params.damagedNativeCaptureReinstall,
+  );
   // Native-require failures rewrap the Node error, so the missing-module code can sit on a cause.
   const importHint =
     params.phase === "validation"
@@ -262,9 +305,11 @@ export function recordPluginError(params: {
   const hint =
     errorCode === "ENOSPC"
       ? "ENOSPC: no space left on device; free space on the filesystem used by the plugin load and rerun Doctor"
-      : params.phase === "validation"
-        ? undefined
-        : (deprecatedApiHint ?? importHint?.hint);
+      : damagedNativeCaptureHint
+        ? damagedNativeCaptureHint
+        : params.phase === "validation"
+          ? undefined
+          : (deprecatedApiHint ?? importHint?.hint);
   const displayError = hint ? `${hint} (${errorText})` : errorText;
   params.record.status = "error";
   params.record.error = displayError;
