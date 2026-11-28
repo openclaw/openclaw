@@ -336,11 +336,12 @@ async function resolveDeliveryTargetWithPolicy(
     }
   }
 
-  const targetParams = {
+  const targetParams: ResolveOutboundTargetParams = {
     channel: resolvedTarget.channel,
     to: resolvedTarget.to,
     cfg,
     accountId: effectiveAccountId,
+    channelInferred: target === "last" && !policy?.to?.trim() ? true : undefined,
   };
   const resolved = await resolveOutboundTargetWithPlugin({
     plugin,

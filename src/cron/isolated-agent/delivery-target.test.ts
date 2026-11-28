@@ -3,6 +3,7 @@ import { parseTelegramTargetForTest } from "../../../test/helpers/infra/telegram
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { resolveMessageChannelSelection as selectConfiguredMessageChannel } from "../../infra/outbound/channel-selection.js";
 import {
   createTargetsTestRegistry,
   forumMessagingForTest,
@@ -448,4 +449,75 @@ describe("resolveDeliveryTarget", () => {
 
     expect(result).toMatchObject({ ok: true, to: "63448508", threadId: "42" });
   });
+
+  it.each([
+    { channel: "last", expected: "missing" },
+    { channel: "last", explicitTo: "   ", expected: "missing" },
+    { channel: "last", explicitTo: true, expected: "@alpha" },
+    { channel: "alpha", expected: "@alpha" },
+    { channel: "last", explicitTo: true, noSource: true, expected: "missing" },
+    { channel: "last", storedTo: "@denied-room", denied: true, expected: "@operator" },
+    { channel: "last", explicitTo: "@denied-room", denied: true, expected: "denied" },
+  ])(
+    "keeps cron namespace and native target intent ($channel, $expected)",
+    async ({ channel, explicitTo, noSource, storedTo, denied, expected }) => {
+      const normalizeTarget = vi.fn((raw: string) => (raw.startsWith("@") ? raw : `@${raw}`));
+      const resolveNative = vi.fn(({ to, allowFrom }: { to?: string; allowFrom?: string[] }) =>
+        denied && to === "@denied-room" && allowFrom?.includes("operator")
+          ? { ok: false as const, error: new Error("cron target denied") }
+          : { ok: true as const, to: to ?? "" },
+      );
+      const listGroups = vi.fn(async () => [
+        { kind: "group" as const, id: "real-room", name: "alpha" },
+      ]);
+      setPlugins(
+        plugin(
+          "alpha",
+          {
+            outbound: { deliveryMode: "gateway", resolveTarget: resolveNative },
+            messaging: { normalizeTarget, targetResolver: { looksLikeId: () => true } },
+          },
+          {
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+              isConfigured: () => true,
+              resolveAllowFrom: () => ["operator"],
+            },
+            directory: { listGroups },
+          },
+        ),
+      );
+      const sessionKey = `agent:${AGENT_ID}:namespace`;
+      if (noSource) {
+        vi.mocked(resolveMessageChannelSelection).mockImplementationOnce(
+          selectConfiguredMessageChannel,
+        );
+      } else {
+        setSessionEntry(sessionKey, { channel: "alpha", to: storedTo ?? "alpha" });
+      }
+      const result = await resolveTarget(
+        {
+          channel,
+          sessionKey,
+          ...(explicitTo ? { to: typeof explicitTo === "string" ? explicitTo : "alpha" } : {}),
+        },
+        makeCfg({ channels: { alpha: {} } }),
+      );
+      if (expected === "missing") {
+        expect(result).toMatchObject({
+          ok: false,
+          to: undefined,
+          error: { reasonCode: "message_target_missing" },
+        });
+        expect(normalizeTarget).not.toHaveBeenCalled();
+        expect(resolveNative).not.toHaveBeenCalled();
+      } else if (expected === "denied") {
+        expectTargetError(result, "cron target denied");
+      } else {
+        expect(result).toMatchObject({ ok: true, to: expected });
+      }
+      expect(listGroups).not.toHaveBeenCalled();
+    },
+  );
 });

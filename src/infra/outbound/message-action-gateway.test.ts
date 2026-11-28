@@ -168,6 +168,53 @@ describe("runMessageAction gateway dispatch", () => {
     },
   );
 
+  it.each([false, true])(
+    "rejects inferred namespace before RPC, including deferred actions (scheduled=%s)",
+    async (scheduled) => {
+      const normalizeTarget = vi.fn((raw: string) => (raw.startsWith("@") ? raw : `@${raw}`));
+      const listPeers = vi.fn(async () => [{ kind: "user" as const, id: "real-peer", name: "g" }]);
+      const plugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway namespace test plugin.",
+        actions: ["edit"],
+        messaging: {
+          targetPrefixes: ["g"],
+          normalizeTarget,
+          targetResolver: { looksLikeId: () => true },
+        },
+        handleAction: vi.fn(async () => jsonResult({ ok: true })),
+      });
+      plugin.directory = { listPeers };
+      plugin.actions.providerOwnedReadGates = true;
+      setTestPlugin(plugin, "gatewaychat");
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
+      const invoke = (to: string, channel?: string, toolContext?: ActionInput["toolContext"]) =>
+        runMessageAction({
+          cfg: createEnabledMessageActionConfig("gatewaychat"),
+          action: "edit",
+          params: { channel, to, messageId: "message-1", message: "updated" },
+          toolContext,
+          conversationReadOrigin: "direct-operator",
+          messageActionAuthorization: scheduled
+            ? { scheduled: { policy: { version: 1, mode: "trusted" }, assertCurrent: () => {} } }
+            : undefined,
+          gateway: { clientName: "cli", mode: "cli" },
+        });
+
+      await expect(invoke("g")).rejects.toMatchObject({ reasonCode: "message_target_missing" });
+      expect(listPeers).not.toHaveBeenCalled();
+      expect(normalizeTarget).not.toHaveBeenCalled();
+      expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
+      await expect(invoke("g", "gatewaychat")).resolves.toMatchObject({ payload: { ok: true } });
+      await expect(invoke("@real-peer")).resolves.toMatchObject({ payload: { ok: true } });
+      await expect(
+        invoke("g", undefined, { currentChannelProvider: "gatewaychat" }),
+      ).resolves.toMatchObject({ payload: { ok: true } });
+      expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledTimes(3);
+    },
+  );
+
   it("makes required queue persistence bypass gateway plugin dispatch", async () => {
     setTestPlugin(
       createGatewayActionPlugin({

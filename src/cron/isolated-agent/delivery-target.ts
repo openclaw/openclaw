@@ -5,6 +5,7 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { stripTargetProviderPrefix } from "../../infra/outbound/channel-target-prefix.js";
+import { MessageActionDeniedError } from "../../infra/outbound/message-action-denial.js";
 import type { OutboundSessionRoute } from "../../infra/outbound/outbound-session.js";
 import { isReservedTargetLiteralError } from "../../infra/outbound/target-errors.js";
 import type { ResolvedMessagingTarget } from "../../infra/outbound/target-resolver.js";
@@ -275,6 +276,8 @@ export async function resolveDeliveryTarget(
   });
 
   let fallbackChannel: string | undefined;
+  let channelInferred: true | undefined =
+    requestedChannel === "last" && preliminary.mode === "implicit" ? true : undefined;
   let channelResolutionError: Error | undefined;
   if (!preliminary.channel) {
     if (preliminary.lastChannel) {
@@ -286,6 +289,7 @@ export async function resolveDeliveryTarget(
         const { resolveMessageChannelSelection } = await channelSelectionRuntimeLoader.load();
         const selection = await resolveMessageChannelSelection({ cfg });
         fallbackChannel = selection.channel;
+        channelInferred = selection.channelInferred;
       } catch (err) {
         const detail = formatErrorMessage(err);
         channelResolutionError = new Error(
@@ -374,8 +378,15 @@ export async function resolveDeliveryTarget(
         accountId,
         mode,
         allowFrom: effectiveAllowFrom,
+        channelInferred,
       });
       if (!currentTargetResolution.ok) {
+        if (
+          currentTargetResolution.error instanceof MessageActionDeniedError &&
+          currentTargetResolution.error.policyRef === "message-target:destination-required"
+        ) {
+          return failTarget(currentTargetResolution.error);
+        }
         toCandidate = allowFromOverride[0];
       }
     }
@@ -411,6 +422,7 @@ export async function resolveDeliveryTarget(
     accountId,
     mode,
     allowFrom: effectiveAllowFrom,
+    channelInferred,
   });
   if (!docked.ok) {
     if (!toCandidate || !isReservedTargetLiteralError(docked.error)) {

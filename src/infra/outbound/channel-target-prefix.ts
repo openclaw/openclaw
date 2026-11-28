@@ -1,6 +1,8 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { listRuntimeVisibleChannelPlugins } from "./runtime-visible-channels.js";
+import { missingChannelDestinationError } from "./target-errors.js";
 
 const TARGET_KIND_PREFIXES: readonly string[] = [
   "channel",
@@ -65,6 +67,29 @@ function resolveChannelTargetProviderPrefix(
 /** Resolves the channel implied by a plugin-owned target prefix, if any. */
 export function resolveTargetPrefixedChannel(raw?: string | null): string | undefined {
   return resolveChannelTargetProviderPrefix(raw)?.channel;
+}
+
+/** Rejects a bare channel namespace when channel selection supplied no destination intent. */
+export function resolveChannelNamespaceTargetError(
+  raw: unknown,
+  plugin?: ChannelPlugin,
+): Error | undefined {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (!normalized || !plugin) {
+    return undefined;
+  }
+  return [
+    plugin.id,
+    ...(plugin.meta?.aliases ?? []),
+    ...(plugin.messaging?.targetPrefixes ?? []),
+  ].some((candidate) => normalizeOptionalLowercaseString(candidate) === normalized)
+    ? missingChannelDestinationError(
+        plugin.meta.label,
+        normalized,
+        plugin.id,
+        plugin.messaging?.targetResolver?.hint,
+      )
+    : undefined;
 }
 
 /** Rejects targets whose plugin-owned prefix belongs to a different selected channel. */

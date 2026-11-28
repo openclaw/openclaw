@@ -121,6 +121,12 @@ When an agent creates an isolated reminder from an active chat, OpenClaw stores 
 
 Implicit announce delivery uses configured channel allowlists to validate and reroute stale targets. DM pairing-store approvals are not fallback automation recipients; set `delivery.to` or configure the channel `allowFrom` entry when a scheduled job should proactively send to a DM.
 
+An inferred bare channel ID, alias, or target prefix is not a destination, even
+when a directory entry has the same name. This also applies to a saved `last`
+route whose recipient is exactly that namespace. Set `delivery.channel`
+explicitly or qualify `delivery.to`; this denial does not fall back to the first
+allowlisted recipient. Other native recipients keep the existing policy fallback.
+
 ### Default destinations
 
 Set `cron.delivery` to send every announce job that names no route of its own to one place, `cron.agents.<agentId>.delivery` to give one agent's jobs their own place, and `cron.creators.<profileId>.delivery` to give the jobs one person created their own place. For example, to send results to topic 1 of a Telegram forum unless a job says otherwise:

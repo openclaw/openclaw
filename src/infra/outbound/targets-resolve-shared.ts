@@ -7,7 +7,10 @@ import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.pub
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
-import { validateTargetProviderPrefix } from "./channel-target-prefix.js";
+import {
+  resolveChannelNamespaceTargetError,
+  validateTargetProviderPrefix,
+} from "./channel-target-prefix.js";
 import { missingTargetError, reservedTargetLiteralError } from "./target-errors.js";
 import { resolveReservedTargetLiteral } from "./target-normalization.js";
 
@@ -23,6 +26,7 @@ export type ResolveOutboundTargetParams = {
   cfg?: OpenClawConfig;
   accountId?: string | null;
   mode?: ChannelOutboundTargetMode;
+  channelInferred?: true;
 };
 
 /**
@@ -44,6 +48,11 @@ export async function resolveOutboundTargetWithPlugin(params: {
   const plugin = params.plugin;
   if (!plugin) {
     return undefined;
+  }
+  const namespaceError =
+    params.target.channelInferred && resolveChannelNamespaceTargetError(params.target.to, plugin);
+  if (namespaceError) {
+    return { ok: false, error: namespaceError };
   }
 
   // Plugin defaults and allowlists can be account-scoped; resolve them before target validation.

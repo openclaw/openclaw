@@ -30,6 +30,11 @@ validate config without running local state migrations. They require a reachable
 Gateway. Local actions, broadcasts, dry-runs, and commands that need local channel
 discovery retain local config and plugin preparation.
 
+For single-target actions, a bare channel ID, alias, or target prefix is not a
+destination when the channel comes only from sole-channel discovery. Use a
+qualified recipient or set `--channel` explicitly, even when a directory entry
+has that same name. Broadcast destination handling is unchanged.
+
 ## Agent ownership
 
 `openclaw message` uses the configured

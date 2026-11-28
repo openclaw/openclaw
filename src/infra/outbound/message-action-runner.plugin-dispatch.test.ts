@@ -114,6 +114,44 @@ describe("runMessageAction plugin dispatch", () => {
     setActivePluginRegistry(createTestRegistry([]));
     vi.clearAllMocks();
   });
+  it.each(["namespacechat", "NamespaceAlias", "ns"])(
+    "rejects inferred namespace %s before directory I/O or normalization",
+    async (to) => {
+      const normalizeTarget = vi.fn((raw: string) => `@${raw}`);
+      const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+      const listGroups = vi.fn(async () => [{ kind: "group" as const, id: "real-room", name: to }]);
+      const plugin = createActionPlugin("namespacechat", {
+        actions: ["edit"],
+        gatewayActions: [],
+        messaging: {
+          targetPrefixes: ["ns"],
+          normalizeTarget,
+          targetResolver: { looksLikeId: () => true },
+        },
+        handleAction,
+      });
+      plugin.meta = { ...plugin.meta, aliases: ["namespacealias"] };
+      plugin.directory = { listGroups };
+      setTestPlugin(plugin, "namespacechat");
+
+      await expect(
+        runMessageAction({
+          cfg: createEnabledMessageActionConfig("namespacechat"),
+          agentId: "main",
+          action: "edit",
+          params: { to, messageId: "message-1", message: "updated" },
+          conversationReadOrigin: "direct-operator",
+        }),
+      ).rejects.toMatchObject({
+        reasonCode: "message_target_missing",
+        policyRef: "message-target:destination-required",
+      });
+      expect(normalizeTarget).not.toHaveBeenCalled();
+      expect(listGroups).not.toHaveBeenCalled();
+      expect(handleAction).not.toHaveBeenCalled();
+    },
+  );
+
   describe("alias-based plugin action dispatch", () => {
     const { handleAction, plugin: actionHubPlugin } = useActionHubPluginFixture();
     const accountError = "requires the exact current conversation and account";
