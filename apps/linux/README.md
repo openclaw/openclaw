@@ -224,6 +224,23 @@ stack.
 
 ## Develop and build
 
+On Linux, microphone requests from the active Gateway dashboard open a native
+consent dialog. The default is **Deny**; **Allow** permits that audio request.
+Camera and display capture are not granted by this prompt. Navigation or closing
+the dashboard cancels a pending prompt. Realtime Talk additionally requires a
+WebRTC-capable browser runtime. Microphone permission does not supply missing
+WebRTC support; use the Gateway dashboard in a regular browser when the embedded
+runtime lacks it. The regression below verifies microphone consent, not a
+complete Realtime Talk session.
+
+Run the native microphone regression with a display (synthetic capture devices
+only; no real microphone is recorded):
+
+```bash
+cd apps/linux/src-tauri
+cargo test --locked --bin openclaw-desktop microphone_linux::tests::webkit_microphone_consent -- --ignored --test-threads=1
+```
+
 The companion frontend is static HTML, CSS, and JavaScript. Install repository dependencies once
 before building:
 

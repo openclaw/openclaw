@@ -1146,6 +1146,30 @@ impl DocumentRegistration {
             let app = registration.app.clone();
             let label = registration.label.clone();
             let lifetime = registration.lifetime.clone();
+            #[cfg(target_os = "linux")]
+            let microphone = {
+                let app = app.clone();
+                let label = label.clone();
+                let lifetime = lifetime.clone();
+                crate::native_browser_platform::install_dashboard_microphone(&view, move |url| {
+                    app.state::<GatewayWindows>()
+                        .routing
+                        .lock()
+                        .is_ok_and(|state| {
+                            !state.closing
+                                && state
+                                    .windows
+                                    .get(&label)
+                                    .and_then(|route| route.document.as_ref())
+                                    .is_some_and(|doc| {
+                                        doc.lifetime == lifetime
+                                            && doc.phase == NavigationPhase::Active
+                                            && matches_route(url, &doc.url)
+                                    })
+                        })
+                })
+                .await
+            };
             let observer_app = app.clone();
             let observer_label = label.clone();
             let observer_lifetime = lifetime.clone();
@@ -1185,6 +1209,8 @@ impl DocumentRegistration {
                     else {
                         return Ok(());
                     };
+                    #[cfg(target_os = "linux")]
+                    let observed = observed.and(microphone);
                     if observed.is_err() {
                         None
                     } else {
