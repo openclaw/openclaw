@@ -64,6 +64,7 @@ export class ProfileState {
   identityLoading = false;
   private identityRefreshPending = false;
   identityBusy: IdentityChange["kind"] | null = null;
+  avatarPreview: string | null = null;
   identityError: string | null = null;
   attributionError: string | null = null;
 
@@ -142,6 +143,7 @@ export class ProfileState {
       this.identityReceipt = { result: Promise.resolve() };
       this.identityLoading = false;
       this.identityBusy = null;
+      this.avatarPreview = null;
       this.identityError = null;
       this.attributionError = null;
     }
@@ -339,6 +341,9 @@ export class ProfileState {
             return;
           }
           assertUploadsEnabled(this.context.config);
+          // Preview the exact processed pixels in the editor, never in shared identity.
+          this.avatarPreview = `data:${avatar.mime};base64,${avatar.avatarBase64}`;
+          this.publish();
           const result = await client.request<UsersSetAvatarResult>("users.setAvatar", {
             profileId: profile.id,
             mime: avatar.mime,
@@ -422,6 +427,7 @@ export class ProfileState {
     } finally {
       if (isCurrent() && this.identityBusy === change.kind) {
         this.identityBusy = null;
+        this.avatarPreview = null;
         this.publish();
         if (this.identityRefreshPending) {
           this.loadIdentity();
