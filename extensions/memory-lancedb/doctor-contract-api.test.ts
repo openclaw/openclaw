@@ -235,6 +235,17 @@ test("detection leaves an explicit dbPath byte-identical", async () => {
   expect(await snapshotTree(getDbPath())).toEqual(before);
 });
 
+test("detection does not create a missing dbPath", async () => {
+  for (const dbPath of [getDbPath(), pathToFileURL(getDbPath()).href]) {
+    for (const migration of stateMigrations) {
+      await expect(migration.detectLegacyState(migrationParams(undefined, dbPath))).resolves.toBe(
+        null,
+      );
+    }
+  }
+  await expect(fs.access(getDbPath())).rejects.toThrow();
+});
+
 test("deletes only structurally complete legacy envelope rows", async () => {
   const rows = (prefix: string, texts: string[]) =>
     texts.map((text, index) => ({ id: `${prefix}-${index}`, text }));

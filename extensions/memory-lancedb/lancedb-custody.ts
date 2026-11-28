@@ -10,12 +10,13 @@ const lockOptions: FileLockOptions = {
   staleRecovery: "remove-if-definitely-stale",
 };
 
+/** Local directory of a plain path or `file:` URL; null for a remote URI. */
+export function resolveLocalTablePath(dbPath: string): string | null {
+  return /^file:/i.test(dbPath) ? fileURLToPath(dbPath) : dbPath.includes("://") ? null : dbPath;
+}
+
 async function custodyDirectory(dbPath: string): Promise<string | null> {
-  const localPath = /^file:/i.test(dbPath)
-    ? fileURLToPath(dbPath)
-    : dbPath.includes("://")
-      ? null
-      : dbPath;
+  const localPath = resolveLocalTablePath(dbPath);
   if (localPath === null) {
     return null;
   }
