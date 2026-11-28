@@ -377,6 +377,10 @@
 }
 
 .logbook-stats__app {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 999px;
