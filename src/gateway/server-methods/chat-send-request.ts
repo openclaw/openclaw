@@ -27,6 +27,7 @@ import {
 } from "../../chat/work-context.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
 import { captureSessionWorkTarget } from "../../config/sessions/session-work-start.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
@@ -152,6 +153,10 @@ export function normalizeChatSendRequest(params: {
   params: Record<string, unknown>;
   client: GatewayRequestHandlerOptions["client"];
   trustedSystemInput?: boolean;
+  talkSettings?: Pick<
+    NonNullable<OpenClawConfig["talk"]>,
+    "consultThinkingLevel" | "consultFastMode"
+  >;
   activeSteer?: { runId: string; profileId: string };
   goalResume?: SessionGoalOperation & { action: "resume" };
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
@@ -193,6 +198,7 @@ export function normalizeChatSendRequest(params: {
       p.systemInputProvenance ||
       p.systemProvenanceReceipt ||
       p.suppressCommandInterpretation !== undefined ||
+      p.useTalkSettings ||
       p.thinking !== undefined ||
       p.fastMode !== undefined ||
       p.timeoutMs !== undefined)
@@ -252,6 +258,7 @@ export function normalizeChatSendRequest(params: {
       p.thinking !== undefined ||
       p.fastMode !== undefined ||
       p.fastAutoOnSeconds !== undefined ||
+      p.useTalkSettings ||
       p.timeoutMs !== undefined)
   ) {
     // Recovery reads the persisted input and session settings, not transient run overrides.
@@ -338,6 +345,9 @@ export function normalizeChatSendRequest(params: {
       "Human mentions require a signed-in chat in the OpenClaw app. Remove the selected mentions to use this mode.",
     );
   }
+  const talkSettings = ordinaryChat && p.useTalkSettings ? params.talkSettings : undefined;
+  const thinking = p.thinking ?? talkSettings?.consultThinkingLevel;
+  const fastMode = p.fastMode ?? talkSettings?.consultFastMode;
   if (p.appContext && !ordinaryChat) {
     return reject("App context is only supported for ordinary chat messages.");
   }
@@ -361,6 +371,7 @@ export function normalizeChatSendRequest(params: {
       : []),
     p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
     ...(workContext ? [workContext.snapshot] : []),
+    ...(p.useTalkSettings ? [{ useTalkSettings: true }] : []),
     ...(p.appContext ? [{ appContext: stableStringify(p.appContext) }] : []),
     ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
     ...(targetPrecondition ? [targetPrecondition.requestIdentity] : []),
@@ -371,7 +382,11 @@ export function normalizeChatSendRequest(params: {
     chatSendReceivedAtMs,
     clientInfo,
     supportsTaskSuggestions,
-    p,
+    p: {
+      ...p,
+      ...(thinking !== undefined ? { thinking } : {}),
+      ...(fastMode !== undefined ? { fastMode } : {}),
+    },
     targetPrecondition,
     ...(params.providerReviewAcknowledgment
       ? { providerReviewAcknowledgment: params.providerReviewAcknowledgment }
@@ -382,7 +397,9 @@ export function normalizeChatSendRequest(params: {
     ...(workContext ? { workContext } : {}),
     ...(p.appContext ? { appContext: p.appContext } : {}),
     systemInputProvenance,
-    normalizeThinkingLevelOverride: shouldNormalizeTalkThinking({ p, systemInputProvenance }),
+    normalizeThinkingLevelOverride:
+      (p.thinking === undefined && talkSettings?.consultThinkingLevel !== undefined) ||
+      shouldNormalizeTalkThinking({ p, systemInputProvenance }),
     systemProvenanceReceipt,
     suppressCommandInterpretation: commandInterpretationSuppressed,
     toolBindings: p.toolBindings,

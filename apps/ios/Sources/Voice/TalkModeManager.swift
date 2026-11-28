@@ -2756,7 +2756,8 @@ final class TalkModeManager {
     static func chatSendRequest(
         message: String,
         sessionKey: String,
-        idempotencyKey: String) -> OpenClawChatGatewayRequest
+        idempotencyKey: String,
+        useTalkSettings: Bool = false) -> OpenClawChatGatewayRequest
     {
         OpenClawChatGatewayRequests.sendMessage(
             sessionKey: sessionKey,
@@ -2765,7 +2766,8 @@ final class TalkModeManager {
             message: message,
             thinking: nil,
             idempotencyKey: idempotencyKey,
-            attachments: [])
+            attachments: [],
+            useTalkSettings: useTalkSettings)
     }
 
     private func sendChat(
@@ -2774,10 +2776,13 @@ final class TalkModeManager {
         transcriptProcessingGeneration generation: UInt64,
         idempotencyKey: String) async throws -> OpenClawChatSendResponse
     {
+        let useTalkSettings = await context.gateway.supportsServerCapability(
+            .talkChatSettings, ifCurrentRoute: context.route) == true
         let request = Self.chatSendRequest(
             message: message,
             sessionKey: context.sessionKey,
-            idempotencyKey: idempotencyKey)
+            idempotencyKey: idempotencyKey,
+            useTalkSettings: useTalkSettings)
         let res = try await withGatewayStartupAdmission(method: request.method) {
             guard self.isCurrentTranscriptProcessing(generation) else { throw CancellationError() }
             return try await context.gateway.request(request, ifCurrentRoute: context.route)

@@ -280,7 +280,7 @@ it.each([
     h.utterance();
     await sent;
     expect(expectDefined(tracks[0], "captured microphone track").stop).toHaveBeenCalledOnce();
-    h.expectSend({ expectedLeafEntryId: leaf });
+    h.expectSend({ expectedLeafEntryId: leaf, useTalkSettings: true });
     h.answer("Wrong answer", "unrelated");
     h.answer("The local model answered.");
     await h.speech.promise;
