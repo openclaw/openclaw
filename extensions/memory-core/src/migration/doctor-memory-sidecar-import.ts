@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { admitMemoryVectorIndex } from "../memory/manager-search-knn.js";
+import { clearMemoryVectorsUnitNorm } from "../memory/manager-vector-unit-norm.js";
 
 export type LegacyMemorySidecarSource = {
   agentId: string;
@@ -265,6 +266,8 @@ function copyLegacyMemoryVectorRows(db: DatabaseSync): void {
       WHERE canonical.id = legacy.id
     );
   `);
+  // Legacy rows keep their stored scale; the next sync normalizes them in place.
+  clearMemoryVectorsUnitNorm(db);
   assertLegacyDerivedRowsCopied(
     db,
     LEGACY_MEMORY_VECTOR_TABLE,

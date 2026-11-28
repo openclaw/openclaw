@@ -94,6 +94,7 @@ import {
   type MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
 import { refreshMemorySessionSourceState } from "./manager-source-state.js";
+import { normalizeMemoryVectorsInPlace } from "./manager-vector-unit-norm-migration.worker.js";
 
 type PublicationConnection =
   | MemoryShadowConnection
@@ -633,6 +634,13 @@ function createPublicationBackend(
         );
       }
       loadExtension(command.input.state.extensionPath);
+      if (command.type === "index.normalizeVectors") {
+        const dimensions = readMemoryDatabaseFacts(db).meta?.vectorDims;
+        return withFacts(
+          normalizeMemoryVectorsInPlace(db, { ...vectorIndex, dimensions }, write),
+          true,
+        );
+      }
       if (command.type === "database.publish") {
         const publication = command.input;
         return withFacts(

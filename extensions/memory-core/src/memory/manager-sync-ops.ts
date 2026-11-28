@@ -36,6 +36,8 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
   protected readonly automaticRebuildNotice: { sequence: number; warning: string };
   /** Start of the oldest sync whose cache rows were not yet retirable. */
   private cacheRetireSince?: number;
+  /** The unit-norm verification runs at most once per manager; search stays exact otherwise. */
+  private vectorUnitNormAttempted = false;
   protected constructor(notice?: { sequence: number; warning: string }) {
     super();
     this.automaticRebuildNotice = notice ?? { sequence: 0, warning: "" };
@@ -273,6 +275,45 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         );
         if (!upgraded) {
           return MEMORY_SYNC_DEFERRED;
+        }
+      }
+      if (
+        vectorReady &&
+        !params?.force &&
+        !hasTargetSessionRequest &&
+        !this.memoryFullRetryDirty &&
+        !this.sessionsFullRetryDirty &&
+        !this.vectorUnitNormAttempted &&
+        indexIdentity.status === "valid" &&
+        this.database.admission?.engine !== "postgres" &&
+        this.database.facts.vectorState.state === "complete" &&
+        !this.database.facts.vectorUnitNorm
+      ) {
+        // Indexes written before vectors were normalized on write, or since by a
+        // writer that does not normalize. A rebuild that is due anyway publishes
+        // a marked index instead, so only a valid identity is verified here.
+        this.vectorUnitNormAttempted = true;
+        const database = this.database;
+        try {
+          await database.updateIndexStructure(
+            {
+              type: "index.normalizeVectors",
+              input: {
+                state: {
+                  vector: this.vector,
+                  fts: this.fts,
+                  extensionPath: this.vector.extensionPath,
+                },
+              },
+            },
+            () => this.assertDatabaseMutationCurrent(database),
+          );
+        } catch (error) {
+          this.assertDatabaseMutationCurrent(database);
+          // Search keeps the exact cosine path; indexing must not depend on this.
+          log.warn(
+            `memory vectors not verified as unit length; vector search stays on exact cosine: ${formatErrorMessage(error)}`,
+          );
         }
       }
       if (hasTargetSessionRequest && !hasTargetArchiveFiles) {

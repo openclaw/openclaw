@@ -24,6 +24,11 @@ import {
   resolvePersistedMemoryVectorIndexState,
   VECTOR_REBUILD_META_KEY,
 } from "./manager-vector-rebuild-state.js";
+import {
+  isCurrentMemoryVectorsUnitNorm,
+  readMemoryVectorsUnitNorm,
+  VECTOR_UNIT_NORM_META_KEY,
+} from "./manager-vector-unit-norm.js";
 
 export const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 
@@ -37,6 +42,8 @@ export type MemoryDatabaseFacts = {
   hasVectorTable: boolean;
   vectorState: ReturnType<typeof resolveMemoryVectorIndexState>;
   embeddingRefusal: MemoryEmbeddingRefusal | null;
+  /** Every stored SQLite vector has unit L2 norm at this revision (see manager-vector-unit-norm). */
+  vectorUnitNorm?: boolean;
 };
 
 const corpusFacts = new WeakMap<
@@ -79,6 +86,11 @@ export function readMemoryDatabaseFacts(
           .select("value")
           .where("key", "=", EMBEDDING_REFUSAL_META_KEY)
           .as("embeddingRefusal"),
+        eb
+          .selectFrom("memory_index_meta")
+          .select("value")
+          .where("key", "=", VECTOR_UNIT_NORM_META_KEY)
+          .as("unitNormMarker"),
         eb.exists(eb.selectFrom("memory_index_chunks").select("model")).as("hasIndexedChunks"),
         ...(
           [
@@ -145,6 +157,7 @@ export function readMemoryDatabaseFacts(
       hasSemanticChunks: Boolean(row.hasSemanticChunks),
     }),
     embeddingRefusal: parseMemoryEmbeddingRefusal(row.embeddingRefusal),
+    vectorUnitNorm: isCurrentMemoryVectorsUnitNorm(row.unitNormMarker, row.revision),
   };
 }
 
@@ -177,6 +190,8 @@ export function readMemoryRetrievalIndexState(db: EngineConnection) {
       hasIndexedChunks: facts.hasIndexedChunks,
       hasFtsContent: false,
       vectorState: facts.vectorState,
+      // PostgreSQL computes cosine natively; the SQLite fast path does not apply.
+      vectorUnitNorm: false,
     };
   }
   const { meta } = readMemoryIndexMetadata(db);
@@ -198,7 +213,8 @@ export function readMemoryRetrievalIndexState(db: EngineConnection) {
               .get() !== undefined,
         })
       : { state: "empty" as const };
-  return { meta, hasIndexedChunks, hasFtsContent, vectorState };
+  const vectorUnitNorm = vectorState.state === "complete" && readMemoryVectorsUnitNorm(db);
+  return { meta, hasIndexedChunks, hasFtsContent, vectorState, vectorUnitNorm };
 }
 
 export type MemoryRecallQuery = {

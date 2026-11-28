@@ -36,6 +36,12 @@ export type VectorSearch<Row> = {
   vector: readonly number[];
   limit: number;
   textPrefix?: { column: string; maxChars: number };
+  /**
+   * The owner guarantees every stored vector has unit L2 norm. SQLite then
+   * derives the exact cosine distance from the L2 distance its KNN returns
+   * (L2² / 2) instead of rereading each candidate's embedding.
+   */
+  unitNormVectors?: boolean;
   query: (native: { match: RawBuilder<boolean>; distance: RawBuilder<number> }) => {
     toOperationNode(): RootOperationNode;
   };

@@ -51,7 +51,7 @@ export async function searchMemoryVectorIndex(
   capability: VectorCapability,
   index: VectorIndex,
   request: VectorKnnRequest,
-  options: { signal?: AbortSignal; extensionPath?: string } = {},
+  options: { signal?: AbortSignal; extensionPath?: string; unitNormVectors?: boolean } = {},
 ): Promise<VectorKnnResponse> {
   const modelFilter = buildMemoryModelFilter("c.model", request.providerModels);
   const sourceFilter = buildSqliteMemorySourceFilter(request.sourceFilter, "c");
