@@ -616,6 +616,60 @@ type TransportFailureDiagnostic = {
   incompleteReason?: string;
 };
 
+/** Argument hashes are base-36 digests; anything else is not an OpenClaw digest. */
+const TOOL_CALL_ARGUMENT_HASH_PATTERN = /^[0-9a-z]{1,14}$/u;
+
+/**
+ * Bounded, content-free diagnostics for a rejected terminal tool-call argument buffer.
+ * `parseTerminalToolCallArguments` attaches them to the error `cause` and mirrors them
+ * onto `errorBody`. Only the typed fields are surfaced, and only for the malformed
+ * tool-call code, so argument text and provider prose never reach the log here.
+ */
+function readToolCallArgumentDiagnostics(
+  cause: Record<string, unknown> | undefined,
+  errorBody: unknown,
+): { argumentChars?: number; argumentHash?: string; repairAttempted?: boolean } {
+  const diagnostics =
+    cause?.code === MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE
+      ? cause
+      : readToolCallArgumentDiagnosticsBody(errorBody);
+  if (!diagnostics) {
+    return {};
+  }
+  const argumentChars = diagnostics.argumentChars;
+  const argumentHash = diagnostics.argumentHash;
+  const repairAttempted = diagnostics.repairAttempted;
+  const bounded: { argumentChars?: number; argumentHash?: string; repairAttempted?: boolean } = {};
+  if (typeof argumentChars === "number" && Number.isFinite(argumentChars) && argumentChars >= 0) {
+    bounded.argumentChars = Math.trunc(argumentChars);
+  }
+  if (typeof argumentHash === "string" && TOOL_CALL_ARGUMENT_HASH_PATTERN.test(argumentHash)) {
+    bounded.argumentHash = argumentHash;
+  }
+  if (typeof repairAttempted === "boolean") {
+    bounded.repairAttempted = repairAttempted;
+  }
+  return bounded;
+}
+
+/** Read the mirrored diagnostics copy when the error `cause` did not survive the throw. */
+function readToolCallArgumentDiagnosticsBody(
+  errorBody: unknown,
+): Record<string, unknown> | undefined {
+  if (
+    typeof errorBody !== "string" ||
+    !errorBody.includes(MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE)
+  ) {
+    return undefined;
+  }
+  try {
+    const parsed = asOptionalRecord(JSON.parse(errorBody));
+    return parsed?.code === MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Assign terminal fields and record silent transport failures before partial-call cleanup. */
 export function assignTransportErrorDetails(
   output: AssistantMessage,
@@ -634,7 +688,7 @@ export function assignTransportErrorDetails(
         asOptionalRecord(record?.error) ??
         asOptionalRecord(response?.error) ??
         asOptionalRecord(asOptionalRecord(record?.payload)?.error);
-      const metadata: Record<string, string | number | undefined> = {
+      const metadata: Record<string, string | number | boolean | undefined> = {
         provider: output.provider,
         model: output.model,
         name: readTransportDiagnosticLabel(record?.name),
@@ -650,6 +704,7 @@ export function assignTransportErrorDetails(
         responseId: readTransportDiagnosticLabel(
           record?.responseId ?? response?.id ?? output.responseId,
         ),
+        ...readToolCallArgumentDiagnostics(cause, record?.errorBody),
       };
       for (const key in metadata) {
         if (metadata[key] === undefined) {

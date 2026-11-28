@@ -121,6 +121,30 @@ it.each([
     expect(surfaced).not.toContain("rm -rf");
   }
 });
+it("does not log tool-call diagnostics that are not an OpenClaw digest", () => {
+  const logWarn = vi.fn();
+  configureAiTransportHost({ ...initialHost, isLogEnabled: () => true, logWarn });
+  const output = createOpenAIResponsesAssistantOutput(model);
+  const rejected = '{"path":"SECRET.md"';
+  assignTransportErrorDetails(
+    output,
+    Object.assign(new Error("PRIVATE CAUSE"), {
+      errorCode: "malformed_tool_call_arguments",
+      cause: {
+        code: "malformed_tool_call_arguments",
+        argumentChars: rejected.length,
+        argumentHash: "PRIVATE ARGUMENT TEXT",
+        repairAttempted: true,
+      },
+    }),
+  );
+  const metadata = logWarn.mock.calls[0]?.[2] as Record<string, unknown>;
+  expect(metadata.argumentChars).toBe(rejected.length);
+  expect(metadata.repairAttempted).toBe(true);
+  expect(metadata.argumentHash).toBeUndefined();
+  expect(JSON.stringify(logWarn.mock.calls)).not.toContain("PRIVATE ARGUMENT TEXT");
+});
+
 it("does not wait for unread response cancellation after the observer fails", async () => {
   const hookError = new Error("acceptance failed");
   const { promise: cancelStarted, resolve: markCancelStarted } = Promise.withResolvers<void>();

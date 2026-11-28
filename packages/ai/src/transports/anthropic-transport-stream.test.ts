@@ -1931,6 +1931,35 @@ describe("anthropic transport stream", () => {
         expect(eventTypes).not.toContain("done");
       }
     });
+
+    it("surfaces bounded tool-call diagnostics in the provider-error log", async () => {
+      const logWarn = vi.fn();
+      configureAiTransportHost({ ...getAiTransportHost(), isLogEnabled: () => true, logWarn });
+      const partialJson = '{"path": "SECRET.md", "content": "partial';
+      const started = await startRepairServer(
+        repairEvents([{ id: "call_truncated", name: "read", partialJson }]),
+      );
+      server = started.server;
+      const { eventTypes, result } = await runRepairStream(started.baseUrl);
+      expect(result.stopReason).toBe("error");
+      expect(result.errorCode).toBe("malformed_tool_call_arguments");
+      expect(eventTypes).not.toContain("toolcall_end");
+      const providerErrorCall = logWarn.mock.calls.find((call) => call[0] === "provider-error");
+      expect(providerErrorCall).toBeDefined();
+      const metadata = providerErrorCall?.[2] as Record<string, unknown>;
+      const body = JSON.parse(result.errorBody ?? "{}") as Record<string, unknown>;
+      expect(metadata).toMatchObject({
+        code: "malformed_tool_call_arguments",
+        causeCode: "malformed_tool_call_arguments",
+        argumentChars: partialJson.length,
+        argumentHash: body.argumentHash,
+        repairAttempted: true,
+      });
+      expect(metadata.argumentChars).toBe(body.argumentChars);
+      expect(metadata.argumentHash).toMatch(/^[0-9a-z]{1,14}$/);
+      expect(`${result.errorMessage}${result.errorBody}`).not.toContain("SECRET.md");
+      expect(JSON.stringify(logWarn.mock.calls)).not.toContain("SECRET.md");
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
