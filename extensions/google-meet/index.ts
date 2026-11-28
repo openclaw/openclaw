@@ -1,4 +1,5 @@
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
+import { registerMeetingPluginRuntime } from "openclaw/plugin-sdk/meeting-plugin-entry";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   asNonArrayRecord as asParamRecord,
@@ -15,7 +16,7 @@ import {
 import {
   assertGoogleMeetAgentToolActionSupported,
   callGoogleMeetGatewayFromTool,
-  createGoogleMeetRuntimeAccessor,
+  createGoogleMeetRuntime,
   createLazyGoogleMeetNodeInvokePolicy,
   formatGoogleMeetGatewayError,
   keepTrustedToolAgentId,
@@ -46,7 +47,13 @@ export default definePluginEntry({
   configSchema: googleMeetConfigSchema,
   register(api: OpenClawPluginApi) {
     const config = googleMeetConfigSchema.parse(api.pluginConfig);
-    const ensureRuntime = createGoogleMeetRuntimeAccessor({ api, config });
+    const ensureRuntime = registerMeetingPluginRuntime(api, config, {
+      id: "google-meet",
+      name: "Google Meet",
+      disabledMessage: "Google Meet plugin disabled in plugin config",
+      createRuntime: createGoogleMeetRuntime,
+      transcriptSource: { id: "google-meet", aliases: ["googlemeet", "meet"], name: "Google Meet" },
+    });
     const registerGatewayMethod = (
       method: string,
       handler: (options: GatewayRequestHandlerOptions) => Promise<unknown>,
@@ -108,15 +115,6 @@ export default definePluginEntry({
         );
       },
     };
-    api.registerTranscriptSourceProvider({
-      id: "google-meet",
-      aliases: ["googlemeet", "meet"],
-      name: "Google Meet",
-      sourceKinds: ["live-caption"],
-      start: async (request) => await (await ensureRuntime()).startTranscriptSource(request),
-      stop: async (request) => await (await ensureRuntime()).stopTranscriptSource(request),
-    });
-
     registerGatewayMethod("googlemeet.join", async (options) => {
       const { raw, url } = resolveTrustedJoinParams(options);
       const joinOptions = readGoogleMeetJoinOptions(raw);

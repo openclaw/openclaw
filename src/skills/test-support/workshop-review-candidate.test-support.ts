@@ -10,7 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Message } from "../../llm/types.js";
 
 /** A finished foreground turn a Workshop review can fork: its config and final transcript anchor. */
-export type WorkshopReviewCandidateFixture = {
+type WorkshopReviewCandidateFixture = {
   config: OpenClawConfig;
   ctx: { runId: string; workspaceDir: string; modelProviderId: string; modelId: string };
   source: TranscriptEntryAnchor;

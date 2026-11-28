@@ -3,7 +3,11 @@ import { closeSync, fstatSync } from "node:fs";
 import path from "node:path";
 import { readFileWindowFullySync } from "@openclaw/fs-safe/advanced";
 import type { FeatureInvocationContext } from "openclaw/plugin-sdk/feature-plugin";
-import { openRootFile } from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  describeRootFileOpenFailure,
+  isPathInside,
+  openRootFile,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import {
   ATTACHMENT_CHUNK_BYTES,
   type AttachFileInput,
@@ -36,16 +40,27 @@ export async function attachWorkspaceFile(
     assertCurrent();
   };
   current();
+  const filePath = path.resolve(workspace, input.filePath);
+  if (!isPathInside(workspace, filePath)) {
+    throw new Error(
+      `Source file is outside the authorized workspace: ${workspace}. Choose a file inside this workspace.`,
+    );
+  }
   const opened = await openRootFile({
     rootPath: workspace,
-    absolutePath: path.resolve(workspace, input.filePath),
+    absolutePath: filePath,
     boundaryLabel: "Knowledge source workspace",
     rejectSymlinks: true,
     rejectHardlinks: true,
   });
   if (!opened.ok) {
     throw new Error(
-      "Source file must be a readable regular file inside the authorized workspace without aliases.",
+      `${describeRootFileOpenFailure({
+        failure: opened,
+        subject: "Source file",
+        boundaryLabel: "the authorized workspace",
+        filePath,
+      })}. Authorized workspace: ${workspace}`,
     );
   }
   try {

@@ -9,14 +9,30 @@ import type { SchemaVersions } from "./update-candidate-check-early-release.js";
  */
 
 export type RecoveryPlan = {
+  /** The user service manager that runs the Gateway and this recovery. */
+  supervisor: "systemd" | "launchd";
+  /** The recovery's own job: a systemd unit name or a launchd label. */
   unit: string;
+  /** launchd's GUI domain (`gui/<uid>`). */
+  domain?: string;
+  /** The file the launchd job writes its output to; systemd's goes to the journal. */
+  log?: string;
+  /** How the user reads the runner's output. */
+  follow: string;
   checkout: string;
   branch: string;
   target: string;
   /** The release the updater built, kept here for the rebuild window. */
   release: string;
   prefix: string;
+  stateDir: string;
+  /** The unit file or LaunchAgent plist. */
   serviceFile: string;
+  /** Every file of the Gateway's definition that existed when the recovery was planned, the
+   * service file first; each is copied beside itself before the first switch. */
+  definitionFiles: string[];
+  /** The early updater's release link's target, restored when the previous build comes back. */
+  legacyLink: string | null;
   /** `systemctl --user is-enabled` of the Gateway service when the recovery was planned. */
   enabled: string;
   /** Every store's schema version when the recovery was planned. */

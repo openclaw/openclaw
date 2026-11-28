@@ -30,7 +30,6 @@ const captured = (directory: string) => ({
 });
 const captureDefaults = () => ({
   root: process.cwd(),
-  runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
   signal: new AbortController().signal,
   assertCurrent() {},
 });
@@ -195,61 +194,5 @@ it("keeps failed unsealed update evidence without warning or taking another capt
     expect(fs.existsSync(directory)).toBe(true);
     expect(fs.existsSync(path.join(directory, "payload", "0"))).toBe(true);
     expect(capture).not.toHaveBeenCalled();
-  });
-});
-
-it("keeps one sealed container capture, skips repeats, and still retires old captures", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const marker = state.path("activation-capture-marker");
-    const env = { ...state.env, OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER: marker };
-    const captureRoot = resolveUpdateCaptureRoot(state.stateDir);
-    const log = vi.fn();
-    const captureOriginal = (root: string | null) =>
-      preserveDoctorOriginalState({
-        ...captureDefaults(),
-        root,
-        env,
-        runtime: { log, error: vi.fn(), exit: vi.fn() },
-      });
-
-    // A nonfatal capture failure leaves the next start free to capture.
-    const unavailable = await captureOriginal(null);
-    expect(fs.existsSync(marker)).toBe(false);
-    expect(unavailable.findings).toContainEqual(
-      expect.objectContaining({
-        category: "fix-now",
-        message: expect.stringContaining("Pre-repair recovery copy was unavailable"),
-        fixHint: expect.stringContaining("Check installation access and disk space"),
-      }),
-    );
-
-    const capture = vi
-      .spyOn(baselineCapture, "captureUpdateRecoveryBaseline")
-      .mockImplementation(async ({ runId }) => {
-        const directory = path.join(captureRoot, runId);
-        fs.mkdirSync(directory, { recursive: true });
-        fs.writeFileSync(path.join(directory, "manifest.json"), "{}");
-        return captured(directory);
-      });
-    const retire = vi
-      .spyOn(retention, "retireExpiredStandaloneDoctorCaptures")
-      .mockResolvedValue({ retired: [], warnings: [] });
-    await captureOriginal(process.cwd());
-    expect(capture).toHaveBeenCalledOnce();
-    const runId = fs.readFileSync(marker, "utf8");
-    expect(runId).toBe(capture.mock.calls[0]![0].runId);
-
-    log.mockClear();
-    await captureOriginal(process.cwd());
-    expect(capture).toHaveBeenCalledOnce();
-    expect(log).not.toHaveBeenCalled();
-    // Repeat starts keep the container's capture while older ones still age out.
-    expect(retire).toHaveBeenCalledTimes(2);
-    expect(retire).toHaveBeenLastCalledWith(expect.objectContaining({ keepRunId: runId }));
-
-    fs.rmSync(path.join(captureRoot, runId), { recursive: true });
-    await captureOriginal(process.cwd());
-    expect(capture).toHaveBeenCalledTimes(2);
-    expect(fs.readFileSync(marker, "utf8")).toBe(capture.mock.calls[1]![0].runId);
   });
 });

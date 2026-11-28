@@ -98,6 +98,8 @@ Optional default skill allowlist for agents that do not set
 
 Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`), not injection of existing files. For the embedded runtime, use `contextInjection: "never"` to disable injection, unless overridden per agent.
 
+One-shot runs (`openclaw agent --local` and `openclaw agent exec`) do not create these files in the agent workspace, even when this setting is off, because the bootstrap conversation needs a later turn. The first Gateway or chat run creates them. A sandbox with `workspaceAccess: "none"` still seeds its own private copy unless `skipBootstrap` is set.
+
 ```json5
 {
   agents: { defaults: { skipBootstrap: true } },
@@ -162,6 +164,25 @@ Max total characters injected across all workspace bootstrap files. Default: `60
 
 Per-agent override: `agents.entries.*.bootstrapTotalMaxChars`. Omitted values
 inherit `agents.defaults.bootstrapTotalMaxChars`.
+
+## `agents.entries.*.sharedUserDir`
+
+Directory holding a `USER.md` that several agents share. When set, the agent
+loads that file in place of its workspace `USER.md`. Agents without it keep
+their workspace file. The workspace path guard is unchanged: the directory is
+read only for bootstrap and is not exposed to workspace file tools. See
+[One USER.md for several agents](/concepts/user-model#one-usermd-for-several-agents).
+
+```json5
+{
+  agents: {
+    entries: {
+      work: { sharedUserDir: "~/openclaw-user" },
+      home: { sharedUserDir: "~/openclaw-user" },
+    },
+  },
+}
+```
 
 ## Per-agent bootstrap profile overrides
 

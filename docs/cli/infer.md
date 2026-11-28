@@ -235,6 +235,9 @@ openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --jso
 
 `--model` must be `<provider/model>`.
 
+If transcription skips a file, the error reports the reason when available,
+such as a missing file or the minimum or maximum size limit.
+
 An accepted interrupt cancels the pending transcription request and suppresses
 late transcript output.
 

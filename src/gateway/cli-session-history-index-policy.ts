@@ -211,6 +211,27 @@ export type CliHistoryMergeStore = {
   ) => void;
 };
 
+// Native rows answer the prompt before them. When that prompt is a local user
+// turn, they belong to its run, as rows from OpenClaw's own runtimes do.
+function projectImportedTurnRun(
+  metadata: string | null,
+  matchExternal: CliHistoryMergeStore["matchExternal"],
+): string | null {
+  const { turnExternalId, ...meta } =
+    asOptionalRecord(metadata ? JSON.parse(metadata) : null) ?? {};
+  if (typeof turnExternalId !== "string") {
+    return metadata;
+  }
+  const key = resolveImportedExternalIdentityKey({ ...meta, externalId: turnExternalId });
+  const turn = key ? matchExternal(key) : undefined;
+  const turnKey =
+    turn?.role === "user" && turn.metadata
+      ? normalizeOptionalString(asOptionalRecord(JSON.parse(turn.metadata))?.idempotencyKey)
+      : undefined;
+  const runId = turnKey?.endsWith(":user") ? turnKey.slice(0, -":user".length) : undefined;
+  return JSON.stringify(runId && meta.runId === undefined ? { ...meta, runId } : meta);
+}
+
 export function mergeCliHistoryRow(
   imported: Omit<HistoryRow, "payload">,
   store: CliHistoryMergeStore,
@@ -278,6 +299,7 @@ export function mergeCliHistoryRow(
     advance(duplicate);
     return true;
   }
+  imported.metadata = projectImportedTurnRun(imported.metadata, matchExternal);
   return false;
 }
 

@@ -1,9 +1,18 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveStateDir } from "../config/paths.js";
-import { resolveGatewayProfileSuffix } from "../daemon/constants.js";
+import {
+  GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
+  resolveGatewayProfileSuffix,
+} from "../daemon/constants.js";
+import { resolveLaunchAgentGuiDomain } from "../daemon/launchd-runtime.js";
+import {
+  resolveLaunchAgentEnvFilePath,
+  resolveLaunchAgentEnvWrapperPath,
+} from "../daemon/launchd-service-files.js";
 import { resolveServiceEntrypointIndex } from "../daemon/service-layout.js";
 import { resolveManagedGatewayServiceCommand } from "../daemon/service-types.js";
 import { resolveGatewayService } from "../daemon/service.js";
@@ -12,22 +21,29 @@ import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   readSchemaVersions,
+  shellStatePath,
   type EarlyGitReleaseRecoveryStart,
   type EarlyGitReleaseSchemaChange,
   type SchemaVersions,
 } from "./update-candidate-check-early-release.js";
 import type { RecoveryPlan } from "./update-early-release-recovery-record.js";
 import {
+  describeRecoveryJob,
+  isRecoveryJobRunning,
+  startRecoveryJob,
+  type RunCommand,
+} from "./update-early-release-recovery-service.js";
+import {
   buildCommit,
   EARLY_RELEASE_RECOVERY_FLAG,
   git,
+  legacyLinkPath,
   ok,
   processStart,
   readJsonString,
   removeTree,
   runRecoveryCommand,
   commandTail,
-  type RunCommand,
 } from "./update-early-release-recovery.js";
 
 /**
@@ -49,33 +65,53 @@ const PASSED_ENV = [
   "XDG_RUNTIME_DIR",
   "DBUS_SESSION_BUS_ADDRESS",
   "OPENCLAW_HOME",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_PROFILE",
+  // The selectors name the Gateway service the runner's `gateway install` rewrites (a custom
+  // LaunchAgent label or systemd unit); the state directory is passed resolved, below.
+  ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS.filter((key) => key !== "OPENCLAW_STATE_DIR"),
   "OPENCLAW_AGENT_DIR",
   "PI_CODING_AGENT_DIR",
   "COREPACK_HOME",
   "NODE_EXTRA_CA_CERTS",
 ];
 
+/** A process's parent and command line: procfs on Linux, ps elsewhere. */
+function readProcess(pid: number): { parent: number; argv: string[] } | null {
+  try {
+    if (fs.existsSync("/proc")) {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      return {
+        parent: Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]),
+        argv: fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0"),
+      };
+    }
+    const shown = execFileSync("/bin/ps", ["-ww", "-o", "ppid=,command=", "-p", String(pid)], {
+      encoding: "utf8",
+      env: { ...process.env, LC_ALL: "C" },
+    });
+    const match = /^\s*(\d+)\s+(.*)$/u.exec(shown.trim());
+    return match ? { parent: Number(match[1]), argv: match[2]!.split(" ") } : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The updater this check reports to: the nearest ancestor running `openclaw update`. The CLI
- * renames its process to `openclaw`, which on Linux replaces its command line; the Gateway
- * names itself `openclaw-gateway`.
+ * renames its process to `openclaw`, which replaces its command line; the Gateway names itself
+ * `openclaw-gateway`.
  */
 function findDriver(): RecoveryPlan["driver"] | undefined {
   let pid = process.ppid;
   for (let depth = 0; depth < 8 && pid > 1; depth++) {
-    try {
-      const argv = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
-      const start = processStart(pid);
-      if (start && (argv.includes("update") || argv[0] === "openclaw")) {
-        return { pid, start };
-      }
-      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-      pid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
-    } catch {
+    const shown = readProcess(pid);
+    const start = processStart(pid);
+    if (!shown || !start) {
       return undefined;
     }
+    if (shown.argv.includes("update") || shown.argv[0] === "openclaw") {
+      return { pid, start };
+    }
+    pid = shown.parent;
   }
   return undefined;
 }
@@ -135,6 +171,8 @@ export type StartDeps = {
     entry?: string;
     environment?: Record<string, string>;
   } | null>;
+  /** launchd's GUI domain of this user. */
+  guiDomain: () => string;
 };
 
 async function readGatewayService(env: NodeJS.ProcessEnv) {
@@ -162,29 +200,88 @@ const defaultStartDeps = (): StartDeps => ({
   findDriver,
   readSchema: readSchemaVersions,
   readService: readGatewayService,
+  guiDomain: resolveLaunchAgentGuiDomain,
 });
+
+/** The service manager the runner needs, and its job's name; or why there is none. */
+async function resolveSupervisor(
+  change: EarlyGitReleaseSchemaChange,
+  deps: StartDeps,
+): Promise<
+  | {
+      supervisor: RecoveryPlan["supervisor"];
+      unit: string;
+      domain?: string;
+      log?: string;
+      serviceDir: string;
+    }
+  | { reason: string }
+> {
+  const { env, run } = deps;
+  const home = env.HOME || os.homedir();
+  if (deps.platform === "linux") {
+    if (!ok(await run(["systemctl", "--user", "show", "--property=Version"]))) {
+      return { reason: "no systemd user manager is reachable" };
+    }
+    return {
+      supervisor: "systemd",
+      unit: `openclaw-update-recovery${resolveGatewayProfileSuffix(env.OPENCLAW_PROFILE)}`,
+      serviceDir: path.join(env.XDG_CONFIG_HOME || path.join(home, ".config"), "systemd", "user"),
+    };
+  }
+  if (deps.platform === "darwin") {
+    const domain = deps.guiDomain();
+    // A user who is not logged in to the desktop has no GUI domain for the job.
+    if (!ok(await run(["launchctl", "print", domain]))) {
+      return { reason: `launchd's ${domain} domain is not available (no desktop login session)` };
+    }
+    const profile = env.OPENCLAW_PROFILE?.trim();
+    return {
+      supervisor: "launchd",
+      unit: `ai.openclaw.update-recovery${profile && profile !== "default" ? `.${profile}` : ""}`,
+      domain,
+      log: path.join(change.stateDir, "logs", "update-recovery.log"),
+      serviceDir: path.join(home, "Library", "LaunchAgents"),
+    };
+  }
+  return { reason: "it runs only with a Linux systemd user service or a macOS launchd Gateway" };
+}
+
+/** Whether the Gateway service is running now (a stopped one stays stopped). */
+async function isGatewayRunning(
+  supervisor: RecoveryPlan["supervisor"],
+  serviceFile: string,
+  domain: string | undefined,
+  run: RunCommand,
+): Promise<boolean> {
+  if (supervisor === "launchd") {
+    const label = path.basename(serviceFile, ".plist");
+    const printed = await run(["launchctl", "print", `${domain}/${label}`]);
+    return ok(printed) && /^\tstate = running$/mu.test(printed.output);
+  }
+  const shown = await run(["systemctl", "--user", "is-active", path.basename(serviceFile)]);
+  return shown.output.trim() === "active";
+}
 
 /** Every reason the runner cannot finish this update unattended, checked before any change. */
 async function planRecovery(
   change: EarlyGitReleaseSchemaChange,
   deps: StartDeps,
-): Promise<{ plan: RecoveryPlan } | { reason: string } | { running: string }> {
+): Promise<{ plan: RecoveryPlan } | { reason: string } | { running: RecoveryPlan["supervisor"] }> {
   const { env, run } = deps;
-  if (deps.platform !== "linux") {
-    return { reason: "it runs only with a Linux systemd user service" };
+  const manager = await resolveSupervisor(change, deps);
+  if ("reason" in manager) {
+    return manager;
   }
+  const { supervisor, unit, domain } = manager;
   // A running recovery answers first: the checks below can see its work in progress.
-  if (!ok(await run(["systemctl", "--user", "show", "--property=Version"]))) {
-    return { reason: "no systemd user manager is reachable" };
+  if (await isRecoveryJobRunning(supervisor, unit, domain, run)) {
+    return { running: supervisor };
   }
-  const unit = `openclaw-update-recovery${resolveGatewayProfileSuffix(env.OPENCLAW_PROFILE)}`;
-  const state = (await run(["systemctl", "--user", "is-active", unit])).output.trim();
-  if (["active", "activating", "deactivating", "reloading"].includes(state)) {
-    return { running: unit };
-  }
+  const job = describeRecoveryJob(supervisor, unit, domain, manager.log ?? "");
   if (!change.pending) {
     return {
-      reason: `an earlier automatic recovery stopped after migrating (journalctl --user -u ${unit})`,
+      reason: `an earlier automatic recovery stopped after migrating (log: ${job.log})`,
     };
   }
   const common = await git(
@@ -229,13 +326,13 @@ async function planRecovery(
     return { reason: "pnpm is not on PATH" };
   }
   const service = await deps.readService(env).catch(() => null);
-  const userUnits = path.join(
-    env.XDG_CONFIG_HOME || path.join(env.HOME || os.homedir(), ".config"),
-    "systemd",
-    "user",
-  );
-  if (!service?.sourcePath || !isPathInside(userUnits, service.sourcePath)) {
-    return { reason: "the Gateway is not a managed systemd user service" };
+  const managed = supervisor === "launchd" ? "a launchd LaunchAgent" : "a systemd user service";
+  if (
+    !service?.sourcePath ||
+    !isPathInside(manager.serviceDir, service.sourcePath) ||
+    (supervisor === "launchd" && !service.sourcePath.endsWith(".plist"))
+  ) {
+    return { reason: `the Gateway is not ${managed} of this user` };
   }
   const serviceStateDir = resolveStateDir({ HOME: env.HOME, ...service.environment });
   if (realpath(serviceStateDir) !== realpath(change.stateDir)) {
@@ -247,7 +344,8 @@ async function planRecovery(
     return ok(shown) ? realpath(shown.output.trim()) : null;
   };
   const launcher = path.join(change.prefix, "openclaw-launcher.mjs");
-  const legacy = realpath(path.join(change.prefix, "lib", "node_modules", "openclaw"));
+  const legacyPath = legacyLinkPath(change);
+  const legacy = realpath(legacyPath);
   const entry = service.entry ? realpath(service.entry) : "";
   if (
     entry !== launcher &&
@@ -278,11 +376,14 @@ async function planRecovery(
   }
   // `gateway install --force` restarts the service; one the user stopped, or an update run
   // with --no-restart left alone, stays as it is.
-  const gateway = path.basename(service.sourcePath);
-  if ((await run(["systemctl", "--user", "is-active", gateway])).output.trim() !== "active") {
+  if (!(await isGatewayRunning(supervisor, service.sourcePath, domain, run))) {
     return { reason: "the Gateway service is not running" };
   }
-  const enabled = (await run(["systemctl", "--user", "is-enabled", gateway])).output.trim();
+  const gateway = path.basename(service.sourcePath);
+  const enabled =
+    supervisor === "systemd"
+      ? (await run(["systemctl", "--user", "is-enabled", gateway])).output.trim()
+      : "enabled";
   const schema = deps.readSchema(env);
   if (!schema) {
     return { reason: "the database schema versions could not be read" };
@@ -291,15 +392,37 @@ async function planRecovery(
   if (!driver) {
     return { reason: "the updater process could not be identified" };
   }
+  const label = path.basename(service.sourcePath, ".plist");
+  const serviceEnv = { ...env, ...service.environment };
+  const definitionFiles = [
+    service.sourcePath,
+    ...(supervisor === "launchd"
+      ? [
+          resolveLaunchAgentEnvFilePath(serviceEnv, label),
+          resolveLaunchAgentEnvWrapperPath(serviceEnv, label),
+        ]
+      : []),
+  ].filter((file, index) => index === 0 || fs.existsSync(file));
+  let legacyLink: string | null = null;
+  try {
+    legacyLink = fs.readlinkSync(legacyPath);
+  } catch {}
   return {
     plan: {
+      supervisor,
       unit,
+      ...(domain ? { domain } : {}),
+      ...(manager.log ? { log: manager.log } : {}),
+      follow: supervisor === "launchd" ? `the recovery log ${manager.log}` : `\`${job.log}\``,
       checkout,
       branch: branch.output.trim(),
       target,
       release: path.join(change.prefix, "recovery", "openclaw"),
       prefix: change.prefix,
+      stateDir: change.stateDir,
       serviceFile: service.sourcePath,
+      definitionFiles,
+      legacyLink,
       enabled,
       schema,
       fromVersion: readJsonString(path.join(checkout, "package.json"), "version") ?? "unknown",
@@ -309,8 +432,21 @@ async function planRecovery(
   };
 }
 
+/** How the check's output names the job; its paths are spelled from `$HOME`, because the early
+ * updater redacts the state and home directories out of that output. */
+function followJob(
+  plan: Pick<RecoveryPlan, "supervisor" | "unit" | "domain" | "log" | "stateDir">,
+  env: NodeJS.ProcessEnv,
+) {
+  const log =
+    plan.supervisor === "launchd"
+      ? `tail -f ${shellStatePath(plan.stateDir, env, "logs/update-recovery.log").path}`
+      : "";
+  return describeRecoveryJob(plan.supervisor, plan.unit, plan.domain, log);
+}
+
 /**
- * Called by `--check` once it has decided to refuse an early updater's schema change. When every
+ * Called by `--check` once it has decided to stop an early updater's schema change. When every
  * precondition holds it keeps the built release out of the updater's cleanup and starts the
  * runner. Nothing changes otherwise, and the reason is returned for the printed rebuild.
  */
@@ -321,8 +457,15 @@ export async function startEarlyGitReleaseRecovery(
   const planned = await planRecovery(change, deps).catch((error: unknown) => ({
     reason: `its preconditions could not be read (${String(error)})`,
   }));
+  const running = (supervisor: RecoveryPlan["supervisor"], unit: string, domain?: string) => ({
+    started: false as const,
+    running: followJob({ supervisor, unit, domain, stateDir: change.stateDir }, deps.env),
+  });
   if ("running" in planned) {
-    return { started: false, running: planned.running };
+    const manager = await resolveSupervisor(change, deps);
+    return "reason" in manager
+      ? { started: false, reason: manager.reason }
+      : running(planned.running, manager.unit, manager.domain);
   }
   if ("reason" in planned) {
     return { started: false, reason: planned.reason };
@@ -333,7 +476,7 @@ export async function startEarlyGitReleaseRecovery(
   const lock = path.join(plan.prefix, ".recovery-start");
   const owner = `${process.pid} ${processStart(process.pid) ?? ""}`;
   if (!takeStartLock(lock, owner)) {
-    return { started: false, running: plan.unit };
+    return running(plan.supervisor, plan.unit, plan.domain);
   }
   try {
     return await keepAndStart(change, plan, deps);
@@ -397,10 +540,10 @@ async function keepAndStart(
   deps: StartDeps,
 ): Promise<EarlyGitReleaseRecoveryStart> {
   const run = deps.run;
+  const follow = followJob(plan, deps.env);
   // Under the lock: a recovery another check started a moment ago is running now.
-  const state = (await run(["systemctl", "--user", "is-active", plan.unit])).output.trim();
-  if (["active", "activating", "deactivating", "reloading"].includes(state)) {
-    return { started: false, running: plan.unit };
+  if (await isRecoveryJobRunning(plan.supervisor, plan.unit, plan.domain, run)) {
+    return { started: false, running: follow };
   }
   // An earlier attempt's release no longer serves: the updater could not run otherwise.
   if (fs.existsSync(path.dirname(plan.release))) {
@@ -420,36 +563,29 @@ async function keepAndStart(
     ...runtimeProcessEntrypoints.updateMigratedFinalize,
     root: plan.release,
   });
-  const started = await run([
-    "systemd-run",
-    "--user",
-    `--unit=${plan.unit}`,
-    "--collect",
-    "--quiet",
-    "--description=OpenClaw update recovery",
-    "--property=Restart=on-abnormal",
-    "--property=RestartSec=15s",
-    `--working-directory=${plan.checkout}`,
-    ...PASSED_ENV.flatMap((key) => (deps.env[key] ? [`--setenv=${key}=${deps.env[key]}`] : [])),
+  const environment = Object.fromEntries([
+    ...PASSED_ENV.flatMap((key) => (deps.env[key] ? [[key, deps.env[key]!]] : [])),
     // Resolved, because the runner's working directory differs. Only when set: the runner's
     // `gateway install --force` writes it into the service definition.
-    ...(deps.env.OPENCLAW_STATE_DIR
-      ? [`--setenv=OPENCLAW_STATE_DIR=${path.resolve(change.stateDir)}`]
-      : []),
-    // systemd expands `$NAME` in a service's command line; `$$` passes a literal `$`.
-    ...[
+    ...(deps.env.OPENCLAW_STATE_DIR ? [["OPENCLAW_STATE_DIR", path.resolve(change.stateDir)]] : []),
+  ]);
+  const failed = await startRecoveryJob({
+    plan,
+    run,
+    programArguments: [
       process.execPath,
       fileURLToPath(worker),
       EARLY_RELEASE_RECOVERY_FLAG,
       JSON.stringify(plan),
-    ].map((arg) => arg.replaceAll("$", () => "$$")),
-  ]);
-  if (!ok(started)) {
+    ],
+    environment,
+  });
+  if (failed) {
     // Keep the release where the updater's cleanup finds it; never delete it unmoved.
     if (ok(await git(run, plan.checkout, "worktree", "move", plan.release, change.root))) {
       fs.rmSync(path.dirname(plan.release), { recursive: true, force: true });
     }
-    return { started: false, reason: `systemd-run failed (${commandTail(started)})` };
+    return { started: false, reason: failed };
   }
-  return { started: true, unit: plan.unit, target: plan.target };
+  return { started: true, job: follow, target: plan.target };
 }

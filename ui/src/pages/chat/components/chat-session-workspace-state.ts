@@ -394,17 +394,16 @@ export function loadSessionWorkspace(
   sessionWorkspaceForHost(state).publish();
 }
 
-/** Refresh workspace facts after a run, which may have created a git checkout. */
+/** Refresh workspace facts after a run, which may have created a git checkout. Returns the retired diff. */
 export function refreshSessionWorkspaceState(
   state: SessionWorkspaceHost,
   refreshFiles: boolean,
-): boolean {
+): SessionWorkspaceState["diffContent"] {
   const workspace = state.sessionWorkspaceState;
   if (!workspace || workspace.sessionKey !== state.sessionKey) {
-    return false;
+    return undefined;
   }
-  const diffOpen =
-    workspace.diffContent !== undefined && state.sidebarContent === workspace.diffContent;
+  const retiredDiff = workspace.diffContent;
   delete workspace.diffContent;
   for (const role of ["all", "assistant"] as const) {
     const artifacts = role === "all" ? workspace.artifacts : workspace.assistantArtifacts;
@@ -428,7 +427,7 @@ export function refreshSessionWorkspaceState(
   } else {
     loadSessionWorkspace(state, workspace);
   }
-  return diffOpen;
+  return retiredDiff;
 }
 
 /** Retire facts owned by one checkout without disturbing panel layout or retained drafts. */

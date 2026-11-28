@@ -3,10 +3,26 @@ import UIKit
 @testable import OpenClaw
 
 struct OpenClawBrandTests {
-    @Test func `brand colors meet text contrast in both appearances`() {
-        let foregroundColors = [
-            ("accent", OpenClawBrand.uiAccent),
-            ("accentHot", OpenClawBrand.uiAccentHotForeground),
+    @Test(arguments: [UIUserInterfaceStyle.light, .dark])
+    func `brand red is the same for tint and fill in either appearance`(style: UIUserInterfaceStyle) {
+        let traits = UITraitCollection(userInterfaceStyle: style)
+        for accent in [OpenClawBrand.uiAccent, OpenClawBrand.uiAccentFill] {
+            let rgb = Self.rgbComponents(accent, traits: traits)
+            #expect((rgb.red * 255).rounded() == 205)
+            #expect((rgb.green * 255).rounded() == 53)
+            #expect((rgb.blue * 255).rounded() == 53)
+            #expect(Self.contrastRatio(accent, .white, traits: traits) >= 4.5)
+            #expect(Self.contrastRatio(accent, OpenClawBrand.uiVoid, traits: traits) >= 3)
+            if style == .light {
+                for background in [UIColor.systemBackground, UIColor.secondarySystemBackground] {
+                    #expect(Self.contrastRatio(accent, background, traits: traits) >= 4.5)
+                }
+            }
+        }
+    }
+
+    @Test func `semantic foreground colors meet text contrast in both appearances`() {
+        let statusColors = [
             ("ok", OpenClawBrand.uiOK),
             ("warn", OpenClawBrand.uiWarn),
             ("danger", OpenClawBrand.uiDanger),
@@ -16,7 +32,7 @@ struct OpenClawBrandTests {
 
         for style in [UIUserInterfaceStyle.light, .dark] {
             let traits = UITraitCollection(userInterfaceStyle: style)
-            for (name, color) in foregroundColors {
+            for (name, color) in statusColors {
                 for background in backgrounds {
                     #expect(
                         Self.contrastRatio(color, background, traits: traits) >= 4.5,
@@ -32,14 +48,6 @@ struct OpenClawBrandTests {
                     Self.contrastRatio(color, tintedBackground, traits: traits) >= 4.5,
                     "\(name) on tinted background in \(style)")
             }
-
-            let pillBackground = Self.composite(
-                OpenClawBrand.uiAccent,
-                alpha: style == .dark ? 0.12 : 0.08,
-                over: .secondarySystemGroupedBackground,
-                traits: traits)
-            #expect(Self.contrastRatio(OpenClawBrand.uiAccent, pillBackground, traits: traits) >= 4.5)
-            #expect(Self.contrastRatio(OpenClawBrand.uiAccentFill, .white, traits: traits) >= 4.5)
         }
     }
 

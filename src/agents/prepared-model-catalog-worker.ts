@@ -9,6 +9,7 @@ import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { captureRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import { captureRemoteModelCatalogWorkerTransfer } from "../model-catalog/remote-startup-snapshot.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import {
   getPluginCacheRetirementSignal,
@@ -545,7 +546,16 @@ export function createPreparedModelCatalogWorker(
           if (shared) {
             shared.validate = receiveResult;
           }
-          const taskInput = reuse ? requestInput : workerInput;
+          let taskInput: PreparedModelCatalogWorkerTask["value"] = reuse
+            ? requestInput
+            : workerInput;
+          if (!reuse && workerInput.remoteCatalog) {
+            // A queued generation may have retired; share only the publication current at dispatch.
+            const transfer = captureRemoteModelCatalogWorkerTransfer(workerInput.remoteCatalog);
+            if (transfer !== workerInput.remoteCatalog) {
+              taskInput = { ...workerInput, remoteCatalog: transfer };
+            }
+          }
           // Auth refresh returns before catalog discovery. Keep configured rows in the parent
           // for the next catalog task, including when both commands reuse one worker.
           return {

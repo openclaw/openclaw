@@ -155,9 +155,10 @@ suite.define(() => {
             .poll(() => feedback.textContent())
             .toContain(
               kind === "assignment"
-                ? "Could not confirm the assignment."
-                : "Could not confirm the access change.",
+                ? "Couldn’t confirm the assignment."
+                : "Couldn’t confirm the access change.",
             );
+          expect(await feedback.textContent()).not.toContain("Response interrupted");
           expect(mutations).toBe(1);
           if (kind === "assignment") {
             await panel.getByRole("button", { name: "Cancel", exact: true }).click();

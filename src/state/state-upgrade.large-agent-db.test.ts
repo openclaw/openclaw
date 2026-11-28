@@ -7,6 +7,7 @@ import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcri
 import { bindFreshClientCredentialStore } from "../infra/client-credential-migration.js";
 import { openClientCredentialCustody } from "../infra/client-credential-store.js";
 import { sha256File } from "../infra/crypto-digest.js";
+import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
 import { readSqliteCleanCloseSeal } from "../infra/sqlite-clean-close-seal.js";
 import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
@@ -29,7 +30,11 @@ import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runti
 import { upgradeStateDirectory } from "./state-upgrade.js";
 
 const dirs: string[] = [];
+const locks: Array<GatewayLockHandle | null> = [];
 afterEach(async () => {
+  for (const lock of locks.splice(0)) {
+    await lock?.release();
+  }
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
@@ -157,80 +162,85 @@ describe("startup canonical ownership", () => {
     const originalAgent = snapshotLogical(agentPath);
     const stateIdentity = fs.statSync(statePath);
     const log = { info: vi.fn(), warn: vi.fn() };
-    const result = await upgradeStateDirectory({
-      env,
-      log,
-    });
-    await closeOpenClawAgentDatabasesAsync();
-    expect(readRegistry()).toEqual(registrations);
-    expect(result, JSON.stringify({ result, warnings: log.warn.mock.calls })).toEqual({
-      status: "upgraded",
-    });
-    expect(fs.statSync(agentPath)).toMatchObject({
-      dev: agentIdentity.dev,
-      ino: agentIdentity.ino,
-    });
-    // The first Doctor pass may refresh optimizer pages, not user data.
-    expect(snapshotLogical(agentPath)).toEqual(originalAgent);
-    expect(fs.statSync(statePath)).toMatchObject({
-      dev: stateIdentity.dev,
-      ino: stateIdentity.ino,
-    });
-    expect(fs.readdirSync(stateDir).some((name) => name.startsWith(".upgrade-"))).toBe(false);
-    expect(
-      fs.readdirSync(path.dirname(agentPath)).filter((name) => name.includes(".pre-")),
-    ).toEqual([]);
-    // The existing clean-close owner may publish its validated seal, not an upgrade copy.
-    expect(
-      readSqliteCleanCloseSeal(agentPath, fs.statSync(agentPath, { bigint: true })),
-    ).toBeDefined();
-    {
-      using state = new DatabaseSync(statePath, { readOnly: true });
-      expect(state.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    const lock = await acquireGatewayLock({ env, role: "sqlite-maintenance", allowInTests: true });
+    locks.push(lock);
+    await lock!.run(async () => {
+      const result = await upgradeStateDirectory({ env, log });
+      await closeOpenClawAgentDatabasesAsync();
+      expect(readRegistry()).toEqual(registrations);
+      expect(result, JSON.stringify({ result, warnings: log.warn.mock.calls })).toEqual({
+        status: "upgraded",
       });
-      const ownership = state
-        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = 'auth.sharedStore'")
-        .get();
-      expect(JSON.parse(String(ownership?.value_json))).toEqual({ location: "state-db" });
-    }
-    const migratedState = snapshotLogical(statePath);
-    const agentBytes = await sha256File(agentPath);
-    const stateBytes = await sha256File(statePath);
-    const currentAgentIdentity = fs.statSync(agentPath);
-    const legacy = await detectSharedAuthStoreMigration({
-      stateDir,
-      env,
-      config: {},
-      doctorOnlyStateMigrations: true,
-      artifactPreservingReadOnly: true,
+      expect(fs.statSync(agentPath)).toMatchObject({
+        dev: agentIdentity.dev,
+        ino: agentIdentity.ino,
+      });
+      // The first Doctor pass may refresh optimizer pages, not user data.
+      expect(snapshotLogical(agentPath)).toEqual(originalAgent);
+      expect(fs.statSync(statePath)).toMatchObject({
+        dev: stateIdentity.dev,
+        ino: stateIdentity.ino,
+      });
+      expect(fs.readdirSync(stateDir).some((name) => name.startsWith(".upgrade-"))).toBe(false);
+      expect(
+        fs.readdirSync(path.dirname(agentPath)).filter((name) => name.includes(".pre-")),
+      ).toEqual([]);
+      // The existing clean-close owner may publish its validated seal, not an upgrade copy.
+      expect(
+        readSqliteCleanCloseSeal(agentPath, fs.statSync(agentPath, { bigint: true })),
+      ).toBeDefined();
+      {
+        using state = new DatabaseSync(statePath, { readOnly: true });
+        expect(state.prepare("PRAGMA user_version").get()).toEqual({
+          user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+        });
+        const ownership = state
+          .prepare(
+            "SELECT value_json FROM config_machine_state WHERE state_key = 'auth.sharedStore'",
+          )
+          .get();
+        expect(JSON.parse(String(ownership?.value_json))).toEqual({ location: "state-db" });
+      }
+      const migratedState = snapshotLogical(statePath);
+      const agentBytes = await sha256File(agentPath);
+      const stateBytes = await sha256File(statePath);
+      const currentAgentIdentity = fs.statSync(agentPath);
+      const legacy = await detectSharedAuthStoreMigration({
+        stateDir,
+        env,
+        config: {},
+        doctorOnlyStateMigrations: true,
+        artifactPreservingReadOnly: true,
+      });
+      expect(legacy.hasLegacy).toBe(false);
+      const pending = await detectLegacyStateMigrations({
+        cfg: {},
+        env,
+        doctorOnlyStateMigrations: true,
+        artifactPreservingReadOnly: true,
+        legacySessionSurfaces: await prepareLegacySessionSurfaces({ config: {}, env }),
+      });
+      expect(pending.preview).toEqual([]);
+      const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+      await expect(upgradeStateDirectory({ env, log })).resolves.toEqual({
+        status: "current",
+      });
+      await closeOpenClawAgentDatabasesAsync();
+      expect(exec).not.toHaveBeenCalledWith(expect.stringMatching(/\bANALYZE\b/i));
+      expect(await sha256File(agentPath)).toBe(agentBytes);
+      expect(await sha256File(statePath)).toBe(stateBytes);
+      expect(fs.statSync(agentPath)).toMatchObject({
+        dev: currentAgentIdentity.dev,
+        ino: currentAgentIdentity.ino,
+        size: currentAgentIdentity.size,
+      });
+      expect(fs.statSync(statePath)).toMatchObject({
+        dev: stateIdentity.dev,
+        ino: stateIdentity.ino,
+      });
+      expect(snapshotLogical(agentPath)).toEqual(originalAgent);
+      expect(snapshotLogical(statePath)).toEqual(migratedState);
+      expect(readRegistry()).toEqual(registrations);
     });
-    expect(legacy.hasLegacy).toBe(false);
-    const pending = await detectLegacyStateMigrations({
-      cfg: {},
-      env,
-      doctorOnlyStateMigrations: true,
-      artifactPreservingReadOnly: true,
-      legacySessionSurfaces: await prepareLegacySessionSurfaces({ config: {}, env }),
-    });
-    expect(pending.preview).toEqual([]);
-    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-    await expect(upgradeStateDirectory({ env, log })).resolves.toEqual({ status: "current" });
-    await closeOpenClawAgentDatabasesAsync();
-    expect(exec).not.toHaveBeenCalledWith(expect.stringMatching(/\bANALYZE\b/i));
-    expect(await sha256File(agentPath)).toBe(agentBytes);
-    expect(await sha256File(statePath)).toBe(stateBytes);
-    expect(fs.statSync(agentPath)).toMatchObject({
-      dev: currentAgentIdentity.dev,
-      ino: currentAgentIdentity.ino,
-      size: currentAgentIdentity.size,
-    });
-    expect(fs.statSync(statePath)).toMatchObject({
-      dev: stateIdentity.dev,
-      ino: stateIdentity.ino,
-    });
-    expect(snapshotLogical(agentPath)).toEqual(originalAgent);
-    expect(snapshotLogical(statePath)).toEqual(migratedState);
-    expect(readRegistry()).toEqual(registrations);
   });
 });

@@ -147,7 +147,7 @@ suite.define(() => {
       const sessionKey = "agent:main:dashboard:async-question-proof";
       const followUpTitle = "What should I emphasize?";
       const multipleQuestions = {
-        ...(!active ? openAiAuthor : {}),
+        ...(!active ? { ...openAiAuthor, phase: "commentary" } : {}),
         ...questionMessage,
         runId: "working-run",
         __openclaw: { id: "audience-prompt", seq: 2 },
@@ -171,7 +171,7 @@ suite.define(() => {
         sessionKey,
         historyMessages: [replyMessage, multipleQuestions],
         inFlightRun: { runId: "working-run", startedAt: Date.now(), text: "" },
-        sessionInfo: { hasActiveRun: true, activeRunIds: ["working-run"] },
+        sessionInfo: { key: sessionKey, hasActiveRun: true, activeRunIds: ["working-run"] },
       });
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -248,7 +248,7 @@ suite.define(() => {
           };
           await gateway.setMethodResponse("chat.history", {
             messages: [replyMessage, multipleQuestions, finalMessage],
-            sessionInfo: { hasActiveRun: false, activeRunIds: [] },
+            sessionInfo: { key: sessionKey, hasActiveRun: false, activeRunIds: [] },
           });
           await gateway.emitGatewayEvent("chat", {
             sessionKey,

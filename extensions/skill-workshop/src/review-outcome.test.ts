@@ -230,15 +230,14 @@ describe("undoWorkshopReview", () => {
   it("restores edited skills, archives created ones, and tells the reviewed session", async () => {
     const result = await undo();
     const undoCtx = { ...user, runId: "skill-workshop-undo:review" };
-    expect(library.restoreWorkshopSkill).toHaveBeenCalledExactlyOnceWith(undoCtx, {
-      name: "deploy",
-      versionId: "v-before-review",
-      summary: "undid background review",
-    });
-    expect(library.archiveWorkshopSkill).toHaveBeenCalledExactlyOnceWith(undoCtx, {
-      name: "release",
-      reason: "undo",
-    });
+    expect(library.restoreWorkshopSkill).toHaveBeenCalledExactlyOnceWith(
+      { ...undoCtx, undoReviewChange: { id: "c1", runId: REVIEW_RUN_ID } },
+      { name: "deploy", versionId: "v-before-review", summary: "undid background review" },
+    );
+    expect(library.archiveWorkshopSkill).toHaveBeenCalledExactlyOnceWith(
+      { ...undoCtx, undoReviewChange: { id: "c2", runId: REVIEW_RUN_ID } },
+      { name: "release", reason: "undo" },
+    );
     expect(result).toMatchObject({
       status: "undone",
       changes: [
@@ -247,6 +246,16 @@ describe("undoWorkshopReview", () => {
       ],
     });
     expectNotice("do not revert it again");
+  });
+  it("still restores the edited sibling when the created skill was replaced", async () => {
+    record(user, { skillName: "release", action: "archive", versionId: "v-original" });
+    record(user, { skillName: "release", action: "create" });
+    expect(await undo()).toMatchObject({
+      status: "undone",
+      changes: [{ skillName: "deploy", action: "restore" }],
+    });
+    expect(library.archiveWorkshopSkill).not.toHaveBeenCalled();
+    expectNotice("restored `deploy`");
   });
   it("lets a concurrent second press find the review already undone", async () => {
     const [first, second] = await Promise.all([undo(), undo()]);

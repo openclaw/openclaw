@@ -202,6 +202,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "src/gateway/server.config-patch.test.ts",
     watchGlobs: ["src/gateway/config-reload.ts"],
   },
+  {
+    // sessions.create reaches fork normalization through four imports, beyond the PR walk.
+    testFile: "src/gateway/server.sessions.create.fork-search.test.ts",
+    watchGlobs: ["src/config/sessions/session-accessor.sqlite-parent-fork.ts"],
+  },
   // server.close() reaches these owners through the kernel's lazy shutdown
   // runtime, four or five import hops away; aggressive selection walks two.
   ...[
@@ -1472,7 +1477,9 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   },
   // Native maintainer fixtures copy and launch their shell owner instead of importing it.
   ...[
+    "test/scripts/pr-baseline-proof.test.ts",
     "test/scripts/pr-correction-preparation.test.ts",
+    "test/scripts/pr-current-workflow-recovery.test.ts",
     "test/scripts/pr-host-tools.test.ts",
     "test/scripts/pr-main-refresh.test.ts",
     "test/scripts/pr-merge-auto-recovery.test.ts",
@@ -1484,6 +1491,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "test/scripts/pr-merge-prior-ci.test.ts",
     "test/scripts/pr-merge-qualified-refusal.test.ts",
     "test/scripts/pr-publication.test.ts",
+    "test/scripts/pr-workflow-successor.test.ts",
     "test/scripts/pr-wrappers.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,

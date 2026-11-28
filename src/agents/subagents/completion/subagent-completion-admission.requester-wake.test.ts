@@ -58,7 +58,6 @@ describe("persisted subagent requester wakes", () => {
     settleRequesterCompletionBatch({
       entries: [input.subagent],
       outcome,
-      databaseOptions: { database: db.value },
     });
   const expectNoRejection = (driver: ReturnType<typeof requesterWakeDriver>) =>
     expect(driver.warn).not.toHaveBeenCalledWith(
@@ -119,7 +118,6 @@ describe("persisted subagent requester wakes", () => {
       settleRequesterCompletionBatch({
         entries: batch.map(({ subagent }) => subagent),
         outcome,
-        databaseOptions: { database: db.value },
       });
     await expect(settle()).rejects.toThrow("synthetic notice write failure");
     expect(stored(input)?.requesterSettleWake).toBeDefined();
@@ -550,7 +548,6 @@ describe("persisted subagent requester wakes", () => {
           expect(
             await settleSubagentCompletionInHistory({
               subagent: second.subagent,
-              databaseOptions: { database: db.value },
             }),
           ).toBe(true);
           expect(currentRun(second).requesterSettleWake?.rearmGeneration).toBe(1);

@@ -517,6 +517,7 @@ function sampledBytes(profile: HeapProfiler.SamplingHeapProfile) {
   let prepared = 0;
   let roster = 0;
   let list = 0;
+  let sidebarShare = 0;
   let sort = 0;
   let comparator = 0;
   const visit = (
@@ -526,6 +527,7 @@ function sampledBytes(profile: HeapProfiler.SamplingHeapProfile) {
     inList = false,
     inSort = false,
     inComparator = false,
+    inSidebarShare = false,
   ) => {
     const preparedFrame = inPrepared || node.callFrame.functionName === "withPreparedExactRows";
     const rosterFrame = inRoster || node.callFrame.functionName === "withAgentRosterFactsBatch";
@@ -533,18 +535,29 @@ function sampledBytes(profile: HeapProfiler.SamplingHeapProfile) {
     const sortFrame = inSort || node.callFrame.functionName === "sortAndLimitSessionEntries";
     const comparatorFrame =
       inComparator || node.callFrame.functionName === "compareSessionEntryPairs";
+    const sidebarShareFrame =
+      inSidebarShare || node.callFrame.functionName === "shareSidebarSessionRows";
     total += node.selfSize;
     prepared += preparedFrame ? node.selfSize : 0;
     roster += rosterFrame ? node.selfSize : 0;
     list += listFrame ? node.selfSize : 0;
     sort += sortFrame ? node.selfSize : 0;
     comparator += comparatorFrame ? node.selfSize : 0;
+    sidebarShare += sidebarShareFrame ? node.selfSize : 0;
     for (const child of node.children) {
-      visit(child, preparedFrame, rosterFrame, listFrame, sortFrame, comparatorFrame);
+      visit(
+        child,
+        preparedFrame,
+        rosterFrame,
+        listFrame,
+        sortFrame,
+        comparatorFrame,
+        sidebarShareFrame,
+      );
     }
   };
   visit(profile.head);
-  return { total, prepared, roster, list, sort, comparator };
+  return { total, prepared, roster, list, sort, comparator, sidebarShare };
 }
 
 function sampledCpu(profile: Profiler.Profile) {
@@ -560,6 +573,7 @@ function sampledCpu(profile: Profiler.Profile) {
     "resolveGatewaySessionThinkingProjectionInternal",
     "resolveAvailableAgentHarnessPolicy",
     "projectGatewaySessionRunState",
+    "shareSidebarSessionRows",
   ]);
   const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
   const parents = new Map(

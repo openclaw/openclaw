@@ -1352,7 +1352,6 @@ describe("startTelegramWebhook", () => {
         path: TELEGRAM_WEBHOOK_PATH,
         payload,
         secret: TELEGRAM_SECRET,
-        mode: "random-chunked",
         timeoutMs: WEBHOOK_POST_TIMEOUT_MS,
       });
 

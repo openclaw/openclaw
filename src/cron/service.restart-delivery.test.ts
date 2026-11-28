@@ -7,7 +7,6 @@ import {
 import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { createFollowupRunner } from "../auto-reply/reply/followup-runner.js";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
-import { createMockTypingController } from "../auto-reply/reply/test-helpers.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   readLatestSessionTranscriptReport,
@@ -368,7 +367,6 @@ it("records a retired cron follow-up without replay", () =>
     clearCronJobActive(job.id, marker);
 
     await createFollowupRunner({
-      typing: createMockTypingController(),
       typingMode: "never",
       defaultModel: "gpt-test",
     })(queued);

@@ -26,7 +26,10 @@ fixture.next.tarball = path.join(fixtureRoot, "next.tgz");
 const expected = crash ? fixture.previous : fixture.next;
 fs.mkdirSync(artifacts, { recursive: true });
 // openclaw-temp-dir: allow standalone Docker lane owns its runtime until container removal.
-const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-release-survivor-"));
+// Root's converted launcher needs a root-controlled parent chain, unlike /tmp.
+const root = fs.mkdtempSync(
+  path.join(process.geteuid?.() === 0 ? "/opt" : os.tmpdir(), "openclaw-release-survivor-"),
+);
 const state = path.join(root, "home", ".openclaw");
 const prefix = path.join(root, "prefix");
 fs.mkdirSync(state, { recursive: true });

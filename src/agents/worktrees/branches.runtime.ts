@@ -105,10 +105,18 @@ export async function readRepositoryBranches(
         BRANCH_SUGGESTIONS_PER_KIND,
       );
       for (const entry of entries) {
-        if (entry.branchName && (entry.branch.kind !== "remote" || entry.branchName !== "HEAD")) {
-          // Local branches win collisions with the same logical remote branch name.
-          branches.set(entry.branchName, entry);
+        if (!entry.branchName) {
+          continue;
         }
+        // Keep one suggestion per short name: local branches win, then origin.
+        if (
+          entry.branch.kind === "remote" &&
+          (entry.branchName === "HEAD" ||
+            branches.get(entry.branchName)?.ref.startsWith("refs/remotes/origin/"))
+        ) {
+          continue;
+        }
+        branches.set(entry.branchName, entry);
       }
     } catch {
       branchesUnavailable = true;

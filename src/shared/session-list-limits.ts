@@ -9,3 +9,6 @@ export const SESSIONS_LIST_TRANSCRIPT_LIMIT = 100;
  *  the next page, so a category whose newest session falls outside this window
  *  is reachable rather than silently empty. Tune here. */
 export const SIDEBAR_SESSION_ROSTER_LIMIT = 200;
+
+/** Per-row audience variants retained for child visibility, activity and presentation. */
+export const MAX_SESSION_ROW_AUDIENCES = 64;

@@ -659,6 +659,7 @@ it("refreshes a child without revisiting parents whose child facts stayed the sa
     const firstParent = key("first-parent");
     const secondParent = key("second-parent");
     const child = key("subagent:changing-child");
+    const sibling = key("subagent:unchanged-child");
     const unrelated = key("unrelated");
     const write = (sessionKey: string, entry: SessionEntry) =>
       replaceSessionEntrySync({ agentId, sessionKey }, entry);
@@ -673,6 +674,7 @@ it("refreshes a child without revisiting parents whose child facts stayed the sa
       label: "Original",
     };
     write(child, entry);
+    write(sibling, { ...entry, sessionId: "unchanged-child", label: "Sibling" });
 
     using _ = holdForeground();
     using projection = await createTestProjection({ cfg, modelCatalog: [] });
@@ -683,7 +685,7 @@ it("refreshes a child without revisiting parents whose child facts stayed the sa
     const other = describe(unrelated).materialized;
     const original = describe(child).materialized;
     const count = projection.materializedCount;
-    expect(first.source.childLinks?.map((link) => link.key)).toEqual([child]);
+    expect(first.source.childLinks?.map((link) => link.key)).toEqual([child, sibling]);
 
     write(child, { ...entry, label: "Renamed" });
     await projection.ensureMaterialized();
@@ -694,17 +696,32 @@ it("refreshes a child without revisiting parents whose child facts stayed the sa
     expect(describe(unrelated).materialized).toBe(other);
     expect(projection.materializedCount - count).toBe(1);
 
+    const beforeTimestamp = projection.materializedCount;
     write(child, { ...entry, updatedAt: 2 });
     await projection.ensureMaterialized();
-    expect(describe(firstParent).materialized.source.childLinks?.[0]?.entry.updatedAt).toBe(2);
+    const updatedParent = describe(firstParent).materialized;
+    const updatedLinks = updatedParent.source.childLinks!;
+    expect(updatedLinks[0]?.entry.updatedAt).toBe(2);
+    expect(updatedLinks[1]).toBe(first.source.childLinks?.[1]);
+    expect(projection.materializedCount - beforeTimestamp).toBe(1);
 
+    const updatedChild = describe(child).materialized;
+    write(child, { ...entry, updatedAt: 2 });
+    await projection.ensureMaterialized();
+    expect(describe(child).materialized).toBe(updatedChild);
+    expect(describe(firstParent).materialized).toBe(updatedParent);
+
+    const beforeMove = projection.materializedCount;
     write(child, { ...entry, parentSessionKey: secondParent, spawnedBy: secondParent });
     await projection.ensureMaterialized();
     expect(projection.present(describe(child)).parentSessionKey).toBe(secondParent);
-    expect(describe(firstParent).materialized.source.childLinks).toEqual([]);
+    expect(describe(firstParent).materialized.source.childLinks?.map((link) => link.key)).toEqual([
+      sibling,
+    ]);
     expect(describe(secondParent).materialized.source.childLinks?.map((link) => link.key)).toEqual([
       child,
     ]);
+    expect(projection.materializedCount - beforeMove).toBe(1);
     expect(describe(unrelated).materialized).toBe(other);
   });
 });

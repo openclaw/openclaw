@@ -222,10 +222,11 @@ function safeAvatarUrl(raw: string | undefined): URL | null {
   return url;
 }
 
-async function fetchAvatarDataUrl(
+/** Shared by the preview and the reader header; each fetch is bounded on its own. */
+export async function fetchAvatarDataUrl(
   rawUrl: string | undefined,
   fetchImpl: typeof fetch,
-  signal: AbortSignal,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
   const url = safeAvatarUrl(rawUrl);
   if (!url) {

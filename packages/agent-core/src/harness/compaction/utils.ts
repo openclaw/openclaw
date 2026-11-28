@@ -1,4 +1,8 @@
-import { hasRuntimeContextMarker, type AssistantMessage, type Message } from "@openclaw/llm-core";
+import {
+  hasRuntimeContextMarker,
+  type AssistantMessage,
+  type Message,
+} from "@openclaw/llm-core/types";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -356,7 +360,11 @@ function omissionPhase(count: number): 0 | 1 | 2 {
   return count < MAX_OMISSION_MESSAGES ? 0 : count === MAX_OMISSION_MESSAGES ? 1 : 2;
 }
 
-type ConversationPart = ConversationEntryText & { user?: boolean; toolResult?: true };
+type ConversationPart = ConversationEntryText & {
+  user?: boolean;
+  toolResult?: true;
+  screen?: true;
+};
 
 /** Project one actual source row, sharing exactly the same text rules on collection and reads. */
 function projectConversationMessage(
@@ -365,8 +373,15 @@ function projectConversationMessage(
   registerCall?: (id: string, label: string) => void,
 ): ConversationPart[] {
   const parts: ConversationPart[] = [];
-  const add = (full: string, labeled = full, short = labeled, user = false, toolResult?: true) => {
-    parts.push({ full, labeled, short, user, toolResult });
+  const add = (
+    full: string,
+    labeled = full,
+    short = labeled,
+    user = false,
+    toolResult?: true,
+    screen?: true,
+  ) => {
+    parts.push({ full, labeled, short, user, toolResult, screen });
   };
   // Carriers remain in replay for thinking-prefix binding, never in summaries.
   if (hasRuntimeContextMarker(msg)) {
@@ -397,10 +412,21 @@ function projectConversationMessage(
           `[Tool result of ${label}]: ${project(SAMPLED_TOOL_RESULT_MAX_CHARS)}`,
           false,
           true,
+          true,
         );
       } else {
         const full = `[${formatCompactionUserLabel(msg)}]: ${content}`;
-        add(full, full, full, isCompactionUserRequest(msg));
+        const provenance = asRecord(Reflect.get(msg, "provenance"));
+        const sender = asRecord(Reflect.get(msg, "__openclaw"));
+        const userRequest = isCompactionUserRequest(msg);
+        const senderIdentity = asRecord(sender?.senderIdentity);
+        const outsideUser =
+          userRequest &&
+          sender?.senderIsOwner === false &&
+          (provenance?.kind === "external_user" ||
+            Boolean(sender.senderId) ||
+            (senderIdentity !== undefined && senderIdentity.type !== "profile"));
+        add(full, full, full, userRequest, undefined, outsideUser || undefined);
       }
     }
   } else if (msg.role === "assistant") {
@@ -490,6 +516,7 @@ function describeConversationParts<TSource>(
         shortLength: text.short.length,
         user: text.user === true,
         toolResult: text.toolResult,
+        screen: text.screen,
         ...state,
       },
       text,

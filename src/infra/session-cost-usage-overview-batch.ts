@@ -23,6 +23,8 @@ export type UsageOverviewBatch = {
 // TOTAL_FIELDS.length in session-cost-usage-quarters.ts; kept local so the Gateway reader
 // does not load the quarter codec.
 const TOTALS_WIDTH = 12;
+const LATENCY_WIDTH = 8;
+const DAY_COUNT_OFFSET = TOTALS_WIDTH + 10 + LATENCY_WIDTH;
 
 /** Packed row layout shared by the worker fold (writer) and `readUsageOverviewBatch`. */
 export const ROW = {
@@ -33,15 +35,15 @@ export const ROW = {
   LAST: TOTALS_WIDTH + 3,
   MESSAGES: TOTALS_WIDTH + 4,
   LATENCY: TOTALS_WIDTH + 10,
-  DAY_COUNT: TOTALS_WIDTH + 15,
-  MODEL_COUNT: TOTALS_WIDTH + 16,
-  TOOL_COUNT: TOTALS_WIDTH + 17,
-  DAY_MODEL_COUNT: TOTALS_WIDTH + 18,
+  DAY_COUNT: DAY_COUNT_OFFSET,
+  MODEL_COUNT: DAY_COUNT_OFFSET + 1,
+  TOOL_COUNT: DAY_COUNT_OFFSET + 2,
+  DAY_MODEL_COUNT: DAY_COUNT_OFFSET + 3,
   /** 0 without quarter data, 1 imprecise, 2 when a quarter had tokens. */
-  HOURS: TOTALS_WIDTH + 19,
-  HEADER: TOTALS_WIDTH + 20,
-  /** Date string id, then totals, messages (6), latency count/sum/min/max/p95. */
-  DAY_WIDTH: 1 + TOTALS_WIDTH + 11,
+  HOURS: DAY_COUNT_OFFSET + 4,
+  HEADER: DAY_COUNT_OFFSET + 5,
+  /** Date string id, then totals, messages (6), latency count/sum/min/max/p95, timed ms/tokens/cost. */
+  DAY_WIDTH: 1 + TOTALS_WIDTH + 6 + LATENCY_WIDTH,
   DAY_MESSAGES: 1 + TOTALS_WIDTH,
   DAY_LATENCY: 1 + TOTALS_WIDTH + 6,
   /** Provider and model string ids (-1 when missing), count, totals. */
@@ -247,6 +249,9 @@ export function readUsageOverviewBatch(
       avgMs: values[offset + 1]! / values[offset]!,
       // Each quarter retains its p95; merged p95 is the largest one.
       p95Ms: values[offset + 4]!,
+      timedMs: values[offset + 5] || undefined,
+      timedTokens: values[offset + 6] || undefined,
+      timedCost: values[offset + 7] || undefined,
       minMs: values[offset + 2]!,
       maxMs: values[offset + 3]!,
     });

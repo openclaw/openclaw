@@ -62,7 +62,6 @@ export const sessionTypingHandler: GatewayRequestHandlers[string] = async (optio
     },
     () => {
       if (
-        options.sessionMutationAuthorization?.participationSignal?.aborted ||
         client?.invalidated ||
         client?.connectionSignal?.aborted ||
         hasCurrentClientAuthority?.() === false
@@ -181,7 +180,6 @@ export const sessionTypingHandler: GatewayRequestHandlers[string] = async (optio
       : undefined,
     emit: () => {
       if (
-        options.sessionMutationAuthorization?.participationSignal?.aborted ||
         client?.invalidated ||
         client?.connectionSignal?.aborted ||
         hasCurrentClientAuthority?.() === false ||

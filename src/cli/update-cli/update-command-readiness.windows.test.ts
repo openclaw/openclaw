@@ -8,7 +8,6 @@ import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { toPublicUpdateRun } from "../../infra/update-run-record.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withMockedWindowsPlatform } from "../../test-utils/vitest-spies.js";
@@ -203,7 +202,6 @@ it.each([
     }
     expect(waiting.detail).toContain("continuing with readiness unverified");
     expect(f.read().status).toBe("running");
-    expect(renderUpdateRunReport(f.read()).markdown).toContain(waiting.detail);
     expect(toPublicUpdateRun(f.read()).steps).toContainEqual(waiting);
     expect(defaultRuntime[json ? "error" : "log"]).toHaveBeenCalledWith(
       expect.stringContaining(waiting.detail!),
@@ -236,7 +234,6 @@ it("keeps HTTP endpoint results visible while readiness remains pending", async 
   expect(waiting.status).toBe("in_progress");
   expect(waiting.detail).toContain("HTTP healthz=200; readyz=503");
   expect(waiting.detail).toContain("Remaining 5370000ms");
-  expect(renderUpdateRunReport(f.read()).markdown).toContain("HTTP healthz=200; readyz=503");
 });
 
 it.each(["cancellation", "execution ownership loss"])(

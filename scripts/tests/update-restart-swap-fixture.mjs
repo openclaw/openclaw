@@ -71,6 +71,7 @@ export async function createDiskSwap(sourceRoot, base) {
     "infra/package-update-filesystem",
     "infra/package-update-launcher-names",
     "infra/package-update-integrity",
+    "infra/package-update-integrity-drift",
     "infra/package-update-integrity-hasher",
     "infra/package-update-npm-root",
     "infra/package-update-local-overrides",

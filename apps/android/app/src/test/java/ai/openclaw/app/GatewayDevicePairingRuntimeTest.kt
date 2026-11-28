@@ -1,8 +1,8 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
@@ -113,7 +113,7 @@ class GatewayDevicePairingRuntimeTest {
         when (method) {
           "device.pair.approve" -> {
             throw GatewayRequestRejected(
-              GatewaySession.ErrorShape("INVALID_REQUEST", "device pairing approval denied"),
+              ErrorShape("INVALID_REQUEST", "device pairing approval denied"),
             )
           }
 

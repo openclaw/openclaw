@@ -87,7 +87,8 @@ function findSourceCheckoutBinding(): string | undefined {
 export function loadIrohBinding(): typeof IrohNative {
   const require = createRequire(import.meta.url);
   const errors: string[] = [];
-  for (const specifier of [PACKAGE_NAME, findSourceCheckoutBinding()]) {
+  const sourceBinding = findSourceCheckoutBinding();
+  for (const specifier of [PACKAGE_NAME, sourceBinding]) {
     if (!specifier) {
       continue;
     }
@@ -106,8 +107,8 @@ export function loadIrohBinding(): typeof IrohNative {
       );
     }
   }
-  const message = findSourceCheckoutBinding()
-    ? "OpenClaw ID is enabled, but the iroh binding is not built or could not be loaded. Run `pnpm build:iroh` from the source checkout."
+  const message = sourceBinding
+    ? "OpenClaw ID is enabled, but the iroh binding is not built or could not be loaded. Run `pnpm build:iroh` from the Git worktree serving the Gateway (the active release's openclaw directory after an update), then restart the Gateway."
     : "The OpenClaw ID transport is not available in this build.";
   throw new Error(message, {
     cause: new Error(`iroh binding unavailable (${errors.join("; ") || "not installed"})`),

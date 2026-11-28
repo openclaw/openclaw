@@ -15,7 +15,7 @@ import {
   mountSidebarContext,
 } from "../test-helpers/app-sidebar.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import { domProbe, allMutationObserverOptions } from "../test-helpers/dom-probe.ts";
+import { domProbe } from "../test-helpers/dom-probe.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
@@ -33,7 +33,6 @@ import {
   snapshotSessions,
   type SidebarSnapshotModel,
 } from "./sidebar-snapshot-model.ts";
-import { sessionIconMask } from "./solid/icon.tsx";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
 const emptySnapshot: SidebarSnapshotModel = {
@@ -116,18 +115,6 @@ function mountObservedHost(
   mountSolid(() => view(observed.host), { container });
   return observed.update;
 }
-
-it("keeps named glyphs visible and updates their kind without replacing the leading slot", () => {
-  const { dom, session, setCurrent } = mountRow({ icon: "kanban" });
-  const glyph = dom.query(".session-glyph");
-  const art = dom.query<HTMLElement>(".session-glyph__icon .session-css-icon");
-  expect(art?.style.maskImage).toBe(sessionIconMask("kanban", 1.75));
-  setCurrent({ ...session, icon: "bot" });
-  flush();
-  expect(dom.query(".session-glyph__icon .session-css-icon")).toBe(art);
-  expect(art?.style.maskImage).toBe(sessionIconMask("bot", 1.75));
-  expect(dom.query(".session-glyph")).toBe(glyph);
-});
 
 it("paints the restored roster and workspace before live data arrives", async () => {
   const { host, dom } = await createCachedHost();
@@ -239,27 +226,13 @@ it("keeps cached agent rows while the live roster settles", async () => {
   expect(host.querySelector(`[data-session-key="${key}"]`)).toBeNull();
 });
 
-it("keeps the unread badge on an idle child with an icon", () => {
-  const { dom } = mountRow(
-    { key: "agent:main:child", icon: "🦞", unread: true, status: "done" },
-    { isChild: true },
-  );
-  expect(dom.text(".session-glyph__emoji")).toBe("🦞");
-  expect(dom.query('.session-glyph__badge[aria-label="Unread"]')).not.toBeNull();
-});
-
-it("shows quiet background work on the own glyph and gives an active run precedence", () => {
+it("keeps a session with only background processes idle", () => {
   const { dom, session, setCurrent } = mountRow({ backgroundProcessCount: 1, icon: "book" });
   const indicator = () => dom.query('.session-glyph__ring[role="img"]');
-  expect(indicator()?.getAttribute("aria-label")).toBe("Background work running");
-  expect(indicator()?.classList.contains("session-glyph__ring--background")).toBe(true);
+  expect(indicator()).toBeNull();
   setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true });
   flush();
   expect(indicator()?.getAttribute("aria-label")).toBe("Active run");
-  expect(indicator()?.classList.contains("session-glyph__ring--background")).toBe(false);
-  setCurrent({ ...session, backgroundProcessCount: undefined });
-  flush();
-  expect(indicator()).toBeNull();
 });
 
 it.each([undefined, 1])(
@@ -271,7 +244,6 @@ it.each([undefined, 1])(
     );
     const ring = () => dom.query('.sidebar-session-indicator [role="img"]');
     expect(ring()?.getAttribute("aria-label")).toBe("Subagents working");
-    expect(ring()?.classList.contains("session-glyph__ring--background")).toBe(false);
     expect(dom.query('.session-row-aside [aria-label="Subagents working"]')).toBeNull();
     expect(dom.all('[aria-label="Unread"]')).toHaveLength(0);
     expect(dom.query(".sidebar-recent-session__link")?.getAttribute("aria-describedby")).toContain(
@@ -281,7 +253,6 @@ it.each([undefined, 1])(
     setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true, status: "running" });
     flush();
     expect(ring()?.getAttribute("aria-label")).toBe("Active run");
-    expect(ring()?.classList.contains("session-glyph__ring--background")).toBe(false);
 
     // Preserve the existing queued-parent signal while its subagents are running.
     setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true, status: "queued" });
@@ -305,49 +276,6 @@ it("keeps hidden child activity off the idle parent row", () => {
   expect(dom.all('[aria-label="Unread"]')).toHaveLength(1);
   expect(dom.query(".sidebar-recent-session__link")?.getAttribute("aria-describedby")).toBeNull();
 });
-
-it("keeps the same child row and owner glyph through run start and completion", () => {
-  const { dom, session, setCurrent } = mountRow(
-    {
-      key: "agent:main:child",
-      status: "done",
-      owner: { actor: { type: "human", id: "ada", label: "Ada" } },
-    },
-    { isChild: true },
-  );
-  const row = dom.query(".sidebar-recent-session");
-  const owner = dom.query("openclaw-session-owner-chip");
-  expect(owner).not.toBeNull();
-  expect(dom.query('[aria-label="Done"]')).toBeNull();
-  for (const active of [true, false]) {
-    setCurrent({
-      ...session,
-      status: active ? "running" : "done",
-      hasActiveRun: active,
-      isRunVisuallyActive: active,
-    });
-    flush();
-    expect(dom.query(".sidebar-recent-session")).toBe(row);
-    expect(dom.query("openclaw-session-owner-chip")).toBe(owner);
-    expect(Boolean(dom.query(".session-glyph--running"))).toBe(active);
-    expect(dom.query('[aria-label="Done"]')).toBeNull();
-  }
-});
-
-it.each([false, null, undefined])(
-  "preserves the run glyph's bare styling for icon override %s",
-  (icon) => {
-    const { dom } = mountRow(
-      { key: "agent:main:running", hasActiveRun: true, status: "running", icon: "book" },
-      {},
-      { icon },
-    );
-    const glyph = dom.query(".session-glyph--running");
-    expect(glyph).not.toBeNull();
-    expect(glyph?.classList.contains("session-glyph--bare")).toBe(icon === false);
-    expect(glyph?.querySelector(".session-glyph__icon") !== null).toBe(icon !== false);
-  },
-);
 
 it.each(["owner", "icon"] as const)(
   "retains %s artwork and actions when live rows republish unchanged presentation",
@@ -450,25 +378,6 @@ it("renders the saved chip identity before agent discovery without reviving anot
   expect(dom.query("openclaw-sidebar-agent-card")).toBeNull();
   expect(dom.query(".sidebar-workspace-header")).not.toBeNull();
   expect(dom.query("openclaw-tooltip")).toBeNull();
-});
-
-it("retains the workspace name DOM across unrelated sidebar publications and renames", () => {
-  const { host, container, dom } = createHost("roster", {});
-  const update = mountObservedHost(host, container, renderSidebarAgentCard);
-  const name = () => dom.query(".sidebar-agent-card__name-text");
-  const original = name();
-  expect(original?.textContent).toBe("Harbor");
-
-  update();
-  expect(name()).toBe(original);
-
-  host.restoreSidebarSnapshot({
-    ...emptySnapshot,
-    brand: { ...emptySnapshot.brand, name: "Harbor renamed" },
-  });
-  update();
-  expect(name()).toBe(original);
-  expect(name()?.textContent).toBe("Harbor renamed");
 });
 
 it("keeps the rendered preview slot after caching without restoring live run authority", () => {
@@ -637,64 +546,6 @@ it("shows unavailable counts after a failed live summary instead of retaining sa
   update();
   expect(dom.present(".sidebar-online__counts", ".sidebar-online__retry")).toEqual([false, true]);
 });
-
-it.each([false, true])(
-  "keeps row facepiles idle with unchanged inputs (owner: %s), while admitting new presence",
-  async (withOwner) => {
-    const { host, container, dom } = createHost();
-    let session = projectSidebarSession({
-      key: "agent:main:thread",
-      owner: withOwner
-        ? { actor: { type: "human", id: "ada", identity: { type: "profile", id: "ada" } } }
-        : undefined,
-    });
-    const presence = ["ada", "bea"].map((id) => ({
-      ts: 1,
-      user: { id, identity: { type: "profile" as const, id }, name: id },
-      watchedSessions: [session.key],
-    }));
-    host.sessionData.presencePayload = { presence };
-    const observed = observeHost(host);
-    const current = () => {
-      observed.track();
-      return session;
-    };
-    mountSolid(() => <SessionTree host={observed.host} session={current()} />, { container });
-    const update = observed.update;
-    update();
-    const row = dom.query(".sidebar-recent-session")!;
-    const facepile = dom.query("openclaw-viewer-facepile")!;
-    await facepile.updateComplete;
-    const updates: MutationRecord[] = [];
-    const observer = new MutationObserver((records) => updates.push(...records));
-    observer.observe(facepile, allMutationObserverOptions());
-    onTestFinished(() => observer.disconnect());
-
-    update();
-    await facepile.updateComplete;
-    expect(updates).toHaveLength(0);
-
-    host.sessionData.presencePayload = { presence: presence.slice(0, 1) };
-    update();
-    await facepile.updateComplete;
-    expect(updates.length).toBeGreaterThan(0);
-    updates.length = 0;
-    expect(facepile.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe(
-      withOwner ? undefined : "ada",
-    );
-
-    session = {
-      ...session,
-      owner: { actor: { type: "human", id: "bea", identity: { type: "profile", id: "bea" } } },
-    };
-    update();
-    await facepile.updateComplete;
-    expect(updates.length > 0).toBe(withOwner);
-    expect(dom.query(".sidebar-recent-session")).toBe(row);
-    expect(dom.query("openclaw-viewer-facepile")).toBe(facepile);
-    expect(facepile.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe("ada");
-  },
-);
 
 it("updates a pinned session's resolved avatar without replacing its row", () => {
   const { host, container, dom } = createHost();

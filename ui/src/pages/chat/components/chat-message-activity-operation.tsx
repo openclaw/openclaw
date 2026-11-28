@@ -253,9 +253,9 @@ export function LifecycleOperations(props: {
               </span>
             }
           >
-            <span class="chat-tool-row__title">
+            <>
               <span class="chat-tool-row__verb">{verb()}</span>{" "}
-              <span class="chat-tool-row__subagent-name">
+              <span class="chat-tool-row__title chat-tool-row__subagent-name">
                 <For each={parts()} keyed={(part) => part.type + part.value}>
                   {(part) => (
                     <Show when={part().type === "element"} fallback={part().value}>
@@ -271,15 +271,18 @@ export function LifecycleOperations(props: {
                             entries()[Number(part().value)]?.open
                           }
                           fallback={
-                            <SubagentName
-                              name={entries()[Number(part().value)]?.name ?? ""}
-                              sessionKey={entries()[Number(part().value)]?.key}
-                            />
+                            <span class="chat-tool-msg-summary__label">
+                              <SubagentName
+                                name={entries()[Number(part().value)]?.name ?? ""}
+                                sessionKey={entries()[Number(part().value)]?.key}
+                              />
+                            </span>
                           }
                         >
                           <button
                             type="button"
                             class="chat-tool-row__subagent-link"
+                            title={entries()[Number(part().value)]?.name}
                             onClick={() => {
                               const entry = entries()[Number(part().value)]!;
                               entry.open?.(entry.key!);
@@ -296,7 +299,7 @@ export function LifecycleOperations(props: {
                   )}
                 </For>
               </span>
-            </span>
+            </>
           </Show>
         </span>
         <Show when={operationRunInterrupted(first()) && firstOutcome() === "unrecorded"}>

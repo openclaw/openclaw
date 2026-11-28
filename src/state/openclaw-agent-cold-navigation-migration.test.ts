@@ -238,15 +238,20 @@ it("checks pending-input mutation integrity before crossing from v38 to the curr
           /^PRAGMA (?:quick_check|integrity_check|foreign_key_check)/u.test(sql),
         ),
       ).toEqual([
-        "PRAGMA quick_check;",
-        "PRAGMA integrity_check('schema_meta');",
-        "PRAGMA integrity_check('session_conversations');",
-        "PRAGMA integrity_check('session_members');",
-        "PRAGMA integrity_check('session_nodes');",
-        "PRAGMA integrity_check('session_pending_inputs');",
-        "PRAGMA integrity_check('session_transcript_active_events');",
-        "PRAGMA integrity_check('session_windows');",
-        "PRAGMA foreign_key_check;",
+        // A version step never scans the whole file; the next Gateway start owes that check.
+        "PRAGMA integrity_check('sqlite_schema');",
+        ...[
+          "schema_meta",
+          "session_conversations",
+          "session_members",
+          "session_nodes",
+          "session_pending_inputs",
+          "session_transcript_active_events",
+          "session_windows",
+        ].flatMap((table) => [
+          `PRAGMA integrity_check('${table}');`,
+          `PRAGMA foreign_key_check('${table}');`,
+        ]),
       ]);
       expect(
         resolveSchemaMigrationIntegrityCheck(

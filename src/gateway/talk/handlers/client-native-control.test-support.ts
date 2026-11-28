@@ -164,18 +164,20 @@ type NativePluginFixture = {
   rpcSourceTesting: typeof rpcSourceTesting;
 };
 
-export async function withNativePlugin(
+let activeNativeFixture: Promise<void> | undefined;
+
+export function withNativePlugin(
   run: (fixture: NativePluginFixture) => Promise<void>,
   options: {
     model?: string;
     nativeEffects?: boolean;
     operatorScopes?: string[];
-    onConsult?: () => void;
+    onConsult?: (completion: Promise<unknown>) => void;
     consultScope?: GatewayContextResolver;
     configure?: (config: OpenClawConfig) => void;
   } = {},
 ): Promise<void> {
-  await withOpenClawTestState(
+  activeNativeFixture = withOpenClawTestState(
     { layout: "state-only", prefix: "talk-native-control-", env: { OPENAI_API_KEY: undefined } },
     async (state) => {
       const realtimeConfig: TalkRealtimeConfig = {
@@ -186,6 +188,7 @@ export async function withNativePlugin(
       const config: OpenClawConfig = {
         agents: {
           ownership: "explicit",
+          defaults: { model: "anthropic/claude-opus-4-6" },
           entries: {
             voice: { agentDir: state.agentDir(AGENT_ID), workspace: state.workspaceDir },
             other: {},
@@ -257,12 +260,13 @@ export async function withNativePlugin(
                   if (original) {
                     request.runAgentConsult = Object.assign(
                       (...args: Parameters<typeof original>) => {
-                        options.onConsult?.();
-                        return options.consultScope
+                        const completion = options.consultScope
                           ? withPluginRuntimeGatewayContextResolver(options.consultScope, () =>
                               original(...args),
                             )
                           : original(...args);
+                        options.onConsult?.(completion);
+                        return completion;
                       },
                       original,
                     );
@@ -362,8 +366,10 @@ export async function withNativePlugin(
     },
   ).finally(() => {
     // Fresh state reuses SESSION_ID only after the previous fixture's work has drained.
+    activeNativeFixture = undefined;
     clearPromptCacheObservations(SESSION_ID);
   });
+  return activeNativeFixture;
 }
 
 export async function connectNativeSession(
@@ -443,6 +449,7 @@ export async function withParkedNativeTask(
   const runAbortController = new AbortController();
   let activeRun: RunEmbeddedAgentParams | undefined;
   let phase = "waiting for delegation";
+  let startReadinessDeadline: (() => void) | undefined;
   let backendAborted = false;
   const abortOwned = vi.fn(() => {
     backendAborted = true;
@@ -456,6 +463,8 @@ export async function withParkedNativeTask(
   upstream.runEmbeddedAgent
     .mockImplementationOnce(async (params) => {
       try {
+        // Session and model preparation precede the backend; the deadline times its registration.
+        startReadinessDeadline?.();
         phase = "admitting backend";
         if (!params.preparedRunAdmission) {
           throw new Error("Expected real Talk admission");
@@ -588,21 +597,27 @@ export async function withParkedNativeTask(
     let deadline: ReturnType<typeof setTimeout> | undefined;
     let stopObservingCompletion: (() => void) | undefined;
     const timeoutMs = 1000;
+    let registrationObserved = false;
+    startReadinessDeadline = () => {
+      if (deadline !== undefined) {
+        return;
+      }
+      deadline = setTimeout(() => {
+        failed.reject(
+          new Error(
+            `registration readiness not observed within ${timeoutMs} ms; last phase: ${phase}`,
+          ),
+        );
+      }, timeoutMs);
+    };
     const prepare = embeddedRuns.prepareEmbeddedAgentRunCompletionClaim;
     const observeRegistration = vi
       .spyOn(embeddedRuns, "prepareEmbeddedAgentRunCompletionClaim")
       .mockImplementation((sessionId, runId, target) => {
         const claim = prepare(sessionId, runId, target);
-        if (sessionId === SESSION_ID && deadline === undefined) {
-          // Workspace and session preparation precede the registration owner's lifetime.
+        if (sessionId === SESSION_ID && !registrationObserved) {
+          registrationObserved = true;
           phase = "waiting for embedded registration";
-          deadline = setTimeout(() => {
-            failed.reject(
-              new Error(
-                `registration readiness not observed within ${timeoutMs} ms; last phase: ${phase}`,
-              ),
-            );
-          }, timeoutMs);
           registered.resolve(claim.registered);
         }
         return claim;
@@ -688,8 +703,13 @@ export function installNativePluginTestHooks() {
       .mockRejectedValue(new Error("Unexpected model invocation"));
   });
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
+  afterEach(async () => {
+    try {
+      // Vitest can stop awaiting the test before its fixture restores the state directory.
+      await activeNativeFixture;
+    } finally {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
   });
 }

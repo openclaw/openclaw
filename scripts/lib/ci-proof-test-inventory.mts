@@ -1514,7 +1514,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cli/pairing-cli.test.ts",
   "src/cli/plugin-install-plan.test.ts",
   "src/cli/plugin-invocation-resources.test.ts",
-  "src/cli/plugin-registry.test.ts",
   "src/cli/plugins-authoring-command.test.ts",
   "src/cli/plugins-cli.inspect.test.ts",
   "src/cli/plugins-cli.install.test.ts",

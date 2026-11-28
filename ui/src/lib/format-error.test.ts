@@ -97,13 +97,10 @@ describe("formatUiError programming errors", () => {
     ["another realm's TypeError", runInNewContext("new TypeError('x is not a function')") as Error],
   ];
 
-  it.each(programmingErrors)("shows the caller's fallback for %s", (_name, error) => {
-    expect(formatUiError(error, "Logs could not load.")).toBe("Logs could not load.");
-  });
-
   it.each(programmingErrors)(
-    "shows the generic message without a fallback for %s",
+    "uses the caller fallback or generic message for %s",
     (_name, error) => {
+      expect(formatUiError(error, "Logs could not load.")).toBe("Logs could not load.");
       expect(formatUiError(error)).toBe("Request failed");
     },
   );
