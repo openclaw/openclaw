@@ -72,9 +72,7 @@ export function classifyScheduledJob(
   const ref = jobRef(job);
   // Command payloads run host commands without the parent's access and never pause.
   const runsCommand = job.payload.kind === "command";
-  // Only a trigger script or a detached/custom-session run executes under the minted context;
-  // a main-target job runs in the agent's own session, though a missing parent still pauses it.
-  const usesContext = Boolean(job.trigger) || (!runsCommand && job.sessionTarget !== "main");
+  const usesContext = Boolean(job.trigger) || !runsCommand;
   if (result.status === "pause") {
     if (!runsCommand) {
       report.pauses.push({

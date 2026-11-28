@@ -47,8 +47,8 @@ afterEach(() => {
 it.each([
   { kind: "member", target: "isolated", reset: false, direct: false },
   { kind: "owner", target: "isolated", reset: false, direct: false },
-  { kind: "member", target: "main", reset: false, direct: false },
-  { kind: "owner", target: "main", reset: false, direct: false },
+  { kind: "member", target: "session:main", reset: false, direct: false },
+  { kind: "owner", target: "session:main", reset: false, direct: false },
   { kind: "member", target: "isolated", reset: true, direct: false },
   { kind: "member", target: "isolated", reset: false, direct: true },
   { kind: "member", target: "isolated", reset: false, direct: true, directAdmin: true },
@@ -302,7 +302,7 @@ it.each([
         expect(payload).not.toHaveBeenCalled();
         expect(observed?.openclawIdPrincipal).toEqual(fixture.snapshot.openclawIdPrincipal);
         expect(sender).toEqual(
-          kind === "member" ? { senderIsOwner: false } : target === "main" ? undefined : {},
+          kind === "member" ? { senderIsOwner: false } : target === "session:main" ? undefined : {},
         );
       } finally {
         cron.stop();

@@ -115,9 +115,10 @@ for (const loseReplacement of [false, true]) {
         enabled: true,
         deleteAfterRun: true,
         schedule: { kind: "at", at: new Date(Date.now() + 2_000).toISOString() },
-        sessionTarget: "main",
+        sessionTarget: "session:agent:main:main",
+        delivery: { mode: "none" },
         wakeMode: "now",
-        payload: { kind: "systemEvent", text: "synthetic recovery" },
+        payload: { kind: "agentTurn", message: "synthetic recovery" },
       });
       const original = workers[0];
       expect(original).toBeInstanceOf(Worker);

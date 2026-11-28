@@ -79,16 +79,28 @@ type InvalidPersistedCronJobReason =
   | "invalid-execution-policy"
   | "unsatisfiable-schedule"
   | "invalid-trigger"
+  | "unsupported-definition"
   | "missing-payload"
   | "invalid-payload";
 
-/** Returns the first structural reason a persisted cron job cannot be loaded safely. */
+/** Runtime rejects retired shapes; offline Doctor inventory may inspect their remaining fields. */
 export function getInvalidPersistedCronJobReason(
   candidate: Record<string, unknown>,
+  options: { allowLegacyMainAutomation?: boolean } = {},
 ): InvalidPersistedCronJobReason | null {
   const id = candidate.id;
   if (typeof id !== "string" || !id.trim()) {
     return "missing-id";
+  }
+  const target = candidate.sessionTarget;
+  if (
+    target !== undefined &&
+    target !== "isolated" &&
+    target !== "current" &&
+    !(options.allowLegacyMainAutomation && target === "main") &&
+    !(typeof target === "string" && target.startsWith("session:"))
+  ) {
+    return "unsupported-definition";
   }
   const lastMeaningfulResult = asRecord(candidate.state).lastMeaningfulResult;
   if (
@@ -279,25 +291,25 @@ export function getInvalidPersistedCronJobReason(
       ? null
       : "invalid-payload";
   }
+  const legacySystemEvent = options.allowLegacyMainAutomation && payloadKind === "systemEvent";
   if (
-    payloadKind !== "systemEvent" &&
+    !legacySystemEvent &&
     payloadKind !== "agentTurn" &&
     payloadKind !== "command" &&
     payloadKind !== "script"
   ) {
-    return "invalid-payload";
+    return "unsupported-definition";
   }
-  const requiredText =
-    payloadKind === "systemEvent"
-      ? payloadRecord.text
-      : payloadKind === "agentTurn"
-        ? payloadRecord.message
-        : payloadKind === "script"
-          ? payloadRecord.script
-          : undefined;
+  const requiredText = legacySystemEvent
+    ? payloadRecord.text
+    : payloadKind === "agentTurn"
+      ? payloadRecord.message
+      : payloadKind === "script"
+        ? payloadRecord.script
+        : undefined;
   if (
-    (payloadKind === "systemEvent" || payloadKind === "agentTurn" || payloadKind === "script") &&
-    (typeof requiredText !== "string" || (payloadKind !== "systemEvent" && !requiredText.trim()))
+    (legacySystemEvent || payloadKind === "agentTurn" || payloadKind === "script") &&
+    (typeof requiredText !== "string" || (!legacySystemEvent && !requiredText.trim()))
   ) {
     return "invalid-payload";
   }

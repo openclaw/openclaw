@@ -6,8 +6,8 @@ function candidate(overrides: Record<string, unknown> = {}) {
     id: "job-1",
     schedule: { kind: "every", everyMs: 30_000 },
     trigger: { script: "json({ fire: true })" },
-    payload: { kind: "systemEvent", text: "changed" },
-    sessionTarget: "main",
+    payload: { kind: "agentTurn", message: "changed" },
+    sessionTarget: "session:agent:main:main",
     ...overrides,
   };
 }

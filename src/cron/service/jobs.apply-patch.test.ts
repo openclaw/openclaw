@@ -3,8 +3,9 @@ import { describe, expect, it } from "vitest";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { projectCronJobThroughStorageCodec } from "../store/row-codec.js";
+import { resolveCronRunToolsAllow } from "../tools-allow.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
-import { applyJobPatch, createJob } from "./jobs.js";
+import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "./jobs.js";
 
 function makeJob(overrides: Partial<CronJob> = {}): CronJob {
   return makeCronJob({
@@ -14,10 +15,10 @@ function makeJob(overrides: Partial<CronJob> = {}): CronJob {
   });
 }
 
-function makeMainJob(delivery?: CronJob["delivery"]) {
+function makeSessionJob(delivery?: CronJob["delivery"]) {
   return makeJob({
-    sessionTarget: "main",
-    payload: { kind: "systemEvent", text: "tick" },
+    sessionTarget: "session:agent:main:main",
+    payload: { kind: "agentTurn", message: "tick" },
     delivery,
   });
 }
@@ -30,6 +31,34 @@ const clearedFailureDestination = {
   mode: undefined,
 };
 const failureDefaults = { channel: "slack", to: "C123", accountId: "bot-b" };
+
+it.each(["patch", "declaration"] as const)(
+  "keeps a finite tool cap when a %s removes the trigger",
+  (edit) => {
+    const job = makeJob({
+      sessionTarget: "session:agent:main:main",
+      trigger: { script: "json({ fire: false });" },
+      payload: {
+        kind: "agentTurn",
+        message: "check",
+        toolsAllow: ["read"],
+        toolsAllowIsDefault: true,
+      },
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+      delivery: { mode: "none" },
+    });
+    if (edit === "patch") {
+      applyJobPatch(job, { trigger: null });
+    } else {
+      applyDeclarativeJobSpec(
+        job,
+        { ...job, trigger: undefined, payload: { kind: "agentTurn", message: "check" } },
+        { enabledExplicit: false, nowMs: job.updatedAtMs },
+      );
+    }
+    expect(resolveCronRunToolsAllow(job)).toEqual(["read"]);
+  },
+);
 
 describe("applyJobPatch schedule retention", () => {
   it.each([undefined, false] as const)(
@@ -73,7 +102,7 @@ describe("schedule activation ownership", () => {
   it("ignores caller-supplied activation state during creation", () => {
     const now = Date.parse("2026-07-30T00:00:00.000Z");
     const input = {
-      ...makeMainJob(),
+      ...makeSessionJob(),
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
       state: {
         scheduleActivatedAtMs: now - 60_000,
@@ -111,54 +140,57 @@ describe("schedule activation ownership", () => {
 });
 
 describe("applyJobPatch delivery merge", () => {
-  it.each([
-    {
-      channel: null,
-      to: null,
-      threadId: null,
-      accountId: null,
-      completionDestination: null,
-      failureDestination: null,
-    },
-    { mode: "none", channel: "telegram", to: "123", threadId: 0, accountId: "bot-a" },
-  ] satisfies NonNullable<CronJobPatch["delivery"]>[])(
-    "preserves main-session no-delivery semantics for %j",
-    (delivery) => {
-      const job = makeMainJob();
-
-      applyJobPatch(job, { delivery });
-
-      expect(job.delivery).toBeUndefined();
-      expect(resolveCronDeliveryPlan(job).mode).toBe("none");
-    },
-  );
-
-  it.each([
-    { mode: "announce" },
-    { completionDestination: { mode: "webhook", to: "https://example.com/completed" } },
-  ] satisfies NonNullable<CronJobPatch["delivery"]>[])(
-    "rejects authored main delivery %j",
-    (delivery) => {
-      const job = makeMainJob();
-
-      expect(() => applyJobPatch(job, { delivery })).toThrow(
-        'cron channel delivery config is only supported for sessionTarget="isolated"',
-      );
-    },
-  );
-
-  it("clears inherited announce delivery when retargeting to main with bestEffort", () => {
-    const job = makeJob();
+  it("preserves implicit announce when clearing absent session delivery overrides", () => {
+    const job = makeSessionJob();
     applyJobPatch(job, {
-      sessionTarget: "main",
-      payload: { kind: "systemEvent", text: "tick" },
-      delivery: { bestEffort: false },
+      delivery: {
+        channel: null,
+        to: null,
+        threadId: null,
+        accountId: null,
+        completionDestination: null,
+        failureDestination: null,
+      },
     });
-    expect(job).toMatchObject({ sessionTarget: "main", delivery: undefined });
+    expect(job.delivery).toBeUndefined();
+    expect(resolveCronDeliveryPlan(job).mode).toBe("announce");
   });
 
-  it("preserves inherited main-session webhook mode in a partial delivery update", () => {
-    const job = makeMainJob({ mode: "webhook", to: "https://example.com/old", bestEffort: true });
+  it("honors explicit no-delivery for an existing-session task", () => {
+    const job = makeSessionJob();
+    applyJobPatch(job, { delivery: { mode: "none" } });
+    expect(job.delivery?.mode).toBe("none");
+    expect(resolveCronDeliveryPlan(job).mode).toBe("none");
+  });
+
+  it("keeps chat and completion webhook delivery when retargeting to an existing session", () => {
+    const job = makeJob();
+    applyJobPatch(job, {
+      sessionTarget: "session:agent:main:main",
+      delivery: {
+        bestEffort: false,
+        completionDestination: { mode: "webhook", to: "https://example.com/completed" },
+      },
+    });
+    expect(job).toMatchObject({
+      sessionTarget: "session:agent:main:main",
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "-1001234567890",
+        bestEffort: false,
+        completionDestination: { mode: "webhook", to: "https://example.com/completed" },
+      },
+    });
+    expect(resolveCronDeliveryPlan(job).mode).toBe("announce");
+  });
+
+  it("preserves inherited existing-session webhook mode in a partial delivery update", () => {
+    const job = makeSessionJob({
+      mode: "webhook",
+      to: "https://example.com/old",
+      bestEffort: true,
+    });
 
     applyJobPatch(job, {
       delivery: { to: "https://example.com/new", bestEffort: false },
@@ -174,7 +206,7 @@ describe("applyJobPatch delivery merge", () => {
   it.each(["isolated", "main"] as const)(
     "clears %s failure routes as global opt-outs",
     (target) => {
-      const job = target === "main" ? makeMainJob() : makeJob();
+      const job = target === "main" ? makeSessionJob() : makeJob();
       if (job.delivery) {
         job.delivery.failureDestination = { mode: "announce", ...failureDefaults };
       }
@@ -182,7 +214,7 @@ describe("applyJobPatch delivery merge", () => {
 
       expect(job.delivery?.failureDestination).toStrictEqual(clearedFailureDestination);
       if (target === "main") {
-        expect(job.delivery?.mode).toBe("none");
+        expect(job.delivery?.mode).toBe("announce");
       }
       const accountId = target === "main" ? "bot-a" : "bot-b";
       expect(resolveFailureDestination(job, { ...failureDefaults, accountId })).toBeNull();

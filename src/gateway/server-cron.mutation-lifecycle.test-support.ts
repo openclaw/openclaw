@@ -93,11 +93,11 @@ export function registerGatewayCronMutationAuthorityTests(harness: CronMutationH
         const job = await harness.addCronJob(
           state,
           `authority ${method}`,
-          { kind: "systemEvent", text: "run" },
+          { kind: "agentTurn", message: "run" },
           {
             owner,
             schedule: { kind: "every", everyMs: 60_000 },
-            sessionTarget: "main",
+            sessionTarget: "session:agent:main:main",
             wakeMode: "now",
           },
         );

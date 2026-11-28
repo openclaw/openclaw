@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
-import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
+import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { makeCronStreamSandboxTarget } from "./stream-sandbox.test-support.js";
@@ -414,47 +414,4 @@ describe("cron stream trigger composition", () => {
       },
     );
   });
-});
-
-it("skips invalid main jobs with command payloads loaded from disk", async () => {
-  const { storePath } = await makeStorePath();
-  const enqueueSystemEvent = vi.fn();
-  const runCommandJob = vi.fn<NonNullable<CronServiceDeps["runCommandJob"]>>();
-  const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>();
-  await writeCronStoreSnapshot({
-    storePath,
-    jobs: [
-      {
-        id: "job-1",
-        name: "bad",
-        enabled: true,
-        createdAtMs: Date.now(),
-        updatedAtMs: Date.now(),
-        schedule: { kind: "at", at: "2025-12-13T00:00:01.000Z" },
-        sessionTarget: "main",
-        wakeMode: "now",
-        payload: { kind: "command", argv: ["echo", "invalid main payload"] },
-        state: {},
-      },
-    ],
-  });
-  const { cron } = await createCron(true, {
-    storePath,
-    cronConfig: undefined,
-    enqueueSystemEvent,
-    runCommandJob,
-    runSessionEvent,
-  });
-  try {
-    vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
-    await cron.run("job-1", "due");
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(runCommandJob).not.toHaveBeenCalled();
-    expect(runSessionEvent).not.toHaveBeenCalled();
-    const [job] = await cron.list({ includeDisabled: true });
-    expect(job?.state.lastStatus).toBe("skipped");
-    expect(job?.state.lastError).toMatch(/sessionTarget "main" requires payload\.kind/i);
-  } finally {
-    cron.stop();
-  }
 });

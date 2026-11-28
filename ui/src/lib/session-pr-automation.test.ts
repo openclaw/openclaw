@@ -260,7 +260,7 @@ it.each(["autoFix", "autoMerge", "autoArchive"] as const)(
       { ...spec, owner: { agentId: target.agentId, sessionKey: "agent:main:other" } },
       { ...spec, sessionTarget: otherTarget },
       { ...spec, declarationKey: undefined },
-      { ...spec, payload: { kind: "systemEvent" as const, text: "not an agent turn" } },
+      { ...spec, payload: { kind: "command" as const, argv: ["true"] } },
     ];
     for (const mismatch of mismatches) {
       expect(matchesJob(mismatch, target, option)).toBe(false);

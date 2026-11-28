@@ -158,7 +158,6 @@ it("accepts a configured channel owner", async () => {
 
 it("continues a read-only parent review after errors and reports only applicable job warnings", async () => {
   const archivedKey = "agent:main:dashboard:archived";
-  const main = { sessionTarget: "main", payload: { kind: "systemEvent", text: "x" } } as const;
   const command = {
     payload: { kind: "command", argv: ["true"] },
   } satisfies Partial<CronStoredJob>;
@@ -172,8 +171,6 @@ it("continues a read-only parent review after errors and reports only applicable
     jobRow("no-chat-type", { createdActor: profileActor }),
     jobRow("other"),
     { id: "broken", definition: null, invalidReason: "invalid-definition-json" },
-    jobRow("main-removed", { ...main, sourceConversation: GONE }),
-    jobRow("main-live", main),
     jobRow("command-removed", { ...command, sourceConversation: GONE }),
     jobRow("command-live", command),
   ];
@@ -184,9 +181,7 @@ it("continues a read-only parent review after errors and reports only applicable
   expect(text).toContain("a creating conversation with no stored chat type");
   expect(text).toContain(`- no-chat-type (no-chat-type): \`${PARENT}\``);
   expect(text).toContain(`- other (other): ${ownerTools}`);
-  expect(text?.split("\n").filter((line) => line.includes("main-"))).toEqual([
-    "- main-removed (main-removed): `agent:main:dashboard:gone` was removed",
-  ]);
+
   expect(text).not.toMatch(/broken|command-/);
   expect(mocks.note).toHaveBeenCalledWith(expect.any(String), "Cron");
   expect(mocks.readSession).toHaveBeenCalledWith(

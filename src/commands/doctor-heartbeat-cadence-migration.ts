@@ -56,13 +56,11 @@ import {
 
 const CHECK_ID = "core/doctor/heartbeat-cadence-migration";
 
-function isPendingLegacyHeartbeatRetry(job: DoctorCronJob): job is CronJob & {
-  payload: Extract<CronJob["payload"], { kind: "systemEvent" }>;
-} {
+function isPendingLegacyHeartbeatRetry(job: DoctorCronJob): job is CronJob {
   return (
     job.schedule.kind === "at" &&
-    job.sessionTarget === "main" &&
-    job.payload.kind === "systemEvent" &&
+    job.sessionTarget.startsWith("session:") &&
+    job.payload.kind === "agentTurn" &&
     (job.state.lastRunStatus ?? job.state.lastStatus) === "skipped" &&
     job.state.lastError === "disabled" &&
     typeof job.state.lastRunAtMs === "number" &&
@@ -298,7 +296,7 @@ export async function ensureHeartbeatMonitorJobs(
         const current = currentJobs.find((job) => job.id === previous.id);
         if (
           !current ||
-          current.payload.kind !== "systemEvent" ||
+          current.payload.kind !== "agentTurn" ||
           !isDeepStrictEqual(current, previous) ||
           current.state.runningAtMs !== undefined
         ) {
@@ -373,12 +371,12 @@ export async function ensureHeartbeatMonitorJobs(
         const authoritySource: CronJob = current
           ? {
               ...current,
-              // Heartbeat and systemEvent both used the non-tool-runtime input
+              // Heartbeat used the non-tool-runtime input
               // fingerprint. Validate the original authority before rebinding it
               // to agentTurn, whose fingerprint deliberately changes that bit.
               payload:
                 current.payload.kind === "heartbeat"
-                  ? { ...current.payload, kind: "systemEvent", text: "" }
+                  ? { ...current.payload, kind: "command", argv: [] }
                   : current.payload,
             }
           : item.job;

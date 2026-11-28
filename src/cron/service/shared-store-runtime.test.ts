@@ -55,10 +55,10 @@ function addJob(cron: CronService, name: string, target = false) {
     schedule: target
       ? { kind: "cron", expr: "0 6 * * *", tz: "UTC" }
       : { kind: "every", everyMs: 86_400_000, anchorMs: Date.now() + 86_400_000 },
-    sessionTarget: target ? "main" : "isolated",
+    sessionTarget: target ? "session:agent:main:main" : "isolated",
     wakeMode: "next-heartbeat",
     payload: target
-      ? { kind: "systemEvent", text: "target" }
+      ? { kind: "agentTurn", message: "target" }
       : { kind: "agentTurn", message: "run canary" },
   });
 }
@@ -187,7 +187,7 @@ it("rejects a stale config mutation instead of overwriting its peer", async () =
   ).rejects.toThrow("changed after it was read");
   const persisted = await readJob(storePath, target.id);
   expect(persisted?.name).toBe("peer-update");
-  expect(persisted?.delivery).toBeUndefined();
+  expect(persisted?.delivery).toEqual(target.delivery);
   cron.stop();
 });
 

@@ -584,8 +584,8 @@ it.each([
     };
     const exercise = async (callUpdate: (patch: CronJobPatch) => Promise<void>) => {
       await callUpdate({
-        sessionTarget: "main",
-        payload: { kind: "systemEvent", text: "Check status" },
+        sessionTarget: "isolated",
+        payload: { kind: "command", argv: ["true"] },
       });
       const store = await loadCronStore(storePath);
       const dormant = expectDefined(
@@ -593,8 +593,8 @@ it.each([
         "dormant job",
       );
       expect(dormant).toMatchObject({
-        sessionTarget: "main",
-        payload: { kind: "systemEvent", toolsAllow: ["message"] },
+        sessionTarget: "isolated",
+        payload: { kind: "command", argv: ["true"], toolsAllow: ["message"] },
         scheduledToolPolicy: accountPolicy,
       });
       if (definition === "erased policy") {

@@ -11,7 +11,6 @@ import { isCliProvider } from "../../../agents/model-selection-cli.js";
 import { resolveDefaultModelForAgent } from "../../../agents/model-selection-config.js";
 import { resolveModelRefFromString } from "../../../agents/model-selection-shared.js";
 import { isConfiguredCommandOwner } from "../../../auto-reply/command-owner-facts.js";
-import { resolveAgentMainSessionKey } from "../../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -236,10 +235,8 @@ async function reviewJob(
     owner = checkRequesterOwnerReadOnly(cfg, requester, requesterProfile);
   }
   const runSessionKey =
-    job.sessionTarget === "main"
-      ? resolveAgentMainSessionKey({ cfg, agentId })
-      : (resolveCronSessionTargetSessionKey(job.sessionTarget) ??
-        `agent:${agentId}:cron:${job.id}:run:doctor`);
+    resolveCronSessionTargetSessionKey(job.sessionTarget) ??
+    `agent:${agentId}:cron:${job.id}:run:doctor`;
   const facts = assembleScheduledAdmissionFacts(
     {
       cfg,

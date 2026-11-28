@@ -53,8 +53,9 @@ import {
   type LegacyCronRepairState,
   type LegacyCronStoreRepairParams,
 } from "./legacy-repair-plan.js";
+import { isLegacyMainAutomation } from "./main-session-migration.js";
 import { archiveLegacyCronFile } from "./quarantine-archive.js";
-import { mergeRuntimeEntryIntoConfigJob } from "./repair-plan.js";
+import { mergeLegacyCronJobsForRepair, mergeRuntimeEntryIntoConfigJob } from "./repair-plan.js";
 import {
   assertCronStateSchemaSupportedAsync,
   rethrowSqliteSchemaVersionError,
@@ -103,14 +104,20 @@ export async function loadLegacyCronRepairState(params: {
     params.storePath ?? resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg), params.env);
   await assertCronStateSchemaSupportedAsync(params.env);
   const legacyQuarantine = await loadLegacyCronQuarantineForMigration(storePath);
-  if (params.onlyIfLegacyDetected && !legacyQuarantine) {
-    return null;
-  }
   const persistedQuarantine = await loadCronQuarantinedJobs(storePath, params.env);
 
   const loaded = params.readOnly
     ? await loadCronJobsStoreWithConfigJobsReadOnly(storePath, params.env)
     : await loadCronJobsStoreWithConfigJobs(storePath);
+  const { currentJobs, invalidConfigRows, retainedHeartbeatJobIds } =
+    mergeLegacyCronJobsForRepair(loaded);
+  if (
+    params.onlyIfLegacyDetected &&
+    !legacyQuarantine &&
+    !currentJobs.some(isLegacyMainAutomation)
+  ) {
+    return null;
+  }
   const runtimeDefaultAgentId = tryResolveAmbientOwnerAgentId(params.cfg);
   const projectedOwnersByJobId = new Map(
     loaded.store.jobs.map((job) => [job.id, projectCronOwner(job, runtimeDefaultAgentId)]),
@@ -136,16 +143,6 @@ export async function loadLegacyCronRepairState(params: {
       projectedOwnersByJobId.set(jobId, { kind: "explicit", agentId });
     }
   }
-  const invalidConfigRows: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
-  const currentJobs =
-    loaded.configJobs.length > 0
-      ? loaded.configJobs.map((job, index) =>
-          mergeRuntimeEntryIntoConfigJob({
-            job,
-            runtimeEntry: loaded.configJobRuntimeEntries[index],
-          }),
-        )
-      : (loaded.store.jobs as unknown as Array<Record<string, unknown>>);
   for (const job of currentJobs) {
     const jobId = normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
     const sqlOwner = jobId ? sqlOwners.get(jobId) : undefined;
@@ -162,6 +159,7 @@ export async function loadLegacyCronRepairState(params: {
     legacyQuarantine,
     invalidConfigRows,
     persistedQuarantine,
+    retainedHeartbeatJobIds,
     projectedOwnersByJobId,
     rawJobs: currentJobs,
     jobsFingerprint: loaded.jobsFingerprint,
@@ -219,6 +217,7 @@ export async function applyLegacyCronStoreRepair(
           ...(quarantine ? { quarantine } : {}),
           ...(deleteQuarantineEntries.length > 0 ? { deleteQuarantineEntries } : {}),
           preserveRuntimeState: true,
+          retainUnlistedJobIds: state.retainedHeartbeatJobIds,
         };
         if (state.ownerRows.length > 0 || state.persistedQuarantine.length > 0) {
           const backup = await backupCronStoreForDoctor(
@@ -231,6 +230,7 @@ export async function applyLegacyCronStoreRepair(
                 state.jobsFingerprint,
                 state.persistedQuarantine,
                 store,
+                [...state.retainedHeartbeatJobIds],
                 quarantineEntries,
                 deleteQuarantineEntries,
               ],
@@ -265,7 +265,7 @@ export async function applyLegacyCronStoreRepair(
     }
   }
 
-  changes.push(...retirementChanges);
+  changes.push(...normalized.mainSessionRepairs, ...retirementChanges);
   if (normalized.issues.reconciledOwnerAccount) {
     changes.push(
       `Reconciled ${pluralize(normalized.issues.reconciledOwnerAccount, "cron job owner account")} from persisted creator identity; existing tool permissions were preserved.`,
@@ -384,7 +384,10 @@ export async function migrateRetiredCronState(params: {
         if (!state) {
           throw new Error("Cron repair snapshot unavailable");
         }
-        const ids = new Set(state.rawJobs.map((job) => normalizeOptionalStringifiedId(job.id)));
+        const ids = new Set([
+          ...state.retainedHeartbeatJobIds,
+          ...state.rawJobs.map((job) => normalizeOptionalStringifiedId(job.id)),
+        ]);
         const imported = legacy.jobs.filter((job) => {
           const id = normalizeOptionalStringifiedId(job.id);
           if (ids.has(id)) {

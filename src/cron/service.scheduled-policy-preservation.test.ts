@@ -57,8 +57,8 @@ describe("scheduled policy preservation across payload conversions", () => {
         );
         if (mutation === "update") {
           await cron.update(created.id, {
-            payload: { kind: "systemEvent", text: "report" },
-            sessionTarget: "main",
+            payload: { kind: "command", argv: ["true"] },
+            sessionTarget: "isolated",
           });
         } else {
           await cron.add({ ...input, payload: { kind: "command", argv: ["true"] } });

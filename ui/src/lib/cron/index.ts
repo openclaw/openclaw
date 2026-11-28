@@ -15,13 +15,7 @@ import {
   retireCronStatusRequest,
 } from "./editor-status.ts";
 import { hasUnchangedCronSchedule, buildCronSchedule } from "./form-schedule.ts";
-import {
-  hasCronFormErrors,
-  isReadOnlyCronPayload,
-  jobToForm,
-  normalizeCronFormState,
-  validateCronForm,
-} from "./form.ts";
+import { hasCronFormErrors, isReadOnlyCronPayload, jobToForm, validateCronForm } from "./form.ts";
 import { patchCronJobDefinition } from "./job-definition.ts";
 import { loadCronJobsPage } from "./jobs-full.ts";
 import { retireCronJobsRequest } from "./jobs.ts";
@@ -147,7 +141,7 @@ type CronSaveResult = { saved: false } | { saved: true; jobId: string };
 export async function addCronJob(state: CronState): Promise<CronSaveResult> {
   let result: CronSaveResult = { saved: false };
   await withCronBusy(state, undefined, async (client, reportFeedback, isCurrent) => {
-    const form = normalizeCronFormState(state.cronForm);
+    const form = state.cronForm;
     if (form !== state.cronForm) {
       state.cronForm = form;
     }
@@ -527,7 +521,7 @@ export function startCronClone(state: CronState, job: CronJob) {
     cloned.payloadKind = DEFAULT_CRON_FORM.payloadKind;
     cloned.payloadText = "";
   }
-  state.cronForm = normalizeCronFormState(cloned, { payloadKind: cloned.payloadKind });
+  state.cronForm = cloned;
   state.cronFieldErrors = validateCronForm(state.cronForm);
 }
 

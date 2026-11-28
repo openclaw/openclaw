@@ -8,6 +8,7 @@ export type CronStoreSaveOptions = {
     nowMs: number;
   };
   preserveRuntimeState?: boolean;
+  retainUnlistedJobIds?: ReadonlySet<string>;
   deleteQuarantineEntries?: readonly (QuarantinedCronConfigJob | CronQuarantinedJob)[];
 };
 

@@ -19,9 +19,9 @@ function listState(...jobs: Partial<CronJob>[]) {
         name: "job",
         enabled: true,
         schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC" },
-        sessionTarget: "main",
+        sessionTarget: "session:agent:main:main",
         wakeMode: "now",
-        payload: { kind: "systemEvent", text: "tick" },
+        payload: { kind: "agentTurn", message: "tick" },
         state: { nextRunAtMs: Date.parse("2030-02-27T15:30:00.000Z") },
         createdAtMs: Date.parse("2026-02-27T15:00:00.000Z"),
         updatedAtMs: Date.parse("2026-02-27T15:05:00.000Z"),
@@ -55,13 +55,13 @@ it("keeps unscheduled jobs after the scheduled descending page", async () => {
 it("preserves list revisions for large Unicode and escaped payloads", async () => {
   const state = listState({
     name: "Unicode report 🦞",
-    payload: { kind: "systemEvent", text: '🦞 日本語 "quoted" \\path\n\t'.repeat(1024) },
+    payload: { kind: "agentTurn", message: '🦞 日本語 "quoted" \\path\n\t'.repeat(1024) },
   });
 
   const page = await listPage(state);
 
   expect((await listPage(state)).snapshotRevision).toBe(page.snapshotRevision);
-  state.store!.jobs[0]!.payload = { kind: "systemEvent", text: "changed 🦞" };
+  state.store!.jobs[0]!.payload = { kind: "agentTurn", message: "changed 🦞" };
   expect((await listPage(state)).snapshotRevision).not.toBe(page.snapshotRevision);
 });
 

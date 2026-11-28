@@ -362,10 +362,7 @@ function anonymizePayload(payload: CronStoredJob["payload"]): CronStoredJob["pay
   if (payload.kind === "script") {
     return { kind: "script", script: "return null", ...tools };
   }
-  if (payload.kind === "systemEvent") {
-    return { kind: "systemEvent", text: "fixture", ...tools };
-  }
-  return { kind: "command", argv: ["true"] };
+  return { kind: "command", argv: ["true"], ...tools };
 }
 
 /**
@@ -523,9 +520,6 @@ async function main() {
     const rows: ReplayRow[] = [];
     const fixtures = new Map<string, ScheduledContextFixture>();
     for (const job of jobs) {
-      if (job.sessionTarget === "main") {
-        continue;
-      }
       const agentId = tryResolveCronJobEffectiveAgentId(job, tryResolveAmbientOwnerAgentId(cfg));
       if (!agentId) {
         rows.push({

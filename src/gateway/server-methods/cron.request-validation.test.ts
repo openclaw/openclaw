@@ -67,7 +67,7 @@ describe("cron request validation", () => {
 });
 
 it.each([false, true])(
-  "refuses source-less participant system events, preserving ordinary creation (participant=%s)",
+  "refuses source-less participant commands, preserving ordinary creation (participant=%s)",
   async (participant) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
@@ -86,15 +86,17 @@ it.each([false, true])(
       const capture = captureCronCreatorSession(
         {
           ...createHistoryJob("main", sessionKey),
-          sessionTarget: "main",
-          payload: { kind: "systemEvent", text: "Must not escape the original invitation" },
+          sessionTarget: "isolated",
+          payload: { kind: "command", argv: ["true"] },
         },
         undefined,
         { client, context: createDirectChatContext({ getRuntimeConfig: () => ({}) }) },
         {},
       );
       if (participant) {
-        await expect(capture).rejects.toThrow(/participant|participating/i);
+        await expect(capture).rejects.toThrow(
+          "The original authenticated authority could not be retained for this automation.",
+        );
       } else {
         expect((await capture).operatorSource).toBeUndefined();
       }

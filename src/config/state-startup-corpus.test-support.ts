@@ -250,9 +250,12 @@ export function createStateStartupCorpusFixture() {
               expect(cronPath).toBe(fixture.cronStorePath);
               const cron = await loadCronJobsStore(cronPath);
               signal.throwIfAborted();
-              expect(cron.jobs.find((job) => job.id === fixture.cronJob.id)).toMatchObject(
-                fixture.cronJob,
-              );
+              expect(cron.jobs.find((job) => job.id === fixture.cronJob.id)).toMatchObject({
+                ...fixture.cronJob,
+                sessionTarget: "session:agent:main:main",
+                payload: { kind: "agentTurn", message: fixture.cronJob.payload.text },
+                delivery: { mode: "none" },
+              });
               expect(getUserPreferences(fixture.controlUi.userId)).toMatchObject(
                 fixture.controlUi.settings,
               );

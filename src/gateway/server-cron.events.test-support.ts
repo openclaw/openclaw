@@ -51,9 +51,10 @@ export function makeCronJob(name: string, overrides: Partial<CronJobCreate> = {}
     name,
     enabled: true,
     schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text: "hello" },
+    payload: { kind: "agentTurn", message: "hello" },
+    delivery: { mode: "none" },
     ...overrides,
   };
 }

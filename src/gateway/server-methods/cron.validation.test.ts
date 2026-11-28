@@ -63,6 +63,7 @@ import {
   expectCronSuccess,
   expectCronReply,
   expectResponseError,
+  expectInvalidCronPatternError,
   requireCronAddPayload,
   requireRecord,
   agentTurnCronParams,
@@ -199,10 +200,6 @@ async function invokeWake(params: Record<string, unknown>, client?: GatewayClien
 
 function setRuntimeConfig(config: OpenClawConfig): void {
   getRuntimeConfig.mockReturnValue(config);
-}
-
-function expectInvalidCronPatternError(respond: ReturnType<typeof vi.fn>): void {
-  expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "CronPattern" });
 }
 
 describe("cron method validation", () => {
@@ -887,10 +884,10 @@ describe("cron method validation", () => {
     const { context, respond } = await invokeCronAdd({
       name: "main reminder",
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
+      sessionTarget: "session:agent:main:main",
       sessionKey: "agent:main:harness:codex:supervision:native-thread",
       wakeMode: "now",
-      payload: { kind: "systemEvent", text: "remind me" },
+      payload: { kind: "agentTurn", message: "remind me" },
     });
 
     expect(context.cron.add).toHaveBeenCalled();
@@ -1136,20 +1133,21 @@ describe("cron method validation", () => {
       enqueueSystemEvent: vi.fn(),
       runIsolatedAgentJob,
     });
-    await cron.start();
     const releaseReplacement = createDeferred();
     try {
-      const staleJob = await cron.add({
+      const staleJob = createCronJob({
         id: "cron-1",
         name: "scoped job",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
+        sessionTarget: "session:agent:main:main",
         wakeMode: "next-heartbeat",
         agentId: "main",
-        payload: { kind: "systemEvent", text: "before replacement" },
+        payload: { kind: "agentTurn", message: "before replacement" },
         delivery: { mode: "none" },
       });
+      await saveCronStore(storePath, { version: 1, jobs: [staleJob] });
+      await cron.start();
       const replacementEntered = createDeferred();
       const replacement = cron.updateWithPrecondition(
         staleJob.id,

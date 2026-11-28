@@ -94,9 +94,10 @@ it.for(["replacement-loss", "stop-during-launch"] as const)(
         enabled: true,
         deleteAfterRun: true,
         schedule: { kind: "at", at: new Date(Date.now()).toISOString() },
-        sessionTarget: "main",
+        sessionTarget: "session:agent:main:main",
+        delivery: { mode: "none" },
         wakeMode: "now",
-        payload: { kind: "systemEvent", text: "synthetic held startup run" },
+        payload: { kind: "agentTurn", message: "synthetic held startup run" },
       });
       expect(workers).toHaveLength(1);
       await workers[0]!.terminate();

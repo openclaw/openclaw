@@ -372,3 +372,7 @@ export function callerClientWithCronCreatorAuthority(
   client.internal!.agentRuntimeIdentity!.cronCreatorAuthorityGrant = grant;
   return client;
 }
+
+export function expectInvalidCronPatternError(respond: ReturnType<typeof vi.fn>): void {
+  expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "CronPattern" });
+}

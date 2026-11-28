@@ -85,15 +85,19 @@ it.each([
           createdAtMs: 1,
           updatedAtMs: 1,
           schedule: { kind: "every", everyMs: 1_800_000, anchorMs: 0 },
-          sessionTarget: "main",
+          sessionTarget: "isolated",
           wakeMode: "now",
-          payload: { kind: "systemEvent", text: "Legacy monitor" },
+          payload: { kind: "command", argv: ["true"] },
           state: {},
         };
         upsertCronJobRow(db, storeKey, job, index);
         db.prepare(
           "UPDATE cron_jobs SET payload_kind = 'heartbeat', job_json = ? WHERE store_key = ? AND job_id = ?",
-        ).run(JSON.stringify({ ...job, payload: { kind: "heartbeat" } }), storeKey, id);
+        ).run(
+          JSON.stringify({ ...job, sessionTarget: "main", payload: { kind: "heartbeat" } }),
+          storeKey,
+          id,
+        );
       }
     });
     const metadataSnapshot = createPluginMetadataSnapshotFixture();

@@ -225,20 +225,16 @@ it("preserves legal spellings, blank omission, and clear semantics on add and ed
     expect((await jobNamed("renamed"))?.payload).not.toHaveProperty("thinking");
   }));
 
-it.each(["systemEvent", "command", "script"])(
-  "keeps unused thinking ignored when adding a %s job",
-  (kind) =>
-    withCronGateway(async ({ readJobs, writeScript }) => {
-      const payloadArgs =
-        kind === "systemEvent"
-          ? ["--system-event", "hello"]
-          : kind === "command"
-            ? ["--command-argv", '["printf","hello"]', "--no-deliver"]
-            : ["--script", await writeScript(), "--no-deliver"];
-      const result = await runCli(addArgs(kind, payloadArgs, "--thinking", "hihg"));
-      const jobs = await readJobs();
-      expect(result.exitCode).toBe(0);
-      expect(jobs).toMatchObject([{ payload: { kind } }]);
-      expect(jobs[0]?.payload).not.toHaveProperty("thinking");
-    }),
+it.each(["command", "script"])("keeps unused thinking ignored when adding a %s job", (kind) =>
+  withCronGateway(async ({ readJobs, writeScript }) => {
+    const payloadArgs =
+      kind === "command"
+        ? ["--command-argv", '["printf","hello"]', "--no-deliver"]
+        : ["--script", await writeScript(), "--no-deliver"];
+    const result = await runCli(addArgs(kind, payloadArgs, "--thinking", "hihg"));
+    const jobs = await readJobs();
+    expect(result.exitCode).toBe(0);
+    expect(jobs).toMatchObject([{ payload: { kind } }]);
+    expect(jobs[0]?.payload).not.toHaveProperty("thinking");
+  }),
 );

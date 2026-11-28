@@ -52,8 +52,8 @@ it("reclaims a disabled scheduler's worker before stop and still accepts manual 
   const { storePath } = fixtures.makeStorePath();
   const now = Date.now();
   const job = createDueIsolatedJob({ id: "manual-after-retirement", nowMs: now, nextRunAtMs: now });
-  job.sessionTarget = "main";
-  job.payload = { kind: "systemEvent", text: job.id };
+  job.sessionTarget = "session:main";
+  job.payload = { kind: "agentTurn", message: job.id };
   await saveCronStore(storePath, { version: 1, jobs: [job] });
   const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(async () => ({
     status: "ok",
@@ -190,8 +190,8 @@ it.each([false, true])(
       createDueIsolatedJob({ id: "upcoming", nowMs: now, nextRunAtMs: now + 132_000 }),
     ];
     for (const job of jobs) {
-      job.sessionTarget = "main";
-      job.payload = { kind: "systemEvent", text: job.id };
+      job.sessionTarget = "session:main";
+      job.payload = { kind: "agentTurn", message: job.id };
     }
     await saveCronStore(storePath, { version: 1, jobs });
     const database = openOpenClawStateDatabase().db;

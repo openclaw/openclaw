@@ -39,7 +39,7 @@ export function createNativeEmbedLayoutMethodResponses(): Record<string, unknown
       configRevision: `synthetic-${id}-revision`,
       createdAtMs: timestamp,
       updatedAtMs: timestamp,
-      payload: { kind: "systemEvent", text: `Synthetic ${id} automation` },
+      payload: { kind: "agentTurn", message: `Synthetic ${id} automation` },
       state: { lastRunStatus },
     }),
   );

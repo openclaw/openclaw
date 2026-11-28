@@ -251,9 +251,9 @@ it.each([
               createdAtMs: runningAtMs,
               updatedAtMs: runningAtMs,
               schedule: { kind: "every", everyMs: 900_000, anchorMs: runningAtMs },
-              sessionTarget: "main",
+              sessionTarget: "isolated",
               wakeMode: "next-heartbeat",
-              payload: { kind: "systemEvent", text: "legacy placeholder" },
+              payload: { kind: "command", argv: ["true"] },
               state: { runningAtMs, ...(replayFinishedRun ? { consecutiveErrors: 9 } : {}) },
             },
             0,
@@ -281,6 +281,7 @@ it.each([
                 payload_kind: "heartbeat",
                 job_json: JSON.stringify({
                   ...JSON.parse(row.job_json),
+                  sessionTarget: "main",
                   payload: { kind: "heartbeat" },
                 }),
                 state_json: JSON.stringify({

@@ -1740,9 +1740,9 @@ describe("gateway hot reload model state", () => {
           name: "preserve the real watched child",
           enabled: true,
           schedule: { kind: "on-exit", command },
-          sessionTarget: "main",
+          sessionTarget: "session:agent:main:main",
           wakeMode: "next-heartbeat",
-          payload: { kind: "systemEvent", text: "watched child finished" },
+          payload: { kind: "agentTurn", message: "watched child finished" },
         });
         await initialCronState.reconcileExitWatchers();
         expect(spawn).toHaveBeenCalledOnce();

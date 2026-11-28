@@ -46,7 +46,10 @@ export function inspectCronRowsForDoctor(db: EngineConnection): PluginDoctorCron
           ? "declaration-key-mismatch"
           : !state
             ? "invalid-state-json"
-            : getInvalidPersistedCronJobReason({ ...definition, state });
+            : getInvalidPersistedCronJobReason(
+                { ...definition, state },
+                { allowLegacyMainAutomation: true },
+              );
     const inspected: PluginDoctorCronJob = {
       storeKey: row.store_key,
       id: row.job_id,

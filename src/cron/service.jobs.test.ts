@@ -20,9 +20,9 @@ const WEBHOOK = "https://example.invalid/cron";
 const input = (overrides: Partial<CronJobCreate> = {}) =>
   cronTestInput({
     name: "job",
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
     wakeMode: "now",
-    payload: { kind: "systemEvent", text: "tick" },
+    payload: { kind: "command", argv: ["true"] },
     ...overrides,
   });
 
@@ -307,8 +307,6 @@ it("preserves a future running marker owned by a live execution", () => {
 const patchErrors = {
   completion: 'cron completion destination webhook is only supported with delivery.mode="announce"',
   webhook: "cron webhook delivery requires delivery.to to be a valid http(s) URL",
-  mainFailure:
-    'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
   triggerSyntax: "cron trigger script has a syntax error: Unexpected token (line 1, column 10)",
   emptyTrigger: "cron trigger script must not be empty",
   scriptSyntax: "cron script payload has a syntax error",
@@ -317,10 +315,6 @@ const patchErrors = {
   channel: "cron announce delivery requires an explicit channel",
 };
 const announce = { mode: "announce" as const, channel: "telegram", to: "123" };
-const invalidMainJob = () =>
-  fixtureJob({
-    delivery: { ...announce, failureDestination: { ...announce, to: "999" } },
-  });
 const explicitChannelJob = () =>
   createTestJob(agentInput({ delivery: { mode: "announce", channel: "discord" } }), options);
 type InvalidPatch = [
@@ -340,7 +334,6 @@ it.each<InvalidPatch>([
     () => fixtureJob({ delivery: { mode: "webhook" } }),
     { delivery: { mode: "webhook", to: "" } },
   ],
-  ["mainFailure", invalidMainJob, { enabled: true }],
   [
     "triggerSyntax",
     () => createTestJob(triggeredInput()),
@@ -429,13 +422,13 @@ it.each(["systemEvent", "agentTurn"] as const)(
     const current = createTestJob(
       input({
         agentId: "custom-agent",
-        payload: kind === "agentTurn" ? agentPayload() : { kind: "systemEvent", text: "tick" },
+        payload: kind === "agentTurn" ? agentPayload() : { kind: "agentTurn", message: "tick" },
       }),
     );
     applyJobPatch(current, { name: "renamed" }, { defaultAgentId: "main" });
     expect(current).toMatchObject({
       agentId: "custom-agent",
-      sessionTarget: "main",
+      sessionTarget: "session:agent:main:main",
       name: "renamed",
     });
   },

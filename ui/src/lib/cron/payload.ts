@@ -15,13 +15,6 @@ export function buildCronPayload(
   // Updates must omit caps so the Gateway retains that job's existing authority.
   const toolsAllow = !isUpdate && source && "toolsAllow" in source ? source.toolsAllow : undefined;
   const restrictions = toolsAllow ? { toolsAllow: [...toolsAllow] } : {};
-  if (form.payloadKind === "systemEvent") {
-    const text = form.payloadText.trim();
-    if (!text) {
-      throw new Error(t("cron.errors.systemEventTextRequired"));
-    }
-    return { kind: "systemEvent" as const, text, ...restrictions };
-  }
   if (form.payloadKind !== "agentTurn") {
     throw new Error(`Cron ${form.payloadKind} payloads are read-only in Control UI.`);
   }

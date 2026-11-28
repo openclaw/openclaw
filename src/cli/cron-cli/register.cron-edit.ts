@@ -168,11 +168,10 @@ export function registerCronEditCommand(cron: Command) {
               ? normalizeCronSessionTargetOption(opts.session)
               : undefined;
           if (typeof opts.session === "string" && !sessionTarget) {
-            throw new CronCliError("--session must be main, isolated, current, or session:<id>");
+            throw new CronCliError("--session must be isolated, current, or session:<id>");
           }
-          const initialPayloadKind = opts.systemEvent
-            ? "systemEvent"
-            : typeof opts.script === "string"
+          const initialPayloadKind =
+            typeof opts.script === "string"
               ? "script"
               : opts.command || opts.commandArgv
                 ? "command"
@@ -181,20 +180,6 @@ export function registerCronEditCommand(cron: Command) {
                   : undefined;
           if (sessionTarget && initialPayloadKind) {
             await assertCronCliJobSpec({ sessionTarget, payload: { kind: initialPayloadKind } });
-          }
-          const hasExplicitChatDelivery =
-            parseCronThreadIdOption(opts.threadId) !== undefined ||
-            typeof opts.channel === "string" ||
-            typeof opts.to === "string" ||
-            typeof opts.account === "string";
-          if (
-            sessionTarget === "main" &&
-            typeof opts.systemEvent === "string" &&
-            hasExplicitChatDelivery
-          ) {
-            throw new CronCliError(
-              "--channel, --to, --account, and --thread-id require an agentTurn job or a non-main command or script job with delivery.",
-            );
           }
           const webhookUrl =
             typeof opts.webhook === "string"
@@ -357,7 +342,6 @@ export function registerCronEditCommand(cron: Command) {
 
           const deliveryPolicy = parseCronDeliveryPolicyOptions(opts);
           const hasDeliveryPolicy = Object.keys(deliveryPolicy).length > 0;
-          const hasSystemEventPatch = typeof opts.systemEvent === "string";
           const scriptPath = readNonBlankString(opts.script);
           const commandShell = readNonBlankString(opts.command);
           const commandArgv = parseCronCommandArgv(opts.commandArgv);
@@ -460,12 +444,8 @@ export function registerCronEditCommand(cron: Command) {
           if (hasTimeoutSeconds && hasScriptSpecificPayloadField) {
             assertCronTimeoutSupported("script");
           }
-          if (hasTimeoutSeconds && hasSystemEventPatch) {
-            assertCronTimeoutSupported("systemEvent");
-          }
           const requestedPayloadKinds = (
             [
-              ["systemEvent", hasSystemEventPatch],
               ["agentTurn", hasAgentTurnSpecificPayloadField],
               ["command", hasCommandSpecificPayloadField],
               ["script", hasScriptSpecificPayloadField],
@@ -500,10 +480,7 @@ export function registerCronEditCommand(cron: Command) {
           }
           let droppedEnvKeys: string[] = [];
           let payload: Record<string, unknown> | undefined;
-          if (payloadKind === "systemEvent") {
-            payload = { kind: "systemEvent" };
-            assignIf(payload, "text", String(opts.systemEvent), hasSystemEventPatch);
-          } else if (payloadKind === "agentTurn") {
+          if (payloadKind === "agentTurn") {
             payload = { kind: "agentTurn" };
             assignIf(payload, "message", String(opts.message), typeof opts.message === "string");
             assignIf(payload, "model", opts.clearModel ? null : model);
@@ -608,16 +585,6 @@ export function registerCronEditCommand(cron: Command) {
               }
               const mode = delivery.mode ?? existing.delivery?.mode;
               if (deliveryPolicy.target === "owner" || deliveryPolicy.directPolicy != null) {
-                const resolvedSessionTarget = sessionTarget ?? existing.sessionTarget;
-                if (
-                  hasSystemEventPatch ||
-                  (resolvedSessionTarget === "main" &&
-                    (payloadKind ?? existing.payload.kind) !== "agentTurn")
-                ) {
-                  throw new CronCliError(
-                    "--delivery-target/--direct-policy require an agentTurn job or a non-main job with chat delivery",
-                  );
-                }
                 if (mode === "webhook") {
                   throw new CronCliError(
                     "--direct-policy requires chat delivery; use --announce or --no-deliver",

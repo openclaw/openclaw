@@ -38,6 +38,7 @@ export type LegacyCronRepairState = {
   legacyQuarantine?: LegacyCronQuarantine;
   invalidConfigRows: QuarantinedCronConfigJob[];
   persistedQuarantine: CronQuarantinedJob[];
+  retainedHeartbeatJobIds: ReadonlySet<string>;
   projectedOwnersByJobId: ReadonlyMap<string, CronOwnerProjection>;
   rawJobs: Array<Record<string, unknown>>;
   jobsFingerprint: string | undefined;
@@ -93,9 +94,10 @@ export async function planLegacyCronStoreRepair(params: LegacyCronStoreRepairPar
   const quarantineRecovery = recoverValidQuarantinedCronScheduleJobs(
     quarantineEntriesToRevalidate,
     new Set(
-      state.rawJobs
-        .map((job) => normalizeOptionalStringifiedId(job.id))
-        .filter((id): id is string => id !== undefined),
+      [
+        ...state.retainedHeartbeatJobIds,
+        ...state.rawJobs.map((job) => normalizeOptionalStringifiedId(job.id)),
+      ].filter((id): id is string => id !== undefined),
     ),
   );
   if (quarantineRecovery.recoveredJobs.length > 0) {
@@ -118,6 +120,7 @@ export async function planLegacyCronStoreRepair(params: LegacyCronStoreRepairPar
     params.normalized && quarantineRecovery.recoveredJobs.length === 0
       ? params.normalized
       : normalizeStoredCronJobs(state.rawJobs, {
+          cfg: params.cfg,
           migrateCodexModelRefs: params.migrateCodexModelRefs,
           shouldMigrateCodexRuntimePolicyTarget: (target) =>
             !blockedRuntimePolicyTargets.has(cronCodexRuntimePolicyTargetKey(target)),

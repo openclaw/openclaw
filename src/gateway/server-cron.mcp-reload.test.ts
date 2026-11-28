@@ -39,10 +39,10 @@ test("a running cron service can call an MCP server added after startup", async 
         name: "MCP after reload",
         enabled: true,
         schedule: { kind: "every", everyMs: 30_000 },
-        sessionTarget: "main",
+        sessionTarget: "session:agent:main:main",
         wakeMode: "next-heartbeat",
         agentId: "main",
-        payload: { kind: "systemEvent", text: "must not fire", toolsAllow: ["healthy__probe"] },
+        payload: { kind: "agentTurn", message: "must not fire", toolsAllow: ["healthy__probe"] },
         trigger: {
           script: "await MCP.healthy.probe({}); return { fire: false, state: 'called' };",
         },

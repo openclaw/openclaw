@@ -225,10 +225,7 @@ describe("cron model schema regressions", () => {
       "every",
       "cron",
     ]);
-    expect(propertyAt(disabled.parameters, "job.payload.kind")?.enum).toEqual([
-      "systemEvent",
-      "agentTurn",
-    ]);
+    expect(propertyAt(disabled.parameters, "job.payload.kind")?.enum).toEqual(["agentTurn"]);
     for (const key of ["command", "source"]) {
       expect(propertyAt(disabled.parameters, `job.schedule.${key}`)).toBeUndefined();
     }
@@ -237,6 +234,11 @@ describe("cron model schema regressions", () => {
     }
     expect(disabled.description).toContain("TRIGGERS DISABLED");
     expect(disabled.description).toContain("say it is unsupported");
+  });
+
+  it("advertises only the isolated target for script payloads when triggers are enabled", () => {
+    const tool = createCronTool({ config: { cron: { triggers: { enabled: true } } } });
+    expect(tool.description).toContain('{kind:"script",script}: headless, isolated only');
   });
 
   it("keeps the full trigger surface and approval guidance when config omits cron.triggers", () => {
@@ -439,7 +441,7 @@ describe("cron shorthand and schedule recovery", () => {
         id: "job",
         configRevision: "sha256:trigger",
         trigger: null,
-        payload: { kind: "systemEvent", text: "before" },
+        payload: { kind: "agentTurn", message: "before" },
       });
       const trigger = { script: "json({ fire: true })", once: false };
       await execute({ action: "update", jobId: "job", trigger });
@@ -464,7 +466,7 @@ describe("cron shorthand and schedule recovery", () => {
     });
 
     it("preserves canonical/padded conflicts for gateway rejection (#95407)", async () => {
-      const conflict = { "payload ": { kind: "systemEvent", text: "conflict" } };
+      const conflict = { "payload ": { kind: "agentTurn", message: "conflict" } };
       await execute({ action: "add", job: { ...job, ...conflict } });
       expectAdd({ payload: job.payload, ...conflict });
     });

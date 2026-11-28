@@ -84,7 +84,7 @@ suite.define(() => {
         cronJob(id, name, {
           configRevision: `revision-${id}`,
           schedule: { kind: "cron", expr: "0 9 * * *" },
-          payload: { kind: "systemEvent", text: "Synthetic garden inventory reminder" },
+          payload: { kind: "agentTurn", message: "Synthetic garden inventory reminder" },
         });
       const a = job("garden-a", "Garden A");
       const b = job("garden-b", "Garden B");
@@ -209,7 +209,7 @@ suite.define(() => {
         configRevision: "revision-initial",
         description: "Check shared stock before the Monday delivery.",
         schedule: { kind: "cron", expr: "0 9 * * 1", tz: "America/Chicago" },
-        payload: { kind: "systemEvent", text: "Remind the garden team to check shared stock." },
+        payload: { kind: "agentTurn", message: "Remind the garden team to check shared stock." },
       });
       const latest = {
         ...initial,

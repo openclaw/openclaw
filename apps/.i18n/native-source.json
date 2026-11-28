@@ -4824,7 +4824,7 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt","kind":"ui-call","surface":"android","id":"native.android.e15885377b28fa59","source":"Working"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt","kind":"ui-call","surface":"android","id":"native.android.ed99ff091936196e","source":"Working directory"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt","kind":"ui-call","surface":"android","id":"native.android.a659d5f70860b13e","source":"e.g. America/New_York"},
-    {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt","kind":"ui-call","surface":"android","id":"native.android.4995815d94f77c94","source":"main, isolated, current, or session:<id>"},
+    {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt","kind":"ui-call","surface":"android","id":"native.android.d1be939de9db0414","source":"isolated, current, or session:<key>"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebarRowFacts.swift","kind":"ui-call","surface":"apple","id":"native.apple.371e69f16cb636f4","source":"archivebox"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebarRowFacts.swift","kind":"ui-call","surface":"apple","id":"native.apple.a1ae35cd7487d48f","source":"arrow.triangle.branch"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebarRowFacts.swift","kind":"ui-call","surface":"apple","id":"native.apple.3e915f1a9ac1e9e9","source":"exclamationmark.triangle"},

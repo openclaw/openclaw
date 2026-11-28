@@ -219,14 +219,14 @@ conformance("post-ready storage consumers", (fixture) => {
     const retained = {
       name: "post-ready durable job",
       enabled: false,
-      payload: { kind: "systemEvent" as const, text: "synthetic cron marker" },
+      payload: { kind: "agentTurn" as const, message: "synthetic cron marker" },
     };
     try {
       await original.start();
       const job = await original.add({
         ...structuredClone(retained),
         schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
+        sessionTarget: "session:agent:main:main",
         wakeMode: "next-heartbeat",
       });
       original.stop();

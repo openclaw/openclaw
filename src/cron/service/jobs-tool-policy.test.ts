@@ -148,7 +148,7 @@ it.each([false, true])(
     const previousJob = { ...toolJob(["read"]), operatorSource: source };
     const job: CronStoredJob = {
       ...previousJob,
-      payload: { kind: "systemEvent", text: "changed execution" },
+      payload: { kind: "command", argv: ["echo", "changed execution"] },
     };
     const reconcile = () =>
       reconcileCronOperatorSource({ job, previousJob, defaultAgentId: "main" });

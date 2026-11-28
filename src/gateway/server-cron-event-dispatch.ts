@@ -138,11 +138,9 @@ export async function fireOnExitJob(
   const summary = formatOnExitRunSummary(exit);
   const result = await deps.run(job.id, (current) => {
     const payload = current.payload;
-    return payload.kind === "systemEvent"
-      ? { ...payload, text: `${payload.text}\n\n${summary}` }
-      : payload.kind === "agentTurn"
-        ? { ...payload, message: `${payload.message}\n\n${summary}` }
-        : undefined;
+    return payload.kind === "agentTurn"
+      ? { ...payload, message: `${payload.message}\n\n${summary}` }
+      : undefined;
   });
   if (!result.ok || !("ran" in result && result.ran)) {
     // Retiring a one-shot must not hide refused admission behind a fulfilled callback.

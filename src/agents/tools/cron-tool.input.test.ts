@@ -10,9 +10,9 @@ import {
 installCronToolTestFixture();
 
 it.each([
-  { everyMs: 60_000, text: "Stretch" },
-  { "schedule.everyMs": 60_000, "payload.text": "Stretch" },
-  { every: 60_000, text: "Stretch" },
+  { everyMs: 60_000, message: "Stretch" },
+  { "schedule.everyMs": 60_000, "payload.message": "Stretch" },
+  { every: 60_000, message: "Stretch" },
 ])("recovers a malformed job wrapper before validating flat fields %j", async (fields) => {
   const tool = createTestCronTool();
   const input = { action: "add", job: "remind", name: "Break", ...fields };
@@ -30,7 +30,7 @@ it.each([
     params: {
       name: "Break",
       schedule: { kind: "every", everyMs: 60_000 },
-      payload: { kind: "systemEvent", text: "Stretch" },
+      payload: { kind: "agentTurn", message: "Stretch" },
     },
   });
   expect(input.job).toBe("remind");

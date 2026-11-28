@@ -57,9 +57,10 @@ const reminder = (text: string, wakeMode: "now" | "next-heartbeat" = "next-heart
   enabled: false,
   deleteAfterRun: false,
   schedule: { kind: "at" as const, at: new Date(Date.now() + 60_000).toISOString() },
-  sessionTarget: "main" as const,
+  sessionTarget: "session:agent:main:main" as const,
   wakeMode,
-  payload: { kind: "systemEvent" as const, text },
+  payload: { kind: "agentTurn" as const, message: text },
+  delivery: { mode: "none" as const },
 });
 const sessionEntry = () => ({
   sessionId: "cron-restart-session",
@@ -78,7 +79,7 @@ async function resetAfterRestart() {
   resetSystemEventsForTest();
 }
 
-async function prepareCronSessionFixture(state: OpenClawTestState, onQueued?: () => void) {
+async function prepareCronSessionFixture(state: OpenClawTestState) {
   const config = completionConfig(state.workspaceDir);
   setRuntimeConfigSnapshot(config);
   await state.writeConfig(config);
@@ -98,12 +99,6 @@ async function prepareCronSessionFixture(state: OpenClawTestState, onQueued?: ()
         ...params,
         ...scope,
         cfg: config,
-        onLaneWait(info) {
-          params.onLaneWait?.(info);
-          if (info?.waiting) {
-            onQueued?.();
-          }
-        },
       }),
     enqueueSystemEvent: () => {
       throw new Error("Main-session events must use the session controller");
@@ -131,13 +126,12 @@ async function enqueueForeground(text: string, signal: AbortSignal) {
 }
 
 it.for(["next-heartbeat", "now"] as const)(
-  "records an unadopted %s event as interrupted once across restart",
+  "retires an unstarted %s reminder once across restart",
   async (wakeMode, { signal }) => {
     await withOpenClawTestState(
       { label: "cron-event-restart", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
-        const queued = createDeferred();
-        const { createService, history } = await prepareCronSessionFixture(state, queued.resolve);
+        const { createService, history } = await prepareCronSessionFixture(state);
         const first = createService();
         const foregroundStarted = createDeferred();
         const releaseForeground = createDeferred();
@@ -154,24 +148,23 @@ it.for(["next-heartbeat", "now"] as const)(
         const foreground = await enqueueForeground("Synthetic foreground work", signal);
         const gate = waitForGate(signal);
         let replacement: CronService | undefined;
-        let running: ReturnType<CronService["run"]> | undefined;
         let afterRestart: Awaited<ReturnType<typeof enqueueForeground>> | undefined;
         try {
           await gate(foregroundStarted.promise, foreground.settled, "Foreground never started");
           await first.start();
           const job = await first.add(reminder("Synthetic pending reminder", wakeMode));
-          running = first.run(job.id, "force");
-          await gate(queued.promise, running, "Cron event never queued");
+          await expect(first.enqueueRun(job.id, "force")).resolves.toMatchObject({
+            ok: true,
+            enqueued: true,
+          });
           expect(history(job.id)).toEqual([]);
-          expect(peekSystemEventEntries(scope.sessionKey)).toMatchObject([
-            { text: "Synthetic pending reminder" },
-          ]);
+          expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
           expect(prompts).toHaveLength(1);
 
           abortActiveCronTaskRuns();
           first.stop();
           releaseForeground.resolve();
-          await withinTest(Promise.all([running, foreground.settled]), signal);
+          await withinTest(foreground.settled, signal);
           await first.waitForIdle();
           await drainGlobalSingletonLifecycleState("restart");
 
@@ -179,7 +172,11 @@ it.for(["next-heartbeat", "now"] as const)(
           await replacement.start();
           const interrupted = history(job.id);
           expect(interrupted).toEqual([
-            expect.objectContaining({ status: "error", error: expect.stringMatching(/restart/i) }),
+            expect.objectContaining({
+              status: "skipped",
+              completionStatus: "failed",
+              error: "cron: job became ineligible before launch",
+            }),
           ]);
           expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
           replacement.stop();
@@ -204,7 +201,6 @@ it.for(["next-heartbeat", "now"] as const)(
           first.stop();
           replacement?.stop();
           await Promise.allSettled([
-            running,
             foreground.settled,
             afterRestart?.settled,
             first.waitForIdle(),
@@ -285,7 +281,10 @@ it("finishes a queued Cron event only after its adopted turn and transport settl
           delivery: normalizeSessionDeliveryState({ context: route }),
         });
         await cron.start();
-        const job = await cron.add(reminder("Synthetic adopted reminder"));
+        const job = await cron.add({
+          ...reminder("Synthetic adopted reminder"),
+          delivery: { mode: "announce" },
+        });
         await expect(cron.enqueueRun(job.id, "force")).resolves.toMatchObject({
           ok: true,
           enqueued: true,

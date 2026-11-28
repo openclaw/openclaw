@@ -1,46 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
-import { normalizeCronFormState, validateCronForm } from "./form.ts";
+import { validateCronForm } from "./form.ts";
 
 describe("cron form validation", () => {
-  it.each([
-    ["payloadKind", "isolated", "systemEvent", "main", "systemEvent"],
-    ["payloadKind", "main", "agentTurn", "main", "agentTurn"],
-    ["sessionTarget", "main", "agentTurn", "main", "agentTurn"],
-    ["sessionTarget", "isolated", "systemEvent", "isolated", "agentTurn"],
-  ] as const)(
-    "normalizes a changed %s on %s/%s",
-    (changed, sessionTarget, payloadKind, target, kind) => {
-      const form = { ...DEFAULT_CRON_FORM, sessionTarget, payloadKind };
-      expect(normalizeCronFormState(form, { [changed]: form[changed] })).toMatchObject({
-        sessionTarget: target,
-        payloadKind: kind,
-        deliveryMode: "none",
-      });
-    },
-  );
-
-  it.each([
-    ["main", "agentTurn", false, "announce"],
-    ["main", "systemEvent", false, "none"],
-    ["main", "script", true, "none"],
-    ["main", "command", true, "none"],
-    ["isolated", "script", true, "announce"],
-    ["isolated", "command", true, "announce"],
-  ] as const)(
-    "normalizes announce delivery for %s/%s",
-    (sessionTarget, payloadKind, payloadLocked, deliveryMode) => {
-      const form = {
-        ...DEFAULT_CRON_FORM,
-        sessionTarget,
-        payloadKind,
-        payloadLocked,
-        deliveryMode: "announce" as const,
-      };
-      expect(normalizeCronFormState(form).deliveryMode).toBe(deliveryMode);
-    },
-  );
   it("validates key cron form errors", () => {
     const errors = validateCronForm({
       ...DEFAULT_CRON_FORM,

@@ -138,8 +138,9 @@ it.each([false, true])(
     await withCronStore("cron-readonly-worker", async (state) => {
       const job = makeCronJob({
         name: "scheduled café 🦞",
-        sessionTarget: "main",
-        payload: { kind: "systemEvent", text: "persisted event" },
+        sessionTarget: "session:agent:main:main",
+        delivery: { mode: "none" },
+        payload: { kind: "agentTurn", message: "persisted event" },
         state: { nextRunAtMs: 60_001 },
       });
       const store: CronStoreFile = { version: 1, jobs: [job] };

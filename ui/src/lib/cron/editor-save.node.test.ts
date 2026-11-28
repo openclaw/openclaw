@@ -83,7 +83,7 @@ async function saveAndReopen(state: CronState, readJob: () => CronJob) {
 describe("automation save editor ownership", () => {
   it.each([true, false])("saves ordinary job policies enabled=%s", async (enabled) => {
     const stored = storedJob({
-      sessionTarget: enabled ? "main" : "session:agent:main:main",
+      sessionTarget: "session:agent:main:main",
       activeHours: { start: "22:00", end: "06:00", timezone: "UTC" },
       idleOnly: true,
       payload: {
@@ -119,7 +119,7 @@ describe("automation save editor ownership", () => {
     }
     await saveAndReopen(state, readJob);
     expect(stored).toMatchObject({
-      sessionTarget: enabled ? "main" : "session:agent:main:main",
+      sessionTarget: "session:agent:main:main",
       idleOnly: enabled,
       payload: {
         kind: "agentTurn",
@@ -302,9 +302,9 @@ it.each<
   async (_name, expr, original, exact, amount, expected, originalExpr, unchanged) => {
     const stored = storedJob({
       schedule: { kind: "cron", expr: originalExpr ?? expr, tz: "UTC", staggerMs: original },
-      sessionTarget: "main",
+      sessionTarget: "session:agent:main:main",
       wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "Synthetic paused task" },
+      payload: { kind: "agentTurn", message: "Synthetic paused task" },
     });
     const readJob = () => readPublicJob(stored);
     let submittedSchedule: unknown;
@@ -359,9 +359,9 @@ it.each(["create", "edit"] as const)(
       service,
       storedJob({
         schedule: { kind: "cron", expr: "0 7 * * *", tz: "UTC" },
-        sessionTarget: "main",
+        sessionTarget: "session:agent:main:main",
         wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "Synthetic paused task" },
+        payload: { kind: "agentTurn", message: "Synthetic paused task" },
       }),
     );
     const readJob = () => readPublicJob(stored);
@@ -393,8 +393,8 @@ it.each(["create", "edit"] as const)(
         scheduleKind: "cron",
         cronExpr: "0 7 * * *",
         cronTz: "UTC",
-        sessionTarget: "main",
-        payloadKind: "systemEvent",
+        sessionTarget: "session:agent:main:main",
+        payloadKind: "agentTurn",
         payloadText: "Synthetic paused task",
       };
     } else {

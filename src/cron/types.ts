@@ -47,10 +47,10 @@ export type { CronCompletionStatus } from "./completion-status.js";
 // with match carrying the required JavaScript regex source when mode is "match".
 export type CronSchedule = CronJobWire["schedule"];
 
-/** Runtime target that decides whether a job joins main, isolated, or a named session. */
-type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
+/** Runtime target that decides whether a job uses a detached or existing session. */
+type CronSessionTarget = "isolated" | "current" | `session:${string}`;
 
-/** Wake policy for main-session jobs waiting on heartbeat/user activity. */
+/** Wake policy for jobs waiting on user activity. */
 type CronWakeMode = CronJobWire["wakeMode"];
 
 /** Messaging channel id accepted by cron delivery settings. */

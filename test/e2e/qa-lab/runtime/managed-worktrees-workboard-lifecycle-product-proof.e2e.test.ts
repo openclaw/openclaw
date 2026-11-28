@@ -248,9 +248,10 @@ describe("managed worktrees Workboard-owner product proof", () => {
         name: "Workboard event nudge proof",
         enabled: true,
         schedule: { kind: "cron", expr: "0 3 1 1 *", tz: "America/Los_Angeles" },
-        sessionTarget: "main",
+        agentId: "qa",
+        sessionTarget: "session:agent:qa:main",
         wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "Workboard event nudge proof" },
+        payload: { kind: "command", argv: ["node", "--version"] },
       })) as { id: string };
       const boardId = "qa-event-nudge";
       await activeHarness.gateway.call("workboard.boards.upsert", {

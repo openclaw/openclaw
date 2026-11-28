@@ -10,9 +10,7 @@ import {
   makeTempDir,
   useAutoCleanupTempDirTracker,
 } from "../../test/helpers/temp-dir.js";
-import { resolveCronDeliveryPlan } from "../cron/delivery-plan.js";
 import { loadedCronStoreFromRows, loadCronRows } from "../cron/store/row-codec.js";
-import type { CronStoredJob } from "../cron/types.js";
 import { OLDER_OPERATOR_APPROVAL_SCHEMA_SQL } from "../gateway/operator-approval-store.older-reader.test-support.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import { bindFreshClientCredentialStore } from "../infra/client-credential-migration.js";
@@ -56,6 +54,7 @@ import {
 import * as stateRepair from "./openclaw-state-db-doctor-repair.js";
 import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-doctor-schema.js";
 import {
+  type LegacyCronJobFixture,
   downgradeWorkerPlacementsToV7,
   expectedStateMigrationsFromV27,
   expectV2026_7_1_2CronHistoryPreserved,
@@ -531,10 +530,7 @@ function insertAuditMarker(
 function seedLegacyCronJob(
   database: DatabaseSync,
   storeKey: string,
-  job: Pick<
-    CronStoredJob,
-    "id" | "name" | "createdAtMs" | "updatedAtMs" | "sessionTarget" | "wakeMode"
-  > & { payload: Pick<CronStoredJob["payload"], "kind"> },
+  job: LegacyCronJobFixture,
   fields: Record<string, SQLInputValue> = {},
 ) {
   insertRow(database, "cron_jobs", {
@@ -1443,7 +1439,7 @@ describe("openclaw state database", () => {
       { enabled: false },
       { enabled: true, delivery: { mode: "none" } },
     ];
-    const jobs: CronStoredJob[] = cases.map(({ enabled, delivery }, index) => ({
+    const jobs = cases.map(({ enabled, delivery }, index) => ({
       id: `legacy-main-${index}`,
       name: "Legacy main job",
       enabled,
@@ -1470,11 +1466,12 @@ describe("openclaw state database", () => {
 
     await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
     const migrated = openOpenClawStateDatabase(options);
-    const loaded = loadedCronStoreFromRows(loadCronRows(migrated.db, storeKey)).store.jobs;
-    expect(loaded).toEqual(jobs);
-    for (const job of loaded) {
-      expect(resolveCronDeliveryPlan(job)).toMatchObject({ mode: "none", requested: false });
-    }
+    const loaded = loadedCronStoreFromRows(loadCronRows(migrated.db, storeKey));
+    expect(loaded.store.jobs).toEqual([]);
+    expect(loaded.invalidConfigRows).toHaveLength(jobs.length);
+    expect(loadCronRows(migrated.db, storeKey).map((row) => JSON.parse(row.job_json))).toEqual(
+      jobs.map(({ state: _state, ...definition }) => definition),
+    );
   });
 
   it("preserves malformed cron JSON for quarantine through the v13 doctor repair", async () => {

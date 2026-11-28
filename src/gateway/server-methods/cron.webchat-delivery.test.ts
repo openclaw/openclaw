@@ -171,10 +171,10 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           enabled: false,
           schedule: { kind: "at", at, everyMs: 1, anchorMs: 0, expr: "", tz: "", staggerMs: 0 },
           trigger: { script: "return { fire: true };", once: true },
+          sessionTarget: "session:agent:main:main",
           payload: {
-            kind: "systemEvent",
-            text: "Reminder: play basketball!",
-            message: "",
+            kind: "agentTurn",
+            message: "Reminder: play basketball!",
             model: "",
           },
           delivery: {
@@ -209,8 +209,8 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           name: "basketball-reminder",
           enabled: false,
           schedule: { kind: "at", at },
-          sessionTarget: "main",
-          payload: { kind: "systemEvent", text: "Reminder: play basketball!" },
+          sessionTarget: "session:agent:main:main",
+          payload: { kind: "agentTurn", message: "Reminder: play basketball!", toolsAllow: ["*"] },
           deleteAfterRun: true,
         }),
       ]);

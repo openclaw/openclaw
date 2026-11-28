@@ -501,9 +501,9 @@ describe("cron ownership access matrix", () => {
       enabled: true,
       declarationKey: "daily-check",
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
+      sessionTarget: "session:agent:main:main",
       wakeMode: "now",
-      payload: { kind: "systemEvent", text: "replacement" },
+      payload: { kind: "agentTurn", message: "replacement" },
     };
     const matches = (job: CronJob) =>
       cronJobMatchesDeclarationScope({ job, input, callerScope, defaultAgentId: "ops" });
@@ -635,15 +635,18 @@ describe("cron ownership access matrix", () => {
       scheduledToolPolicy: trusted,
       payload,
     });
-    const toEvent = await updateAs(
+    const noTools = await updateAs(
       "scoped",
       {
         id: dormant.id,
-        patch: { sessionTarget: "main", payload: { kind: "systemEvent", text: "Check status" } },
+        patch: {
+          sessionTarget: "session:agent:ops:main",
+          payload: { kind: "agentTurn", message: "Check status", toolsAllow: [] },
+        },
       },
       dormant.context,
     );
-    expect(toEvent.respond.mock.calls[0]?.[0]).toBe(true);
+    expect(noTools.respond.mock.calls[0]?.[0]).toBe(true);
     expect((await dormant.stored())?.scheduledToolPolicy).toEqual(policy(S_A, "default"));
     const reloaded = await seedService(expectDefinedJob(await dormant.stored()));
     const restore = await invokeCron(

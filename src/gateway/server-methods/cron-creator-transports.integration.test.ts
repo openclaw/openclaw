@@ -197,7 +197,6 @@ it.each([
   { scope: "operator.cron", ocid: false, target: "current" },
   { scope: "operator.write", ocid: false, target: "current" },
   { scope: "operator.write", ocid: true, target: "isolated" },
-  { scope: "operator.write", ocid: true, target: "main" },
 ])(
   "admits $scope automation creation without owner authority (OCID=$ocid target=$target)",
   async ({ scope, ocid, target }) => {

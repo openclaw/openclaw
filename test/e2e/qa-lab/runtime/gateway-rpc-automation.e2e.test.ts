@@ -172,9 +172,9 @@ it(
         name: "automation",
         enabled: true,
         schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-        sessionTarget: "main",
+        sessionTarget: "session:agent:main:main",
         wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "Future automation evidence" },
+        payload: { kind: "agentTurn", message: "Future automation evidence" },
       });
       expect(added).toMatchObject({ name: "automation" });
 

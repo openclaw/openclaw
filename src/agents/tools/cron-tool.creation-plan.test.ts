@@ -10,7 +10,8 @@ installCronToolTestFixture();
 const brief = {
   name: "Morning brief",
   schedule: { kind: "every", everyMs: 60_000 },
-  payload: { kind: "systemEvent", text: "Read" },
+  sessionTarget: "session:agent:main:main",
+  payload: { kind: "agentTurn", message: "Read" },
 };
 
 it("recovers a natural add using only the ordered names, never operator-supplied internal IDs", async () => {

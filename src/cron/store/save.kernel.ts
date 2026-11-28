@@ -221,9 +221,13 @@ function replaceCronStoreRowsInDatabase(
   db: EngineConnection,
   storeKey: string,
   store: CronStoreFile,
-  preserveRuntimeState: boolean,
+  opts?: CronStoreSaveOptions,
 ): void {
-  const replaced = replaceCronRows(db, storeKey, store, { preserveRuntimeState });
+  const preserveRuntimeState = opts?.preserveRuntimeState === true;
+  const replaced = replaceCronRows(db, storeKey, store, {
+    preserveRuntimeState,
+    retainUnlistedJobIds: opts?.retainUnlistedJobIds,
+  });
   replaceCronRuntimeAuthorityRows({
     db,
     storeKey,
@@ -271,7 +275,7 @@ export function saveCronStoreInDatabase(
     hooks?.hooks.afterWrite?.(database.db, hooks.receiptSchema);
     return;
   }
-  replaceCronStoreRowsInDatabase(database.db, storeKey, store, opts?.preserveRuntimeState === true);
+  replaceCronStoreRowsInDatabase(database.db, storeKey, store, opts);
   hooks?.hooks.afterWrite?.(database.db, hooks.receiptSchema);
 }
 

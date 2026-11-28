@@ -85,9 +85,9 @@ it.each(["run_settled", "subagent_ended"] as const)(
       name: "Workboard automation",
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
+      sessionTarget: "session:agent:main:main",
       wakeMode: "now",
-      payload: { kind: "systemEvent", text: "categorize board" },
+      payload: { kind: "agentTurn", message: "categorize board" },
     });
     const settled = finished.waitForOk(job.id);
     const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];

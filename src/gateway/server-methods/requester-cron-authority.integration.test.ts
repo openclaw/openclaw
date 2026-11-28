@@ -583,9 +583,9 @@ describe("automation stream exec policy at persistence", () => {
           kind: "stream",
           command: [process.execPath, "-e", `process.stdout.write(${JSON.stringify(name)})`],
         },
-        sessionTarget: "main",
+        sessionTarget: "isolated",
         wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "Synthetic stream policy test" },
+        payload: { kind: "script", script: "return null;" },
       });
       await setPolicy("full", "off");
       const legacyApprovalsPath = resolveExecApprovalsPath();

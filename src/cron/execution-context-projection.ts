@@ -74,7 +74,7 @@ function projectLegacyDecisions(
   facts: ScheduledAdmissionFacts,
 ): ScheduledDecisionVector {
   const inSession = resolveCronSessionTargetSessionKey(job.sessionTarget) !== undefined;
-  const sessionTurn = inSession || job.sessionTarget === "main";
+  const sessionTurn = inSession;
   const allow = facts.resolvedToolsAllow;
   const automationsAllowed = isRuntimeToolAllowed(AUTOMATIONS_TOOL_NAME, allow);
   return {

@@ -367,7 +367,7 @@ it.each([
 it("drops pending automation scratch when admin access is removed", async () => {
   const job = createCronViewJob("migrated-job", {
     payload: { kind: "agentTurn", message: "Review the checklist" },
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
   });
   const scratch = createDeferred<object>();
   const request = cronRpc({

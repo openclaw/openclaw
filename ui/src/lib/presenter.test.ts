@@ -34,7 +34,6 @@ it("routes cron state and payload labels through whole catalog templates", async
       last: formatMs(1000),
     });
     const cases: Array<[CronJob["payload"], string, Record<string, string>]> = [
-      [{ kind: "systemEvent", text: "User Text" }, "system", { text: "User Text" }],
       [{ kind: "command", argv: ["Run", "--Flag"] }, "command", { command: "Run --Flag" }],
       [{ kind: "script", script: "Echo User Text" }, "script", { script: "Echo User Text" }],
       [{ kind: "agentTurn", message: "User Prompt" }, "agent", { message: "User Prompt" }],
@@ -66,9 +65,9 @@ function job(schedule: CronJob["schedule"]): CronJob {
     createdAtMs: 0,
     updatedAtMs: 0,
     schedule,
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
     wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text: "test" },
+    payload: { kind: "agentTurn", message: "test" },
     state: {},
   };
 }

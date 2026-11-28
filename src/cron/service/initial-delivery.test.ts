@@ -22,11 +22,13 @@ function createInput(
 
 it.each([
   ["isolated", { kind: "script", script: "return { notify: 'hello' }" }, { mode: "announce" }],
-  ["main", { kind: "agentTurn", message: "hello" }, undefined],
-  ["isolated", { kind: "systemEvent", text: "tick" }, undefined],
-] as const)("resolves initial delivery for %s %j", (target, payload, expected) => {
-  expect(resolveInitialCronDelivery(createInput(target, payload))).toEqual(expected);
-});
+  ["session:main", { kind: "agentTurn", message: "hello" }, { mode: "announce" }],
+] satisfies Array<[CronJobCreate["sessionTarget"], CronJobCreate["payload"], CronJob["delivery"]]>)(
+  "resolves initial delivery for %s %j",
+  (target, payload, expected) => {
+    expect(resolveInitialCronDelivery(createInput(target, payload))).toEqual(expected);
+  },
+);
 
 // Direct service callers do not pass through normalizeCronJobCreate, so keep
 // the public add and declarative convergence paths pinned to the same default.

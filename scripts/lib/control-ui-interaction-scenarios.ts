@@ -363,9 +363,9 @@ export function createInteractionFixture(
     createdAtMs: 1_800_000_000_000,
     updatedAtMs: 1_800_000_000_000,
     schedule: { kind: "every", everyMs: 3_600_000 },
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
     wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text: "Synthetic interaction benchmark reminder." },
+    payload: { kind: "agentTurn", message: "Synthetic interaction benchmark reminder." },
     state: {},
   }));
   const cronPage = (rows: CronJob[], offset: number) => ({

@@ -67,10 +67,10 @@ const timedJob = (id: string, nextRunAtMs = AT): CronJob => ({
 function mainJob(id: string, payload: CronJob["payload"]): CronJob {
   const job = dueJob(id);
   delete job.delivery;
-  return { ...job, sessionTarget: "main", wakeMode: "now", payload };
+  return { ...job, sessionTarget: "session:agent:main:main", wakeMode: "now", payload };
 }
 const conditionJob = () => ({
-  ...mainJob("main-cancel", { kind: "systemEvent", text: "queued downstream work" }),
+  ...mainJob("main-cancel", { kind: "agentTurn", message: "queued downstream work" }),
   schedule: { kind: "every" as const, everyMs: 60_000, anchorMs: AT - 60_000 },
   trigger: { script: "json({ fire: true })" },
 });

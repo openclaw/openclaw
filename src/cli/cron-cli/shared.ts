@@ -85,9 +85,6 @@ export function assertCronTimeoutSupported(
   if (payloadKind === "script") {
     throw new CronCliError("Use --script-timeout-seconds for script jobs, not --timeout-seconds.");
   }
-  if (payloadKind !== "agentTurn" && payloadKind !== "command") {
-    throw new CronCliError(`--timeout-seconds is not supported for ${payloadKind} jobs.`);
-  }
 }
 
 export function parseCronNoOutputTimeoutOption(opts: Record<string, unknown>): number | undefined {
@@ -588,7 +585,7 @@ export function printCronList(
       next: [job.enabled ? formatRelative(state.nextRunAtMs, now) : "-", theme.muted],
       last: [formatRelative(state.lastRunAtMs, now), theme.muted],
       status: [status.label, status.color],
-      target: [job.sessionTarget, job.sessionTarget === "main" ? theme.accent : theme.accentBright],
+      target: [job.sessionTarget, theme.accentBright],
       delivery: [
         deliveryPreview ? `${deliveryPreview.label} (${deliveryPreview.detail})` : "-",
         deliveryPreview ? theme.info : theme.muted,

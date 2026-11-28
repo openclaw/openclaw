@@ -332,8 +332,8 @@ it("defers missed isolated and main-session work for two minutes without blockin
       payload: { kind: "agentTurn", message: "synthetic startup task" },
     }),
     job("main-session", now - 2 * minute, {
-      sessionTarget: "main",
-      payload: { kind: "systemEvent", text: "synthetic startup notice" },
+      sessionTarget: "session:agent:main:main",
+      payload: { kind: "agentTurn", message: "synthetic startup notice" },
     }),
     job("command", now - minute),
   ]);

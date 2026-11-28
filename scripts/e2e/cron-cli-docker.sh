@@ -29,6 +29,7 @@ docker_e2e_run_with_harness \
   -e "OPENCLAW_SKIP_ACPX_RUNTIME=1" \
   -e "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
+  -e "OPENAI_API_KEY=cron-cli-fixture-key" \
   -e "GW_TOKEN=$TOKEN" \
   -e "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1" \
   -i \
@@ -67,10 +68,6 @@ dump_logs_on_error() {
       /tmp/cron-cli-script-after-generic.json \
       /tmp/cron-cli-script-edit-timeout.json \
       /tmp/cron-cli-script-after-specific.json \
-      /tmp/cron-cli-event-add.json \
-      /tmp/cron-cli-event-before.json \
-      /tmp/cron-cli-event-generic-timeout.log \
-      /tmp/cron-cli-event-after.json \
       /tmp/cron-cli-list.json \
       /tmp/cron-cli-show.json \
       /tmp/cron-cli-disable.json \
@@ -169,16 +166,6 @@ if (phase === "create") {
       expected: { toolsAllow: ["*"] },
     },
     {
-      label: "trigger-system-default",
-      input: {
-        name: "operator trigger system default",
-        sessionTarget: "main",
-        trigger: { script: "return { fire: false }" },
-        payload: { kind: "systemEvent", text: "trigger system default" },
-      },
-      expected: { toolsAllow: ["*"] },
-    },
-    {
       label: "trigger-command-default",
       input: {
         name: "operator trigger command default",
@@ -187,15 +174,6 @@ if (phase === "create") {
         payload: { kind: "command", argv: ["printf", "trigger-command"] },
       },
       expected: { toolsAllow: ["*"] },
-    },
-    {
-      label: "transport-system-capless",
-      input: {
-        name: "operator transport system capless",
-        sessionTarget: "main",
-        payload: { kind: "systemEvent", text: "transport system capless" },
-      },
-      expected: {},
     },
     {
       label: "transport-command-capless",
@@ -207,22 +185,22 @@ if (phase === "create") {
       expected: {},
     },
     {
-      label: "transport-system-narrow-trigger",
+      label: "transport-command-narrow-trigger",
       input: {
-        name: "operator transport system narrow",
-        sessionTarget: "main",
-        payload: { kind: "systemEvent", text: "transport system narrow", toolsAllow: ["read"] },
+        name: "operator transport command narrow",
+        sessionTarget: "isolated",
+        payload: { kind: "command", argv: ["printf", "transport-command"], toolsAllow: ["read"] },
       },
       expected: { toolsAllow: ["read"] },
       patch: { trigger: { script: "return { fire: false }" } },
       expectedAfterPatch: { toolsAllow: ["read"] },
     },
     {
-      label: "transport-system-capless-trigger",
+      label: "transport-command-capless-trigger",
       input: {
-        name: "operator transport system adopts wildcard",
-        sessionTarget: "main",
-        payload: { kind: "systemEvent", text: "transport system adopts wildcard" },
+        name: "operator transport command adopts wildcard",
+        sessionTarget: "isolated",
+        payload: { kind: "command", argv: ["printf", "transport-command"] },
       },
       expected: {},
       patch: { trigger: { script: "return { fire: false }" } },
@@ -283,12 +261,15 @@ read_json_field() {
 
 node --input-type=module -e '
   const fs = await import("node:fs/promises");
+  const { applyMockOpenAiModelConfig } = await import("./scripts/e2e/lib/fixtures/mock-openai-config.mjs");
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   if (!configPath) {
     throw new Error("OPENCLAW_CONFIG_PATH is required");
   }
   const raw = await fs.readFile(configPath, "utf8").catch(() => "{}");
   const config = JSON.parse(raw || "{}");
+  // The agent jobs need a configured model at creation and never call it.
+  applyMockOpenAiModelConfig(config, { mockPort: 9, modelRef: "openai/cron-fixture" });
   config.cron ??= {};
   config.cron.triggers = { ...(config.cron.triggers ?? {}), enabled: true };
   await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
@@ -320,14 +301,14 @@ job_id="$(read_json_field /tmp/cron-cli-add.json id)"
 cron_cli add \
   "agent authority smoke" \
   --every 1h \
-  --session isolated \
+  --session session:agent:main:main \
   --message "verify explicit cron tool authority" \
   --no-deliver \
   --json > /tmp/cron-cli-agent-add.json
 agent_job_id="$(read_json_field /tmp/cron-cli-agent-add.json id)"
 
 cron_cli show "$agent_job_id" --json > /tmp/cron-cli-agent-default.json
-cron_cli edit "$agent_job_id" --tools read
+cron_cli edit "$agent_job_id" --tools read --timeout-seconds 30
 cron_cli show "$agent_job_id" --json > /tmp/cron-cli-agent-restricted.json
 cron_cli edit "$agent_job_id" --clear-tools
 cron_cli show "$agent_job_id" --json > /tmp/cron-cli-agent-cleared.json
@@ -342,6 +323,9 @@ node --input-type=module -e '
   }
   if (JSON.stringify(restrictedPayload?.toolsAllow) !== JSON.stringify(["read"])) {
     throw new Error(`cron edit --tools did not persist: ${JSON.stringify(restrictedPayload)}`);
+  }
+  if (restrictedPayload?.kind !== "agentTurn" || restrictedPayload.timeoutSeconds !== 30) {
+    throw new Error(`cron edit --timeout-seconds did not update the task: ${JSON.stringify(restrictedPayload)}`);
   }
   if (JSON.stringify(clearedPayload?.toolsAllow) !== JSON.stringify(["*"])) {
     throw new Error(`cron edit --clear-tools is not explicit: ${JSON.stringify(clearedPayload)}`);
@@ -408,34 +392,6 @@ node --input-type=module -e '
   }
 '
 cron_cli rm "$script_job_id" --json >/dev/null
-
-cron_cli add \
-  "event timeout smoke" \
-  --every 1h \
-  --session main \
-  --system-event "cron event timeout proof" \
-  --json > /tmp/cron-cli-event-add.json
-event_job_id="$(read_json_field /tmp/cron-cli-event-add.json id)"
-cron_cli get "$event_job_id" > /tmp/cron-cli-event-before.json
-if cron_cli edit "$event_job_id" --timeout-seconds 30 > /tmp/cron-cli-event-generic-timeout.log 2>&1; then
-  echo "generic timeout unexpectedly succeeded for systemEvent job" >&2
-  exit 1
-fi
-grep -q -- "--timeout-seconds is not supported for systemEvent jobs" \
-  /tmp/cron-cli-event-generic-timeout.log
-cron_cli get "$event_job_id" > /tmp/cron-cli-event-after.json
-node --input-type=module -e '
-  const fs = await import("node:fs/promises");
-  const before = JSON.parse(await fs.readFile("/tmp/cron-cli-event-before.json", "utf8"));
-  const after = JSON.parse(await fs.readFile("/tmp/cron-cli-event-after.json", "utf8"));
-  if (before.payload?.kind !== "systemEvent") {
-    throw new Error(`event setup mismatch: ${JSON.stringify(before.payload)}`);
-  }
-  if (JSON.stringify(after.payload) !== JSON.stringify(before.payload)) {
-    throw new Error(`rejected generic timeout changed event payload: ${JSON.stringify(after.payload)}`);
-  }
-'
-cron_cli rm "$event_job_id" --json >/dev/null
 
 cron_cli list --all --json > /tmp/cron-cli-list.json
 node --input-type=module -e '

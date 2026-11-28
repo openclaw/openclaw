@@ -210,6 +210,12 @@ export async function ensureLoaded(
   const loaded = await loadCronJobsStoreWithConfigJobsByKey(state.deps.storeKey, {
     includeConfigRevisions: Boolean(state.deps.onDefinitionChange),
   });
+  if (loaded.invalidConfigRows.some((row) => row.reason === "unsupported-definition")) {
+    // Do not quarantine or rewrite definitions from a format Doctor may still migrate.
+    throw new Error(
+      "Cron storage has unsupported automation definitions. Run openclaw doctor --fix before starting automations.",
+    );
+  }
   const loadNowMs = state.deps.nowMs();
   // Persisted cron rows are validated lazily, so treat them as raw records at the
   // store boundary and only trust the CronJob shape after validation below.
