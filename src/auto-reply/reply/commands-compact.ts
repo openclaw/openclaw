@@ -19,6 +19,7 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
+import { resolveSessionDispatchKind } from "../../sessions/session-key-utils.js";
 import { matchCommandPrefix, rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 import { createCompactionNoticePayload } from "./compaction-notice.js";
@@ -99,6 +100,12 @@ export async function handleCompactCommand(
     : (params.sessionStore?.[params.sessionKey] ?? params.sessionEntry);
   if (!targetSessionEntry?.sessionId) {
     return compactionUnavailable("missing session id");
+  }
+  // The ACP harness owns this conversation's model context; compacting the Gateway mirror would report a compaction that never happened.
+  if (resolveSessionDispatchKind(params.sessionKey, targetSessionEntry) === "acp") {
+    return compactionUnavailable(
+      "this conversation is bound to an ACP harness, which manages its own context; nothing was compacted",
+    );
   }
   const runtime = await import("./commands-compact.runtime.js");
   const sessionId = targetSessionEntry.sessionId;
