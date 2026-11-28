@@ -35,6 +35,8 @@ import {
   isClaudeToolUseBlockType,
 } from "../cli-output-records.js";
 import { cliBackendLog } from "../cli-runner/log.js";
+import type { AgentInternalEvent } from "../internal-events.js";
+import { rewriteSubagentCompletionReplyInstructionForRelayOnly } from "../subagents/completion/subagent-completion-instructions.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -487,4 +489,39 @@ export function resolveCompletionToolPolicy(params: {
       !completionRetainsRequesterTools &&
       !completionNeedsMessageDelivery);
   return { completionRetainsRequesterTools, runtimeToolsAllow, disableTools };
+}
+
+export function adaptCompletionRelayTurnForToolSurface(params: {
+  prompt: string;
+  internalEvents?: AgentInternalEvent[];
+  isSubagentAnnounceHandoff: boolean;
+  completionRetainsRequesterTools: boolean;
+  completionNeedsMessageDelivery?: boolean;
+}): {
+  prompt: string;
+  internalEvents?: AgentInternalEvent[];
+} {
+  if (!params.isSubagentAnnounceHandoff || params.completionRetainsRequesterTools) {
+    return { prompt: params.prompt, internalEvents: params.internalEvents };
+  }
+  const allowMessageDelivery = params.completionNeedsMessageDelivery === true;
+  const prompt = rewriteSubagentCompletionReplyInstructionForRelayOnly(
+    params.prompt,
+    allowMessageDelivery,
+  );
+  const internalEvents = params.internalEvents
+    ? params.internalEvents.map((event) => {
+        if (event.type !== "task_completion") {
+          return event;
+        }
+        const nextInstruction = rewriteSubagentCompletionReplyInstructionForRelayOnly(
+          event.replyInstruction,
+          allowMessageDelivery,
+        );
+        return nextInstruction === event.replyInstruction
+          ? event
+          : Object.assign({}, event, { replyInstruction: nextInstruction });
+      })
+    : undefined;
+  return { prompt, internalEvents };
 }
