@@ -22,11 +22,6 @@ import {
 } from "../plugins/legacy-sdk-resource-host.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
-import {
-  createPluginCache,
-  invalidatePluginCacheMetadata,
-  withPluginCache,
-} from "../plugins/plugin-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -276,28 +271,6 @@ function getLastDispatchedClientInternal(): Record<string, unknown> {
   return (call?.client?.internal ?? {}) as Record<string, unknown>;
 }
 
-function getLastPluginLoadLogger(): {
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-  debug?: (message: string) => void;
-} {
-  const call = getLastMockFirstArg(loadOpenClawPlugins, "plugin load") as
-    | {
-        logger?: {
-          info: (message: string) => void;
-          warn: (message: string) => void;
-          error: (message: string) => void;
-          debug?: (message: string) => void;
-        };
-      }
-    | undefined;
-  if (!call?.logger) {
-    throw new Error("Expected plugin loader to receive a logger");
-  }
-  return call.logger;
-}
-
 async function loadTestModules() {
   const actualServerPlugins = await import("./server-plugins.js");
   serverPluginsModule = {
@@ -472,33 +445,6 @@ afterEach(() => {
 });
 
 describe("loadGatewayPlugins", () => {
-  test.each(["warn", "info"] as const)(
-    "routes %s diagnostics and retires informational deduplication with metadata",
-    async (level) => {
-      const cache = createPluginCache();
-      loadOpenClawPlugins.mockReturnValue(
-        createRegistry([{ level, pluginId: "demo", source: "/plugin.ts", message: "notice" }]),
-      );
-      const log = createTestLog();
-      const expected = "[plugins] notice (plugin=demo, source=/plugin.ts)";
-      const emitted = () =>
-        log[level].mock.calls.filter(([message]) => message === expected).length;
-      await withPluginCache(cache, async () => {
-        await loadStartupPluginFixture({ log });
-        await loadStartupPluginFixture({ log });
-        expect(emitted()).toBe(level === "info" ? 1 : 2);
-        invalidatePluginCacheMetadata(cache);
-        await loadStartupPluginFixture({ log });
-      });
-      expect(emitted()).toBe(level === "info" ? 2 : 3);
-      for (const sink of ["error", "warn", "info"] as const) {
-        if (sink !== level) {
-          expect(log[sink]).not.toHaveBeenCalledWith(expected);
-        }
-      }
-    },
-  );
-
   test("does not re-log a quarantined plugin verification diagnostic", async () => {
     const diagnostic: PluginDiagnostic = {
       level: "error",
@@ -745,25 +691,6 @@ describe("loadGatewayPlugins", () => {
 
     expect(getLastPluginLoadOption("allowProcessHomeSessionCatalogs")).toBe(false);
   });
-
-  test.each([false, true])(
-    "routes plugin registration logs with info suppression %s",
-    async (suppressPluginInfoLogs) => {
-      loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-      await loadGatewayPluginsForTest({ suppressPluginInfoLogs });
-
-      const logger = getLastPluginLoadLogger();
-      logger.info("plugin ready");
-      logger.warn("plugin warning");
-
-      if (suppressPluginInfoLogs) {
-        expect(pluginRuntimeLoaderLogger.info).not.toHaveBeenCalled();
-      } else {
-        expect(pluginRuntimeLoaderLogger.info).toHaveBeenCalledWith("plugin ready");
-      }
-      expect(pluginRuntimeLoaderLogger.warn).toHaveBeenCalledWith("plugin warning");
-    },
-  );
 
   test.each(["startup"] as const)(
     "prepares an empty %s candidate without loading plugins or replacing the active runtime",

@@ -2127,9 +2127,6 @@ const enSettings = {
       textSize: "Text size",
     },
     chatPrefs: {
-      compactSessionOpening: "Open with 24 messages",
-      compactSessionOpeningHint:
-        "Fetch the latest 24 messages when opening a conversation without saved history. Scroll up to read earlier messages.",
       title: "Chat",
       devices: "Microphone and camera",
       messageWidth: "Message width",
