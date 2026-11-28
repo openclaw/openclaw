@@ -391,54 +391,47 @@ describe("plugin inventory install health", () => {
     },
   );
 
-  it.each([true])(
-    "rechecks a different runtime root after caching installed dependency health: %s",
-    (initiallyHealthy) => {
-      const fixture = createProjectionFixture({ requiredDependency: true });
-      const projectRoot = resolvePluginNpmProjectDir({
-        npmDir: path.join(fixture.env.OPENCLAW_STATE_DIR, "npm"),
-        packageName: "@fixture/projection",
+  it("rechecks a different runtime root after caching installed dependency health: true", () => {
+    const fixture = createProjectionFixture({ requiredDependency: true });
+    const projectRoot = resolvePluginNpmProjectDir({
+      npmDir: path.join(fixture.env.OPENCLAW_STATE_DIR, "npm"),
+      packageName: "@fixture/projection",
+    });
+    const runtimeRoot = path.join(projectRoot, "alternate-runtime");
+    fs.mkdirSync(runtimeRoot);
+    const dependency = path.join(fixture.packageDir, "node_modules", "required-runtime");
+    fs.mkdirSync(dependency, { recursive: true });
+    fs.writeFileSync(
+      path.join(dependency, "package.json"),
+      JSON.stringify({ name: "required-runtime", version: "1.0.0" }),
+    );
+
+    for (const { rootDir, healthy } of [
+      { rootDir: fixture.packageDir, healthy: true },
+      { rootDir: runtimeRoot, healthy: false },
+    ]) {
+      const registry: PluginDependencyHealthRegistry = {
+        plugins: [
+          {
+            id: fixture.pluginId,
+            source: path.join(rootDir, "dist/index.js"),
+            rootDir,
+            enabled: true,
+            status: "loaded",
+            origin: "global",
+          },
+        ],
+        diagnostics: [],
+      };
+      const report = projectPluginInstallHealth(registry, fixture);
+
+      expect(report.plugins[0]?.dependencyStatus).toMatchObject({
+        requiredInstalled: healthy,
+        missing: healthy ? [] : ["required-runtime"],
       });
-      const runtimeRoot = path.join(projectRoot, "alternate-runtime");
-      fs.mkdirSync(runtimeRoot);
-      const dependency = path.join(
-        initiallyHealthy ? fixture.packageDir : runtimeRoot,
-        "node_modules",
-        "required-runtime",
-      );
-      fs.mkdirSync(dependency, { recursive: true });
-      fs.writeFileSync(
-        path.join(dependency, "package.json"),
-        JSON.stringify({ name: "required-runtime", version: "1.0.0" }),
-      );
-
-      for (const { rootDir, healthy } of [
-        { rootDir: fixture.packageDir, healthy: initiallyHealthy },
-        { rootDir: runtimeRoot, healthy: !initiallyHealthy },
-      ]) {
-        const registry: PluginDependencyHealthRegistry = {
-          plugins: [
-            {
-              id: fixture.pluginId,
-              source: path.join(rootDir, "dist/index.js"),
-              rootDir,
-              enabled: true,
-              status: "loaded",
-              origin: "global",
-            },
-          ],
-          diagnostics: [],
-        };
-        const report = projectPluginInstallHealth(registry, fixture);
-
-        expect(report.plugins[0]?.dependencyStatus).toMatchObject({
-          requiredInstalled: healthy,
-          missing: healthy ? [] : ["required-runtime"],
-        });
-        expect(report.plugins[0]?.status).toBe(healthy ? "loaded" : "error");
-      }
-    },
-  );
+      expect(report.plugins[0]?.status).toBe(healthy ? "loaded" : "error");
+    }
+  });
 });
 
 function makeTempDir() {
