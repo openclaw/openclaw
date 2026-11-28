@@ -4,7 +4,6 @@ import { t } from "../../i18n/index.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
-import { clearChatHistory } from "./chat-history-actions.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { preparePaneSessionHandoff } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -79,8 +78,14 @@ export async function createCapturedChatSession({
   if (signal.aborted || !isCurrent() || state.sessionKey !== previousSessionKey) {
     return false;
   }
+  if (!expiredIncognito && !(await confirmReset())) {
+    return false;
+  }
+  const { clearChatHistory } = preservesBoard
+    ? await import("./chat-history-clear.runtime.ts")
+    : {};
   if (
-    (!expiredIncognito && !(await confirmReset())) ||
+    signal.aborted ||
     !isCurrent() ||
     !areUiSessionKeysEquivalent(state.sessionKey, previousSessionKey)
   ) {
@@ -97,7 +102,7 @@ export async function createCapturedChatSession({
   }
 
   setChatError(state, null);
-  if (preservesBoard) {
+  if (clearChatHistory) {
     const resetResult = await clearChatHistory(state);
     return resetResult !== "failed";
   }
