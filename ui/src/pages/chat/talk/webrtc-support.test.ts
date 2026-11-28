@@ -53,6 +53,24 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
     );
   });
 
+  it("uses a broker-advertised token without sending it in Authorization", async () => {
+    const fetchMock = stubFetch(new Response("answer-sdp"));
+    await readAnswer({
+      offerUrl: "/plugins/openai/realtime/calls",
+      offerHeaders: { "x-openclaw-realtime-token": "reservation-token" },
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://gateway.example.test/plugins/openai/realtime/calls",
+      expect.objectContaining({
+        headers: {
+          "x-openclaw-realtime-token": "reservation-token",
+          "Content-Type": "application/sdp",
+        },
+        redirect: "error",
+      }),
+    );
+  });
+
   it.each([OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES, undefined])(
     "accepts an SDP answer with provider limit %s",
     async (limit) => {

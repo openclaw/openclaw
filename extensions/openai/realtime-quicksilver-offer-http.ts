@@ -61,7 +61,15 @@ export function applyRealtimeOfferCorsHeaders(
   return true;
 }
 
+export const REALTIME_OFFER_TOKEN_HEADER = "x-openclaw-realtime-token";
+
 export function readOfferBearerToken(req: IncomingMessage): string | undefined {
+  const token = req.headers[REALTIME_OFFER_TOKEN_HEADER];
+  if (token !== undefined) {
+    // An OAuth proxy may supply an unrelated Authorization header. Reject
+    // malformed or duplicate offer tokens rather than falling back to it.
+    return typeof token === "string" && /^[A-Za-z0-9_-]+$/.test(token) ? token : undefined;
+  }
   const authorization = req.headers.authorization?.trim();
   return authorization?.match(/^Bearer\s+([^\s]+)$/i)?.[1];
 }
