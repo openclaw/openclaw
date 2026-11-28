@@ -44,10 +44,6 @@ import {
 } from "../../model-catalog-view.js";
 import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import type { ModelRef } from "../../model-selection.js";
-import {
-  getPreparedModelRuntimeBorrowedSnapshot,
-  getPreparedModelRuntimePluginGeneration,
-} from "../../prepared-model-runtime-generation-scope.js";
 import { readAdmittedPublishedModelCatalog } from "../../prepared-model-runtime.capture.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveTieredModel } from "../model-resolution.js";
@@ -413,15 +409,10 @@ export async function resolveEmbeddedRunModelSetup(params: {
       ...createEmptyAgentDiscoveryStores(),
     };
     // Native capability rows omit transport; keep the picker routes captured for this turn.
-    const generation = getPreparedModelRuntimePluginGeneration();
-    const borrowedSnapshot = generation
-      ? getPreparedModelRuntimeBorrowedSnapshot(generation)
-      : undefined;
     const routeCatalog =
-      (borrowedSnapshot &&
-      borrowedSnapshot.modelCatalog === params.preparedModelRuntime?.modelCatalog
-        ? readAdmittedPublishedModelCatalog(borrowedSnapshot)
-        : undefined) ?? catalog;
+      (params.preparedModelRuntime &&
+        readAdmittedPublishedModelCatalog(params.preparedModelRuntime)) ??
+      catalog;
     const routeVariants =
       routeCatalog &&
       createModelCatalogSnapshotView(runParams.config ?? {}, routeCatalog).variantsOf({
