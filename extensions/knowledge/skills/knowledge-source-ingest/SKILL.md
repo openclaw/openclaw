@@ -1,6 +1,6 @@
 ---
 name: knowledge-source-ingest
-description: Incrementally ingest enumerable external sources into Knowledge with canonical source identity, retained snapshot manifests, overlap-aware diffing, and reconciliation of changed or deleted items. Includes a generic manifest tool, a read-only Discrawl adapter and a Slack read normalizer.
+description: Incrementally ingest enumerable external sources into Knowledge with canonical source identity, retained snapshot manifests, overlap-aware diffing, and reconciliation of changed or deleted items. Includes a generic manifest tool, a read-only Discrawl adapter, a Slack read normalizer, and a read-only Gmail reader (through the Composio CLI) with its normalizer.
 ---
 
 # Source Ingest Skill
@@ -32,7 +32,7 @@ For creating recurring ingestion jobs, use `knowledge-automation` first.
 ## Procedure
 
 1. Inspect `knowledge_status` and `knowledge_ontology` for the intended vault scope and the `source` fields, then search Knowledge for the canonical source and prior snapshots by provider/source key. If an owner-private ingestion unexpectedly resolves to a conversation scope or an empty vault after a restart, stop before writing and restore the intended authorized scope; never infer that prior coverage is absent from the wrong scope.
-2. Acquire a bounded export with an approved reader. For Slack, normalize saved `read` results with `scripts/slack-read-normalize.mjs`. For Discrawl, run `scripts/discrawl-normalize.mjs` with its configured read-only archive, exact channel ID when known, and `[since,before)` RFC3339 bounds. The normalized payload includes stable author IDs plus archive-observed display fields. Preserve the raw JSONL, and create a separate line-stable readable transcript when human review or line citations are needed.
+2. Acquire a bounded export with an approved reader. For Slack, normalize saved `read` results with `scripts/slack-read-normalize.mjs`. For Gmail, read only with `scripts/gmail-read.mjs`, which runs only read-only Composio Gmail tools, and normalize each thread with `scripts/gmail-normalize.mjs messages`. For Discrawl, run `scripts/discrawl-normalize.mjs` with its configured read-only archive, exact channel ID when known, and `[since,before)` RFC3339 bounds. The normalized payload includes stable author IDs plus archive-observed display fields. Preserve the raw JSONL, and create a separate line-stable readable transcript when human review or line citations are needed.
 3. Generate a deterministic manifest with `scripts/source-manifest.mjs snapshot`. Attach it before publishing the snapshot page; record the returned SHA-256.
 4. Download all overlapping prior manifests and run `scripts/source-manifest.mjs plan`. Inspect covered/uncovered intervals and the added/changed/deleted/unchanged/unresolved lists.
 5. Test 3–5 substantive items or discussions, then ingest through `knowledge-ingest` (or `knowledge-meeting-ingest` for meetings). For chat, group related messages with their reply context; use `knowledge-entities` to enrich relevant people, companies, projects and concepts from their contributions. Carry supported developments into the State of the most specific existing page, rewritten in place, plus dated claims and source notes; not only a channel digest, and never a section per run or per channel. Use stable external IDs in source citations and the retained snapshot as a dependency. Reuse its originals rather than uploading one copy per discussion.
@@ -63,10 +63,25 @@ Save each Slack `read` result as JSON, then:
 
 Do not include credentials, archive paths, or raw private content in Knowledge page prose. No scheduler, connector daemon, or plugin-owned ingestion job is created; the skill and scripts support an authorized agent-run workflow.
 
+## Gmail example
+
+    node scripts/gmail-read.mjs check
+    node scripts/gmail-read.mjs threads --id 18c0ffee0001 --output-dir threads
+    node scripts/gmail-normalize.mjs messages --account owner@example.com \
+      --input threads/18c0ffee0001.json --output messages.jsonl
+    node scripts/source-manifest.mjs snapshot --provider gmail \
+      --source-key gmail:owner@example.com/18c0ffee0001 --completeness complete ...
+
 ## Scribe runs
 
-The **Learn from Slack** scribe runs this skill unattended. Its prompt checks
-access, sets up any automation and lists its settings. Do not ask questions.
+The **Learn from Mail** and **Learn from Slack** scribes run this skill
+unattended. Their prompts check access, set up any automation and list their
+settings. Do not ask questions.
+
+### Learn from Mail
+
+Task: triage and ingest the Gmail threads in the settings. Follow
+[Learn from Mail](references/scribe-runs.md#learn-from-mail).
 
 ### Learn from Slack
 

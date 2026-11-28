@@ -1682,13 +1682,16 @@ const config = {
         // knowledge-source-ingest/SKILL.md has agents run these bundled scripts by path.
         "skills/knowledge-source-ingest/scripts/chat-transcript.mjs!",
         "skills/knowledge-source-ingest/scripts/discrawl-normalize.mjs!",
+        "skills/knowledge-source-ingest/scripts/gmail-normalize.mjs!",
+        "skills/knowledge-source-ingest/scripts/gmail-read.mjs!",
         "skills/knowledge-source-ingest/scripts/slack-read-normalize.mjs!",
         "skills/knowledge-source-ingest/scripts/source-manifest.mjs!",
         // skill-packaging.test.ts runs this skill-reference generator with --check.
         "scripts/sync-skill-references.mjs",
       ]),
-      // discrawl-normalize.mjs reads the user's own Discord archive through the discrawl CLI.
-      ignoreBinaries: ["discrawl"],
+      // discrawl-normalize.mjs reads the user's own Discord archive through the discrawl CLI, and
+      // gmail-read.mjs reads Gmail through the Composio CLI.
+      ignoreBinaries: ["composio", "discrawl"],
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/matrix`]: bundledPluginWorkspace([
       // The monitor lazy-loads outbound behavior on inbound-only processes.

@@ -90,6 +90,8 @@ it("bundled skill payload includes all skill entrypoints, references and upstrea
       expect(files.has(`skills/${name}/scripts/source-manifest.mjs`)).toBeTruthy();
       expect(files.has(`skills/${name}/scripts/discrawl-normalize.mjs`)).toBeTruthy();
       expect(files.has(`skills/${name}/scripts/slack-read-normalize.mjs`)).toBeTruthy();
+      expect(files.has(`skills/${name}/scripts/gmail-read.mjs`)).toBeTruthy();
+      expect(files.has(`skills/${name}/scripts/gmail-normalize.mjs`)).toBeTruthy();
       expect(files.has(`skills/${name}/references/scribe-runs.md`)).toBeTruthy();
     }
   }

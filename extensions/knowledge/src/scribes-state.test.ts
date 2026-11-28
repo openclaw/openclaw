@@ -137,6 +137,34 @@ describe("scribes catalog", () => {
     expect(checkRunMessage("slack", `${optedRun}\nSkip #random.`)).toEqual({ state: "custom" });
   });
 
+  it("writes a Mail prompt that names the account, sent mail, run amounts and the read-only reader", () => {
+    const runMessage = runPrompt(
+      scribeSetup("mail", "ongoing", defaultOptions("mail"), "America/Los_Angeles"),
+    );
+    expect(runMessage).toContain(
+      [
+        "- Gmail threads: the Gmail account linked in Composio, from the last 7 days, leaving out promotions, social and forums mail.",
+        "- Sent mail: also list threads with mail the owner sent, so their own requests and promises are read.",
+        "- Each run: ingest 10 threads, triaging at most 80.",
+      ].join("\n"),
+    );
+    expect(runMessage).toContain(
+      'Follow "Learn from Mail" in the "Scribe runs" section of the knowledge-source-ingest skill',
+    );
+    expect(runMessage).toContain("Read Gmail only through the skill's gmail-read.mjs script");
+    expect(runMessage).toContain("never send, draft, label, archive or delete mail.");
+    expect(checkRunMessage("mail", runMessage)).toEqual({
+      state: "current",
+      options: { since: "7d", sent: true },
+    });
+    const once = setupPrompt(scribeSetup("mail", "once", { since: "today", sent: false }, "UTC"));
+    expect(once).toContain("Runs once, now, in this turn.");
+    expect(once).toContain("from today on (new mail only)");
+    expect(once).toContain("- Sent mail: list only threads with mail the owner received;");
+    expect(once).not.toContain("Each run:");
+    expect(scribeById("mail")!.plugin).toMatchObject({ id: "composio", catalogPath: "composio/composio" });
+  });
+
   // Every choice of each scribe with editable settings, as the start dialog offers them.
   const editableChoices = [
     ...(["active", "all"] as const).flatMap((scope) =>
@@ -150,6 +178,9 @@ describe("scribes catalog", () => {
         id: "granola" as const,
         options: { meetings, since },
       })),
+    ),
+    ...(["7d", "30d", "today"] as const).flatMap((since) =>
+      [true, false].map((sent) => ({ id: "mail" as const, options: { since, sent } })),
     ),
     ...(["7d", "30d", "today"] as const).flatMap((since) =>
       [false, true].flatMap((userToken) =>
@@ -475,10 +506,14 @@ describe("scribes state", () => {
       ["claim-consolidation", "on", "s-review", "job-review"],
       ["conversations", "available", undefined, undefined],
       ["granola", "available", undefined, undefined],
+      ["mail", "available", undefined, undefined],
       ["memory", "done", "s-memory", undefined],
       ["slack", "available", undefined, undefined],
     ]);
-    expect(snapshots[3]!.result).toEqual({ state: "done", summary: "Saved 4" });
+    expect(snapshots.find((s) => s.scribe.id === "memory")!.result).toEqual({
+      state: "done",
+      summary: "Saved 4",
+    });
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
       search: scribeLabel(memory),
@@ -593,7 +628,8 @@ describe("scribes state", () => {
     expect(await detectSources({ request } as never, "main")).toEqual({
       activeConversations: 148,
       memoryFile: { size: 4096 },
-      plugins: { granola: "ready" },
+      // Composio declares no sign-in the page can read: installed and on is ready.
+      plugins: { composio: "ready", granola: "ready" },
     });
     const failing = vi.fn(async () => {
       throw new Error("missing scope");
@@ -603,11 +639,12 @@ describe("scribes state", () => {
 });
 
 describe("plugin readiness", () => {
-  // Slack is installed with no readable account state, so only Granola's readiness is known.
+  // Slack is installed with no readable account state, and Composio is installed and on (its
+  // sign-in is checked by runs), so only Granola's readiness varies.
   const read = async (answer: () => unknown) => {
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "plugins.inspect") {
-        return params?.pluginId === "slack"
+        return params?.pluginId === "slack" || params?.pluginId === "composio"
           ? { plugin: { installed: true, enabled: true } }
           : answer();
       }
@@ -623,7 +660,9 @@ describe("plugin readiness", () => {
     expect(request).toHaveBeenCalledWith("plugins.inspect", {
       pluginId: scribeById("granola")!.plugin!.id,
     });
-    return detection.plugins;
+    const { composio, ...others } = detection.plugins ?? {};
+    expect(composio).toBe("ready");
+    return Object.keys(others).length ? others : undefined;
   };
 
   it("maps plugins.inspect to missing, disabled, needs sign-in and ready", async () => {
