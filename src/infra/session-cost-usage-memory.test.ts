@@ -135,7 +135,6 @@ async function fixture(
     binding,
     append,
     sessionFile,
-    ...target,
     refresh: () => refreshUsage(binding),
     report: (files = [sessionFile]) => runUsage(binding, sessionReport(files)),
     snapshot: (input: SessionActorMemoryUsageReads["session.usage.snapshot"]["input"]) =>
