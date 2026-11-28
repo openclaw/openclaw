@@ -9,6 +9,7 @@ import {
   sessionEntrySnapshotColumnsDefinition,
   type SessionEntryProjection,
 } from "./session-entry-snapshot-values.js";
+import type { SessionMember } from "./session-membership-facts.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type PreparedSessionEntryPredicate = {
@@ -53,6 +54,7 @@ export type CommittedSessionSharingFacts = {
   entry: SessionSharingEntry | undefined;
   placeholder?: SessionEntryPlaceholder;
   membership: ReadonlySet<string>;
+  memberAccess?: Readonly<Record<string, NonNullable<SessionMember["access"]>>>;
 };
 
 export type SessionSharingAcquisition = {
@@ -61,6 +63,8 @@ export type SessionSharingAcquisition = {
   sessionId?: string;
   membership: Map<string, boolean>;
   membershipPostimage?: ReadonlySet<string>;
+  memberAccess?: Record<string, NonNullable<SessionMember["access"]>>;
+  memberAccessPostimage?: CommittedSessionSharingFacts["memberAccess"];
 };
 
 export type PreparedSessionSharingRead = {
@@ -225,14 +229,23 @@ export function reconcileSessionSharingAcquisition(
     throw new Error("Session sharing acquisition is no longer current");
   }
   const membership = new Set(acquisition.membershipPostimage ?? snapshot.membership);
+  const memberAccess = {
+    ...(acquisition.membershipPostimage
+      ? acquisition.memberAccessPostimage
+      : snapshot.memberAccess),
+  };
   for (const [identityId, present] of acquisition.membership) {
+    delete memberAccess[identityId];
+    if (present && acquisition.memberAccess?.[identityId]) {
+      memberAccess[identityId] = acquisition.memberAccess[identityId];
+    }
     if (present) {
       membership.add(identityId);
     } else {
       membership.delete(identityId);
     }
   }
-  return { ...snapshot, entry: acquisition.entry ?? snapshot.entry, membership };
+  return { ...snapshot, entry: acquisition.entry ?? snapshot.entry, membership, memberAccess };
 }
 
 /** The committing producer supplies both identities; a matching final snapshot cannot undo reset. */
@@ -269,6 +282,11 @@ export function recordAcquiringSessionMember(
   }
   acquisition.sessionId = member.sessionId;
   acquisition.membership.set(member.identityId, member.present);
+  acquisition.memberAccess ??= {};
+  delete acquisition.memberAccess[member.identityId];
+  if (member.present && member.access) {
+    acquisition.memberAccess[member.identityId] = member.access;
+  }
 }
 
 /** Apply a committed field postimage only to its original session generation. */
@@ -293,5 +311,10 @@ export function updateSessionSharingField(
   } else {
     membership.delete(change.identityId);
   }
-  return { ...facts, membership };
+  const memberAccess = { ...facts.memberAccess };
+  delete memberAccess[change.identityId];
+  if (change.present && change.access) {
+    memberAccess[change.identityId] = change.access;
+  }
+  return { ...facts, membership, memberAccess };
 }

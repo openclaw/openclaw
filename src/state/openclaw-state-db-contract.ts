@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 
@@ -97,6 +98,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "device_pairing_join_codes",
   "device_pairing_browser_requests",
   "skill_workshop_changes",
+  "skill_workshop_activity",
   "worker_environment_ssh_fallback_ports",
   "worker_session_placement_moves",
 ] as const;
@@ -188,3 +190,8 @@ export type OpenClawStateDatabaseSchemaMigration = {
   kind: keyof typeof STATE_SCHEMA_MIGRATION_DESCRIPTIONS;
   path: string;
 };
+
+export type StateWriteTransactionOptions = Pick<
+  SqliteTransactionOptions,
+  "beginLockFailureReporting" | "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
+> & { singleStatement?: true };

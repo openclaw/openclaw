@@ -1,4 +1,4 @@
-/** Offers retirable recovery copies when an update's space check would refuse. */
+/** Offers retirable recovery copies when an update's space check finds a shortfall. */
 import {
   inspectSessionSqliteRecovery,
   type RecoveryCleanupReport,
@@ -7,6 +7,7 @@ import { retireOwnedSessionSqliteRecovery } from "../../commands/doctor-session-
 import { createConfigIO } from "../../config/io.js";
 import { formatDiskSpaceBytes } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { UpdateSnapshotSpaceAssessment } from "../../infra/update-candidate-snapshot.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { runWithLocalStateOwner } from "../local-state-owner.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
@@ -59,13 +60,14 @@ function retireRecoveryCopies(env: NodeJS.ProcessEnv): Promise<RecoveryCleanupRe
 /**
  * Cleanup's own eligibility decides what may go; nothing is removed without an
  * interactive yes, so `--yes`, JSON and Gateway-driven updates only report it.
+ * A skipped image never stops the update; removal only lets it keep one.
  */
 export async function assessSnapshotCapacityOfferingCleanup(
-  assess: () => Promise<UpdateStepResult>,
+  assess: () => Promise<UpdateSnapshotSpaceAssessment>,
   options: CleanupOfferOptions,
 ): Promise<UpdateStepResult> {
-  const result = await assess();
-  if (result.exitCode === 0) {
+  const { step: result, shortfall } = await assess();
+  if (!shortfall) {
     return result;
   }
   const env = options.env ?? process.env;
@@ -73,7 +75,7 @@ export async function assessSnapshotCapacityOfferingCleanup(
   try {
     preview = await inspectSessionSqliteRecovery({ cfg: await readCleanupConfig(env)(), env });
   } catch {
-    // An unreadable inventory leaves the original refusal unchanged.
+    // An unreadable inventory leaves the original result unchanged.
     return result;
   }
   const candidates = preview.artifacts.filter((item) => item.outcome === "candidate");
@@ -83,15 +85,22 @@ export async function assessSnapshotCapacityOfferingCleanup(
   const size = formatDiskSpaceBytes(preview.totals.candidateBytes);
   const summary = `${candidates.length} recovery ${candidates.length === 1 ? "copy" : "copies"} from earlier updates use ${size} and can be removed.`;
   if (options.prompt === false || !canPromptForSpaceCleanup(options)) {
-    return {
-      ...result,
-      stderrTail: [
-        result.stderrTail,
-        `${summary} Run openclaw update in a terminal to be offered their removal, or stop the Gateway and run openclaw update cleanup, then retry.`,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    };
+    const removal =
+      "Run openclaw update in a terminal to be offered their removal, or stop the Gateway and run openclaw update cleanup";
+    return result.exitCode === 0
+      ? {
+          ...result,
+          warnings: [
+            ...(result.warnings ?? []),
+            `${summary} ${removal} to keep a pre-migration image on the next update.`,
+          ],
+        }
+      : {
+          ...result,
+          stderrTail: [result.stderrTail, `${summary} ${removal}, then retry.`]
+            .filter(Boolean)
+            .join("\n"),
+        };
   }
   options.print(summary);
   for (const item of candidates) {
@@ -118,5 +127,5 @@ export async function assessSnapshotCapacityOfferingCleanup(
   } catch (error) {
     options.print(`Recovery cleanup did not finish: ${formatErrorMessage(error)}`);
   }
-  return assess();
+  return (await assess()).step;
 }

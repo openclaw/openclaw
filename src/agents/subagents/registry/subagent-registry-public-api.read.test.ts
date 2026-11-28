@@ -75,6 +75,52 @@ function expectSelected(
   ).toEqual({ ready: true, value: undefined });
 }
 
+it("replays persisted collectors with their launch id and current run id", async () => {
+  const entry = createRun("current-run", {
+    requesterSessionKey: "agent:main:main",
+    requesterAgentId: "main",
+    swarmRunId: "launch-run",
+    swarmLaunchReplayKey: "replay-key",
+    swarmLaunchRequestFingerprint: "request-fingerprint",
+    label: "research",
+  });
+  saveSubagentRegistryToSqlite(new Map([[entry.runId, entry]]));
+  const api = createReadApi();
+  await expect(
+    api.resolveSwarmLaunchReplay("replay-key", "request-fingerprint", "agent:main:main", "main"),
+  ).resolves.toEqual({
+    status: "accepted",
+    runId: "launch-run",
+    currentRunId: "current-run",
+    childSessionKey: entry.childSessionKey,
+    label: "research",
+  });
+});
+
+it("rejects mismatched replay payloads and queued launches without a reservation", async () => {
+  const entry = createRun("collector", {
+    requesterSessionKey: "agent:main:main",
+    requesterAgentId: "main",
+    swarmLaunchReplayKey: "replay-key",
+    swarmLaunchRequestFingerprint: "request-fingerprint",
+    swarmLaunchPending: true,
+    execution: { status: "queued" },
+    completion: { required: false },
+    collectorCompletion: undefined,
+  });
+  saveSubagentRegistryToSqlite(new Map([[entry.runId, entry]]));
+  const api = createReadApi();
+  await expect(
+    api.resolveSwarmLaunchReplay("replay-key", "different-fingerprint", "agent:main:main", "main"),
+  ).resolves.toEqual({ status: "mismatch" });
+  await expect(
+    api.resolveSwarmLaunchReplay("replay-key", "request-fingerprint", "agent:main:main", "main"),
+  ).resolves.toEqual({ status: "inactive" });
+  await expect(
+    api.resolveSwarmLaunchReplay("replay-key", "request-fingerprint", "agent:other:main", "other"),
+  ).resolves.toEqual({ status: "missing" });
+});
+
 it("uses the replacement owner published while collector payload hydration is pending", async () => {
   const original = createRun("original", { swarmRunId: "collector" });
   saveSubagentRegistryToSqlite(new Map([[original.runId, original]]));

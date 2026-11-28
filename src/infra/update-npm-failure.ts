@@ -4,11 +4,16 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   normalizeSupportDiagnosticErrorCode,
+  redactPublicSupportVersion,
   redactSupportDiagnosticLine,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
+import { getOfficialExternalPluginCatalogEntryForPackage } from "../plugins/official-external-plugin-catalog.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { npmFailurePackageSpec, parseNpmErrorCode } from "./npm-error.js";
+import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
+import { parseOpenClawReleaseVersion } from "./semver.js";
+import { DEV_BRANCH, normalizeUpdateChannel } from "./update-channels.js";
 import type { UpdateFailureFact } from "./update-failure-facts.js";
 import { updatePreflightDetailMessage } from "./update-preflight-details.js";
 
@@ -58,24 +63,47 @@ export function createNpmFailureFacts(
   }));
 }
 
-export function formatNpmFailureFacts(
-  facts: readonly UpdateFailureFact[],
-  context: SupportRedactionContext,
-): string[] {
+/** OpenClaw release versions, including corrections and a Git tag's leading `v`. */
+export function isPublicReleaseVersion(value: string): boolean {
+  const version = value.replace(/^v(?=\d)/u, "");
+  return (
+    redactPublicSupportVersion(version) === version ||
+    (version.trim() === version && parseOpenClawReleaseVersion(version) !== null)
+  );
+}
+
+/** Release versions and OpenClaw's own channel tags; any other selector can name private work. */
+export function isPublicUpdateSelector(value: string): boolean {
+  return (
+    isPublicReleaseVersion(value) ||
+    value === "latest" ||
+    value === DEV_BRANCH ||
+    normalizeUpdateChannel(value) === value
+  );
+}
+
+/** Only OpenClaw's own packages are known public; other names may live on a private registry. */
+export function publicNpmPackageSpec(spec: string | undefined): string | undefined {
+  const parsed = spec ? parseRegistryNpmSpec(spec) : null;
+  if (
+    !parsed ||
+    (parsed.name !== "openclaw" && !getOfficialExternalPluginCatalogEntryForPackage(parsed.name))
+  ) {
+    return undefined;
+  }
+  return parsed.selector && !isPublicUpdateSelector(parsed.selector) ? parsed.name : parsed.raw;
+}
+
+export function formatNpmFailureFacts(facts: readonly UpdateFailureFact[]): string[] {
   const npm = facts.filter((fact) => fact.check === "npm" || fact.check === "bun").slice(0, 5);
   if (!npm.length) {
     return [];
   }
   const code = normalizeSupportDiagnosticErrorCode(npm[0]?.code) ?? "unknown";
+  const spec = publicNpmPackageSpec(npm[0]?.packageSpec);
   const remedy = updatePreflightDetailMessage(
     `npm-${code === "EPERM" ? "EACCES" : code === "E404" ? "ETARGET" : code}`,
-  )?.replace("<spec>", npm[0]?.packageSpec ? quoteCliArg(npm[0].packageSpec) : "<spec>");
-  return [
-    `${npm[0]?.check} failure code: ${code}`,
-    ...sanitizeNpmLines(
-      npm.flatMap((fact) => (fact.message ? [fact.message] : [])),
-      context,
-    ),
-    ...(remedy ? [`Next step: ${remedy}`] : []),
-  ];
+  )?.replace("<spec>", spec ? quoteCliArg(spec) : "<spec>");
+  // npm output is third-party text (registry URLs, accounts, paths); it stays in the local record.
+  return [`${npm[0]?.check} failure code: ${code}`, ...(remedy ? [`Next step: ${remedy}`] : [])];
 }

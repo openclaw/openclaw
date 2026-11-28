@@ -28,9 +28,10 @@ import { runPackageUpdateDoctor } from "./update-command-package.js";
 const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
+// Git releases run Doctor in the release itself; only package updates delegate it.
 it.each([
   { kind: "package", fault: "requester-reassigned" },
-  { kind: "git", fault: "migrated" },
+  { kind: "package", fault: "migrated" },
 ] as const)(
   "delegates $kind Doctor without reusing its suspended parent ($fault)",
   async ({ kind, fault }) => {
@@ -139,12 +140,9 @@ it.each([
         requesterAuthority,
       };
       mocks.nativeSupport.mockResolvedValue(true);
-      mocks.validateCanary.mockResolvedValue({
+      mocks.checkCandidate.mockResolvedValue({
         status: "ok",
-        phase: "readiness",
         steps: [],
-        durationMs: 1,
-        logTail: [],
         doctorConfigWrites: true,
       });
       const runUpdate = async (
@@ -167,13 +165,12 @@ it.each([
         return {
           ...successfulUpdate,
           root,
-          mode: kind === "git" ? ("git" as const) : ("npm" as const),
+          mode: "npm" as const,
           steps: step ? [step] : [],
           status: step?.exitCode === 0 ? ("ok" as const) : ("error" as const),
         };
       };
       mocks.runPackageUpdate.mockImplementation(runUpdate);
-      mocks.runGitUpdate.mockImplementation(runUpdate);
       const update = withUpdateCommandExecutor(runId, async (executor) => {
         params.opts.run!.executorFence = await executor.enter(root);
         return executeMutableUpdate(await bindExecutionGuards(params));

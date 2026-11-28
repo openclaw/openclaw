@@ -2,17 +2,20 @@ import { resolveIntegerOption } from "@openclaw/normalization-core/number-coerci
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { automationCreationFromToolDetails } from "../chat/automation-job-result.js";
 import {
   boundedJsonUtf8Bytes,
   firstEnumerableOwnKeys,
   jsonUtf8BytesOrInfinity,
   type BoundedJsonUtf8Bytes,
 } from "../infra/json-utf8-bytes.js";
+import { preserveCollectedSubagentCompletions } from "../shared/subagent-completion.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   truncateToolResultMessage,
 } from "./embedded-agent-runner/tool-result-truncation.js";
 import type { AgentMessage } from "./runtime/index.js";
+import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
 export function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): number {
   return resolveIntegerOption(opts?.maxToolResultChars, DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS, {
@@ -127,18 +130,7 @@ function buildPersistedDetailsFallback(
     copyPersistedSummaryFields({
       target: fallback,
       source: src,
-      keys: [
-        "status",
-        "sessionId",
-        "pid",
-        "exitCode",
-        "exitSignal",
-        "truncated",
-        "spill",
-        "fullOutputPath",
-        "spilledChars",
-        "spillTruncated",
-      ],
+      keys: ["status", "sessionId", "pid", "exitCode", "exitSignal", "truncated", "spill"],
       maxChars: MAX_PERSISTED_DETAIL_FALLBACK_STRING_CHARS,
     });
     copyPersistedResultStateFields(fallback, src, MAX_PERSISTED_DETAIL_FALLBACK_STRING_CHARS);
@@ -165,7 +157,7 @@ function enforcePersistedDetailsByteCap(
     : buildPersistedDetailsFallback(undefined, originalSize, sanitizedBytes);
 }
 
-function sanitizeToolResultDetailsForPersistence(details: unknown): unknown {
+function sanitizeToolResultDetailsForPersistence(details: unknown, toolName: string): unknown {
   if (details === undefined || details === null) {
     return details;
   }
@@ -174,6 +166,16 @@ function sanitizeToolResultDetailsForPersistence(details: unknown): unknown {
   const originalSize = boundedJsonUtf8Bytes(details, MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES);
   if (originalSize.complete && originalSize.bytes <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES) {
     return details;
+  }
+  if (isAutomationsToolName(toolName)) {
+    const automationCreation = automationCreationFromToolDetails(details);
+    if (automationCreation) {
+      return enforcePersistedDetailsByteCap(
+        { persistedDetailsTruncated: true, automationCreation },
+        undefined,
+        originalSize,
+      );
+    }
   }
   const src = asOptionalObjectRecord(details);
   if (!src) {
@@ -211,9 +213,6 @@ function sanitizeToolResultDetailsForPersistence(details: unknown): unknown {
       "totalChars",
       "truncated",
       "spill",
-      "fullOutputPath",
-      "spilledChars",
-      "spillTruncated",
       "truncation",
     ],
     maxChars: MAX_PERSISTED_DETAIL_STRING_CHARS,
@@ -234,12 +233,16 @@ function sanitizeToolResultDetailsForPersistence(details: unknown): unknown {
 }
 
 export function capToolResultForPersistence(msg: AgentMessage, maxChars: number): AgentMessage {
-  const capped = msg.role === "toolResult" ? truncateToolResultMessage(msg, maxChars) : msg;
+  const withCompletion = preserveCollectedSubagentCompletions(msg);
+  const capped =
+    withCompletion.role === "toolResult"
+      ? truncateToolResultMessage(withCompletion, maxChars)
+      : withCompletion;
   if (capped.role !== "toolResult") {
     return capped;
   }
   const details = capped.details;
-  const sanitizedDetails = sanitizeToolResultDetailsForPersistence(details);
+  const sanitizedDetails = sanitizeToolResultDetailsForPersistence(details, capped.toolName);
   if (sanitizedDetails === details) {
     return capped;
   }

@@ -1,4 +1,5 @@
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { markGatewayRestartTrace } from "../../gateway/restart-trace.js";
 import type { GatewayServerOptions, GatewayStartupOperation } from "../../gateway/server-public.js";
 import type { startGatewayServer } from "../../gateway/server.js";
@@ -11,20 +12,34 @@ import type { GatewayOwnerSupervisor } from "../../infra/gateway-owner-lease.typ
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
 import { SqliteIntegrityWorkerInterruptedError } from "../../infra/sqlite-integrity-worker-error.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
+import { ExitError } from "../../runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
+import { getGatewayStartupStopExitCode } from "../signal-exit-barrier.js";
 import { measureGatewayBootstrapStep } from "../startup-trace.js";
 import { resolveGatewayShutdownBudget } from "./run-loop-shutdown-budget.js";
 
 const lifecycleRuntimeLoader = createLazyImportLoader(() => import("./lifecycle.runtime.js"));
 
-/** Prime lifecycle code and acquire initial custody before installing signal handlers. */
+/** A stop accepted before the run loop owns signals unwinds startup with the signal's status. */
+function assertGatewayStartupNotStopped(): void {
+  const code = getGatewayStartupStopExitCode();
+  if (code !== undefined) {
+    throw new ExitError(code);
+  }
+}
+
+/**
+ * Prime lifecycle code and acquire initial custody before installing signal handlers.
+ * Until then the CLI signal owner holds any stop; custody is released before startup unwinds.
+ */
 export async function prepareGatewayRunLoop(
   params: { lockPort?: number; lifecycleLockDeadlineMs?: number },
   logger: Pick<SubsystemLogger, "info" | "warn">,
 ) {
+  assertGatewayStartupNotStopped();
   // Updates rotate dist chunks; signal handling must retain this exact runtime.
   const lifecycleRuntime = await measureGatewayBootstrapStep(
     "cli.bootstrap.lifecycle-runtime",
@@ -35,16 +50,31 @@ export async function prepareGatewayRunLoop(
   const restartDecision = lifecycleRuntime.resolveGatewayRestartDecision();
   // Resolve the native deadline before acquiring custody that needs final settlement.
   const startupBudget = await resolveGatewayShutdownBudget(supervisorMode, logger);
-  const lock = await measureGatewayBootstrapStep("cli.bootstrap.gateway-lock", () =>
-    acquireGatewayLock({
-      port: params.lockPort,
-      listenerMode: supervisorMode ? "supervised" : "foreground",
-      supervisor,
-      ...(params.lifecycleLockDeadlineMs !== undefined
-        ? { lifecycleDeadlineMs: params.lifecycleLockDeadlineMs }
-        : {}),
-    }),
-  );
+  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
+  try {
+    lock = await measureGatewayBootstrapStep("cli.bootstrap.gateway-lock", () =>
+      acquireGatewayLock({
+        port: params.lockPort,
+        listenerMode: supervisorMode ? "supervised" : "foreground",
+        supervisor,
+        ...(params.lifecycleLockDeadlineMs !== undefined
+          ? { lifecycleDeadlineMs: params.lifecycleLockDeadlineMs }
+          : {}),
+        // Each attempt, including those of an ownership wait, refuses after a stop.
+        assertCurrent: assertGatewayStartupNotStopped,
+      }),
+    );
+  } catch (error) {
+    // Acquisition rolls back its own custody; an accepted stop owns the outcome.
+    assertGatewayStartupNotStopped();
+    throw error;
+  }
+  if (getGatewayStartupStopExitCode() !== undefined) {
+    // No run-loop handler will see this stop, so release custody here.
+    await lock?.release();
+    logger.info("released Gateway state ownership after a stop during startup");
+    assertGatewayStartupNotStopped();
+  }
   return { lifecycleRuntime, supervisor, supervisorMode, restartDecision, startupBudget, lock };
 }
 
@@ -58,7 +88,7 @@ type GatewayRunLoopStartOptions = Pick<
   | "gatewayStateOwner"
 > & { requestHotReloadRecovery?: GatewayRestartEmitter };
 
-export type GatewayRestartStartupFailureHandler = (
+type GatewayRestartStartupFailureHandler = (
   error: unknown,
   signal: AbortSignal,
 ) => Promise<"completed" | "failed" | void>;
@@ -70,8 +100,11 @@ export type GatewayRunLoopParams = {
   /** Grants this run loop authority over the process it exclusively owns. */
   ownsProcessLifecycle?: boolean;
   lockPort?: number;
+  /** Resolve the next listener port before reacquiring its state owner. */
+  resolveRestartPort?: () => Promise<number>;
   lifecycleLockDeadlineMs?: number;
   healthHost?: string;
+  healthConfig?: OpenClawConfig;
   beginBoot?: (
     startedAtMs: number,
     previousOwner?: { pid: number; heartbeatAt?: number },
@@ -83,18 +116,39 @@ export type GatewayRunLoopParams = {
 };
 
 export function createGatewayRestartRecovery(
-  {
-    onRestartStartupFailure: onFailure,
-  }: {
-    onRestartStartupFailure?: GatewayRestartStartupFailureHandler;
-  },
+  params: Pick<GatewayRunLoopParams, "onRestartStartupFailure" | "resolveRestartPort" | "lockPort">,
   logger: Pick<SubsystemLogger, "info" | "error">,
   supervisor: GatewayOwnerSupervisor | null,
 ) {
+  const onFailure = params.onRestartStartupFailure;
+  let preparationFailure: { error: unknown } | undefined;
   let work:
     | { controller: AbortController; settled: ReturnType<GatewayRestartStartupFailureHandler> }
     | undefined;
   return {
+    async reacquireLock() {
+      preparationFailure = undefined;
+      let port: number | undefined;
+      try {
+        port = (await params.resolveRestartPort?.()) ?? params.lockPort;
+      } catch (error) {
+        // The next startup iteration owns recovery; do not acquire stale-port custody.
+        preparationFailure = { error };
+        return null;
+      }
+      return acquireGatewayLock({
+        port,
+        listenerMode: supervisor ? "supervised" : "foreground",
+        supervisor,
+      });
+    },
+    throwPreparationFailure() {
+      if (preparationFailure) {
+        const failure = preparationFailure;
+        preparationFailure = undefined;
+        throw failure.error;
+      }
+    },
     reportInstallationReplacement(
       replacement: GatewayInstallationReplacement,
     ): GatewayBootLifecycleCompletion {

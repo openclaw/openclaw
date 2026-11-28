@@ -30,6 +30,9 @@ const fetchIds = (
   options: Omit<Parameters<typeof fetchLiveProviderModelIds>[0], "providerId" | "endpoint">,
 ) => fetchLiveProviderModelIds({ ...requestDefaults, ...options });
 const modelRows = (...ids: string[]) => ids.map((id) => ({ id, object: "model" }));
+// Rows a default picker offers: neither declared non-chat nor unlikely chat.
+const isLikelyChat = (model: { inference?: { chat: boolean; chatEvidence?: "unlikely" } }) =>
+  model.inference?.chat !== false && model.inference?.chatEvidence !== "unlikely";
 function catalogResponse(body: unknown, release: () => Promise<void>, finalUrl = endpoint) {
   return {
     response: body instanceof Response ? body : new Response(JSON.stringify(body)),
@@ -91,7 +94,7 @@ describe("provider-catalog-live-runtime", () => {
   beforeEach(() => clearLiveCatalogCacheForTests());
   afterEach(() => vi.restoreAllMocks());
 
-  it("requires chat metadata or a catalog declaration, including models.dev modalities", async () => {
+  it("hides declared non-chat rows, including models.dev modalities, and keeps unknown rows", async () => {
     const { fetchGuard } = buildFetchGuard({
       data: [
         { id: "voice-v2", modalities: { input: ["text"], output: ["audio"] } },
@@ -117,12 +120,12 @@ describe("provider-catalog-live-runtime", () => {
       result.provider.models
         .filter((model) => model.inference?.chat !== false)
         .map((model) => model.id),
-    ).toEqual(["catalog-chat", "multimodal"]);
+    ).toEqual(["catalog-chat", "multimodal", "unclassified"]);
     expect(
       result.provider.models
         .filter((model) => model.inference?.chat === false)
         .map((model) => model.id),
-    ).toEqual(["contradictory", "disabled-chat", "unclassified", "voice-v2"]);
+    ).toEqual(["contradictory", "disabled-chat", "voice-v2"]);
   });
 
   it("fetches and dedupes live model ids with opaque resolved auth", async () => {
@@ -499,9 +502,20 @@ describe("provider-catalog-live-runtime", () => {
       }),
       models[1],
       expect.objectContaining({ id: "sunsetting-chat" }),
+      expect.objectContaining({ id: "unknown-model" }),
       expect.objectContaining({ id: "vision-chat" }),
     ];
-    expect(first.models.filter((model) => model.inference?.chat !== false)).toEqual(expected);
+    expect(first.models.filter(isLikelyChat)).toEqual(expected);
+    expect(
+      first.models.filter((model) => model.inference?.chatEvidence === "unlikely").map((m) => m.id),
+    ).toEqual([
+      "babbage-002",
+      "gpt-3.5-turbo-instruct",
+      "gpt-audio-mini",
+      "gpt-realtime-2",
+      "grok-2-image",
+      "grok-imagine-video",
+    ]);
     expect(second.models).toEqual(first.models);
 
     const compatible = await buildOpenAICompatibleLiveModelProviderConfig({
@@ -514,7 +528,7 @@ describe("provider-catalog-live-runtime", () => {
       apiKey: "provider-key",
       fetchGuard,
     });
-    expect(compatible.models.filter((model) => model.inference?.chat !== false)).toEqual(expected);
+    expect(compatible.models.filter(isLikelyChat)).toEqual(expected);
     expect(fetchGuardMock.mock.calls[1]?.[0].url).toBe(endpoint);
     expect(requestHeaders(fetchGuardMock, 1).get("authorization")).toBe("Bearer provider-key");
 
@@ -546,7 +560,7 @@ describe("provider-catalog-live-runtime", () => {
       readModelId: (row) => readLiveModelCatalogStringField(row, "slug"),
     });
 
-    expect(provider.models.filter((model) => model.inference?.chat !== false)).toEqual([
+    expect(provider.models.filter(isLikelyChat)).toEqual([
       expect.objectContaining({ id: "fresh-chat", input: ["text"] }),
       models[0],
     ]);

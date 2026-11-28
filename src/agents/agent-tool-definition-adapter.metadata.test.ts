@@ -25,4 +25,14 @@ describe("session tool definition metadata", () => {
     expect(isCodeModeControlTool(definition)).toBe(true);
     expect(isCodeModeControlTool(wrapToolDefinition(definition))).toBe(true);
   });
+
+  it("keeps the repeat-guard declaration through session adaptation", () => {
+    const repeatable = { actions: ["poll"] };
+    const [declared, plain] = toToolDefinitions([
+      { ...createStubTool("process"), repeatable },
+      createStubTool("read"),
+    ]);
+    expect(declared && wrapToolDefinition(declared).repeatable).toBe(repeatable);
+    expect(plain && wrapToolDefinition(plain).repeatable).toBeUndefined();
+  });
 });

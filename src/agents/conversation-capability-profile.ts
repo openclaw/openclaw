@@ -58,6 +58,7 @@ function resolveManifestToolProfileNames(
 }
 
 export type ConversationCapabilityProfileParams = {
+  pluginExecutionAuthority?: AdmittedRunOperatorAuthority;
   requesterOrigin?: RequesterOrigin;
   operatorProfileId?: string;
   /** Captured policy owner; null excludes ambient request authority. */
@@ -156,7 +157,11 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
     ...params,
     subagentSessionKey,
     agentId: effective.agentId,
-    messageProvider: callerContext.local ? messageProvider : callerContext.channel,
+    // Local scheduled creators use the execution channel only for account lookup.
+    // Keep the run's provider unchanged for independent reply and event routing.
+    messageProvider: callerContext.local
+      ? (messageProvider ?? params.messageChannel)
+      : callerContext.channel,
     groupId: trustedGroup.groupId,
     groupChannel: trustedGroupChannel,
     groupSpace: trustedGroupSpace,
@@ -223,6 +228,7 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
 
   return {
     ...effective,
+    operatorAuthority: params.pluginExecutionAuthority,
     sessionKey: params.sessionKey,
     subagentSessionKey,
     trustedGroup,
@@ -247,6 +253,12 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
     explicitToolAllowlist: collectExplicitAllowlist(explicitToolAllowlistPolicies),
     explicitToolOverrideAllowlist: collectExplicitAllowlist(explicitOverridePolicies),
     explicitToolDenylist: collectExplicitDenylist(explicitToolAllowlistPolicies),
+    // A fixed listing builds plugins past sender, group and run denies; the turn policy gates calls.
+    sessionToolDenylist: collectExplicitDenylist(
+      explicitToolAllowlistPolicies.filter(
+        (policy) => ![groupPolicy, senderPolicy, runtimeToolPolicy].includes(policy),
+      ),
+    ),
     runtimePluginToolGrant: params.runtimePluginToolGrant,
   };
 }

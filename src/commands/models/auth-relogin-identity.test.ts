@@ -21,6 +21,7 @@ describe("re-login identity boundaries", () => {
     Partial<Parameters<typeof resolveReloginProfileIdentity>[0]> & {
       name: string;
       expected?: typeof profiles;
+      matcher?: typeof matchesPersonalAccount;
     }
   >([
     {
@@ -30,10 +31,7 @@ describe("re-login identity boundaries", () => {
     {
       name: "an unverifiable candidate",
       existingProfiles: { "fixture:one": credential("a"), "fixture:unknown": credential("b") },
-      matchesPersonalAccount: (
-        incoming: AuthProfileCredential,
-        existing: AuthProfileCredential,
-      ) => {
+      matcher: (incoming: AuthProfileCredential, existing: AuthProfileCredential) => {
         if (existing.type === "oauth" && existing.accountId === "b") {
           throw new Error("identity unavailable");
         }
@@ -54,7 +52,7 @@ describe("re-login identity boundaries", () => {
     ({
       profiles: incoming = profiles,
       existingProfiles = { "fixture:old": credential("a") },
-      matchesPersonalAccount: matcher = matchesPersonalAccount,
+      matcher = matchesPersonalAccount,
       requestedProfileId,
       expected = incoming,
     }) => {
@@ -62,21 +60,89 @@ describe("re-login identity boundaries", () => {
         resolveReloginProfileIdentity({
           profiles: incoming,
           existingProfiles,
-          matchesPersonalAccount: matcher,
+          method: { matchesPersonalAccount: matcher },
           requestedProfileId,
         }).profiles,
       ).toEqual(expected);
     },
   );
 
+  it("uses a verified shared match before checking an occupied generated ID", () => {
+    const result = resolveReloginProfileIdentity({
+      profiles,
+      existingProfiles: { "fixture:new": credential("b"), "fixture:work": credential("a") },
+      method: {
+        matchesPersonalAccount: () => false,
+        matchesSharedAccount: matchesPersonalAccount,
+        canReplaceGeneratedProfile: () => false,
+      },
+    });
+    expect(result.profiles[0]?.profileId).toBe("fixture:work");
+    expect(() => result.validateCurrentCredential?.("fixture:work", credential("a"))).not.toThrow();
+  });
+
+  it("guards the final automatic ID against rows outside the provider's snapshot", () => {
+    const result = resolveReloginProfileIdentity({
+      profiles,
+      existingProfiles: {},
+      method: { matchesPersonalAccount, canReplaceGeneratedProfile: matchesPersonalAccount },
+    });
+    expect(result.validateCurrentCredential).toBeTypeOf("function");
+    expect(() => result.validateCurrentCredential?.("fixture:new", undefined)).not.toThrow();
+    // The Control UI shows this too, so it names no CLI-only flag.
+    const collision =
+      "A different account is already saved under this sign-in's profile. Remove that account, then sign in again.";
+    expect(() => result.validateCurrentCredential?.("fixture:new", credential("b"))).toThrow(
+      collision,
+    );
+    expect(() =>
+      result.validateCurrentCredential?.("fixture:new", { ...credential("a"), provider: "other" }),
+    ).toThrow(collision);
+  });
+
   it("rejects a vanished identity unless the login explicitly purged it", () => {
     const result = resolveReloginProfileIdentity({
       profiles,
       existingProfiles: { "fixture:old": credential("a") },
-      matchesPersonalAccount,
+      method: { matchesPersonalAccount },
     });
     expect(() => result.validateCurrentCredential?.("fixture:old", undefined)).toThrow(
       "identity changed",
     );
+  });
+
+  it.each([false, true])("keeps a verified same-account name (force=%s)", (force) => {
+    const existing = { ...credential("a"), displayName: "Personal" };
+    const result = resolveReloginProfileIdentity({
+      profiles,
+      existingProfiles: { "fixture:work": existing },
+      method: { matchesSharedAccount: matchesPersonalAccount, matchesPersonalAccount: () => false },
+      allowMissingReusedProfile: force,
+    });
+    expect(result.profiles).toEqual([
+      {
+        profileId: "fixture:work",
+        credential: { ...profiles[0]!.credential, displayName: "Personal" },
+      },
+    ]);
+    if (force) {
+      expect(() => result.validateCurrentCredential?.("fixture:work", undefined)).not.toThrow();
+    } else {
+      expect(() => result.validateCurrentCredential?.("fixture:work", existing)).not.toThrow();
+    }
+  });
+
+  it.each([
+    ["a", "Personal"],
+    ["b", undefined],
+  ])("keeps a name in an explicit slot only for the same account (%s)", (account, displayName) => {
+    const existing = { ...credential(account), displayName: "Personal" };
+    const result = resolveReloginProfileIdentity({
+      profiles,
+      existingProfiles: { "fixture:new": existing },
+      requestedProfileId: "fixture:new",
+      method: { matchesSharedAccount: matchesPersonalAccount },
+    });
+    expect(result.profiles[0]?.credential.displayName).toBe(displayName);
   });
 });

@@ -77,7 +77,8 @@
   "description": "Dashboard workboard for agent-owned issues and sessions.",
   "catalog": {
     "featured": true,
-    "order": 10
+    "order": 10,
+    "sidebar": true
   },
   "contracts": {
     "tools": [

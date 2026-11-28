@@ -1,4 +1,3 @@
-// Detached chat.send dispatch owns runtime delivery, post-dispatch persistence, and terminalization.
 import { performance } from "node:perf_hooks";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
@@ -55,6 +54,7 @@ import {
 import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 import { finalizeChatSendDispatchedReplies } from "./chat-send-reply-finalization.js";
+// Detached chat.send dispatch owns runtime delivery, post-dispatch persistence, and terminalization.
 import { createAcceptedChatSendRetry, waitForAcceptedChatSendRetry } from "./chat-send-retry.js";
 import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
 import { registerChatSendToolEventRecipients } from "./chat-send-tool-event-recipients.js";
@@ -133,17 +133,16 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     isAgentRunStarted: () => agentRunStarted,
     isRunCurrent,
     abortSignal: activeRunAbort.controller.signal,
-    onCommandBlock: isInternalTextSlashCommandTurn
-      ? (text) =>
-          broadcastChatDelta({
-            context,
-            runId: clientRunId,
-            sessionKey,
-            agentId,
-            text,
-            isCurrent: isRunCurrent,
-          })
-      : undefined,
+    commandTurn: isInternalTextSlashCommandTurn,
+    onCommandBlock: (text) =>
+      broadcastChatDelta({
+        context,
+        runId: clientRunId,
+        sessionKey,
+        agentId,
+        text,
+        isCurrent: isRunCurrent,
+      }),
     getReplyDispatchRun: () => replyDispatchRun,
     logGateway: context.logGateway,
     session,
@@ -409,15 +408,6 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   onTranscriptStartPreparation: () => diagnostics.scope("snapshot")?.finish,
                   abortSignal: activeRunAbort.controller.signal,
                   getProviderLoginConfig: context.getRuntimeConfig,
-                  assertProviderLoginAuthority: () => {
-                    client?.connectionSignal?.throwIfAborted();
-                    if (
-                      client?.invalidated ||
-                      !client?.connect.scopes?.includes("operator.admin")
-                    ) {
-                      throw new Error("Provider login authority is no longer active.");
-                    }
-                  },
                   // Retain this input identity while followup/collect owns its execution.
                   onFollowupQueueDisposition: queuedFollowup.onQueueDisposition,
                   onQueuedFollowupReplyBatch: queuedFollowup.onQueuedFollowupReplyBatch,
@@ -427,12 +417,13 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   media: replyOptionMedia,
                   ...(p.timeoutMs !== undefined ? { timeoutOverrideMs: p.timeoutMs } : {}),
                   thinkingLevelOverride: p.thinking,
+                  normalizeThinkingLevelOverride: request.normalizeThinkingLevelOverride,
                   fastModeOverride: p.fastMode,
-                  queueModeOverride: p.queueMode,
+                  queueModeOverride: admission.operatorAuthority?.participationCeiling
+                    ? "followup"
+                    : p.queueMode,
                   userTurnTranscriptRecorder: userTurnRecorder,
-                  ...injectionDisposition.replyOptions(
-                    p.queueMode === "steer" && Boolean(messageInjectionTarget),
-                  ),
+                  ...injectionDisposition.replyOptions(Boolean(messageInjectionTarget)),
                   fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                   onAgentRunStart,
                   onPreparedAgentRunStart: ({

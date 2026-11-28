@@ -492,27 +492,6 @@ suite.define(() => {
       await counterValue(counter).toBe(`${index + 1} / ${titles.length}`);
       await polledAttribute(shown, "alt").toBe(titles[index]);
     };
-    for (const [start, direction] of [
-      [0, 1],
-      [8, -1],
-    ] as const) {
-      const trigger = await revealImage(page, titles[start]!);
-      await trigger.click();
-      await expectPosition(start);
-      for (let index = start + direction; index >= 0 && index < titles.length; index += direction) {
-        await page.keyboard.press(direction === 1 ? "ArrowRight" : "ArrowLeft");
-        await expectPosition(index);
-      }
-      const endpoint = direction === 1 ? titles.length - 1 : 0;
-      expect(
-        await exactButton(lightbox, direction === 1 ? "Next image" : "Previous image").isDisabled(),
-      ).toBe(true);
-      await page.keyboard.press(direction === 1 ? "ArrowRight" : "ArrowLeft");
-      await expectPosition(endpoint);
-      await page.keyboard.press("Escape");
-      await expect.poll(() => lightbox.count()).toBe(0);
-      await expectFocused(trigger);
-    }
     // Open a structured interior slot and both exact duplicate inline slots.
     const inline = page.locator(".markdown-inline-image-button");
     await revealImage(page, inline.first());

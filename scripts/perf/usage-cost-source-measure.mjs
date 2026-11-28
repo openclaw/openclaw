@@ -36,7 +36,7 @@ assert(Number.isSafeInteger(iterations) && iterations > 0);
 const owner = path.resolve(values.owner);
 const sourceHashes = Object.fromEntries(
   [
-    "src/utils/usage-format.ts",
+    "src/model-catalog/usage-pricing.ts",
     "src/agents/models-config-state.ts",
     "src/model-catalog/pricing.ts",
   ].map((file) => [
@@ -47,7 +47,7 @@ const sourceHashes = Object.fromEntries(
   ]),
 );
 const { resolveModelCostConfig } = await import(
-  pathToFileURL(path.join(owner, "src/utils/usage-format.ts")).href
+  pathToFileURL(path.join(owner, "src/model-catalog/usage-pricing.ts")).href
 );
 fs.mkdirSync(values["fixture-root"], { recursive: true });
 const agentDir = fs.mkdtempSync(path.join(values["fixture-root"], "pricing-missing-"));

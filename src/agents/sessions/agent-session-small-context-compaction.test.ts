@@ -507,7 +507,11 @@ describe("AgentSession small-context compaction", () => {
         "Review these recorded module results.\n" +
         "The module preserves accessible blue buttons.\n".repeat(growthRows);
       const continuation = "Confirm the retained button color.";
-      const firstAnswer = "The agreed button color is blue.\n".repeat(historyRows);
+      // Distinct rows: one repeated line would be stopped as a repetition runaway.
+      const firstAnswer = Array.from(
+        { length: historyRows },
+        (_, row) => `Row ${row}: the agreed button color is blue.\n`,
+      ).join("");
       const summary =
         "The project uses blue buttons. Preserve the recorded accessibility decisions.\n".repeat(
           summaryRows,

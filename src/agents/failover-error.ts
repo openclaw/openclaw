@@ -73,6 +73,8 @@ const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "SessionTranscriptReadFenceError",
   "SqliteWorkerError",
   "SessionCapabilityMetadataChangedError",
+  "SessionDeliveryGenerationUnavailableError",
+  "SessionDeliveryGenerationRevokedError",
 ]);
 
 export { recordModelFallbackStop } from "./model-fallback-stop.js";
@@ -648,6 +650,7 @@ export function coerceToFailoverError(
           authMode: err.authMode ?? context?.authMode,
           status,
           code: err.code,
+          userMessage: err.userMessage,
           rawError:
             err.rawError ??
             (context?.rateLimitRetriesExhausted !== undefined ? message : undefined),

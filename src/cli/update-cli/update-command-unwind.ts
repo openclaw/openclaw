@@ -1,10 +1,7 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import {
-  assertUpdateRecoveryAdmission,
-  inspectPluginCohortRecoveryAdmission,
-} from "../../infra/update-run-recovery-admission.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -14,6 +11,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import { runMutableUpdateRecovery } from "./update-command-mutable-signals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import { assertUpdateCommandRecoveryState } from "./update-command-recovery.js";
 import {
   createUpdateCommandFailureResult,
   UpdateCommandFailure,
@@ -174,22 +172,16 @@ export async function withUpdateCommandRecoveryUnwind(
         }
         paths.add(file);
         await assertUpdateRecoveryAdmission({ env, pluginCohort });
+        const current = assertUpdateCommandRecoveryState({ ...opts, run: { ...run, env } });
+        if (current && !pluginCohort) {
+          throw new UpdateRecoveryRequiredError(current.pair.reservation);
+        }
       }
     };
     try {
       await runMutableUpdateRecovery(admitRecovery);
     } catch (error) {
-      // Repair settles a matching cohort pair; other retained recovery keeps its original owner.
-      const repairable =
-        error instanceof UpdateRecoveryRequiredError &&
-        (await runMutableUpdateRecovery(() =>
-          inspectPluginCohortRecoveryAdmission({ env: run.env }, error.record.runId),
-        ).catch(() => undefined));
-      const pending = pendingFailure(
-        error,
-        failure?.error ?? error,
-        repairable ? "Run `openclaw update repair` to finish this recovery." : undefined,
-      );
+      const pending = pendingFailure(error, failure?.error ?? error);
       if (
         failure &&
         !(failure.error instanceof UpdateCommandFailure) &&

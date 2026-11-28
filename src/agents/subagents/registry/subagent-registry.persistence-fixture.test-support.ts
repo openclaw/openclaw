@@ -19,7 +19,7 @@ import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persi
 import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.js";
 
 const { announceSpy } = vi.hoisted(() => ({
-  announceSpy: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
+  announceSpy: vi.fn(async (): Promise<"delivered" | "undelivered"> => "delivered"),
 }));
 
 vi.mock("../announce/subagent-announce.js", async (importOriginal) => ({

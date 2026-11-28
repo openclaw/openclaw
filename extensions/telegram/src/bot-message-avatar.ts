@@ -84,7 +84,7 @@ export function createTelegramDirectAvatarResolver(params: {
             getFile: (signal) => params.api.getFile(photo.file_id, signal),
           },
           maxBytes: AVATAR_MAX_BYTES,
-          abortSignal,
+          budget: abortSignal,
         });
         return abortSignal.aborted ? undefined : media?.path;
       } catch {

@@ -2,6 +2,7 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createDeferred } from "@solidjs/signals";
 import { action, createMemo, createOptimistic, createStore, onSettled } from "solid-js";
+import { pluginTabLocation } from "../../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../../app/context.ts";
 import { hasOperatorReadAccess } from "../../../app/operator-access.ts";
 import {
@@ -459,6 +460,7 @@ export function createAgentMemory(
     const configState = context.runtimeConfig.state;
     const configObject = currentConfigObject(configState);
     const configuredDreaming = resolveConfiguredDreaming(configObject);
+    const agentId = dreaming.selectedAgentId;
     // The status RPC can complete after config switches the engine Off. Keep the
     // cached payload for a future refresh, but never present it as current runtime state.
     const dreamingStatus = configuredDreaming.engineOff ? null : dreaming.dreamingStatus;
@@ -505,6 +507,25 @@ export function createAgentMemory(
           "memory-wiki",
           { enabledByDefault: false },
         ),
+        onOpenKnowledge:
+          configuredDreaming.pluginId === "knowledge" && agentId
+            ? (query?: string) => {
+                const tab = pluginTabLocation(
+                  { pluginId: "knowledge", id: "overview" },
+                  context.basePath,
+                );
+                const search = new URLSearchParams(tab.search);
+                search.set("p.agent", agentId);
+                search.set("p.view", query ? "search" : "browse");
+                if (query) {
+                  search.set("p.q", query);
+                }
+                context.navigate("plugin", {
+                  pathname: tab.pathname,
+                  search: "?" + search.toString(),
+                });
+              }
+            : undefined,
         wikiImportInsightsLoading: dreaming.resourceReads.wikiImportInsights?.pending ?? false,
         wikiImportInsights: dreaming.wikiImportInsights,
         wikiOverviewLoading: dreaming.resourceReads.wikiOverview?.pending ?? false,
@@ -663,10 +684,12 @@ export function createAgentMemory(
   };
   const statusDataRead = createMemo(() => {
     config.read();
-    const status = resolveConfiguredDreaming(currentConfigObject(context.runtimeConfig.state))
+    const result = resolveConfiguredDreaming(currentConfigObject(context.runtimeConfig.state))
       .engineOff
-      ? null
-      : resourceReads.dreamingStatus().value;
+      ? { value: null }
+      : resourceReads.dreamingStatus();
+    // Retain accepted status after refresh failures, not invented empty lists after a first failure.
+    const status = result.value ?? readResource(result);
     return {
       shortTermCount: status?.shortTermCount ?? 0,
       promotedCount: status?.promotedToday ?? 0,

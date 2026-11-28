@@ -1,5 +1,8 @@
 import { Type } from "typebox";
-import { bindCreatedGoalContinuation } from "../../auto-reply/reply/goal-continuation-return.js";
+import {
+  bindCreatedGoalContinuation,
+  releaseCompletedGoalContinuation,
+} from "../../auto-reply/reply/goal-continuation-return.js";
 import { SessionGoalTransitionError } from "../../config/sessions/goals-transitions.js";
 import {
   createSessionGoal,
@@ -99,7 +102,7 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
     name: "create_goal",
     displaySummary: "Create a thread goal",
     description:
-      "Create a goal only when explicitly requested by the user or system instructions. Set a positive token_budget only when a budget is explicitly requested; otherwise omit it or pass null. Fails if a goal already exists; the user must clear it before starting another.",
+      "Create a goal only when explicitly requested by the user or system instructions. Set a positive token_budget only when a budget is explicitly requested; otherwise omit it or pass null. A completed goal is replaced with a fresh active goal and fresh accounting. Fails if an unfinished goal exists; do not complete or clear unfinished work to replace it.",
     parameters: CreateGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -148,6 +151,9 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
           status,
           ...(note ? { note } : {}),
         });
+        if (goal.status === "complete") {
+          releaseCompletedGoalContinuation({ ...scope, runId: options.runId, goalId: goal.id });
+        }
         return jsonResult({
           status: "updated",
           goal,

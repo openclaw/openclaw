@@ -7,6 +7,7 @@
  * --retained measures real projection/fragment ownership and release (use --expose-gc).
  * --images uses 48 messages with 12 frozen 64 KiB inline images (user + tool results),
  * the real host image normalizer and existing serialization on both revisions.
+ * --large-images uses 20 frozen 1–5 MiB images (60 MiB decoded); use --mode build.
  * --mode system isolates system normalization; use --prepared-system and --iterations 20000.
  * --prepared-system carries a session-owned 64 KiB prompt revision through request construction.
  * All non-build modes consume contiguous bytes, flattening older Blob bodies like guarded fetch.
@@ -26,10 +27,13 @@
  * none|observer|service-tier selects no hook, an observer, or the bundled tier wrapper.
  * --diagnostics reports cold/warm/appended encode work separately from timing passes.
  * --interval-ms 200 paces each request to compare memory at five requests/second.
+ * --cpu-profile attributes sampled CPU separately from timing/allocation runs.
+ * ownerSites attributes copy, comparison, inspection and encoding work; multiply
+ * bytes/request by the workload's requests/minute for a normalized allocation rate.
  */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session, type HeapProfiler, type Profiler } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
@@ -46,8 +50,10 @@ const { values } = parseArgs({
     mode: { type: "string", default: "full" },
     iterations: { type: "string" },
     allocation: { type: "boolean", default: false },
+    "cpu-profile": { type: "boolean", default: false },
     retained: { type: "boolean", default: false },
     "prepared-system": { type: "boolean", default: false },
+    "large-images": { type: "boolean", default: false },
     images: { type: "boolean", default: false },
     restored: { type: "boolean", default: false },
     turns: { type: "string" },
@@ -64,10 +70,15 @@ assert(
 );
 assert(values.turns === undefined || ["100", "500"].includes(values.turns));
 assert(values.hook === undefined || ["none", "observer", "service-tier"].includes(values.hook));
+if (values["large-images"]) {
+  values.images = true;
+}
 const messageCount = values.turns
   ? Number(values.turns) * 3
   : values.images
-    ? 48
+    ? values["large-images"]
+      ? 66
+      : 48
     : Number(values.messages);
 const iterations = parseStrictIntegerOption({
   raw: values.iterations,
@@ -169,13 +180,15 @@ for (let index = 0; index < messageCount; index++) {
 }
 if (values.images) {
   // Synthetic PNG headers exercise MIME sniffing without invoking a native image codec.
-  const bytes = Buffer.alloc(64 * 1024, 0xa7);
-  Buffer.from("89504e470d0a1a0a0000000d49484452", "hex").copy(bytes);
-  for (let index = 0; index < 36; index += 6) {
+  let imageIndex = 0;
+  for (let index = 0; index < (values["large-images"] ? 60 : 36); index += 6) {
     for (const offset of [0, 2]) {
       const message = messages[index + offset]!;
       assert(message.role === "toolResult" || message.role === "user");
       assert(Array.isArray(message.content));
+      const size = values["large-images"] ? (1 + (imageIndex++ % 5)) * 1024 * 1024 : 64 * 1024;
+      const bytes = Buffer.alloc(size, 0xa7);
+      Buffer.from("89504e470d0a1a0a0000000d49484452", "hex").copy(bytes);
       bytes.writeUInt32BE(index + offset, 32);
       message.content.push({
         type: "image",
@@ -277,6 +290,8 @@ async function collect(): Promise<void> {
 if (values.diagnostics) {
   assert(serialize);
   const nativeStringify = JSON.stringify;
+  const nativeDescriptor = Object.getOwnPropertyDescriptor;
+  const nativeOwnKeys = Reflect.ownKeys;
   const NativeBlob = Blob;
   const counts = {
     messageEncodes: 0,
@@ -285,12 +300,22 @@ if (values.diagnostics) {
     blobAssemblyMs: 0,
     frozenChecks: 0,
     frozenCheckMs: 0,
+    plainChecks: 0,
+    plainCheckMs: 0,
+    descriptorReads: 0,
+    ownKeyWalks: 0,
   };
   configureAiTransportHost({
     ...getAiTransportHost(),
     immutableData: {
       freezeJsonSnapshot,
-      isPlainData,
+      isPlainData(value) {
+        const start = performance.now();
+        const result = isPlainData(value);
+        counts.plainCheckMs += performance.now() - start;
+        counts.plainChecks++;
+        return result;
+      },
       isDeeplyFrozenPlainData(value) {
         const start = performance.now();
         const result = isDeeplyFrozenPlainData(value);
@@ -300,6 +325,14 @@ if (values.diagnostics) {
       },
     },
   });
+  Object.getOwnPropertyDescriptor = (value, key) => {
+    counts.descriptorReads++;
+    return nativeDescriptor(value, key);
+  };
+  Reflect.ownKeys = (value) => {
+    counts.ownKeyWalks++;
+    return nativeOwnKeys(value);
+  };
   JSON.stringify = (value, replacer, space) => {
     const result =
       typeof replacer === "function"
@@ -366,6 +399,8 @@ if (values.diagnostics) {
     }
   } finally {
     JSON.stringify = nativeStringify;
+    Object.getOwnPropertyDescriptor = nativeDescriptor;
+    Reflect.ownKeys = nativeOwnKeys;
     globalThis.Blob = NativeBlob;
   }
   process.exit(0);
@@ -500,9 +535,11 @@ const prepared = await build();
 let lastPrepared = prepared;
 let last: Uint8Array<ArrayBuffer> | undefined;
 let lastSystem: ReturnType<typeof buildAnthropicSystemBlocks>;
+const wallSamples: number[] = [];
 async function run() {
+  wallSamples.length = 0;
   for (let index = 0; index < iterations; index++) {
-    const requestStart = intervalMs ? performance.now() : 0;
+    const requestStart = performance.now();
     if (values.mode === "system") {
       assert(context);
       lastSystem = buildAnthropicSystemBlocks(
@@ -519,6 +556,7 @@ async function run() {
     }
     lastPrepared = values.mode === "serialize" ? prepared : await build();
     last = values.mode === "build" ? undefined : await encode(lastPrepared);
+    wallSamples.push(performance.now() - requestStart);
     if (intervalMs) {
       await delay(Math.max(0, intervalMs - (performance.now() - requestStart)));
     }
@@ -538,8 +576,16 @@ await run();
 await verifyLast();
 await collect();
 const inspector = new Session();
-if (values.allocation) {
+assert(!(values.allocation && values["cpu-profile"]), "Profile CPU and allocation separately");
+if (values.allocation || values["cpu-profile"]) {
   inspector.connect();
+}
+if (values["cpu-profile"]) {
+  await inspector.post("Profiler.enable");
+  await inspector.post("Profiler.setSamplingInterval", { interval: 100 });
+  await inspector.post("Profiler.start");
+}
+if (values.allocation) {
   await inspector.post("HeapProfiler.startSampling", {
     samplingInterval: 4096,
     includeObjectsCollectedByMajorGC: true,
@@ -557,21 +603,66 @@ const elapsedMs = performance.now() - start;
 const collections = gc.stop()?.statistics ?? [];
 let allocationBytesPerRequest: number | undefined;
 let sites: Array<{ name: string; bytesPerRequest: number }> | undefined;
+const ownerNames = new Set([
+  "estimateBase64DecodedBytes",
+  "normalizeAnthropicInlineContentBlocks",
+  "copyPlainData",
+  "samePlainData",
+  "inspectPlainData",
+  "isDeeplyFrozenPlainData",
+  "encodeMessageFragment",
+]);
+const ownerSites = new Map<string, number>();
 if (values.allocation) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
   const totals = new Map<string, number>();
-  const sum = (node: HeapProfiler.SamplingHeapProfileNode): number => {
+  const sum = (node: HeapProfiler.SamplingHeapProfileNode, owner?: string): number => {
     const name = `${node.callFrame.functionName}@${node.callFrame.url.split("/").at(-1)}`;
     totals.set(name, (totals.get(name) ?? 0) + node.selfSize);
-    return node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
+    const current = ownerNames.has(node.callFrame.functionName)
+      ? node.callFrame.functionName
+      : owner;
+    if (current) {
+      ownerSites.set(current, (ownerSites.get(current) ?? 0) + node.selfSize);
+    }
+    return node.selfSize + node.children.reduce((total, child) => total + sum(child, current), 0);
   };
   allocationBytesPerRequest = sum(profile.head) / iterations;
   sites = [...totals]
     .toSorted((a, b) => b[1] - a[1])
     .slice(0, 10)
     .map(([name, bytes]) => ({ name, bytesPerRequest: bytes / iterations }));
-  inspector.disconnect();
 }
+if (values["cpu-profile"]) {
+  const { profile } = await inspector.post("Profiler.stop");
+  const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
+  const owners = new Map<number, string>();
+  const visit = (node: Profiler.ProfileNode, owner?: string): void => {
+    const current = ownerNames.has(node.callFrame.functionName)
+      ? node.callFrame.functionName
+      : owner;
+    if (current) {
+      owners.set(node.id, current);
+    }
+    for (const id of node.children ?? []) {
+      const child = nodes.get(id);
+      if (child) {
+        visit(child, current);
+      }
+    }
+  };
+  const root = profile.nodes[0];
+  if (root) {
+    visit(root);
+  }
+  for (const [index, id] of (profile.samples ?? []).entries()) {
+    const owner = owners.get(id);
+    if (owner) {
+      ownerSites.set(owner, (ownerSites.get(owner) ?? 0) + (profile.timeDeltas?.[index] ?? 0));
+    }
+  }
+}
+inspector.disconnect();
 const expectedWire = await verifyLast();
 const memoryBeforeFinalGc = process.memoryUsage();
 globalThis.gc?.();
@@ -580,7 +671,7 @@ console.log(
     messages: messageCount,
     mode: values.mode,
     preparedSystem: values["prepared-system"],
-    images: values.images ? 12 : 0,
+    images: values.images ? (values["large-images"] ? 20 : 12) : 0,
     turns: values.turns,
     hook: values.hook,
     intervalMs,
@@ -593,6 +684,8 @@ console.log(
     mainThreadCpuUsPerRequest: (cpu.user + cpu.system) / iterations,
     allocationBytesPerRequest,
     elapsedMs,
+    wallMedianMs: wallSamples.toSorted((a, b) => a - b)[Math.floor(wallSamples.length / 2)],
+    wallP95Ms: wallSamples.toSorted((a, b) => a - b)[Math.floor(wallSamples.length * 0.95)],
     gcMs: collections.reduce((sum, entry) => sum + entry.cost / 1000, 0),
     gcMaxMs: Math.max(0, ...collections.map((entry) => entry.cost / 1000)),
     gcCount: collections.length,
@@ -602,5 +695,9 @@ console.log(
     hostLoadBefore,
     hostLoadAfter: loadavg(),
     sites,
+    ownerSites: Object.fromEntries(
+      [...ownerSites].map(([name, total]) => [name, total / iterations]),
+    ),
+    ownerSiteUnits: values.allocation ? "bytes/request" : "sampled-us/request",
   }),
 );

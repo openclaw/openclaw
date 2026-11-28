@@ -63,10 +63,9 @@ export function registerRequesterWakeOwnershipTests(options: {
         childAgentId: "main",
         cleanupCompletedAt: undefined,
         requesterTurnRunId,
-        retireAfterRequesterTurn: true,
+        retireAfterSettle: true,
       };
       Object.assign(input.subagent, owner);
-      input.subagent.requesterSettleWake!.retireAfterSettle = true;
       options.persistOwner(input);
 
       await expect(
@@ -82,7 +81,7 @@ export function registerRequesterWakeOwnershipTests(options: {
           childSessionKey: "global",
           childAgentId: "main",
           requesterTurnRunId,
-          retireAfterRequesterTurn: true,
+          retireAfterSettle: true,
         });
         expect(retained?.requesterSettleWake).toBeUndefined();
         expect(retained?.browserCleanupDispatchedAt).toBeUndefined();

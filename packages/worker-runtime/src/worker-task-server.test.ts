@@ -166,7 +166,7 @@ it("preserves transferred results, failures, and resource ordering for synchrono
       initialize: vi.fn(),
       onMessage: vi.fn(),
       installTaskContext: vi.fn(),
-      onIdle: vi.fn(),
+      onIdle: () => order.push("idle"),
     },
   );
   const task = (taskId: number, input: string) => {
@@ -187,7 +187,7 @@ it("preserves transferred results, failures, and resource ordering for synchrono
     const waiting = task(3, "waiting");
     const afterClosed = once(afterReply, "message");
     parent.emit("message", { closeResource: true, key: "after", resourcePort: afterReceipt });
-    expect(order).toEqual(["task:first", "task:fail", "close:before"]);
+    expect(order).toEqual(["task:first", "idle", "task:fail", "idle", "close:before"]);
     finishClose.resolve();
     expect(await beforeClosed).toEqual([{ ok: true }]);
     expect(await waiting).toEqual(success(3));
@@ -195,13 +195,17 @@ it("preserves transferred results, failures, and resource ordering for synchrono
     expect(await task(4, "last")).toEqual(success(4));
     expect(order).toEqual([
       "task:first",
+      "idle",
       "task:fail",
+      "idle",
       "close:before",
       "closed:before",
       "task:waiting",
       "close:after",
       "closed:after",
+      "idle",
       "task:last",
+      "idle",
     ]);
   } finally {
     finishClose.resolve();
@@ -210,3 +214,67 @@ it("preserves transferred results, failures, and resource ordering for synchrono
     }
   }
 });
+
+it.each([false, true])(
+  "publishes idle only after queued resource closes settle (first rejects: %s)",
+  async (rejectFirst) => {
+    const parent = Object.assign(new EventEmitter(), { postMessage: vi.fn() });
+    boundary.port = parent;
+    const firstStarted = Promise.withResolvers<void>();
+    const secondStarted = Promise.withResolvers<void>();
+    const firstFinished = Promise.withResolvers<void>();
+    const secondFinished = Promise.withResolvers<void>();
+    const idle = Promise.withResolvers<void>();
+    const onIdle = vi.fn(() => idle.resolve());
+    const first = new MessageChannel();
+    const second = new MessageChannel();
+    serveOwnedWorkerTasks(
+      vi.fn(),
+      {
+        closeResource: async (key) => {
+          if (key === "first") {
+            firstStarted.resolve();
+            await firstFinished.promise;
+            if (rejectFirst) {
+              throw new Error("first close failed");
+            }
+          } else {
+            secondStarted.resolve();
+            await secondFinished.promise;
+          }
+        },
+      },
+      {
+        initialize: vi.fn(),
+        onMessage: vi.fn(),
+        installTaskContext: vi.fn(),
+        onIdle,
+      },
+    );
+    const firstReply = once(first.port2, "message");
+    const secondReply = once(second.port2, "message");
+    parent.emit("message", { closeResource: true, key: "first", resourcePort: first.port1 });
+    parent.emit("message", { closeResource: true, key: "second", resourcePort: second.port1 });
+    try {
+      await firstStarted.promise;
+      expect(onIdle).not.toHaveBeenCalled();
+      firstFinished.resolve();
+      await secondStarted.promise;
+      expect(onIdle, "Pending resource cleanup must not publish idle").not.toHaveBeenCalled();
+      expect(await firstReply).toEqual([
+        rejectFirst ? { ok: false, error: "first close failed", detail: undefined } : { ok: true },
+      ]);
+      secondFinished.resolve();
+      await idle.promise;
+      expect(await secondReply).toEqual([{ ok: true }]);
+      expect(onIdle).toHaveBeenCalledTimes(1);
+    } finally {
+      firstFinished.resolve();
+      secondFinished.resolve();
+      await Promise.all([firstReply, secondReply, idle.promise]);
+      for (const port of [first.port1, first.port2, second.port1, second.port2]) {
+        port.close();
+      }
+    }
+  },
+);

@@ -373,7 +373,7 @@ suite.define(() => {
           const viewport = await layoutBox(thread);
           expect(firstBox.y).toBeGreaterThanOrEqual(viewport.y - 2);
           expect(firstBox.y).toBeLessThan(viewport.y + viewport.height);
-          await pane.locator(".chat-history-sentinel").waitFor({ state: "detached" });
+          await pane.locator(".chat-history-boundary").waitFor({ state: "detached" });
           expect((await gateway.getRequests("chat.history")).length).toBe(manual ? 2 : 1);
         }
       },

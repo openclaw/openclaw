@@ -8,29 +8,29 @@ import {
   type SessionPendingInput,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { prepareSqliteScope } from "./session-accessor.sqlite-scope.js";
-import { hasSessionActorEmptyPendingInputHistory } from "./session-actor-replica.js";
+import { readSessionActorEmptyPendingInputHistory } from "./session-actor-replica.js";
 import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type {
   PendingInputHistoryQuery,
   PendingInputHistorySnapshot,
+  PendingInputHistoryTerminalCheck,
 } from "./session-pending-input-history.types.js";
 import { projectSessionPendingInput } from "./session-pending-input-value.js";
 import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
-import type { InternalSessionEntry } from "./types.js";
 
 type Scope = SessionAccessScope & { agentId: string; sessionId: string };
 
 /** Capture live queue custody now; preserve it only after the session marker commits. */
 export async function captureSessionQueuedInputsForRestart(scope: Scope) {
-  const captured = captureSessionStoreReadTarget(
+  const captured = await captureSessionStoreReadTarget(
     scope,
     "Queued shutdown inputs changed their database owner",
   );
   const resolved = await prepareSqliteScope(scope);
-  const physical = captured.resolve(resolved);
+  const physical = await captured.resolve(resolved);
   physical.assertCurrent();
   const queuedInputs = listLiveSessionPendingInputs(
     physical.identity.canonicalPath,
@@ -39,20 +39,8 @@ export async function captureSessionQueuedInputsForRestart(scope: Scope) {
     true,
   );
   const queuedInputIds = queuedInputs.map((input) => input.inputId);
-  const queuedInputSources: NonNullable<
-    InternalSessionEntry["resumeAfterRestart"]
-  >["queuedInputSources"] = {};
-  for (const input of queuedInputs) {
-    if (input.runId) {
-      queuedInputSources[input.inputId] = {
-        runId: input.runId,
-        source: input.recoverySource ?? { kind: "unavailable" },
-      };
-    }
-  }
   return {
     queuedInputIds,
-    queuedInputSources: queuedInputs.length > 0 ? queuedInputSources : undefined,
     preserve: () => {
       physical.assertCurrent();
       preserveSessionQueuedInputOwnersForRestart(queuedInputIds);
@@ -114,7 +102,7 @@ async function readPendingInputRows(
     ...scope,
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
-  const target = captureSessionStoreReadTarget(
+  const target = await captureSessionStoreReadTarget(
     captured,
     "Pending input history changed its captured database owner",
   );
@@ -124,7 +112,7 @@ async function readPendingInputRows(
     identity,
     source: readSource,
     assertReadCurrent,
-  } = target.resolve(resolved);
+  } = await target.resolve(resolved);
   const query = {
     ...options,
     sessionKey: resolved.sessionKey,
@@ -139,11 +127,11 @@ async function readPendingInputRows(
     return { rows: [], total: 0 };
   }
   assertReadCurrent();
-  if (
-    !query.queuedInputIds &&
-    hasSessionActorEmptyPendingInputHistory(identity, resolved.sessionKey, query.sessionId)
-  ) {
-    return { rows: [], total: 0 };
+  const emptyHistory =
+    !query.queuedOnly &&
+    readSessionActorEmptyPendingInputHistory(identity, resolved.sessionKey, query.sessionId);
+  if (emptyHistory) {
+    return { rows: [], total: 0, ...(query.includeQueueObservation && { runState: emptyHistory }) };
   }
   return withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
     if (onRead) {
@@ -186,9 +174,25 @@ async function readPendingInputRows(
 
 export async function listSessionPendingInputs(
   scope: Scope,
-  options: { limit?: number; before?: number } = {},
+  options: {
+    limit?: number;
+    before?: number;
+    audience?: import("./session-pending-input-audience.js").PendingInputAudience;
+    observeQueue?: (
+      hasQueuedInput: boolean | undefined,
+      matchesTerminal: PendingInputHistoryTerminalCheck,
+    ) => void;
+  } = {},
 ): Promise<SessionPendingInputPage> {
-  const { rows, total, nextBefore } = await readPendingInputRows(scope, options);
+  const { observeQueue, ...query } = options;
+  const { rows, total, hasQueuedInput, runState, nextBefore } = await readPendingInputRows(scope, {
+    ...query,
+    ...(observeQueue && { includeQueueObservation: true }),
+  });
+  observeQueue?.(
+    total === 0 ? false : hasQueuedInput,
+    (runId, status) => runState?.lastRunId === runId && runState.status === status,
+  );
   return {
     items: rows.toReversed().map(projectSessionPendingInput),
     total: total ?? 0,
@@ -196,16 +200,11 @@ export async function listSessionPendingInputs(
   };
 }
 
-/** Called only for a session explicitly marked by graceful shutdown. */
-export async function readSessionQueuedInputPage(
-  scope: Scope,
-  options: { queuedInputIds: readonly string[]; before?: number },
-) {
-  if (options.queuedInputIds.length === 0) {
-    return { rows: [], total: 0 };
-  }
+/** Read all unconsumed durable queued inputs without current process custody. */
+export async function readSessionQueuedInputPage(scope: Scope, options: { before?: number } = {}) {
   return readPendingInputRows(scope, {
     ...options,
+    queuedOnly: true,
     limit: 20,
     includeTotal: false,
   });

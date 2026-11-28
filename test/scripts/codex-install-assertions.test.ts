@@ -906,6 +906,49 @@ describe("Codex install helpers", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("reports bounded message route shape without private transcript content", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-route-diagnostic-");
+    const fixture = createCodexNpmPluginLiveFixture(root);
+    const privateValue = "private-message-target-and-credential";
+    const messages = Array.from({ length: 17 }, (_, index) => [
+      transcriptToolCall("send-" + index, "message", {
+        action: "send",
+        message: privateValue,
+        final: false,
+        target: privateValue,
+      }),
+      transcriptToolResult("send-" + index, "message", index === 0),
+    ]).flat();
+    replaceSessionTranscriptMessages({
+      stateDir: path.join(root, "state"),
+      sessionId: fixture.sessionId,
+      messages,
+    });
+    const result = runLiveAssertions(fixture, ["diagnose-followthrough", fixture.sessionId]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).not.toContain(privateValue);
+    const diagnostic = JSON.parse(
+      result.stdout.trim().replace("codex_followthrough_routing: ", ""),
+    );
+    expect(diagnostic).toMatchObject({
+      status: "available",
+      sessionKeyPresent: true,
+      truncated: true,
+    });
+    expect(diagnostic.messageCalls).toHaveLength(16);
+    expect(diagnostic.messageCalls[0]).toEqual({
+      action: "send",
+      final: false,
+      routeFields: { channel: false, target: true, to: false, channelId: false, targets: false },
+      result: "failed",
+    });
+    expect(diagnostic.messageCalls[1].result).toBe("completed");
+    const unavailable = runLiveAssertions(fixture, ["diagnose-followthrough", "missing-session"]);
+    expect(unavailable.status).toBe(0);
+    expect(unavailable.stdout.trim()).toBe('codex_followthrough_routing: {"status":"unavailable"}');
+  });
+
   it.each(["sqlite", "legacy-json"] as const)(
     "accepts progress, artifact work, and completion with the %s session contract",
     (sessionStoreContract) => {

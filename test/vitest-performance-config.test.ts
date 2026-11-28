@@ -85,7 +85,11 @@ describe("filesystem module cache ownership", () => {
     transitionLock("1.0.0");
     return { root, generation, transitionLock, ...files };
   };
-  const runCacheApi = (root: string, source: string) =>
+  const runCacheApi = (
+    root: string,
+    source: string,
+    cacheConfig = loadVitestPerformanceConfig({}, "linux", root),
+  ) =>
     runNode(
       root,
       root,
@@ -95,7 +99,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createVitest } from ${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("vitest/node")).href)};
 const root = ${JSON.stringify(root)};
-const cacheConfig = ${JSON.stringify(loadVitestPerformanceConfig({}, "linux", root))};
+const cacheConfig = ${JSON.stringify(cacheConfig)};
 const create = (options = {}, overrides = {}) => createVitest("test", {
   root, config: false, watch: false, ...cacheConfig, ...options,
 }, overrides);
@@ -106,6 +110,75 @@ const withContext = async (options, overrides, run) => {
 ${source}
 `),
     );
+
+  it.each([
+    { name: "explicit zero", env: { OPENCLAW_VITEST_FS_MODULE_CACHE: "0" }, platform: "linux" },
+    {
+      name: "explicit false",
+      env: { OPENCLAW_VITEST_FS_MODULE_CACHE: " FALSE " },
+      platform: "darwin",
+    },
+    { name: "Windows default", env: {}, platform: "win32" },
+    { name: "Windows runner", env: { RUNNER_OS: "Windows" }, platform: "linux" },
+  ] as const)("does not create filesystem transforms for $name", ({ env, platform }) => {
+    const { root, write } = prepareCacheFixture("disabled");
+    write("subject.js", "export const value = 42;");
+    runCacheApi(
+      root,
+      `
+await withContext({}, {}, async ctx => {
+  const { value } = await ctx.getRootProject().import("./subject.js");
+  assert.equal(value, 42);
+  assert.equal(ctx.config.fsModuleCache, false);
+});
+assert.equal(fs.existsSync(path.join(root, "node_modules", ".vitest-cache")), false);
+assert.equal(fs.existsSync(path.join(root, ".cache", "vitest")), false);
+`,
+      loadVitestPerformanceConfig(env, platform, root),
+    );
+  });
+
+  it("honors benchmark CLI opt-outs when the config enables both caches", () => {
+    const { root, write, read } = prepareCacheFixture("cli-disabled");
+    write("fixture.test.js", 'test("runs without caches", () => expect(42).toBe(42));');
+    write(
+      "vitest.config.mjs",
+      `export default ${JSON.stringify({
+        root,
+        test: {
+          globals: true,
+          include: ["fixture.test.js"],
+          maxWorkers: 1,
+          cache: true,
+          fsModuleCache: true,
+          fsModuleCachePath: path.join(root, "transforms"),
+        },
+      })};`,
+    );
+    runNode(
+      root,
+      root,
+      vitestArgs(root, [
+        "--no-cache",
+        "--no-fsModuleCache",
+        "--reporter=json",
+        "--outputFile",
+        path.join(root, "result.json"),
+      ]),
+    );
+    expect(JSON.parse(read("result.json"))).toMatchObject({
+      success: true,
+      numTotalTests: 1,
+      numPassedTests: 1,
+    });
+    for (const directory of [
+      "node_modules/.vite/vitest",
+      "node_modules/.vitest-cache",
+      "transforms",
+    ]) {
+      expect(fs.existsSync(path.join(root, directory)), directory).toBe(false);
+    }
+  });
 
   it("preserves each project's optimized dependency identity when reusing shared transforms", () => {
     const { root } = prepareCacheFixture("optimizer-identity");

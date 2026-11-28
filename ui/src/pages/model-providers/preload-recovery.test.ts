@@ -20,7 +20,7 @@ it("catches a catalog publication between route preload and page mount", async (
     providerOutcomes: [{ provider: "openai", status: "ready" }],
     models: [{ id: "fixture", name: "Fixture", provider: "openai", available: true }],
   };
-  publishCatalog(context, "main", { ...ready, pendingProviders: ["openai"] });
+  publishCatalog(context, "main", { models: [], pendingProviders: ["openai"] });
   const releaseAuth = deferNextAuthStatus();
   const originalRequest = request.getMockImplementation()!;
   request.mockImplementation(async (method: string) => {

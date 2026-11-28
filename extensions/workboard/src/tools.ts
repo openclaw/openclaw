@@ -177,20 +177,6 @@ const toolSchemas = {
     createdCardIds: Type.Optional(
       Type.Array(Type.String(), { description: "Cards created during this run." }),
     ),
-    claims: Type.Optional(
-      Type.Array(
-        strictObject({
-          statement: Type.String({ description: "One thing you claim the result does." }),
-          proofId: Type.Optional(
-            Type.String({ description: "Existing proof id that backs this claim." }),
-          ),
-        }),
-        {
-          description:
-            "Optional itemized claims, recorded as your claims; completion never waits on them.",
-        },
-      ),
-    ),
   }),
   verify: strictObject({
     id: cardIdField(),
@@ -199,8 +185,7 @@ const toolSchemas = {
       WORKBOARD_VERIFICATION_OUTCOMES.map((outcome) => Type.Literal(outcome)),
       { description: "Your conclusion." },
     ),
-    claimId: Type.Optional(Type.String({ description: "Claim record you checked." })),
-    proofId: Type.Optional(Type.String({ description: "Proof record you checked." })),
+    proofId: Type.Optional(Type.String({ description: "Worker proof record you checked." })),
     artifactId: Type.Optional(Type.String({ description: "Artifact you checked." })),
     runId: Type.Optional(Type.String({ description: "Run whose result you checked." })),
     note: Type.Optional(Type.String({ description: "Short finding." })),
@@ -302,7 +287,13 @@ export function createWorkboardTools(params: {
         const childId = readStringParam(record, "childId", { required: true });
         const token = record.token as string | undefined;
         return jsonResult({
-          card: redactClaimToken(await store.linkCards(parentId, childId, { ownerId, token })),
+          card: redactClaimToken(
+            await store.linkCards(
+              (await store.requireCardByIdOrPrefix(parentId)).id,
+              (await store.requireCardByIdOrPrefix(childId)).id,
+              { ownerId, token },
+            ),
+          ),
         });
       },
     },
@@ -315,7 +306,9 @@ export function createWorkboardTools(params: {
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
         const id = readStringParam(record, "id", { required: true });
-        const { card, workerContext } = await store.readWithWorkerContext(id);
+        const { card, workerContext } = await store.readWithWorkerContext(id, {
+          allowPrefix: true,
+        });
         return jsonResult({
           card: redactClaimToken(card),
           workerContext,
@@ -331,7 +324,8 @@ export function createWorkboardTools(params: {
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
         const id = readStringParam(record, "id", { required: true });
-        const claimed = await store.claim(id, {
+        const card = await store.requireCardByIdOrPrefix(id);
+        const claimed = await store.claim(card.id, {
           ownerId,
           ttlSeconds: record.ttlSeconds,
         });

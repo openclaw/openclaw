@@ -9,6 +9,7 @@ import {
   WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
 } from "./worker-exec-approval-schemas.js";
 import {
+  WORKER_EXEC_DEFAULTS_PROTOCOL_FEATURE,
   WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOL_METHODS,
@@ -98,6 +99,7 @@ export const WORKER_PROTOCOL_FEATURES = [
   NODE_WORKER_PROCESS_CHANGES_PROTOCOL_FEATURE,
   WORKER_COMPUTER_PROTOCOL_FEATURE,
   WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
+  WORKER_EXEC_DEFAULTS_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE,
   "worker-inference-v1",
@@ -272,6 +274,15 @@ export const WorkerRuntimeContextMessageSchema = Type.Union([
     details: closedObject({
       kind: Type.Enum(["prompt-update", "runtime-context"]),
       turnScoped: Type.Boolean(),
+      replay: Type.Optional(Type.Literal("append")),
+      dataRanges: Type.Optional(
+        Type.Array(
+          closedObject({
+            start: Type.Integer({ minimum: 0 }),
+            end: Type.Integer({ minimum: 1 }),
+          }),
+        ),
+      ),
     }),
   }),
 ]);

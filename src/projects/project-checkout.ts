@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import { insideGitCheckout, runGit } from "../agents/worktrees/git.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   OpenClawStateLeaseError,
-  type OpenClawStateLeaseContext,
-  withOpenClawStateLease,
+  type OpenClawStateAsyncLeaseContext,
+  withOpenClawStateLeaseAsync,
 } from "../state/openclaw-state-lease.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 
 const PROJECT_CHECKOUT_LEASE_MS = 30_000;
 const PROJECT_CHECKOUT_WAIT_MS = 30_000;
@@ -23,26 +23,27 @@ export class ProjectCheckoutBusyError extends OpenClawStateLeaseError {
 
 export async function withProjectCheckoutLifecycle<T>(
   repoRoot: string,
-  options: OpenClawStateDatabaseOptions & {
+  options: {
+    context: OpenClawStateWorkerContext;
     signal?: AbortSignal;
     waitMs?: number;
     operation?: string;
   },
-  run: (lease: OpenClawStateLeaseContext) => Promise<T>,
+  run: (lease: OpenClawStateAsyncLeaseContext) => Promise<T>,
 ): Promise<T> {
   let entered = false;
   try {
-    return await withOpenClawStateLease(
+    return await withOpenClawStateLeaseAsync(
       {
         scope: "projects.checkout",
         key: repoRoot,
         signal: options.signal,
-        database: { scope: "shared", options },
         leaseMs: PROJECT_CHECKOUT_LEASE_MS,
         waitMs: options.waitMs ?? PROJECT_CHECKOUT_WAIT_MS,
         leaseLabel: "project checkout lease",
         operationLabel: options.operation ?? "projects.checkout.lifecycle",
       },
+      options.context,
       (lease) => {
         entered = true;
         return run(lease);
@@ -74,7 +75,7 @@ export async function resolveProjectDirectory(projectPath: string): Promise<stri
 
 export async function resolveProjectCheckout(projectPath: string) {
   const requested = await resolveProjectDirectory(projectPath);
-  if (!insideGitCheckout(requested)) {
+  if (!(await insideGitCheckout(requested))) {
     throw new ProjectCheckoutError(`project path is not a git checkout: ${projectPath}`);
   }
   const rootResult = await runGit(requested, ["rev-parse", "--show-toplevel"], {

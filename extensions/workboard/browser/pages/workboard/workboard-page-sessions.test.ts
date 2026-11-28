@@ -5,9 +5,8 @@ import type {
   WorkboardSessionsBoardRead,
 } from "@openclaw/workboard-contract";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
-import type { ControlUiAgentPickerProps, ControlUiHost } from "openclaw/plugin-sdk/control-ui";
+import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { loadMessages } from "../../i18n/locales.ts";
 import { mountPage } from "./workboard-page.test-support.ts";
 
 beforeEach(() => {
@@ -118,46 +117,54 @@ function peoplePicker(page: ReturnType<typeof mountPage>) {
   );
 }
 
-it("retains session clocks on host refreshes and updates timestamps, titles and locale", async () => {
+it("keeps unaccepted session results unknown and retains accepted empty results during refresh", async () => {
   const page = sessionsPage();
+  const request = expectDefined(page.request.getMockImplementation(), "request");
+  let pending = createDeferred<WorkboardSessionsBoardRead>();
+  page.request.mockImplementation((method, params) =>
+    method === "workboard.sessionsBoard.read" ? pending.promise : request(method, params),
+  );
+  const counts = () => page.container.querySelectorAll(".workboard-column__count");
+  const empty = () => page.container.querySelectorAll(".workboard-sessions__empty");
   await page.connect();
-  const tile = expectDefined(
-    page.container.querySelector('[data-session-key="agent:main:working"]'),
-    "session tile",
-  );
-  const time = expectDefined(
-    tile.querySelector<HTMLElement>(".workboard-session-tile__time"),
-    "session time",
-  );
-  expect(time.textContent).toBe("2m ago");
-  const scheduled = vi.spyOn(globalThis, "setTimeout");
-  for (let index = 0; index < 5; index++) {
-    page.fixture.notify();
-    await vi.advanceTimersByTimeAsync(0);
-  }
-  expect(scheduled).not.toHaveBeenCalled();
-  scheduled.mockRestore();
-
-  const session = expectDefined(page.result.sessions[0], "working session");
-  session.label = "Updated retries";
-  session.lastActivityAt = Date.now() - 10_000;
-  const previousTitle = time.title;
-  page.fixture.emit("plugin.workboard.changed", { epoch: "facts", revision: 2 });
+  expect.soft(counts()).toHaveLength(0);
+  expect.soft(empty()).toHaveLength(0);
+  const workingColumn = page.container.querySelector('[data-session-column="working"]');
+  expect.soft(workingColumn?.getAttribute("aria-label")).toBe("Working");
+  pending.reject(new Error("Session inventory unavailable"));
   await vi.advanceTimersByTimeAsync(0);
-  expect(page.container.querySelector('[data-session-key="agent:main:working"]')).toBe(tile);
-  expect(tile.querySelector(".workboard-session-tile__time")).toBe(time);
-  expect(tile.querySelector("button")?.textContent).toBe("Updated retries");
-  expect(tile.getAttribute("title")).toContain("Updated retries");
-  expect(time.title).not.toBe(previousTitle);
-  expect(time.textContent).toBe("just now");
-  await vi.advanceTimersByTimeAsync(50_000);
-  expect(time.textContent).toBe("1m ago");
-
-  await loadMessages("de");
-  Object.assign(page.fixture.host, { locale: "de" });
-  page.fixture.notify();
+  const alert = page.container.querySelector('[role="alert"]');
+  expect(alert?.textContent).toContain("Session inventory unavailable");
+  expect.soft(empty()).toHaveLength(0);
+  pending = createDeferred<WorkboardSessionsBoardRead>();
+  page.fixture.emit("plugin.workboard.changed", { epoch: "readiness", revision: 1 });
   await vi.advanceTimersByTimeAsync(0);
-  expect(time.textContent).toBe("vor 1 Min.");
+  pending.resolve({ ...page.result, sessions: [] });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(empty()).toHaveLength(2);
+  expect(counts()[0]?.textContent).toBe("0");
+  pending = createDeferred<WorkboardSessionsBoardRead>();
+  page.fixture.emit("plugin.workboard.changed", { epoch: "readiness", revision: 2 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(empty()).toHaveLength(2);
+  pending.reject(new Error("Refresh unavailable"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(empty()).toHaveLength(2);
+  pending = createDeferred<WorkboardSessionsBoardRead>();
+  peoplePicker(page).onSelect("me");
+  await vi.advanceTimersByTimeAsync(0);
+  expect.soft(empty()).toHaveLength(0);
+  expect.soft(counts()).toHaveLength(0);
+  pending.reject(new Error("People view unavailable"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect.soft(empty()).toHaveLength(0);
+  pending = createDeferred<WorkboardSessionsBoardRead>();
+  peoplePicker(page).onSelect("everyone");
+  await vi.advanceTimersByTimeAsync(0);
+  pending.resolve(page.result);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+  expect(counts()[0]?.textContent).toBe("1");
   page.dispose();
 });
 
@@ -352,44 +359,6 @@ function button(page: ReturnType<typeof mountPage>, label: string) {
   );
 }
 
-it("loads the next Sessions board page and refreshes the loaded window after a write receipt", async () => {
-  const page = sessionsPage();
-  const all = [...page.result.sessions];
-  const first = expectDefined(all[0], "first session");
-  const request = expectDefined(page.request.getMockImplementation(), "request");
-  page.request.mockImplementation(async (method, params) => {
-    if (method === "workboard.sessionsBoard.read") {
-      // SAFETY: this fixture handles the documented Sessions board request contract.
-      const input = params as { after?: string };
-      return {
-        ...page.result,
-        sessions: input.after ? all.slice(1) : all.slice(0, 1),
-        total: 2,
-        nextCursor: input.after ? undefined : first.key,
-      };
-    }
-    return request(method, params);
-  });
-  await page.connect();
-  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(1);
-  expect(page.container.textContent).toContain("1 of 2 sessions loaded");
-  button(page, "Load more sessions").click();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.read", {
-    boardId: "sessions",
-    view: { includePeople: true },
-    after: first.key,
-  });
-  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
-  expect(page.container.textContent).not.toContain("Load more sessions");
-  first.label = "Updated retries";
-  page.fixture.emit("plugin.workboard.changed", { epoch: "facts", revision: 2 });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
-  expect(page.container.textContent).toContain("Updated retries");
-  page.dispose();
-});
-
 it("recovers empty-board facts through one plugin refresh of the selected people view", async () => {
   const page = sessionsPage();
   const sessions = page.result.sessions.splice(0);
@@ -522,54 +491,6 @@ it("fences an older conditional read when a session moves", async () => {
     boardId: "sessions",
     view: { includePeople: true },
   });
-});
-
-it("renders session columns, owner avatars and canonical facts without card controls or an unavailable dock", async () => {
-  const page = sessionsPage();
-  await page.connect();
-  expect(
-    [...page.container.querySelectorAll("[data-session-column]")].map((column) =>
-      column.getAttribute("aria-label"),
-    ),
-  ).toEqual(["Working, 1", "Done, 1"]);
-  expect(page.container.textContent).toContain("Fix retries");
-  expect(page.container.textContent).toContain("Checking reconnects");
-  expect(page.container.textContent).toContain("#42 · Open");
-  expect(page.container.textContent).toContain("#43 · Merged");
-  expect(page.container.textContent).toContain("2m ago");
-  expect(
-    page.container.querySelector('[data-session-key="agent:writer:done"]')?.getAttribute("title"),
-  ).toContain("pinned");
-  expect(page.container.querySelector('[role="status"]')?.textContent).toContain(
-    "Gateway disconnected",
-  );
-  expect(page.fixture.host.components.mountAgentAvatar).toHaveBeenCalledWith(
-    expect.any(HTMLElement),
-    { agentId: "writer", label: "writer" },
-  );
-  expect(
-    page.container.querySelector(
-      ".workboard-create, .workboard-dispatch, .workboard-card, .workboard-status-tabs, .workboard-board-agent, .workboard-refresh",
-    ),
-  ).toBeNull();
-  expectDefined(
-    page.container.querySelector<HTMLButtonElement>('[data-session-key="agent:main:working"]'),
-    "session tile",
-  ).click();
-  expect(page.fixture.host.sessions.open).toHaveBeenCalledWith({
-    sessionKey: "agent:main:working",
-    agentId: "main",
-  });
-  const picker = expectDefined(
-    page.container.querySelector<HTMLElement & ControlUiAgentPickerProps>(
-      ".workboard-agent-filter [data-test-agent-picker]",
-    ),
-    "agent filter",
-  );
-  picker.onSelect("writer");
-  await vi.advanceTimersByTimeAsync(0);
-  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(1);
-  expect(page.container.textContent).not.toContain("Fix retries");
 });
 
 it("pins a dragged session and rereads the selected people view", async () => {

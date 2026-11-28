@@ -58,10 +58,11 @@ function workspaceSelection(
 
 /** Observation retains the selected session while the existing-only shared reader runs. */
 export async function readSharedGitHubPublication(
-  session: PublicationSessionIdentity,
+  inputSession: PublicationSessionIdentity,
   selector: SharedGitHubPublicationSelector,
   preparedRead?: Awaited<ReturnType<typeof prepareGitHubPublicationSession>>["readCurrent"],
 ) {
+  const session = { ...inputSession };
   const capturedSelector = { ...selector };
   let workspaceIndependent = false;
   const memory = captureSessionEntryMetadataRead(session, () => {});

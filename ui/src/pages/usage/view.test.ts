@@ -66,14 +66,14 @@ function insightCard(container: ParentNode, title: string): Element | undefined 
   );
 }
 
-function averageCostSummary(container: ParentNode) {
-  const hint = container.querySelector("#usage-summary-hint-average-cost");
+function costSummary(container: ParentNode) {
+  const hint = container.querySelector("#usage-summary-hint-cost");
+  const badge = [...container.querySelectorAll(".usage-metric-badge")].find((entry) =>
+    entry.querySelector("small")?.textContent?.startsWith("Cost"),
+  );
   return {
     hint: hint?.parentElement?.querySelector('[slot="content"]')?.textContent?.trim(),
-    value: hint
-      ?.closest(".usage-summary-card")
-      ?.querySelector(".usage-summary-value")
-      ?.textContent?.trim(),
+    value: badge?.querySelector("strong")?.textContent?.trim(),
   };
 }
 
@@ -108,6 +108,52 @@ describe("renderUsage", () => {
     expect(buttons().map((button) => button.getAttribute("aria-label"))).toEqual([
       "Remove filter: Provider",
     ]);
+  });
+
+  it("keeps selected providers usable without claiming an unknown inventory is empty", () => {
+    const props = createUsageProps();
+    const onQueryDraftChange = (props.callbacks.filters.onQueryDraftChange = vi.fn());
+    props.filters.queryDraft = "provider:openai";
+    const { container, setData } = mountReactiveUsage(props);
+    document.body.appendChild(container);
+    onTestFinished(() => container.remove());
+    const { surface } = openUsageFilter(container, "Provider");
+    expect(surface.querySelector('[aria-label="openai"]')?.getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    const search = surface.querySelector<HTMLInputElement>("input")!;
+    search.value = "anthropic";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(surface.querySelector(".usage-value-picker__empty")).toBeNull();
+    setData((current) => ({ ...current, error: "Report unavailable" }));
+    flush();
+    expect(surface.querySelector(".usage-value-picker__empty")).toBeNull();
+    const filterOptions = { agent: [], channel: [], provider: [], model: [], tool: [] };
+    setData((current) => ({ ...current, error: null, filterOptions }));
+    flush();
+    expect(surface.querySelector(".usage-value-picker__empty")?.textContent).toContain("anthropic");
+    setData((current) => ({
+      ...current,
+      filterOptions: { ...filterOptions, provider: ["anthropic"] },
+    }));
+    flush();
+    expect(surface.querySelector("input")).toBe(search);
+    expect(search.value).toBe("anthropic");
+    expect(surface.querySelector('[aria-label="anthropic"]')).not.toBeNull();
+    expect(surface.querySelector(".usage-value-picker__empty")).toBeNull();
+    search.focus();
+    const confirm = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    Object.defineProperty(confirm, "keyCode", { value: 229 });
+    search.dispatchEvent(confirm);
+    expect(confirm.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(search);
+    expect(onQueryDraftChange).not.toHaveBeenCalled();
+    search.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+    search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(onQueryDraftChange).toHaveBeenCalledExactlyOnceWith(
+      "provider:openai provider:anthropic ",
+    );
   });
 
   it("keeps an IME-composed Enter from applying the usage query", () => {
@@ -181,14 +227,9 @@ describe("renderUsage", () => {
   });
 
   it.each(["session", "day"] as const)(
-    "restores the range warning after clearing a known-zero %s filter",
+    "distinguishes selected %s pricing and restores the range warning when cleared",
     (filter) => {
       const fixture = createRecordedCostUsage();
-      const zeroSession = fixture.sessions[0]!;
-      const selected: Partial<UsageProps["filters"]> =
-        filter === "session"
-          ? { selectedSessions: [zeroSession.key] }
-          : { selectedDays: zeroSession.usage!.activityDates! };
       const props = usageFixture(
         {
           ...fixture,
@@ -197,36 +238,42 @@ describe("renderUsage", () => {
         { startDate: fixture.costDaily[0]!.date },
       );
       const clearedFilters = { ...props.filters };
-      const container = document.createElement("div");
-      const [currentFilters, setFilters] = createSignal(props.filters);
-      mountUsage(
-        {
-          ...props,
-          get filters() {
-            return currentFilters();
-          },
-          get data() {
-            return { ...props.data, ...projectUsageData(fixture.sessions, currentFilters()) };
-          },
-        },
-        container,
-      );
-      for (const { filters, missing, value } of [
-        { filters: clearedFilters, missing: true, value: "$0.03" },
-        { filters: { ...clearedFilters, ...selected }, missing: false, value: "$0.00" },
-        { filters: clearedFilters, missing: true, value: "$0.03" },
-      ]) {
+      const { container, setFilters, setData } = mountReactiveUsage(props);
+      for (const [index, missing, cost] of [
+        [-1, true, "$0.20"],
+        [0, false, "$0.00"],
+        [-1, true, "$0.20"],
+        [1, false, "$0.20"],
+        [2, true, "Unpriced"],
+      ] as const) {
+        const session = fixture.sessions[index];
+        const selected: Partial<UsageProps["filters"]> = !session
+          ? {}
+          : filter === "session"
+            ? { selectedSessions: [session.key] }
+            : { selectedDays: session.usage!.activityDates! };
+        const filters = { ...clearedFilters, ...selected };
         setFilters(filters);
+        setData({ ...props.data, ...projectUsageData(fixture.sessions, filters) });
         flush();
-        expect(averageCostSummary(container)).toEqual({
-          hint: missing
-            ? "Known cost, including estimates, divided by all user and agent messages. Some usage has no cost data."
-            : "Known cost, including estimates, divided by all user and agent messages.",
-          value,
+        expect(costSummary(container)).toEqual({
+          hint: missing ? "Some usage has no cost data." : undefined,
+          value: cost,
         });
       }
     },
   );
+
+  it("retains the cost hint button when a refresh changes the total but not the warning", () => {
+    const fixture = createRecordedCostUsage();
+    const { container, setData } = mountReactiveUsage(usageFixture(fixture));
+    const hint = container.querySelector("#usage-summary-hint-cost");
+    expect(hint).not.toBeNull();
+    setData((data) => ({ ...data, totals: { ...fixture.totals, totalCost: 5 } }));
+    flush();
+    expect(costSummary(container).value).toBe("$5.00");
+    expect(container.querySelector("#usage-summary-hint-cost")).toBe(hint);
+  });
 
   it("surfaces a provider-usage failure instead of hiding the panel", () => {
     const container = mountFixture({ providerUsageUnavailable: true });
@@ -279,15 +326,11 @@ describe("renderUsage", () => {
     try {
       expect(container.querySelector(".usage-filter-menu__query input")).toBeNull();
       const { dropdown, surface, trigger } = openProviderFilter(container);
-      const first = [...dropdown.querySelectorAll('[role="menuitemcheckbox"]')].find(
-        (item) => item.getAttribute("aria-label") === "clear",
-      )!;
+      const first = dropdown.querySelector('[aria-label="clear"]')!;
       expect(trigger.getAttribute("aria-label")).toBe("Provider");
       await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
       for (const provider of ["clear", "second"]) {
-        const option = [
-          ...dropdown.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]'),
-        ].find((item) => item.getAttribute("aria-label") === provider)!;
+        const option = dropdown.querySelector<HTMLButtonElement>(`[aria-label="${provider}"]`)!;
         option.click();
         await waitForSolid(() => expect(option.getAttribute("aria-checked")).toBe("true"));
         expect(trigger.textContent).toContain(provider === "clear" ? "clear" : "2");
@@ -297,9 +340,7 @@ describe("renderUsage", () => {
         expect(surface.matches(":popover-open")).toBe(true);
       }
       expect(onQueryDraftChange.mock.lastCall?.[0]).toBe("provider:clear provider:second ");
-      const mainTrigger = container.querySelector<HTMLButtonElement>(
-        ".usage-filter-menu__trigger",
-      )!;
+      const mainTrigger = container.querySelector<HTMLButtonElement>('[aria-label="Filters"]')!;
       mainTrigger.click();
       await waitForSolid(() => expect(mainTrigger.getAttribute("aria-expanded")).toBe("false"));
       expect(first.isConnected).toBe(true);
@@ -512,7 +553,41 @@ describe("renderUsage", () => {
     expect(firstDay?.getAttribute("aria-label")).toContain("May 1, 2026");
     expect(firstDay?.getAttribute("aria-label")).toContain("990 tokens, $9.90");
     expect(firstDay?.querySelector(".daily-bar--empty")).toBeNull();
-    expect(textAt(container, ".cost-window--range .cost-window__value")).toBe("$10.00");
+  });
+
+  it("shows throughput from timed turns on the selected day", () => {
+    const latency = {
+      count: 1,
+      avgMs: 60_000,
+      p95Ms: 60_000,
+      minMs: 60_000,
+      maxMs: 60_000,
+      timedMs: 60_000,
+      timedTokens: 1_000,
+      timedCost: 0.1,
+    };
+    const otherDay = { ...latency, timedTokens: 5_000, timedCost: 0.5 };
+    const container = mountFixture(
+      {
+        totals: usageTotals(10_000, 1),
+        overview: createUsageOverview({ durationMs: 48 * 60 * 60 * 1000, durationCount: 1 }),
+        aggregates: {
+          ...buildAggregatesFromSessions([]),
+          latency: { ...otherDay, count: 2, timedMs: 120_000, timedTokens: 6_000, timedCost: 0.6 },
+          dailyLatency: [
+            { date: "2026-05-13", ...otherDay },
+            { date: "2026-05-14", ...latency },
+          ],
+        },
+      },
+      { startDate: "2026-05-01", endDate: "2026-05-14", selectedDays: ["2026-05-14"] },
+    );
+
+    const throughput = container
+      .querySelector("#usage-summary-hint-throughput")
+      ?.closest(".usage-summary-card");
+    expect(throughput && textAt(throughput, ".usage-summary-value")).toBe("1.0K tok/min");
+    expect(throughput && textAt(throughput, ".usage-summary-sub")).toBe("$0.10 / min");
   });
 
   it("retains an accepted zero overview and guards refresh until settlement, but not an error or retired result", async () => {

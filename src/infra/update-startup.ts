@@ -24,6 +24,7 @@ import {
   isGatewayExternallySupervised,
 } from "./gateway-supervision.js";
 import { compareSemverStrings } from "./npm-registry-spec.js";
+import { detectRespawnSupervisor } from "./supervisor-markers.js";
 import { checkTelemetryUpdate } from "./telemetry.js";
 import { UpdateCampaignController } from "./update-campaign.js";
 import {
@@ -41,6 +42,8 @@ import { resolveNpmChannelTag, type UpdateCheckResult } from "./update-check.js"
 import { devUpdateTargetFromGitTarget } from "./update-dev-target.js";
 import { prepareStartupUpdateInstall, withUpdateInstallStatus } from "./update-install-status.js";
 import type { StartupInstallStatus } from "./update-install-status.types.js";
+import { owesAutomaticPluginRetry, UPDATE_OWED_STEP_HISTORY } from "./update-run-owed-step.js";
+import { listUpdateRunsAsync } from "./update-run-reader.js";
 import { runCampaignUpdate, type AutoUpdateRunner } from "./update-startup-auto-run.js";
 import { canRunDevGitCampaign, resolveDevGitUpdate } from "./update-startup-refresh.js";
 import {
@@ -210,6 +213,14 @@ function clearAutoState(nextState: UpdateCheckState): void {
   delete nextState.autoFirstSeenAt;
 }
 
+/** Unreadable history proves nothing is owed, so it never starts a retry. */
+async function readOwedPluginRetry(): Promise<boolean> {
+  return listUpdateRunsAsync({ limit: UPDATE_OWED_STEP_HISTORY }).then(
+    (runs) => owesAutomaticPluginRetry(runs, VERSION),
+    () => false,
+  );
+}
+
 async function recordAutoUpdateAttempt(version: string): Promise<void> {
   const attemptAt = resolveUpdateCheckNowMs(Date.now());
   const attemptState = await readState();
@@ -272,6 +283,9 @@ async function runGatewayUpdateCheckOwned(
     installStatus: StartupInstallStatus,
     channel: "stable" | "beta" | "dev",
     tag: string,
+    // An owed-step retry gates new campaigns on its own cooldown and revalidates live state
+    // after the idle wait, immediately before the update run is created.
+    retry?: { canStart: () => boolean; admit: () => Promise<boolean> },
   ) => {
     const { root, status } = installStatus;
     const canApply = () => {
@@ -296,7 +310,8 @@ async function runGatewayUpdateCheckOwned(
       target,
       canStart: () =>
         canApply() &&
-        (!cfg.update?.auto?.schedule || autoScheduleWindow(cfg, Date.now()) !== undefined),
+        (!cfg.update?.auto?.schedule || autoScheduleWindow(cfg, Date.now()) !== undefined) &&
+        (retry?.canStart() ?? true),
       inspect: params.activeWorkInspectors,
       onChange: (campaign) => {
         const current = getUpdateSchedule();
@@ -332,8 +347,13 @@ async function runGatewayUpdateCheckOwned(
         setSchedule(campaign ? { ...current, campaign } : withoutUpdateCampaign(current));
       },
       apply: ({ forced, target: admittedTarget }) =>
-        lifecycle.run(() =>
-          runCampaignUpdate({
+        lifecycle.run(async () => {
+          // Ending the campaign here settles only this campaign; a newer one keeps its target.
+          if (retry && !(await retry.admit())) {
+            params.log.info("update campaign ended before applying: nothing left to retry");
+            return "failed";
+          }
+          return runCampaignUpdate({
             channel,
             mode: admittedTarget.kind === "git" ? "git" : status.packageManager,
             version:
@@ -351,8 +371,8 @@ async function runGatewayUpdateCheckOwned(
             campaign: updateCampaign,
             onUpdateRunCreated: params.onUpdateRunCreated,
             signal: params.signal,
-          }),
-        ),
+          });
+        }),
     });
   };
   const announceDevGitUpdate: NonNullable<UpdateCheckLifecycle["announceDevGitUpdate"]> = async (
@@ -669,7 +689,50 @@ async function runGatewayUpdateCheckOwned(
     if (channel !== "extended-stable") {
       clearAutoState(nextState);
     }
-    retireUpdateTarget(getUpdateSchedule() ?? initialSchedule, updateCampaign, params);
+    // A current core can still owe plugin convergence from the update that installed it. The
+    // same-version update converges plugins and retries owed steps through the existing handoff.
+    // The registry must name this exact version so the handoff can resolve its tag.
+    const retryChannel =
+      cmp === 0 && shouldRunAutoUpdate && (channel === "stable" || channel === "beta")
+        ? channel
+        : undefined;
+    const retryOwed =
+      retryChannel !== undefined &&
+      Boolean(
+        detectRespawnSupervisor(process.env, process.platform, {
+          includeLinuxOpenClawGatewayServiceMarker: true,
+        }),
+      ) &&
+      (await readOwedPluginRetry());
+    if (retryChannel && !isCurrent()) {
+      return;
+    }
+    if (retryChannel && retryOwed) {
+      setAvailable(null);
+      // No target is published: nothing newer is available.
+      const { target: _target, ...current } = getUpdateSchedule() ?? initialSchedule;
+      setSchedule(current);
+      // The cooldown counts elapsed time from the automatic update that installed this version;
+      // a cron window says only when a campaign may start, and the previous one can be minutes old.
+      const cooldownEndsAtMs =
+        state.autoLastAttemptVersion === VERSION &&
+        lastAttemptAt !== null &&
+        Number.isFinite(lastAttemptAt)
+          ? lastAttemptAt + ONE_HOUR_MS
+          : undefined;
+      const announced = updateCampaign.getState() !== undefined;
+      // An announced retry keeps its campaign, including a hold, across later checks; the ledger
+      // ends it once the handed-off run, a manual update, or a repair takes the row.
+      announceUpdate({ kind: "package", version: VERSION }, installStatus, retryChannel, tag, {
+        canStart: () => cooldownEndsAtMs === undefined || Date.now() >= cooldownEndsAtMs,
+        admit: readOwedPluginRetry,
+      });
+      if (!announced && updateCampaign.getState()) {
+        params.log.info("automatic update will retry owed plugin steps", { version: VERSION, tag });
+      }
+    } else {
+      retireUpdateTarget(getUpdateSchedule() ?? initialSchedule, updateCampaign, params);
+    }
   }
 
   await writeState(nextState);

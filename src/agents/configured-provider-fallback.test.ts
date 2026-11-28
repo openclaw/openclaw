@@ -34,21 +34,6 @@ const localProvider = configuredProvider("http://127.0.0.1:9191/v1", [
 ]);
 
 describe("resolveConfiguredProviderFallback", () => {
-  it("recognizes normalized default provider keys", () => {
-    expect(
-      resolveConfiguredProviderFallback({
-        cfg: configuredProviders({
-          " OpenAI ": configuredProvider(defaultProviderBaseUrl, [
-            configuredModel("configured-default", "Configured Default"),
-          ]),
-          "local-provider": localProvider,
-        }),
-        defaultProvider: "openai",
-        defaultModel: "configured-default",
-      }),
-    ).toBeNull();
-  });
-
   it("preserves configured provider preference order", () => {
     expect(
       resolveConfiguredProviderFallback({
@@ -59,8 +44,6 @@ describe("resolveConfiguredProviderFallback", () => {
           ]),
           second: localProvider,
         }),
-        defaultProvider: "openai",
-        defaultModel: undefined,
       }),
     ).toEqual({ provider: "first", model: "first-model" });
   });

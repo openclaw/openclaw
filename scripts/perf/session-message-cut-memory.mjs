@@ -67,6 +67,11 @@ if (isMainThread) {
   const database = agent.openOpenClawAgentDatabase(options);
   const key = `agent:main:${workerData.key}`;
   const entry = readSessionEntryRow(database, key).entry;
+  const rowsBefore = Number(
+    database.db
+      .prepare("SELECT count(*) AS n FROM transcript_events WHERE session_id=?")
+      .get(entry.sessionId).n,
+  );
   let peak = 0,
     queries = 0,
     rows = 0,
@@ -127,22 +132,29 @@ if (isMainThread) {
       sample();
       assert.equal(outcome.status, "created");
       if (process.env.OOM_VERIFY) {
+        // The cut keeps the transcript and appends one leaf control, so every
+        // pre-cut row must still hold its own payload bytes.
         const target = outcome.entry.sessionId;
-        const count = database.db.prepare(
-          "SELECT count(*) AS n FROM transcript_events WHERE session_id=?",
-        );
-        const sourceCount = count.get(entry.sessionId).n;
-        assert.equal(typeof sourceCount, "number");
-        assert.equal(count.get(target).n, Number(sourceCount) + 1);
+        assert.equal(target, entry.sessionId);
         assert.equal(
-          database.db
-            .prepare(
-              "SELECT count(*) AS n FROM transcript_events a JOIN transcript_events b ON a.seq=b.seq WHERE a.session_id=? AND b.session_id=? AND a.seq>0 AND (a.event_json IS NOT b.event_json OR a.event_zstd IS NOT b.event_zstd OR a.event_utf8_bytes IS NOT b.event_utf8_bytes)",
-            )
-            .get(entry.sessionId, target).n,
+          Number(
+            database.db
+              .prepare("SELECT count(*) AS n FROM transcript_events WHERE session_id=?")
+              .get(target).n,
+          ),
+          rowsBefore + 1,
+        );
+        assert.equal(
+          Number(
+            database.db
+              .prepare(
+                "SELECT count(*) AS n FROM transcript_events WHERE session_id=? AND seq>0 AND event_json IS NULL AND event_zstd IS NULL",
+              )
+              .get(target).n,
+          ),
           0,
         );
-        parentPort.postMessage({ verifiedPayloadRows: Number(sourceCount) - 1 }, []);
+        parentPort.postMessage({ verifiedPayloadRows: rowsBefore - 1 }, []);
       }
       assert.equal(outcome.editorText, "x".repeat(Number(process.env.OOM_EVENT_BYTES ?? 32768)));
       throw rollback;

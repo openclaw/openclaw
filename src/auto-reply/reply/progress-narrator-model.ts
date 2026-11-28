@@ -1,3 +1,4 @@
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   prepareUtilityCompletionForAgent,
   runUtilityCompletion,
@@ -55,6 +56,8 @@ export async function generateNarrationWithUtilityModel(params: {
   prepared: NonNullable<Awaited<ReturnType<typeof prepareNarrationModel>>>;
   input: ProgressNarrationInput;
   abortSignal: AbortSignal;
+  /** The turn's admitted authority; execution skips utility candidates its role refuses. */
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   timeoutMs: number;
 }): Promise<{ text: string | null; error?: string }> {
   try {
@@ -67,6 +70,7 @@ export async function generateNarrationWithUtilityModel(params: {
       prompt: buildNarrationUserPrompt(params.input),
       timeoutMs: params.timeoutMs,
       abortSignal: params.abortSignal,
+      ...(params.operatorAuthority ? { operatorAuthority: params.operatorAuthority } : {}),
       answerTokenBudget: 4_096,
       streamParams: { temperature: 0.3 },
     });

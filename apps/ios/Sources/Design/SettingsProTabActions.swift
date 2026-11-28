@@ -3,118 +3,60 @@ import SwiftUI
 import UserNotifications
 
 extension SettingsProTab {
+    /// A status row (label, description, current value) heading a detail page.
     func detailStatusCard(
-        icon: String,
         title: OpenClawTextValue,
         detail: OpenClawTextValue,
         value: OpenClawTextValue,
-        color: Color,
-        actionTitle: LocalizedStringKey? = nil,
-        actionSystemImage: String = "arrow.right",
-        action: (() -> Void)? = nil) -> some View
+        header: LocalizedStringKey) -> some View
     {
         Section {
-            HStack(spacing: 12) {
-                SettingsIcon(systemName: icon, color: color)
-                VStack(alignment: .leading, spacing: 2) {
-                    title.text
-                        .font(OpenClawType.headline)
-                    detail.text
-                        .font(OpenClawType.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 8)
-                value.text
-                    .font(OpenClawType.subheadMedium)
-                    .foregroundStyle(color)
-            }
-            if let action, let actionTitle {
-                Button(action: action) {
-                    Label(actionTitle, systemImage: actionSystemImage)
-                        .font(OpenClawType.subheadSemiBold)
-                        .frame(maxWidth: .infinity)
-                }
-                .openClawProminentButton()
-            }
+            SettingsDescriptionRow(title, description: detail, value: value)
+        } header: {
+            SettingsSectionTitle(header)
         }
     }
 
     var diagnosticChecksCard: some View {
-        Section("Checks") {
+        Section {
             let run = self.diagnosticsRunPresentation
-            self.diagnosticCheckRow(
-                icon: "stethoscope",
-                title: "Last Run",
-                detail: .verbatim(self.diagnosticsLastRunText),
-                value: .verbatim(run.value),
-                color: run.color)
-            let gateway = self.gatewayStatusPresentation
-            self.diagnosticCheckRow(
-                icon: "antenna.radiowaves.left.and.right",
-                title: "Gateway Link",
-                detail: .verbatim(gateway.detail),
-                value: .verbatim(gateway.value),
-                color: gateway.color)
-            self.diagnosticCheckRow(
-                icon: "dot.radiowaves.left.and.right",
-                title: "Discovery",
-                detail: .verbatim(self.gatewayController.discoveryStatusText),
-                value: .verbatim(self.gatewayController.gateways.count.formatted()),
-                color: self.gatewayController.gateways.isEmpty ? .secondary : OpenClawBrand.accent)
-            let talkConfig = self.gatewayTalkConfigPresentation
-            self.diagnosticCheckRow(
-                icon: "waveform",
-                title: "Talk Config",
-                detail: .verbatim(talkConfig.detail),
-                value: .verbatim(talkConfig.value),
-                color: talkConfig.color)
-            self.diagnosticCheckRow(
-                icon: "bell",
-                title: "Notifications",
-                detail: "Approval and event alert channel",
-                value: .verbatim(self.notificationPresentation.text),
-                color: self.notificationPresentation.color)
-            self.diagnosticCheckRow(
-                icon: "rectangle.on.rectangle",
-                title: "Screen Capture",
-                detail: "Live foreground capture state",
-                value: .verbatim(self.appModel.screenRecordActive
-                    ? String(localized: "live")
-                    : String(localized: "idle")),
-                color: self.appModel.screenRecordActive ? OpenClawBrand.ok : .secondary)
-            self.diagnosticCheckRow(
-                icon: "mic",
-                title: "Voice Wake",
-                detail: .verbatim(self.appModel.voiceWake.statusText),
-                value: .verbatim(self.voiceWakeEnabled
-                    ? String(localized: "on")
-                    : String(localized: "off")),
-                color: self.voiceWakeEnabled ? OpenClawBrand.ok : .secondary)
-        }
-    }
-
-    func diagnosticCheckRow(
-        icon: String,
-        title: OpenClawTextValue,
-        detail: OpenClawTextValue,
-        value: OpenClawTextValue,
-        color: Color) -> some View
-    {
-        HStack(spacing: 12) {
-            SettingsIcon(systemName: icon, color: color)
-            VStack(alignment: .leading, spacing: 2) {
-                title.text
-                    .font(OpenClawType.subheadSemiBold)
-                detail.text
-                    .font(OpenClawType.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            if let lastRun = self.diagnosticsLastRunText {
+                SettingsDescriptionRow("Last run", description: .verbatim(lastRun), value: .verbatim(run))
+            } else {
+                SettingsDetailRow("Last run", value: .verbatim(run))
             }
-            Spacer(minLength: 8)
-            value.text
-                .font(OpenClawType.subhead)
-                .foregroundStyle(.secondary)
+            let gateway = self.gatewayStatusPresentation
+            SettingsDescriptionRow(
+                "Connection",
+                description: .verbatim(gateway.detail),
+                value: .verbatim(gateway.value))
+            SettingsDescriptionRow(
+                "Discovery",
+                description: .verbatim(self.gatewayController.discoveryStatusText),
+                value: .verbatim(self.gatewayController.gateways.count.formatted()))
+            let talkConfig = self.gatewayTalkConfigPresentation
+            SettingsDescriptionRow(
+                "Talk config",
+                description: .verbatim(talkConfig.detail),
+                value: .verbatim(talkConfig.value))
+            SettingsDescriptionRow(
+                "Notifications",
+                description: "Approval and event alerts",
+                value: .verbatim(self.notificationPresentation.text))
+            SettingsDescriptionRow(
+                "Screen capture",
+                description: "Screen recording while the app is open",
+                value: .verbatim(self.appModel.screenRecordActive
+                    ? String(localized: "Live")
+                    : String(localized: "Idle")))
+            SettingsDescriptionRow(
+                "Voice Wake",
+                description: .verbatim(self.appModel.voiceWake.statusText),
+                value: .verbatim(self.voiceWakeEnabled
+                    ? String(localized: "On")
+                    : String(localized: "Off")))
+        } header: {
+            SettingsSectionTitle("Checks")
         }
     }
 
@@ -162,7 +104,7 @@ extension SettingsProTab {
         self.pendingForgetGateway = nil
         guard await self.gatewayController.forgetGateway(stableID: entry.stableID) else {
             self.setupStatusText = String(
-                format: String(localized: "Could not forget %@."),
+                format: String(localized: "Couldn’t forget %@."),
                 entry.name)
             self.refreshGatewayRegistry()
             return
@@ -232,7 +174,6 @@ extension SettingsProTab {
         } else {
             self.manualGatewayContextPath = nil
         }
-        self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
         let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInstanceId.isEmpty else { return }
         guard !self.appModel.isLocalGatewayFixtureEnabled,
@@ -258,29 +199,6 @@ extension SettingsProTab {
         self.pendingTargetSuppression.releaseAutoConnect(controller: self.gatewayController)
     }
 
-    func connect(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
-        let supersededSetupLease = self.takeStagedGatewaySetupSuppression()
-        defer {
-            if let supersededSetupLease {
-                self.gatewayController.resumeAutoConnect(after: supersededSetupLease)
-            }
-        }
-        self.connectingGateway = .gateway(gateway.id)
-        defer {
-            self.connectingGateway = nil
-            self.refreshGatewayRegistry()
-        }
-        self.manualGatewayEnabled = false
-        self.gatewayAuthFields.selectTarget(
-            gateway.stableID,
-            instanceId: self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines),
-            allowManualOverride: false)
-        GatewaySettingsStore.saveDiscoveredGatewayStableID(gateway.stableID, preferred: true)
-        if let err = await self.gatewayController.connectWithDiagnostics(gateway) {
-            self.setupStatusText = err
-        }
-    }
-
     func applySetupCodeAndConnect() async {
         guard let attemptID = self.beginGatewaySetupAttempt() else { return }
         defer {
@@ -291,11 +209,11 @@ extension SettingsProTab {
         guard await self.applySetupCode(attemptID: attemptID) else { return }
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.resolvedManualPort(host: host) != nil else {
-            self.setupStatusText = String(localized: "Failed: invalid port")
+            self.setupStatusText = String(localized: "Enter a valid port.")
             return
         }
         guard await self.preflightGateway(host: host) else { return }
-        self.setupStatusText = String(localized: "Setup code applied. Connecting...")
+        self.setupStatusText = String(localized: "Setup code applied. Connecting…")
         await self.connectManual(setupAttemptID: attemptID)
     }
 
@@ -338,7 +256,7 @@ extension SettingsProTab {
 
         guard let parsedLink = raw.isEmpty ? stagedLink : GatewayConnectDeepLink.fromSetupInput(raw) else {
             self.setupStatusText = String(
-                localized: "Setup code not recognized or uses an insecure ws:// gateway URL.")
+                localized: "This setup code isn’t valid, or it uses an insecure ws:// address.")
             return false
         }
         let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
@@ -385,18 +303,19 @@ extension SettingsProTab {
 
     func openGatewayQRScanner() {
         self.invalidateGatewaySetupAttempt()
-        let lease = self.gatewayController.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
-        self.stagedGatewaySetupLink = nil
-        self.pendingTargetSuppression.replace(owner: .qrScanner, lease: lease)
-        self.scannerScanID = self.scannerResultHandoff.beginScan()
-        self.connectingGateway = nil
-        self.setupStatusText = String(localized: "Opening QR scanner...")
-        self.showQRScanner = true
+        let lease = gatewayController.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
+        stagedGatewaySetupLink = nil
+        pendingTargetSuppression.replace(owner: .qrScanner, lease: lease)
+        scannerScanID = scannerResultHandoff.beginScan()
+        connectingGateway = nil
+        setupStatusText = String(localized: "Opening QR scanner…")
+        pairUsingCode = false
+        showQRScanner = true
     }
 
     func queueScannedResult(_ result: QRScannerResult, scanID: UInt64) {
         guard self.scannerResultHandoff.queue(result, scanID: scanID) else { return }
-        self.setupStatusText = String(localized: "QR loaded. Closing scanner...")
+        self.setupStatusText = String(localized: "QR loaded. Closing scanner…")
         self.showQRScanner = false
     }
 
@@ -453,12 +372,12 @@ extension SettingsProTab {
         guard self.setupAttemptID == attemptID else { return }
         guard await self.applyGatewayLink(link) else { return }
         self.setupStatusText = String(
-            format: String(localized: "QR loaded. Connecting to %@:%@..."),
+            format: String(localized: "QR loaded. Connecting to %@:%@…"),
             link.host,
             link.port.formatted())
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.resolvedManualPort(host: host) != nil else {
-            self.setupStatusText = String(localized: "Failed: invalid port")
+            self.setupStatusText = String(localized: "Enter a valid port.")
             return
         }
         guard await self.preflightGateway(host: host) else { return }
@@ -480,11 +399,11 @@ extension SettingsProTab {
         }
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty else {
-            self.setupStatusText = String(localized: "Failed: host required")
+            self.setupStatusText = String(localized: "Enter a host.")
             return
         }
         guard self.manualPortIsValid, let port = self.resolvedManualPort(host: host) else {
-            self.setupStatusText = String(localized: "Failed: invalid port")
+            self.setupStatusText = String(localized: "Enter a valid port.")
             return
         }
         self.connectingGateway = .manual
@@ -690,7 +609,23 @@ extension SettingsProTab {
     func title(for route: SettingsRoute) -> String {
         switch route {
         case .deviceSettings: String(localized: "Device Settings")
-        case .gateway: String(localized: "Gateway")
+        case .voiceAndTalk: String(localized: "Voice & Talk")
+        case .permissions: String(localized: "Permissions")
+        case .accessories: String(localized: "Accessories")
+        case .chatPreferences: String(localized: "Chat")
+        case .storage: String(localized: "Storage")
+        case .sidebarPages: String(localized: "Pages")
+        case .skills: String(localized: "Skills")
+        case .plugins: String(localized: "Plugins")
+        case .advanced: String(localized: "Advanced")
+        case .gateway:
+            self.gatewayRegistry.entries.first {
+                GatewayStableIdentifier.matches(
+                    $0.stableID,
+                    self.appModel.activeGatewayConnectConfig?.effectiveStableID ??
+                        self.appModel.connectedGatewayID ?? self.gatewayRegistry.activeStableID)
+            }.map(self.gatewayRegistry.compactName) ?? String(localized: "Connection")
+        case .gatewayDetails: String(localized: "Connection details")
         case .appleWatch: String(localized: "Apple Watch")
         case .espSetup: String(localized: "ESP device setup")
         case .approvals: String(localized: "Approvals")
@@ -786,7 +721,7 @@ extension SettingsProTab {
         }
         if lower.contains("timed out") {
             return String(
-                localized: "Connection timed out. Check the gateway and your network, then try again.")
+                localized: "Connection timed out. Check your Gateway and network, then try again.")
         }
         if lower.contains("unauthorized role") {
             return String(
@@ -797,9 +732,9 @@ extension SettingsProTab {
 
     func isTransientSetupStatus(_ raw: String) -> Bool {
         let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let setupApplied = String(localized: "Setup code applied. Connecting...").lowercased()
-        let checkingReachability = String(localized: "Checking gateway reachability...").lowercased()
-        let qrFormat = String(localized: "QR loaded. Connecting to %@:%@...").lowercased()
+        let setupApplied = String(localized: "Setup code applied. Connecting…").lowercased()
+        let checkingReachability = String(localized: "Checking Gateway reachability…").lowercased()
+        let qrFormat = String(localized: "QR loaded. Connecting to %@:%@…").lowercased()
         return lower == setupApplied
             || Self.localizedFormat(qrFormat, matches: lower)
             || lower == checkingReachability
@@ -826,36 +761,19 @@ extension SettingsProTab {
         return value.range(of: pattern, options: .regularExpression) != nil
     }
 
-    func gatewayDetailLines(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> [String] {
-        var lines: [String] = []
-        if let lanHost = gateway.lanHost { lines.append("LAN: \(lanHost)") }
-        if let tailnet = gateway.tailnetDns { lines.append("Tailnet: \(tailnet)") }
-        if let gatewayPort = gateway.gatewayPort {
-            lines.append("Port: \(gatewayPort)")
-        }
-        return lines.isEmpty ? [gateway.debugID] : lines
-    }
-
     var gatewayConnected: Bool {
         !self.appModel.isAppleReviewDemoModeEnabled &&
             GatewayStatusBuilder.build(appModel: self.appModel) == .connected
     }
 
-    /// First-run state: no paired gateways yet (local gateway fixtures fake a
-    /// pairing), so the status card surfaces Scan QR as the primary action.
-    var gatewayNeedsPairing: Bool {
-        self.gatewayRegistry.entries.isEmpty && !self.appModel.isLocalGatewayFixtureEnabled
-    }
-
-    var gatewayStatusPresentation: (detail: String, value: String, color: Color) {
+    var gatewayStatusPresentation: (detail: String, value: String) {
         if self.appModel.isAppleReviewDemoModeEnabled {
-            return (String(localized: "Apple Review demo mode"), String(localized: "demo"), OpenClawBrand.accent)
+            return (String(localized: "Apple Review demo mode"), String(localized: "Demo"))
         }
         let connected = self.gatewayConnected
         return (
             self.appModel.gatewayDisplayStatusText,
-            connected ? String(localized: "online") : String(localized: "offline"),
-            connected ? OpenClawBrand.ok : .secondary)
+            connected ? String(localized: "Online") : String(localized: "Offline"))
     }
 
     var gatewayDiagnosticConnected: Bool {
@@ -868,30 +786,29 @@ extension SettingsProTab {
 
     var approvalEmptyDetail: String {
         if self.appModel.isAppleReviewDemoModeEnabled {
-            return String(localized: "Live gateway requests are disabled in demo mode.")
+            return String(localized: "Live requests are off in demo mode.")
         }
         if self.notificationPresentation.needsAttention {
             return String(
                 localized: "Foreground approvals still appear while OpenClaw is connected.")
         }
         return self.gatewayConnected
-            ? String(localized: "Gateway requests will appear here.")
-            : String(localized: "Connect to the gateway.")
+            ? String(localized: "Approval requests will appear here.")
+            : String(localized: "Connect to OpenClaw.")
     }
 
-    var gatewayTalkConfigPresentation: (detail: String, value: String, color: Color) {
+    var gatewayTalkConfigPresentation: (detail: String, value: String) {
         if self.appModel.isAppleReviewDemoModeEnabled {
-            return (String(localized: "Demo mode only"), String(localized: "demo"), .secondary)
+            return (String(localized: "Demo mode only"), String(localized: "Demo"))
         }
         let loaded = self.appModel.talkMode.gatewayTalkConfigLoaded
         return (
             self.appModel.talkMode.gatewayTalkTransportLabel,
-            loaded ? String(localized: "loaded") : String(localized: "missing"),
-            loaded ? OpenClawBrand.ok : .secondary)
+            loaded ? String(localized: "Loaded") : String(localized: "Not loaded"))
     }
 
     var gatewayAddress: String {
-        self.appModel.gatewayRemoteAddress ?? String(localized: "Waiting for gateway")
+        self.appModel.gatewayRemoteAddress ?? String(localized: "Waiting for Gateway")
     }
 
     var gatewayServer: String {
@@ -910,7 +827,7 @@ extension SettingsProTab {
     var approvalItems: [SettingsApprovalItem] {
         guard let pendingApproval = self.appModel.pendingExecApprovalPrompt else { return [] }
         let pendingTitle = pendingApproval.commandPreview.map(OpenClawTextValue.verbatim)
-            ?? OpenClawTextValue.localized("Review gateway action")
+            ?? OpenClawTextValue.localized("Review action")
         let agentDetail = String(
             format: String(localized: "Agent: %@"),
             self.appModel.activeAgentName)
@@ -930,7 +847,7 @@ extension SettingsProTab {
                 title: pendingApproval.allowsAllowAlways
                     ? .localized("Permission can be saved")
                     : .localized("One-time approval"),
-                detail: "Gateway request",
+                detail: "Approval request",
                 priority: pendingApproval.allowsAllowAlways
                     ? .localized("Medium")
                     : .localized("Review"),
@@ -938,18 +855,13 @@ extension SettingsProTab {
         ]
     }
 
-    var diagnosticsHealthValue: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return String(localized: "demo") }
-        if self.gatewayConnected { return String(localized: "ready") }
-        if self.gatewayController.gateways.isEmpty { return String(localized: "check") }
-        return String(localized: "partial")
-    }
-
-    var diagnosticsRunPresentation: (value: String, color: Color) {
-        guard let diagnosticsIssueCount else { return (String(localized: "pending"), .secondary) }
-        return (
-            diagnosticsIssueCount == 0 ? String(localized: "pass") : diagnosticsIssueCount.formatted(),
-            diagnosticsIssueCount == 0 ? OpenClawBrand.ok : OpenClawBrand.warn)
+    var diagnosticsRunPresentation: String {
+        guard let diagnosticsIssueCount else { return String(localized: "Not run") }
+        if diagnosticsIssueCount == 0 { return String(localized: "Passed") }
+        if diagnosticsIssueCount == 1 { return String(localized: "1 issue") }
+        return String(
+            format: String(localized: "%lld issues"),
+            Int64(diagnosticsIssueCount))
     }
 
     var notificationDisclosureAccepted: Bool {

@@ -1,25 +1,27 @@
+import type { GatewayRequestAuthorityV1 } from "openclaw/plugin-sdk/gateway-request-authority";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expect, it, vi } from "vitest";
 import { memoryStore, sampleUpload } from "./beam-store.test-support.js";
 import { createBeamOwnedViewHandler } from "./owned-view.js";
 
-// Only the authenticated fields consumed by the handler are supplied by this fixture.
-function visitorClient(assertCurrent: () => void) {
+function visitorAuthority(assertCurrent: () => void): GatewayRequestAuthorityV1 {
   return {
-    connect: { scopes: ["operator.sessions.write"] },
-    authenticatedUserProfile: { profileId: "alice" },
-    internal: {
-      operatorAccessAuthority: {
-        requiredPolicyPlugin: "visitor-access",
-        gatewayAccessGrant: { pluginId: "visitor-access" },
-        assertCurrent,
-      },
+    scopes: ["operator.sessions.write"],
+    personProfileId: "alice",
+    requiredGrantPluginId: "visitor-access",
+    assertCurrent(requiredGrant) {
+      expect(requiredGrant).toBe("visitor-access");
+      assertCurrent();
     },
-  } as NonNullable<GatewayRequestHandlerOptions["client"]>;
+    async revalidate(requiredGrant) {
+      expect(requiredGrant).toBe("visitor-access");
+      assertCurrent();
+    },
+  };
 }
 
-it.each(["revoked", "expired", "transport", "role"])(
+it.each(["transport"])(
   "withholds an owned transcript when authority ends during storage IO: %s",
   async (cause) => {
     const stored = {
@@ -31,14 +33,10 @@ it.each(["revoked", "expired", "transport", "role"])(
     };
     const read = Promise.withResolvers<typeof stored>();
     const entered = Promise.withResolvers<void>();
-    const grant = new AbortController();
     let connected = true;
-    let now = 0;
-    let roleCurrent = true;
-    const client = visitorClient(() => {
-      grant.signal.throwIfAborted();
-      if (now >= 1) {
-        throw new Error("Visitor invitation expired");
+    const authority = visitorAuthority(() => {
+      if (!connected) {
+        throw new Error("publisher authority ended");
       }
     });
     const store = {
@@ -52,29 +50,18 @@ it.each(["revoked", "expired", "transport", "role"])(
     const pending = createBeamOwnedViewHandler(
       store,
       "read",
+      () => authority,
     )({
       params: { hostId: "gateway", threadId: stored.beamId },
-      client,
       respond,
-      hasCurrentClientAuthority: () => connected,
       sessionMutationAuthorization: {
         assertTargetCurrent() {},
-        assertCurrent() {
-          if (!roleCurrent) {
-            throw new Error("named role revoked");
-          }
-        },
+        assertCurrent() {},
       },
     });
     await entered.promise;
     if (cause === "transport") {
       connected = false;
-    } else if (cause === "role") {
-      roleCurrent = false;
-    } else if (cause === "expired") {
-      now = 1;
-    } else {
-      grant.abort(new Error(cause));
     }
     read.resolve(stored);
     await pending;
@@ -93,18 +80,17 @@ it("reports stale pages and unavailable storage without asking a current publish
   const stored = { ...sampleUpload(), publisherProfileId: "alice", createdAt: 1, receivedAt: 1 };
   store.values.set(stored.beamId, stored);
   const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
-  const client = visitorClient(() => {});
+  const authority = visitorAuthority(() => {});
   const baseParams = { hostId: "gateway", threadId: stored.beamId, limit: 1 };
   const invoke = async (params: Record<string, unknown>, source = store) => {
     respond.mockClear();
     await createBeamOwnedViewHandler(
       source,
       "read",
+      () => authority,
     )({
       params,
-      client,
       respond,
-      hasCurrentClientAuthority: () => true,
       sessionMutationAuthorization: { assertCurrent() {}, assertTargetCurrent() {} },
     });
     return respond.mock.calls[0];

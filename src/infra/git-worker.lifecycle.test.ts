@@ -810,6 +810,7 @@ describe("Git operation host lifecycle", () => {
     async (ending) => {
       const root = tempDirs.make("openclaw-git-worker-temporary-");
       const repo = await repository(root);
+      await fs.writeFile(path.join(repo, "dirty.txt"), "pending recovery\n");
       const neighbor = path.join(root, "neighbor.txt");
       await fs.writeFile(neighbor, "keep");
       const entered = createDeferredCore();

@@ -199,7 +199,8 @@
   font-weight: 500;
 }
 
-.app-toast__description {
+.app-toast__description,
+.chat-error__actions {
   color: var(--muted);
   font-size: calc(13px * var(--control-ui-text-scale));
   line-height: calc(18px * var(--control-ui-text-scale));

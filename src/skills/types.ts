@@ -59,6 +59,8 @@ export type SkillUsagePath = {
   readPath: string;
   /** Host-bound prompt reference before runtime materialization. */
   sourceReadPath?: string;
+  /** Selected installation path before canonicalization or runtime remapping. */
+  sourceFilePath?: string;
   /** Canonical source SKILL.md path used as the lifecycle identity. */
   skillFile: string;
   skillName: string;

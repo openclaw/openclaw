@@ -35,7 +35,7 @@ describe("agent schema refresh", () => {
         }
         const db = database.db;
         db.exec("DROP INDEX idx_agent_cache_expiry");
-        invalidateOpenClawAgentDatabaseValidation(database.path);
+        invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
         revokeSqliteDatabaseAdmissions(db);
         expect(readSqliteDatabaseIntegrityVerification(db)).toBeUndefined();
         const publicationFailure = new Error("Publication was not acknowledged");
@@ -72,13 +72,13 @@ describe("agent schema refresh", () => {
   );
 
   it("publishes known derived DDL without repeating agent admission", async () => {
-    await withReceiptFixture(false, (database, options) => {
+    await withReceiptFixture(false, async (database, options) => {
       const reader = openOpenClawAgentDatabaseReadOnly(options);
       if (!reader.found || isPostgresSqlConnection(reader.database.db)) {
         throw new Error("Expected independent SQLite reader");
       }
       const previous = getOpenClawAgentDatabaseValidation(database)!;
-      const retainedReader = captureOpenClawAgentDatabaseReadValidation(database);
+      const retainedReader = await captureOpenClawAgentDatabaseReadValidation(database);
       expect(retainedReader).toBeDefined();
       try {
         runSqliteImmediateTransactionSync(database.db, () => {

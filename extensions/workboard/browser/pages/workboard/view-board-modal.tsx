@@ -37,6 +37,13 @@ const originals = new WeakMap<
   Pick<BoardDraft, "name" | "icon" | "color" | "sessions">
 >();
 
+function sessionColumnsKey(spec: WorkboardSessionsBoardSpec): string {
+  // The fallback radio treats an omitted flag and an explicit false alike.
+  return JSON.stringify(
+    spec.columns.map((column) => ({ ...column, fallback: column.fallback ?? false })),
+  );
+}
+
 export function createBoardDraft(board: WorkboardBoardSummary): BoardDraft {
   const fields = { name: board.name ?? board.id, icon: board.icon ?? "", color: board.color ?? "" };
   const draft: BoardDraft = {
@@ -108,6 +115,13 @@ export function BoardModal(props: {
       }
       const clearAppearance: string[] = [];
       const original = originals.get(initialDraft);
+      const openingColumnsKey = original?.sessions
+        ? sessionColumnsKey(normalizeWorkboardSessionsBoardSpec(original.sessions))
+        : undefined;
+      const columnsToSave =
+        sessions && sessionColumnsKey(sessions) !== openingColumnsKey
+          ? sessions.columns
+          : undefined;
       for (const field of ["name", "icon", "color"] as const) {
         const value = initialDraft[field].trim();
         if (value !== original?.[field]) {
@@ -128,17 +142,13 @@ export function BoardModal(props: {
       if (!isCurrent()) {
         return;
       }
-      if (
-        sessions &&
-        JSON.stringify(initialDraft.sessions?.columns) !==
-          JSON.stringify(original?.sessions?.columns)
-      ) {
+      if (columnsToSave) {
         if (!props.canWrite) {
           throw new Error(t("workboard.sessionsBoard.writeUnavailable"));
         }
         await client.request("workboard.sessionsBoard.update", {
           boardId: initialDraft.id,
-          patch: { columns: sessions.columns },
+          patch: { columns: columnsToSave },
         });
       }
       if (isCurrent()) {
@@ -235,7 +245,6 @@ export function BoardModal(props: {
                 class="settings-input"
                 autofocus
                 required
-                maxlength="120"
                 ref={nameValue}
                 disabled={saving() || !props.canWrite}
                 onInput={(event) => {
@@ -312,25 +321,27 @@ export function BoardModal(props: {
             </button>
           </openclaw-modal-actions>
         </form>
-        <Loading
-          on={completion()}
-          fallback={<WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />}
-        >
-          <Errored
-            fallback={(error) => (
-              <WorkboardToast
-                owner={draft()}
-                message={formatUiError(error())}
-                key={completion()}
-                tone="error"
-                outcomeSource
-              />
-            )}
+        {!draft().sessions ? (
+          <Loading
+            on={completion()}
+            fallback={<WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />}
           >
-            {completed()}
-            <WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />
-          </Errored>
-        </Loading>
+            <Errored
+              fallback={(error) => (
+                <WorkboardToast
+                  owner={draft()}
+                  message={formatUiError(error())}
+                  key={completion()}
+                  tone="error"
+                  outcomeSource
+                />
+              )}
+            >
+              {completed()}
+              <WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />
+            </Errored>
+          </Loading>
+        ) : undefined}
       </>
     </Dialog>
   );
@@ -370,7 +381,6 @@ function SessionsEditor(props: {
                 <input
                   class="settings-input"
                   required
-                  maxlength="60"
                   aria-label={t("workboard.sessionsBoard.columnLabel")}
                   ref={labelValue}
                   onInput={(event) => {
@@ -408,7 +418,6 @@ function SessionsEditor(props: {
                 <textarea
                   class="settings-input"
                   required
-                  maxlength="400"
                   rows="2"
                   aria-label={t("workboard.sessionsBoard.description")}
                   ref={descriptionValue}

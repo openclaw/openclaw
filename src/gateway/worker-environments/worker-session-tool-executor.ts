@@ -471,7 +471,7 @@ export function createWorkerSessionToolExecutor(
       () => {
         request.signal?.throwIfAborted();
         if (!params.placements.isWorkerTurnToolAuthorized(source.turnClaim, request.toolName)) {
-          throw new Error("Worker session tool authority changed");
+          throw new Error("Worker turn ended or lacks this tool. Start a new turn.");
         }
       },
     );
@@ -487,7 +487,7 @@ export function createWorkerSessionToolExecutor(
       return errorResult(new Error(message));
     }
     if (started.kind === "unauthorized") {
-      throw new Error("Worker session tool authority changed");
+      throw new Error("Worker turn ended or lacks this tool. Start a new turn.");
     }
     const sourceClaimId = source.turnClaim.claimId;
     const operationIdentity = {
@@ -634,7 +634,7 @@ export async function createWorkerGatewayTools(
   const assertAuthorized = (name: string) => {
     capability.receiptAuthority();
     if (!params.placements.isWorkerTurnToolAuthorized(claim, name)) {
-      throw new Error("Worker tool authority changed");
+      throw new Error("Worker turn ended or lacks this tool. Start a new turn.");
     }
   };
   const authorizeTool = (tool: AnyAgentTool, execute: AnyAgentTool["execute"]) =>

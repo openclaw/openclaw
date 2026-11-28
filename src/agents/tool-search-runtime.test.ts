@@ -1,6 +1,7 @@
 import { Agent, type AgentEvent, type AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { prepareDispatchArguments } from "../../packages/agent-core/src/dispatch-call.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import {
@@ -27,10 +28,7 @@ import {
   singleToolCallStreamFn as createSingleToolCallStreamFn,
   toolSearchTestModel as model,
 } from "./tool-search-loop.test-support.js";
-import {
-  prepareToolSearchDispatcherArguments,
-  readToolSearchCallArgs,
-} from "./tool-search-request.js";
+import { readToolSearchCallArgs } from "./tool-search-request.js";
 import {
   formatToolSearchControlError,
   formatToolSearchControlResult,
@@ -44,6 +42,7 @@ import {
   resolveToolSearchConfig,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createWebSearchTool } from "./tools/web-search.js";
@@ -156,7 +155,7 @@ describe("Tool Search dispatcher argument preparation", () => {
       input: { id: 1, args: { id: "example_tool" } },
     },
   ])("leaves $label unchanged", ({ input }) => {
-    expect(prepareToolSearchDispatcherArguments(input)).toBe(input);
+    expect(prepareDispatchArguments(input)).toBe(input);
   });
 
   describe("through the real agent loop", () => {
@@ -267,12 +266,12 @@ describe("Tool Search input schemas", () => {
   });
 
   it.each([
-    ["10", '"10" (string)'],
+    ["ten", "[redacted] (string)"],
     [false, "false (boolean)"],
     [null, "null (null)"],
     [["private payload"], "[array] (array)"],
     [{ password: "private payload" }, "[object] (object)"],
-  ])("explains rejected integer input %j without executing it", async (value, received) => {
+  ])("explains rejected integer input %j and coerces a quoted integer", async (value, received) => {
     const parameters = Type.Object({ maxFires: Type.Integer({ minimum: 1 }) });
     const target = fakeTool("strict_limit", parameters);
     const { runtime } = createRuntime([target]);
@@ -281,7 +280,7 @@ describe("Tool Search input schemas", () => {
       `maxFires: expected integer; received ${received}`,
     );
     expect(target.execute).not.toHaveBeenCalled();
-    await expect(runtime.call("strict_limit", { maxFires: 10 })).resolves.toMatchObject({
+    await expect(runtime.call("strict_limit", { maxFires: "10" })).resolves.toMatchObject({
       result: { details: { input: { maxFires: 10 } } },
     });
     expect(target.execute).toHaveBeenCalledOnce();
@@ -530,7 +529,7 @@ describe("Tool Search input schemas", () => {
       const hostileSchema = {
         type: "object",
         required: ["never"],
-        properties: { never: { type: "string" } },
+        properties: { never: { type: "integer" } },
         additionalProperties: false,
       };
       const entry: ToolSearchCatalogEntry = {
@@ -557,8 +556,10 @@ describe("Tool Search input schemas", () => {
         { validateInput: true },
       );
 
-      await expect(runtime.call(target.name, { unexpected: true })).resolves.toMatchObject({
-        result: { details: { input: { unexpected: true } } },
+      await expect(
+        runtime.call(target.name, { never: "1", unexpected: true }),
+      ).resolves.toMatchObject({
+        result: { details: { input: { never: "1", unexpected: true } } },
       });
       expect(target.execute).toHaveBeenCalledOnce();
     },
@@ -628,6 +629,47 @@ describe("Tool Search catalog indexing", () => {
 });
 
 describe("Tool Search network error boundaries", () => {
+  it("releases network provenance from a completed control before its id is reused", async () => {
+    const local = fakeTool("local_record");
+    const network = fakeTool("network_record");
+    network.resultContentSource = "network";
+    const rejected = fakeTool("rejected_record");
+    rejected.resultContentSource = "network";
+    rejected.execute = async () => {
+      throw new Error("External service failed");
+    };
+    const remote = fakeTool("remote_description");
+    const { catalogRef, config } = createRuntime([local, network, rejected]);
+    addClientToolsToToolCatalog({ tools: [remote], enabled: true, catalogRef });
+    const controls = createToolSearchTools({ catalogRef, config });
+    const execute = (name: string, id: string, args: unknown) =>
+      controls.find((tool) => tool.name === name)!.execute(id, args);
+
+    const completed = await Promise.all([
+      execute(TOOL_CALL_RAW_TOOL_NAME, "call", { id: network.name }),
+      execute(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe", { id: remote.name }),
+      execute(TOOL_SEARCH_RAW_TOOL_NAME, "search", { query: remote.name, limit: 1 }),
+      execute(TOOL_SEARCH_RAW_TOOL_NAME, "batch", { queries: [{ query: remote.name, limit: 1 }] }),
+    ]);
+    for (const result of completed) {
+      expect(result.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
+      });
+    }
+    await expect(execute(TOOL_CALL_RAW_TOOL_NAME, "error", { id: rejected.name })).rejects.toThrow(
+      "EXTERNAL_UNTRUSTED_CONTENT",
+    );
+
+    for (const id of ["call", "describe", "search", "batch", "error"]) {
+      const result = await execute(TOOL_CALL_RAW_TOOL_NAME, id, { id: local.name });
+      expect(result.content[0]).toMatchObject({
+        type: "text",
+        text: expect.not.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
+      });
+    }
+  });
+
   it.each(["structured tool call", "code-mode callValue"] as const)(
     "bounds actual nested 16 MiB network results for %s while preserving exact values",
     async (surface) => {

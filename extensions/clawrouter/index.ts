@@ -41,6 +41,7 @@ import {
 import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { clawrouterMediaUnderstandingProvider } from "./audio-transcription.js";
 import { normalizeClawRouterApiBaseUrl, normalizeClawRouterRootUrl } from "./base-url.js";
+import { createClawRouterConverseStream } from "./converse-stream.js";
 import { buildClawRouterDecisionProvider } from "./decision-provider.js";
 import { clawrouterEmbeddingProvider } from "./embedding-provider.js";
 import { buildClawRouterImageGenerationProvider } from "./image-generation-provider.js";
@@ -358,8 +359,11 @@ const TIMEOUT_MS = 10_000;
 const MAX_BYTES = 1024 * 1024;
 const unavailable = (): ClawRouterPoolResult => ({
   status: "unavailable",
-  message:
-    "ClawRouter pool status is unavailable. Check the ClawRouter connection and try Refresh.",
+  message: "Couldn’t load ClawRouter pool status. Select Refresh to try again.",
+});
+const unsupported = (): ClawRouterPoolResult => ({
+  status: "unsupported",
+  message: "This ClawRouter deployment doesn’t provide pool status.",
 });
 
 async function readJson(response: Response): Promise<unknown> {
@@ -501,7 +505,8 @@ export default defineSingleProviderPluginEntry({
           if (!token) {
             result = {
               status: "not_configured",
-              message: "Configure a ClawRouter key in Model Providers, then try Refresh.",
+              message:
+                "No ClawRouter API key is available. Ask an admin to add one in Settings → Models.",
             };
           } else {
             const baseUrl = normalizeClawRouterRootUrl(
@@ -522,7 +527,7 @@ export default defineSingleProviderPluginEntry({
                 result = {
                   status: "unauthorized",
                   message:
-                    "The ClawRouter key was rejected. Check or replace it in Model Providers.",
+                    "ClawRouter rejected the API key. Ask an admin to replace the key OpenClaw uses.",
                 };
               } else if (response.status === 404) {
                 const body = readRecord(await readJson(response).catch(() => undefined));
@@ -535,17 +540,9 @@ export default defineSingleProviderPluginEntry({
                         status: "hidden",
                         message: "Ask your ClawRouter admin to enable pool status for this policy.",
                       }
-                    : {
-                        status: "unsupported",
-                        message:
-                          "This ClawRouter deployment does not expose pool status. Ask your admin to update ClawRouter.",
-                      };
+                    : unsupported();
               } else if (response.status === 405) {
-                result = {
-                  status: "unsupported",
-                  message:
-                    "This ClawRouter deployment does not expose pool status. Ask your admin to update ClawRouter.",
-                };
+                result = unsupported();
               } else if (!response.ok) {
                 result = unavailable();
               } else {
@@ -623,16 +620,16 @@ export default defineSingleProviderPluginEntry({
       // This is protocol support, not a key grant. The decision executor checks the
       // selected credential's catalog before using its native route.
       augmentModelCatalog: ({ entries }) =>
-        entries.map((entry) =>
-          entry.provider === PROVIDER_ID &&
-          entry.id === "openai/gpt-6-luna" &&
-          entry.api === "openai-responses"
-            ? {
-                ...entry,
-                inference: { ...decisionCapabilities, chat: entry.inference?.chat ?? true },
-              }
-            : entry,
-        ),
+        entries
+          .filter(
+            ({ provider, id, api }) =>
+              provider === PROVIDER_ID && id === "openai/gpt-6-luna" && api === "openai-responses",
+          )
+          .map((entry) =>
+            Object.assign({}, entry, {
+              inference: { ...decisionCapabilities, chat: entry.inference?.chat ?? true },
+            }),
+          ),
       // Live catalog routing also applies to explicitly configured model rows.
       preferRuntimeResolvedModel: () => true,
       prepareDynamicModel: async (ctx) => {
@@ -654,6 +651,11 @@ export default defineSingleProviderPluginEntry({
           apiKey,
           discoveryApiKey: apiKey,
           baseUrl: ctx.providerConfig?.baseUrl ?? configuredBaseUrl(ctx.config),
+          requestedModelId: ctx.modelId,
+          requestedModelApi:
+            ctx.providerConfig?.models?.find((model) => model.id === ctx.modelId)?.api ??
+            ctx.modelRegistry?.find(PROVIDER_ID, ctx.modelId)?.api ??
+            ctx.providerConfig?.api,
         });
         const model = providerConfig.models.find((entry) => entry.id === ctx.modelId);
         if (!model) {
@@ -674,6 +676,7 @@ export default defineSingleProviderPluginEntry({
         return baseUrl !== providerConfig.baseUrl ? { ...providerConfig, baseUrl } : undefined;
       },
       normalizeResolvedModel: ({ model }) => normalizeClawRouterResolvedModel(model),
+      createStreamFn: createClawRouterConverseStream,
       resolveFastModeSupport,
       resolveServiceTiers,
       resolveNativeWebSearch,
@@ -685,7 +688,7 @@ export default defineSingleProviderPluginEntry({
         if (ctx.modelApi === "openai-completions" && ctx.modelId?.startsWith("mistral/")) {
           return mistralReplay.buildReplayPolicy?.(ctx);
         }
-        if (ctx.modelApi === "anthropic-messages") {
+        if (ctx.modelApi === "anthropic-messages" || ctx.modelApi === "bedrock-converse-stream") {
           return anthropicReplay.buildReplayPolicy?.(ctx);
         }
         if (ctx.modelApi === "google-generative-ai") {

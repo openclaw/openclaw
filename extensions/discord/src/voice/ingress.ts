@@ -5,11 +5,11 @@ import type { RealtimeVoiceSelectionHandle } from "openclaw/plugin-sdk/realtime-
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Client } from "../internal/discord.js";
-import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug } from "../monitor/allow-list.js";
 import { buildDiscordGroupSystemPrompt } from "../monitor/inbound-context.js";
 import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { getDiscordRuntime } from "../runtime.js";
+import { formatMention } from "../target-parsing.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
 import type { VoiceRealtimeSpeakerContext, VoiceSessionEntry } from "./session.js";
 import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
@@ -131,7 +131,7 @@ export async function runDiscordVoiceAgentTurn(params: {
         messageProvider: DISCORD_VOICE_MESSAGE_PROVIDER,
         accountId: params.accountId,
         extraSystemPrompt: context.extraSystemPrompt,
-        senderIsOwner: context.senderIsOwner,
+        runContext: { senderId: params.userId },
         allowModelOverride: Boolean(voiceModel),
         model: voiceModel,
         toolsAllow: params.toolsAllow,

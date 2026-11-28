@@ -479,7 +479,6 @@ async function probeOtelGenerationConfigWatcher(
     mock = await startQaMockOpenAiServer();
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
-      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",

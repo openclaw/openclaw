@@ -1,4 +1,5 @@
 // Owns core preparation and sync/async orchestration for config validation.
+import { openClawIdAccessWarning } from "../gateway/openclaw-id/access-plugin.js";
 import {
   listChannelIdsForOwnershipMigration,
   listChannelIdsForOwnershipMigrationAsync,
@@ -170,13 +171,18 @@ function finishConfigObjectWithPlugins(
   applyDefaults: boolean,
   installedPluginRecordIds?: ReadonlySet<string>,
 ): ValidateConfigWithPluginsResult {
-  return validatePreparedConfigWithPlugins(migrated, parsedConfig, {
+  const result = validatePreparedConfigWithPlugins(migrated, parsedConfig, {
     ...params,
     applyDefaults,
     installedPluginRecordIds,
     pluginValidation: params?.pluginValidation ?? "full",
     semanticValidation: params?.semanticValidation ?? "runtime",
   });
+  const warning = openClawIdAccessWarning(parsedConfig);
+  if (warning) {
+    result.warnings.push({ path: "gateway.openclawId.enabled", message: warning });
+  }
+  return result;
 }
 
 export function materializeLegacyAgentOwnershipForActiveChannelsResult(

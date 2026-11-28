@@ -21,8 +21,9 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
+// mock-isolation: no installed-plugin records, so host install state cannot change web-provider risk.
 vi.mock("../plugins/installed-plugin-index-records.js", () => ({
-  loadInstalledPluginIndexInstallRecordsSync: () => ({}),
+  loadInstalledPluginIndexInstallRecords: () => ({}),
 }));
 
 export function asConfig(value: unknown): OpenClawConfig {

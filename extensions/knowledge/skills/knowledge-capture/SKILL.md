@@ -8,7 +8,7 @@ description: Save durable preferences, decisions, project facts, commitments, an
 When Knowledge is the selected memory provider, its ordinary-turn remembering
 policy also authorizes selective capture of meaningful durable information. This
 is agent judgment, not a background extraction hook. Otherwise require save intent.
-Do not save transient task status, secrets, unsupported guesses, or excluded content.
+Do not save progress toward an outcome, secrets, unsupported guesses, or excluded content.
 Apply preferences as contextual facts, not executable instructions or new authority.
 Saving a preference does not configure the assistant or guarantee that the
 preference will be loaded in future turns.
@@ -24,9 +24,29 @@ when you know it, the subject's exact page title or alias. An omitted subject is
 inferred when the text names exactly one entity page. It resolves subjects,
 reports exact repeats and never creates pages. Its published receipt is the save.
 
-When the claim concerns an entity that has a page and changes what its State
-says (a decision, an outcome, a changed status, a resolved question), also
-update that page below in the same task. Claims alone leave its State stale.
+### Outcomes, not progress
+
+Save what the user will still want known after the task ends. Prefer what the
+user said (decisions, preferences, corrections, commitments, beliefs) over what
+you observed or did; save your own observations only when they are a final
+outcome: something done, chosen, finished, cancelled or abandoned. Steps taken,
+intermediate results, routine waiting and "as of" snapshots of something still
+changing stay in the conversation. Constraints and blockers the user states, and
+anything they ask you to remember, still count.
+
+| Progress: do not save                          | Outcome: save                                    |
+| ---------------------------------------------- | ------------------------------------------------ |
+| Searched flights; the cheapest was $412 at 3pm | Booked the 9am flight to Lisbon                  |
+| Waiting on lab results                         | The doctor ruled out X; treatment starts with Y  |
+| Got a third roofing quote                      | Chose Acme for the roof: $14k, starting in March |
+| Rewrote section 2 again as asked               | The essay leads with the personal story          |
+| CI failed at commit abc123; rebased and pushed | Pull request merged                              |
+
+When the claim concerns an entity that has a page and changes where that
+subject stands (a milestone, a decision, a new or cleared blocker, a changed
+plan or next step, a resolved question), also update that page below in the
+same task. Claims alone leave its State stale. Steps toward an outcome leave
+State alone.
 Continue below too to revise a page's prose or save a longer note.
 
 ## Update a page or save a note

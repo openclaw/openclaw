@@ -10,6 +10,8 @@ vi.mock("./update-cli/update-command-immutable.js", unavailableRuntime);
 vi.mock("./update-cli/update-command-finalize.js", unavailableRuntime);
 vi.mock("./update-cli/status.js", unavailableRuntime);
 vi.mock("./update-cli/wizard.js", unavailableRuntime);
+// mock-isolation: loading check-release at registration must fail this test.
+vi.mock("../update/check-release.js", unavailableRuntime);
 
 it("keeps update help available without loading execution dependencies", async () => {
   const { registerUpdateCli } = await import("./update-cli.js");
@@ -21,6 +23,7 @@ it("keeps update help available without loading execution dependencies", async (
     "wizard",
     "adopt-immutable",
     "recover",
+    "check-release",
   ]) {
     let output = "";
     const program = new Command()

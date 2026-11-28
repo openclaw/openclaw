@@ -6,7 +6,12 @@ import type { CodexAppServerClient } from "./client.js";
 import type { createCodexInferenceContext } from "./inference-context.js";
 import { readCodexInferenceMetadata, type CodexInferenceMetadata } from "./inference-metadata.js";
 import { CODEX_INFERENCE_TRANSPORT_FAILURE as FAILURE } from "./inference-transport.js";
-import { createUploadBody, createRetryableUploadBody, MAX_BODY_BYTES } from "./inference-upload.js";
+import {
+  CODEX_INFERENCE_REQUEST_TOO_LARGE,
+  createUploadBody,
+  createRetryableUploadBody,
+  MAX_BODY_BYTES,
+} from "./inference-upload.js";
 import type {
   NativeModelSourceCapture,
   NativeModelSourceRequest,
@@ -85,9 +90,7 @@ export function authorizationFailure(error: unknown): string | undefined {
  */
 export class CodexInferenceRequestTooLargeError extends Error {
   constructor() {
-    super(
-      `Request exceeds the maximum size accepted by the Codex inference relay (${MAX_BODY_BYTES} bytes).`,
-    );
+    super(CODEX_INFERENCE_REQUEST_TOO_LARGE);
   }
 }
 

@@ -10,6 +10,8 @@ const enProfile = {
       description:
         "Connect your Discord identity to this profile. Your existing permissions and channel access rules still apply.",
       unavailable: "Discord account linking isn’t configured. Ask an admin to enable it.",
+      noGatewayAccount:
+        "An admin needs to set up a Discord account on this Gateway before you can link yours.",
       gatewayAccount: "Discord account",
       connect: "Connect Discord",
       connectShort: "Connect",
@@ -32,7 +34,7 @@ const enProfile = {
       unlink: "Unlink",
       ownerOf: "{email} · Owner of {claw}",
       linkedElsewhere:
-        "This OpenClaw ID is already linked to another profile. Merge that profile into this one in Users, or unlink it there first.",
+        "This OpenClaw ID is already linked to another profile. Unlink it from that profile first. If both profiles belong to you, an admin can merge them instead.",
       profileLinked:
         "This profile is already linked to an OpenClaw ID. Unlink it first to link another.",
       failed: "Couldn’t update the OpenClaw ID link. Try again.",
@@ -86,6 +88,7 @@ const enProfile = {
         "Verified sign-in identity, not permission to publish. Manage publishing access separately.",
       githubVerified: "Verified",
       githubUnavailable: "Unavailable",
+      githubSetup: "Sign in with GitHub through Cloudflare Access or Tailscale Serve to verify it.",
       githubUnavailableDescription:
         "No single verified GitHub sign-in account is available to display.",
       ownerGithubDescription:

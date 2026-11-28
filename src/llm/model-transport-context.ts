@@ -8,8 +8,9 @@ type ModelTransportContext = {
   onRateLimitWait?: (retryAt: number) => () => void;
 };
 
+// Retained process-wide transport hosts must read context entered by later SDK module copies.
 const modelTransportContext = new AsyncContext<ModelTransportContext>(
-  Symbol("modelTransportContext"),
+  Symbol.for("openclaw.modelTransportContext"),
 );
 
 export function withModelTransportContext<T>(context: ModelTransportContext, run: () => T): T {

@@ -1,6 +1,8 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isGatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
 import {
+  cardsWithPendingDrops,
   changedDraftPayload,
   draftPayload,
   planWorkboardCardDrop,
@@ -33,7 +35,13 @@ import type {
 function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
   const countArray = (key: string) =>
     isRecord(value) && Array.isArray(value[key]) ? value[key].length : 0;
+  const failure =
+    isRecord(value) && Array.isArray(value.startFailures) ? value.startFailures[0] : undefined;
   return {
+    firstFailure:
+      isRecord(failure) && typeof failure.title === "string" && typeof failure.error === "string"
+        ? `${failure.title}: ${failure.error}`
+        : null,
     started: countArray("started"),
     failures: countArray("startFailures"),
     promoted: countArray("promoted"),
@@ -58,7 +66,7 @@ export async function saveWorkboardCardDraft(params: WorkboardClientContext) {
     return;
   }
   if (cardId && (!base || base.id !== cardId)) {
-    state.error = "This card changed before editing began. Cancel and reopen it to continue.";
+    state.error = t("workboard.cardChangedBeforeEdit");
     notifyWorkboard(params.host);
     return;
   }
@@ -91,8 +99,8 @@ export async function saveWorkboardCardDraft(params: WorkboardClientContext) {
   } catch (error) {
     const conflict = base && reconcileCardConflict(state, error);
     if (conflict) {
-      rebaseWorkboardDraft(state, conflict.card);
-      state.error = `${conflict.message} Your unsaved edits remain in the form.`;
+      rebaseWorkboardDraft(state, conflict);
+      state.error = t("workboard.editConflict");
     } else {
       state.error = formatError(error);
     }
@@ -146,7 +154,11 @@ export async function addWorkboardCardComment(
   );
 }
 
-function reconcileCardConflict(state: ReturnType<typeof getWorkboardState>, error: unknown) {
+function reconcileCardConflict(
+  state: ReturnType<typeof getWorkboardState>,
+  error: unknown,
+  applyCard = replaceCard,
+) {
   if (
     isGatewayRequestError(error) &&
     error.code === "workboard_conflict" &&
@@ -154,8 +166,8 @@ function reconcileCardConflict(state: ReturnType<typeof getWorkboardState>, erro
     error.details.type === "workboard_card_conflict"
   ) {
     const card = normalizeCardPayload(error.details);
-    replaceCard(state, card);
-    return { card, message: error.message };
+    applyCard(state, card);
+    return card;
   }
   return null;
 }
@@ -174,8 +186,12 @@ export async function moveWorkboardCard(
   if (current.nextCursor && params.beforeCardId !== undefined) {
     return;
   }
-  const cards = current.cards;
+  const cards = cardsWithPendingDrops(current);
   const card = cards.find((candidate) => candidate.id === params.cardId);
+  const dropPlan =
+    card && params.beforeCardId !== undefined
+      ? planWorkboardCardDrop(cards, card, params.status, params.beforeCardId, params.boardFilter)
+      : [];
   const moves =
     params.beforeCardId === undefined
       ? [
@@ -185,9 +201,7 @@ export async function moveWorkboardCard(
             ...(current.nextCursor ? {} : { position: params.position }),
           },
         ]
-      : card
-        ? planWorkboardCardDrop(cards, card, params.status, params.beforeCardId, params.boardFilter)
-        : [];
+      : dropPlan;
   if (!moves.length) {
     return;
   }
@@ -197,6 +211,12 @@ export async function moveWorkboardCard(
     async (state, client) => {
       // A recovered older load must not clear an error owned by this move.
       delete getWorkboardRuntime(params.host).loadError;
+      if (dropPlan.length) {
+        for (const move of dropPlan) {
+          state.pendingDrops.set(move.id, { status: params.status, position: move.position });
+        }
+        notifyWorkboard(params.host);
+      }
       try {
         for (const move of moves) {
           const payload =
@@ -213,6 +233,7 @@ export async function moveWorkboardCard(
                     : {}),
                 });
           replaceCard(state, normalizeCardPayload(payload));
+          state.pendingDrops.delete(move.id);
         }
       } catch (error) {
         state.error = formatError(error);
@@ -224,6 +245,10 @@ export async function moveWorkboardCard(
           reloadAfterFailure = true;
         }
       } finally {
+        // Only remove this drop's unconfirmed placements; never rewind a successful peer write.
+        for (const move of dropPlan) {
+          state.pendingDrops.delete(move.id);
+        }
         if (state.draggedCardId === params.cardId) {
           state.draggedCardId = null;
         }
@@ -248,7 +273,7 @@ type WorkboardCardMutationParams = WorkboardClientContext & {
 export async function runWorkboardCardMutation<T>(
   params: WorkboardCardMutationParams & {
     cardIds?: readonly string[];
-    reconcileConflict?: boolean;
+    reconcileConflict?: false | typeof replaceCard;
   },
   mutate: (state: ReturnType<typeof getWorkboardState>, client: GatewayBrowserClient) => Promise<T>,
 ): Promise<T | false> {
@@ -272,7 +297,7 @@ export async function runWorkboardCardMutation<T>(
     return await mutate(state, params.client);
   } catch (error) {
     if (params.reconcileConflict !== false) {
-      reconcileCardConflict(state, error);
+      reconcileCardConflict(state, error, params.reconcileConflict);
     }
     state.error = formatError(error);
     return false;
@@ -288,17 +313,47 @@ export async function updateWorkboardCardProperties(
   params: WorkboardClientContext & {
     card: WorkboardCard;
     patch: Partial<Pick<WorkboardCard, "priority" | "labels" | "agentId" | "title" | "notes">>;
+    previewInline?: boolean;
   },
 ) {
-  return runWorkboardCardMutation({ ...params, cardId: params.card.id }, async (state, client) => {
-    const payload = await client.request("workboard.cards.update", {
-      id: params.card.id,
-      expectedUpdatedAt: params.card.updatedAt,
-      patch: params.patch,
-    });
-    replaceCard(state, normalizeCardPayload(payload));
-    return true;
-  });
+  const applyCard: typeof replaceCard = params.previewInline
+    ? (state, receipt) => {
+        const index = state.cards.findIndex((card) => card.id === receipt.id);
+        const current = state.cards[index];
+        if (!current || current.updatedAt > receipt.updatedAt) {
+          return;
+        }
+        if (current.position === receipt.position) {
+          // A property edit doesn't move the card behind peers with the same position.
+          setWorkboardCards(state, state.cards.with(index, receipt));
+        } else {
+          replaceCard(state, receipt);
+        }
+      }
+    : replaceCard;
+  return runWorkboardCardMutation(
+    { ...params, cardId: params.card.id, reconcileConflict: applyCard },
+    async (state, client) => {
+      const { card, patch } = params;
+      // Only the observed card gets the preview. A replacement from the Gateway
+      // supplies its own values; dropping the preview never restores an old list.
+      if (params.previewInline) {
+        state.inlinePreviews.set(card, { ...card, ...patch });
+        notifyWorkboard(params.host);
+      }
+      try {
+        const payload = await client.request("workboard.cards.update", {
+          id: card.id,
+          expectedUpdatedAt: card.updatedAt,
+          patch,
+        });
+        applyCard(state, normalizeCardPayload(payload));
+        return true;
+      } finally {
+        state.inlinePreviews.delete(card);
+      }
+    },
+  );
 }
 
 export async function deleteWorkboardCard(

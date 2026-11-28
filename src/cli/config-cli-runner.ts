@@ -23,6 +23,7 @@ import { visitConfigValueTree } from "../config/value-tree.js";
 import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
+import { openClawIdAccessWarning } from "../gateway/openclaw-id/access-plugin.js";
 import { danger, info } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -540,7 +541,7 @@ export async function runConfigOperations(params: {
       );
     }
   } else {
-    await replaceConfigFile({
+    const written = await replaceConfigFile({
       sourceConfig: authoredNextConfig,
       snapshot,
       ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
@@ -563,6 +564,10 @@ export async function runConfigOperations(params: {
           : {}),
       },
     });
+    const warning = openClawIdAccessWarning(written.nextConfig);
+    if (warning) {
+      runtime.error(warning);
+    }
   }
   if (removedGatewayAuthPaths.length > 0) {
     runtime.log(

@@ -181,8 +181,7 @@ suite.define(() => {
       await expect.poll(async () => openaiCard.locator('input[type="password"]').count()).toBe(0);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
-      await page.locator("[data-models-connect]").click();
-      await page.locator('[data-models-login-provider="google"]').click();
+      await page.locator('[data-models-catalog-provider="google"] button').click();
       const addSection = page.locator("[data-models-key-dialog]");
       await addSection.getByLabel("API key").fill("synthetic-writer-provider-key");
       // The modal makes the picker inert. Use its selection owner without

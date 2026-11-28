@@ -4,12 +4,96 @@ Capture the real surface required by the task. A synthetic page can demonstrate
 the annotation tools, but cannot prove a product fix. Keep the raw screenshot or
 recording and the measured rectangles alongside the annotated output.
 
+For PRs, follow the shared [visual-proof workflow and comparison layout](../../openclaw-pr-maintainer/references/media.md#pr-visual-proof).
+The annotation renderer introduced in [#174805](https://github.com/openclaw/openclaw/pull/174805)
+works on captured images; it does not choose a scenario or establish product proof.
+
+## Choose marks that explain the fix
+
+The implementing agent selects targets from the PR's visible change, measures
+them, and writes factual labels. Use the fewest marks that make the difference
+clear, not a box around every changed component:
+
+| Visible change      | Mark                                                    | Example label pair                                  |
+| ------------------- | ------------------------------------------------------- | --------------------------------------------------- |
+| Duplicate content   | Outlines around the repeated/single content             | Account shown twice → Account shown once            |
+| Clipping or overlap | Outline or arrow at the affected edge                   | Action clipped → Action fully visible               |
+| Alignment           | Guide through corresponding edges or centers            | Renderer-calculated offsets from the same reference |
+| Spacing             | Bracket between measured edges                          | Renderer-calculated gap before and after            |
+| Moved control       | Arrow to its old/new location, retaining surrounding UI | Action in overflow → Action beside item             |
+
+Label observations, not verdicts such as “Bad” and “Fixed.” Do not invent numbers
+or imply that a still proves timing or backend behavior. Place labels in clear
+space and outline strokes outside the text they explain. Keep exact measured
+bounds for alignment/spacing even if an outline needs visual padding.
+
+## Callout appearance and color
+
+Use a filled, softly rounded card with a prominent sans-serif title, quieter
+secondary detail, and an optional compact pill for a meaningful measured delta.
+The shared renderer supplies this layout, fine outlines, and thin pointers; do
+not build a separate per-PR card renderer or recolor its generated markup.
+
+The annotating agent chooses `color` (a `#RRGGBB` accent) after inspecting the
+actual screenshot, its theme, and the area behind the annotation. The renderer
+derives the card, border, text, and pill colors from that accent. Lilac is not a
+fixed default for every image. Keep a matched before/after pair on the same
+palette when it remains readable in both. Check the resulting text, pointer,
+and target outline at the intended display size; color choice is not an
+automatic contrast guarantee. When omitted, the existing mark-specific accent
+is used.
+
+For arrows and outlines, `text` is the title. Add `detail` only when it helps
+explain the observation, and `badge` only for a verified delta or similarly
+useful short value. Alignment and spacing retain their renderer-calculated
+titles; secondary fields never replace those measurements. Do not make up a
+number just to fill the pill.
+
+```json
+{
+  "kind": "arrow",
+  "from": { "x": 470, "y": 532 },
+  "to": { "x": 408, "y": 532 },
+  "labelAt": { "x": 480, "y": 490 },
+  "text": "Wider account menu",
+  "detail": "336 CSS px wide",
+  "badge": "+32",
+  "color": "#8570ad"
+}
+```
+
+This is an annotation example, not a measurement of your screenshot. Use the
+actual saved bounds and comparison values. Cards grow with their content; keep
+the title/detail short and place the whole card in clear space.
+
 ## Geometry
 
-All positions use viewport CSS pixels, top-left origin. `scale` is raw pixels per
-CSS pixel, not zoom. The first rectangle is the alignment reference. Measure
-each target in the settled state with Playwright `locator.boundingBox()`; reject
-missing or offscreen targets. Use `labelAt` to place a label in clear space.
+All positions use one capture coordinate system with a top-left origin. For web
+captures use viewport CSS pixels; `scale` is image pixels per CSS pixel, not zoom.
+Use the settled bounds returned by `takeControlUiScreenshotFrame`, or measure
+with Playwright `locator.boundingBox()` when capturing outside that helper.
+Reject missing or offscreen targets. The first rectangle is the alignment
+reference. Use `labelAt` to place a label in clear space.
+
+For native outlines/arrows, use the verified logical capture dimensions as
+`viewport` and image pixels per logical unit as `scale`. This keeps labels
+readable on high-density screenshots without resizing the source image. Map
+accessibility/test bounds into that coordinate system, accounting for window
+origin and orientation; native points or Android density-independent units are
+not image pixels. If no bounds are reported, locate the target in the inspected
+screenshot, but do not present estimates as precise measurements.
+
+The renderer's numeric alignment/spacing labels say `px`. For native physical-
+pixel measurements, use image-pixel bounds, PNG dimensions as `viewport`, and
+`scale: 1`; use a matched close crop if labels would otherwise be unreadable.
+Do not present native point/density-independent measurements as physical pixels.
+Use PNG captures, or convert a captured JPEG to PNG without resizing it; retain
+the original alongside the PR artifacts.
+
+For a crop, translate targets and labels by the crop origin in the same units.
+Web frame crops expose `pixelBounds`: subtract their pixel origin from
+pixel-converted target coordinates and annotate that cropped PNG with `scale: 1`.
+Do not take another screenshot to annotate or modify the app to draw the marks.
 
 | Kind        | Fields                        | Meaning                                                                                                                                                                                                        |
 | ----------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -18,8 +102,10 @@ missing or offscreen targets. Use `labelAt` to place a label in clear space.
 | `alignment` | `axis`, `edge`, `rects`       | `axis: "x"` compares horizontal coordinates with a vertical guide; `"y"` compares vertical coordinates. `edge` is `start`, `center`, or `end`. Label reports maximum absolute offset from the first rectangle. |
 | `spacing`   | `axis`, `from`, `to`, `at`    | Rectangles ordered left-to-right (`x`) or top-to-bottom (`y`). Measures the gap between edges, or the intersecting interval when they overlap. `at` locates the bracket on the other axis.                     |
 
-Every kind accepts optional `labelAt: {x,y}`. Labels are single-line and must fit;
-shorten text instead of shrinking it. Bounds must fit the capture viewport.
+Every kind accepts optional `labelAt: {x,y}`, `color`, `detail` (1–80 characters),
+and `badge` (1–16 characters). Arrow/outline secondary fields require `text`.
+Each text row stays on one line and must fit; shorten text instead of shrinking
+it. Bounds and the complete card must fit the capture viewport.
 
 ## Screenshot
 

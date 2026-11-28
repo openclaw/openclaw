@@ -132,6 +132,7 @@ export type WorkboardCardStore = Omit<WorkboardKeyedStore, "entries"> & {
     expectedUpdatedAt: number,
     ownerSlot: WorkboardOwnerSlot,
   ): Promise<WorkboardOwnerClaimResult>;
+  findCardIdsByPrefix(prefix: string): Promise<string[]>;
   listCardStatuses(ids: readonly string[]): Promise<Array<{ id: string; status: string }>>;
   listBoardAggregates(): Promise<WorkboardBoardCardAggregate[]>;
   listStatsAggregates(boardId?: string): Promise<WorkboardCardStatsAggregate[]>;

@@ -282,7 +282,7 @@ describe("buildExportSessionReply", () => {
 
     expect(reply.text).toContain("📊 Entries: 2");
     expect(reply.text).toContain(
-      "⚠️ Skipped 1 malformed transcript row that was not a session entry. rows 2",
+      "⚠️ Skipped 1 malformed chat history row that was not a session entry. rows 2",
     );
   });
 

@@ -26,6 +26,7 @@ import { performance, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as yieldTurn, setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { createSyntheticSourceInfo, type Skill } from "../../src/skills/loading/skill-contract.js";
 
 const { values } = parseArgs({
@@ -90,6 +91,7 @@ if (values.worker) {
   };
   const input = {
     kind: "scan" as const,
+    nativeMode: getFsSafeNativeConfig().mode,
     path: "",
     requests: [
       {
