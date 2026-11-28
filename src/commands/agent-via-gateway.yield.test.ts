@@ -75,8 +75,8 @@ function chatFinal(runId: string, sessionKey: string, text: string, extra = {}) 
   };
 }
 
-/** The agent connection streams `events`, then answers the yielded turn. */
-function mockYieldedGatewayTurn(events: unknown[], connection = new AbortController()) {
+/** The agent connection streams `events`, answers the yielded turn, then streams `later`. */
+function mockYieldedGatewayTurn(events: unknown[], later: unknown[] = []) {
   callGateway.mockImplementationOnce(async (value: unknown) => {
     const request = value as {
       onAccepted?: (payload: unknown) => void;
@@ -87,7 +87,17 @@ function mockYieldedGatewayTurn(events: unknown[], connection = new AbortControl
     for (const event of events) {
       request.onEvent?.(event);
     }
-    await request.onResponse?.(vi.fn(), connection.signal, yieldedTurn);
+    const waiting = request.onResponse?.(vi.fn(), new AbortController().signal, yieldedTurn);
+    if (later.length) {
+      // The wait is armed once the turn's own reply has printed.
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledWith("Checking with a helper."));
+      // One zero-length timer turn: a zero deadline (the --timeout 0 bug) would fire first.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    for (const event of later) {
+      request.onEvent?.(event);
+    }
+    await waiting;
     return yieldedTurn;
   });
 }
@@ -112,6 +122,20 @@ it("prints a yielded turn's acknowledgment, then the reply its subagents settle"
     ["Checking with a helper."],
     ["The helper says 17 × 19 = 323."],
   ]);
+  expect(runtime.error).not.toHaveBeenCalled();
+  expect(process.exitCode).toBe(0);
+});
+
+it("waits without a deadline when --timeout 0 disables the turn's timeout", async () => {
+  const main = "agent:main:main";
+  mockYieldedGatewayTurn(
+    [lifecycle("child-1", "agent:main:subagent:c1", "end")],
+    [lifecycle("settle-1", main, "start"), chatFinal("settle-1", main, "Done: 323.")],
+  );
+
+  await agentCliCommand({ message: "hi", sessionKey: main, timeout: "0" }, runtime);
+
+  expect(runtime.log).toHaveBeenLastCalledWith("Done: 323.");
   expect(runtime.error).not.toHaveBeenCalled();
   expect(process.exitCode).toBe(0);
 });
