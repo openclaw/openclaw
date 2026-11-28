@@ -11,7 +11,8 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabaseDisposal from "../../state/openclaw-agent-db-disposal.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { runAuthProbes, withAuthProbeStateOwnership } from "./list.probe.js";
+import { runAuthProbes } from "./list.probe.js";
+import { withAuthProbeStateOwnership } from "./list.probe.owner.js";
 
 const runner = vi.hoisted(() =>
   vi.fn<(params: { agentDir: string; abortSignal?: AbortSignal }) => Promise<{ text: string }>>(),
@@ -165,8 +166,9 @@ it("does not acquire probe state from a closed caller scope", async () => {
   const inParent = parent.run(() => AsyncLocalStorage.snapshot());
   await parent.drain();
   const run = vi.fn(async () => undefined);
+  const batch = await probeParams(1);
   await expect(
-    inParent(() => withAuthProbeStateOwnership({ mode: "exclusive" }, run)),
+    inParent(() => withAuthProbeStateOwnership({ mode: "exclusive" }, batch, run)),
   ).rejects.toThrow("Async work scope is closed");
   expect(run).not.toHaveBeenCalled();
   await expectOwnership(false);

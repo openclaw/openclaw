@@ -3,6 +3,7 @@ import {
   ErrorCodes,
   errorShape,
   type ModelsProbeResult,
+  validateModelsProbeBatchParams,
   validateModelsProbeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveNativeModelPrimary } from "../../agents/agent-scope-config.js";
@@ -25,6 +26,10 @@ import {
 } from "../../commands/models/list.probe.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatForLog } from "../ws-log.js";
+import {
+  captureLocalStateMutationGuard,
+  localStateOwnerChangedError,
+} from "./local-state-owner.js";
 import { resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -155,6 +160,39 @@ function mapProbeResult(provider: string, results: AuthProbeResult[]): ModelsPro
 }
 
 export const modelsProbeHandlers: GatewayRequestHandlers = {
+  "models.probeBatch": async (request) => {
+    const { params, context, respond } = request;
+    if (!assertValidParams(params, validateModelsProbeBatchParams, "models.probeBatch", respond)) {
+      return;
+    }
+    try {
+      captureLocalStateMutationGuard(params.expectedOwnerId, request);
+    } catch (error) {
+      respond(false, undefined, localStateOwnerChangedError(error));
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const scope = resolveModelAuthAgentScope(cfg, params.agentId);
+    if (!scope.ok) {
+      respond(false, undefined, scope.error);
+      return;
+    }
+    const summary = await runAuthProbes({
+      cfg,
+      agentId: scope.agentId,
+      agentDir: scope.agentDir,
+      workspaceDir: resolveAgentWorkspaceDir(cfg, scope.agentId),
+      providers: params.providers,
+      modelCandidates: params.modelCandidates,
+      options: params.options,
+      signal: request.signal,
+    });
+    // Preserve CLI target metadata, not raw provider failures, over RPC.
+    for (const target of summary.results) {
+      target.error = safeProbeTargetError(target);
+    }
+    respond(true, summary, undefined);
+  },
   "models.probe": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateModelsProbeParams, "models.probe", respond)) {
       return;

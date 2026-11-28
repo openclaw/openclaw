@@ -240,9 +240,7 @@ async function runIsolatedCompletionOwned(
       };
       const { config, agentDir, workspaceDir } = context;
       const usageOwner = {
-        config,
-        agentId,
-        agentDir,
+        ...context,
         provider,
         model: input.model,
         purpose: input.purpose,
@@ -455,6 +453,8 @@ async function runIsolatedCompletionOwned(
             modelId: request.model,
             agentDir,
             profileId: authProfileId,
+            probeTransientCooldown:
+              request.probeTransientCooldown && authProfileId === request.authProfileId,
             allowMissingApiKeyModes: ["aws-sdk"],
             allowBundledStaticCatalogFallback: true,
             skipAgentDiscovery: true,
@@ -550,6 +550,7 @@ async function runIsolatedCompletionOwned(
             attempt,
             store: harnessAuth.store,
             modelId: harnessAuth.model.id,
+            probeProfileId: request.probeTransientCooldown ? request.authProfileId : undefined,
           });
         let firstError: unknown;
         let priorProfileAttempted = false;

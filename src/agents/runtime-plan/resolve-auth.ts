@@ -91,6 +91,7 @@ function listDistinctPreparedRuntimeAuthAttempts(
 export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
   attempts: readonly PreparedAgentRuntimeAuthAttempt[];
   store?: AuthProfileStore;
+  probeProfileId?: string;
   modelId: string;
   model: Model;
   materializeModel(input: {
@@ -113,6 +114,7 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
         attempt,
         store: params.store,
         modelId: params.modelId,
+        probeProfileId: params.probeProfileId,
       }),
     );
   let firstError: unknown;

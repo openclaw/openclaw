@@ -328,6 +328,7 @@ async function prepareModelWithCredentialsCore(
       const resolvedAuth = await resolvePreparedRuntimeAuthAttempts({
         attempts: preparedAuth.attempts,
         store: authStore,
+        probeProfileId: params.probeTransientCooldown ? params.profileId : undefined,
         modelId: initialModel.id,
         model: initialModel,
         materializeModel,

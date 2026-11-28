@@ -210,6 +210,10 @@ export const validateSkillsFileGetParams = createProtocolValidator(
   S.SkillsFileGetParamsSchema,
   Checks.isSkillsFileGetParams,
 );
+export const validateModelsProbeBatchParams = createProtocolValidator(
+  S.ModelsProbeBatchParamsSchema,
+  Checks.isModelsProbeBatchParams,
+);
 export const validateModelsProbeParams = createProtocolValidator(
   S.ModelsProbeParamsSchema,
   Checks.isModelsProbeParams,

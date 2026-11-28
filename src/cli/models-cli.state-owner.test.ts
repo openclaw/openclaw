@@ -100,7 +100,6 @@ function expectNoLocalAdmission() {
 it.each([
   "add",
   "list",
-  "activate synthetic:manual",
   "logout synthetic:manual --yes",
   "setup-token --provider synthetic",
   "paste-token --provider synthetic",
@@ -118,6 +117,24 @@ it.each([
     expectNoLocalAdmission();
   },
 );
+
+it("asks only the live owner to verify and activate the exact saved profile", async () => {
+  mocks.gateway.mockResolvedValueOnce(
+    Object.assign({ ok: true, lines: [] }, { provider: "fixture", profileId: "fixture:second" }),
+  );
+  await runAuth(["--agent", "writer", "auth", "activate", "fixture:second"]);
+  expect(mocks.gateway.mock.calls[0]?.[0]).toMatchObject({
+    method: "openclaw.setup.activate",
+    params: {
+      kind: "saved-auth:fixture%3Asecond",
+      activationConfirmed: true,
+      agentId: "writer",
+      expectedOwnerId: "synthetic-gateway-owner",
+    },
+    requiredCapabilities: ["local-state-owner-routing-v1", "models-auth-activate-owner-v1"],
+  });
+  expectNoLocalAdmission();
+});
 
 it("delegates paste-api-key to the live owner without local credential admission", async () => {
   await runAuth("auth paste-api-key --provider openai");

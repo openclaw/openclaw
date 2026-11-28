@@ -12,9 +12,11 @@ import {
 import {
   type AuthProfileCredential as ProfileEntry,
   type AuthProfileEligibilityReasonCode,
+  type AuthProfileStore,
   externalCliDiscoveryScoped,
   ensureAuthProfileStoreAsync,
   listProfilesForProvider,
+  markAuthProfileSuccess,
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileEligibility,
   upsertAuthProfileWithLock,
@@ -59,6 +61,7 @@ import {
   loadProbeModelCatalog,
   selectProbeModel,
 } from "./list.probe.models.js";
+import { type AuthProbeStateOwnership, withAuthProbeStateOwnership } from "./list.probe.owner.js";
 import { formatMs } from "./shared.js";
 
 export { redactAuthProbeError };
@@ -219,7 +222,7 @@ export async function buildProbeTargets(params: {
   providers: string[];
   modelCandidates: string[];
   options: AuthProbeOptions;
-}): Promise<{ targets: AuthProbeTarget[]; results: AuthProbeResult[] }> {
+}): Promise<{ targets: AuthProbeTarget[]; results: AuthProbeResult[]; store: AuthProfileStore }> {
   const { cfg, agentDir, providers, modelCandidates, options, workspaceDir } = params;
   const authAliasLookupParams = { config: cfg, workspaceDir };
   const store = await ensureAuthProfileStoreAsync(agentDir, {
@@ -562,48 +565,18 @@ export async function buildProbeTargets(params: {
     });
   }
 
-  return { targets, results };
-}
-
-type AuthProbeStateOwnership = {
-  mode: "exclusive";
-};
-
-/** Own canonical state only for direct CLI probes; Gateway RPC probes already run under its lock. */
-export async function withAuthProbeStateOwnership<T>(
-  ownership: AuthProbeStateOwnership | undefined,
-  run: (signal?: AbortSignal) => Promise<T>,
-): Promise<T> {
-  if (!ownership) {
-    return await run();
-  }
-  const { runWithLocalStateOwner } = await import("../../cli/local-state-owner.js");
-  return await runWithLocalStateOwner({
-    method: "models status --probe",
-    params: {},
-    target: "model credentials",
-    onForeignOwner: "refuse",
-    onlineAlternative: "Omit --probe to read status without live checks.",
-    runLocal: async ({ signal }) => {
-      const work = await createAuthProbeWork(signal);
-      try {
-        return await work.run(() => run(signal));
-      } finally {
-        // Ownership outlives a failed batch until its in-flight probes settle.
-        await work.settle(async () => {});
-        await work.settled;
-      }
-    },
-  });
+  return { targets, results, store };
 }
 
 export async function runAuthProbes(
   params: Parameters<typeof buildProbeTargets>[0] & {
     onProgress?: (update: { completed: number; total: number; label?: string }) => void;
     stateOwnership?: AuthProbeStateOwnership;
+    signal?: AbortSignal;
   },
 ) {
-  return await withAuthProbeStateOwnership(params.stateOwnership, async (abortSignal) => {
+  return await withAuthProbeStateOwnership(params.stateOwnership, params, async (localSignal) => {
+    const abortSignal = localSignal ?? params.signal;
     const startedAt = Date.now();
     const startedAtMonotonic = monotonicNow();
     const plan = await buildProbeTargets(params);
@@ -716,6 +689,7 @@ export async function runAuthProbes(
                   provider: model.provider,
                   model: model.model,
                   authProfileId: isolatedProfileId ?? target.profileId,
+                  probeTransientCooldown: target.source === "profile",
                   ...(isolatedAgentDir
                     ? { preparedModelRuntimeMode: "isolated-read-only" as const }
                     : {}),
@@ -735,6 +709,17 @@ export async function runAuthProbes(
               );
               if (!completionResult.text.trim()) {
                 return buildResult("format", "The provider returned no visible text.");
+              }
+              // Only a pinned profile check proves that account recovered. Environment and
+              // configuration checks may run with a private, synthetic probe credential.
+              if (target.source === "profile" && target.profileId) {
+                await markAuthProfileSuccess({
+                  store: plan.store,
+                  agentDir,
+                  provider: model.provider,
+                  profileId: target.profileId,
+                  modelId: model.model,
+                });
               }
               return buildResult("ok");
             } catch (err) {

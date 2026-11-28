@@ -177,6 +177,22 @@ export const ModelsProbeParamsSchema = closedObject({
   agentId: Type.Optional(Type.String()),
 });
 
+/** Local models status forwards its complete target list to the active state owner. */
+export const ModelsProbeBatchParamsSchema = closedObject({
+  expectedOwnerId: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  providers: Type.Array(NonEmptyString),
+  modelCandidates: Type.Array(NonEmptyString),
+  options: closedObject({
+    provider: Type.Optional(NonEmptyString),
+    profileIds: Type.Optional(Type.Array(NonEmptyString)),
+    includeDirectKeys: Type.Optional(Type.Boolean()),
+    timeoutMs: Type.Number({ exclusiveMinimum: 0 }),
+    concurrency: Type.Integer({ minimum: 1 }),
+    maxTokens: Type.Optional(Type.Integer({ minimum: 1 })),
+  }),
+});
+
 export const AuthProbeStatusSchema = Type.Union([
   Type.Literal("ok"),
   Type.Literal("auth"),
