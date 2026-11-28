@@ -500,6 +500,16 @@ it("keeps the default-agent warning off JSON stdout and preserves an empty tool 
   });
 });
 
+it("skips the default-agent warning when an agent-scoped session key names the owner", async () => {
+  const params = await namedAdd("--message", "hi", "--session-key", "agent:ops:telegram:direct:1");
+  expect(params).toMatchObject({ sessionKey: "agent:ops:telegram:direct:1" });
+  expect(params).not.toHaveProperty("agentId", expect.anything());
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
+
+  await namedAdd("--message", "hi", "--session-key", "telegram:direct:1");
+  expectRuntimeErrorContaining("No --agent specified");
+});
+
 it("creates a one-shot webhook system event with an explicit keep policy", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));

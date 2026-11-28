@@ -580,7 +580,7 @@ openclaw automations edit <job-id> --session current
 openclaw automations edit <job-id> --session "session:daily-brief"
 ```
 
-`openclaw automations add` warns when `--agent` is omitted on agent-turn or script jobs. Ownership resolves from an explicit `--agent`, then an agent-qualified `--session-key`, then the configured default agent. The default follows `agents.defaults.systemAgent.agentId` or the applicable legacy/sole-agent fallback; omitting `--agent` does not pin the job to `main`. Pass `--agent <id>` at create time to pin a specific agent. If no owner can be resolved, creation fails with an error asking you to select an agent or configure the system agent.
+`openclaw automations add` warns when an agent-turn or script job names no owner, that is, when both `--agent` and an agent-qualified `--session-key` are omitted. Ownership resolves from an explicit `--agent`, then an agent-qualified `--session-key`, then the configured default agent. The default follows `agents.defaults.systemAgent.agentId` or the applicable legacy/sole-agent fallback; omitting `--agent` does not pin the job to `main`. Pass `--agent <id>` at create time to pin a specific agent. If no owner can be resolved, creation fails with an error asking you to select an agent or configure the system agent.
 
 Delivery tweaks:
 
