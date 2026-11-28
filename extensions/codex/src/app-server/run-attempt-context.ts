@@ -143,7 +143,7 @@ export async function prepareCodexAttemptContext(
       tokenBudget: effectiveContextTokenBudget,
     });
   if (activeContextEngine) {
-    await bootstrapHarnessContextEngine({
+    const transcriptMayHaveChanged = await bootstrapHarnessContextEngine({
       hadSessionFile: hadSessionTranscriptState,
       contextEngine: activeContextEngine,
       ...(runtimeParams.authoredContextTokenCap && effectiveContextTokenBudget
@@ -165,7 +165,10 @@ export async function prepareCodexAttemptContext(
       config: params.config,
       warn: (message) => embeddedAgentLog.warn(message),
     });
-    historyState.messages = (await readFencedHistory()) ?? historyState.messages;
+    // Unchanged rows under the same fence read back identical, and a large history costs seconds.
+    if (transcriptMayHaveChanged) {
+      historyState.messages = (await readFencedHistory()) ?? historyState.messages;
+    }
   }
   // The admission fence intentionally excludes this logical turn's committed results.
   historyState.messages.push(...(params.pluginRuntimeRefreshMessages ?? []));

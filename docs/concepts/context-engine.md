@@ -84,7 +84,7 @@ Every time OpenClaw runs a model prompt, the context engine participates at four
   </Accordion>
 </AccordionGroup>
 
-Engines can also implement an optional `maintain()` method for transcript maintenance (safe rewrites via `runtimeContext.rewriteTranscriptEntries()`) after bootstrap, a successful turn, or compaction. Set `info.turnMaintenanceMode: "background"` to run it as deferred work instead of blocking the reply.
+Engines can also implement an optional `maintain()` method for transcript maintenance (safe rewrites via `runtimeContext.rewriteTranscriptEntries()`) after bootstrap, a successful turn, or compaction. Return `changed: true` whenever maintenance rewrote the transcript: before a Codex turn, OpenClaw reads the session history again after bootstrap maintenance only when it reports a change. Set `info.turnMaintenanceMode: "background"` to run it as deferred work instead of blocking the reply.
 
 When queued budget compaction accepts background maintenance, it keeps the prepared
 runtime alive through maintenance, coalesced reruns, and engine disposal. Acceptance
