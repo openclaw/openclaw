@@ -1,0 +1,5 @@
+# StepFun Step 5 Preview catalog coverage: endpoint-eligibility rows for the new
+# default across both surfaces and regions, plus onboarding alias-ownership
+# preservation when the default moves under an existing config.
+# Exact net growth for PR #153525.
+96
