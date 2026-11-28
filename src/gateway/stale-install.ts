@@ -81,7 +81,6 @@ type InstallationObserver = {
   replacement?: GatewayInstallationReplacement;
   check?: Promise<void>;
   readiness?: PreparedReadinessChecker;
-  trialSettled?: boolean;
   legacyTrial?: LegacyTrial;
   legacyTrialChecked?: boolean;
   legacyTrialCheck?: Promise<void>;
@@ -248,7 +247,9 @@ function disarmInstallationLegacyTrial(observer: InstallationObserver): Promise<
       if (!prepared.publish().coreReady) {
         return;
       }
-      const { observeLegacyTrialReadiness } = await import("../update/gateway-trial.js");
+      const { announceReady, observeLegacyTrialReadiness, schedulePluginMaintenance } =
+        await import("../update/gateway-trial.js");
+      await announceReady(observer.running.buildId).finally(schedulePluginMaintenance);
       observer.recoverTrialHistory = await observeLegacyTrialReadiness(
         observer.running.buildId,
         observer.root,
@@ -265,15 +266,6 @@ function disarmInstallationLegacyTrial(observer: InstallationObserver): Promise<
 /** The existing maintenance tick owns disk reads; requests only consume recorded facts. */
 export async function checkGatewayInstallationReplacement(): Promise<void> {
   const observer = installationState.observer;
-  // Resident launchers acknowledge the serving listener through the existing maintenance owner.
-  if (observer && !observer.trialSettled) {
-    observer.trialSettled = true;
-    void import("../update/gateway-trial.js")
-      .then(({ announceReady }) => announceReady(observer.running.buildId))
-      .catch(() => {
-        observer.trialSettled = false;
-      });
-  }
   if (observer?.readiness) {
     await announceGatewayInstallationReady(observer.readiness);
   }

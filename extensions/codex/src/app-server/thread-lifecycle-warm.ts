@@ -63,6 +63,7 @@ import {
 import {
   assertAdoptedCodexThreadResumeAllowed,
   CodexIncognitoPolicyChangeError,
+  isCodexNativeSectionStale,
   refreshCodexThreadInstructions,
 } from "./thread-policy.js";
 import { buildCodexThreadGenericInstructions } from "./thread-requests.js";
@@ -641,7 +642,9 @@ export async function tryReuseCodexLiveThread(
           binding,
           params,
         );
-    if (!incognito && retainedThread.configFingerprint !== liveThreadConfigFingerprint) {
+    // An incognito fingerprint is its retained one; only persistent threads cold-resume.
+    const staleSection = isCodexNativeSectionStale(params, binding.threadId, ephemeralPolicy);
+    if (staleSection || retainedThread.configFingerprint !== liveThreadConfigFingerprint) {
       // Return the same owner first: cold-resume preparation must observe native teardown
       // before releasing it, otherwise a loaded resume can silently ignore new policy.
       preserveSubscription = true;
@@ -680,7 +683,7 @@ export async function tryReuseCodexLiveThread(
           withCurrent: params.authority?.withCurrent,
         });
       } catch (error) {
-        // The ephemeral conversation survives a failed instruction handoff; the retained
+        // The conversation survives a failed instruction handoff; the retained
         // record still names the old instructions, so the next turn delivers it again.
         preserveSubscription = true;
         throw error;

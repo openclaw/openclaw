@@ -328,7 +328,9 @@ src/agents/github-host-runtime.ts
 src/agents/github-host.ts
 src/agents/internal-runtime-context.ts
 src/agents/mcp-connect-action.ts
+src/agents/mcp-oauth-identity.ts
 src/agents/mcp-oauth-store-error.ts
+src/agents/mcp-startup-backoff.ts
 src/agents/model-auth-policy.ts
 src/agents/model-catalog-entry.ts
 src/agents/model-catalog-lookup.ts
@@ -344,10 +346,12 @@ src/agents/model-selection-alias-scope.ts
 src/agents/model-selection-config.ts
 src/agents/model-selection-normalize.ts
 src/agents/model-selection-shared.ts
+src/agents/model-selection-resolve.ts
 src/agents/model-selection-warnings.ts
 src/agents/model-serving-context.ts
 src/agents/openai-model-routes.ts
 src/agents/openai-routing.ts
+src/agents/operator-model-policy.ts
 src/agents/owner-display.ts
 src/agents/requester-origin.ts
 src/agents/plugin-model-catalog-repair.ts
@@ -377,6 +381,7 @@ src/agents/tool-policy.ts
 src/agents/tool-search-protocol.ts
 src/agents/tools/automations-tool-name.ts
 src/agents/utility-model-setting.ts
+src/agents/utility-model-selection.ts
 src/agents/utils/git.ts
 src/agents/workspace-access.ts
 src/agents/workspace-default-path.ts
@@ -574,6 +579,7 @@ src/cli/program/command-descriptor-utils.ts
 src/cli/quote-cli-arg.ts
 src/cli/signal-exit-barrier.ts
 src/cli/wait.ts
+src/commands/doctor-live-store-pending.ts
 src/commands/doctor/shared/channel-legacy-config-migrate.ts
 src/commands/doctor/shared/codex-route-agent-entries.ts
 src/commands/doctor/shared/codex-route-model-ref.ts
@@ -1130,6 +1136,7 @@ src/infra/gateway-owner-lease.read.ts
 src/infra/gateway-owner-lease.worker.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
+src/infra/gateway-lock-recovery-namespace.ts
 src/infra/gateway-service-installation-context.ts
 src/infra/gateway-state-owner-cold-admission.ts
 src/infra/gateway-state-owner-directory.ts
@@ -1195,6 +1202,7 @@ src/infra/net/proxy/active-managed-proxy-tls.ts
 src/infra/net/proxy/active-proxy-state.ts
 src/infra/net/proxy/managed-proxy-undici.ts
 src/infra/net/proxy/proxy-tls.ts
+src/infra/net/proxyline-runtime.ts
 src/infra/net/redirect-headers.ts
 src/infra/net/runtime-fetch.ts
 src/infra/net/ssrf-trusted-host-linklocal-exemptions.ts
@@ -1338,6 +1346,7 @@ src/infra/sqlite-reader-metrics.ts
 src/infra/sqlite-readonly-auth-schema.ts
 src/infra/sqlite-readonly-auth-transfer.ts
 src/infra/sqlite-readonly-location-cleanup.ts
+src/infra/sqlite-readonly-location.inspection.ts
 src/infra/sqlite-readonly-location.ts
 src/infra/sqlite-readonly-location.worker.ts
 src/infra/sqlite-readonly-native-resource.client.ts
@@ -1452,6 +1461,7 @@ src/infra/update-capture-space.ts
 src/infra/update-channels.ts
 src/infra/update-database-generations.ts
 src/infra/update-database-path.ts
+src/infra/update-doctor-config-capture.ts
 src/infra/update-doctor-config-schema.ts
 src/infra/update-doctor-config.ts
 src/infra/update-doctor-lint-schema.ts
@@ -1467,6 +1477,7 @@ src/infra/update-failure-result.ts
 src/infra/update-immutable-install-schema.ts
 src/infra/update-immutable-protection-schema.ts
 src/infra/update-maintenance.ts
+src/infra/update-managed-service-handoff-boot-schema.ts
 src/infra/update-managed-service-handoff-boot.ts
 src/infra/update-managed-service-handoff-cancellation.ts
 src/infra/update-managed-service-handoff-children.ts
@@ -1496,6 +1507,7 @@ src/infra/update-rehearsal-paths.ts
 src/infra/update-result-claim.ts
 src/infra/update-result-payload.ts
 src/infra/update-run-activation.ts
+src/infra/restart-sentinel-codec.ts
 src/infra/restart-sentinel-store.ts
 src/infra/update-run-activity.ts
 src/infra/update-run-admission.read.ts
@@ -1942,7 +1954,6 @@ src/plugins/slots.ts
 src/plugins/status-dependencies-core.ts
 src/plugins/toggle-config.ts
 src/plugins/update-cohort-artifacts.ts
-src/plugins/update-cohort-protected-artifacts.ts
 src/plugins/web-search-install-catalog.ts
 src/process/child-memory.ts
 src/process/child-process-tree.ts
@@ -2298,6 +2309,7 @@ src/state/openclaw-state-db-read-connection.ts
 src/state/openclaw-state-db-read-schema.ts
 src/state/openclaw-state-db-readonly-reuse.ts
 src/state/openclaw-state-db-readonly.ts
+src/state/openclaw-state-db-doctor-repair-plan.ts
 src/state/openclaw-state-db-repair-pending.ts
 src/state/openclaw-state-db-repair.ts
 src/state/openclaw-state-db-schema-additive.ts
@@ -3022,6 +3034,7 @@ src/agents/agent-bundle-mcp-runtime-owner.ts
 src/agents/agent-bundle-mcp-runtime-shared.ts
 src/infra/client-credential-migration-data.ts
 src/infra/client-credential-migration.ts
+src/infra/client-credential-recovery-plan.ts
 src/infra/client-credential-native-bootstrap.ts
 src/infra/client-credential-operations.ts
 src/infra/client-credential-paths.ts

@@ -16,7 +16,6 @@ import {
   type UpdateRunRecord,
   type UpdateRunStep,
 } from "../../../src/infra/update-run-record.ts";
-import { resolveUpdateRunIdentity } from "../../../src/infra/update-run-report.ts";
 import { updateRunWarningMessages } from "../../../src/infra/update-run-step.ts";
 import { t } from "../i18n/index.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
@@ -154,7 +153,13 @@ export function projectUpdateRun(
   );
   const details = detailStep ? (stepDetails.get(updateRunStepOwner(detailStep.step)) ?? "") : "";
   const facts = run.verification;
-  const identity = resolveUpdateRunIdentity(facts, run.after);
+  const identityMismatch =
+    Boolean(
+      facts.runningVersion && run.after.version && facts.runningVersion !== run.after.version,
+    ) ||
+    Boolean(
+      facts.runningBuildId && run.after.buildId && facts.runningBuildId !== run.after.buildId,
+    );
   const booleanState = (value: boolean | undefined): "pass" | "warn" | "fail" | "pending" =>
     value === undefined ? (terminal ? "warn" : "pending") : value ? "pass" : "fail";
   const oracles = [
@@ -166,10 +171,10 @@ export function projectUpdateRun(
     {
       name: "version",
       state:
-        identity.kind === "unavailable"
+        facts.versionMatch === false && !identityMismatch
           ? "warn"
-          : booleanState(identity.kind === "unobserved" ? undefined : identity.kind === "verified"),
-      observed: identity.kind !== "unobserved",
+          : booleanState(facts.versionMatch),
+      observed: facts.versionMatch !== undefined,
     },
     {
       name: "plugins",

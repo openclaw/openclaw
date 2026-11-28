@@ -15,12 +15,21 @@ import {
 export async function checkLegacyPluginManifestPending(
   ctx: DoctorHealthFlowContext,
 ): Promise<DoctorMaintenancePending> {
-  const { collectLegacyPluginManifestContractMigrations } =
-    await import("../commands/doctor-plugin-manifests.js");
-  return collectLegacyPluginManifestContractMigrations({ config: ctx.cfg, env: process.env })
-    .length > 0
-    ? "work"
-    : "none";
+  const [
+    { collectLegacyPluginManifestContractMigrations },
+    { decideDoctorPendingFromLiveStores },
+    { resolveOpenClawStateSqlitePath },
+  ] = await Promise.all([
+    import("../commands/doctor-plugin-manifests.js"),
+    import("../commands/doctor-live-store-pending.js"),
+    import("../state/openclaw-state-db.paths.js"),
+  ]);
+  // Manifest discovery reads the installed plugin index from the state database.
+  return decideDoctorPendingFromLiveStores([resolveOpenClawStateSqlitePath()], () =>
+    collectLegacyPluginManifestContractMigrations({ config: ctx.cfg, env: process.env }).length > 0
+      ? "work"
+      : "none",
+  );
 }
 
 export async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -112,6 +121,47 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
   });
 }
 
+function sessionTranscriptRepairInputs(ctx: DoctorHealthFlowContext) {
+  return {
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+    integrityCheck: ctx.options.fullIntegrityCheck ? ("full" as const) : ("quick" as const),
+  };
+}
+
+export async function checkSessionTranscriptHeadersContributionPending(
+  ctx: DoctorHealthFlowContext,
+): Promise<DoctorMaintenancePending> {
+  const { checkSessionTranscriptHeaderRepairPending } =
+    await import("../commands/doctor-session-transcript-headers.js");
+  return checkSessionTranscriptHeaderRepairPending(sessionTranscriptRepairInputs(ctx));
+}
+
+export async function runSessionTranscriptHeadersHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  const { noteSessionTranscriptHeaderHealth } =
+    await import("../commands/doctor-session-transcript-headers.js");
+  await noteSessionTranscriptHeaderHealth(sessionTranscriptRepairInputs(ctx));
+}
+
+export async function checkSessionTranscriptLabelsContributionPending(
+  ctx: DoctorHealthFlowContext,
+): Promise<DoctorMaintenancePending> {
+  const { checkSessionTranscriptLabelRepairPending } =
+    await import("../commands/doctor-session-transcript-labels.js");
+  return checkSessionTranscriptLabelRepairPending(sessionTranscriptRepairInputs(ctx));
+}
+
+export async function runSessionTranscriptLabelsHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  const { noteSessionTranscriptLabelHealth } =
+    await import("../commands/doctor-session-transcript-labels.js");
+  await noteSessionTranscriptLabelHealth(sessionTranscriptRepairInputs(ctx));
+}
+
 export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } =
     await import("../commands/doctor/cron/index.js");
@@ -168,9 +218,77 @@ export async function checkLegacyStatePending(
     // state database, so it is not repeated here.
     return "work";
   }
-  const { countStoredObsoleteGeneratedExecApprovals } =
-    await import("../infra/exec-approvals-generated-migration.js");
-  return countStoredObsoleteGeneratedExecApprovals() > 0 ? "work" : "none";
+  const [
+    { countStoredObsoleteGeneratedExecApprovals },
+    { decideDoctorPendingFromLiveStores },
+    { resolveOpenClawStateSqlitePath },
+  ] = await Promise.all([
+    import("../infra/exec-approvals-generated-migration.js"),
+    import("../commands/doctor-live-store-pending.js"),
+    import("../state/openclaw-state-db.paths.js"),
+  ]);
+  return decideDoctorPendingFromLiveStores([resolveOpenClawStateSqlitePath()], () =>
+    countStoredObsoleteGeneratedExecApprovals() > 0 ? "work" : "none",
+  );
+}
+
+/**
+ * Read-only: the plugin registry repair's own no-op test. The registry lives in the state
+ * database, so it decides only while a connection holds it. The repair still runs that test
+ * inside the stop, where the alternative, the plugin lease, writes rows on every run.
+ */
+export async function checkPluginRegistryContributionPending(
+  ctx: DoctorHealthFlowContext,
+): Promise<DoctorMaintenancePending> {
+  const [
+    { checkPluginRegistryRepairPending },
+    { decideDoctorPendingFromLiveStores },
+    { resolveOpenClawStateSqlitePath },
+  ] = await Promise.all([
+    import("../commands/doctor-plugin-registry.js"),
+    import("../commands/doctor-live-store-pending.js"),
+    import("../state/openclaw-state-db.paths.js"),
+  ]);
+  return decideDoctorPendingFromLiveStores([resolveOpenClawStateSqlitePath()], () =>
+    checkPluginRegistryRepairPending({
+      config: ctx.cfg,
+      env: process.env,
+      prompter: ctx.prompter,
+    }),
+  );
+}
+
+/**
+ * Read-only: the Telegram General-topic repair's own detection, which opens each agent
+ * database. It decides only while a connection holds the stores it reads.
+ */
+export async function checkTelegramGeneralTopicConversationsPending(
+  ctx: DoctorHealthFlowContext,
+): Promise<DoctorMaintenancePending> {
+  if (!ctx.prompter.shouldRepair) {
+    return "none";
+  }
+  const env = ctx.env ?? process.env;
+  const [
+    { checkCoreContributionRepairsPending },
+    { listTelegramGeneralTopicConversationDatabasePaths },
+    { decideDoctorPendingFromLiveStores },
+    { resolveOpenClawStateSqlitePath },
+  ] = await Promise.all([
+    import("./doctor-health-contribution-core.js"),
+    import("../commands/doctor-telegram-general-topic-conversations.js"),
+    import("../commands/doctor-live-store-pending.js"),
+    import("../state/openclaw-state-db.paths.js"),
+  ]);
+  return decideDoctorPendingFromLiveStores([resolveOpenClawStateSqlitePath(env)], () =>
+    decideDoctorPendingFromLiveStores(
+      listTelegramGeneralTopicConversationDatabasePaths(ctx.cfg, env),
+      () =>
+        checkCoreContributionRepairsPending(ctx, [
+          "core/doctor/telegram-general-topic-conversations",
+        ]),
+    ),
+  );
 }
 
 export async function checkLegacyRuntimeFilesContributionPending(
@@ -197,9 +315,20 @@ export async function checkConfiguredPluginInstallReleasePending(
   if (!ctx.sourceConfigValid || !ctx.prompter.shouldRepair) {
     return "none";
   }
-  const { checkConfiguredPluginInstallReleaseStepPending } =
-    await import("../commands/doctor/shared/release-configured-plugin-installs.js");
-  return checkConfiguredPluginInstallReleaseStepPending(configuredPluginInstallReleaseInputs(ctx));
+  const [
+    { checkConfiguredPluginInstallReleaseStepPending },
+    { decideDoctorPendingFromLiveStores },
+    { resolveOpenClawStateSqlitePath },
+  ] = await Promise.all([
+    import("../commands/doctor/shared/release-configured-plugin-installs.js"),
+    import("../commands/doctor-live-store-pending.js"),
+    import("../state/openclaw-state-db.paths.js"),
+  ]);
+  const inputs = configuredPluginInstallReleaseInputs(ctx);
+  // Plugin install records and metadata snapshots live in the state database.
+  return decideDoctorPendingFromLiveStores([resolveOpenClawStateSqlitePath(inputs.env)], () =>
+    checkConfiguredPluginInstallReleaseStepPending(inputs),
+  );
 }
 
 export async function checkLegacyPluginSourceCapturesContributionPending(

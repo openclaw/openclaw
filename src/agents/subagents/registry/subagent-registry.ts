@@ -148,7 +148,6 @@ const {
   scheduleResume,
   completeCleanupBookkeeping,
   completeSubagentRun,
-  refreshFrozenResultFromSession,
   resumeRequesterSettleWake,
   resumePendingRequesterSettlements,
   settleRequesterTurnAfterSessionSpawns,
@@ -332,6 +331,8 @@ function resumeFinalizedSubagentRun(runId: string, entry: SubagentRunRecord) {
 
   // Only a live execution owner can keep a completion wait active.
   if (!isSubagentRunLive(entry)) {
+    // Fresh requester custody lets the sweeper settle a crash-left execution.
+    scheduleSubagentRegistrySweep({ delayMs: 0 });
     return;
   }
   const cfg = getRuntimeConfig();
@@ -414,23 +415,16 @@ function retireSupersededSubagentRun(
 }
 
 const subagentSweeper = createSubagentRegistrySweeper({
-  ...contextCleanup,
+  cleanupCollectorLaunchResources: contextCleanup.cleanupCollectorLaunchResources,
+  runContextEngineSubagentEnded: contextCleanup.runContextEngineSubagentEnded,
+  notifyContextEngineSubagentEnded: contextCleanup.notifyContextEngineSubagentEnded,
   runs: subagentRuns,
-  resumedRuns,
   clearPendingLifecycleError,
-  clearPendingLifecycleTimeout,
   sweepPendingLifecycle: (now) => pendingLifecycle.sweepExpired(now),
   completeSubagentRunWithRecovery: completionRuntime.completeSubagentRunWithRecovery,
   startSubagentAnnounceCleanupFlow,
-  completeCleanupBookkeeping,
   resumeRequesterSettleWake,
   resumePendingRequesterSettlements,
-  isCleanupOwnerCurrent: subagentLifecycleController.isCleanupOwnerCurrent,
-  isTerminalTailActive: subagentLifecycleController.isTerminalTailActive,
-  sessionEffectsHostCurrent: (entry) =>
-    subagentLifecycleController.sessionEffectsHostCurrent(entry),
-  shouldSuppressSessionEffects: (entry, effects) =>
-    subagentLifecycleController.shouldSuppressSessionEffects(entry, effects),
   callGateway: callSubagentRegistryGateway,
   retireSupersededRun: retireSupersededSubagentRun,
   retireObligations: retireKilledSubagentObligations,
@@ -448,7 +442,6 @@ const subagentListener = createSubagentRegistryListener({
       childSessionKey: entry.childSessionKey,
       childAgentId: entry.childAgentId,
     }),
-  refreshFrozenResultFromSession,
   completeSubagentRunWithRecovery: completionRuntime.completeSubagentRunWithRecovery,
 });
 
@@ -546,7 +539,7 @@ export const listCollectorRunsForRequester = publicApi.listCollectorRunsForReque
 export const completeCollectorLaunchCleanup = publicApi.completeCollectorLaunchCleanup;
 export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput;
 export const listSwarmRunsForGroup = publicApi.listSwarmRunsForGroup;
-export const getSwarmRunByLaunchReplayKey = publicApi.getSwarmRunByLaunchReplayKey;
+export const resolveSwarmLaunchReplay = publicApi.resolveSwarmLaunchReplay;
 export const countActiveRunsForSession = publicApi.countActiveRunsForSession;
 export function initSubagentRegistry() {
   return subagentRestorer.restoreOnce();
@@ -582,14 +575,18 @@ export async function terminateLiveSubagentsForShutdown(
   );
 }
 
-export function activateSubagentRegistry(
+export async function activateSubagentRegistry(
   resolveGatewayContext: GatewayContextResolver,
 ): Promise<void> {
   // Reuse the instance's own fenced closure so late-restored siblings share one
   // authority across repeated activation; the raw holder can outlive that instance.
   activeGatewayContextResolver = resolveGatewayContext()?.resolveGatewayContext;
   bindGatewayContextResolver(subagentRuns, activeGatewayContextResolver);
-  return subagentRestorer.activate();
+  await subagentRestorer.activate();
+  if (subagentRuns.size > 0) {
+    subagentSweeper.start();
+    scheduleSubagentRegistrySweep({ delayMs: 0 });
+  }
 }
 export const settleRequesterAfterSessionSpawns = publicApi.settleRequesterAfterSessionSpawns;
 export const markRequesterTurnYielded = publicApi.markRequesterTurnYielded;

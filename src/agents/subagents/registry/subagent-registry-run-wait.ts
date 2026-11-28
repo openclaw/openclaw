@@ -16,6 +16,7 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { waitForAgentRun } from "../../run-wait.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
+import { hasSubagentKill } from "./subagent-control-kill-intent.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
@@ -326,8 +327,7 @@ export abstract class SubagentWaitManager {
               }
               if (
                 typeof current.execution.endedAt === "number" ||
-                current.killIntent ||
-                current.killReconciliation ||
+                hasSubagentKill(current) ||
                 current.execution.startedAt === observedStartedAt
               ) {
                 return { value: undefined };

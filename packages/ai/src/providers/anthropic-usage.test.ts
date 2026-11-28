@@ -88,6 +88,59 @@ describe("Anthropic usage", () => {
   });
 
   it.each([
+    ["inclusive", true, { input: 66, totalTokens: 2117, promptTokens: 2114 }],
+    ["disjoint", undefined, { input: 2114, totalTokens: 4165, promptTokens: 4162 }],
+  ] as const)("reads %s input_tokens against cache reads", (_name, flag, expected) => {
+    const model = { compat: { inputTokensIncludeCacheRead: flag } };
+    const usage = createZeroUsage();
+    const report = { input_tokens: 2114, cache_read_input_tokens: 2048 };
+    const start = applyAnthropicMessageStartUsage(usage, { ...report, output_tokens: 0 }, model);
+    expect(usage).toMatchObject({
+      contextUsage: {
+        state: "available",
+        promptTokens: expected.promptTokens,
+        totalTokens: expected.promptTokens,
+      },
+    });
+
+    applyAnthropicMessageDeltaUsage(usage, { ...report, output_tokens: 3 }, start, model);
+
+    expect(usage).toMatchObject({
+      input: expected.input,
+      output: 3,
+      cacheRead: 2048,
+      totalTokens: expected.totalTokens,
+      contextUsage: {
+        state: "available",
+        promptTokens: expected.promptTokens,
+        totalTokens: expected.totalTokens,
+      },
+    });
+  });
+  it("subtracts the last cache read when an inclusive delta omits it", () => {
+    const usage = createZeroUsage();
+    const inclusive = { compat: { inputTokensIncludeCacheRead: true } };
+    const start = applyAnthropicMessageStartUsage(
+      usage,
+      { input_tokens: 2114, output_tokens: 0, cache_read_input_tokens: 2048 },
+      inclusive,
+    );
+
+    applyAnthropicMessageDeltaUsage(
+      usage,
+      { input_tokens: 2114, output_tokens: 3 },
+      start,
+      inclusive,
+    );
+
+    expect(usage).toMatchObject({
+      input: 66,
+      cacheRead: 2048,
+      contextUsage: { state: "available", promptTokens: 2114, totalTokens: 2117 },
+    });
+  });
+
+  it.each([
     ["start fallback", [6, 4], undefined, undefined, undefined, [6, 4]],
     ["top-level fallback", undefined, [6, 4], undefined, undefined, [6, 4]],
     ["summed buckets", undefined, undefined, [6, 4], [12, 8], [18, 12]],

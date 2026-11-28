@@ -29,7 +29,7 @@ function applyNative(
 }
 function resultOf(
   content: OpenClawAgentToolResult["content"],
-  details: unknown = {},
+  details: unknown,
 ): OpenClawAgentToolResult {
   return { content, details };
 }

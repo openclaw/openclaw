@@ -182,7 +182,7 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
       },
     ];
     for (const { file, descriptor, seed } of fixtures) {
-      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
       const storeId = randomUUID();
       const namespace = `git_backup_${storeId.replaceAll("-", "")}`;
       namespaces.set(file, namespace);

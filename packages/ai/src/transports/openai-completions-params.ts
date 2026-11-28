@@ -4,8 +4,7 @@ import {
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { getAiTransportHost } from "../host.js";
-import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
+import { convertMessages } from "../openai-completions-messages.js";
 import { measuredRequestPressure, type OpenAICompletionsOptions } from "../provider-options.js";
 import {
   PROVIDER_DEFERRED_TOOL_NAMES,
@@ -34,7 +33,10 @@ import {
   prepareOpenAITools,
   reconcileOpenAICompletionsToolChoice,
 } from "../providers/openai-tool-projection.js";
-import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
+import {
+  normalizeOpenAIToolParameters,
+  resolveOpenAIStrictToolSetting,
+} from "../providers/openai-tool-schema.js";
 import { withPreparedToolSchemaNormalization } from "../providers/tool-schema-normalization-cache.js";
 import { normalizeToolSchema } from "../providers/tool-schema-normalization.js";
 import { shortHash } from "../utils/hash.js";
@@ -57,10 +59,7 @@ import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
 } from "./openai-completions-string-content.js";
-import {
-  getCompat,
-  resolveOpenAIStrictToolFlagWithDiagnostics,
-} from "./openai-transport-params.js";
+import { getCompat } from "./openai-transport-params.js";
 import {
   log,
   resolvePromptCacheKey,
@@ -165,22 +164,7 @@ function convertTools(
   const prepared = mode === "managed" ? prepareOpenAITools(tools) : undefined;
   const projection = prepared?.projection ?? projectOpenAITools(tools);
   const convert = () => {
-    const strict =
-      mode === "direct"
-        ? compat.supportsStrictMode
-          ? false
-          : undefined
-        : resolveOpenAIStrictToolFlagWithDiagnostics(
-            projection,
-            getAiTransportHost().resolveOpenAIStrictToolSetting(model, {
-              transport: "stream",
-              supportsStrictMode: compat?.supportsStrictMode,
-            }),
-            {
-              transport: "completions",
-              model,
-            },
-          );
+    const strict = resolveOpenAIStrictToolSetting(compat);
     return {
       projection,
       tools: sortTransportToolsByName(projection.tools).map((tool) => {
@@ -190,9 +174,7 @@ function convertTools(
         return prepareOpenAIFunctionTool(
           tool.name,
           tool.description,
-          mode === "direct"
-            ? parameters
-            : normalizeOpenAIStrictToolParameters(parameters, strict === true, model.compat),
+          mode === "direct" ? parameters : normalizeOpenAIToolParameters(parameters, model.compat),
           strict,
           mutableParameters,
         ).completions;
@@ -299,10 +281,13 @@ export function buildOpenAICompletionsRequest(
     cacheOptOutIndexes,
     supportsTools,
     // Deferred tools stay callable without a declaration; only unavailable history becomes text.
-    declaredToolNames: new Set([
-      ...(converted?.projection.tools.map((tool) => tool.name) ?? []),
-      ...(options?.[PROVIDER_DEFERRED_TOOL_NAMES] ?? []),
-    ]),
+    // A request that offers no tools has no catalog to reconcile, so its history stays native.
+    declaredToolNames: converted?.projection.inputToolCount
+      ? new Set([
+          ...converted.projection.tools.map((tool) => tool.name),
+          ...(options?.[PROVIDER_DEFERRED_TOOL_NAMES] ?? []),
+        ])
+      : undefined,
     preserveSystemPromptCacheBoundary:
       cacheControl !== undefined &&
       !managedCompat?.requiresStringContent &&
@@ -370,49 +355,27 @@ export function buildOpenAICompletionsRequest(
     params.stop = options.stop;
   }
   let directToolProjection: ReturnType<typeof projectOpenAITools> | undefined;
-  if (supportsTools) {
-    if (converted) {
-      if (policy.mode === "direct") {
-        directToolProjection = converted.projection;
-      }
-      if (
-        converted.tools.length > 0 ||
-        (policy.mode === "managed" &&
-          converted.projection.inputToolCount === 0 &&
-          converted.projection.diagnostics.length === 0)
-      ) {
-        params.tools = converted.tools;
-      } else if (hasToolCallHistory(context.messages)) {
-        params.tools = [];
-      }
-      if (
-        policy.mode === "direct" &&
-        params.stream &&
-        compat.zaiToolStream &&
-        converted.tools.length > 0
-      ) {
+  // An empty tools array is never sent: OpenAI accepts its absence, and some
+  // servers reject `[]` (#53472). A request without tools says nothing about tools.
+  if (supportsTools && converted) {
+    if (policy.mode === "direct") {
+      directToolProjection = converted.projection;
+    }
+    // Reconcile even without tools: a required choice with no surviving tool must fail.
+    const toolChoice =
+      policy.mode === "managed" && options?.toolChoice
+        ? reconcileOpenAICompletionsToolChoice(options.toolChoice, converted.projection)
+        : compatDetection?.capabilities.usesExplicitProxyLikeEndpoint
+          ? "auto"
+          : undefined;
+    if (converted.tools.length > 0) {
+      params.tools = converted.tools;
+      if (policy.mode === "direct" && params.stream && compat.zaiToolStream) {
         params.tool_stream = true;
       }
-      if (policy.mode === "managed" && options?.toolChoice) {
-        const toolChoice = reconcileOpenAICompletionsToolChoice(
-          options.toolChoice,
-          converted.projection,
-        );
-        if (toolChoice !== undefined) {
-          params.tool_choice = toolChoice;
-        }
-      } else if (
-        compatDetection?.capabilities.usesExplicitProxyLikeEndpoint &&
-        params.tools?.length
-      ) {
-        params.tool_choice = "auto";
+      if (toolChoice !== undefined) {
+        params.tool_choice = toolChoice;
       }
-    } else if (hasToolCallHistory(context.messages)) {
-      params.tools = [];
-    }
-    if (compatDetection?.capabilities.usesExplicitProxyLikeEndpoint && params.tools?.length === 0) {
-      delete params.tools;
-      delete params.tool_choice;
     }
   }
   if (policy.mode === "direct" && compat.cacheControlFormat === "anthropic") {
@@ -431,7 +394,7 @@ export function buildOpenAICompletionsRequest(
       options.toolChoice,
       directToolProjection ?? projectOpenAITools([]),
     );
-    if (toolChoice !== undefined) {
+    if (toolChoice !== undefined && params.tools) {
       params.tool_choice = toolChoice;
     }
   }

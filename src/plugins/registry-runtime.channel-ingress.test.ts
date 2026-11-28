@@ -691,7 +691,9 @@ describe("bundled channel ingress runtime ownership", () => {
 
     expectIngress(bundled, { ...first }, "unknown");
     expectIngress(bundled, [first, same], "present", { messageId: "message-2" });
-    expectIngress(bundled, [first, mixed], "unknown");
+    expectIngress(bundled, [await bundled.resolveIngress("person-a"), mixed], "unknown", {
+      senderId: "person-b",
+    });
   });
 });
 

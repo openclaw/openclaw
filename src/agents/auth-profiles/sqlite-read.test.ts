@@ -69,6 +69,7 @@ beforeEach(() => {
       coordinationKey: "file:root",
       databasePath: "/fixture/state.sqlite",
       identity: { key: "file:root", canonicalPath: "/fixture/state.sqlite" },
+      isCurrent: () => rootCurrent,
       assertCurrent: () => {
         if (!rootCurrent) {
           throw new Error("Shared auth owner was revoked");

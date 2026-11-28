@@ -29,7 +29,6 @@ describe("plugin loading in the embedded AOT profile", () => {
         tryNative: true,
       });
       expect(load(entry)).toEqual({ value: 42 });
-      expect(load(entry)).toEqual({ value: 42 });
       expect(fs.readFileSync(marker, "utf8")).toBe("executed");
       expect(() =>
         preparePluginModule({

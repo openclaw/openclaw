@@ -54,6 +54,16 @@ export function recordAgentProvenanceInDatabase(
   agentProvenancePublication.stagePostimages(database, [provenance]);
 }
 
+/** Delete one row inside the caller's authoritative state transaction. */
+export function deleteAgentProvenanceForAgent(database: EngineConnection, agentId: string): void {
+  const db = getNodeSqliteKysely<AgentProvenanceDatabase>(database);
+  executeSqliteQuerySync(
+    database,
+    db.deleteFrom("agent_provenance").where("agent_id", "=", normalizeAgentId(agentId)),
+  );
+  agentProvenancePublication.stageDeletions(database, [normalizeAgentId(agentId)]);
+}
+
 export function agentProvenanceFromRow(
   row: AgentProvenanceDatabase["agent_provenance"],
 ): AgentProvenance {

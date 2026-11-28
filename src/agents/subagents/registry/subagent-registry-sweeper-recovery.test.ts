@@ -134,8 +134,7 @@ describe("subagent registry cleanup scheduling", () => {
   it.each(["terminal", "running"] as const)(
     "only gives ended %s children requester-wake priority over pending cleanup",
     async (executionStatus) => {
-      const { entry, completeCleanupBookkeeping, resumeRequesterSettleWake, sweeper } =
-        createHarness();
+      const { entry, resumeRequesterSettleWake, sweeper } = createHarness();
       entry.execution = {
         status: executionStatus,
         endedAt: Date.now() - 60_000,
@@ -147,7 +146,6 @@ describe("subagent registry cleanup scheduling", () => {
       await sweeper.sweepOnce();
 
       if (executionStatus === "terminal") {
-        expect(completeCleanupBookkeeping).not.toHaveBeenCalled();
         expect(resumeRequesterSettleWake).toHaveBeenCalledWith(entry.runId, entry);
       } else {
         expect(resumeRequesterSettleWake).not.toHaveBeenCalled();

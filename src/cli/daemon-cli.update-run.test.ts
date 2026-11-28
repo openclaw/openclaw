@@ -45,7 +45,7 @@ function fixture() {
   };
   const opts = { json: true, run: { runId: run.runId, env } };
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-  return { stateDir, options, run, result, opts };
+  return { options, run, result, opts };
 }
 
 async function finishFromPublishedDriver(

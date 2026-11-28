@@ -36,7 +36,7 @@ type ToolStreamMessage = {
   role: string;
   content: Array<{ type: string; text?: string; name?: string }>;
 };
-function fakeBaseStream(resultMessage: unknown, events: unknown[] = []) {
+function fakeBaseStream(resultMessage: unknown, events: unknown[]) {
   return vi.fn(() => createFakeStream({ events, resultMessage }));
 }
 
@@ -106,7 +106,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     content,
     provenance: { kind: "inter_session", sourceTool },
   });
-  function promptResult(prompt: string, merged = false, removeLeaf = false) {
+  function promptResult(prompt: string, merged: boolean, removeLeaf = false) {
     return { prompt, merged, removeLeaf };
   }
   const forwarded = promptResult(

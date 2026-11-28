@@ -327,6 +327,10 @@ unsupported capability declarations.
 | `chat-only-assistant-text` | Renders assistant text from `chat`, omitting redundant assistant-text `agent` events. See [event families](/gateway/protocol/rpc-bootstrap-and-events#common-event-families).   |
 | `chat-queue-status`        | Displays authoritative pending-input receipts instead of transient successful queue acknowledgments. Refusals, drops, and errors remain visible.                                |
 
+Advertise `chat-history-queue-observation` to receive the queue-wide
+[pending-input observation](/gateway/protocol/rpc-session-control#chat-input-reconciliation)
+with chat history and startup.
+
 Without the health/presence options, clients retain full cached hello health and
 presence. The Control UI advertises `hello-health-on-demand` and
 `hello-presence-self`; the presence stream avoids caching a roster across

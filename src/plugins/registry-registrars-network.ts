@@ -3,11 +3,11 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/schema/error-codes.js";
+import { GENERATED_BUNDLED_CHANNEL_REGISTRATION } from "../channels/bundled-channel-registration.generated.js";
 import { listChatChannels } from "../channels/chat-meta.js";
 import { normalizeChannelMeta } from "../channels/plugins/meta-normalization.js";
 import type { AnyChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelMeta } from "../channels/plugins/types.public.js";
-import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import {
   createPluginGatewayMethodDescriptor,
   type GatewayMethodProfileAccess,
@@ -77,7 +77,7 @@ function resolveOfficialExternalChannelMeta(id: string): Partial<ChannelMeta> | 
 }
 
 function resolveGeneratedBundledChannelMeta(id: string): ChannelMeta | undefined {
-  const channel = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
+  const channel = GENERATED_BUNDLED_CHANNEL_REGISTRATION.find(
     (entry) => entry.channelId === id && entry.configurable !== false,
   );
   const label = normalizeOptionalString(channel?.label);

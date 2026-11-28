@@ -199,7 +199,7 @@ resized while its reported dimensions remain unchanged.
 
 Browser tabs appear directly in the Chat side-panel header, with the URL toolbar below. Each tab shows its page favicon when automatic favicon fetching is enabled and an icon is available. Closing the last browser tab leaves the Browser panel open so you can create another tab with **+**. When Browser is moved to the main area, its tabs appear above its own toolbar.
 
-When the Gateway browser is stopped, choose **Start browser**. The panel shows a loading indicator while startup is pending. If startup fails, it shows the error and restores **Start browser** so you can retry.
+When managed Chrome is stopped, the first nonblank edit in the address field starts it in the background. The address stays in the field until you submit it. An unused startup expires after 30 seconds; opening a page or explicitly starting the browser keeps it running. You can also choose **Start browser** without typing. The panel shows a loading indicator while startup is pending. If startup fails, it shows the error and restores **Start browser** so you can retry.
 
 While an Agent browser preview refreshes, the current page stays visible and the reload icon spins in the toolbar. A loading skeleton appears only before the first page image is available. If refreshing fails, the panel keeps the previous image and shows the error above it.
 
@@ -240,22 +240,23 @@ can contribute the same docked reader surface through the
 
 Click a GitHub issue, pull request, or commit link to read it in a browser-style
 tab beside the conversation. Each tab has a GitHub icon, a title, and a close
-control; the address bar and **Open on GitHub** link stay visible. Opening the
-same item from chat selects its existing tab. Links inside the reader and URLs
-entered in the address bar navigate the current tab, with independent Back and
-Forward history. The **+** button opens a new tab. Up to ten tabs stay in memory,
-including their loaded documents while you switch between them.
+control. Once an item loads, **Refresh** and **Open on GitHub** appear in the
+document header. A link to an item that already has a tab selects that tab, and
+links to other supported items inside the reader open in their own tab. Use
+**+** (or choose **Link reader** from the Chat side panel's **+** menu) to open
+an empty tab where you can enter a URL. Up to ten tabs stay in memory, keeping
+their loaded documents while you switch between them.
 
 Hold Ctrl or Cmd to suppress link hover previews while opening several links.
 Pressing either key also dismisses an open preview and cancels a pending one.
 Normal hover and keyboard-focus previews resume on the next interaction after release.
 
 Loaded reader documents and link previews stay visible while the same Gateway
-reconnects. The reader refreshes after reconnect without clearing its address
-draft. Changing Gateway or losing reader access clears the protected content.
+reconnects. The reader refreshes after reconnect. Changing Gateway or losing
+reader access clears the protected content.
 
 Opening or loading an item keeps keyboard focus where you are typing. The
-**+** button focuses the address bar so you can enter a new URL.
+Adding an empty tab to a reader that is already open focuses its URL field.
 
 The reader shows descriptions, issue and pull-request discussion comments,
 commit comments, published inline PR review comments with file/line and diff

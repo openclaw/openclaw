@@ -64,6 +64,69 @@ it("selects a persisted subagent for wait", async () => {
   }, true);
 });
 
+it("waits for exact retained results after a child session is reused", async () => {
+  await withRegistry(async () => {
+    const childSessionKey = "agent:main:subagent:reused";
+    const first = persistedRun({
+      runId: "first",
+      childSessionKey,
+      endedAt: 100,
+      outcome: { status: "ok" },
+    });
+    const second = persistedRun({
+      runId: "second",
+      childSessionKey,
+      generation: 2,
+      endedAt: 200,
+      outcome: { status: "error", error: "task failed" },
+    });
+    const current = persistedRun({ runId: "current", childSessionKey, generation: 3 });
+    const oldBranch = persistedRun({ runId: "old-branch", endedAt: 100 });
+    const unrelated = persistedRun({
+      runId: "unrelated",
+      childSessionKey: oldBranch.childSessionKey,
+      generation: 2,
+      requesterSessionKey: "agent:main:other",
+      endedAt: 300,
+    });
+    const descendant = persistedRun({
+      runId: "descendant",
+      requesterSessionKey: oldBranch.childSessionKey,
+      endedAt: 200,
+    });
+    const hidden = [
+      oldBranch,
+      unrelated,
+      descendant,
+      { ...first, runId: "old-requester", requesterStorePath: "/previous" },
+      { ...first, runId: "old-controller", controllerStorePath: "/previous" },
+    ];
+    const rows = [first, second, current, ...hidden];
+    persistRegistryFixture(new Map(rows.map((run) => [run.runId, run])));
+    clearSubagentRunsReadCacheForTest();
+
+    expect(await waitForRuns([second.runId, current.runId, first.runId])).toMatchObject({
+      reason: "completed",
+      completed: [second.runId, first.runId],
+      runs: [
+        {
+          runId: second.runId,
+          status: "terminal",
+          outcome: { status: "error", error: "task failed" },
+        },
+        { runId: current.runId, status: "running" },
+        { runId: first.runId, status: "terminal", outcome: { status: "ok" } },
+      ],
+    });
+    const ids = hidden.map((run) => run.runId);
+    expect(await waitForRuns(ids)).toMatchObject({
+      reason: "unavailable",
+      unavailable: ids,
+      runs: [],
+    });
+  }, true);
+});
+
 it("keeps current control selection within the caller tree", async () => {
   await withRegistry(async () => {
     const selected = createRun({ runId: "selected" });

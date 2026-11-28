@@ -112,7 +112,7 @@ it.each([
     details: {
       status: "completed",
       exitCode: 0,
-      fullOutputPath: "/workspace/tokenjuice/full-output.txt",
+      spill: { path: "/workspace/tokenjuice/full-output.txt" },
     },
   },
 ])("keeps the host's original $label out of the packaged reducer", async ({ details, suffix }) => {

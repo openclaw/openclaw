@@ -570,6 +570,8 @@ it("releases host preparation custody after unexpected worker exit with an outst
       expect(capture).toBeGreaterThanOrEqual(0);
       const worker = posts.mock.contexts[capture] as NativeWorker;
       await worker.terminate();
+      prepared.artifact.dispose();
+      await prepared.artifact.disposeAsync();
       expectBytes(captured, fixture.bytes);
       await retirePluginCache(cache);
       // Pool retirement releases preparation custody asynchronously after confirmed exit.

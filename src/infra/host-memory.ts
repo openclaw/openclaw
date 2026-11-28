@@ -75,10 +75,17 @@ export function readHostFreeMemoryBytes(): number {
   return available > 0 ? available : os.freemem();
 }
 
+let pressureCgroup: { membership: string; view: ReturnType<typeof readCgroupV2View> } | undefined;
+
 /** Defer optional background work before consuming the last 20% of process or host capacity. */
 export function isMemoryPressureHigh(): boolean {
   const linuxNode = process.platform === "linux" && !process.versions.bun;
-  const view = linuxNode ? readCgroupV2View() : undefined;
+  const membership = linuxNode ? readCgroupV2Membership() : undefined;
+  // A live move via cgroup.procs changes the leaf and its ancestors.
+  if (membership && pressureCgroup?.membership !== membership) {
+    pressureCgroup = { membership, view: readCgroupV2View(membership) };
+  }
+  const view = membership ? pressureCgroup?.view : undefined;
   const delegated = view?.delegated ? readDelegatedMemory(view) : undefined;
   const limit = delegated ? delegated.limitBytes : process.constrainedMemory();
   if (Number.isSafeInteger(limit) && limit > 0) {
@@ -115,8 +122,9 @@ function directoriesToMount(start: string): string[] {
 }
 
 /** Map namespace-relative membership through the visible cgroup2 mount before reading any limits. */
-function readCgroupV2View() {
-  const membership = process.platform === "linux" ? readCgroupV2Membership() : undefined;
+function readCgroupV2View(
+  membership = process.platform === "linux" ? readCgroupV2Membership() : undefined,
+) {
   if (!membership) {
     return undefined;
   }

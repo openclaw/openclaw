@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   type CronInferenceBinding,
   describeCronInferenceBinding,
+  markCronAccountRefusalBypassed,
   resolveCronRuntimeSessionEntry,
 } from "./inference-binding.js";
 
@@ -138,7 +139,15 @@ export async function prepareCronRunInference(params: {
   // The last admitted candidate's runtime, named when its CLI backend refuses the account.
   let candidateRuntime: string | undefined;
   return {
-    runParams: (provider) => (provider === binding.provider ? pinned : live),
+    runParams: (provider) => {
+      if (provider === binding.provider) {
+        return pinned;
+      }
+      // A fallback on another provider runs on its own credentials, so a refused recorded
+      // account no longer decides whether this job can ever run.
+      markCronAccountRefusalBypassed(unavailable);
+      return live;
+    },
     runtimeSessionEntry: (entry, provider) =>
       resolveCronRuntimeSessionEntry(binding, entry, provider),
     assertCandidate(provider, cliExecution, runtime) {

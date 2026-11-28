@@ -1214,7 +1214,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
   );
 
-  it("delivers visible placeholder text for channel completion", async () => {
+  it("keeps channel completion parameters valid for a silent requester response", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [],
@@ -1473,7 +1473,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     let sourceEffectsAllowed = true;
     const callGateway = createGatewayMock({}, () => {
       sourceEffectsAllowed = false;
-      throw new Error("incomplete terminal response code=incomplete_result");
+      throw Object.assign(new Error("incomplete terminal response"), { code: "incomplete_result" });
     });
     const sendMessage = createSendMessageMock();
     const result = await deliverFixture("discord", {

@@ -6,7 +6,10 @@ import { exitCliAfterOutput, watchCliExitAfterOutput } from "../cli/one-shot-exi
 import { getPendingCliDisposers } from "../cli/runtime-cleanup.js";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
-import type { DoctorMaintenancePending } from "../commands/doctor-maintenance-pending.js";
+import type {
+  DoctorMaintenancePending,
+  DoctorMaintenancePendingCheck,
+} from "../commands/doctor-maintenance-pending.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { isDefaultInstallIdentity, resolveIsNixMode, resolveStateDir } from "../config/paths.js";
@@ -222,13 +225,18 @@ export async function prepareDoctorInteractiveMaintenance(params: {
   };
 }
 
+/** The contribution pass ended in a refusal that showDoctorRepairRefusal reports. */
+export function isDoctorRepairRefused(ctx: DoctorHealthFlowContext): boolean {
+  return Boolean(ctx.configWriteRefusal) || ctx.postInstallDoctorResult?.status === "error";
+}
+
 export function showDoctorRepairRefusal(
   ctx: DoctorHealthFlowContext,
 ): UpdatePostInstallDoctorResult | undefined {
+  if (!isDoctorRepairRefused(ctx)) {
+    return undefined;
+  }
   if (!ctx.configWriteRefusal) {
-    if (ctx.postInstallDoctorResult?.status !== "error") {
-      return undefined;
-    }
     showDoctorHealthSummary(ctx);
     showDoctorOutro("Doctor blocked; required repairs remain incomplete.");
     return ctx.postInstallDoctorResult;
@@ -282,6 +290,21 @@ export function checkDoctorStateSchemaPending(
   schemas: DoctorDatabasePreflight,
 ): DoctorMaintenancePending {
   return schemas.pendingMigrations?.some((entry) => entry.kind === "state") ? "work" : "none";
+}
+
+/** Traces each `doctor.config-flow` input, then the step; no work without maintenance. */
+export async function traceDoctorConfigFlowPending(
+  trace: (step: string, check?: DoctorMaintenancePendingCheck) => Promise<boolean> | undefined,
+  options: DoctorOptions,
+  schemas: DoctorDatabasePreflight,
+): Promise<void> {
+  const { traceConfigFlowPendingInputs } =
+    await import("../commands/doctor-config-flow-pending.js");
+  await traceConfigFlowPendingInputs(trace, {
+    env: process.env,
+    integrityCheck: options.fullIntegrityCheck ? "full" : "quick",
+    agentDatabaseMigrationDiscovery: schemas.agentDatabaseMigrationDiscovery,
+  });
 }
 
 export async function prepareDoctorStateSchema(

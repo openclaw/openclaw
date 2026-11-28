@@ -219,6 +219,11 @@ parent turn that started it. The revocation applies to the caller's next request
 Cancelling a queued follow-up by its `runId` removes only that follow-up; the
 active run and other queued follow-ups in the same session continue.
 
+Once Stop records its kill claim, a session reset, rotation, or removal does not cancel that
+Stop or require a retry. Stop finishes the claimed original run and joins its
+captured execution. It does not stop a successor run or update the replacement
+session's status or abort marker. A new Stop selects its own current target.
+
 Every new registration records its selected owning agent as `childAgentId`,
 including agent-qualified child keys, and the original child session identity.
 If a visible spawn's creation receipt omits that identity, the spawn reports an
@@ -316,7 +321,7 @@ timeout. Those events do not automatically cancel them.
 - Direct announce attempts are best-effort. Stored task records and results survive, but an execution or completion turn is not replayed after restart; the root requester reconciles them.
 - Sub-agents still share the same Gateway process resources; concurrency caps apply per spawning session or Swarm group, not to total Gateway concurrency.
 - `sessions_spawn` returns `{ status: "accepted", runId, childSessionKey }` when startup is accepted, without waiting for the child task to finish. Cloud-worker spawns can wait for provisioning before returning this receipt.
-- Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
+- OpenClaw sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents can inherit the parent thread's developer instructions, which include shared persona, skills, and memory guidance; a selected personal `users/<profile-id>/USER.md` overlay stays parent-only and is not inherited.
 - Recursive spawning is enabled through depth `5` by default. Set `maxSpawnDepth` from `1` through `5` to lower the boundary.
 - `maxChildrenPerAgent` caps active children per session (default `5`, range `1-20`).
 

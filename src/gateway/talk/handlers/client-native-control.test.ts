@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { getActiveNativeAttempt } from "../../../agents/embedded-agent-runner/run-state.js";
 import * as workspace from "../../../agents/workspace.js";
@@ -74,6 +74,28 @@ function holdWorkspacePreparation() {
 
 describe("native Talk through the public OpenAI plugin registration", () => {
   installNativePluginTestHooks();
+
+  describe("fixture teardown", () => {
+    const release = createDeferredCore();
+    afterEach(() => release.resolve());
+
+    it("restores the state directory even when the test stops waiting for its fixture", async ({
+      onTestFinished,
+    }) => {
+      const original = process.env.OPENCLAW_STATE_DIR;
+      const entered = createDeferredCore();
+      const fixture = withNativePlugin(async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      onTestFinished(async () => {
+        const restored = process.env.OPENCLAW_STATE_DIR;
+        await fixture;
+        expect(restored).toBe(original);
+      });
+      await Promise.race([entered.promise, fixture]);
+    });
+  });
 
   it("dispatches each subscription delegation once and accepts fresh IDs", async () => {
     upstream.runEmbeddedAgent.mockImplementation(nativeConsult("Replay completed."));

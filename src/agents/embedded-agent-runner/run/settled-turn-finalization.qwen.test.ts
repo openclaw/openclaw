@@ -7,7 +7,7 @@ import { resolveSettledToolTerminalContinuation } from "./incomplete-turn-recove
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 function recover(
-  stopReason: "stop" | "length" = "stop",
+  stopReason: "stop" | "length",
   text?: string,
   overrides: Partial<EmbeddedRunAttemptResult> = {},
 ) {

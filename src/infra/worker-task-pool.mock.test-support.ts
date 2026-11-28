@@ -17,6 +17,7 @@ function closedResources() {
 export function createOwnedWorkerTaskPoolMock<Input, Output>(
   overrides: Partial<Pool<Input, Output>>,
 ): Pool<Input, Output> {
+  let closed = false;
   return {
     run: unexpectedTask,
     runTask: unexpectedTask,
@@ -26,7 +27,12 @@ export function createOwnedWorkerTaskPoolMock<Input, Output>(
     startRotate: closedResources,
     closeResources: async () => {},
     startCloseResources: closedResources,
-    close: async () => {},
+    get isClosed() {
+      return closed;
+    },
+    close: async () => {
+      closed = true;
+    },
     ...overrides,
   };
 }

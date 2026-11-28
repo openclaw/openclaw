@@ -500,7 +500,8 @@ export function runOneShotSqliteInspection<T>(
           encoding: "utf8",
           windowsHide: true,
           env,
-          cwd,
+          // Inheriting the current directory avoids a redundant chdir that can fail under sudo -u.
+          ...(cwd === tryProcessCwd() ? {} : { cwd }),
           maxBuffer: SQLITE_READONLY_WORKER_MAX_BUFFER,
           timeout: params.deadlineOwnedByCaller ? undefined : timeoutMs,
           killSignal: "SIGKILL",
