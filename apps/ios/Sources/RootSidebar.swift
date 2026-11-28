@@ -12,6 +12,7 @@ struct RootSidebar: View {
     @State private var pullToSearch = RootSidebarPullTracker()
     @State private var collapsedParents: Set<String> = []
     @State private var presentedAttention: OpenClawChatAttentionPresentation?
+    @State private var hasShownStartupSkeleton = false
     @AppStorage("sidebar.pinnedSessionsCollapsed") private var pinnedSessionsCollapsed = false
     @AppStorage("sidebar.sessionsCollapsed") private var sessionsCollapsed = false
     @AppStorage(RootTabs.pinnedSidebarPagesStorageKey) private var pinnedPagesStorage: String = ""
@@ -36,11 +37,7 @@ struct RootSidebar: View {
             VStack(alignment: .leading, spacing: 16) {
                 self.pagesSection(approvals: rowPass.approvals)
                     .padding(.top, 2)
-                if self.model.isPreparingDrawerSessions(appModel: self.appModel) {
-                    self.loadingSessionsRow
-                } else {
-                    self.drawerSessionSections(rowPass: rowPass)
-                }
+                self.sessionArea(rowPass: rowPass)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 10)
@@ -245,13 +242,40 @@ struct RootSidebar: View {
         return Image(uiImage: image)
     }
 
+    private func sessionArea(rowPass: SessionRowPass) -> some View {
+        let preparing = self.model.isPreparingDrawerSessions(appModel: self.appModel)
+        let reserveRows = preparing || (self.hasShownStartupSkeleton && self.appModel.isOperatorGatewayConnected)
+        return ZStack(alignment: .topLeading) {
+            if reserveRows {
+                // Keep the loading footprint under the incoming list. Longer lists still scroll
+                // naturally; shorter ones don't pull the drawer up during the handoff.
+                RootSidebarSessionSkeleton(
+                    pinsCollapsed: self.pinnedSessionsCollapsed,
+                    sessionsCollapsed: self.sessionsCollapsed)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(Text(String(localized: "Loading sessions")))
+                    .opacity(preparing ? 1 : 0)
+                    .accessibilityHidden(!preparing)
+                    .allowsHitTesting(false)
+            }
+            if !preparing {
+                self.drawerSessionSections(rowPass: rowPass)
+                    .transition(.opacity)
+            }
+        }
+        .animation(self.reduceMotion || preparing ? nil : .easeOut(duration: 0.16), value: preparing)
+        .onChange(of: preparing, initial: true) { _, loading in
+            if loading { self.hasShownStartupSkeleton = true }
+        }
+    }
+
     private func drawerSessionSections(rowPass: SessionRowPass) -> some View {
         let sessionSections = self.visibleSessionSections(categories: rowPass.categories)
         let sessionLayout = Self.sessionLayout(sessionSections)
         let sidebarSessionKeys = Set(Self.flattened(sessionSections.flatMap(\.nodes)).map(\.session.key))
         let actualSessionKeys = Set(self.model.sessions.map(\.key))
         let showsAllSessions = sidebarSessionKeys.intersection(actualSessionKeys).count >= 15
-        return Group {
+        return VStack(alignment: .leading, spacing: 16) {
             if !sessionLayout.pinnedNodes.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     self.sessionSectionHeader(
