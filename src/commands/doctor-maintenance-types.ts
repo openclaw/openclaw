@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { UpdateDatabaseGenerations } from "../infra/update-database-generations.js";
+import type { UpdateRecoveryFence } from "../infra/update-run-recovery-types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 
@@ -16,6 +17,7 @@ export type DoctorMaintenanceParams = {
   runtime: RuntimeEnv;
   runId?: string;
   assertCurrent?: () => void;
+  legacyPostCore?: { createdAtMs: number; fence: UpdateRecoveryFence };
   lendPolicyCustody?: import("../infra/update-doctor-result.js").UpdateDoctorWriteAuthority["lendPolicyCustody"];
   databaseGenerations?: UpdateDatabaseGenerations;
   databaseWriteCapture?: import("../infra/update-doctor-result.js").UpdateDoctorWriteAuthority["databaseWriteCapture"];

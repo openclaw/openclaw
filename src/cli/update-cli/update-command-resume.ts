@@ -1,4 +1,5 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import type { DoctorMaintenanceParams } from "../../commands/doctor-maintenance-types.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -29,6 +30,10 @@ import {
   createManagedUpdateRequesterContinuationAuthority,
   resolveManagedUpdateRequester,
 } from "../../infra/update-requester-authority.js";
+import {
+  isUpdateRunContinuationCandidate,
+  recordedUpdateRunDrivers,
+} from "../../infra/update-run-activity.js";
 import { recordPostCoreUpdateEvidence } from "../../infra/update-run-interruption.js";
 import { getUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
@@ -186,6 +191,17 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
           // Reuse the parent's row without admitting, adopting, or terminalizing another run.
           return await resumePostCoreUpdateInternal({
             ...resumed,
+            ...(legacyPackageBridge &&
+            current &&
+            isUpdateRunContinuationCandidate(current, runId) &&
+            !recordedUpdateRunDrivers(current).length
+              ? {
+                  legacyPostCore: {
+                    createdAtMs: record.createdAtMs,
+                    fence,
+                  },
+                }
+              : {}),
             opts: {
               ...opts,
               run: {
@@ -243,7 +259,10 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
 }
 
 async function resumePostCoreUpdateInternal(
-  params: ResumePostCoreUpdateParams & { parentOwnsCompletion: boolean },
+  params: ResumePostCoreUpdateParams & {
+    parentOwnsCompletion: boolean;
+    legacyPostCore?: DoctorMaintenanceParams["legacyPostCore"];
+  },
 ): Promise<{
   pluginUpdate: PostCorePluginUpdateResult;
   result: UpdateRunResult;
@@ -351,6 +370,7 @@ async function resumePostCoreUpdateInternal(
           options: { repair: true, nonInteractive: true, json: params.opts.json },
           runtime: { ...defaultRuntime, log: defaultRuntime.error },
           ...(params.opts.run ? { assertCurrent } : {}),
+          legacyPostCore: params.legacyPostCore,
         });
         // Each fresh Doctor holds its own database fences after admission. Release
         // this scope before unscoped requester policy reads reopen shared state.

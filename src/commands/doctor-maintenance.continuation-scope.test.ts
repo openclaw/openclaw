@@ -1,13 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import type { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
+import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
 import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline-capture.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
-import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { createUpdateRun, recordUpdateRunPhase } from "../infra/update-run-ledger.js";
 import { listUpdateRuns } from "../infra/update-run-reader.js";
 import * as pluginResources from "../plugins/doctor-contract-preparation.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -43,6 +45,83 @@ vi.mock("./doctor-maintenance-stale-service.js", async (original) => ({
 }));
 
 const fixture = setupDoctorAdmissionFixture();
+
+it.each(["standalone", "admitted", "competing run"] as const)(
+  "checks installed-service legacy admission: %s",
+  async (scenario) => {
+    const { env } = fixture(true);
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", undefined);
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
+    const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, { env });
+    recordUpdateRunPhase(run.runId, "activating", {}, { env });
+    const root = path.join(env.OPENCLAW_STATE_DIR, "install");
+    fs.mkdirSync(root);
+    const phases: unknown[] = [];
+    prepareService.mockImplementation(async (params) => {
+      phases.push(params.phase);
+      return {
+        stopped: false,
+        inspected: true,
+        runtimeInspected: true,
+        running: false,
+        offline: true,
+        serviceUpdateVerdict: {
+          kind: "owned",
+          root,
+          fingerprint: "synthetic-supervisor",
+          refreshDefinition: false,
+        },
+      };
+    });
+    if (scenario !== "standalone") {
+      vi.stubEnv(UPDATE_RUN_ID_ENV, run.runId);
+      const parent = createManagedHandoffLeaseStore().processIdentity(process.ppid);
+      if (!parent) {
+        throw new Error("Expected real parent process identity");
+      }
+      const competingRun =
+        scenario === "competing run"
+          ? createUpdateRun({ trigger: "cli", origin: { driver: readUpdateRunDriver() } }, { env })
+          : undefined;
+      await withUpdateCommandExecutor(
+        run.runId,
+        async (executor) => {
+          const fence = await executor.enter(root);
+          fence.assertCurrent();
+          const repair = beginDoctorRepair({
+            root,
+            assertCurrent: fence.assertCurrent,
+            legacyPostCore: {
+              createdAtMs: run.createdAtMs,
+              fence,
+            },
+          });
+          if (competingRun) {
+            await expect(repair).rejects.toThrow(
+              `Update ${competingRun.runId} remains recorded as running`,
+            );
+          } else {
+            const maintenance = await repair;
+            await maintenance?.release();
+            expect(maintenance).toBeDefined();
+          }
+        },
+        { legacyPackageParent: parent },
+      );
+      expect(phases[0]).toBe("inspect");
+      if (competingRun) {
+        expect(phases).toEqual(["inspect"]);
+      }
+      return;
+    }
+    const error = await beginDoctorRepair({ root }).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("driver PID and host not recorded");
+    expect((error as Error).stack).toContain("doctor-maintenance-admission.ts");
+    expect(phases).toEqual(["inspect"]);
+  },
+);
 
 it.each([true, false])(
   "keeps Doctor continuation with its repair scope (cached writer: %s)",
