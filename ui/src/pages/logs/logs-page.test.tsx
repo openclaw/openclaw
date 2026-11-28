@@ -356,16 +356,17 @@ it.each([false, true])("recovers a logs error with previously loaded rows: %s", 
 it("keeps text and level filters active as quiet polls append rows", async () => {
   const line = (message: string, level: string) =>
     JSON.stringify({ message, _meta: { logLevelName: level } });
+  const query = "  CAFE\u0301 οσ  ";
   const request = responding(
-    tail(1, [line("alpha info", "INFO"), line("alpha error", "ERROR"), line("beta", "INFO")]),
-    tail(2, [line("alpha next", "ERROR"), line("beta next", "ERROR")]),
+    tail(1, [line("Café ΟΣ info", "INFO"), line("Café ος error", "ERROR"), line("beta", "INFO")]),
+    tail(2, [line("Café οσ next", "ERROR"), line("beta next", "ERROR")]),
   );
   const { page } = await setup(request);
   const filter = page.container.querySelector<HTMLInputElement>(".settings-input")!;
-  filter.value = "alpha";
+  filter.value = query;
   filter.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
-  page.expectRows(["alpha info", "alpha error"]);
+  page.expectRows(["Café ΟΣ info", "Café ος error"]);
   page.query('[aria-controls="logs-levels:content"]')!.click();
   flush();
   await vi.waitFor(() => {
@@ -376,10 +377,10 @@ it("keeps text and level filters active as quiet polls append rows", async () =>
     item!.click();
   });
   flush();
-  page.expectRows(["alpha error"]);
+  page.expectRows(["Café ος error"]);
   await poll();
-  expect(filter.value).toBe("alpha");
-  page.expectRows(["alpha error", "alpha next"]);
+  expect(filter.value).toBe(query);
+  page.expectRows(["Café ος error", "Café οσ next"]);
 });
 
 it("forces a scroll when auto-follow is re-enabled away from the bottom", async () => {
