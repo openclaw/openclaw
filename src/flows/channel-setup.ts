@@ -62,6 +62,7 @@ import {
   resolveChannelSetupSelectionOptions,
   resolveChannelSetupWorkspaceDir,
   resolveQuickstartDefault,
+  shouldPromptChannelAccountId,
 } from "./channel-setup.status.js";
 
 export function createChannelSetupHooks(params: {
@@ -317,7 +318,6 @@ export async function setupChannels(
     options?.initialSelection?.[0] ??
     (deferStatusUntilSelection ? undefined : resolveQuickstartDefault(statusByChannel));
 
-  const shouldPromptAccountIds = options?.promptAccountIds === true;
   const accountIdsByChannel = new Map<ChannelChoice, string>();
   const recordAccount = (channel: ChannelChoice, accountId: string) => {
     options?.onAccountId?.(channel, accountId);
@@ -508,7 +508,7 @@ export async function setupChannels(
     prompter: setupPrompter,
     options: setupOptions,
     accountOverrides,
-    shouldPromptAccountIds,
+    shouldPromptAccountIds: shouldPromptChannelAccountId(next, channel, statusByChannel, options),
     forceAllowFrom: forceAllowFromChannels.has(channel),
   });
 
