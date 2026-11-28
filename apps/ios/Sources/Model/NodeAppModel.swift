@@ -497,6 +497,8 @@ final class NodeAppModel {
         return problem
     }
 
+    static let execApprovalUnreachableMessage = "OpenClaw couldn't connect to the gateway operator session."
+
     private var mainSessionBaseKey: String = "main"
     private var gatewaySessionScope: String?
     var gatewayAccentColorHex: String?
@@ -558,9 +560,7 @@ final class NodeAppModel {
         }
         return self.pendingExecApprovalInboxItems.compactMap { item in
             let prompt = item.prompt
-            guard self.isExecApprovalPromptCurrent(prompt),
-                  let source = prompt.attentionSource,
-                  source.authorityGeneration == self.operatorAuthorityGeneration,
+            guard let source = self.currentApprovalSource(for: prompt),
                   let expiresAtMs = prompt.expiresAtMs
             else { return nil }
             return OpenClawChatAttentionRequest(
@@ -591,6 +591,25 @@ final class NodeAppModel {
             mainSessionKey: self.mainSessionKey,
             agentID: agentID,
             sessionRoutingContract: self.chatSessionRoutingContract)
+    }
+
+    func pendingApproval(forSession sessionKey: String, agentID: String?) -> ExecApprovalInboxItem? {
+        self.pendingExecApprovalInboxItems.first { item in
+            guard let source = self.currentApprovalSource(for: item.prompt) else { return false }
+            return self.approvalTargetsSession(
+                sourceSessionKey: source.sessionKey,
+                sourceAgentID: source.agentID ?? item.prompt.agentId,
+                sessionKey: sessionKey,
+                agentID: agentID)
+        }
+    }
+
+    func currentApprovalSource(for prompt: ExecApprovalPrompt) -> ApprovalAttentionSource? {
+        guard self.isExecApprovalPromptCurrent(prompt),
+              let source = prompt.attentionSource,
+              source.authorityGeneration == self.operatorAuthorityGeneration
+        else { return nil }
+        return source
     }
 
     /// An uncertain resolution keeps approval actions frozen, but the reviewer can
@@ -2038,9 +2057,11 @@ final class NodeAppModel {
                 approvalId: approvalId,
                 gatewayStableID: gatewayStableID)
         }
-        await self.presentNotificationPermissionGuidanceForExecApprovalIfNeeded(
-            approvalId: approvalId,
-            shouldApply: shouldContinue)
+        if attentionSource?.sessionKey == nil {
+            await self.presentNotificationPermissionGuidanceForExecApprovalIfNeeded(
+                approvalId: approvalId,
+                shouldApply: shouldContinue)
+        }
         guard shouldContinue() else { return }
         await self.presentExecApprovalPrompt(
             approvalId: approvalId,
@@ -7906,6 +7927,7 @@ extension NodeAppModel {
     {
         guard shouldContinue(), let approvalId = ExecApprovalIdentifier.exact(prompt.approvalId) else { return }
         let operatorRoute: GatewayNodeSessionRoute
+        let gatewayID: String
         switch await self.validateExecApprovalPushRoute(
             prompt,
             sourceReason: "notification_action",
@@ -7913,6 +7935,7 @@ extension NodeAppModel {
         {
         case let .validated(context):
             operatorRoute = context.route
+            gatewayID = context.gatewayStableID
         case .unavailable:
             guard shouldContinue() else { return }
             self.appendPendingWatchExecApprovalRecoveryPush(prompt)
@@ -7927,6 +7950,20 @@ extension NodeAppModel {
             notificationPush: prompt,
             expectedOperatorRoute: operatorRoute,
             shouldContinue: shouldContinue)
+        guard shouldContinue(),
+              self.pendingExecApprovalPrompt?.matches(approvalID: approvalId, gatewayStableID: gatewayID) == true,
+              let key = Self.execApprovalInboxKey(self.pendingExecApprovalPrompt)
+        else { return }
+        if let item = self.execApprovalInboxPromptsByKey[key],
+           let source = self.currentApprovalSource(for: item),
+           let sessionKey = source.sessionKey,
+           ChatSessionSidebarModel.isSessionInActiveAgentScope(
+               key: sessionKey, agentID: source.agentID ?? item.agentId, activeAgentID: self.chatAgentId)
+        {
+            self.openChat(sessionKey: sessionKey)
+        } else {
+            self.approvalInboxNavigationRequestID &+= 1
+        }
     }
 
     func presentExecApprovalGatewayEventPrompt(
@@ -8615,6 +8652,18 @@ extension NodeAppModel {
         self.clearPendingExecApprovalPromptIfMatches(approvalId)
     }
 
+    func resolveSessionApproval(_ item: ExecApprovalInboxItem, decision: ApprovalDecision) async {
+        // The global review selection may change before the tap's task starts.
+        guard self.currentApprovalSource(for: item.prompt) != nil,
+              self.pendingExecApprovalInboxItems.contains(item)
+        else { return }
+        if Self.execApprovalInboxKey(self.pendingExecApprovalPrompt) != item.id {
+            self.presentPendingExecApprovalFromInbox(item.id)
+        }
+        guard Self.execApprovalInboxKey(self.pendingExecApprovalPrompt) == item.id else { return }
+        await self.resolvePendingExecApprovalPrompt(decision: decision.rawValue)
+    }
+
     func resolvePendingExecApprovalPrompt(decision: String) async {
         guard let prompt = pendingExecApprovalPrompt else { return }
         guard self.pendingExecApprovalPromptResolvedText == nil else { return }
@@ -8705,7 +8754,7 @@ extension NodeAppModel {
         else {
             self.execApprovalNotificationLogger.error(
                 "Exec approval action failed id=\(approvalID, privacy: .public): operator not connected")
-            return .failed(message: "OpenClaw couldn't connect to the gateway operator session.")
+            return .failed(message: Self.execApprovalUnreachableMessage)
         }
 
         let rpcFamily = await self.execApprovalRPCFamily(route: context.route)

@@ -238,6 +238,14 @@ struct ChatProTab: View {
                     self.usesSideToolbar
                         ? AnyView(Color.clear.frame(height: self.compactToolbarInset).allowsHitTesting(false))
                         : AnyView(self.chatHeader))
+                .environment(
+                    \.openClawChatComposerAccessory,
+                    viewModel.isNewChatDraft ? nil : AnyView(
+                        ChatSessionApproval(
+                            sessionKey: viewModel.sessionKey,
+                            agentID: self.appModel.chatAgentId,
+                            agentName: self.agentDisplayName)
+                            .id(viewModel.sessionKey)))
                 .environment(\.openClawChatShowsDisconnectNotice, self.startFirstGatewaySetup != nil)
                 .environment(
                     \.openClawChatNewSessionOptionsPresented,
