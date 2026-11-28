@@ -3217,7 +3217,9 @@ fn replace_main_webview_for_target(
         .add_child(builder, LogicalPosition::new(0, 0), size)
         .and_then(|view| {
             #[cfg(target_os = "linux")]
-            linux_clipboard_paste::install_webview(&view)?;
+            if startup_registration.is_some() {
+                linux_clipboard_paste::install_webview(&view)?;
+            }
             #[cfg(target_os = "macos")]
             window_chrome_macos::install_webview(&view)?;
             window_chrome::observe_history(&view);
@@ -3508,10 +3510,6 @@ fn main() {
             })
             .build()?;
         window_chrome::install(&window.as_ref().window())?;
-        #[cfg(target_os = "linux")]
-        if let Some(view) = app.get_webview("main") {
-            linux_clipboard_paste::install_webview(&view)?;
-        }
         #[cfg(target_os = "macos")]
         if let Some(view) = app.get_webview("main") {
             window_chrome_macos::install_webview(&view)?;
