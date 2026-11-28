@@ -32,7 +32,7 @@ export function normalizeMatrixUserId(raw?: string | null): string {
   return normalizeMatrixUser(trimmed);
 }
 
-/** Matrix sends to `user:<mxid>` reuse or create the DM room with that user. */
+/** Matrix sends to `user:<mxid>` deliver to the existing DM room with that user. */
 export function resolveMatrixDirectTarget(params: {
   senderId: string;
 }): ChannelDirectTargetResolution | undefined {

@@ -303,7 +303,8 @@ same form inbound messages report for the sender. It runs synchronously
 against config, so do not call the network here:
 
 - Return `{ kind: "direct", to, threadId? }` with a `to` that this channel's
-  outbound send accepts. The send opens or creates the DM conversation.
+  outbound send accepts. A target is not a delivery guarantee: some channels
+  only deliver to a DM that already exists (see the table below).
 - Return `{ kind: "unreachable", reason }` when the id names a user the channel
   knows it cannot message directly, for example a Telegram username.
 - Return `undefined` when the id is not a user this channel can address.
@@ -320,8 +321,8 @@ Bundled channels use these targets:
 | Slack           | `user:<id>` or `team:<T>:user:<id>` | Qualified with the account's workspace when known.            |
 | Telegram        | `<user id>`                         | Telegram rejects the send until the user has started the bot. |
 | Microsoft Teams | `user:<Entra object id or 29: id>`  | The send reuses or opens the bot's 1:1 chat.                  |
-| Google Chat     | `users/<numeric id>`                | Email-form user names are not mapped.                         |
-| Matrix          | `user:<mxid>`                       | The send reuses or creates the DM room.                       |
+| Google Chat     | `users/<numeric id>`                | The send fails unless the app already has a DM with the user. |
+| Matrix          | `user:<mxid>`                       | The send fails unless a DM room with the user already exists. |
 
 ## Progress and preview delivery ownership
 

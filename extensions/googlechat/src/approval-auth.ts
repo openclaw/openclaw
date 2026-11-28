@@ -16,7 +16,7 @@ export function normalizeGoogleChatApproverId(value: string | number): string | 
   return `users/${suffix}`;
 }
 
-/** Google Chat sends to a numeric `users/<id>` open the app's DM space with that user. */
+/** Google Chat sends to a numeric `users/<id>` deliver to the app's existing DM space with that user. */
 export function resolveGoogleChatDirectTarget(params: {
   senderId: string;
 }): ChannelDirectTargetResolution | undefined {

@@ -453,8 +453,9 @@ export type ChannelMessagingAdapter = {
   /**
    * Map a channel user id, in the form inbound messages report as the sender,
    * to the outbound target for a direct message with that user. Config-only:
-   * the channel's outbound send opens or creates the DM conversation. Return
-   * `undefined` when the id is not a user this channel can address.
+   * resolving a target does not prove a send will succeed, since some channels
+   * deliver only to a DM that already exists. Return `undefined` when the id
+   * is not a user this channel can address.
    */
   resolveDirectTarget?: (params: {
     cfg: OpenClawConfig;
