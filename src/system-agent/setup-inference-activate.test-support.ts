@@ -397,14 +397,14 @@ export async function fixture(
             ...codexRuntimeArtifactAuth,
           }
         : {}),
-      modelId: "gpt-5.4-mini",
+      modelId: params.model,
       modelApi: options.subscription ? "openai-chatgpt-responses" : "openai-responses",
     });
     return {
       payloads: [{ text: "OK" }],
       meta: {
         durationMs: 1,
-        executionTrace: { winnerProvider: "openai", winnerModel: "gpt-5.4-mini" },
+        executionTrace: { winnerProvider: "openai", winnerModel: params.model },
       },
     };
   };

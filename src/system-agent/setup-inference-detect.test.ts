@@ -10,6 +10,7 @@ import type { ProviderAppGuidedSetupCandidate, ProviderPlugin } from "../plugins
 import {
   detectSetupInference,
   listManualSetupInferenceDetection,
+  listSavedSetupInferenceRetryCandidates,
 } from "./setup-inference-detect.js";
 
 const fixture = vi.hoisted(() => ({
@@ -166,6 +167,24 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
+});
+
+it("lists persisted retry choices without probing services, loading auth methods, or changing manual discovery", async () => {
+  fixture.resolveManifestProviderAuthChoices.mockReturnValue([
+    { ...choice, appGuidedDiscovery: false },
+  ]);
+  fixture.loadAuthProfileStore.mockClear();
+  await expect(listManualSetupInferenceDetection()).resolves.toMatchObject({ candidates: [] });
+  expect(fixture.loadAuthProfileStore).not.toHaveBeenCalled();
+  await expect(listSavedSetupInferenceRetryCandidates()).resolves.toEqual([
+    expect.objectContaining({
+      kind: "saved-auth:fixture%3Asaved",
+      modelRef: "fixture/saved-model",
+    }),
+  ]);
+  expect(fixture.detectInferenceBackends).not.toHaveBeenCalled();
+  expect(fixture.resolvePluginProvidersCore).not.toHaveBeenCalled();
+  expect(fixture.withSetupProviderAuthMethod).not.toHaveBeenCalled();
 });
 
 function nativeCandidate(

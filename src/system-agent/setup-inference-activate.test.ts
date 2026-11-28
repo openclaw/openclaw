@@ -666,6 +666,48 @@ describe("setup activation credentials and configuration", () => {
     },
   );
 
+  it("promotes only the explicitly chosen alternate model after it verifies with the saved sign-in", async () => {
+    const setup = await fixture({ primaryModel: "stable/working" });
+    const alternateModel = "gpt-5.4";
+    const alternateRef = "openai/gpt-5.4";
+    const config = structuredClone(setup.config);
+    const models = config.models?.providers?.openai?.models;
+    assert.ok(models?.[0]);
+    models.push({ ...models[0], id: alternateModel, name: "Alternate fixture model" });
+    const before = JSON.stringify(config);
+    await writeConfig(setup, before);
+
+    setup.run.mockRejectedValueOnce(new Error("Fixture starter verification failed"));
+    expect(await setup.activate()).toMatchObject({ ok: false });
+    const saved = setup.readProfile();
+    assert.ok(saved);
+    expect(saved[1]).toMatchObject(credential);
+    expect(await fs.readFile(setup.configPath, "utf8")).toBe(before);
+
+    const kind = `saved-auth:${encodeURIComponent(saved[0])}` as const;
+    setup.run.mockRejectedValueOnce(new Error("Fixture alternate verification failed"));
+    expect(await setup.activate(kind, undefined, { modelRef: alternateRef })).toMatchObject({
+      ok: false,
+    });
+    expect(await fs.readFile(setup.configPath, "utf8")).toBe(before);
+
+    setup.run.mockImplementationOnce(async (params) => {
+      expect(await fs.readFile(setup.configPath, "utf8")).toBe(before);
+      return await setup.reply(params);
+    });
+    expect(await setup.activate(kind, undefined, { modelRef: alternateRef })).toMatchObject({
+      ok: true,
+      modelRef: alternateRef,
+    });
+    expectCalls(setup, 1, 3);
+    for (const [params] of setup.run.mock.calls.slice(1)) {
+      expect(params).toMatchObject({ model: alternateModel, authProfileId: saved[0] });
+    }
+    expect(primaryModel((await readSnapshot()).config.agents?.defaults?.model)).toBe(
+      alternateRef + "@" + saved[0],
+    );
+  });
+
   it("reports a saved sign-in whose model is at capacity in one plain sentence", async () => {
     const setup = await fixture();
     setup.run.mockRejectedValueOnce(new Error("Selected model is at capacity"));

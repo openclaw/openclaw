@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { isDisposableEntrypoint } from "../daemon/durable-service-entrypoint.js";
+import * as setupDetection from "../system-agent/setup-inference-detect.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
@@ -169,42 +170,77 @@ describe("runGuidedOnboarding quick start", () => {
     expect(deps.runForegroundGateway).toHaveBeenCalledOnce();
   });
 
-  it("preserves guarded discovery consent in an incomplete config", async () => {
-    localOnboarding.persisted.config = {
-      wizard: { securityAcknowledgedAt: "2026-08-01T00:00:00.000Z", accessMode: "guarded" },
-    };
-    // Declined discovery still reaches the manual picker (Custom Provider is
-    // always offered); skipping there keeps this test about consent only.
-    promptAuthChoiceGrouped.mockResolvedValueOnce("skip");
-    const prompter = createWizardPrompter();
-    vi.mocked(prompter.select).mockImplementation(async ({ options, initialValue }) => {
-      // Accept saved defaults, but decline discovery if its consent prompt appears.
-      const choice =
-        options.find(({ value }) => value === "manual") ??
-        options.find(({ value }) => value === initialValue);
-      return choice!.value;
-    });
-    const deps = setupDeps({ prompter });
+  it.each(["manual", "look"])(
+    "uses the saved discovery choice (%s) for saved sign-in retries",
+    async (choice) => {
+      localOnboarding.persisted.config = {
+        wizard: { securityAcknowledgedAt: "2026-08-01T00:00:00.000Z", accessMode: "guarded" },
+      };
+      using retryInventory = vi
+        .spyOn(setupDetection, "listSavedSetupInferenceRetryCandidates")
+        .mockResolvedValue([
+          {
+            kind: "saved-auth:fixture%3Asaved",
+            modelRef: "fixture/saved-model",
+            label: "Saved fixture sign-in",
+            detail: "Saved after verification failed",
+            recommended: false,
+            credentials: true,
+          },
+        ]);
+      promptAuthChoiceGrouped
+        .mockResolvedValueOnce("fixture-api-key")
+        .mockResolvedValueOnce("skip");
+      const prompter = createWizardPrompter();
+      vi.mocked(prompter.select).mockImplementation(async ({ options, initialValue }) => {
+        // Keep guarded mode, then answer its one-time discovery question.
+        const selected =
+          options.find(({ value }) => value === choice) ??
+          options.find(({ value }) => value === initialValue);
+        return selected!.value;
+      });
+      const activate = vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async () => ({
+        ok: false,
+        status: "timeout",
+        error: "Fixture verification failed after saving sign-in",
+      }));
+      const deps = setupDeps({ prompter, activate });
 
-    await runGuidedOnboardingImpl({ agentName: "main" }, makeRuntime(), deps);
+      await runGuidedOnboardingImpl({ agentName: "main" }, makeRuntime(), deps);
 
-    expect(prompter.select).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: "How would you like to start?" }),
-    );
-    expect(prompter.select).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "How should I set things up?",
-        initialValue: "guarded",
-      }),
-    );
-    expect(prompter.select).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "May I look around to find your AI access?" }),
-    );
-    expect(deps.detect).not.toHaveBeenCalled();
-    expect(deps.listManualOptions).toHaveBeenCalledOnce();
-    expect(deps.persistAccessMode).not.toHaveBeenCalledWith("full");
-    expect(localOnboarding.persisted.config?.wizard?.accessMode).toBe("guarded");
-  });
+      expect(prompter.select).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: "How would you like to start?" }),
+      );
+      expect(prompter.select).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "How should I set things up?",
+          initialValue: "guarded",
+        }),
+      );
+      expect(prompter.select).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "May I look around to find your AI access?" }),
+      );
+      expect(activate).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ kind: "provider-auth", authChoice: "fixture-api-key" }),
+      );
+      expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
+      const retryGroups = promptAuthChoiceGrouped.mock.calls[1]?.[0].additionalGroups;
+      if (choice === "manual") {
+        expect(deps.detect).not.toHaveBeenCalled();
+        expect(retryInventory).not.toHaveBeenCalled();
+        expect(retryGroups).toEqual([]);
+        expect(deps.listManualOptions).toHaveBeenCalledOnce();
+      } else {
+        expect(deps.detect).toHaveBeenCalledOnce();
+        expect(retryInventory).toHaveBeenCalledOnce();
+        expect(retryGroups?.[0]?.options).toContainEqual(
+          expect.objectContaining({ value: "candidate:saved-auth:fixture%3Asaved" }),
+        );
+      }
+      expect(deps.persistAccessMode).not.toHaveBeenCalledWith("full");
+      expect(localOnboarding.persisted.config?.wizard?.accessMode).toBe("guarded");
+    },
+  );
 
   it("custom setup keeps telemetry, first-agent, access, and provider choices in order", async () => {
     const prompter = createWizardPrompter(

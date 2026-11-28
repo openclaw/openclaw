@@ -295,11 +295,10 @@ async function runGuidedOnboardingFlow(
       throw new Error("Another onboarding run replaced this setup operation. Retry onboarding.");
     }
   };
+  const setupAgentId =
+    resumingSetup && hasAuthoredRoster ? localSetup?.teamCoordinatorId : undefined;
   const activate: NonNullable<GuidedOnboardingDeps["activate"]> = async (params) => {
-    const activationParams =
-      resumingSetup && hasAuthoredRoster && localSetup?.teamCoordinatorId
-        ? { ...params, agentId: localSetup.teamCoordinatorId }
-        : params;
+    const activationParams = setupAgentId ? { ...params, agentId: setupAgentId } : params;
     if (
       !localOnboarding ||
       (!resumingSetup && (existingConfig.gateway || detection?.setupComplete === true))
@@ -390,6 +389,14 @@ async function runGuidedOnboardingFlow(
 
   const resultLines = await runManualStage({
     detection,
+    ...(wantsDiscovery
+      ? {
+          refreshSavedCandidates: async () =>
+            (
+              await import("../system-agent/setup-inference-detect.js")
+            ).listSavedSetupInferenceRetryCandidates(setupAgentId),
+        }
+      : {}),
     config: existingConfig,
     workspace,
     runtime,
