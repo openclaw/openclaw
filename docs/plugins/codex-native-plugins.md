@@ -36,7 +36,7 @@ explicit invalidation, and failed-catalog handling remain unchanged.
 - `plugins.entries.codex.enabled` is `true`.
 - `plugins.entries.codex.config.codexPlugins.enabled` is `true`.
 - Codex app-server reports `0.149.0` or newer. The official plugin ships
-  `@openai/codex` `0.169.0` and may select a newer installed Codex; newer
+  `@openai/codex` `0.172.0` and may select a newer installed Codex; newer
   custom, remote, and macOS desktop-owned binaries continue with a
   compatibility warning and normal runtime validation.
 - The target Codex app-server can see the expected marketplace, plugin, and
@@ -57,7 +57,7 @@ explicit invalidation, and failed-catalog handling remain unchanged.
 
 New OpenAI models can require a newer Codex version than your OpenClaw release
 bundles. The reporter-supplied minimum for GPT-6.2 is Codex `0.166.0`,
-which the current `0.169.0` bundle exceeds. For the evidence limits and
+which the current `0.172.0` bundle exceeds. For the evidence limits and
 upgrades between OpenClaw releases, see
 [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
 With a ChatGPT/Codex login, select the **Codex** runtime for your session.
@@ -483,6 +483,17 @@ not force a connector refresh for every new thread. OpenClaw caches the
 combined inventory in memory for one hour and refreshes stale or missing
 entries asynchronously. The cache is process-local; restarting the CLI or
 gateway drops it.
+
+When a configured plugin's app remains missing or inaccessible, readiness repair
+reuses a successful forced refresh for up to one minute within the same account,
+thread, and covered app set. The next turn after that interval can retry, so an
+unavailable connector does not force hosted discovery on every message or stay
+excluded indefinitely. Initial cold-runtime repair, installation, explicit cache
+invalidation, and `/codex plugins refresh` still refresh immediately. Native app
+policy checks continue on enabled-policy turns; reusing inventory grants no access.
+Runtime refresh invalidates cached thread readiness for that account/runtime too,
+so the next message can reconsider a newly connected app without waiting for the
+minute to elapse. Other accounts and runtimes retain their own cached readiness.
 
 Missing inventory methods, authentication errors, transport failures, and
 connector refresh failures do not admit app tools. Ordinary turns, including

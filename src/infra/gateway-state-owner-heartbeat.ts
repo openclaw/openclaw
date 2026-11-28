@@ -12,6 +12,7 @@ import {
   type GatewayStateOwnerHeartbeatData,
   type GatewayStateOwnerVerification,
   type GatewayStateOwnerHeartbeatLoss,
+  heartbeatStartup,
   isGatewayStateOwnerLockSnapshotCurrent,
 } from "./gateway-state-owner-heartbeat.runtime.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
@@ -58,6 +59,7 @@ export function startGatewayStateOwnerHeartbeat(
     const lastBeat = new BigInt64Array(new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT));
     // Match the lock's mtime clock; Bun workers have independent hrtime origins.
     Atomics.store(lastBeat, 0, BigInt(now()));
+    const startup = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
     const { port1, port2 } = new MessageChannel();
     const worker = createCpuTrackedWorker(url, {
       workerData: {
@@ -67,6 +69,7 @@ export function startGatewayStateOwnerHeartbeat(
         failureMs: 60_000,
         lastBeat: lastBeat.buffer,
         events: port2,
+        startup,
       } satisfies GatewayStateOwnerHeartbeatData,
       transferList: [port2],
       execArgv: resolveRuntimeWorkerThreadExecArgv(url),
@@ -225,8 +228,19 @@ export function startGatewayStateOwnerHeartbeat(
         rejectPending(new Error("Gateway state ownership is no longer current"));
         port1.close();
         worker.ref();
-        worker.postMessage("stop", []);
         termination = (async () => {
+          // Startup and shutdown race for the same cell before the first lock I/O.
+          if (
+            Atomics.compareExchange(
+              startup,
+              0,
+              heartbeatStartup.pending,
+              heartbeatStartup.cancelled,
+            ) === heartbeatStartup.pending
+          ) {
+            return worker.terminate();
+          }
+          worker.postMessage("stop", []);
           if (!(await settlesWithin(closed.promise, RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS))) {
             // A stuck worker may leak its lock fds on runtimes without an exit sweep.
             process.emitWarning(

@@ -200,6 +200,26 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     return entry?.card;
   }
 
+  async requireCardByIdOrPrefix(id: string): Promise<WorkboardCard> {
+    const exact = await this.get(id);
+    if (exact) {
+      return exact;
+    }
+    const prefix = id.trim();
+    if (!prefix) {
+      throw new Error(`card not found: ${id}`);
+    }
+    const [match, other] = await this.store.findCardIdsByPrefix(prefix);
+    if (other !== undefined) {
+      throw new Error(`Ambiguous card id prefix: ${prefix} (at least 2 matches)`);
+    }
+    const card = match === undefined ? undefined : (await this.store.lookup(match))?.card;
+    if (!card) {
+      throw new Error(`card not found: ${id}`);
+    }
+    return card;
+  }
+
   protected async requireCard(id: string): Promise<WorkboardCard> {
     const card = await this.get(id);
     if (!card) {

@@ -3430,7 +3430,7 @@ describe("handleSendChat", () => {
         "chat.history",
         {
           sessionKey: "agent:main",
-          ...historyBudget,
+          ...historyBudget(80),
           knownState: {},
           inputRunIds: [
             findRequestPayload(host.request, "chat.send", "rejected send").idempotencyKey,
@@ -3515,7 +3515,7 @@ describe("handleSendChat", () => {
       if (agentId) {
         expect(host.request).toHaveBeenCalledWith(
           "chat.history",
-          { ...target, ...historyBudget, knownState: {} },
+          { ...target, ...historyBudget(24), knownState: {} },
           { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
         );
         expect(host.chatMessagesBySession?.has(resolveChatSnapshotKey(host, target))).toBe(false);
@@ -3565,7 +3565,7 @@ describe("handleSendChat", () => {
         "chat.history",
         {
           sessionKey: sourceSessionKey,
-          ...historyBudget,
+          ...historyBudget(24),
           knownState: {},
         },
         { timeoutMs: 30_000, signal: expect.any(AbortSignal) },

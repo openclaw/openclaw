@@ -312,9 +312,18 @@ describe("direct compactor through the context-engine delegate", () => {
       expected: "tokens",
       trigger: "budget",
     },
+    {
+      limit: "no-config",
+      enabled: true,
+      explicit: "tokens",
+      expected: "tokens",
+      trigger: "budget",
+      preflightRequired: true,
+    },
   ] as const)(
     "passes honest queued byte pressure (trigger=$trigger, limit=$limit, enabled=$enabled, explicit=$explicit)",
-    async ({ trigger, limit, enabled, explicit, expected }) => {
+    async ({ trigger, limit, enabled, explicit, expected, ...row }) => {
+      const preflightRequired = "preflightRequired" in row;
       const fixture = await createFixture("summary");
       const { readSessionTranscriptAccountingAsync } =
         await import("../../gateway/session-transcript-readers.js");
@@ -356,9 +365,11 @@ describe("direct compactor through the context-engine delegate", () => {
               },
         trigger,
         preflightCompactionTrigger: explicit,
+        ...(preflightRequired ? { preflightRequired } : {}),
       });
       expect(result).toMatchObject({ ok: true, compacted: false });
       expect(backend).toHaveBeenCalledOnce();
+      expect(backend.mock.calls[0]?.[0].reason).toBe(preflightRequired ? "preflight" : trigger);
       expect(backend.mock.calls[0]?.[0].runtimeContext).toMatchObject({
         trigger,
         preflightCompactionTrigger: expected,

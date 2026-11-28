@@ -18,6 +18,7 @@ import type { ExecPolicyOverrides, ExecSessionDefaults } from "./exec-defaults.j
 import type { InstalledSkill } from "./installed-skill-catalog.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import type { SpillOwner } from "./sessions/tools/private-temp-file.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import type { CronToolOptions } from "./tools/cron-tool.types.js";
@@ -29,6 +30,7 @@ import type {
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
+  spillOwner?: SpillOwner;
   /** Reads the sticky untrusted-content flag for the current user turn. */
   isTurnTainted?: () => boolean;
   /** Session-owned declaration used only for tool listing, never invocation authority. */
@@ -104,6 +106,8 @@ export type OpenClawSharedToolsOptions = {
   fixedToolListing?: boolean;
   /** Session-owned Gateway publication surface; the broker checks current identity and authority. */
   githubPublicationAvailable?: boolean;
+  /** Admitted session is in its default workspace. The move checks live authority separately. */
+  sessionProjectMoveEligible?: boolean;
   cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
   computerContextEpoch?: { value: number };
@@ -123,6 +127,8 @@ export type OpenClawSharedToolsOptions = {
 };
 
 export type OpenClawToolsOptions = {
+  /** Host-owned admission policy, separate from model and tool-listing config. */
+  readDelegationConfig?: () => OpenClawConfig;
   /** Internal listing owner pins discovery changes or renders a read-only inventory. */
   githubPublicationConfigurationAware?: true;
   /** Internal inventory projection; the resulting GitHub tool cannot execute. */

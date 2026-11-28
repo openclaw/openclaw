@@ -48,6 +48,7 @@ export function isActivityMessageGroup(group: MessageGroup, bubbleMode = false):
   // Keep one activity owner as the first call gains live facts or more calls.
   // Its renderer can simplify a settled singleton without replacing the owner.
   return (
+    Boolean(group.compaction) ||
     bubbleMode ||
     group.messages.length > 1 ||
     cards.length > 0 ||
@@ -129,6 +130,7 @@ function isTurnOutputGroup(item: TurnRenderItem): item is MessageGroup {
   return (
     item.kind === "group" &&
     (item.role === "assistant" || item.role === "tool") &&
+    !(item.compaction && !item.runId) &&
     !assistantGroupIsIndependentBoundary(item)
   );
 }
@@ -136,6 +138,7 @@ function isTurnOutputGroup(item: TurnRenderItem): item is MessageGroup {
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
   if (
     item.kind !== "group" ||
+    (item.compaction && !item.runId) ||
     item.isStreaming ||
     groupHasVisibleReplyContent(item, false) ||
     item.messages.some(({ message }) => isProviderVoiceTranscript(message))
@@ -143,11 +146,15 @@ function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
     return false;
   }
   const role = item.role.toLowerCase();
+  // Only text the model labels as commentary is hideable progress. Unlabeled
+  // text, such as Chat Completions text before a tool call, stays visible.
   return (
     role === "tool" ||
     (role === "assistant" &&
       !assistantGroupIsIndependentBoundary(item) &&
-      assistantMessageKind(item.messages[0]?.message, item.visibleContent) !== "final_answer")
+      assistantMessageKind(item.messages[0]?.message, item.visibleContent) !== "final_answer" &&
+      (item.visibleContent !== "text" ||
+        item.messages.every(({ message }) => resolveAssistantReplyPhase(message) === "commentary")))
   );
 }
 
@@ -563,6 +570,11 @@ export type CompletedTurnRenderItem = TurnRenderItem | WorkGroupRenderItem;
 // new run IDs. Visible content, not other output elsewhere in those runs,
 // bounds the log. Reuse prepared visibility and cached cards in this pass.
 function isActivityGroup(group: MessageGroup): boolean {
+  // Manual/legacy compactions have no agent-run owner; do not assign them to
+  // an earlier answer or turn merely because that work is nearby.
+  if (group.compaction && !group.runId) {
+    return false;
+  }
   if (group.isStreaming || group.visibleContent === "non-text" || hasForwardedSource(group)) {
     return false;
   }

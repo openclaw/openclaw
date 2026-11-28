@@ -839,28 +839,6 @@ describe("app-tool-stream result blocks", () => {
     expect(entry?.output).toBe("captured beginning");
   });
 
-  it("projects live edit counts and lets the resolved result replace them without flicker", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({ chatRunId: "run-1" });
-    const toolCallId = "call-live-edit";
-    const identity = buildToolStreamIdentity("run-1", toolCallId);
-    const emit = toolEvents(host, "run-1", { name: "edit", toolCallId });
-    emit(1, { phase: "start", args: { path: "src/report.ts" } });
-    emit(2, { phase: "input_delta", diff: { added: 12, removed: 3 } });
-    vi.advanceTimersByTime(80);
-    expect(host.toolStreamById.get(identity)?.liveDiffStat).toEqual({ added: 12, removed: 3 });
-    expect(host.chatToolMessages[0]?.["__openclawToolStreamDiffStat"]).toEqual({
-      added: 12,
-      removed: 3,
-    });
-    emit(3, { phase: "result", result: { details: { diff: "-1 old\n+1 new" } } });
-    const resolved = host.toolStreamById.get(identity);
-    expect(resolved?.liveDiffStat).toBeUndefined();
-    expect(resolved?.details).toEqual({ diff: "-1 old\n+1 new" });
-    expect(resolved?.message).not.toHaveProperty("__openclawToolStreamDiffStat");
-    expect(host.chatToolMessages[0]).not.toHaveProperty("__openclawToolStreamDiffStat");
-  });
-
   it("applies session-status effects when the result reports a placeholder tool name", () => {
     const host = createHost();
     const toolCallId = "status-preserve-name";

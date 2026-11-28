@@ -14,6 +14,7 @@ type CronJobMutationOptions = Pick<
   | "streamSandbox"
   | "streamOperatorSource"
   | "enabledExplicit"
+  | "keepDeclarationFor"
   | "systemOwned"
   | "createdActor"
   | "inferenceBinding"

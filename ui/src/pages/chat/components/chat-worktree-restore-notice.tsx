@@ -1,4 +1,5 @@
 import { action, createMemo, createOptimistic, createSignal, Errored, Show } from "solid-js";
+import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import { registerChatWorktreeEnglish } from "../../../i18n/locales/en-chat-worktree.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -13,6 +14,12 @@ export function ChatWorktreeRestoreNotice(
   },
 ) {
   const [saving, setSaving] = createOptimistic(false);
+  // The Gateway restores for an administrator or the conversation's creator only.
+  const canRestore = createMemo(
+    () =>
+      props.selectedSession?.sharingRole === "owner" ||
+      hasOperatorAdminAccess(props.contextGateway?.snapshot.hello?.auth ?? null),
+  );
   const [attempt, setAttempt] = createSignal<{ result: Promise<void> }>();
   const outcome = createMemo(() => attempt()?.result.then(() => null), { loadingValue: undefined });
   const restore = action(function* () {
@@ -34,9 +41,11 @@ export function ChatWorktreeRestoreNotice(
       <div class="callout__content">
         <div>
           {t(
-            props.selectedSession?.worktreeState === "removed-fresh"
-              ? "chat.composer.workspaceRestoreFreshDetail"
-              : "chat.composer.workspaceRestoreSnapshotDetail",
+            !canRestore()
+              ? "chat.composer.workspaceRestoreAskAdmin"
+              : props.selectedSession?.worktreeState === "removed-fresh"
+                ? "chat.composer.workspaceRestoreFreshDetail"
+                : "chat.composer.workspaceRestoreSnapshotDetail",
           )}
         </div>
         <Show when={!saving()}>
@@ -51,28 +60,30 @@ export function ChatWorktreeRestoreNotice(
           </Errored>
         </Show>
       </div>
-      <button
-        type="button"
-        class="btn btn--sm"
-        disabled={!props.connected || saving()}
-        aria-busy={saving() ? "true" : "false"}
-        onClick={() => {
-          const result = restore();
-          setAttempt({ result });
-          void result.catch(() => {});
-        }}
-      >
-        <Show when={saving()}>
-          <span class="btn__spinner" aria-hidden="true" />
-        </Show>
-        {saving()
-          ? t("chat.composer.workspaceRestoring")
-          : t(
-              props.selectedSession?.worktreeState === "removed-fresh"
-                ? "chat.composer.workspaceRestoreFresh"
-                : "chat.composer.workspaceRestore",
-            )}
-      </button>
+      <Show when={canRestore()}>
+        <button
+          type="button"
+          class="btn btn--sm"
+          disabled={!props.connected || saving()}
+          aria-busy={saving() ? "true" : "false"}
+          onClick={() => {
+            const result = restore();
+            setAttempt({ result });
+            void result.catch(() => {});
+          }}
+        >
+          <Show when={saving()}>
+            <span class="btn__spinner" aria-hidden="true" />
+          </Show>
+          {saving()
+            ? t("chat.composer.workspaceRestoring")
+            : t(
+                props.selectedSession?.worktreeState === "removed-fresh"
+                  ? "chat.composer.workspaceRestoreFresh"
+                  : "chat.composer.workspaceRestore",
+              )}
+        </button>
+      </Show>
     </div>
   );
 }

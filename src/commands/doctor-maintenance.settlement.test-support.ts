@@ -98,8 +98,8 @@ vi.mock("../infra/update-run-ledger.js", () => ({
   recordUpdateRunPhase: vi.fn(),
   recordUpdateRunStep: boundary.step,
 }));
-vi.mock("../infra/update-run-activity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/update-run-activity.js")>()),
+vi.mock("../infra/update-repair-driver-admission.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-repair-driver-admission.js")>()),
   inspectUpdateRepairDriverAdmission: boundary.admission,
 }));
 vi.mock("../infra/update-managed-service-handoff-boot.js", async (importOriginal) => ({

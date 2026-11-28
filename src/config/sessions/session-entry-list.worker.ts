@@ -27,7 +27,7 @@ export async function readSessionEntryList(
     env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
   };
   const listing =
-    scope.cleanupSession === undefined
+    scope.cleanupSession === undefined && scope.promptCacheSince === undefined
       ? await import("./session-accessor.sqlite-entry-list.read.js")
       : undefined;
   const resolveScope = listing
@@ -35,6 +35,11 @@ export async function readSessionEntryList(
     : undefined;
   const cleanup =
     scope.cleanupSession === undefined ? undefined : await import("./plugin-host-cleanup.js");
+  const recovery =
+    scope.promptCacheSince === undefined
+      ? undefined
+      : await import("./session-prompt-cache-recovery.worker.js");
+  let promptCacheKeys: string[] | undefined;
   let source: SessionEntryListWorkerResult["source"];
   let revision: string | undefined;
   let unchanged: true | undefined;
@@ -45,6 +50,10 @@ export async function readSessionEntryList(
     (database) =>
       readWithCanonicalSessionReaderContinuation(database, request.continuation, () => {
         source = captureSessionEntryReadSource(database, request.expectedIdentity);
+        if (recovery && scope.promptCacheSince !== undefined) {
+          promptCacheKeys = recovery.readPromptCacheRecoveryKeys(database, scope.promptCacheSince);
+          return [];
+        }
         if (scope.cleanupSession === undefined) {
           const read = () =>
             listing!.listSqliteSessionEntriesFromDatabase(
@@ -126,6 +135,7 @@ export async function readSessionEntryList(
     source,
     revision,
     unchanged,
+    ...(recovery ? { promptCacheKeys: promptCacheKeys ?? [] } : {}),
     ...(scope.expiredCronRuns ? { nextCronRunUpdatedAt } : {}),
     ...(scope.cronRetention ? { nextCronRunSessionKey } : {}),
   };

@@ -255,9 +255,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
         });
         // Inference happens between admission and returning the proposed change.
         controller.abort();
-        await expect(resolveProposal(proposal)).rejects.toThrow(
-          "system-agent approval authority is no longer active",
-        );
+        await expect(resolveProposal(proposal)).rejects.toThrow("system-agent approval ended");
       },
     );
     expect(effect).not.toHaveBeenCalled();
@@ -339,7 +337,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     sessions.set("delegate-full", { ...session });
     release.resolve();
 
-    await expect(pending).rejects.toThrow("system-agent approval authority is no longer active");
+    await expect(pending).rejects.toThrow("system-agent approval ended");
     expect(effect).not.toHaveBeenCalled();
   });
 

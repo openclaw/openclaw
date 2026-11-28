@@ -3,7 +3,12 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createContractToolTerminalObserver } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
@@ -470,6 +475,71 @@ describe("dynamic tool execution helpers", () => {
     await vi.advanceTimersByTimeAsync(completionMs);
     await expect(response).resolves.toEqual(completed);
     expect(getExecutionTimeoutMs).toHaveBeenCalledExactlyOnceWith(call.arguments);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    { declared: false, args: { instruction: "ship" } },
+    { declared: true, args: { instruction: "ship", timeoutMs: 600_000 } },
+  ])(
+    "passes a closed schema only the timeout arguments it declares (declared: $declared)",
+    async ({ declared, args }) => {
+      const beforeToolCall = vi.fn(async (_event: unknown) => ({}));
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+      );
+      onTestFinished(resetGlobalHookRunner);
+      const execute = vi.fn(async (_id: string, _args: unknown) => textToolResult("completed"));
+      const parameters = {
+        type: "object",
+        properties: {
+          instruction: { type: "string" },
+          ...(declared ? { timeoutMs: { type: "number" } } : {}),
+        },
+        additionalProperties: false,
+      };
+      const call = toolCall("strict_tool", {
+        instruction: "ship",
+        timeoutMs: 600_000,
+        timeoutSeconds: 600,
+      });
+      const toolBridge = createBridge([createTool("strict_tool", { parameters, execute })]);
+      const timeoutMs = resolveDynamicToolCallTimeoutMs({ call, config: undefined, toolBridge });
+
+      const response = await executeTool({ call, toolBridge, timeoutMs });
+
+      expect(timeoutMs).toBe(600_000);
+      expect(toCodexDynamicToolProtocolResponse(response)).toEqual(textResponse("completed"));
+      expect(beforeToolCall.mock.calls[0]?.[0]).toHaveProperty("params", args);
+      expect(execute.mock.calls[0]?.[1]).toEqual(args);
+    },
+  );
+
+  it("preserves a tool-owned approval wait and completion budget", async () => {
+    vi.useFakeTimers();
+    const call = toolCall("github_publish", {
+      action: "create_comment",
+      issueNumber: 1,
+      body: "Proof",
+    });
+    const completed = textResponse("Comment posted after approval.");
+    const onTimeout = vi.fn();
+    const toolBridge = {
+      availableTools: [createTool("github_publish", { getExecutionTimeoutMs: () => 600_000 })],
+      handleToolCall: () =>
+        new Promise<CodexDynamicToolCallResponse>((resolve) => {
+          setTimeout(() => resolve(completed), 310_000);
+        }),
+    };
+    const response = executeTool({
+      call,
+      toolBridge,
+      timeoutMs: resolveDynamicToolCallTimeoutMs({ call, config: undefined, toolBridge }),
+      onTimeout,
+    });
+    await vi.advanceTimersByTimeAsync(310_000);
+    await expect(response).resolves.toEqual(completed);
+    expect(onTimeout).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
   });
 

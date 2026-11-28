@@ -101,10 +101,11 @@ export function DraftDetail(props: {
                             "sw-file-chip",
                             { "sw-file-chip--active": file === target().filePath },
                           ]}
+                          title={file}
                           aria-current={file === target().filePath ? "true" : undefined}
                           onClick={() => props.view().onOpen({ ...target(), filePath: file })}
                         >
-                          {file}
+                          <bdi>{file}</bdi>
                         </button>
                       )}
                     </For>
@@ -192,7 +193,11 @@ export function DraftContent(props: { reads: WorkshopReads }) {
                 <div class="sw-well">
                   <MarkdownHtml
                     class="sw-markdown chat-text"
-                    markdown={splitFrontmatter(viewer().result.content).body}
+                    markdown={
+                      viewer().target.filePath === "SKILL.md"
+                        ? splitFrontmatter(viewer().result.content).body
+                        : viewer().result.content
+                    }
                     options={{ mode: "document" }}
                   />
                 </div>

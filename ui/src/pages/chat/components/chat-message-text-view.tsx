@@ -88,7 +88,7 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
   const streaming = createMemo(
     () =>
       props.options.isStreaming
-        ? (loadStreamingMarkdown.peek() ?? loadStreamingMarkdown())
+        ? (loadStreamingMarkdown.peek() ?? loadStreamingMarkdown().catch(() => undefined))
         : loadStreamingMarkdown.peek(),
     { loadingValue: undefined },
   );

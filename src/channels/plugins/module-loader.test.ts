@@ -11,7 +11,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
   vi.resetModules();
-  vi.doUnmock("jiti");
+  vi.doUnmock("../../plugins/jiti-factory.js");
 });
 
 describe("channel plugin module loader helpers", () => {
@@ -37,7 +37,8 @@ describe("channel plugin module loader helpers", () => {
 
   it("uses native require for eligible JavaScript modules without creating Jiti", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ ok: false })));
-    vi.doMock("jiti", () => ({
+    vi.doMock("../../plugins/jiti-factory.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../plugins/jiti-factory.js")>()),
       createJiti,
     }));
     const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(

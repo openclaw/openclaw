@@ -285,8 +285,6 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
     const Detail = (detailProps: { loading: boolean; retry: () => void }) => {
       let output!: HTMLDivElement;
       let back!: HTMLButtonElement;
-      const titleScrollState = useScrollState(true, false);
-
       const savePosition = () => {
         const id = selected();
         if (id && output) {
@@ -429,10 +427,9 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             {!props.mobile && (
               <strong
                 class="chat-processes__detail-name"
-                ref={titleScrollState}
                 title={selectedRow()?.name}
               >
-                {selectedRow()?.name}
+                <bdi>{selectedRow()?.name}</bdi>
               </strong>
             )}
             <Show when={selectedRow()}>

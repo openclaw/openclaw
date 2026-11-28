@@ -10,10 +10,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { findOpenFixtureFiles } from "../state/openclaw-state-ownership.test-support.js";
 import {
-  classifyGatewayLockProcessNamespace,
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
+import { classifyGatewayLockProcessNamespace } from "./gateway-lock-recovery-namespace.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { startGatewayStateOwnerHeartbeat } from "./gateway-state-owner-heartbeat.js";
 import type { GatewayStateOwnerHeartbeatData } from "./gateway-state-owner-heartbeat.runtime.js";
@@ -63,7 +63,12 @@ function lockFixture(prefix: string, projection = false) {
 }
 
 function observeHeartbeatWorkers(
-  fault?: "EIO" | "clock origin" | SharedArrayBuffer,
+  fault?:
+    | "EIO"
+    | "clock origin"
+    | "withhold close acknowledgment"
+    | SharedArrayBuffer
+    | { fixtureStartup: SharedArrayBuffer },
   legacy = false,
 ) {
   const workers: Worker[] = [];
@@ -84,7 +89,15 @@ function observeHeartbeatWorkers(
           `data:text/javascript,${encodeURIComponent(`
               import fs from "node:fs";
               import { parentPort, workerData } from "node:worker_threads";
-              if (workerData.clockOrigin) {
+              if (workerData.fixtureStartup) {
+                parentPort.postMessage("loading");
+                Atomics.wait(new Int32Array(workerData.fixtureStartup), 0, 0);
+              } else if (${fault === "withhold close acknowledgment"}) {
+                const postMessage = parentPort.postMessage.bind(parentPort);
+                parentPort.postMessage = (message, transfer) =>
+                  postMessage(message === "closed" ? "close withheld" : message, transfer);
+                parentPort.close = () => {};
+              } else if (workerData.clockOrigin) {
                 const monotonic = process.hrtime.bigint.bind(process.hrtime);
                 process.hrtime.bigint = () => monotonic() - 120_000_000_000n;
               } else if (workerData.pause) {
@@ -114,7 +127,9 @@ function observeHeartbeatWorkers(
         ? { ...options, workerData: { ...data, pause: fault, intervalMs: 1 } }
         : fault === "clock origin"
           ? { ...options, workerData: { ...data, clockOrigin: true } }
-          : options,
+          : typeof fault === "object"
+            ? { ...options, workerData: { ...data, ...fault } }
+            : options,
     );
     workers.push(worker);
     ready.push(once(worker, "message"));
@@ -714,6 +729,46 @@ it("keeps renewing the root when a projection disappears during its heartbeat", 
   ]);
 });
 
+it("stops a cold heartbeat before it can renew a lock", async () => {
+  const { rootPath } = lockFixture("openclaw-owner-close-startup-");
+  const stamp = new Date("2026-01-01T00:00:00Z");
+  fs.utimesSync(rootPath, stamp, stamp);
+  const startup = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  const { ready } = observeHeartbeatWorkers({ fixtureStartup: startup.buffer });
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const heartbeat = startGatewayStateOwnerHeartbeat(
+    new Set([{ lockPath: rootPath, verifyStillHeld: () => true }]),
+    (error) => {
+      throw error;
+    },
+  );
+  const resume = () => {
+    Atomics.store(startup, 0, 1);
+    Atomics.notify(startup, 0);
+  };
+  try {
+    expect(await Promise.all(ready)).toEqual([["loading"]]);
+    // Let the real worker run after stop wins, rather than relying on native termination timing.
+    vi.spyOn(heartbeat.worker, "terminate").mockImplementationOnce(
+      () =>
+        new Promise<number>((resolve) => {
+          heartbeat.worker.once("exit", resolve);
+          resume();
+        }),
+    );
+    const stopped = heartbeat.stop();
+    await vi.advanceTimersByTimeAsync(RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS);
+    await stopped;
+    expect(warning).not.toHaveBeenCalled();
+    expect(fs.statSync(rootPath).mtimeMs).toBe(stamp.getTime());
+  } finally {
+    resume();
+    await heartbeat.worker.terminate();
+    await heartbeat.stop();
+  }
+});
+
 it.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
   "closes deleted heartbeat locks before stop completes",
   async () => {
@@ -726,6 +781,7 @@ it.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
     );
     try {
       await once(heartbeat.worker, "message");
+      expect(findOpenFixtureFiles(new Set([root]))).toHaveLength(Object.keys(locks).length);
       for (const lockPath of Object.keys(locks)) {
         fs.unlinkSync(lockPath);
       }
@@ -739,19 +795,7 @@ it.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
 
 it("bounds an unresponsive heartbeat close and warns before forced termination", async () => {
   const { rootPath } = lockFixture("openclaw-owner-close-timeout-");
-  const createWorker = workerCpu.createCpuTrackedWorker;
-  vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((_url, options) =>
-    createWorker(
-      new URL(
-        `data:text/javascript,${encodeURIComponent(`
-        import { parentPort } from "node:worker_threads";
-        parentPort.on("message", () => {});
-        parentPort.postMessage(null);
-      `)}`,
-      ),
-      options,
-    ),
-  );
+  const { ready } = observeHeartbeatWorkers("withhold close acknowledgment");
   const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const heartbeat = startGatewayStateOwnerHeartbeat(
@@ -761,8 +805,11 @@ it("bounds an unresponsive heartbeat close and warns before forced termination",
     },
   );
   try {
-    await once(heartbeat.worker, "message");
+    expect(await Promise.all(ready)).toEqual([[null]]);
+    const closing = once(heartbeat.worker, "message");
     const stopped = heartbeat.stop();
+    // The worker actually closes its descriptors; only acknowledgment is withheld.
+    expect(await closing).toEqual(["close withheld"]);
     await vi.advanceTimersByTimeAsync(RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS - 1);
     expect(heartbeat.worker.threadId).not.toBe(-1);
     expect(warning).not.toHaveBeenCalled();

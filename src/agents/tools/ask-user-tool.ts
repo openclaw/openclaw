@@ -9,6 +9,7 @@ import { isReplyDispatchDeliveryError } from "../../auto-reply/reply/reply-dispa
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import { QUESTION_COMPOSER_REPLACEMENT_GUIDANCE } from "../../shared/question-composer-replacement.js";
 import { sleep } from "../../utils/sleep.js";
 import {
   resolveAgentQuestionGatewayCall,
@@ -35,6 +36,7 @@ import {
   createGatewayQuestionCanceller,
   createQuestionPromptLifetime,
   readQuestionRejection,
+  wasQuestionReplacedByComposer,
   type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
 import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
@@ -367,27 +369,32 @@ function answeredResult(
   return textResult(`${lines.join("\n")}\n\n${JSON.stringify(payload)}`, payload);
 }
 
-function unresolvedActionResult(reason: "cancelled" | "expired" | "declined") {
+function unresolvedActionResult(
+  reason: "cancelled" | "expired" | "declined",
+  replacedByComposer = false,
+) {
   const payload = { status: "action_unresolved" as const, reason };
-  return textResult(
-    "The required manual step was " +
-      reason +
-      ". The dependent task remains blocked; do not continue its dependent actions, retry this handoff, or claim success. Preserve completed progress and report this outcome. Wait for a new user instruction before trying this step again.\n\n" +
-      JSON.stringify(payload),
-    payload,
-  );
+  const note = replacedByComposer
+    ? `The required manual step remains incomplete and its dependent actions remain blocked. ${QUESTION_COMPOSER_REPLACEMENT_GUIDANCE}`
+    : `The required manual step was ${reason}. The dependent task remains blocked; do not continue its dependent actions, retry this handoff, or claim success. Preserve completed progress and report this outcome. Wait for a new user instruction before trying this step again.`;
+  return textResult(`${note}\n\n${JSON.stringify(payload)}`, payload);
 }
 
 function noAnswerResult(
   status: Exclude<QuestionWaitAnswerResult["status"], "answered">,
   requiredAction = false,
+  replacedByComposer = false,
 ) {
   if (requiredAction) {
-    return unresolvedActionResult(status === "cancelled" ? "cancelled" : "expired");
+    return unresolvedActionResult(
+      status === "cancelled" ? "cancelled" : "expired",
+      replacedByComposer,
+    );
   }
   const payload = { status: "no_answer" as const };
-  const note =
-    status === "cancelled"
+  const note = replacedByComposer
+    ? QUESTION_COMPOSER_REPLACEMENT_GUIDANCE
+    : status === "cancelled"
       ? "The question was cancelled; proceed with best judgment."
       : "No answer arrived; proceed with best judgment.";
   return textResult(`${note}\n\n${JSON.stringify(payload)}`, payload);
@@ -570,6 +577,8 @@ export function createAskUserTool(params: {
               ? "expired"
               : result.status,
             normalized.requiredAction,
+            result.status === "cancelled" &&
+              (await wasQuestionReplacedByComposer(gatewayCall, questionId)),
           );
         }
         throw new Error("question.waitAnswer returned an invalid status");

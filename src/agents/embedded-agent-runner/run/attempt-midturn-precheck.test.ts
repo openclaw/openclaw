@@ -373,7 +373,12 @@ describe("provider request admission", () => {
           });
         }
         if (assistantChars && requests.length === 1) {
-          message.content.unshift({ type: "text", text: "v".repeat(assistantChars) });
+          // Distinct rows: a single repeated character is stopped as a repetition runaway.
+          const rows = Array.from(
+            { length: Math.ceil(assistantChars / 15) },
+            (_, index) => `row ${String(index).padStart(10, "0")}\n`,
+          );
+          message.content.unshift({ type: "text", text: rows.join("").slice(0, assistantChars) });
         }
         if (completionTokens !== undefined && requests.length === 1) {
           message.usage.output = completionTokens;

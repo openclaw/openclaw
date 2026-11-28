@@ -145,7 +145,7 @@ describe("accepted steering queue custody", () => {
                       queueSessionsSendSteeringWithCustody(
                         { agentId: "main", sessionKey, sessionId },
                         operation,
-                        () => source.authority.assertCurrent(),
+                        () => source.authority.signal?.throwIfAborted(),
                         async (assertCurrent, lifecycle) => {
                           assertRetained = assertCurrent;
                           settle = lifecycle.onQueueSettled;
@@ -266,7 +266,11 @@ describe("retained requester continuation", () => {
                     operatorAuthority: source.authority,
                     operationalRunInstance: admitted.operationalRunInstance,
                     approvalAuthority,
-                    receiptAuthority: () => receiptCurrent,
+                    receiptAuthority: () => {
+                      if (!receiptCurrent) {
+                        throw new Error("agent tool caller authority is no longer active");
+                      }
+                    },
                     fullPermission: true,
                     sessionEventToolsAllow: ["sessions_send"],
                   },
@@ -437,7 +441,11 @@ describe("retained requester continuation", () => {
                       personalToolParticipants: participants,
                       operationalRunInstance:
                         createOperationalRunInstanceRef("finished-alice-selector"),
-                      receiptAuthority: () => receiptCurrent,
+                      receiptAuthority: () => {
+                        if (!receiptCurrent) {
+                          throw new Error("agent tool caller authority is no longer active");
+                        }
+                      },
                       fullPermission: true,
                     },
                     () =>

@@ -10,10 +10,11 @@ import { installDatabaseEngineSelection } from "../infra/database-engine/context
 import { installDirectoryWatchPort } from "../infra/directory-watch-host.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
+import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import {
-  captureRemoteModelCatalogStartupSnapshot,
-  withRemoteModelCatalogSnapshot,
-} from "../model-catalog/remote-overlay.js";
+  decodeRemoteModelCatalogWorkerBytes,
+  readRemoteModelCatalogStartupPublication,
+} from "../model-catalog/remote-startup-snapshot.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -57,6 +58,7 @@ import { replaceRuntimeAuthProfileStoreSnapshotsAsync } from "./auth-profiles/ru
 import { loadAuthProfileStoreForCatalogAsync } from "./auth-profiles/store-runtime.js";
 import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.js";
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
+import { parseModelCatalogJson } from "./model-catalog-json.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
@@ -450,10 +452,12 @@ async function runCatalogRequest(
     }
     // Saved catalogs seed the template registry. Every provider this plan saves publishes its
     // live rows, so an accepted empty listing withdraws the saved ones.
-    const plannedProviders = source.pluginCatalogs.flatMap(({ contents }) =>
-      // SAFETY: the models.json plan serializes each generated catalog with a providers record.
-      Object.keys((JSON.parse(contents) as { providers?: object }).providers ?? {}),
-    );
+    const plannedProviders = source.pluginCatalogs.flatMap(({ contents }) => {
+      // A merge with no discoveries reuses the stored catalog, including accepted JSONC.
+      // SAFETY: provider keys are read from the same catalog input as the model registry.
+      const catalog = parseModelCatalogJson(contents, true) as { providers?: object };
+      return Object.keys(catalog.providers ?? {});
+    });
     for (const provider of [
       ...(facts.modelCatalog.providerOutcomes ?? []).map((outcome) => outcome.provider),
       ...plannedProviders,
@@ -562,7 +566,22 @@ if (parentPort) {
       const { request, context } = task;
       let value: PreparedModelCatalogWorkerInput;
       if ("pluginMetadataSnapshot" in task.value) {
-        value = task.value;
+        const captured = task.value.remoteCatalog;
+        // Reuse only the captured source and content revision, including after the parent rotates.
+        const remoteCatalog =
+          captured &&
+          (readRemoteModelCatalogStartupPublication(captured) ??
+            Array.from(
+              contexts.values(),
+              ({ prepared }) => prepared.pluginGeneration.remoteCatalog,
+            ).find(
+              (catalog) =>
+                catalog?.sourceUrl === captured.sourceUrl && catalog.revision === captured.revision,
+            ) ??
+            ("sharedBytes" in captured
+              ? decodeRemoteModelCatalogWorkerBytes(captured.sharedBytes)
+              : captured));
+        value = { ...task.value, remoteCatalog };
       } else {
         const retained = contexts.get(context.workspaceDir);
         if (retained?.fingerprint !== context.fingerprint) {
@@ -573,24 +592,6 @@ if (parentPort) {
           remoteCatalog: retained.prepared.pluginGeneration.remoteCatalog,
           pluginMetadataSnapshot: retained.prepared.pluginGeneration.pluginMetadataSnapshot,
         };
-      }
-      if (value.remoteCatalog) {
-        // Transport clones share the publisher's content revision. Reuse an existing owner
-        // before registry callbacks capture the request scope; keep no extra revision cache.
-        const retained = [
-          captureRemoteModelCatalogStartupSnapshot(),
-          ...Array.from(
-            contexts.values(),
-            ({ prepared }) => prepared.pluginGeneration.remoteCatalog,
-          ),
-        ].find(
-          (catalog) =>
-            catalog?.sourceUrl === value.remoteCatalog?.sourceUrl &&
-            catalog?.revision === value.remoteCatalog?.revision,
-        );
-        if (retained) {
-          value = { ...value, remoteCatalog: retained };
-        }
       }
       activeRequest = value;
       let reportAfter = 0;

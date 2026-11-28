@@ -100,10 +100,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   requesterAgentId: string;
   expectedTarget: SessionEventTarget;
   childSessionKey: string;
-  childSessionId?: string;
   agentId: string;
-  ownerAgentId?: string;
-  env?: NodeJS.ProcessEnv;
   eventRouting: EventSessionRoutingPolicy;
   deliveryContext?: DeliveryContext;
   cfg?: OpenClawConfig;
@@ -125,7 +122,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   const deliveryContext = structuredClone(params.deliveryContext);
   const emit = (text: string, contextKey: string) => {
     const cleaned = truncate(text.trim(), STREAM_BUFFER_MAX_CHARS);
-    if (disposed || !cleaned) {
+    if (disposed) {
       return;
     }
     try {
@@ -184,14 +181,6 @@ export function startAcpSpawnParentStreamRelay(params: {
     emit(`${relayLabel}: ${snippet}`, `${contextPrefix}:progress`);
   };
 
-  const scheduleFlush = () => {
-    if (disposed || flushTimer) {
-      return;
-    }
-    flushTimer = setTimeout(flushPending, STREAM_FLUSH_MS);
-    flushTimer.unref();
-  };
-
   const appendVisibleProgress = (delta: string, kind: string) => {
     if (stallNotified) {
       stallNotified = false;
@@ -200,7 +189,7 @@ export function startAcpSpawnParentStreamRelay(params: {
 
     lastProgressAt = Date.now();
     firstVisibleOutputAt ??= lastProgressAt;
-    if (pendingText && pendingProgressKind && pendingProgressKind !== kind) {
+    if (pendingText && pendingProgressKind !== kind) {
       flushPending();
     }
     pendingProgressKind = kind;
@@ -212,16 +201,10 @@ export function startAcpSpawnParentStreamRelay(params: {
       flushPending();
       return;
     }
-    scheduleFlush();
-  };
-
-  const flushReplaceableAssistantSnapshot = () => {
-    const snapshot = replaceableAssistantSnapshot;
-    replaceableAssistantSnapshot = undefined;
-    if (!snapshot?.trim()) {
-      return;
+    if (!flushTimer) {
+      flushTimer = setTimeout(flushPending, STREAM_FLUSH_MS);
+      flushTimer.unref();
     }
-    appendVisibleProgress(snapshot, "assistant:replaceable");
   };
 
   const appendItemProgressSnapshot = (snapshot: { itemId: string; text: string }) => {
@@ -230,9 +213,8 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     const kind = `item:${snapshot.itemId}`;
-    const isPrefixUpdate = Boolean(previous && snapshot.text.startsWith(previous));
-    const hasPendingSnapshot = pendingProgressKind === kind && Boolean(pendingText);
-    if (previous && !isPrefixUpdate && hasPendingSnapshot) {
+    const isPrefixUpdate = snapshot.text.startsWith(previous);
+    if (!isPrefixUpdate && pendingProgressKind === kind) {
       pendingText = "";
     }
     itemProgressTextById.set(snapshot.itemId, snapshot.text);
@@ -257,7 +239,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   };
 
   const noOutputWatcherTimer = setInterval(() => {
-    if (disposed || stallNotified || Date.now() - lastProgressAt < NO_OUTPUT_NOTICE_MS) {
+    if (stallNotified || Date.now() - lastProgressAt < NO_OUTPUT_NOTICE_MS) {
       return;
     }
     stallNotified = true;
@@ -266,9 +248,6 @@ export function startAcpSpawnParentStreamRelay(params: {
   noOutputWatcherTimer.unref();
 
   const relayLifetimeTimer = setTimeout(() => {
-    if (disposed) {
-      return;
-    }
     emit(
       `${relayLabel} stream relay timed out after ${Math.round(MAX_RELAY_LIFETIME_MS / 1000)}s without completion.`,
       `${contextPrefix}:timeout`,
@@ -278,10 +257,6 @@ export function startAcpSpawnParentStreamRelay(params: {
   relayLifetimeTimer.unref();
 
   const unsubscribe = onAgentEventForRun(runId, (event) => {
-    if (disposed || event.runId !== runId) {
-      return;
-    }
-
     if (event.stream === "assistant") {
       const data = event.data;
       const assistantPhase = normalizeAssistantPhase(data.phase);
@@ -368,7 +343,9 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (phase !== "end" && phase !== "error") {
       return;
     }
-    flushReplaceableAssistantSnapshot();
+    if (replaceableAssistantSnapshot) {
+      appendVisibleProgress(replaceableAssistantSnapshot, "assistant:replaceable");
+    }
     flushPending();
     if (phase === "end") {
       const startedAt = asFiniteNumber(event.data.startedAt);

@@ -8,8 +8,9 @@ import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow, SessionsRewindResult } from "../../api/types.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
-import { loadOlderChatHistoryPage, requestChatSessionSnapshot } from "./chat-history-request.ts";
+import { loadOlderChatHistoryPage } from "./chat-history-request.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import {
   activeHistory as emptyActiveHistory,
   createState,
@@ -27,6 +28,7 @@ import {
   reconcileChatRunLifecycle,
 } from "./run-lifecycle.ts";
 import {
+  applyChatCacheSnapshot,
   cacheChatSessionSnapshot,
   readChatMessagesFromCache,
   type ChatMessageCache,
@@ -90,7 +92,7 @@ function rewindState(history: ChatHistoryResult, response: Promise<SessionsRewin
 const rewind = (state: ReturnType<typeof rewindState>) =>
   rewindChatHistory(state, "user-entry", new ChatAttachmentReadLifecycle(() => {}));
 
-it("preserves prepared quiet activity through older pages and prefetched snapshots", async () => {
+it("preserves prepared quiet activity through older pages", async () => {
   const result = {
     role: "toolResult",
     toolCallId: "wait",
@@ -106,11 +108,85 @@ it("preserves prepared quiet activity through older pages and prefetched snapsho
   expect((await loadOlderChatHistoryPage(state, { cursor: "older-1" }))?.messages).toEqual(
     expected,
   );
-  expect(
-    await requestChatSessionSnapshot(state.client!, state.sessionKey, state, () => true),
-  ).toMatchObject({ kind: "snapshot", snapshot: { messages: expected } });
   expect(result).not.toHaveProperty("activity");
 });
+
+it.each([100, 101, 107])(
+  "reuses the startup receipt during browser history restore (opening starts at %i)",
+  async (openingStart) => {
+    const entries = (start: number, end: number) =>
+      Array.from({ length: end - start + 1 }, (_, index) => {
+        const seq = start + index;
+        return message("assistant", `History entry ${seq}`, {
+          id: `history-${seq}`,
+          seq,
+          transcriptPosition: { source: "history", rawSeq: seq },
+        });
+      });
+    const end = openingStart + 23;
+    const row = {
+      key: "agent:main:warm",
+      kind: "direct" as const,
+      sessionId: "warm-session",
+      activeLeafEntryId: `history-${end}`,
+      updatedAt: 1,
+    };
+    const initialHistory = {
+      messages: entries(openingStart, end),
+      sessionInfo: row,
+      sessionId: row.sessionId,
+      hasMore: true,
+      olderCursor: "older-than-opening",
+      nextOffset: 24,
+      totalMessages: end,
+    };
+    const state = Object.assign(createState(initialHistory), { sessionKey: "agent:main:warm" });
+    const response = createDeferred<Awaited<ReturnType<typeof state.sessions.subscribeMessages>>>();
+    const subscription = vi
+      .spyOn(state.sessions, "subscribeMessages")
+      .mockReturnValue(response.promise);
+    const request = vi.spyOn(state.client!, "request").mockResolvedValue({
+      kind: "delta",
+      deltaCursor: "advanced-history-cursor",
+      messages: entries(101, end).map((entry, index) => ({
+        message: entry,
+        messageId: `history-${101 + index}`,
+        messageSeq: 101 + index,
+      })),
+      sessionInfo: row,
+    });
+    const ready = syncSelectedSessionMessageSubscription(state, { initialHistory: true });
+
+    applyChatCacheSnapshot(state, {
+      sessionId: initialHistory.sessionId,
+      messages: entries(99, 100),
+      displayedLeafEntryId: "history-100",
+      pagination: {
+        hasMore: true,
+        olderCursor: "older-than-held",
+        totalMessages: 100,
+        nextOffset: 2,
+      },
+      deltaCursor: "restored-history-cursor",
+    });
+    const opening = loadChatHistory(state, { startup: true, deferBranches: true });
+    response.resolve({
+      key: state.sessionKey,
+      agentId: null,
+      initialHistory: { ok: true, payload: initialHistory },
+    });
+
+    await ready;
+    await opening;
+    expect(subscription.mock.calls[0]?.[1]?.initialHistory?.limit).toBe(24);
+    expect(request.mock.calls.map(([method, params]) => ({ method, params }))).toMatchObject(
+      openingStart === 100
+        ? []
+        : [{ method: "chat.startup", params: { cursor: "restored-history-cursor", limit: 80 } }],
+    );
+    expect(state.chatMessages).toEqual(entries(99, end));
+  },
+);
 
 it("requests the configured default agent for the global workspace alias", async () => {
   const state = createState({ messages: [] });

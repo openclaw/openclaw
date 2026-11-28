@@ -28,6 +28,7 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
             start: textarea.selectionStart,
             end: textarea.selectionEnd,
             value: textarea.value,
+            maxLength: textarea.maxLength,
           })?.value
         : undefined;
     },
@@ -49,6 +50,7 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
             start: late ? target.selectionStart : target.value.length,
             end: late ? target.selectionEnd : target.value.length,
             value: target.value,
+            maxLength: target.maxLength,
           },
           late,
           preservePreview,

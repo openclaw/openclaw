@@ -45,13 +45,13 @@ export const resolveUpdateInstallSurfaceMock =
   vi.fn<
     typeof import("../../infra/update-runner-install-surface.js").resolveUpdateInstallSurface
   >();
-export const resolveStartupInstallStatusMock =
+const resolveStartupInstallStatusMock =
   vi.fn<typeof import("../../infra/update-install-status.js").resolveStartupInstallStatus>();
 const getLatestUpdateRestartSentinelMock = vi.fn<() => RestartSentinelPayload | null>(() => null);
 const refreshLatestUpdateRestartSentinelMock = vi.fn<() => Promise<RestartSentinelPayload | null>>(
   async () => null,
 );
-export const recordLatestUpdateRestartSentinelMock = vi.fn();
+const recordLatestUpdateRestartSentinelMock = vi.fn();
 export const isRestartEnabledMock = vi.fn(() => true);
 const readPackageVersionMock = vi.fn(async () => "1.0.0");
 const versionMock = vi.hoisted(() => ({ value: "1.0.0" }));
@@ -86,7 +86,7 @@ export const startManagedServiceUpdateHandoffMock = vi.fn<
   handoffId: params?.handoffId ?? "handoff-default",
   installRoot: params?.root ?? "/tmp/openclaw",
 }));
-export const claimManagedServiceUpdateHandoffMock = vi.fn<
+const claimManagedServiceUpdateHandoffMock = vi.fn<
   typeof import("../../infra/update-managed-service-handoff.js").claimManagedServiceUpdateHandoff
 >(async () => true);
 export const transferManagedServiceUpdateHandoffMock = vi.fn<
@@ -237,7 +237,9 @@ require(process.argv[1]);`,
   }
 }
 
-export const sendGatewayLifecycleNoticeMock = vi.fn(async () => true);
+export const sendGatewayLifecycleNoticeMock = vi.fn<
+  typeof import("../server-restart-sentinel-notice.js").sendGatewayLifecycleNotice
+>(async () => true);
 export const resolveGatewayLifecycleNoticeRouteMock = vi.fn(
   ({
     deliveryContext,
@@ -599,13 +601,5 @@ export function mockGlobalInstallSurface(root = "/tmp/openclaw-global") {
     mode: "npm",
     root,
     packageRoot: root,
-  });
-}
-
-export function mockGitInstallSurface(root: string) {
-  resolveStartupInstallStatusMock.mockResolvedValue({
-    root,
-    status: { root, installKind: "git", packageManager: "pnpm" },
-    installReceipt: null,
   });
 }

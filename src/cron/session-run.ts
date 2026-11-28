@@ -90,14 +90,13 @@ export async function runCronSessionTurn(
   let operatorAdmissionFailure: CronRunErrorClassification | undefined;
   const assertCurrent = () => {
     params.assertCurrent();
-    operator?.authority.assertCurrent();
     if (!noticesStarted) {
       notices.assertCurrent();
     }
   };
   const restoreOperator = async (
     signal?: AbortSignal,
-  ): Promise<Pick<ScheduledSessionAutomation, "operatorAuthority" | "automationAdmin">> => {
+  ): Promise<Pick<ScheduledSessionAutomation, "operatorAuthority">> => {
     operator?.release();
     operator = undefined;
     const { restoreCronOperatorSource } = await import("../gateway/cron-operator-source.js");
@@ -121,10 +120,7 @@ export async function runCronSessionTurn(
       throw error;
     }
     assertCurrent();
-    return {
-      operatorAuthority: operator?.authority,
-      automationAdmin: operator?.automationAdmin ? true : undefined,
-    };
+    return { operatorAuthority: operator?.authority };
   };
   try {
     const delivery =
@@ -371,8 +367,12 @@ export async function runCronSessionTurn(
       errorClassification:
         operatorAdmissionFailure ??
         (result.terminalOutcome
-          ? resolveCronAgentErrorClassification(result.terminalOutcome, result.errorReason)
-          : undefined),
+          ? resolveCronAgentErrorClassification(
+              result.terminalOutcome,
+              result.errorReason,
+              result.automationResult?.errorClassification,
+            )
+          : result.automationResult?.errorClassification),
       error:
         result.error ??
         (result.status === "cancelled" ? "Automation session turn was cancelled" : undefined),

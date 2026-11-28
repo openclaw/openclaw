@@ -59,6 +59,10 @@ enum OpenClawType {
         scaledVariable(.body, weight: Body.regular, size: 13, relativeTo: .footnote)
     }
 
+    static var footnoteMedium: Font {
+        scaledVariable(.body, weight: Body.medium, size: 13, relativeTo: .footnote)
+    }
+
     static var footnoteSemiBold: Font {
         scaledVariable(.body, weight: Body.semiBold, size: 13, relativeTo: .footnote)
     }

@@ -11,7 +11,7 @@ struct RootSidebarStabilityTests {
         let appModel = NodeAppModel()
         let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
         let model = RootSidebarModel()
-        // 40 pinned rows, then 23 recent rows of which the sidebar shows the newest 20.
+        // 40 pinned rows, then 23 recent rows of which the sidebar shows the newest 15.
         var sessions = (0..<63).map { index in
             var row = OpenClawChatSessionEntry(
                 key: "agent:main:work-\(index)", kind: "direct", updatedAt: Double(index),
@@ -22,8 +22,9 @@ struct RootSidebarStabilityTests {
         model.testRosterLoad = { ChatSessionRosterSnapshot(sessions: sessions, isCached: false) }
         await model.refreshSessions(appModel: appModel)
         let root = RootSidebar(
-            model: model, selectedDestination: .chat, isDrawerLayout: true,
-            isDismissButtonEnabled: true, selectDestination: { _ in }, selectSession: { _ in }, hideSidebar: {})
+            model: model, selectedDestination: .chat,
+            isSidebarVisible: true, selectDestination: { _ in }, selectSession: { _ in }, openPagesEditor: {},
+            openSearch: {})
             .environment(appModel)
             .environment(gatewayController)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 340, height: 700))

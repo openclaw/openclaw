@@ -139,6 +139,12 @@ describe("Zoom meeting session flow", () => {
   it("ends the session when the tracked Zoom tab disappears", async () => {
     const { harness, runtime } = runtimeFixture();
     const joined = await joinMeeting(runtime);
+    Object.assign(joined.session.chrome?.health ?? {}, {
+      providerConnected: true,
+      realtimeReady: true,
+      audioInputActive: true,
+      audioOutputActive: true,
+    });
     harness.state.tabOpen = false;
 
     const status = await runtime.status(joined.session.id);
@@ -152,6 +158,10 @@ describe("Zoom meeting session flow", () => {
           inCall: false,
           manualAction: undefined,
           status: "browser-tab-missing",
+          providerConnected: false,
+          realtimeReady: false,
+          audioInputActive: false,
+          audioOutputActive: false,
         },
       },
     });

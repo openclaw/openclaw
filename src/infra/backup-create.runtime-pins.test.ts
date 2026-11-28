@@ -9,18 +9,29 @@ import {
 import { backupCase, restoreBackup } from "./backup-create-family.test-support.js";
 import { createBackupArchive } from "./backup-create.js";
 
-it(
-  "snapshots the runtime pin store instead of archiving opaque bytes",
-  backupCase({ layout: "split", prefix: "backup-runtime-pins-" })(async (state) => {
-    withDaemonRuntimePinStore(state.env, true, (db) => {
-      db.prepare(
-        "INSERT INTO daemon_runtime_pins (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-      ).run("gateway", '{"runtimePath":"/synthetic/node"}', 123);
-    });
+it.each(["before discovery", "during archive write"] as const)(
+  "snapshots the runtime pin store created %s instead of archiving opaque bytes",
+  backupCase({ layout: "split", prefix: "backup-runtime-pins-" })(async (state, timing) => {
+    const createPin = () =>
+      withDaemonRuntimePinStore(state.env, true, (db) => {
+        db.prepare(
+          "INSERT INTO daemon_runtime_pins (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+        ).run("gateway", '{"runtimePath":"/synthetic/node"}', 123);
+      });
+    let pending = timing === "during archive write";
+    if (!pending) {
+      createPin();
+    }
     const pathname = resolveDaemonRuntimePinStorePath(state.env);
     const backup = await createBackupArchive({
       output: state.path("backup.tar.gz"),
       includeWorkspace: false,
+      onProgress: ({ stage, phase }) => {
+        if (pending && stage === "archive-write" && phase === "start") {
+          createPin();
+          pending = false;
+        }
+      },
     });
     expect(backup.warnings ?? []).not.toContainEqual(expect.stringContaining(pathname));
     const restored = await restoreBackup(state, backup);

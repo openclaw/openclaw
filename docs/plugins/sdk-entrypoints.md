@@ -444,8 +444,10 @@ after awaited preparation, use
 `session-store-runtime`) with `stores: [{ agentId, storePath, sessionKeys }]`.
 It retains all selected physical sources until its synchronous callback returns.
 An optional `involvingProfileId` matches exact canonical owners or direct profile
-participants, including merge aliases; it never matches mentions or display
-prefixes. After preparing the selected stores, the shared-state worker reads a
+participants, including merge aliases; it does not interpret names, logins or
+display prefixes. A separate optional `profileRelation` accepts a numeric GitHub
+account target and an `owned` or `involving` relationship. `involving` additionally
+matches recorded mentions. Both selectors intersect when supplied together. After preparing the selected stores, the shared-state worker reads a
 fresh canonical profile snapshot, without reusing an earlier inspection snapshot
 or resident catalog. Local identity changes invalidate that prepared selection.
 Final native reads observe the selected session rows after the last await. Profile
@@ -620,3 +622,16 @@ entries in place from a caller-owned child environment. Copy inherited values
 first; never pass `process.env`. Other preload libraries remain available.
 Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
 the runtime's existing dispatch and delivery authority.
+
+Session Share keeps the legacy list/read contracts unchanged. Optional node
+catalog commands are `openclaw.sessions.catalog.list.v1` and
+`openclaw.sessions.catalog.read.v1`, explicitly allowed on the receiver and
+advertised/approved on the source. Node list accepts `profileRelation` and
+`includeOriginalPath`; read accepts `profileRelation`. The only source target is
+`{ type: "github-account", id: "123" }`, with relationship `owned` or `involving`.
+The outbound Gateway pair is `session-share.catalog.list/read`, advertised in
+`features.methods`. Its list accepts `profileRelation`, but never `includeOriginalPath`;
+Gateway sources cannot supply original links. Receivers use the advertised catalog
+pair for every list/read, and the legacy pair only when the catalog pair is absent.
+These selectors narrow publication, not reader authority.
+See [Session Share](/plugins/session-share) for numbered setup and disclosure.

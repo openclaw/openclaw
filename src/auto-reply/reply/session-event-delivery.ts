@@ -2,6 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { copyReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { SessionEventOptions, SessionEventTarget } from "./session-event-contract.js";
 import { getSessionEventRuntimeConfig } from "./session-event-target.js";
 
@@ -98,11 +99,20 @@ export function createSessionEventReplyDelivery(params: {
         params.assertEffectCurrent();
         params.options.scheduledAutomation?.assertDeliveryCurrent?.();
       };
+      const replyToId =
+        params.options.source === "restart" ? params.options.restartReplyToId : undefined;
+      // This anchor belongs to the original request, not the synthetic event or a model directive.
+      const deliveryPayload = replyToId
+        ? setReplyPayloadMetadata(
+            copyReplyPayloadMetadata(payload, { ...payload, replyToId, replyToCurrent: undefined }),
+            { replyToIdExplicit: true },
+          )
+        : payload;
       const result = await deliverReply({
         cfg: getSessionEventRuntimeConfig(),
         agentId: params.agentId,
         sessionKey: params.sessionKey,
-        payload,
+        payload: deliveryPayload,
         replyKind: kind,
         abortSignal: params.signal,
         beforeDeliver: async () => {

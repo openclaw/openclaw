@@ -1,10 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ChildProcess } from "node:child_process";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent,
 } from "../infra/diagnostic-events.js";
+import type { DiagnosticChildProcessSpawnFields } from "../infra/diagnostic-process-types.js";
 import {
   isPowerShellInlineFileCommandFlag,
   POSIX_INLINE_COMMAND_FLAGS,
@@ -15,11 +17,11 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveOomScoreWrappedCommand } from "./linux-oom-score-spawn.js";
 
 const spawnCounts = resolveGlobalSingleton(Symbol.for("openclaw.childProcessSpawnCounts"), () => ({
-  counts: new Map<string, { family: string; operation: string; count: number }>(),
+  counts: new Map<string, Omit<DiagnosticChildProcessSpawnFields, "type" | "intervalMs">>(),
   sampledAt: performance.now(),
 }));
 const COMMAND_FAMILIES =
-  /^(node|bun|git|ps|pgrep|lsof|sh|bash|zsh|cmd|powershell|pwsh|npm|pnpm|python|python3|uv|ssh|openclaw)$/;
+  /^(node|bun|git|ps|pgrep|lsof|sh|bash|zsh|cmd|powershell|pwsh|npm|pnpm|python|python3|uv|ssh|openclaw|ffprobe|ffmpeg|xdg-open)$/;
 const GIT_OPERATIONS = [
   "repository.identities",
   "repository.branches",
@@ -169,6 +171,7 @@ export function prepareChildProcessSpawnRecorder(
   inputCommand: string,
   inputArgs: readonly string[] = [],
   sqliteOperation?: `sqlite.${"scoped-read" | "session"}.${"broker" | "native"}`,
+  transport?: DiagnosticChildProcessSpawnFields["transport"],
 ): (() => void) | undefined {
   if (!areDiagnosticsEnabledForProcess()) {
     return undefined;
@@ -205,11 +208,17 @@ export function prepareChildProcessSpawnRecorder(
       : (sqliteOperation ??
         childOperation.getStore() ??
         unscopedProcessOperation(family, name, args));
-  const key = `${family}:${operation}`;
+  const key = `${family}:${operation}:${transport ?? ""}`;
   return () => {
     if (areDiagnosticsEnabledForProcess()) {
       const previous = spawnCounts.counts.get(key);
-      spawnCounts.counts.set(key, { family, operation, count: (previous?.count ?? 0) + 1 });
+      spawnCounts.counts.set(key, {
+        family,
+        operation,
+        transport,
+        thread: isMainThread ? "main" : "worker",
+        count: (previous?.count ?? 0) + 1,
+      });
     }
   };
 }
@@ -220,8 +229,9 @@ export function recordChildProcessSpawn(
   child: ChildProcess,
   sqliteOperation?: `sqlite.${"scoped-read" | "session"}.${"broker" | "native"}`,
   args: readonly string[] = [],
+  transport?: DiagnosticChildProcessSpawnFields["transport"],
 ): void {
-  const record = prepareChildProcessSpawnRecorder(command, args, sqliteOperation);
+  const record = prepareChildProcessSpawnRecorder(command, args, sqliteOperation, transport);
   if (record) {
     child.once("spawn", record);
   }
@@ -239,12 +249,10 @@ export function emitChildProcessSpawnSample(): void {
   if (intervalMs < 60_000) {
     return;
   }
-  for (const { family, operation, count } of spawnCounts.counts.values()) {
+  for (const fields of spawnCounts.counts.values()) {
     emitInternalDiagnosticEvent({
       type: "diagnostic.child_process.spawn",
-      family,
-      operation,
-      count,
+      ...fields,
       intervalMs,
     });
   }

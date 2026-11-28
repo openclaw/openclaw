@@ -191,12 +191,8 @@ function resolveNextInstalledPluginIndexRevision(current: number | null): number
   return Math.max(Date.now(), (current ?? 0) + 1);
 }
 
-function writePersistedInstalledPluginIndexRow(
-  database: EngineConnection,
-  index: InstalledPluginIndex,
-  revision: number,
-): InstalledPluginIndexRow {
-  const persistedIndex = {
+function serializePersistedInstalledPluginIndex(index: InstalledPluginIndex) {
+  return {
     version: index.version,
     warning: index.warning ?? INSTALLED_PLUGIN_INDEX_WARNING,
     hostContractVersion: index.hostContractVersion,
@@ -228,9 +224,30 @@ function writePersistedInstalledPluginIndexRow(
         : diagnostic,
     ),
   };
+}
+
+/**
+ * The index as a write would store it and a read would return it. The store keeps only the
+ * fields its reader admits (for example only `bundledDist` of package build metadata), so a
+ * rediscovered index equals the persisted one only after this projection.
+ */
+export function projectInstalledPluginIndexForStore(
+  index: InstalledPluginIndex,
+): InstalledPluginIndex | null {
+  const persisted = serializePersistedInstalledPluginIndex(
+    preparePersistedInstalledPluginIndex(index),
+  );
+  return parseInstalledPluginIndex(safeParseJson(JSON.stringify(persisted)));
+}
+
+function writePersistedInstalledPluginIndexRow(
+  database: EngineConnection,
+  index: InstalledPluginIndex,
+  revision: number,
+): InstalledPluginIndexRow {
   const valueJson = JSON.stringify({
     revision,
-    index: persistedIndex,
+    index: serializePersistedInstalledPluginIndex(index),
   } satisfies PersistedInstalledPluginIndexValue);
   const { compiled, bind } = compileSqliteQueryBindings<void>(() =>
     getNodeSqliteKysely<InstalledPluginIndexDatabase>(database)

@@ -243,9 +243,6 @@ async function runSubcommand(
     config: params.cfg,
     agentId: params.agentId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    ...(params.command.assertOwnerCurrent
-      ? { assertOwnerCurrent: params.command.assertOwnerCurrent }
-      : {}),
   });
   if ("prompt" in result) {
     applyCommandTextToParams(params, result.prompt);

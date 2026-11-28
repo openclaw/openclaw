@@ -5,6 +5,13 @@ import UserNotifications
 
 /// A local projection of the same device owner used by the Dashboard, never a Gateway editor.
 struct LocalDeviceSettingsScreen: View {
+    enum Layout {
+        case device
+        case voiceAndTalk
+        case permissions
+    }
+
+    var layout: Layout = .device
     @Environment(NodeAppModel.self) private var appModel
     @Environment(AppAppearanceModel.self) private var appearanceModel
     @Environment(GatewayConnectionController.self) private var gatewayController
@@ -18,6 +25,8 @@ struct LocalDeviceSettingsScreen: View {
     @State private var consent = IOSDeviceSettingsConsentPresenter()
     @State private var consentAnchor = UIView(frame: .zero)
     @State private var permissions = IOSDeviceSettingsPermissions()
+    /// Empty is Automatic. Talk reads it each time it starts listening (TalkSpeechLocale).
+    @AppStorage(TalkSpeechLocale.phoneSelectionKey) private var talkLanguage = ""
 
     private var snapshot: DeviceSettingsSnapshot {
         IOSDeviceSettingsSnapshotProducer(appModel: self.appModel, appearanceModel: self.appearanceModel)
@@ -29,17 +38,49 @@ struct LocalDeviceSettingsScreen: View {
     var body: some View {
         let snapshot = self.snapshot
         List {
-            self.appearanceSection(snapshot)
-            self.deviceSection(snapshot)
-            self.voiceSection(snapshot)
-            self.permissionsSection(snapshot)
+            switch self.layout {
+            case .device:
+                self.appearanceSection(snapshot)
+                self.deviceSection(snapshot)
+                self.voiceSection(snapshot)
+                self.permissionsSection(snapshot)
+            case .voiceAndTalk:
+                self.voiceSection(snapshot)
+                Section {
+                    // Read-only: the phrase Siri answers to. A bare label read as a dead action row.
+                    SettingsDescriptionRow(
+                        "Live voice",
+                        description: "Say “Start live voice with OpenClaw” to Siri.") {}
+                } header: {
+                    SettingsSectionTitle("Siri")
+                }
+            case .permissions:
+                Section {
+                    self.toggle(
+                        "Allow camera requests",
+                        key: .cameraEnabled,
+                        value: snapshot.capabilities?.cameraEnabled)
+                    if snapshot.capabilities?.healthSummaryAvailable == true {
+                        self.toggle(
+                            "Health summaries",
+                            key: .healthSummaryEnabled,
+                            value: snapshot.capabilities?.healthSummaryEnabled)
+                    }
+                } header: {
+                    SettingsSectionTitle("Agent access")
+                }
+                self.permissionsSection(snapshot)
+            }
             if let errorText {
-                Text(errorText)
-                    .font(OpenClawType.footnote)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("LocalDeviceSettings.Error")
+                Section {
+                    EmptyView()
+                } footer: {
+                    SettingsFootnote(verbatim: errorText)
+                        .accessibilityIdentifier("LocalDeviceSettings.Error")
+                }
             }
         }
+        .listStyle(.insetGrouped)
         .accessibilityIdentifier("LocalDeviceSettings")
         .background(LocalDeviceSettingsConsentAnchor(view: self.consentAnchor))
         .disabled(self.actionTask != nil)
@@ -68,15 +109,10 @@ struct LocalDeviceSettingsScreen: View {
                 Text("Light").font(OpenClawType.body).tag("light")
                 Text("Dark").font(OpenClawType.body).tag("dark")
             } label: {
-                Text("Appearance").font(OpenClawType.body)
+                Text("Appearance").font(SettingsType.label)
             }
-            .pickerStyle(.menu)
+            .settingsMenuPicker()
             .accessibilityIdentifier("LocalDeviceSettings.Appearance")
-        } header: {
-            Text("Appearance").font(OpenClawType.captionSemiBold)
-        } footer: {
-            Text("These settings apply only to this device and do not require Gateway admin access.")
-                .font(OpenClawType.footnote)
         }
     }
 
@@ -92,33 +128,72 @@ struct LocalDeviceSettingsScreen: View {
                     value: snapshot.capabilities?.healthSummaryEnabled)
             }
         } header: {
-            Text("Device").font(OpenClawType.captionSemiBold)
+            SettingsSectionTitle("Device")
         }
     }
 
+    /// Without voice support (the Simulator) a voice switch can't be turned on, but one that is
+    /// already on (Talk from the composer, a restored preference) can always be turned off.
     private func voiceSection(_ snapshot: DeviceSettingsSnapshot) -> some View {
-        Section {
-            self.toggle("Voice Wake", key: .wakeEnabled, value: snapshot.voice.wakeEnabled)
-            self.toggle("Talk", key: .talkEnabled, value: snapshot.voice.talkEnabled)
-            self.toggle("Show Talk control", key: .talkButtonEnabled, value: snapshot.voice.talkButtonEnabled)
+        let onlyOff = !snapshot.voice.supported
+        return Section {
+            self.toggle("Voice Wake", key: .wakeEnabled, value: snapshot.voice.wakeEnabled, onlyOff: onlyOff)
+            self.toggle("Talk", key: .talkEnabled, value: snapshot.voice.talkEnabled, onlyOff: onlyOff)
+            self.toggle(
+                "Show Talk control",
+                key: .talkButtonEnabled,
+                value: snapshot.voice.talkButtonEnabled,
+                onlyOff: onlyOff)
             self.toggle(
                 "Background listening",
                 key: .talkBackgroundEnabled,
-                value: snapshot.voice.talkBackgroundEnabled)
-            self.toggle("Speakerphone", key: .speakerphoneEnabled, value: snapshot.voice.speakerphoneEnabled)
+                value: snapshot.voice.talkBackgroundEnabled,
+                onlyOff: onlyOff)
+            self.toggle(
+                "Speakerphone",
+                key: .speakerphoneEnabled,
+                value: snapshot.voice.speakerphoneEnabled,
+                onlyOff: onlyOff)
+            self.talkLanguagePicker
         } header: {
-            Text("Voice & Talk").font(OpenClawType.captionSemiBold)
+            SettingsSectionTitle("Voice")
         } footer: {
             Text(
                 """
-                Voice requires a supported device and microphone access. \
-                Provider, voice, and speech language remain configured on the Gateway.
+                Voice needs a supported device and microphone access. \
+                Change the provider and voice in OpenClaw.
                 """)
-                .font(OpenClawType.footnote)
+                .font(SettingsType.footnote)
         }
-        .disabled(!snapshot.voice.supported)
     }
 
+    /// The language Talk listens in: Automatic, the phone's own languages, then every other one the
+    /// recognizer supports, each named in its own language.
+    private var talkLanguagePicker: some View {
+        let choices = TalkSpeechLocale.choices()
+        return Picker(selection: self.$talkLanguage) {
+            Text("Automatic").font(OpenClawType.body).tag("")
+            Section {
+                ForEach(choices.phone) { choice in
+                    Text(verbatim: choice.name).font(OpenClawType.body).tag(choice.id)
+                }
+            }
+            Section {
+                ForEach(choices.others) { choice in
+                    Text(verbatim: choice.name).font(OpenClawType.body).tag(choice.id)
+                }
+            }
+        } label: {
+            Text("Language").font(SettingsType.label)
+        }
+        .pickerStyle(.navigationLink)
+        .accessibilityIdentifier("LocalDeviceSettings.talkLanguage")
+    }
+
+    /// Each permission is a short row with its iOS state as the value. A permission iOS has not
+    /// asked for is a row that asks; a limited or denied one opens the app's page in iOS Settings,
+    /// the only place it can change (asking again shows nothing).
+    @ViewBuilder
     private func permissionsSection(_ snapshot: DeviceSettingsSnapshot) -> some View {
         Section {
             Picker(selection: Binding(
@@ -129,52 +204,63 @@ struct LocalDeviceSettingsScreen: View {
                 Text("While using").font(OpenClawType.body).tag("whileUsing")
                 Text("Always").font(OpenClawType.body).tag("always")
             } label: {
-                Text("Location access").font(OpenClawType.body)
+                Text("Location access").font(SettingsType.label)
             }
-            SettingsDetailRow(
-                "Precise Location",
-                value: .verbatim(snapshot.permissions.location
-                    .precise ? String(localized: "On") : String(localized: "Off")))
-            ForEach(snapshot.permissions.entries, id: \.id) { entry in
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text(Self.permissionTitle(entry.id)).font(OpenClawType.body)
-                        Text(Self.statusTitle(entry.status))
-                            .font(OpenClawType.caption)
-                            .foregroundStyle(.secondary)
+            .settingsMenuPicker()
+            // iOS reports full accuracy before Location is ever granted; show it only once it is.
+            if snapshot.permissions.entries.contains(where: { $0.id == .location && $0.status == .granted }) {
+                SettingsDetailRow(
+                    "Precise Location",
+                    value: .verbatim(snapshot.permissions.location
+                        .precise ? String(localized: "On") : String(localized: "Off")))
+            }
+            ForEach(snapshot.permissions.entries.filter {
+                self.layout == .device || $0.id != .notifications
+            }, id: \.id) { entry in
+                if [.notDetermined, .limited, .denied].contains(entry.status) {
+                    let asks = entry.status == .notDetermined
+                    SettingsStateRow(
+                        label: .verbatim(Self.permissionTitle(entry.id)),
+                        value: .verbatim(Self.statusTitle(entry.status)),
+                        opensSystemSettings: !asks)
+                    {
+                        self.perform(asks ? .requestPermission(entry.id) : .openSystemSettings(entry.id))
                     }
-                    Spacer()
-                    if entry.status == .notDetermined || entry.status == .limited {
-                        Button {
-                            self.perform(.requestPermission(entry.id))
-                        } label: {
-                            Text("Request").font(OpenClawType.subheadSemiBold)
-                        }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel(String(localized: "Request") + " " + Self.permissionTitle(entry.id))
-                    }
+                } else {
+                    SettingsDetailRow(
+                        .verbatim(Self.permissionTitle(entry.id)),
+                        value: .verbatim(Self.statusTitle(entry.status)))
                 }
             }
+        } header: {
+            SettingsSectionTitle("iOS permissions")
+        } footer: {
+            SettingsFootnote(
+                "iOS controls permission grants and Precise Location. Change denied permissions in iOS Settings.")
+        }
+        Section {
             Button {
                 self.perform(.openSystemSettings(.location))
             } label: {
-                Text("Open iOS Settings").font(OpenClawType.body)
+                Text("Open iOS Settings").font(SettingsType.label)
             }
-        } header: {
-            Text("Permissions").font(OpenClawType.captionSemiBold)
-        } footer: {
-            Text("iOS controls permission grants and Precise Location. Change denied permissions in iOS Settings.")
-                .font(OpenClawType.footnote)
         }
     }
 
-    private func toggle(_ title: LocalizedStringKey, key: DeviceSettingKey, value: Bool?) -> some View {
+    private func toggle(
+        _ title: LocalizedStringKey,
+        key: DeviceSettingKey,
+        value: Bool?,
+        onlyOff: Bool = false) -> some View
+    {
         Toggle(isOn: Binding(
             get: { value ?? false },
             set: { self.perform(.set(key, .boolean($0))) }))
         {
-            Text(title).font(OpenClawType.body)
+            Text(title).font(SettingsType.label)
         }
+        .tint(OpenClawBrand.ok)
+        .disabled(onlyOff && value != true)
         .accessibilityIdentifier("LocalDeviceSettings." + key.rawValue)
     }
 
@@ -222,7 +308,7 @@ struct LocalDeviceSettingsScreen: View {
             } catch is CancellationError {
                 // Leaving the native screen retires unfinished permission work.
             } catch {
-                self.errorText = String(localized: "Device settings could not be updated. Try again.")
+                self.errorText = String(localized: "Couldn’t update device settings. Try again.")
             }
         }
     }
@@ -254,8 +340,8 @@ struct LocalDeviceSettingsScreen: View {
 
     private static func statusTitle(_ status: DeviceSettingsPermissionStatus) -> String {
         switch status {
-        case .granted: String(localized: "Allowed")
-        case .denied: String(localized: "Denied")
+        case .granted: String(localized: "On")
+        case .denied: String(localized: "Off")
         case .notDetermined: String(localized: "Not requested")
         case .unavailable: String(localized: "Unavailable")
         case .limited: String(localized: "Limited")

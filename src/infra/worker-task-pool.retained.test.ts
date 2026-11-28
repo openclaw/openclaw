@@ -143,7 +143,14 @@ it.each(["runTask", "startTask"] as const)(
       preparedInput = [...captured];
       return "late input";
     };
-    const options = { inputBytes: 8, onInputConsumed: consumed, onExecutionSettled: settled };
+    const controller = new AbortController();
+    const options = {
+      inputBytes: 8,
+      onInputConsumed: consumed,
+      onExecutionSettled: settled,
+      signal: controller.signal,
+    };
+    let observationTimeout: ReturnType<typeof setTimeout> | undefined;
     let outcome: unknown = "pending";
     let observed: Promise<void> | undefined;
     try {
@@ -163,9 +170,13 @@ it.each(["runTask", "startTask"] as const)(
       const closed = once(control.port1, "message");
       control.port1.postMessage("close task channel");
       await closed;
-      // Service the real closed endpoint without letting preparation settle.
+      // The separate control ACK does not join native task-port closure.
       warm.service();
-      await Promise.resolve();
+      observationTimeout = setTimeout(() => {
+        controller.abort(new Error("Task channel closure was not observed"));
+      }, 10_000);
+      await observed;
+      clearTimeout(observationTimeout);
       expect(outcome).toMatchObject({
         code: "unavailable",
         message: expect.stringContaining("Native worker task channel closed"),
@@ -188,6 +199,8 @@ it.each(["runTask", "startTask"] as const)(
       expect(captured).toEqual([]);
       expect(pool.getSnapshot().pendingTasks).toBe(0);
     } finally {
+      clearTimeout(observationTimeout);
+      controller.abort(new Error("Task-channel fixture cleanup"));
       preparation.resolve();
       await observed;
       await pool.close();

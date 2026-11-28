@@ -15,6 +15,7 @@ import {
   expectNoProxyInference,
   nativeProviderFixture,
 } from "./native-worker.test-support.js";
+import type { NodeExecutionContext } from "./node-execution-context.js";
 import { ComposedGatewayHarness, SESSION_ID } from "./worker-fault-injection.test-support.js";
 import { parseWorkerProcessMessage } from "./worker-process-protocol.js";
 import {
@@ -89,10 +90,15 @@ function startupFor(descriptor: WorkerLaunchDescriptor, baseUrl: string): Native
   };
 }
 
-async function launch(descriptor: WorkerLaunchDescriptor, startup?: NativeInferenceStartup) {
+async function launch(
+  descriptor: WorkerLaunchDescriptor,
+  startup?: NativeInferenceStartup,
+  nodeExecution?: NodeExecutionContext,
+) {
   return workers.launch({
     descriptor,
     startup,
+    nodeExecution,
     signal: activeTestSignal,
     diagnostics: () => ({
       admissions: owner().admissions.length,
@@ -165,22 +171,34 @@ describe.skipIf(process.platform === "win32")(
     it("uses private startup model/auth, executes local tools, and durably commits their transcript", async () => {
       const provider = await providerFixture();
       const descriptor = await localDescriptor();
+      const gitConfigFile = path.join(tempDirs.make("worker-node-config-"), "gitconfig");
+      await writeFile(gitConfigFile, "[example]\n  catalog = from-host\n", { mode: 0o444 });
       await writeFile(
         path.join(owner().root, "tool-proof.mjs"),
         'import { readFileSync, writeFileSync } from "node:fs";\n' +
+          'import { execFileSync } from "node:child_process";\n' +
           "const ancestors = []; let pid = process.ppid;\n" +
           'if (process.platform === "linux") { while (pid > 1 && ancestors.length < 20) { ancestors.push(pid); const stat = readFileSync("/proc/" + pid + "/stat", "utf8"); pid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]); } }\n' +
-          'const proof = { pid: process.pid, ancestors, startupPresent: process.argv.includes("--internal-worker-native-inference"), credentialPresent: "WORKER_TEST_PROVIDER_KEY" in process.env };\n' +
+          'const proof = { pid: process.pid, ancestors, catalog: execFileSync("/usr/bin/git", ["config", "--get", "example.catalog"], {encoding: "utf8"}).trim(), toolData: JSON.parse(process.env.OPENCLAW_WORKER_TOOL_DATA), carrierPresent: "OPENCLAW_NODE_WORKER_EXECUTION" in process.env, startupPresent: process.argv.includes("--internal-worker-native-inference"), credentialPresent: "WORKER_TEST_PROVIDER_KEY" in process.env };\n' +
           'writeFileSync(new URL("./tool-proof.json", import.meta.url), JSON.stringify(proof)); console.log("worker tool wrote proof");\n',
       );
       const registry = startupFor(descriptor, provider.baseUrl);
       addSiblingModel(registry);
-      const worker = await launch(descriptor, registry);
+      const worker = await launch(descriptor, registry, {
+        gitConfigFile,
+        toolData: { catalog: "selected" },
+      });
       const outcome = result(await worker.finish());
       expect(outcome).toMatchObject({ retainWorker: false, result: { status: "completed" } });
       expect(worker.child.pid).not.toBe(process.pid);
       const proof = JSON.parse(await readFile(path.join(owner().root, "tool-proof.json"), "utf8"));
-      expect(proof).toMatchObject({ startupPresent: false, credentialPresent: false });
+      expect(proof).toMatchObject({
+        catalog: "from-host",
+        toolData: { catalog: "selected" },
+        carrierPresent: false,
+        startupPresent: false,
+        credentialPresent: false,
+      });
       expect(proof.pid).not.toBe(process.pid);
       expect(proof.pid).not.toBe(worker.child.pid);
       if (process.platform === "linux") {

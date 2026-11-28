@@ -39,7 +39,7 @@ enum OpenClawTextValue: ExpressibleByStringLiteral {
 
 struct OpenClawProBackground: View {
     var body: some View {
-        Color(uiColor: .systemGroupedBackground)
+        OpenClawBrand.canvas
             .ignoresSafeArea()
     }
 }
@@ -153,7 +153,7 @@ private struct ProPanelSurfaceModifier: ViewModifier {
             .background {
                 let shape = RoundedRectangle(cornerRadius: self.radius, style: .continuous)
                 shape
-                    .fill(Color(uiColor: self.isProminent ? .systemBackground : .secondarySystemGroupedBackground))
+                    .fill(OpenClawBrand.surfaceRaised)
                     .overlay {
                         shape.strokeBorder(self.borderStyle, lineWidth: 1)
                     }
@@ -170,7 +170,7 @@ private struct ProPanelSurfaceModifier: ViewModifier {
         if let tint {
             return tint.opacity(self.isProminent ? 0.18 : 0.10)
         }
-        return Color(uiColor: .separator).opacity(self.colorScheme == .dark ? 0.22 : 0.12)
+        return OpenClawBrand.border
     }
 }
 
@@ -197,6 +197,7 @@ struct OpenClawSidebarHeaderAction {
     /// The drawer's reveal control stays in its toolbar slot while the drawer covers it.
     /// Only the button observes this presentation.
     var drawerPresentation: RootSidebarPresentation?
+    var hasApprovalAttention = false
     let action: () -> Void
 
     /// Read only in the button to avoid rebuilding the destination or its toolbar.
@@ -227,8 +228,27 @@ struct OpenClawSidebarRevealToolbarVisibility: ViewModifier {
     }
 }
 
+struct OpenClawRoundNavigationButton<Glyph: View>: View {
+    let action: () -> Void
+    @ViewBuilder let glyph: () -> Glyph
+
+    var body: some View {
+        Button(action: self.action) {
+            self.glyph().openClawToolbarHitTarget().contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
+    }
+}
+
 struct OpenClawSidebarControlButton: View {
     let action: OpenClawSidebarHeaderAction
+
+    private static let chatMenuGlyph = UIGraphicsImageRenderer(size: CGSize(width: 16, height: 8)).image { _ in
+        UIColor.black.setFill()
+        UIBezierPath(roundedRect: CGRect(x: 0, y: 0, width: 16, height: 2), cornerRadius: 1).fill()
+        UIBezierPath(roundedRect: CGRect(x: 0, y: 6, width: 10, height: 2), cornerRadius: 1).fill()
+    }
 
     var body: some View {
         self.identified(self.button.buttonStyle(.plain))
@@ -248,16 +268,27 @@ struct OpenClawSidebarControlButton: View {
         .openClawToolbarHitTarget()
         .contentShape(Rectangle())
         .accessibilityLabel(self.action.accessibilityLabel.text)
+        .accessibilityValue(self.action.hasApprovalAttention
+            ? String(localized: "Needs approval")
+            : "")
     }
 
     private var icon: some View {
-        Image(systemName: self.action.systemName)
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(OpenClawBrand.accent)
+        Image(uiImage: Self.chatMenuGlyph)
+            .renderingMode(.template)
+            .foregroundStyle(Color(uiColor: .label))
             .openClawToolbarGlyphScale()
-            .frame(
-                width: OpenClawProMetric.compactControlSize,
-                height: OpenClawProMetric.compactControlSize)
+            .frame(width: OpenClawProMetric.compactControlSize, height: OpenClawProMetric.compactControlSize)
+            .overlay(alignment: .topTrailing) {
+                if self.action.hasApprovalAttention {
+                    Circle()
+                        .fill(OpenClawBrand.warn)
+                        .frame(width: 7, height: 7)
+                        .padding(7)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
     }
 
     @ViewBuilder
@@ -469,13 +500,15 @@ struct OpenClawToggleIndicator: View {
     let isOn: Bool
 
     var body: some View {
+        // The native switch's footprint (63x28 on iOS 26), so a Settings row with this indicator
+        // is as tall as one with a system Toggle.
         Capsule()
-            .fill(self.isOn ? OpenClawBrand.accentFill : Color.secondary.opacity(0.35))
-            .frame(width: 52, height: 32)
+            .fill(self.isOn ? OpenClawBrand.ok : Color.secondary.opacity(0.35))
+            .frame(width: 63, height: 28)
             .overlay(alignment: self.isOn ? .trailing : .leading) {
                 Circle()
                     .fill(Color.white)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 24, height: 24)
                     .padding(2)
                     .shadow(color: Color.black.opacity(0.14), radius: 1, x: 0, y: 1)
             }

@@ -27,6 +27,7 @@ import type {
   SourceDeliveryPlan,
 } from "../../infra/outbound/source-delivery-plan.types.js";
 import type { SystemEvent } from "../../infra/system-events.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { ReplyOperationObservation } from "../../sessions/reply-operation-state.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -42,7 +43,15 @@ export type SessionEventOutcome = {
   nextCheckMs?: number;
   sourceDeliveryOutcome?: SourceDeliveryOutcome;
   automationResult?: CronRunTelemetry &
-    Pick<CronRunOutcome, "replyDisposition" | "diagnostics" | "result">;
+    Pick<
+      CronRunOutcome,
+      | "replyDisposition"
+      | "diagnostics"
+      | "result"
+      | "errorClassification"
+      | "failureNotificationDetail"
+      | "rateLimitResetAt"
+    >;
   /** Recorded by the turn owner before delivery/cleanup can flatten its cause. */
   terminalOutcome?: AgentRunTerminalOutcome;
   /** Recorded controller restart outcome, before the error is flattened. */
@@ -101,14 +110,18 @@ export type SessionEventOptions = {
     // A yielded tool's result resuming its own conversation; hidden from chat display.
     | "tool_handoff"
     | "cron"
-    // The scheduler's repair request for a failing job; hidden from chat display.
+    // The scheduler's repair request for a failing job, or the repair turn of a job notice
+    // already posted to the chat; hidden from chat display.
     | "cron_failure_repair";
   contextKey?: string;
   /** Stable identity for durable host producers across restart handoffs. */
   sourceTurnId?: string;
   /** Run that started the producer's work; a provenance fact for this turn, never authority. */
   sourceRunId?: string;
+  completedToolCall?: InputProvenance["completedToolCall"];
   deliveryContext?: DeliveryContext;
+  /** Host-owned original reply anchor paired with an interrupted request's saved route. */
+  restartReplyToId?: string;
   abortSignal?: AbortSignal;
   expectedTarget?: SessionEventTarget;
   /** Authorized fresh work may create an absent session; captured completions may not. */
@@ -149,12 +162,10 @@ export type ScheduledSessionAutomation = {
     sessionModelOverrideSource?: "auto" | "user";
   };
   operatorAuthority?: AdmittedRunOperatorAuthority;
-  /** Original authenticated UI admin delegation, revalidated by the restored operator source. */
-  automationAdmin?: true;
   /** Restore the saved requester before an unstarted occurrence is admitted again. */
   readmitOperator?: (
     signal: AbortSignal,
-  ) => Promise<Pick<ScheduledSessionAutomation, "operatorAuthority" | "automationAdmin">>;
+  ) => Promise<Pick<ScheduledSessionAutomation, "operatorAuthority">>;
   admissionSource: NonNullable<AdmittedRunContext["admissionSource"]>;
   executionIdentity?: import("../../cron/service/state.js").CronExecutionIdentityAdmission;
   deliveryAttemptFence?:
@@ -225,6 +236,8 @@ export type SessionEventExecution = {
       meta?: EmbeddedAgentRunMeta;
       payloads?: EmbeddedAgentRunPayload[];
       resolved?: { provider: string; model: string };
+      /** The reply owner's recorded failure; an optional reply may present no failure text. */
+      failureCause?: unknown;
     },
   ) => void | Promise<void>;
 };

@@ -176,9 +176,18 @@ async function startGatewayServerWithRuntime(
         return withAgentDatabaseStartupAdmission(
           async (admission) => {
             stopDatabaseAdmission = () => admission.stop();
+            await using stateSchemaReader = admission.hasPreparedStateSchema()
+              ? undefined
+              : (
+                  await import("../state/openclaw-agent-schema-inspection-worker.js")
+                ).prestartGatewayStateSchemaReader(process.env);
             const mod = await loadServerStart();
             opts.gatewayStateOwner?.assertDatabaseAccess(resolveOpenClawStateSqlitePath());
-            return mod.startGatewayServerCore(port, { ...opts, startupStartedAt });
+            return await mod.startGatewayServerCore(port, {
+              ...opts,
+              startupStartedAt,
+              stateSchemaReader,
+            });
           },
           { deferInspections: !opts.updateCanary },
         );
@@ -213,13 +222,17 @@ async function startGatewayServerWithRuntime(
     { startGatewaySpawnBroker, runWithSpawnBroker },
     { shutdownProcessSupervisor },
     { closeSqliteReadOnlyWorkersForBroker },
+    { predictGatewayStartupResourceProfile },
   ] = await Promise.all([
     import("../process/spawn-broker/context.js"),
     import("../process/supervisor/index.js"),
     import("../infra/sqlite-readonly-worker.js"),
+    import("./server-startup-resource-profile.js"),
   ]);
   let logger: { info: (message: string) => void } | undefined;
   const broker = await startGatewaySpawnBroker({
+    // Bootstrap resolves the profile later; the broker must be placed before it.
+    profile: await predictGatewayStartupResourceProfile(opts.startupConfigSnapshotRead),
     onReady(pid, restarted) {
       if (restarted) {
         logger?.info(`spawn broker restarted pid=${pid}`);

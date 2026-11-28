@@ -88,6 +88,12 @@ const DEFAULT_BROWSER_REMOTE_CDP_HANDSHAKE_TIMEOUT_MS = 3_000;
 const EXTENSION_RELAY_PORT_OFFSET = 8;
 /** Username half of the process-only internal relay credential. */
 const EXTENSION_RELAY_CDP_USER = "openclaw-internal";
+
+/** Whether a CDP URL is an owned extension relay's internal endpoint. */
+export function isExtensionRelayCdpUrl(cdpUrl: string): boolean {
+  return URL.canParse(cdpUrl) && new URL(cdpUrl).username === EXTENSION_RELAY_CDP_USER;
+}
+
 const BROWSER_HEADLESS_ENV_KEY = "OPENCLAW_BROWSER_HEADLESS";
 
 type ManagedBrowserHeadlessMode = {

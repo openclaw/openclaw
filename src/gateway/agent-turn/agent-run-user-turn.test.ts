@@ -62,6 +62,7 @@ function prepareTurn(entry: SessionEntry, overrides: Partial<TurnParams> = {}) {
     activeSessionAgentId: "main",
     cfg: {},
     client: null,
+    senderIsOwner: false,
     images: [],
     offloadedRefs: [],
     suppressVisibleSessionEffects: false,

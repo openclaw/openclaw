@@ -291,7 +291,8 @@ it("retires remounted recovery after its Gateway writes the destination", async 
   expect(fs.existsSync(firstCapture)).toBe(false);
   expect(fs.existsSync(backup)).toBe(false);
   expect([secondCapture, failedCapture, orphan].map(fs.existsSync)).toEqual([true, true, true]);
-  expect(doctors.map(fs.existsSync)).toEqual([false, false, true, true, true]);
+  // Update cleanup applies the standalone Doctor policy: only the newest copy stays.
+  expect(doctors.map(fs.existsSync)).toEqual([false, false, false, false, true]);
 });
 
 it.each(["archive", "interrupted claim"] as const)(
@@ -377,8 +378,10 @@ it.each([true, false])(
       expect(output.run.steps).toContainEqual(warning("injected retirement failure"));
     } else {
       const printed = vi.mocked(defaultRuntime.log).mock.calls.flat().join("\n");
-      expect(printed).toContain("OpenClaw updated; 1 warning needs attention");
+      expect(printed).toContain("✅ OpenClaw updated.");
       expect(printed).toContain("injected retirement failure");
+      expect(printed).toContain("The update outcome is unchanged and the next update retries");
+      expect(printed).toContain("openclaw update cleanup --dry-run");
     }
     expect(getUpdateRun(second, { env })?.steps).toContainEqual(
       warning("injected retirement failure"),

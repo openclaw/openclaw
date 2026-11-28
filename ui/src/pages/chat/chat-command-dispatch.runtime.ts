@@ -18,7 +18,6 @@ import {
   type ChatCommandHost,
   type ChatCommandTarget,
 } from "./chat-commands.ts";
-import { clearChatHistory } from "./chat-history-actions.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { publishChatSessionProjectionMessages } from "./history-merge.ts";
 import { scheduleChatScroll } from "./scroll.ts";
@@ -72,7 +71,8 @@ export async function dispatchCapturedChatSlashCommand(
       if (confirmation !== "confirmed") {
         return confirmation;
       }
-      if (!isChatCommandTargetCurrent(host, target)) {
+      const { clearChatHistory } = await import("./chat-history-clear.runtime.ts");
+      if (!isCurrent() || !isChatCommandTargetCurrent(host, target)) {
         setChatError(host, t("chat.commandResults.connectionChanged"));
         return "failed";
       }

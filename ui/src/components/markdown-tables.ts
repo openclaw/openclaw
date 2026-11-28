@@ -24,7 +24,7 @@ const tableBounds = new WeakMap<HTMLElement, TableBounds>();
 
 type TableOwnerState = {
   release: () => void;
-  closeDialog?: () => void;
+  dialog?: { source: HTMLTableElement; close: () => void };
 };
 
 type TableBounds = { element: HTMLElement; viewport?: number; table?: number; offset: number };
@@ -229,6 +229,10 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
           }
         }
       }
+      // Reconciliation can move a table within the transcript in the same batch.
+      if (state?.dialog && !owner.contains(state.dialog.source)) {
+        state.dialog.close();
+      }
       syncTables(shells);
     });
     const stopScroll = listen(
@@ -282,7 +286,7 @@ export function releaseMarkdownTables(owner: HTMLElement): void {
   const state = tableOwnerStates.get(owner);
   tableOwnerStates.delete(owner);
   state?.release();
-  state?.closeDialog?.();
+  state?.dialog?.close();
 }
 
 async function showTableDialog(
@@ -291,14 +295,14 @@ async function showTableDialog(
   owner: HTMLElement,
 ): Promise<void> {
   const state = tableOwnerStates.get(owner) ?? enhanceMarkdownTables(owner);
-  if (state.closeDialog) {
+  if (state.dialog) {
     return;
   }
   let dialog: HTMLElementTagNameMap["openclaw-modal-dialog"] | undefined;
   const stopListeners: Array<() => void> = [];
   const close = () => {
-    if (state.closeDialog === close) {
-      delete state.closeDialog;
+    if (state.dialog?.close === close) {
+      delete state.dialog;
     }
     for (const stop of stopListeners.splice(0)) {
       stop();
@@ -306,7 +310,7 @@ async function showTableDialog(
     dialog?.remove();
   };
   // Reserve through teardown before loading; reconnect cannot revive this request.
-  state.closeDialog = close;
+  state.dialog = { source: table, close };
   try {
     let mountExpandedMarkdownTable: typeof import("./markdown-table-dialog.ts").mountExpandedMarkdownTable;
     try {
@@ -316,7 +320,7 @@ async function showTableDialog(
         cause,
       });
     }
-    if (state.closeDialog !== close || !owner.isConnected || !trigger.isConnected) {
+    if (state.dialog?.close !== close || !owner.isConnected || !trigger.isConnected) {
       return;
     }
     dialog = document.createElement("openclaw-modal-dialog");
@@ -326,7 +330,7 @@ async function showTableDialog(
       stopListeners.push(registerSessionTitleTarget(target, document.createElement("span")));
     }
   } catch (error) {
-    if (state.closeDialog === close && owner.isConnected && trigger.isConnected) {
+    if (state.dialog?.close === close && owner.isConnected && trigger.isConnected) {
       showToast({ message: formatUiError(error), severity: "error" });
     }
   } finally {
