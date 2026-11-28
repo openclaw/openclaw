@@ -165,17 +165,15 @@ function readChatMessagePreview(toolMessage: Record<string, unknown>) {
     return null;
   }
   const cards = extractToolCardsCached(toolMessage);
-  for (let index = cards.length - 1; index >= 0; index--) {
-    const card = cards[index];
-    if (card?.preview?.kind === "canvas") {
-      return {
-        runId: card.runId,
-        parentToolCallId: card.parentToolCallId,
-        preview: card.preview,
-        text: card.outputText ?? null,
-        timestamp: rawMessageTimestamp(toolMessage),
-      };
-    }
+  const card = cards.findLast((candidate) => candidate?.preview?.kind === "canvas");
+  if (card?.preview?.kind === "canvas") {
+    return {
+      runId: card.runId,
+      parentToolCallId: card.parentToolCallId,
+      preview: card.preview,
+      text: card.outputText ?? null,
+      timestamp: rawMessageTimestamp(toolMessage),
+    };
   }
   const text = extractTextCached(toolMessage) ?? undefined;
   const preview = extractToolPreview(text);
