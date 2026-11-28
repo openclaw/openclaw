@@ -20,7 +20,6 @@ describe("buildStreamErrorAssistantMessage", () => {
     // provider error strings could leak hostnames/metadata to the model and
     // turn them into a prompt-injection surface.
     expect(message.content).toEqual([{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }]);
-    expect(JSON.stringify(message.content)).not.toContain("internal.example.com");
     // The detailed error remains available in the peer field for clients/UIs.
     expect(message.errorMessage).toBe("stream aborted by upstream host=internal.example.com");
     expect(message.stopReason).toBe("error");
