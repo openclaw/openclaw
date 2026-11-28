@@ -6,7 +6,7 @@ import { userProfileDisplayName } from "../../../../src/shared/user-profile-disp
 import type { GatewayAgentRow } from "../../api/types.ts";
 import { hasCronFormErrors } from "../../lib/cron/form.ts";
 import { validateCronModelThinkingSelection } from "../../lib/cron/model-thinking-validation.ts";
-import { getCronRunsViewState } from "../../lib/cron/runs.ts";
+import { getCronRunsForDisplay, getCronRunsViewState } from "../../lib/cron/runs.ts";
 import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -131,7 +131,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
       : (channels.channelsSnapshot?.channelOrder ?? []),
     channelLabels: channels.channelsSnapshot?.channelLabels ?? {},
     channelMeta: channels.channelsSnapshot?.channelMeta ?? [],
-    runs: page.cron().cronRuns,
+    runs: getCronRunsForDisplay(cron),
     runsState: getCronRunsViewState(page.cron()),
     runsError: page.cron().cronRunsError,
     highlightedRunId: page.cron().cronRunsRunId,

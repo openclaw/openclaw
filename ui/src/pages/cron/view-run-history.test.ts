@@ -36,11 +36,11 @@ describe("cron view run history", () => {
             lastMeaningfulResult: { outcome: "blocked", summary: "Old blocker", atMs: 1 },
           },
         }),
-        runs: cases.map(([result], ts) => createRun({ ts, result })),
+        runs: cases.map(([result], index) => createRun({ ts: cases.length - index, result })),
       },
       "job",
     );
-    const entries = [...container.querySelectorAll(".cron-run-entry")].toReversed();
+    const entries = [...container.querySelectorAll(".cron-run-entry")];
     cases.forEach(([result, label, tone], index) => {
       const entry = entries[index]!;
       expect(entryText(entry, "status")).toBe(label);
@@ -95,9 +95,11 @@ describe("cron view run history", () => {
       ],
       [{ status: "skipped", completionStatus: "failed" }, "Skipped", "Not requested"],
     ];
-    const runs = cases.map(([entry], ts) => createRun({ ts, summary: `Run ${ts}`, ...entry }));
+    const runs = cases.map(([entry], index) =>
+      createRun({ ts: cases.length - index, summary: `Run ${index}`, ...entry }),
+    );
     const container = await renderView({ runs }, "job");
-    const entries = [...container.querySelectorAll(".cron-run-entry")].toReversed();
+    const entries = [...container.querySelectorAll(".cron-run-entry")];
     expect(entries).toHaveLength(cases.length);
     cases.forEach(([, title, facts, error], index) => {
       const entry = entries[index]!;
