@@ -76,6 +76,11 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
 
       const unavailable = evt.usageReport?.state === "unavailable";
       const usage: typeof evt.usage = unavailable ? {} : evt.usage;
+      // GenAI input tokens include cached prompt tokens on both the span and the metric.
+      const genAiInputTokens = unavailable
+        ? undefined
+        : (usage.promptTokens ??
+          (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0));
       for (const [tokenType, field] of [
         ["input", "input"],
         ["output", "output"],
@@ -89,7 +94,12 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
           continue;
         }
         runtime.tokensCounter.add(amount, { ...attrs, "openclaw.token": tokenType });
-        if (tokenType === "input" || tokenType === "output") {
+      }
+      for (const [tokenType, amount] of [
+        ["input", genAiInputTokens],
+        ["output", usage.output],
+      ] as const) {
+        if (amount) {
           runtime.genAiTokenUsageHistogram.record(amount, {
             ...genAiAttrs,
             "gen_ai.token.type": tokenType,
@@ -113,10 +123,6 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       if (!runtime.tracesEnabled) {
         return;
       }
-      const genAiInputTokens = unavailable
-        ? undefined
-        : (usage.promptTokens ??
-          (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0));
       const spanAttrs: Record<string, string | number> = {
         ...attrs,
         ...(evt.usageReport ? { "openclaw.usage.state": evt.usageReport.state } : {}),

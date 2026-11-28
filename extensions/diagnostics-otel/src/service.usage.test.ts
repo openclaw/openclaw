@@ -56,3 +56,21 @@ test.each(["available", "unavailable"] as const)(
     ).toMatchObject([{ value: { count: 1, sum: 25 } }]);
   },
 );
+
+test("records cached prompt tokens in GenAI input token usage like the usage span", async () => {
+  const { reader } = installTestMeter();
+  await startOtelService({ traces: true, metrics: true });
+  emitTrustedDiagnosticEvent({
+    type: "model.usage",
+    provider: "fixture",
+    model: "fixture-model",
+    usage: { input: 2_000, output: 50, cacheRead: 50_000, promptTokens: 52_000, total: 52_050 },
+  });
+  await waitForDiagnosticEventsDrained();
+  const span = sdk.exporter.getFinishedSpans().find((s) => s.name === "openclaw.model.usage");
+  expect(span?.attributes["gen_ai.usage.input_tokens"]).toBe(52_000);
+  const [metric] = await collectTestMetrics(reader, "gen_ai.client.token.usage");
+  const sumFor = (type: string) =>
+    metric?.dataPoints.find((point) => point.attributes["gen_ai.token.type"] === type)?.value;
+  expect([sumFor("input"), sumFor("output")]).toMatchObject([{ sum: 52_000 }, { sum: 50 }]);
+});
