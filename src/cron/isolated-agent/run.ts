@@ -511,8 +511,10 @@ async function runCronIsolatedAgentTurnInTrace(
               if (finalized.status === "error") {
                 outcome = "error";
                 outcomeError = finalized.error;
-                finalized.errorClassification =
-                  resolveCronAgentErrorClassification(terminalOutcome);
+                finalized.errorClassification = resolveCronAgentErrorClassification(
+                  terminalOutcome,
+                  execution.runResult.meta.error?.reason,
+                );
                 finalized.interruptedByRestart =
                   resolveAgentRunErrorLifecycleFields(undefined, abortSignal).stopReason ===
                   "restart";

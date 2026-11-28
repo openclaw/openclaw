@@ -11,6 +11,7 @@ import type {
 import type { AgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
 import type { AgentTerminalSnapshot } from "../agent-terminal-snapshot.js";
+import type { FailoverReason } from "../failover/signal.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { ReplyExpectation } from "../reply-completion.js";
 import type { AgentRuntimeCredentialSource } from "../runtime-plan/credential-source.types.js";
@@ -194,6 +195,8 @@ export type EmbeddedAgentRunMeta = {
       | "hook_block";
     message: string;
     code?: string;
+    /** Provider failover class of the typed prompt error, kept for consumers that cannot reparse text. */
+    reason?: FailoverReason;
     /** True only when model fallback can retry this terminal error without repeating side effects. */
     fallbackSafe?: boolean;
     /** True when the payload includes a trusted structured terminal tool summary. */

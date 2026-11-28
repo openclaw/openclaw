@@ -21,6 +21,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   type AuthProfileStore,
 } from "../../auth-profiles.js";
+import { setRuntimeAuthProfileStoreSnapshot } from "../../auth-profiles/runtime-snapshots.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
 import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
@@ -127,6 +128,69 @@ describe("selected route thinking metadata at runtime preparation", () => {
     vi.unstubAllGlobals();
     clearRuntimeAuthProfileStoreSnapshots();
     await state.cleanup();
+  });
+
+  it("reports a usage-limit cooldown on the only harness profile as rate_limit (#206434)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        throw new Error("unexpected network request");
+      }),
+    );
+    setRuntimeAuthProfileStoreSnapshot(
+      {
+        version: 1,
+        profiles: {
+          "openai:subscription": { type: "token", provider: "openai", token: "fixture-token" },
+        },
+        usageStats: {
+          "openai:subscription": {
+            cooldownUntil: Date.now() + 60 * 60_000,
+            cooldownReason: "rate_limit",
+            errorCount: 1,
+            failureCounts: { rate_limit: 1 },
+          },
+        },
+      } satisfies AuthProfileStore,
+      preparedModelRuntime.agentDir,
+    );
+    const runId = "cooldown-rate-limit";
+    const preparing = withPluginRuntimeGenerationScope(preparedModelRuntime, () =>
+      prepareEmbeddedRunRuntime({
+        assertCurrent: () => {},
+        runParams: {
+          runId,
+          admittedRunContext: createTestAdmittedRunContext(runId),
+          sessionId: "cooldown-session",
+          sessionKey: "agent:main:cooldown-session",
+          agentId: "main",
+          prompt: "Reply briefly.",
+          workspaceDir: root,
+          timeoutMs: 5_000,
+          config: preparedModelRuntime.config,
+          thinkLevel: "off",
+          authProfileId: "openai:subscription",
+          authProfileIdSource: "user",
+          allowTransientCooldownProbe: true,
+        },
+        provider: "openai",
+        modelId: MODEL_ID,
+        agentDir: preparedModelRuntime.agentDir,
+        workspaceDir: root,
+        globalLane: "test",
+        hookRunner: undefined,
+        hookContext: { sessionId: "cooldown-session", workspaceDir: root },
+        markStartupStage: () => {},
+        notifyExecutionPhase: () => {},
+        fallbackConfigured: false,
+        preparedModelRuntime,
+      }),
+    );
+    await expect(preparing).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "rate_limit",
+      message: `Prepared auth profiles are temporarily unavailable for openai/${MODEL_ID}.`,
+    });
   });
 
   it.each([
