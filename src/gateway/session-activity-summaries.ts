@@ -39,7 +39,11 @@ import {
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
-import { createActivitySummaryAuthority } from "./session-activity-summary-authority.js";
+import {
+  heldActivitySummaryRefusal,
+  createActivitySummaryAuthority,
+  type ActivitySummaryRefusal,
+} from "./session-activity-summary-authority.js";
 import {
   beginActivitySummaryCompletion,
   type PendingSessionActivitySummaryCompletion,
@@ -90,6 +94,7 @@ type Tracked = ActivitySummaryTarget & {
   windowStart: number;
   calls: number;
   completion?: PendingSessionActivitySummaryCompletion;
+  refusal?: ActivitySummaryRefusal;
 };
 class ActivitySummaryCancelledError extends Error {
   constructor() {
@@ -273,11 +278,12 @@ export function createSessionActivitySummaries(deps: {
     if (state.inFlight) {
       return;
     }
+    state.refusal = heldActivitySummaryRefusal(state.refusal, state.entry);
     if (!queue.includes(state) && !state.retryPending && state.retryAt <= now()) {
       state.retryAt = 0;
       state.failures = 0;
     }
-    if (state.retryAt > now() && !state.retryPending) {
+    if (state.refusal || (state.retryAt > now() && !state.retryPending)) {
       publish(state, "unavailable");
       return;
     }
@@ -353,10 +359,11 @@ export function createSessionActivitySummaries(deps: {
         text = text.slice(0, -OMISSION_NOTICE.length).trimEnd();
       }
       const work = notes.length > 0 || Boolean(restyle && text);
-      // The owner's role gates model work before "updating" or a timer; execution's
+      // The owner's authority gates model work before "updating" or a timer; execution's
       // fallback runner still picks the allowed model from this run's chain.
-      const { operatorAuthority, roleRefusesUtility } = work ? await recapAuthority.prepare() : {};
-      if (roleRefusesUtility) {
+      const admission = work ? await recapAuthority.prepare() : {};
+      if (admission.refused) {
+        state.refusal = admission.refused;
         publish(state, "unavailable");
         return;
       }
@@ -400,7 +407,7 @@ export function createSessionActivitySummaries(deps: {
             state.calls += 1;
             const result = await defaultCompleteModel({
               ...prepared,
-              operatorAuthority,
+              operatorAuthority: admission.operatorAuthority,
               purpose: "session-activity-summary",
               sessionId: state.sessionId,
               sessionKey: state.key,
