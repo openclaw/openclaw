@@ -9,6 +9,7 @@ import { collectRootPackageExcludedExtensionDirs } from "../scripts/lib/bundled-
 import { vitestWorkerRuntimeAssets } from "../scripts/lib/package-root-modules.mts";
 import { isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
 import type { AgentExecEnvelope } from "../src/commands/agent-exec-result.js";
+import { isMissingPathError } from "../src/infra/errno.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const execFileAsync = promisify(execFile);
@@ -108,7 +109,31 @@ describeLive("agent exec clean-install Code Mode with environment authentication
 
     expect(stdout.includes(openAiApiKey) || stderr.includes(openAiApiKey)).toBe(false);
     const result = JSON.parse(stdout) as AgentExecEnvelope;
-    expect(result).toMatchObject({
+    const outputPath = path.join(workspace, "output.txt");
+    const outputReceipt = await fs.readFile(outputPath, "utf8").then(
+      (output) => ({ exists: true, matchesExpected: output === `${input}processed\n` }),
+      (error: unknown) => ({
+        exists: isMissingPathError(error) ? false : null,
+        matchesExpected: false,
+      }),
+    );
+    // Capture independent execution receipts before an early assertion hides them.
+    // The receipt excludes file contents, provider responses, and child diagnostics.
+    const failureReceipt = JSON.stringify({
+      assistantTurns: result.assistantTurns ?? null,
+      bridgeCalls: result.bridgeCalls
+        ? {
+            search: result.bridgeCalls.search,
+            describe: result.bridgeCalls.describe,
+            call: result.bridgeCalls.call,
+          }
+        : null,
+      toolSummary: result.toolSummary
+        ? { calls: result.toolSummary.calls, failures: result.toolSummary.failures }
+        : null,
+      output: outputReceipt,
+    });
+    expect(result, failureReceipt).toMatchObject({
       ok: true,
       status: "ok",
       provider: "openai",
@@ -117,10 +142,10 @@ describeLive("agent exec clean-install Code Mode with environment authentication
       codeModeEngaged: true,
       final: "DONE",
     });
-    expect(result.toolSummary?.tools).toEqual(expect.arrayContaining(["read", "write"]));
-    expect(result.toolSummary?.failures).toBe(0);
-    await expect(fs.readFile(path.join(workspace, "output.txt"), "utf8")).resolves.toBe(
-      `${input}processed\n`,
+    expect(result.toolSummary?.tools, failureReceipt).toEqual(
+      expect.arrayContaining(["read", "write"]),
     );
+    expect(result.toolSummary?.failures, failureReceipt).toBe(0);
+    expect(outputReceipt, failureReceipt).toEqual({ exists: true, matchesExpected: true });
   }, 330_000);
 });
