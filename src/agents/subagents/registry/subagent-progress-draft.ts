@@ -3,6 +3,7 @@ import type { ProgressContinuationDraft } from "../../../channels/progress-conti
 import { onAgentEventForRun, type AgentEventPayload } from "../../../infra/agent-events.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { formatSubagentProgressReference } from "../../agent-activity-presentation.js";
+import { hasSubagentKill } from "./subagent-control-kill-intent.js";
 import { isSubagentDeliveryClosed } from "./subagent-delivery-state.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
@@ -189,8 +190,7 @@ export function adoptSubagentProgressDraft(
     entries.some(
       (entry) =>
         liveByTask.has(taskId(entry)) ||
-        entry.killIntent ||
-        entry.killReconciliation ||
+        hasSubagentKill(entry) ||
         // A wake that already started cannot report a re-yield to this draft.
         entry.requesterSettleWake?.status === "dispatching",
     )

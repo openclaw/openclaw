@@ -65,7 +65,6 @@ describe("filterRecordsToActive", () => {
         source: "npm" as const,
         spec: "@openclaw/codex",
         installPath: "/p/codex",
-        trustedSourceLinkedOfficial: true,
       },
     };
     const filtered = filter(
@@ -74,5 +73,6 @@ describe("filterRecordsToActive", () => {
       { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
     );
     expect(filtered).toEqual(records);
+    expect(filtered.codex).toBe(records.codex);
   });
 });

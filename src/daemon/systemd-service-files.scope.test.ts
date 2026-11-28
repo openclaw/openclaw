@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ExecResult } from "./exec-file.js";
+import { findSystemdServiceAccountMismatch } from "./service-inspection-error.js";
 import type { SystemdServiceReadTarget } from "./service-types.js";
 
 const systemBus = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").execBusctlSystem>());
@@ -331,6 +332,43 @@ describe("system-scope effective command", () => {
           sourcePath: target.unitPath,
         });
       }
+    },
+  );
+
+  it.each([
+    ["inline selectors", false, [], false],
+    ["an environment file", true, [], true],
+    ["an unset selector", false, ["OPENCLAW_STATE_DIR"], true],
+  ] as const)(
+    "names the unit, account and state selectors on refusal: %s",
+    async (_, file, unset, incomplete) => {
+      state.serviceUser = "other";
+      state.assignments = [
+        "OPENCLAW_SERVICE_KIND=gateway",
+        "HOME=/var/lib/other",
+        "OPENCLAW_STATE_DIR=/var/lib/other/.openclaw",
+        "OPENCLAW_GATEWAY_TOKEN=fixture-secret-value",
+      ];
+      state.unset = [...unset];
+      const protectedFile = path.join(path.dirname(target.unitPath), "protected-service.env");
+      state.fileSpecs = file ? [[protectedFile, false]] : [];
+      const reads = vi.spyOn(fs, "readFile");
+
+      const error = await readLoaded().catch((caught: unknown) => caught);
+
+      expect(error).toMatchObject({ reason: "systemd-account-refused" });
+      const mismatch = findSystemdServiceAccountMismatch(error);
+      expect(mismatch).toEqual({
+        unitName: target.unitName,
+        unitPath: target.unitPath,
+        serviceUser: "other",
+        programArguments: ["/usr/bin/openclaw", "gateway"],
+        workingDirectory: "/home/gateway",
+        selectors: { HOME: "/var/lib/other", OPENCLAW_STATE_DIR: "/var/lib/other/.openclaw" },
+        selectorsIncomplete: incomplete,
+      });
+      expect(JSON.stringify(mismatch)).not.toContain("fixture-secret-value");
+      expect(reads.mock.calls.some(([read]) => read === protectedFile)).toBe(false);
     },
   );
 

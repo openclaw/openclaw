@@ -4,7 +4,6 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
-import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
@@ -210,11 +209,9 @@ it.each(["unsettled", "foreign"] as const)(
     const nextAction = guidance(result, {
       environment: { container: false, stateDir: "/fixture/state" },
     });
-    const input = updateRunReportInputFromResult(result, { origin: { nextAction } });
-    expect(input.origin?.nextAction).toBe(nextAction);
     expect(nextAction).toContain("This update recorded possible data at risk (active-mutation)");
     if (unsettled) {
-      expect(input.steps).toContainEqual(
+      expect(result.steps).toContainEqual(
         expect.objectContaining({
           failureFacts: expect.arrayContaining([
             expect.objectContaining({ code: "doctor-processes-unsettled" }),

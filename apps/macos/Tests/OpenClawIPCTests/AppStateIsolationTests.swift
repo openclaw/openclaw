@@ -456,8 +456,6 @@ struct ProfileChatPreferencesTests {
             var modelCaptureError: Error?
             try await AppKitTestSupport.openMenu(button, in: window) { menu in
                 initiallyPinned = menu.items.contains { $0.title == "Unpin model" }
-                let index = try #require(menu.items.firstIndex { $0.title == "fixture/fresh" })
-                try #require(menu.items[index].isEnabled)
                 // Capture errors must not skip the preference actions and assertions.
                 do {
                     try AppKitTestSupport.record(
@@ -465,6 +463,9 @@ struct ProfileChatPreferencesTests {
                 } catch {
                     modelCaptureError = error
                 }
+                // Rendering the capture can shift the model rows.
+                let index = try #require(menu.items.firstIndex { $0.title == "fixture/fresh" })
+                try #require(menu.items[index].isEnabled)
                 menu.performActionForItem(at: index)
             }
             #expect(modelCaptureError == nil)

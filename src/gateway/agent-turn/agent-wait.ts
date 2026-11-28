@@ -18,12 +18,18 @@ import {
 } from "./agent-job.js";
 import type { AgentJobSession } from "./types.js";
 
+type AgentWaitContext = Pick<GatewayRequestContext, "dedupe"> &
+  Partial<Pick<GatewayRequestContext, "resolveGatewayContext" | "sessionRowProjectionOwner">>;
+
+/** Turn observation preserves byte-exact protocol run IDs. */
+export function prepareExactAgentTurnWait(context: AgentWaitContext, params: AgentWaitParams) {
+  return prepareAgentWaitForTurn(context, params, { exactTurnSource: true });
+}
+
 /** Capture an agent wait's initial session and defer its terminal or queued result. */
 export function prepareAgentWaitForTurn(
-  context: Pick<GatewayRequestContext, "dedupe"> &
-    Partial<Pick<GatewayRequestContext, "resolveGatewayContext" | "sessionRowProjectionOwner">>,
+  context: AgentWaitContext,
   params: AgentWaitParams,
-  // Turn waits preserve byte-exact protocol run IDs.
   options: { exactTurnSource?: boolean } = {},
 ) {
   const runId = options.exactTurnSource ? params.runId : params.runId.trim();

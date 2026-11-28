@@ -200,7 +200,12 @@ it.each([false, true])(
         timestamp: 0,
         ...(framed ? { __openclaw: { idempotencyKey: "source-run:user" } } : {}),
       },
-      { ...sourceMessage, ...openAIModel, ...(framed ? { runId: "source-run" } : {}) },
+      {
+        ...sourceMessage,
+        ...openAIModel,
+        phase: "commentary",
+        ...(framed ? { runId: "source-run" } : {}),
+      },
       {
         role: "assistant",
         ...openAIModel,

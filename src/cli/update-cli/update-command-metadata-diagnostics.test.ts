@@ -281,11 +281,7 @@ it.each([
   });
   const recordedRun = ledger.listUpdateRuns()[0];
   expect(recordedRun).toBeDefined();
-  const report = await prepareUpdateFailureReport({
-    attemptId: recordedRun!.runId,
-    recordedRun,
-    result: { status: "error", mode: "unknown", steps: [], durationMs: 0 },
-  });
+  const report = await prepareUpdateFailureReport(recordedRun!);
   if (entry.kind === "graph") {
     expectContains(report.body, ["EACCES", "ECONNRESET", "Connection refused"]);
     expect(report.body).not.toContain("Transport failed");
@@ -294,7 +290,7 @@ it.each([
       "Failed phase: target-resolution",
       "Update mode: package",
       "Update target: 2026.9.2",
-      "Update action: CLI command: openclaw update",
+      "Update action: cli",
       "Installation method: npm-global",
       entry.metadata === "constructor" ? "(Error)" : "TypeError",
       "[redacted-diagnostic]",

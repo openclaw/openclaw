@@ -212,6 +212,8 @@ export type CronFailureNotificationDetail =
     }
   /** A deterministic setup refusal: the operator must record the intended account. */
   | { kind: "inference-account-unrecorded" }
+  /** The recorded account was removed, signed out or replaced: the job pauses until the operator acts. */
+  | { kind: "inference-account-retired" }
   | { kind: "human-owner-unavailable"; catalogUnavailable: boolean }
   /** A stuck-session recovery aborted the run for a known semantic cause (e.g. `blocked_tool_call`). */
   | { kind: "agent-stall"; classification: string };
@@ -243,6 +245,8 @@ export type CronRunOutcome = {
   diagnostics?: CronRunDiagnostics;
   /** Transient: the run was skipped because its parent conversation is gone; pause the job. */
   parentUnavailable?: CronParentUnavailable;
+  /** Transient: the provider's stated reset for a rate-limited run; the next run waits for it. */
+  rateLimitResetAt?: number;
 };
 
 /** Why a parent-linked job pauses before any session is created. */

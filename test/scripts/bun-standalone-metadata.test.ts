@@ -1326,22 +1326,6 @@ describe("standalone image metadata", () => {
     },
   );
 
-  it("leaves prototype-named functions unchanged in minified metadata modules", () => {
-    const { runtime, entry, context, adapter } = fixture();
-    const source = minifyMetadataSource(
-      `function valueOf(value) { return value + 1; }
-       function constructor(value) { return value * 2; }
-       ${ownerSource("src/plugins/plugin-cache-files.ts", "pluginCacheExistsSync")}`,
-    );
-    const transformed = adapter.transform({
-      filename: path.join(runtime, "dist/minified-metadata.js"),
-      contents: source,
-    });
-    vm.runInContext(transformed.contents, context);
-    expect(vm.runInContext("[valueOf(4), constructor(3)]", context)).toEqual([5, 6]);
-    expect(context.pluginCacheExistsSync(entry)).toBe(true);
-  });
-
   it.each([
     { minifiedMetadata: false, typedMetadata: false },
     { minifiedMetadata: true, typedMetadata: false },

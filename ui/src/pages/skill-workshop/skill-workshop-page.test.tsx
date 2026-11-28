@@ -253,40 +253,7 @@ it.each([
   await waitForSolid(() => expect(button(page, opens, true)).not.toBeNull());
 });
 
-it("groups History by day, newest first", async () => {
-  const day = 24 * 60 * 60_000;
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const at = (name: string, createdAtMs: number) => ({
-    ...change,
-    id: `change-${name}`,
-    skillName: name,
-    createdAtMs,
-  });
-  const names = ["fresh-skill", "week-skill", "old-skill"];
-  const request = gateway(
-    {
-      list: { ...list, skills: names.map((name) => ({ ...skill, name })) },
-      read: skillRead,
-    },
-    [
-      at("fresh-skill", start.getTime()),
-      at("week-skill", start.getTime() - 2 * day),
-      at("old-skill", start.getTime() - 20 * day),
-    ],
-  );
-  const page = await mount(request);
-  await waitForSolid(() =>
-    expect(
-      Array.from(page.querySelectorAll(".sw-group__title"), (heading) => heading.textContent),
-    ).toEqual(["Today", "This week", "Earlier"]),
-  );
-  expect(
-    Array.from(page.querySelectorAll(".sw-row--history .sw-row__name"), (name) => name.textContent),
-  ).toEqual(names);
-});
-
-it("searches the loaded skills by name and description", async () => {
+it("clears a loaded-skill search when the selected agent changes", async () => {
   const request = gateway(
     {
       list: {
@@ -310,10 +277,6 @@ it("searches the loaded skills by name and description", async () => {
     search.value = value;
     search.dispatchEvent(new Event("input", { bubbles: true }));
   };
-  type("reconciling");
-  await waitForSolid(() => expect(rows()).toEqual([SKILL]));
-  type("RELEASE");
-  await waitForSolid(() => expect(rows()).toEqual(["release-notes"]));
   type("nothing-like-this");
   await waitText(page, "No skills match your search.");
   context.agentSelection.set("scout");

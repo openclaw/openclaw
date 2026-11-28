@@ -71,6 +71,8 @@ type PromptCacheTracker = {
   /** Missing usage must not bind an older hit to a new request fingerprint. */
   lastCacheReadSnapshot?: PromptCacheSnapshot;
   lastProviderPrompt?: ProviderPromptState["lastAttempt"];
+  /** Whether this snapshot's request carried `prompt_cache_key`; unset until its body is recorded. */
+  requestCacheKeyPresent?: boolean;
   requestedAt: number;
   pendingChanges: PromptCacheChange[] | null;
   unmeasuredChanges?: PromptCacheChange[] | null;
@@ -114,6 +116,23 @@ export function clearPromptCacheObservations(sessionId?: string): void {
   }
 }
 registerSessionResourceCleanup(clearPromptCacheObservations);
+
+/** The chat's most recent recorded request: its route and whether it carried a cache key. */
+export function readLastPromptCacheKeyFact(sessionKey: string) {
+  const chat = sessionKey.trim();
+  let last: PromptCacheTracker | undefined;
+  // Insertion order is request order: each new request re-inserts its tracker.
+  for (const tracker of trackers.values()) {
+    if (tracker.sessionKey === chat) {
+      last = tracker;
+    }
+  }
+  if (last?.requestCacheKeyPresent === undefined) {
+    return undefined;
+  }
+  const { provider, modelId, modelApi } = last.snapshot;
+  return { provider, modelId, modelApi, cacheKeyPresent: last.requestCacheKeyPresent };
+}
 
 // Unpublished provider declarations retain their existing identity contract.
 const toolSchemaFingerprints = new WeakMap<object, string>();
@@ -583,6 +602,7 @@ export function completePromptCacheObservation(
   if (!tracker) {
     return null;
   }
+  tracker.requestCacheKeyPresent = params.providerPrompt?.wire?.cacheKeyPresent;
   const changes = tracker.pendingChanges;
   tracker.pendingChanges = null;
 

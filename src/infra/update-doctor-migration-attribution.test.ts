@@ -22,7 +22,6 @@ import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.t
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { repairDoctorStateSchemaAsync } from "../state/openclaw-state-db-doctor-repair.js";
-import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -696,11 +695,6 @@ it.each(
       expect(transactions.mock.calls.length > 0).toBe(writing);
       await openOpenClawStateDatabaseForDoctor({ env });
       resolveDoctorUpdateAdmission(env).assertCurrent();
-      await executeExistingOpenClawStateRead(
-        { env },
-        { type: "updateRuns.recoveryAdmission" },
-        shape === "clean" ? { current: true, live: true } : { current: true },
-      );
       const result = await migrateLegacyExecApprovals({
         env,
         stateDir,

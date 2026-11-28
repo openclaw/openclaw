@@ -243,14 +243,14 @@ describe("tsdown config", () => {
   });
 
   it("bundles SDK-owned helpers while retaining native package ownership", async () => {
-    const broker = runtimeGraph("plugins/plugin-capture-native-resource");
-    for (const [graph, bundleFsSafe] of [
-      [runtimeGraph("plugins/runtime/index"), false],
-      [broker, true],
-      [runtimeGraph("config/sessions/disk-budget.worker"), true],
-      [runtimeGraph("infra/fs-safe-copy.worker"), true],
-      [runtimeGraph("infra/sqlite-readonly-location.worker"), true],
-      [runtimeGraph("plugins/plugin-generation-preparation.worker"), true],
+    for (const [graph, bundleFsSafe, bundleHelpers] of [
+      [runtimeGraph("plugins/runtime/index"), false, false],
+      [runtimeGraph("plugins/plugin-capture-native-resource"), true, false],
+      [runtimeGraph("state/openclaw-state-lease-heartbeat.worker"), true, false],
+      [runtimeGraph("config/sessions/disk-budget.worker"), true, true],
+      [runtimeGraph("infra/fs-safe-copy.worker"), true, true],
+      [runtimeGraph("infra/sqlite-readonly-location.worker"), true, true],
+      [runtimeGraph("plugins/plugin-generation-preparation.worker"), true, true],
     ] as const) {
       const alwaysBundle = graph.deps?.alwaysBundle;
       const external = (await inputOptions(graph))?.external;
@@ -263,7 +263,7 @@ describe("tsdown config", () => {
         expect(external(specifier, undefined, false)).toBe(!bundleFsSafe);
       }
       for (const specifier of ["semver", "tslog"]) {
-        expect(alwaysBundle(specifier, undefined)).toBe(bundleFsSafe && graph !== broker);
+        expect(alwaysBundle(specifier, undefined)).toBe(bundleHelpers);
       }
       for (const specifier of ["@openclaw/proc-safe/windows-job"]) {
         expect(alwaysBundle(specifier.split("/").slice(0, 2).join("/"), undefined)).toBe(false);

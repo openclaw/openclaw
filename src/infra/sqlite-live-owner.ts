@@ -1,11 +1,8 @@
 import fs from "node:fs";
 import { hostname } from "node:os";
 import path from "node:path";
-import {
-  classifyGatewayLockProcessNamespace,
-  GatewayLockNamespaceError,
-  parseGatewayLockPayload,
-} from "./gateway-lock-payload.js";
+import { GatewayLockNamespaceError, parseGatewayLockPayload } from "./gateway-lock-payload.js";
+import { classifyGatewayLockProcessNamespace } from "./gateway-lock-recovery-namespace.js";
 import { readOwnerPaths } from "./gateway-state-owner-lifecycle.js";
 import { resolveGatewayStateOwnerPath } from "./gateway-state-owner.js";
 import { readStateLeaseProcessOwnerStatus } from "./state-lease-process-owner.js";

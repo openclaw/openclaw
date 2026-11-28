@@ -34,7 +34,6 @@ export function capturePreparedModelRuntimeRefreshError(value: unknown): Error {
   }
   // Never copy a plugin-defined prototype or capture another lazy stack of this build.
   const kind = [
-    PreparedModelRuntimeInitialRunAdmissionError,
     PreparedModelRuntimePublicationSupersededError,
     PreparedModelRuntimeOwnerNotPublishedError,
     PreparedModelRuntimePluginGenerationRetiredError,
@@ -61,13 +60,6 @@ export function capturePreparedModelRuntimeRefreshError(value: unknown): Error {
   refreshErrorSnapshots.set(error, snapshot);
   refreshErrorSnapshots.set(snapshot, snapshot);
   return snapshot;
-}
-
-/** The embedded runner refused its initial admission before executing a generation. */
-export class PreparedModelRuntimeInitialRunAdmissionError extends PreparedModelRuntimeOwnerNotPublishedError {
-  constructor(error: PreparedModelRuntimeOwnerNotPublishedError) {
-    super(error.message, { cause: error, admissionBlocked: true });
-  }
 }
 
 export function isPreparedModelRuntimeMissingOwnerError(

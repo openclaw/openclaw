@@ -9,7 +9,7 @@ import { listAgentIds } from "../../agent-scope-config.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
-import { resolveSpawnAdmission, resolveSpawnMode } from "../../spawn-plan.js";
+import { createSpawnAdmission, resolveSpawnMode } from "../../spawn-plan.js";
 import { validateName } from "../../worktrees/name.js";
 import { prepareSubagentSessionListReadCache } from "../registry/subagent-registry-state.js";
 import { listSwarmRunsForGroup } from "../registry/subagent-registry.js";
@@ -380,32 +380,29 @@ export async function resolveSubagentSpawnRequest(
             )
           : undefined,
       });
-      const resolveAdmission = (pendingChildren = 0) => {
-        const collectorRuns = params.collect
-          ? swarmGroupId
-            ? listSwarmRunsForGroup(swarmGroupId, requesterInternalKey, requesterAgentId)
-            : []
-          : undefined;
-        return resolveSpawnAdmission({
-          cfg,
-          callerDepth,
-          inheritedToolPolicySource: ctx.inheritedToolPolicySource,
-          collector: collectorRuns
-            ? {
-                liveChildren: collectorRuns.filter((entry) => !entry.collectorCompletion).length,
-                totalChildren: collectorRuns.length,
+      const resolveAdmission = createSpawnAdmission({
+        cfg,
+        callerDepth,
+        inheritedToolPolicySource: ctx.inheritedToolPolicySource,
+        requesterSessionKey: requesterInternalKey,
+        requesterAgentId,
+        targetAgentId,
+        requestedAgentId: effectiveRequestedAgentId,
+        configuredAgentIds,
+        readCollector: params.collect
+          ? () => {
+              const runs = swarmGroupId
+                ? listSwarmRunsForGroup(swarmGroupId, requesterInternalKey, requesterAgentId)
+                : [];
+              return {
+                liveChildren: runs.filter((entry) => !entry.collectorCompletion).length,
+                totalChildren: runs.length,
                 maxChildrenPerGroup: swarmConfig.maxChildrenPerGroup,
                 maxTotalPerGroup: swarmConfig.maxTotalPerGroup,
-              }
-            : undefined,
-          requesterSessionKey: requesterInternalKey,
-          requesterAgentId,
-          targetAgentId,
-          requestedAgentId: effectiveRequestedAgentId,
-          configuredAgentIds,
-          additionalActiveChildren: pendingChildren,
-        });
-      };
+              };
+            }
+          : undefined,
+      });
       const admissionReservation = params.collect
         ? undefined
         : reserveChildAdmissionSlot({

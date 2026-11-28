@@ -577,6 +577,7 @@ it(
             sessionKey: target.sessionKey,
             identityId: replacement.id,
           });
+          await expect(terminal).resolves.toMatchObject({ error: "aborted" });
           const beforeDenied = requests.length;
           await expect(
             send(client, target.sessionKey, "Revoked next request", {}, method),
@@ -585,10 +586,9 @@ it(
         } finally {
           hold.resume.resolve();
         }
-        expect(await terminal).toMatchObject({ status: "ok" });
+        await withinTest(runExecution.waitForCompletion(revokedRun.runId), signal);
         expect(forbidden.supplied).toBe(true);
-        // Removal denies the next start, not the tool call of this admitted turn.
-        expect(await fs.readFile(forbidden.file, "utf8")).toBe(forbidden.message);
+        await expect(fs.stat(forbidden.file)).rejects.toMatchObject({ code: "ENOENT" });
         expect(await fs.readFile(allowed.file, "utf8")).toBe(allowed.message);
       }
       expect(providerErrors).toEqual([]);

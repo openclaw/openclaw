@@ -14,7 +14,7 @@ description: "Review, triage, repair, or land OpenClaw issues and pull requests 
 - Repair-and-land authority covers internal scheduling, database admission, lifecycle design, risk, verification. In-task bug fixes (including compatible SDK fixes) and backed-up repairs removing only invalid or unreachable data need no renewed approval.
 - Bulk close/reopen above 50 items needs explicit count and scope.
 - Advisory workflows need explicit security request.
-- Peter-instructed Team updates use the [release deployer](../update-team-server/SKILL.md); never edit live state outside its owner. Notify Night Watch of every deploy/restart; it coordinates restart timing, not update approval.
+- Peter-instructed Team updates use the [release deployer](https://github.com/openclaw/maintainers/blob/main/.agents/skills/update-team-server/SKILL.md); never edit live state outside its owner. Notify Night Watch of every deploy/restart; it coordinates restart timing, not update approval.
 
 ## Select the scope
 

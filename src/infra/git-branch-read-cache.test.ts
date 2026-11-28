@@ -22,12 +22,16 @@ it.each(["selected folder", "intermediate ancestor"])(
     const inner = path.join(outer, "packages", "widget");
     const selected = location === "selected folder" ? inner : path.join(inner, "src");
     await fs.mkdir(selected, { recursive: true });
-    const read = () =>
+    const read = (onRefresh?: () => void) =>
       runGitReadOperation(
         { type: "repository.branches", input: { repoRoot: selected } },
-        { snapshot: true },
+        { snapshot: true, onRefresh },
       );
+    // Observe the first completed read without racing the watch admission recheck.
+    const initialRefresh = Promise.withResolvers<void>();
+    await read(initialRefresh.resolve);
     await vi.waitFor(async () => {
+      await initialRefresh.promise;
       expect(await read()).toEqual({
         branches: [
           { name: "outer-main", kind: "local" },

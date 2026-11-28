@@ -115,13 +115,6 @@ class AgentDatabaseStartupAdmission {
     return this.stopped;
   }
 
-  private startProgress(): void {
-    this.progressTimer ??= startAgentDatabasePreparationProgress(
-      this.pending,
-      () => this.publishingAgentId,
-    );
-  }
-
   /** Bootstrap reuses this startup's compatibility headers; writable opens retain admission. */
   prepareSchemaHeaders(env: NodeJS.ProcessEnv) {
     const prepared: PreparedSchemaHeaders = {
@@ -170,6 +163,10 @@ class AgentDatabaseStartupAdmission {
     if (schema && identity) {
       prepared.state = { identity, schemaAdmissionId: schema.admissionId };
     }
+  }
+
+  hasPreparedStateSchema(): boolean {
+    return this.preparedSchemaHeaders?.state !== undefined;
   }
 
   takePreparedStateSchema(env: NodeJS.ProcessEnv): (() => void) | undefined {
@@ -332,7 +329,10 @@ class AgentDatabaseStartupAdmission {
         recovery.phaseStartedAt = now;
       };
       this.pending.set(agentId, recovery);
-      this.startProgress();
+      this.progressTimer ??= startAgentDatabasePreparationProgress(
+        this.pending,
+        () => this.publishingAgentId,
+      );
       refusals.push(refusal);
       log.info(refusal.reason, { agentId, paths });
       const witnesses = paths.map((pathname) => {

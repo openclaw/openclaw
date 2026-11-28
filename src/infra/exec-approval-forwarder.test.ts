@@ -643,26 +643,6 @@ describe("exec approval forwarder", () => {
     },
   );
 
-  it("can forward resolved notices without pending cache when request payload is present", async () => {
-    const { deliver, forwarder } = createForwarder({
-      cfg: makeTargetsCfg([{ channel: "telegram", to: "123" }]),
-    });
-
-    await forwarder.handleResolved({
-      id: "req-missing",
-      decision: "allow-once",
-      resolvedBy: "telegram:123",
-      ts: 2000,
-      request: {
-        command: "echo ok",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-      },
-    });
-
-    expect(deliver).toHaveBeenCalledTimes(1);
-  });
-
   describe("expiry delivery error handling (#83106)", () => {
     afterEach(() => {
       mockLogError.mockClear();

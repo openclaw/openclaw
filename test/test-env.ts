@@ -276,7 +276,9 @@ function initializeIsolatedTestEnv(tempHome: string, credentialEnvKeys: readonly
   setTestEnvValue("XDG_CONFIG_HOME", path.join(tempHome, ".config"));
   setTestEnvValue("XDG_DATA_HOME", path.join(tempHome, ".local", "share"));
   setTestEnvValue("XDG_STATE_HOME", path.join(tempHome, ".local", "state"));
-  setTestEnvValue("XDG_CACHE_HOME", path.join(tempHome, ".cache"));
+  const cacheHome = path.join(tempHome, ".cache");
+  fs.mkdirSync(cacheHome, { mode: 0o700 });
+  setTestEnvValue("XDG_CACHE_HOME", cacheHome);
   setTestEnvValue("XDG_RUNTIME_DIR", path.join(tempHome, ".runtime"));
 }
 

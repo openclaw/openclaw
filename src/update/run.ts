@@ -15,8 +15,9 @@ import type { PostCorePluginUpdateResult } from "../cli/update-cli/update-comman
 import { resolveStateDir } from "../config/paths.js";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-commit.js";
+import { gitCommandArgv } from "../infra/git-exec.js";
 import { resolveNpmCommand } from "../infra/npm-command.js";
 import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
@@ -24,6 +25,7 @@ import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
 import { isPackageTargetAlreadyCurrent } from "../infra/update-global.js";
 import { describeUnavailableMacosSystemGit } from "../infra/update-macos-git.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "../infra/update-run-limits.js";
+import { listUpdateRunsAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunStep } from "../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../infra/update-run-recovery-admission.js";
 import {
@@ -48,7 +50,6 @@ import { preparePackage } from "./prepare-package.js";
 import {
   acquireUpdateLock,
   allocateStaging,
-  collectReleases,
   createTrialPending,
   hasReleaseUpdateOwner,
   publishStaging,
@@ -152,6 +153,7 @@ export async function prepareUpdate(params: {
     return { status: "failed", reason, message };
   };
   let staging: Awaited<ReturnType<typeof allocateStaging>> | undefined;
+  let gitCheckout: string | undefined;
   try {
     const lock = await acquireUpdateLock(
       { runId: params.runId, pid: process.pid, deadlineMs: timeoutMs },
@@ -168,15 +170,45 @@ export async function prepareUpdate(params: {
           "Another update is switching releases. Try again in a few minutes.",
         );
       }
-      if (lock.previous) {
-        await finishUpdateRunAsync(
-          lock.previous.runId,
-          { status: "failed", reason: "interrupted" },
-          { env },
-        );
-      }
       await checkUpdateInstallationSlot(params.runningRoot, env);
       await assertUpdateRecoveryAdmission({ env });
+      const runningRoot = await fs.realpath(params.runningRoot);
+      const servingTrialRoot =
+        trial && (trial.phase === "committed" || trial.phase === "rolled-back")
+          ? await fs
+              .realpath(
+                path.resolve(prefix, trial.phase === "rolled-back" ? trial.previous : trial.target),
+              )
+              .catch((error: unknown) => {
+                if (!hasErrnoCode(error, "ENOENT")) {
+                  throw error;
+                }
+                return undefined;
+              })
+          : undefined;
+      // The serving release may still own its handed-over plugin work after commit.
+      const handedOverRunId = servingTrialRoot === runningRoot ? trial?.runId : undefined;
+      for (;;) {
+        const unfinished = await listUpdateRunsAsync(
+          {
+            active: true,
+            limit: 100,
+            excludeRunIds: handedOverRunId ? [params.runId, handedOverRunId] : [params.runId],
+          },
+          { env },
+          { current: true },
+        );
+        if (unfinished.length === 0) {
+          break;
+        }
+        for (const run of unfinished) {
+          await finishUpdateRunAsync(
+            run.runId,
+            { status: "failed", reason: "interrupted" },
+            { env },
+          );
+        }
+      }
       const missingGit = await describeUnavailableMacosSystemGit(runCommandWithTimeout, {
         timeoutMs: Math.min(10_000, Math.max(1, deadline - Date.now())),
       });
@@ -212,8 +244,6 @@ export async function prepareUpdate(params: {
         }
         throw error;
       }
-      // Releases left by an earlier update; never on the critical path.
-      void collectReleases(prefix).catch(() => undefined);
       staging = await allocateStaging({ kind: install.kind }, prefix);
       let target;
       try {
@@ -317,6 +347,7 @@ export async function prepareUpdate(params: {
           { env },
         );
       };
+      gitCheckout = target.kind === "git" ? target.checkout : undefined;
       const prepared: PrepareResult =
         target.kind === "git"
           ? await prepareGit({
@@ -507,6 +538,14 @@ export async function prepareUpdate(params: {
       return { status: "pending", target: { version: prepared.version }, releaseRoot };
     } finally {
       if (staging) {
+        if (gitCheckout) {
+          // Candidate checks can fail after a successful build. Retire Git's registration
+          // before deleting the unpublished tree; published releases have left this owner.
+          await runCommandWithTimeout(
+            gitCommandArgv(gitCheckout, ["worktree", "remove", "--force", staging.releaseRoot]),
+            { timeoutMs: 30_000, killProcessTree: true },
+          ).catch(() => undefined);
+        }
         await fs.rm(staging.path, { recursive: true, force: true }).catch(() => undefined);
       }
       await releaseUpdateLock(prefix).catch(() => undefined);
@@ -515,7 +554,8 @@ export async function prepareUpdate(params: {
     return await fail(
       "update-failed",
       "The update failed before anything changed. The current version is still running.",
-      error instanceof Error && error.stack ? error.stack : formatErrorMessage(error),
+      // Exceptions put the cause first; fail() retains command-output tails.
+      sliceUtf16Safe(formatUncaughtError(error), 0, UPDATE_RUN_TEXT_LIMIT),
     );
   }
 }

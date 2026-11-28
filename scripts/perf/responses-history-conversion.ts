@@ -41,7 +41,6 @@ import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
 } from "../../packages/ai/src/transports/openai-responses-compaction-replay.js";
-import { recordResponsesContextUsage } from "../../packages/ai/src/transports/openai-responses-context-usage.js";
 import { cloneResponsesInputForPayloadHook } from "../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { resolveCompletedResponsesToolCall } from "../../packages/ai/src/transports/openai-responses-stream-terminal-internal.js";
 import { sanitizeResponsesImagePayload } from "../../packages/ai/src/transports/responses-image-payload-sanitizer.js";
@@ -317,7 +316,6 @@ if (contextUsage) {
     buildOpenAIResponsesReasoningReplayMetadata(model, identity),
   );
   messages.unshift(checkpoint);
-  const request = buildOpenAIResponsesParams(model, context, options);
   const measured = {
     ...assistant,
     content: [{ type: "text" as const, text: "Completed inspection" }],
@@ -327,7 +325,6 @@ if (contextUsage) {
       contextUsage: { state: "available" as const, promptTokens: 100_000, totalTokens: 100_100 },
     },
   };
-  recordResponsesContextUsage(measured, model, identity, request, [], "transport");
   messages.push(measured, { role: "user", content: "Continue inspection", timestamp: 999 });
   if (frozen) {
     messages.forEach(freezeJsonSnapshot);

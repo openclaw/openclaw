@@ -39,6 +39,8 @@ export type AgentWorkspaceContext = {
   personaInstructions?: string;
   /** Safe for carriers inherited by delegated agents; excludes selected personal profiles. */
   sharedPersonaInstructions?: string;
+  /** Selected personal profile only, for parent-only carriers. */
+  personalPersonaInstructions?: string;
   promptContextFiles: EmbeddedContextFile[];
   memoryReferenceFiles: EmbeddedContextFile[];
   memoryToolRoutedBootstrapFiles: BootstrapFile[];
@@ -147,6 +149,9 @@ export async function prepareAgentWorkspaceContext(
     personaInstructions: renderPersonaInstructions(personaFiles),
     sharedPersonaInstructions: renderPersonaInstructions(
       personaFiles.filter((file) => file.personalUser !== true),
+    ),
+    personalPersonaInstructions: renderPersonaInstructions(
+      personaFiles.filter((file) => file.personalUser === true),
     ),
     promptContextFiles,
     memoryReferenceFiles,

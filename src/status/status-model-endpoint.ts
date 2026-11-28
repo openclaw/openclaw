@@ -49,3 +49,13 @@ export function formatModelEndpointUrl(rawUrl: string): string | undefined {
     return undefined;
   }
 }
+
+/** The /status Endpoint value: the guarded URL, plus a fixed cache-key note when one applies. */
+export function formatStatusEndpoint(
+  rawUrl: string | undefined,
+  cacheKey: string | undefined,
+): string | undefined {
+  const url = rawUrl ? formatModelEndpointUrl(rawUrl) : undefined;
+  // The note is a fixed phrase, so it may sit beside "unknown": custom relays rarely show a URL.
+  return cacheKey ? `${url ?? "unknown"} · cache key: ${cacheKey}` : url;
+}

@@ -329,8 +329,8 @@ export function createSessionRowProjectionFixture(params: {
     readPreparedSpawnedBy(query) {
       const row = describe(query);
       return row
-        ? projectGatewaySessionRunState({ key: row.key, now: Date.now(), rowContext })
-            .subagentOwner || row.storedEntry?.spawnedBy
+        ? projectGatewaySessionRunState({ key: row.key, now: Date.now(), rowContext }).subagent
+            ?.ownerSessionKey || row.storedEntry?.spawnedBy
         : undefined;
     },
     capture: describe,

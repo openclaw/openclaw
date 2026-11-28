@@ -148,31 +148,38 @@ afterEach(async () => {
 describe("prepareEmbeddedAttemptPromptContext", () => {
   registerParityHostLifecycle();
 
-  it("reports unavailable MCP servers in this turn without rewriting history or the system prompt", async () => {
-    const fixture = createInput();
-    const history = JSON.stringify(fixture.input.messages);
-    const prepared = await prepareContext({
-      ...fixture.input,
-      sessionVersion: 4,
-      appendOnlyRuntimeContext: true,
-      mcpDiagnostics: [
-        {
-          serverName: "fixture",
-          safeServerName: "fixture",
-          launchSummary: "synthetic server",
-          message: "MCP tool listing timed out after 10000ms",
-        },
-      ],
-    });
-    expect(prepared.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "MCP server fixture unavailable: MCP tool listing timed out after 10000ms",
-    );
-    expect(prepared.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "Check server reachability",
-    );
-    expect(JSON.stringify(fixture.input.messages)).toBe(history);
-    expect(prepared.systemPromptForHook).toBe("Base system prompt");
-  });
+  it.each([3, 4])(
+    "reports unavailable MCP servers only in the current version %i turn without rewriting history",
+    async (sessionVersion) => {
+      const fixture = createInput();
+      const history = JSON.stringify(fixture.input.messages);
+      const prepared = await prepareContext({
+        ...fixture.input,
+        sessionVersion,
+        appendOnlyRuntimeContext: true,
+        mcpDiagnostics: [
+          {
+            serverName: "fixture",
+            safeServerName: "fixture",
+            launchSummary: "synthetic server",
+            message: "MCP tool listing timed out after 10000ms",
+          },
+        ],
+      });
+      expect(prepared.runtimeContextMessageForCurrentTurn?.content).toContain(
+        "MCP server fixture unavailable: MCP tool listing timed out after 10000ms",
+      );
+      expect(prepared.runtimeContextMessageForCurrentTurn?.content).toContain(
+        "openclaw mcp status --verbose",
+      );
+      expect(JSON.stringify(fixture.input.messages)).toBe(history);
+      expect(prepared.systemPromptForHook).toBe("Base system prompt");
+      const recovered = await prepareContext({ ...fixture.input, sessionVersion });
+      expect(recovered.runtimeContextMessageForCurrentTurn?.content).not.toContain(
+        "MCP server fixture unavailable",
+      );
+    },
+  );
 
   it("preserves fallback context envelopes and canonical input across route switches and replay", async () => {
     const original = "Describe the attached landscape.";
@@ -370,8 +377,9 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     const fixture = createInput();
     fixture.input.capabilityToolNames.add("process");
     const idle = await prepareContext(fixture.input);
-    expect(idle.runtimeContextMessageForCurrentTurn?.content ?? "").not.toContain(
-      "Active exec sessions at turn start (snapshot):",
+    // A first turn carries no earlier snapshot, so the empty form is sent.
+    expect(idle.runtimeContextMessageForCurrentTurn?.content).toContain(
+      "No active exec-tool sessions in this scope at turn start.",
     );
     for (const id of ["exec-z", "exec-a"]) {
       const session = createProcessSessionFixture({ id, backgrounded: true });
@@ -405,7 +413,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(fixture.replaceSessionMessages).not.toHaveBeenCalled();
   });
 
-  it("supersedes retained active facts with explicit empty snapshots", async () => {
+  it("supersedes changed snapshots with empty forms and omits unchanged ones", async () => {
     const fixture = createInput();
     fixture.input.capabilityToolNames = new Set(["process", "sessions_spawn", "image_generate"]);
     const process = createProcessSessionFixture({ id: "exec-a", backgrounded: true });
@@ -435,14 +443,107 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(empty.runtimeContextMessageForCurrentTurn?.content).toContain(
       "persistent automations and other background work are not included.",
     );
-    expect(empty.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "## Active Subagents\nnone",
-    );
+    // The empty subagent snapshot is already in the retained carrier, so it is not sent again.
+    expect(empty.runtimeContextMessageForCurrentTurn?.content).not.toContain("## Active Subagents");
     expect(empty.runtimeContextMessageForCurrentTurn?.content).toContain(
       "- tool=image_generate; none",
     );
     expect(empty.runtimeContextMessageForCurrentTurn?.content).not.toContain("image-1");
   });
+
+  it("does not replay unchanged state snapshots into the next turn's history", async () => {
+    const fixture = createInput();
+    fixture.input.capabilityToolNames = new Set(["process", "sessions_spawn", "session_status"]);
+    const first = await prepareContext({ ...fixture.input, appendOnlyRuntimeContext: true });
+    const firstCarrier = first.runtimeContextMessageForCurrentTurn!;
+    expect(firstCarrier.content).toContain("## Temporal Context");
+    const history = [
+      ...messages,
+      firstCarrier,
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "Done." }], timestamp: 200 }),
+      { role: "user", content: "Previous request 2", timestamp: 300 },
+    ] as AgentMessage[];
+    const second = await prepareContext({
+      ...fixture.input,
+      appendOnlyRuntimeContext: true,
+      messages: history,
+    });
+    // Nothing changed since the snapshot already in history, so this turn adds no snapshot bytes.
+    const secondContent = second.runtimeContextMessageForCurrentTurn?.content ?? "";
+    expect(secondContent).not.toContain("## Temporal Context");
+    expect(secondContent).not.toContain("## Active Subagents");
+    expect(secondContent).not.toContain("Active exec sessions at turn start (snapshot):");
+  });
+
+  it("adds no second snapshot copy when an attempt is retried within one turn", async () => {
+    const fixture = createInput();
+    fixture.input.capabilityToolNames = new Set(["process", "sessions_spawn"]);
+    const first = await prepareContext({ ...fixture.input, appendOnlyRuntimeContext: true });
+    // The failed attempt persisted its user turn and carrier before the retry prepares again.
+    const retry = await prepareContext({
+      ...fixture.input,
+      appendOnlyRuntimeContext: true,
+      messages: [
+        ...messages,
+        { role: "user", content: "Visible request", timestamp: 123 } as AgentMessage,
+        first.runtimeContextMessageForCurrentTurn!,
+      ],
+    });
+    const retryContent = retry.runtimeContextMessageForCurrentTurn?.content ?? "";
+    expect(retryContent).not.toContain("## Active Subagents");
+    expect(retryContent).not.toContain("Active exec sessions at turn start (snapshot):");
+    expect(retryContent).not.toContain("## Temporal Context");
+  });
+
+  it("sends every snapshot, empty forms included, on the first turn after compaction", async () => {
+    const fixture = createInput();
+    fixture.input.capabilityToolNames = new Set(["process", "sessions_spawn"]);
+    const compacted = await prepareContext({
+      ...fixture.input,
+      appendOnlyRuntimeContext: true,
+      // Compaction summarized the earlier carriers away; the summary may describe stale state.
+      messages: [
+        { role: "compactionSummary", summary: "exec-a was running", timestamp: 0, tokensBefore: 0 },
+        ...messages,
+      ] as AgentMessage[],
+    });
+    const content = compacted.runtimeContextMessageForCurrentTurn?.content ?? "";
+    expect(content).toContain("No active exec-tool sessions in this scope at turn start.");
+    expect(content).toContain("## Active Subagents\nnone");
+    expect(content).toContain("## Temporal Context");
+  });
+
+  it.each([
+    { clears: false, resent: false },
+    { clears: true, resent: true },
+  ])(
+    "resends snapshots from turn-scoped updates only when the route clears them: $clears",
+    async ({ clears, resent }) => {
+      const fixture = createInput();
+      fixture.input.capabilityToolNames = new Set(["sessions_spawn"]);
+      const route = {
+        appendOnlyRuntimeContext: true,
+        inHistorySystemUpdates: true,
+        clearsTurnScopedSystemUpdates: clears,
+      };
+      const first = await prepareContext({ ...fixture.input, ...route });
+      const second = await prepareContext({
+        ...fixture.input,
+        ...route,
+        messages: [
+          ...messages,
+          first.runtimeContextMessageForCurrentTurn!,
+          makeAgentAssistantMessage({ content: [{ type: "text", text: "Done." }], timestamp: 200 }),
+          { role: "user", content: "Previous request 2", timestamp: 300 },
+        ] as AgentMessage[],
+      });
+      expect(second.runtimeContextMessageForCurrentTurn?.content ?? "").toEqual(
+        resent
+          ? expect.stringContaining("## Active Subagents")
+          : expect.not.stringContaining("## Active Subagents"),
+      );
+    },
+  );
 
   it("quotes producer data in the new-session model prompt while retaining transcript bytes", async () => {
     const fixture = createInput();
@@ -540,9 +641,6 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       expect(result.promptSubmission.runtimeOnly).toBe(true);
       expect(result.promptForSession).toBe("Continue the OpenClaw runtime event.");
       expect(result.promptForModel).toBe(result.promptForSession);
-      expect(result.runtimeContextMessageForCurrentTurn?.content ?? "").not.toContain(
-        "Active exec sessions at turn start (snapshot):",
-      );
       expect(result.runtimeContextMessageForCurrentTurn?.content).toContain("Runtime room event");
       expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
         "Room conversation data",

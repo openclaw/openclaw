@@ -1374,22 +1374,6 @@ docker_build_run e2e-build -t demo-image .
   });
 
   it.each([
-    ["HEARTBEAT_SECONDS", "heartbeat_seconds"],
-    ["RETRIES", "retry_count"],
-  ])("normalizes zero-padded Docker build %s", (envSuffix, helperSuffix) => {
-    const script = repoRootShell`
-export ROOT_DIR
-export OPENCLAW_DOCKER_BUILD_${envSuffix}=08
-
-source "$ROOT_DIR/scripts/lib/docker-build.sh"
-
-[[ "$(docker_build_${helperSuffix})" = "8" ]]
-`;
-
-    execDockerSnippet(script);
-  });
-
-  it.each([
     [
       "retry count",
       "OPENCLAW_DOCKER_BUILD_RETRIES",

@@ -112,12 +112,9 @@ function checkpoint(target: Target, maintenance: OpenClawStateLeaseContext): voi
   }
 }
 
-export function recoverMisplacedAgentDatabaseCopies(params: {
-  targets: readonly Target[];
-  maintenance: OpenClawStateLeaseContext;
-}): Map<string, Recovery> {
+function readTargetOwnerMetadata(targets: readonly Target[]) {
   const metadata = new Map<string, ReturnType<typeof readExistingAgentSchemaMeta>>();
-  for (const target of params.targets) {
+  for (const target of targets) {
     try {
       // Identity discovery must not replay journals or create/change WAL read marks.
       const database = openNodeSqliteDatabase(
@@ -135,20 +132,45 @@ export function recoverMisplacedAgentDatabaseCopies(params: {
       // Normal migration reports unreadable databases; this repair needs positive identity.
     }
   }
+  return metadata;
+}
+
+/** The owning agent recorded in a database that another agent's locator selects. */
+function misplacedOwnerId(
+  target: Target,
+  identity: ReturnType<typeof readExistingAgentSchemaMeta> | undefined,
+): string | undefined {
+  if (identity?.role !== "agent" || !identity.agentId) {
+    return undefined;
+  }
+  const ownerId = normalizeAgentId(identity.agentId);
+  return ownerId === target.agentId ? undefined : ownerId;
+}
+
+/** Read-only: whether `recoverMisplacedAgentDatabaseCopies` would recover or refuse a target. */
+export function hasMisplacedAgentDatabaseCopies(targets: readonly Target[]): boolean {
+  const metadata = readTargetOwnerMetadata(targets);
+  return targets.some(
+    (target) => misplacedOwnerId(target, metadata.get(target.path)) !== undefined,
+  );
+}
+
+export function recoverMisplacedAgentDatabaseCopies(params: {
+  targets: readonly Target[];
+  maintenance: OpenClawStateLeaseContext;
+}): Map<string, Recovery> {
+  const metadata = readTargetOwnerMetadata(params.targets);
   const results = new Map<string, Recovery>();
   for (const target of params.targets) {
     const identity = metadata.get(target.path);
-    if (
-      identity?.role !== "agent" ||
-      !identity.agentId ||
-      normalizeAgentId(identity.agentId) === target.agentId
-    ) {
+    const ownerId = misplacedOwnerId(target, identity);
+    if (!ownerId) {
       continue;
     }
-    const ownerId = normalizeAgentId(identity.agentId);
     const owners = params.targets.filter(
       (candidate) =>
-        candidate.agentId === ownerId && metadata.get(candidate.path)?.agentId === identity.agentId,
+        candidate.agentId === ownerId &&
+        metadata.get(candidate.path)?.agentId === identity?.agentId,
     );
     try {
       const owner = owners.length === 1 ? owners[0] : undefined;

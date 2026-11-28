@@ -144,6 +144,9 @@ suite.define(() => {
           const document = outer.contentFrame().frameLocator("iframe");
           const summary = document.locator("summary");
           await summary.waitFor();
+          await page
+            .locator("openclaw-chat-detail-panel:visible openclaw-chat-html-preview [role=status]")
+            .waitFor({ state: "hidden" });
           await page.locator(".sidebar-region").evaluate(async (region) => {
             await Promise.all(
               region
@@ -166,7 +169,22 @@ suite.define(() => {
           expect(
             await document.locator("details").evaluate((element) => element.hasAttribute("open")),
           ).toBe(false);
-          await page.mouse.click(bounds!.x + point.x, bounds!.y + point.y);
+          const x = bounds!.x + point.x;
+          const y = bounds!.y + point.y;
+          const pointer = await summary.evaluateHandle((element) => {
+            const receipt = { reached: false };
+            element.addEventListener("pointermove", (event) => {
+              receipt.reached ||= event.isTrusted && event.target === element;
+            });
+            return receipt;
+          });
+          await expect
+            .poll(async () => {
+              await page.mouse.move(x, y);
+              return pointer.evaluate((receipt) => receipt.reached);
+            })
+            .toBe(true);
+          await page.mouse.click(x, y);
           await expect
             .poll(() =>
               document.locator("details").evaluate((element) => element.hasAttribute("open")),

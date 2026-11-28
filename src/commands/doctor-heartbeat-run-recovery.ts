@@ -1,5 +1,6 @@
-import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { listAgentIds, tryResolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { cloneCronJobForMutation } from "../cron/service/jobs-mutation.js";
 import type { DeferredCronNotifications } from "../cron/service/state.js";
 import { receiptFromRow, type CronRunReceiptDatabase } from "../cron/store/run-receipt-read.js";
@@ -61,6 +62,29 @@ export function recoverDoctorHeartbeatRun(params: {
       .where("job_id", "=", job.id)
       .where("status", "=", "running"),
   ).rows[0];
+  const receipt = receiptRow ? receiptFromRow(receiptRow) : undefined;
+  if (
+    receipt &&
+    (receipt.startedAtMs !== job.state.runningAtMs ||
+      (job.state.runningReceiptId !== undefined &&
+        receipt.receiptId !== job.state.runningReceiptId))
+  ) {
+    throw new DoctorHeartbeatMigrationDeferredError(
+      `Heartbeat migration deferred: automation ${job.id} has a receipt that does not match its running marker. Its job and run were retained.`,
+    );
+  }
+  // The receipt identifies the run owner even if the job has since changed.
+  // A configured system agent alone is not evidence that a legacy run belonged to it.
+  const agentId =
+    receipt?.agentId ??
+    tryResolveCronJobEffectiveAgentId(job) ??
+    (cfg.agents?.ownership === "explicit" ? undefined : tryResolveDefaultAgentId(cfg));
+  if (!agentId || !listAgentIds(cfg).includes(agentId)) {
+    const detail = agentId ? `run owner "${agentId}" is not configured` : "run owner is missing";
+    throw new DoctorHeartbeatMigrationDeferredError(
+      `Heartbeat migration deferred: automation ${job.id} ${detail}. Its job and run were retained.`,
+    );
+  }
   const notifications: DeferredCronNotifications = [];
   const logs: CronRunRecoveryOutcome["logs"] = [];
   const startupRequired = new Error("Cron recovery requires Gateway notification dispatch");
@@ -72,13 +96,13 @@ export function recoverDoctorHeartbeatRun(params: {
           database,
           storeKey,
           job: recovered,
-          receipt: receiptRow ? receiptFromRow(receiptRow) : undefined,
+          receipt,
           receiptSchema: prepareCronRunReceiptWriteSchema(database.db),
           state: {
             deps: {
               nowMs: () => nowMs,
               cronConfig: cfg.cron,
-              defaultAgentId: resolveDefaultAgentId(cfg),
+              defaultAgentId: agentId,
               log: createCronMutationLogger(logs),
             },
           },

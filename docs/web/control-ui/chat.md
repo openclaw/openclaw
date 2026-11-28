@@ -495,8 +495,8 @@ Saving keeps your existing draft and does not send a message.
 
 **Ask in side chat** asks about the passage in Side chat. **New session**
 opens the new-session launcher with the passage attached as a
-comment; starting the session sends it as a quote ahead of your prompt. The
-launcher's comment preview can delete the passage but not edit it, and your
+comment; starting the session sends it as a quote ahead of your prompt,
+followed by a link to the session it came from. The launcher's comment preview can delete the passage but not edit it, and your
 current chat draft is left unchanged.
 
 Saving leaves a small, filled comment marker beside the selected passage. Click
@@ -1043,7 +1043,7 @@ When a reply fails and its thread notice is unavailable, the card above the comp
     - Long tool output uses 2,000-character text previews in history. Complete structured results keep their existing display limit so source cards and embedded views remain available. Choose **Show full output** to load the captured result on demand; copying or downloading from that view uses the full result. User and assistant text keep their separate display limits.
     - When a visible assistant message was truncated in `chat.history`, the Control UI automatically fetches the full display-normalized transcript entry through `chat.message.get` by `sessionKey`, active `agentId` when needed, and transcript `messageId`. The preview remains visible while the entry loads; recovered text replaces it inline.
     - Image previews reserve their space while loading. New uploaded images retain their pixel dimensions in saved messages. Previews without dimensions use a temporary 3:2 placeholder, then adopt the decoded image’s aspect ratio without letterboxing; uploaded dimensions also update an already-visible preview. Single images retain that ratio when returning from Settings or reloading the conversation. Open an image to view its full size.
-    - Assistant/generated images are persisted as managed media references. New clients resolve their stable artifact ids through authenticated `artifacts.download` and receive short-lived, exact-resource media URLs, so reloads do not depend on raw base64 payloads or reusable credentials in image URLs. The chat uses bounded thumbnails for still images. GIF attachments load their original bytes inline so they animate without opening the image viewer. Opening uses a screen-sized rendition; Download and Copy explicitly request the full image. These actions share the browser's bounded in-memory image cache, avoiding repeated downloads while a rendition remains cached.
+    - Assistant/generated images are persisted as managed media references. New clients resolve their stable artifact ids through authenticated `artifacts.download` and receive short-lived, exact-resource media URLs, so reloads do not depend on raw base64 payloads or reusable credentials in image URLs. The chat uses bounded thumbnails for still images. When an opaque photo exceeds the preview byte limit, the Gateway tries stronger compression before reducing its dimensions. GIF attachments load their original bytes inline so they animate without opening the image viewer. Opening uses a screen-sized rendition; Download and Copy explicitly request the full image. These actions share the browser's bounded in-memory image cache, avoiding repeated downloads while a rendition remains cached.
     - The Gateway prepares `chat.history` for display, stripping inline directive tags (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, and truncated blocks), and leaked ASCII/full-width model control tokens. Stored assistant visibility honors display, phase, and final-source facts first, then omits raw assistant text that trims to uppercase `NO_REPLY`; lowercase and wrapped forms remain visible. User text is never classified as silence. Heartbeat acknowledgments retain their separate display rules. The Control UI renders prepared history and live output without parsing silence tokens.
     - When a native tool call follows an unphased text group containing only an unfinished tool marker (such as `<` or `<tool_`), live chat and history hide that group. A marker fragment without a following native call remains a terminal literal. Prose and inline or fenced examples keep their existing rendering. Stored message text and tool arguments do not change.
     - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the saved transcript replaces those local messages once the Gateway history catches up. Pending sends in shared sessions remain a single bubble while incremental history catches up, even when another participant's reply arrives first. Saved commentary also replaces its matching live item when incremental history arrives after completion, cancellation, or failure, keeping the progress text in its original place.
@@ -1641,8 +1641,10 @@ other runs are not included. Source cards require run identity in the transcript
 and follow tool-activity visibility. They are hidden while a run is active or
 transcript search is filtering messages.
 
-In completed dashboard turns answered by OpenAI models, commentary, reasoning-only
-messages, and tool activity can share one **Worked for…** disclosure above the answers.
+In completed dashboard turns answered by OpenAI models, commentary the model labels as
+such, reasoning-only messages, and tool activity can share one **Worked for…** disclosure
+above the answers. Assistant text without a commentary label, such as text before a
+tool call on Chat Completions transports, stays visible below the disclosure.
 For other models, mixed-model work, or history that does not identify the model,
 there is no turn-wide disclosure: text and tools stay inline. Switching the selected
 model does not change earlier turns. Tool names and tool grouping are unchanged.

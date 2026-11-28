@@ -14,6 +14,7 @@ import {
   type ActiveEmbeddedRunOwner,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { abortControlledSubagents } from "../../agents/subagents/cancel-descendants.js";
+import { captureDormantSubagentStop } from "../../agents/subagents/dormant-stop.js";
 import { isConfiguredSessionStoreAgentId } from "../../config/sessions.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { resolveExistingAgentSessionStoreTargetsAsync } from "../../config/sessions/targets-runtime.js";
@@ -472,26 +473,33 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         throw abortedPartialPersistenceError(error, abortWarning);
       }
     };
-    const dormantAbort = abortDormantSubagentSession({
-      context,
+    const dormant = captureDormantSubagentStop({
       sessionKey: canonicalKey,
-      sessionKeyAliases: [key, ...(requestedKeyAliases ?? [])],
       agentId: targetAgentId,
-      sessionId: persistedSessionId,
-      requiredSessionId,
-      session: loadedSession ? { ok: true, value: loadedSession } : undefined,
-      defaultAgentId: stableTargetOwner,
       runId: requestedRunId,
-      abortOrigin: "rpc",
-      stopReason: "rpc",
-      userInitiated: p.userInitiated,
-      requester,
-      stopSource: requestedRunId ? "client-run" : "client-session",
-      hookContext: stopHookContext,
-      assertCurrent: assertAbortCurrent,
     });
-    if (dormantAbort) {
-      const result = await dormantAbort;
+    if (dormant) {
+      const result = await abortDormantSubagentSession(
+        {
+          context,
+          sessionKey: canonicalKey,
+          sessionKeyAliases: [key, ...(requestedKeyAliases ?? [])],
+          agentId: targetAgentId,
+          sessionId: persistedSessionId,
+          requiredSessionId,
+          session: loadedSession ? { ok: true, value: loadedSession } : undefined,
+          defaultAgentId: stableTargetOwner,
+          runId: requestedRunId,
+          abortOrigin: "rpc",
+          stopReason: "rpc",
+          userInitiated: p.userInitiated,
+          requester,
+          stopSource: requestedRunId ? "client-run" : "client-session",
+          hookContext: stopHookContext,
+          assertCurrent: assertAbortCurrent,
+        },
+        dormant,
+      );
       if (result.ok) {
         abortWarning = result.value.warning;
       }
