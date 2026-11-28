@@ -373,8 +373,8 @@ that the CLI runner rejected.
 
 The bundled Anthropic plugin communicates directly with the installed Claude Code
 executable over its structured stdio protocol. Claude Code owns its existing local login and
-subscription. OpenClaw uses a non-secret route marker. It never reads, persists,
-refreshes, or forwards native tokens, or sends synthesized Anthropic API
+subscription. OpenClaw uses a non-secret route marker. Agent turns never read, persist,
+refresh, or forward native tokens, or send synthesized Anthropic API
 requests. Compatible agent turns share one warm Claude Code subprocess.
 Agent turns send OpenClaw's system prompt as Claude Code's replacement system
 prompt, so they run under OpenClaw's prompt and workspace identity instead of
@@ -598,7 +598,7 @@ A fresh CLI session receives the saved history unless the session already record
 
 The account is checked once, when the turn is prepared. A token the CLI rotates during the turn applies to the next turn. A plan or token change for the same account does not change the account. Moving the same account between the native login and a forwarded credential changes it. When saved history is withheld, the transcript stays intact and Claude can still read it through `sessions_history` when tool policy allows.
 
-With the `attestNativeLogin` opt-in on, the native login's account is the one Anthropic attests for its credential, not the account record in `.claude.json`. When a turn is prepared, OpenClaw reads the access token the Claude process would use (Keychain first, then `.credentials.json`) from the environment that process receives, including backend, prepared and skill env overrides such as `CLAUDE_CONFIG_DIR`. It sends the token, with a 3 second timeout, only to `https://api.anthropic.com/api/oauth/profile`, the endpoint Claude CLI itself uses. Any failure leaves the login unidentified. OpenClaw never refreshes, writes, logs, or stores the token; it keeps only, in process memory, which account it attested for a keyed hash of each token. While the opt-in is off, OpenClaw never reads or sends the native token.
+With the `attestNativeLogin` opt-in on, the native login's account is the one Anthropic attests for its credential, not the account record in `.claude.json`. When a turn is prepared, OpenClaw reads the access token the Claude process would use (Keychain first, then `.credentials.json`) from the environment that process receives, including backend, prepared and skill env overrides such as `CLAUDE_CONFIG_DIR`. It sends the token, with a 3 second timeout, only to `https://api.anthropic.com/api/oauth/profile`, the endpoint Claude CLI itself uses. Any failure leaves the login unidentified. OpenClaw never refreshes, writes, logs, or stores the token; it keeps only, in process memory, which account it attested for a keyed hash of each token. While the opt-in is off, history recovery never reads or sends the native token. Provider usage polling reads the access token separately; see [Usage tracking](/concepts/usage-tracking).
 
 Older releases recorded transcript coverage instead of an account. Their `known` records keep their account fingerprint. Their `unknown` records can hide an account switch, so those chats keep refusing saved history until `/new`. No SQLite schema migration or transcript deletion occurs.
 

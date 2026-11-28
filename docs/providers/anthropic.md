@@ -69,7 +69,7 @@ for the new tokenizer and account-bound thinking requirements.
 OpenClaw detects the available Anthropic credential and selects the matching usage surface:
 
 - OpenClaw-managed subscription/setup credentials show quota windows and optional extra-usage budget.
-- Native Claude CLI logins stay under Claude's exclusive refresh control, so OpenClaw does not poll their quota endpoint.
+- Native Claude CLI logins show the same quota windows when no OpenClaw-managed credential reports them. OpenClaw runs `claude auth status --json` so Claude refreshes an expiring login under its own lock, then reads only the current access token from Claude's `.credentials.json`. It never reads, copies, or refreshes Claude's refresh token. Keychain-only logins (macOS) are not read, so usage polling never prompts.
 - `ANTHROPIC_ADMIN_KEY` or `ANTHROPIC_ADMIN_API_KEY` shows 30 days of provider-reported organization cost and Messages API usage in Control UI **Usage**, including daily spend, token/cache totals, top models, and cost categories.
 - An `sk-ant-admin...` credential stored in the Anthropic provider profile is detected as an Admin API key automatically.
 

@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type {
   ProviderFetchUsageSnapshotContext,
   ProviderResolveUsageAuthContext,
@@ -25,6 +27,7 @@ import {
   fetchClaudeWebUsage,
   resolveClaudeWebSessionKey,
 } from "./claude-usage.js";
+import { probeClaudeCliAuthStatus } from "./cli-auth-seam.js";
 import { CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
 
 const ANTHROPIC_COST_URL = "https://api.anthropic.com/v1/organizations/cost_report";
@@ -251,7 +254,7 @@ export async function resolveAnthropicUsageAuth(
           ...oauthToken,
           token: encodeProviderUsageAdminToken(CLAUDE_WEB_SESSION_TOKEN_PREFIX, sessionKey),
         }
-      : { handled: true };
+      : await resolveClaudeNativeLoginUsageAuth(ctx);
   }
   if (oauthToken) {
     return oauthToken;
@@ -267,9 +270,57 @@ export async function resolveAnthropicUsageAuth(
     }
   }
 
-  // Claude owns its native refresh-token family. Do not resolve a copied
-  // claude-cli profile here: generic OAuth refresh invalidates Claude's login.
-  return { handled: true };
+  // Never resolve a copied claude-cli profile here: generic OAuth refresh
+  // invalidates Claude's login. Read Claude's own login instead.
+  return await resolveClaudeNativeLoginUsageAuth(ctx);
+}
+
+/**
+ * Usage auth from the native Claude CLI login. Claude owns the refresh-token family, so
+ * OpenClaw only reads the current access token. `claude auth status` runs first: it
+ * confirms the claude.ai login is what Claude uses here and refreshes an expiring token
+ * under Claude's own lock. Keychain-only logins (macOS) stay unread, so nothing prompts.
+ */
+async function resolveClaudeNativeLoginUsageAuth(
+  ctx: ProviderResolveUsageAuthContext,
+): Promise<ProviderResolvedUsageAuth> {
+  const status = await probeClaudeCliAuthStatus({ env: ctx.env, signal: ctx.signal });
+  if (
+    status.status !== "available" ||
+    status.authMethod !== "claude.ai" ||
+    !status.configDirectory ||
+    // Claude reads credentials from this root instead of its config directory.
+    ctx.env.CLAUDE_SECURESTORAGE_CONFIG_DIR !== undefined
+  ) {
+    return { handled: true };
+  }
+  const raw = await fs
+    .readFile(path.join(status.configDirectory, ".credentials.json"), "utf8")
+    .catch(() => undefined);
+  let login: Record<string, unknown> | undefined;
+  try {
+    login = asProviderUsageObject(
+      asProviderUsageObject(raw ? JSON.parse(raw) : undefined)?.claudeAiOauth,
+    );
+  } catch {
+    login = undefined;
+  }
+  const token = typeof login?.accessToken === "string" ? login.accessToken.trim() : "";
+  const expiresAt = typeof login?.expiresAt === "number" ? login.expiresAt : 0;
+  // The usage endpoint rejects tokens without the user:profile scope.
+  const scoped = !Array.isArray(login?.scopes) || login.scopes.includes("user:profile");
+  if (!token || expiresAt <= Date.now() || !scoped) {
+    return { handled: true };
+  }
+  const subscriptionType =
+    typeof login?.subscriptionType === "string" ? login.subscriptionType : status.subscriptionType;
+  const rateLimitTier = typeof login?.rateLimitTier === "string" ? login.rateLimitTier : undefined;
+  return {
+    token,
+    ...(subscriptionType ? { subscriptionType } : {}),
+    ...(rateLimitTier ? { rateLimitTier } : {}),
+    ...(status.email ? { email: status.email } : {}),
+  };
 }
 
 async function isStoredSetupToken(
