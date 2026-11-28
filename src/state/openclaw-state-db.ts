@@ -187,7 +187,19 @@ export async function prepareOpenClawStateDatabaseSchema(
   });
   let repairStarted = false;
   try {
-    let needsRepair = mode === "doctor";
+    // Doctor repairs unless its read-only plan proves every condition the repair acts on
+    // has nothing to do; an undecidable plan repairs, as before (#155446).
+    // Only Doctor loads its plan; ordinary preparation keeps this module's import closure.
+    let needsRepair =
+      mode === "doctor" &&
+      (
+        await (
+          await import("./openclaw-state-db-doctor-repair-plan.js")
+        ).planOpenClawStateDatabaseDoctorRepair({ env, integrityCheck: options.integrityCheck })
+      ).decision !== "none";
+    if (mode === "doctor" && !needsRepair) {
+      return { changes: [], warnings: [] };
+    }
     if (mode === "doctor-preparation") {
       try {
         stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);

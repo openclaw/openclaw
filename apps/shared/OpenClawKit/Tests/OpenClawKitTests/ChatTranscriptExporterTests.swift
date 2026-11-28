@@ -61,11 +61,34 @@ struct ChatTranscriptExporterTests {
         #expect(!markdown.contains("private context"))
         #expect(markdown.contains("System · restart recovery"))
         #expect(markdown.contains("[System · gateway restarted] Gateway restarted after an update."))
+        #if os(iOS)
+        #expect(!markdown.contains("Context first line."))
+        #else
         #expect(markdown.contains("[System · injected context] Context first line.\nContext last line."))
+        #endif
         #expect(markdown.contains("[System · background task] Task first line.\nTask last line."))
         #expect(markdown.contains("[Compacted history · saved 12.5k tokens]"))
         #expect(markdown.contains("[Session reset — The earlier conversation was cleared.]"))
         #expect(!markdown.contains("Unknown marker body"))
+    }
+
+    @Test(arguments: ["\r\n", "\n"]) func `omits protected runtime context from exported text`(lineEnding: String) {
+        let text = [
+            "Before the runtime context.",
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "Synthetic internal text.",
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "After the runtime context.",
+        ].joined(separator: lineEnding)
+        let markdown = ChatTranscriptExporter.markdown(
+            sessionTitle: "Transcript",
+            sessionKey: "main",
+            messages: [self.message(role: "user", text: text, timestamp: 0)])
+
+        #expect(markdown.contains("Before the runtime context."))
+        #expect(markdown.contains("After the runtime context."))
+        #expect(!markdown.contains("Synthetic internal text."))
+        #expect(!markdown.contains("OPENCLAW_INTERNAL_CONTEXT"))
     }
 
     @Test func `formats visible messages and attachments`() {

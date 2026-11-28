@@ -263,7 +263,7 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
             text: "Next question",
             assertCurrent() {},
             assertWritable() {},
-            dispatched: false,
+            externalDispatch: false,
             onCommitted: committed,
           });
           expect(committed).toHaveBeenCalledWith(
@@ -561,7 +561,7 @@ it("slides durable context within its bounds and reloads only when an admission 
             text: "Second input",
             assertCurrent() {},
             assertWritable() {},
-            dispatched: false,
+            externalDispatch: false,
             onCommitted() {},
           });
           historyReads.mockClear();

@@ -255,6 +255,9 @@ struct OpenClawSidebarControlButton: View {
         .openClawToolbarHitTarget()
         .contentShape(Rectangle())
         .accessibilityLabel(self.action.accessibilityLabel.text)
+        .accessibilityValue(self.action.hasApprovalAttention
+            ? String(localized: "Needs approval")
+            : "")
     }
 
     private var icon: some View {

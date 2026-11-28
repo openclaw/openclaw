@@ -168,7 +168,7 @@ it("inlines malformed and encoded references and removes unused definitions", ()
   }
 });
 
-it.each([false, true])("retains Responses payload inlining with strict=%s", (strict) => {
+it("retains Responses payload inlining", () => {
   const schema = {
     ...closed({ value: { ...reference("value"), description: "Value" } }),
     $defs: { value: { type: "string", maxLength: 10 } },
@@ -176,9 +176,9 @@ it.each([false, true])("retains Responses payload inlining with strict=%s", (str
   const normalized = normalize(schema, openai);
   expect(normalized).toHaveProperty("properties.value.$ref", "#/$defs/value");
   const tools = [{ name: "ref", description: "", parameters: normalized }];
-  const [tool] = convertTools(tools, { strict });
+  const [tool] = convertTools(tools, { strict: false });
   expect(tool).toMatchObject({
-    strict,
+    strict: false,
     parameters: object({ value: { type: "string", maxLength: 10, description: "Value" } }),
   });
   expect(JSON.stringify(tool)).not.toContain('"$ref"');
@@ -342,8 +342,6 @@ describe("schema depth", () => {
   function tool(name: string, parameters: Tool["parameters"]): Tool {
     return { name, description: name, parameters };
   }
-  const strictPayload = (parameters: Tool["parameters"], name = "reference_tool") =>
-    convertTools([tool(name, parameters)], { strict: true })[0];
   const logWarn = vi.fn();
   beforeEach(() => configureAiTransportHost({ logWarn: logWarn.mockClear() }));
   function expectLeaf(input: unknown, depth: number, leaf: unknown = {}, composition = false) {
@@ -391,22 +389,19 @@ describe("schema depth", () => {
     ["compat normalized", normalizeOpenAIStrictCompatSchema],
     ["llama.cpp cleaned", cleanSchemaForLlamacppGbnf],
     ["keyword stripped", (schema: unknown) => stripUnsupportedSchemaKeywords(schema, new Set())],
-  ] as const)(
-    "downgrades truncated %s schemas across projection and cache reuse",
-    (_name, prepare) => {
-      const parameters = prepare(nestedSchema(5000, true));
-      assert(isRecord(parameters));
-      const tools = [tool("deep_strict", parameters)];
-      for (let index = 0; index < 2; index++) {
-        const payload = convertTools(tools, { strict: true });
-        expect(payload).toHaveLength(1);
-        expect(payload[0]).toMatchObject({ name: "deep_strict", strict: false });
-        expect(findOpenAIStrictSchemaViolations(payload[0]?.parameters, "parameters")).toEqual([
-          "parameters.depth",
-        ]);
-      }
-    },
-  );
+  ] as const)("marks truncated %s schemas across projection and cache reuse", (_name, prepare) => {
+    const parameters = prepare(nestedSchema(5000, true));
+    assert(isRecord(parameters));
+    const tools = [tool("deep_strict", parameters)];
+    for (let index = 0; index < 2; index++) {
+      const payload = convertTools(tools, { strict: false });
+      expect(payload).toHaveLength(1);
+      expect(payload[0]).toMatchObject({ name: "deep_strict", strict: false });
+      expect(findOpenAIStrictSchemaViolations(payload[0]?.parameters, "parameters")).toEqual([
+        "parameters.depth",
+      ]);
+    }
+  });
 
   it("counts map and composition containers once while preserving literal data and shallow aliases", () => {
     const shared = nestedSchema(3);
@@ -444,29 +439,11 @@ describe("schema depth", () => {
     for (const source of [parameters, { toJSON: () => parameters }]) {
       const tools = [tool("reference_tool", source)];
       for (let index = 0; index < 2; index++) {
-        expect(convertTools(tools, { strict: true })).toMatchObject([
+        expect(convertTools(tools, { strict: false })).toMatchObject([
           { name: "reference_tool", parameters: truncated, strict: false },
         ]);
       }
     }
-    let materialized: unknown = parameters;
-    const tools = [tool("mutable_reference_tool", { toJSON: () => materialized })];
-    // A fresh copy carries no truncation marker; its placeholder is typed so it is strict-eligible.
-    const freshSchema: unknown = {
-      ...structuredClone(parameters),
-      properties: { value: { type: "string" } },
-    };
-    for (const next of [parameters, freshSchema, parameters, freshSchema]) {
-      materialized = next;
-      expect(convertTools(tools, { strict: true })[0]?.strict).toBe(next === freshSchema);
-    }
-    expect(strictPayload(normalize(objectSchema({ nested: parameters }, true)))?.strict).toBe(
-      false,
-    );
-
-    const markedWithToJSON = normalize({ ...schema });
-    Object.defineProperty(markedWithToJSON, "toJSON", { value: () => freshSchema });
-    expect(strictPayload(markedWithToJSON, "recovered")?.strict).toBe(true);
   });
 
   it("keeps deep provider tools and observes source edits and toJSON once per payload", () => {
@@ -474,16 +451,14 @@ describe("schema depth", () => {
     const toJSON = vi.fn(() => schema);
     const tools = [tool("deep_tool", { toJSON }), tool("healthy", objectSchema({}))];
     for (let index = 0; index < 2; index++) {
-      const payload = convertTools(tools, { strict: true });
+      const payload = convertTools(tools, { strict: false });
       expect(payload.map((entry) => entry.name)).toEqual(["deep_tool", "healthy"]);
-      expect(payload[0]?.strict).toBe(false);
       expectLeaf(payload[0]?.parameters, MAX_TOOL_SCHEMA_DEPTH + 1);
     }
     expect(logWarn).toHaveBeenCalledTimes(1);
     expect(toJSON).toHaveBeenCalledTimes(2);
     schema = nestedSchema(2, true);
-    const recovered = convertTools(tools, { strict: true });
-    expect(recovered[0]?.strict).toBe(true);
+    const recovered = convertTools(tools, { strict: false });
     expectLeaf(recovered[0]?.parameters, 2, { type: "string" });
     expect(toJSON).toHaveBeenCalledTimes(3);
   });

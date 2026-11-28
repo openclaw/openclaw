@@ -133,6 +133,20 @@ function replayPreparedRequest(
   }
   // Matched items share ID order, so the suffix spells the parent's IDs as the parent did.
   const spelling = new Map(parent.ids.map((id, index) => [own.ids[index], id]));
+  sendPreparedItems(
+    payload,
+    { prepared, key, sentItems },
+    suffix.map((item) => serializeItem(item, (value) => spelling.get(value) ?? value)),
+  );
+}
+
+/** Sends the prepared request's fields and items unchanged, then the serialized suffix. */
+function sendPreparedItems(
+  payload: Record<string, unknown>,
+  sent: { prepared: Record<string, unknown>; key: string; sentItems: unknown[] },
+  suffix: string[],
+): void {
+  const { prepared, key, sentItems } = sent;
   const replay = replayData({ ...prepared, [key]: [] }, payload);
   for (const name of Object.keys(payload)) {
     delete payload[name];
@@ -140,9 +154,7 @@ function replayPreparedRequest(
   Object.assign(payload, replay, {
     [key]: [
       ...sentItems.map((item) => replayData(item, undefined)),
-      ...suffix.map((item) =>
-        JSON.parse(serializeItem(item, (value) => spelling.get(value) ?? value)),
-      ),
+      ...suffix.map((item) => JSON.parse(item)),
     ],
   });
 }
@@ -268,6 +280,50 @@ export function applySessionForkRequest(
     payload.tool_choice = shape === "object" ? { type: "none" } : "none";
   } else {
     delete payload.tool_choice;
+  }
+}
+
+/**
+ * Makes the NO_REPLY recovery request the settled turn's last request plus the recovery's own
+ * items after that request's last item, so it reads the turn's cached prefix and its reply is
+ * generated under the turn's system prompt, tools and history. The recovery renders earlier
+ * history without the turn's envelopes, so the last sent item (after a tool loop, a tool result
+ * with its call id) anchors the suffix; without an anchor the recovery's own request is sent.
+ * Callers reach this only where `tool_choice` is outside the cache key, so tool_choice none
+ * stops every tool call, provider-hosted ones included.
+ */
+export function applySettledTurnRequest(
+  payload: Record<string, unknown>,
+  prepared: Record<string, unknown>,
+  api: Model["api"],
+): void {
+  const key = ["input", "messages"].find((name) => Array.isArray(payload[name]));
+  const ownItems = key ? payload[key] : undefined;
+  const sentItems = key ? prepared[key] : undefined;
+  const shape = TOOL_CHOICE_NONE.get(api);
+  if (
+    !shape ||
+    !key ||
+    !Array.isArray(ownItems) ||
+    !Array.isArray(sentItems) ||
+    sentItems.length === 0 ||
+    prepared.previous_response_id != null
+  ) {
+    return;
+  }
+  const keep = (value: string) => value;
+  const last = serializeItem(sentItems.at(-1), keep, true);
+  const anchor = ownItems.findLastIndex((item) => serializeItem(item, keep, true) === last);
+  if (anchor < 0) {
+    return;
+  }
+  sendPreparedItems(
+    payload,
+    { prepared, key, sentItems },
+    ownItems.slice(anchor + 1).map((item) => serializeItem(item, keep)),
+  );
+  if (Array.isArray(payload.tools) && payload.tools.length > 0) {
+    payload.tool_choice = shape === "object" ? { type: "none" } : "none";
   }
 }
 
