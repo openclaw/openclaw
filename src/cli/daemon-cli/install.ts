@@ -45,6 +45,7 @@ import {
   resolveManagedGatewayServiceCommand,
 } from "../../daemon/service-types.js";
 import {
+  allowsUnchangedGatewayServiceDefinitionReceipt,
   assertGatewayServiceUpdateCurrent,
   isUpdateOwnedGatewayServiceCommand,
 } from "../../daemon/service-update-authority.js";
@@ -671,6 +672,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
               env: installEnv,
               root: (await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url })) ?? undefined,
               command: existingServiceCommand,
+              allowUnchangedReceipt: allowsUnchangedGatewayServiceDefinitionReceipt(),
               expectedCommand: {
                 programArguments,
                 workingDirectory,

@@ -37,6 +37,7 @@ type ServiceAuthority = {
   compensate: <T>(operation: () => Promise<T>) => Promise<T>;
   updateOwned: boolean;
   originalRoot?: string;
+  allowUnchangedDefinitionReceipt?: boolean;
   nativeCommand?: GatewayServiceNativeCommand;
   nativeDispatch?: NativeDispatch;
 };
@@ -66,6 +67,7 @@ export async function withGatewayServiceUpdateAuthority<T>(
     updateOwned?: boolean;
     assertRecoveryCurrent?: () => void;
     originalRoot?: string;
+    allowUnchangedDefinitionReceipt?: boolean;
     nativeCommand?: GatewayServiceNativeCommand;
   },
 ): Promise<T> {
@@ -111,6 +113,8 @@ export async function withGatewayServiceUpdateAuthority<T>(
     assertCurrent,
     updateOwned: parent?.updateOwned || (options?.updateOwned ?? true),
     originalRoot,
+    allowUnchangedDefinitionReceipt:
+      parent?.allowUnchangedDefinitionReceipt ?? options?.allowUnchangedDefinitionReceipt,
     compensate: (restore) =>
       owners.run(parent, () =>
         withGatewayServiceUpdateAuthority(() => assertScope(true), restore, {
@@ -247,6 +251,13 @@ export function assertGatewayServiceUpdateCurrent(): boolean {
 
 export function isUpdateOwnedGatewayServiceCommand(): boolean {
   return owners.getStore()?.updateOwned === true;
+}
+
+/** A live updater may opt into verifying an unchanged definition without backups. */
+export function allowsUnchangedGatewayServiceDefinitionReceipt(): boolean {
+  const owner = owners.getStore();
+  owner?.assertCurrent();
+  return owner?.updateOwned === true && owner.allowUnchangedDefinitionReceipt === true;
 }
 
 /** Original-root evidence is usable only while its inherited owner remains live. */

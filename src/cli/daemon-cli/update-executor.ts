@@ -107,6 +107,8 @@ export async function runGatewayServiceUpdateCommand(
         },
         {
           originalRoot: grant.retainedParent?.key ?? grant.originalParent?.key ?? grant.parent.key,
+          allowUnchangedDefinitionReceipt:
+            action === "install" && input.allowUnchangedDefinitionReceipt === true,
         },
       ),
     );

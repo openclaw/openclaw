@@ -32,6 +32,7 @@ export async function reconcileGatewayServiceDefinition(params: {
   root: string | undefined;
   command: GatewayServiceCommandConfig | null;
   expectedCommand: GatewayServiceExpectedCommand;
+  allowUnchangedReceipt?: boolean;
   install: (hooks: GatewayServiceDefinitionTransactionHooks) => Promise<void>;
   warn: (message: string) => void;
 }): Promise<GatewayServiceDefinitionBackupReceipt> {
@@ -70,6 +71,7 @@ export async function reconcileGatewayServiceDefinition(params: {
       env: params.env,
       command,
       assertCurrent,
+      allowUnchangedReceipt: params.allowUnchangedReceipt,
       inspect: async () => {
         const current = await resolveGatewayService().readCommand(params.env, {
           requireEffective: true,
@@ -180,14 +182,24 @@ export async function reconcileGatewayServiceDefinition(params: {
     return await settleGatewayServiceRebind(assertCurrent, async () => {
       let recoveryResult: boolean | undefined;
       let recoveryError: unknown;
+      const backupDetails = () =>
+        transaction.backupPaths.length
+          ? ` Service definition backups retained at ${transaction.backupPaths.join(", ")}.`
+          : "";
       try {
         return await withGatewayServiceInstallationRecovery(
           async () => {
-            await params.install({ ...transaction.hooks, preservePolicy });
+            await params.install({
+              ...transaction.hooks,
+              preservePolicy,
+              preserveUnchangedFiles: process.platform === "darwin",
+            });
             assertCurrent();
             const receipt = await transaction.finish();
             warn(
-              `${keys.length ? `Reconciled Gateway service definition: ${keys.join(", ")}.` : "Refreshed Gateway service definition."} Backup: ${transaction.backupPaths.join(", ")}`,
+              receipt.unchanged
+                ? "Reactivated Gateway with the existing LaunchAgent definition."
+                : `${keys.length ? `Reconciled Gateway service definition: ${keys.join(", ")}.` : "Refreshed Gateway service definition."}${backupDetails()}`,
             );
             return receipt;
           },
@@ -203,22 +215,20 @@ export async function reconcileGatewayServiceDefinition(params: {
         );
       } catch (error) {
         if (hasCommandProcessCleanupError(error)) {
-          warn(
-            `Service definition refresh did not settle; backups retained: ${transaction.backupPaths.join(", ")}`,
-          );
+          warn(`Service definition refresh did not settle.${backupDetails()}`);
           throw error;
         }
         if (error instanceof GatewayServiceAuthorityError) {
           warn(
             error.outcome === "unchanged" || error.outcome === "restored"
               ? `Service definition refresh stopped; the previous definition was ${error.outcome === "restored" ? "restored" : "left unchanged"}: ${String(error)}. ${inspectHint}`
-              : `Service definition recovery could not be verified: ${String(error)}; backups retained: ${transaction.backupPaths.join(", ")}. ${inspectHint}`,
+              : `Service definition recovery could not be verified: ${String(error)}.${backupDetails()} ${inspectHint}`,
           );
           throw error;
         }
         if (recoveryResult === undefined) {
           warn(
-            `Service definition refresh failed: ${String(error)}. Recovery could not be verified: ${String(recoveryError)}; backups retained: ${transaction.backupPaths.join(", ")}`,
+            `Service definition refresh failed: ${String(error)}. Recovery could not be verified: ${String(recoveryError)}.${backupDetails()}`,
           );
           throw new GatewayServiceAuthorityError(
             new Error(
