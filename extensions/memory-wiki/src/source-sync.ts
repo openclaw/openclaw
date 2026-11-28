@@ -25,7 +25,7 @@ type SyncMemoryWikiImportedSourcesParams = {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   signal?: AbortSignal;
-  /** Set when the caller compiles next (compile, lint), so the import does not compile too. */
+  /** Set when the caller compiles next (compile, lint, apply), so the import does not compile too. */
   deferIndexRefresh?: boolean;
 };
 
@@ -59,6 +59,14 @@ async function syncMemoryWikiImportedSourcesOnce(
   }
   params.signal?.throwIfAborted();
   if (params.deferIndexRefresh) {
+    if (
+      syncResult.importedCount > 0 ||
+      syncResult.updatedCount > 0 ||
+      syncResult.removedCount > 0
+    ) {
+      // Keep a later read fresh if the caller fails before its promised compile.
+      setMemoryWikiDashboardState(params.config, { state: "compile-required" });
+    }
     return {
       ...syncResult,
       indexesRefreshed: false,
