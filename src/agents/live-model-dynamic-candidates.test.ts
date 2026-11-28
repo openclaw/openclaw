@@ -44,7 +44,7 @@ const config: OpenClawConfig = configFor(DYNAMIC_PROVIDER, "https://configured.e
 });
 const agentDir = "/tmp/openclaw-agent";
 const ref = { provider: DYNAMIC_PROVIDER, id: "glm-5" };
-function candidates(overrides: Partial<CandidateOptions> = {}) {
+function candidates(overrides: Partial<CandidateOptions>) {
   return appendLiveModelCandidates({
     models: [],
     agentDir,

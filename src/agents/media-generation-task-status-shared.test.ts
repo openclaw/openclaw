@@ -22,7 +22,7 @@ const videoTaskStatusOwner = createMediaGenerationTaskStatusOwner({
   promptCompletionLabel: "video",
 });
 
-function makeTask(overrides: Partial<MediaGenerationOperation> = {}): MediaGenerationOperation {
+function makeTask(overrides: Partial<MediaGenerationOperation>): MediaGenerationOperation {
   return {
     taskId: "task-1",
     taskKind: "video_generation",

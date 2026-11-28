@@ -11,7 +11,7 @@ import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import { isModernModelRef } from "./test-helpers/live-model-dynamic-candidates.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-const baseModel = (overrides: Partial<Model> = {}): Model =>
+const baseModel = (overrides: Partial<Model>): Model =>
   makeProviderModelFixture({
     id: "glm-4.7",
     api: "openai-completions",

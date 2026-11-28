@@ -19,11 +19,7 @@ vi.mock("./model-auth-provider-config.js", async (importOriginal) => ({
   resolveUsableCustomProviderApiKey: () => null,
 }));
 type LabelParams = Parameters<typeof prepareModelCatalogAuthLabels>[0];
-function capture(
-  store: AuthProfileStore,
-  providers = ["openai"],
-  options: Partial<LabelParams> = {},
-) {
+function capture(store: AuthProfileStore, providers: string[], options: Partial<LabelParams> = {}) {
   const labels = prepareModelCatalogAuthLabels({
     config: {},
     agentDir: "/tmp/catalog-auth",

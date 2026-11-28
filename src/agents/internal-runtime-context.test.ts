@@ -16,7 +16,7 @@ import {
 const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
   "This context is runtime-generated, not user-authored. Keep internal details private.";
 
-function carrier(content = "runtime ctx") {
+function carrier(content: string) {
   return {
     role: "custom",
     customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
