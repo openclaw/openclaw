@@ -274,14 +274,26 @@ async function gatherDaemonStatusImpl(
     dashboardTarget?.port === daemonPort &&
     selectedUrl.protocol === (summary.gateway.tlsEnabled ? "wss:" : "ws:") &&
     (selectedUrl.hostname === "127.0.0.1" || selectedUrl.hostname === summary.gateway.bindHost);
-  // Use the existing explicit-URL transport policy for alternate endpoints. Only
-  // the matching loopback probe may borrow native service credentials or TLS pins.
+  const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
+  const localCertificate =
+    opts.probe &&
+    !summary.probeUrlOverride &&
+    tlsEnabled &&
+    (!dashboardTarget || dashboardMatchesNative)
+      ? await import("../../infra/tls/gateway.js").then(({ inspectGatewayTlsCertificate }) =>
+          inspectGatewayTlsCertificate(daemonCfg.gateway?.tls),
+        )
+      : undefined;
+  // Use the existing explicit-URL transport policy for alternate endpoints. The plain
+  // loopback probe, or another matching native endpoint once the local certificate pin
+  // loads, may borrow service credentials; the pin proves the peer is this Gateway.
+  const dashboardUsesNative =
+    dashboardMatchesNative &&
+    (dashboardTarget?.probeUrl === summary.probeUrl || localCertificate?.ok === true);
   const probeUrlOverride =
     summary.probeUrlOverride ??
-    (dashboardTarget && !(dashboardMatchesNative && dashboardTarget.probeUrl === summary.probeUrl)
-      ? dashboardTarget.probeUrl
-      : null);
-  const probeUrl = probeUrlOverride ?? summary.probeUrl;
+    (dashboardTarget && !dashboardUsesNative ? dashboardTarget.probeUrl : null);
+  const probeUrl = probeUrlOverride ?? dashboardTarget?.probeUrl ?? summary.probeUrl;
   const gateway = dashboardTarget
     ? { ...summary.gateway, probeUrl: projectGatewayUrlForDiagnostics(probeUrl) }
     : summary.gateway;
@@ -351,13 +363,6 @@ async function gatherDaemonStatusImpl(
         )
       : {};
 
-  const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
-  const localCertificate =
-    opts.probe && !probeUrlOverride && tlsEnabled
-      ? await import("../../infra/tls/gateway.js").then(({ inspectGatewayTlsCertificate }) =>
-          inspectGatewayTlsCertificate(daemonCfg.gateway?.tls),
-        )
-      : undefined;
   let daemonProbeAuth: { token?: string; password?: string } | undefined;
   let rpcAuthWarning: string | undefined;
   let redactedProbeCredential = false;

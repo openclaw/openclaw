@@ -69,7 +69,7 @@ Notes:
   confirm the destination before pairing; canceling keeps the existing selection. This also applies
   when a Gateway update reloads the dashboard before pairing completes.
 - Follows `gateway.tls.enabled`: TLS-enabled gateways print/open `https://` Control UI URLs and connect over `wss://`.
-- For `lan` or a wildcard `custom` bind, same-host launches always use loopback because a wildcard is not a browser destination. Plaintext `tailnet` and `custom` binds also use `127.0.0.1` so the browser has a secure context; TLS-enabled specific hosts keep the configured address so certificate names match.
+- For `lan` or a wildcard `custom` bind, same-host launches always use loopback because a wildcard is not a browser destination. Plaintext `tailnet` and `custom` binds also use `127.0.0.1` so the browser has a secure context; TLS-enabled specific hosts keep the configured address so certificate names match. When the Gateway's certificate loads, the readiness check of that address pins it, so the Gateway's own certificate passes even without an entry for that IP.
 - Before delivering an authenticated loopback URL for a specific-interface bind, the command checks the configured interface and verifies that it and `127.0.0.1` are owned by the same Gateway process. Ambiguous listener ownership stops the command with status guidance.
 - The interactive command prints only the clean base URL; the clipboard/browser launch receives the
   one-time `browserUrl`, never the shared token. SecretRef-managed shared tokens therefore do not leak

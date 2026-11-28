@@ -40,6 +40,7 @@ import { registerGatewayCli } from "../gateway-cli/register.js";
 import { registerDaemonCli } from "./register.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 import { registerStatusConfigReadTests } from "./status.gather.config.test-support.js";
+import { registerStatusDashboardTargetTests } from "./status.gather.dashboard.test-support.js";
 import { registerStatusInstallRecordReadTests } from "./status.gather.install-records.test-support.js";
 import { gatherDaemonStatus } from "./status.gather.js";
 import { registerStatusLaunchdScanTests } from "./status.gather.launchd.test-support.js";
@@ -981,34 +982,16 @@ describe("gatherDaemonStatus", () => {
     expect(output.errors).toContain(`this OpenClaw command is version ${VERSION}`);
   });
 
-  it.each([
-    { args: ["--port", "19001"], port: 19002, role: "diagnostic-only" },
-    { args: [], port: 19002, role: "diagnostic-only" },
-    { args: ["--port", "19001"], port: 19001, role: "target" },
-  ])(
-    "probes the dashboard port $port with installed args $args ($role)",
-    async ({ args, port, role }) => {
-      daemonLoadedConfig = { gateway: { port: 19001, auth: { token: "daemon-token" } } };
-      setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
-      resolveGatewayPort.mockImplementationOnce((cfg, env) => {
-        const configPort = (cfg as { gateway?: { port?: number } }).gateway?.port;
-        const envPort = (env as NodeJS.ProcessEnv).OPENCLAW_GATEWAY_PORT;
-        return envPort ? Number(envPort) : (configPort ?? 18789);
-      });
-      serviceReadCommand.mockResolvedValueOnce({
-        programArguments: ["/bin/node", "cli", "gateway", "run", ...args],
-        environment: daemonEnvironment,
-      });
-
-      const probeUrl = "ws://127.0.0.1:" + port;
-      const status = await gatherStatus({ dashboardTarget: { port, probeUrl } });
-
-      expect(status.rpc?.url).toBe(probeUrl);
-      expect(status.service.targetRole).toBe(role);
-      expect(probeInput().url).toBe(probeUrl);
-      expect(probeInput().token).toBe(role === "target" ? "daemon-token" : undefined);
+  registerStatusDashboardTargetTests({
+    gatherStatus,
+    setDaemonConfig: (config) => {
+      daemonLoadedConfig = config;
     },
-  );
+    resolveGatewayPort,
+    resolveGatewayBindHost,
+    serviceReadCommand,
+    daemonEnvironment,
+  });
 
   it("uses raw explicit URLs for probes but redacts them from status diagnostics", async () => {
     const rawUrl =
