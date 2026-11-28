@@ -70,6 +70,8 @@ const whamResponse = (
   primary_window?: ReturnType<typeof whamWindow>,
   secondary_window?: ReturnType<typeof whamWindow>,
 ) => ({
+  account_id: "acct_test_123",
+  user_id: "user-a",
   rate_limit: { limit_reached, primary_window, secondary_window },
 });
 function expiredQuota(now: number, stats = blockedStats(now)) {
@@ -573,14 +575,14 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     ["acct_test_123", "user-a", true],
     ["other-account", "user-a", false],
     ["acct_test_123", "other-user", false],
+    [undefined, "user-a", false],
+    ["acct_test_123", undefined, false],
+    [undefined, undefined, false],
   ] as const)(
     "reconciles credits for account %s and user %s",
     async (account_id, user_id, clears) => {
       const now = Date.now();
       const store = codexStore(blockedStats(now));
-      const claims = { "https://api.openai.com/auth": { chatgpt_user_id: "user-a" } };
-      oauthProfile(store).access =
-        `e30.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.test`;
       mockLockedUpdatesForStore(store);
       mockWhamResponse(200, {
         ...whamResponse(true, whamWindow(100, 3_600)),
@@ -591,6 +593,28 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
 
       await reprobe(store);
       expect(store.usageStats?.[codexId]?.blockedUntil).toBe(clears ? undefined : now + 86_400_000);
+    },
+  );
+
+  it.each(["model-a", "model-b"])(
+    "applies a model-a restriction to the saved block for %s",
+    async (model) => {
+      const now = Date.now();
+      const store = codexStore({
+        ...blockedStats(now),
+        blockedModel: model,
+        blockedScope: "model",
+      });
+      mockLockedUpdatesForStore(store);
+      mockWhamResponse(200, {
+        ...whamResponse(true, whamWindow(100, 3_600)),
+        credits: { has_credits: true },
+        rate_limit_upsell: { blocked_model_slug: "model-a" },
+      });
+
+      await reprobe(store, { forModel: model });
+      expect(isProfileInCooldown(store, codexId, now, "model-a")).toBe(model === "model-a");
+      expect(isProfileInCooldown(store, codexId, now, "model-b")).toBe(false);
     },
   );
 

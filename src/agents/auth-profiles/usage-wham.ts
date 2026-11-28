@@ -39,6 +39,7 @@ export const whamUsageSchema = z.object({
     .nullish(),
   spend_control: z.object({ reached: z.boolean() }).nullish(),
   credits: whamCreditsSchema.nullish(),
+  rate_limit_upsell: z.object({ blocked_model_slug: z.string().min(1).nullish() }).nullish(),
   rate_limit_reached_type: z
     .object({
       type: z.enum([
@@ -129,10 +130,17 @@ export function classifyWhamUsage(usage: WhamUsage, now: number): WhamCooldownPr
   if (resetMs === undefined && reachedType && reachedType !== "unknown") {
     return failedProbe;
   }
-  return resetMs
-    ? {
-        cooldownMs: WHAM_BURST_COOLDOWN_MS,
-        blockedUntil: resolveUsageWindowUntil(now, resetMs),
-      }
-    : { available: true, cooldownMs: WHAM_BURST_COOLDOWN_MS };
+  if (resetMs) {
+    return {
+      cooldownMs: WHAM_BURST_COOLDOWN_MS,
+      blockedUntil: resolveUsageWindowUntil(now, resetMs),
+    };
+  }
+  if (usage.rate_limit_upsell) {
+    const exceptModel = usage.rate_limit_upsell.blocked_model_slug;
+    return exceptModel
+      ? { available: true, exceptModel, cooldownMs: WHAM_BURST_COOLDOWN_MS }
+      : failedProbe;
+  }
+  return { available: true, cooldownMs: WHAM_BURST_COOLDOWN_MS };
 }

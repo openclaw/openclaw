@@ -15,7 +15,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { decodeOpenAICodexJwtPayload } from "../../plugin-sdk/provider-openai-chatgpt-auth.js";
+import {
+  decodeOpenAICodexJwtPayload,
+  resolveOpenAICodexAuthIdentity,
+} from "../../plugin-sdk/provider-openai-chatgpt-auth.js";
 import { resolveProviderManagesOwnAvailability } from "../../plugins/provider-availability-policy.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
@@ -212,18 +215,25 @@ async function probeWhamForCooldown(
     }
     const usage = parsed.data;
     if (usage.account_id != null || usage.user_id != null) {
-      const claims = asNonArrayRecord(
-        decodeOpenAICodexJwtPayload(profile.access)?.["https://api.openai.com/auth"],
+      // Codex's external-token login uses the bearer as its ID token when none is saved.
+      const identity = asNonArrayRecord(
+        decodeOpenAICodexJwtPayload(profile.idToken ?? profile.access)?.[
+          "https://api.openai.com/auth"
+        ],
       );
+      const accountId = profile.accountId ?? resolveOpenAICodexAuthIdentity(profile).accountId;
       if (
-        (usage.account_id != null &&
-          usage.account_id !== (profile.accountId ?? claims.chatgpt_account_id)) ||
-        (usage.user_id != null && usage.user_id !== (claims.chatgpt_user_id ?? claims.user_id))
+        (usage.account_id != null && usage.account_id !== accountId) ||
+        (usage.user_id != null && usage.user_id !== (identity.chatgpt_user_id ?? identity.user_id))
       ) {
         return { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS };
       }
     }
-    return classifyWhamUsage(usage, Date.now());
+    const result = classifyWhamUsage(usage, Date.now());
+    // An unscoped usage snapshot can describe exhaustion, but cannot release a saved block.
+    return result.available && (!usage.account_id || !usage.user_id)
+      ? { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS }
+      : result;
   } catch {
     return { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS };
   }
