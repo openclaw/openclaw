@@ -7,6 +7,7 @@ import {
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { withoutSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
@@ -286,12 +287,15 @@ export function copySqliteSessionGenerationRows(params: {
   const { identities, rewriteWatermarks, trajectoryEvents, parentStreamEvents } =
     readSqliteSessionGenerationRows(params.source, params.sessionId);
   const destinationDb = getSessionKysely(params.destination.db);
-  for (const table of tables) {
-    executeSqliteQuerySync(
-      params.destination.db,
-      destinationDb.deleteFrom(table).where("session_id", "=", params.sessionId),
-    );
-  }
+  // A copied generation may equal the previous one; replacement still revokes navigation.
+  withoutSqliteDatabaseWriteScope(params.destination.db, () => {
+    for (const table of tables) {
+      executeSqliteQuerySync(
+        params.destination.db,
+        destinationDb.deleteFrom(table).where("session_id", "=", params.sessionId),
+      );
+    }
+  });
   const eventQuery = sourceDb
     .selectFrom("transcript_events")
     .where("session_id", "=", params.sessionId)

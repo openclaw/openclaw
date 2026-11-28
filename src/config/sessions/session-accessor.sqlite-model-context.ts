@@ -21,6 +21,12 @@ import {
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import {
+  readSqliteDatabaseScopedWriteToken,
+  sqliteSessionIdWriteScope,
+} from "../../infra/sqlite-database-admission.js";
+import { getSqliteReadOperationRevision } from "../../infra/sqlite-schema-facts.js";
+import type { SqliteTransactionOptions } from "../../infra/sqlite-transaction-types.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -326,6 +332,25 @@ export function readSessionTranscriptContextSeed(
   return result.found ? result.value : { ...readSessionContextSeed([], seed), header: undefined };
 }
 
+/**
+ * Reads the navigation write token, then starts the read snapshot. The order matters: a token read
+ * after SQLite pins its view could certify rows older than it. Only event-limited reads can reuse
+ * the history index, so other reads skip the receipt.
+ */
+function runNavigationReadSnapshot<T>(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+  maxEvents: number | undefined,
+  operation: (navigationReadToken: string | undefined) => T,
+  options: SqliteTransactionOptions,
+): T {
+  const navigationReadToken =
+    maxEvents !== undefined && getSqliteReadOperationRevision(database.db)
+      ? readSqliteDatabaseScopedWriteToken(database.db, [sqliteSessionIdWriteScope(sessionId)])
+      : undefined;
+  return runSqliteReadSnapshotSync(database.db, () => operation(navigationReadToken), options);
+}
+
 function withTranscriptContextSnapshot<T>(
   scope: SessionTranscriptReadScope,
   read: (snapshot: TranscriptContextSnapshot) => T,
@@ -336,9 +361,11 @@ function withTranscriptContextSnapshot<T>(
   const resolved = resolveSqliteTranscriptReadScope(scope);
   return withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      runSqliteReadSnapshotSync(
-        database.db,
-        () => {
+      runNavigationReadSnapshot(
+        database,
+        resolved.sessionId,
+        limits?.maxEvents,
+        (navigationReadToken) => {
           const db = getSessionKysely(database.db);
           // Compressed rows were validated before encoding; inspect raw identity only.
           const nativeJsonValid = jsonValid(database.db, sql`coalesce(event_json, '{}')`);
@@ -426,6 +453,7 @@ function withTranscriptContextSnapshot<T>(
             database: database.db,
             sessionId: resolved.sessionId,
             generation: version.generation,
+            readToken: navigationReadToken,
             anchorId: through?.entryId,
             maxEvents: limits?.maxEvents,
             through: Math.min(

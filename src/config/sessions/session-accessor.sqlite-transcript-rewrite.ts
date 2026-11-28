@@ -26,6 +26,7 @@ import {
 } from "./session-transcript-index.js";
 import { reconcileRewrittenTranscriptIndex } from "./session-transcript-reconcile.js";
 import {
+  transcriptRewriteOnlyChangesUserMetadata,
   transcriptRewritePreservesAdmission,
   transcriptRewritePreservesProjection,
 } from "./session-transcript-rewrite-effects.js";
@@ -133,7 +134,15 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
       // payload rewrites still invalidate admissions and cursors.
       const generation = admissionUnchanged
         ? undefined
-        : rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
+        : rotateTranscriptGenerationInTransaction(
+            database,
+            resolved.sessionId,
+            // Compared only when the generation rotates; admission-preserving rewrites skip it.
+            !options.legacyTextStorage &&
+              rewrites.every((row) =>
+                transcriptRewriteOnlyChangesUserMetadata(row.expectedEventJson, row.eventJson),
+              ),
+          );
       if (
         priorWorkspace &&
         generation &&

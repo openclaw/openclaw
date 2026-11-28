@@ -44,6 +44,7 @@ import {
   assertSessionTranscriptHot,
   readSessionColdTranscript,
 } from "./session-cold-storage-state.js";
+import { modelContextNavigationWriteScope } from "./session-model-context-navigation.js";
 import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 import { publishSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
@@ -203,8 +204,14 @@ export function ensureTranscriptGenerationInTransaction(
 export function rotateTranscriptGenerationInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
+  preserveModelContextNavigation = false,
 ): string {
-  const generation = writeTranscriptGeneration(database, sessionId, true);
+  const generation = writeTranscriptGeneration(
+    database,
+    sessionId,
+    true,
+    preserveModelContextNavigation,
+  );
   const actor = readSessionActorTransactionState(database, { sessionId });
   if (actor) {
     // Later publication in this transaction must carry the rotated token.
@@ -218,8 +225,13 @@ function writeTranscriptGeneration(
   database: OpenClawAgentDatabase,
   sessionId: string,
   rotate: boolean,
+  preserveModelContextNavigation = false,
 ): string {
-  return withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
+  const scopes = [sqliteSessionIdWriteScope(sessionId)];
+  if (rotate && !preserveModelContextNavigation) {
+    scopes.push(modelContextNavigationWriteScope(sessionId));
+  }
+  return withSqliteDatabaseWriteScope(database.db, scopes, () => {
     const db = getSessionKysely(database.db);
     const generation = createTranscriptGeneration();
     executeSqliteQuerySync(

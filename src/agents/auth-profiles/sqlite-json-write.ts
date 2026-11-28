@@ -1,5 +1,6 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
+import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import { withAuthProfileCredentialWrite } from "../../state/user-model-account-authority.js";
 import { publishAuthProfileRowsChanged } from "./persisted-rows-receipt.js";
 import {
@@ -49,6 +50,9 @@ export function writeAuthProfileJsonCell(
   const write = () => executeSqliteQuerySync(database, query);
   if (target === "store") {
     withAuthProfileCredentialWrite(database, payload, write);
+  } else if (kind === "agent") {
+    // Auth's own receipt refreshes health rows; this DML changes no session history.
+    withSqliteDatabaseWriteScope(database, [], write);
   } else {
     write();
   }
@@ -73,6 +77,9 @@ export function deleteAuthProfileJsonCell(
   const write = () => executeSqliteQuerySync(database, query);
   if (target === "store") {
     withAuthProfileCredentialWrite(database, undefined, write);
+  } else if (kind === "agent") {
+    // Auth's own receipt refreshes health rows; this DML changes no session history.
+    withSqliteDatabaseWriteScope(database, [], write);
   } else {
     write();
   }
