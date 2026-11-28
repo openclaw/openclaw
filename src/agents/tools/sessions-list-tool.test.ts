@@ -11,15 +11,17 @@ const { mocks } = await import("./sessions-list.mocks.test-support.js");
 
 import { VALID_CONFIG, getSessionsListDetails, sessionRow } from "./sessions-list.test-support.js";
 
-function mockRows(sessions: unknown[], path = "/tmp/sessions.json") {
+function mockRows(sessions: unknown[]) {
   mocks.gatewayCall.mockImplementation(async (opts: unknown) =>
-    (opts as { method?: string }).method === "sessions.list" ? { path, sessions } : {},
+    (opts as { method?: string }).method === "sessions.list"
+      ? { path: "/tmp/sessions.json", sessions }
+      : {},
   );
 }
 function groupRow(key: string, classification: string, sessionId: string, peerKind?: string) {
   return { key, kind: "group", classification, sessionId, ...(peerKind ? { peerKind } : {}) };
 }
-function projectedRow(key: string, classification: string, extra: Record<string, unknown> = {}) {
+function projectedRow(key: string, classification: string, extra: Record<string, unknown>) {
   return { key, kind: "direct", classification, ...extra };
 }
 function globalConfig(owned = true): OpenClawConfig {
