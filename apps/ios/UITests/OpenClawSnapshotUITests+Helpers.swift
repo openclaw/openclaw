@@ -3,7 +3,7 @@ import Vision
 import XCTest
 
 extension OpenClawSnapshotUITests {
-    func verifyApprovalNotificationsNavigation(fromOverview: Bool) async throws {
+    func verifyApprovalNotificationsNavigation() async throws {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["OPENCLAW_IOS_APPROVAL_FIXTURE_URL"] != nil,
             "Requires a task-owned synthetic Gateway approval fixture")
@@ -22,19 +22,12 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 8))
         app.buttons["Cancel"].tap()
 
-        if fromOverview {
-            try self.selectSidebarDestination("Overview")
-            let approvals = app.buttons.containing(.staticText, identifier: "Pending approvals").firstMatch
-            XCTAssertTrue(approvals.waitForExistence(timeout: 8))
-            approvals.tap()
-        } else {
-            try self.selectSidebarDestination("Settings")
-            let approvals = app.buttons.containing(.staticText, identifier: "Approvals").firstMatch
-            XCTAssertTrue(approvals.waitForExistence(timeout: 8))
-            approvals.tap()
-        }
+        try self.selectSidebarDestination("Settings")
+        let approvals = app.buttons.containing(.staticText, identifier: "Approvals").firstMatch
+        XCTAssertTrue(approvals.waitForExistence(timeout: 8))
+        approvals.tap()
 
-        let origin = fromOverview ? "overview" : "settings"
+        let origin = "settings"
         let review = app.buttons["Review exec approval"].firstMatch
         XCTAssertTrue(review.waitForExistence(timeout: 5))
         review.tap()
@@ -79,8 +72,7 @@ extension OpenClawSnapshotUITests {
         switch destination {
         case "overview": app.staticTexts["Agent session"]
         case "chat": app.otherElements["chat-composer-surface"]
-        case "agents": app.buttons["agent-status-filter-menu"]
-        case "settings": app.descendants(matching: .any)["SettingsHub.Fallback"]
+        case "settings": app.descendants(matching: .any)["SettingsHub.Native"]
         case "gateway": app.navigationBars["Gateway"]
         default: self.readinessMarker(in: app)
         }
@@ -315,8 +307,15 @@ extension OpenClawSnapshotUITests {
         self.waitForHittable(true, of: destination)
         destination.tap()
 
-        self.waitForHittable(false, of: hideSidebar)
-        XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 5), file: file, line: line)
+        if title == "Settings" {
+            XCTAssertTrue(
+                app.descendants(matching: .any)["SettingsHub.Native"].waitForExistence(timeout: 5),
+                file: file,
+                line: line)
+        } else {
+            self.waitForHittable(false, of: hideSidebar)
+            XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 5), file: file, line: line)
+        }
     }
 
     func startNewChatFromSidebar(
@@ -709,9 +708,10 @@ extension OpenClawSnapshotUITests {
             thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)))
     }
 
-    /// Model sign-in is the picker's last row; at the medium detent it can sit below the fold.
+    /// Provider accounts is the picker's last row; the composer can also offer a sign-in shortcut.
     func pickerSignInRow(in app: XCUIApplication) -> XCUIElement {
-        let signIn = app.buttons["chat-model-sign-in"]
+        let signIn = app.buttons.matching(NSPredicate(
+            format: "identifier == %@ AND label == %@", "chat-model-sign-in", "Provider accounts")).element
         if !signIn.waitForExistence(timeout: 2) {
             self.expandModelPickerSheet(in: app)
         }
@@ -873,50 +873,6 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "chat-composer-compact")
     }
 
-    func verifyModelSelection(in app: XCUIApplication, actions: XCUIElement, popover: XCUIElement) {
-        let expandedProviderDrawer = app.buttons["chat-model-provider-drawer-openai"]
-        XCTAssertTrue(expandedProviderDrawer.waitForExistence(timeout: 5))
-        expandedProviderDrawer.tap()
-        let collapsedProviderDrawer = app.buttons["chat-model-provider-drawer-openai"]
-        self.waitForValue("Collapsed", of: collapsedProviderDrawer)
-        let anthropicDrawer = app.buttons["chat-model-provider-drawer-anthropic"]
-        XCTAssertTrue(anthropicDrawer.waitForExistence(timeout: 5))
-        self.assertMinimumTouchTarget(anthropicDrawer)
-        XCTAssertEqual(anthropicDrawer.value as? String, "Collapsed")
-        anthropicDrawer.tap()
-        let expandedAnthropicDrawer = app.buttons["chat-model-provider-drawer-anthropic"]
-        self.waitForValue("Expanded", of: expandedAnthropicDrawer)
-        let nonDefaultModel = app.buttons["anthropic/claude-opus-4-1"]
-        XCTAssertTrue(nonDefaultModel.waitForExistence(timeout: 5))
-        XCTAssertTrue(nonDefaultModel.images["chat-model-provider-icon-anthropic"].exists)
-        self.assertMinimumTouchTarget(nonDefaultModel)
-        nonDefaultModel.tap()
-        XCTAssertTrue(popover.waitForNonExistence(timeout: 3))
-
-        actions.tap()
-        let selectedNextModel = app.buttons["anthropic/claude-opus-4-1"]
-        XCTAssertTrue(selectedNextModel.waitForExistence(timeout: 5))
-        XCTAssertEqual(selectedNextModel.value as? String, "Selected")
-        XCTAssertGreaterThan(
-            selectedNextModel.images["chat-menu-selection-checkmark"].frame.minX,
-            selectedNextModel.frame.midX)
-        let restoredDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
-        XCTAssertTrue(restoredDefaultModel.waitForExistence(timeout: 5))
-        restoredDefaultModel.tap()
-        XCTAssertTrue(popover.waitForNonExistence(timeout: 3))
-
-        actions.tap()
-        let reselectedDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
-        XCTAssertTrue(reselectedDefaultModel.waitForExistence(timeout: 5))
-        XCTAssertEqual(reselectedDefaultModel.value as? String, "Selected")
-        XCTAssertGreaterThan(
-            reselectedDefaultModel.images["chat-menu-selection-checkmark"].frame.minX,
-            reselectedDefaultModel.frame.midX)
-    }
-
-    /// A fresh simulator can show this system alert before the scene becomes active.
-    /// Screenshot fixtures do not exercise notification authorization; leave the
-    /// readiness assertion intact and answer only that specific launch prompt.
     func dismissScreenshotNotificationPrompt() {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let alert = springboard.alerts.firstMatch

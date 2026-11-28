@@ -26,14 +26,34 @@ struct OnboardingActivationCanvas<Content: View>: View {
     }
 }
 
+/// The brand mark and title of every full-screen onboarding step. Keep it the only owner of the
+/// mark's size and spacing, so stepping between screens never moves or resizes the mark.
 struct OnboardingHeroHeader: View {
     let title: LocalizedStringKey
     let subtitle: LocalizedStringKey?
     var mood: OpenClawMascotMood = .idle
+    var showsConnectedBadge = false
 
     var body: some View {
         VStack(spacing: 18) {
-            OpenClawActivationGlyph(size: 78, mood: self.mood, interactive: true)
+            ZStack(alignment: .bottomTrailing) {
+                OpenClawActivationGlyph(size: 78, mood: self.mood, interactive: true)
+
+                if self.showsConnectedBadge {
+                    Image(systemName: "checkmark")
+                        .font(OpenClawType.headlineBold)
+                        .foregroundStyle(.white)
+                        .frame(width: 30, height: 30)
+                        .background {
+                            Circle()
+                                .fill(OpenClawBrand.ok)
+                        }
+                        .overlay {
+                            Circle()
+                                .stroke(OpenClawBrand.activationCanvas, lineWidth: 3)
+                        }
+                }
+            }
 
             VStack(spacing: 8) {
                 Text(self.title)
@@ -50,6 +70,7 @@ struct OnboardingHeroHeader: View {
             }
         }
         .frame(maxWidth: .infinity)
+        .padding(.top, 18)
     }
 }
 
@@ -185,8 +206,7 @@ private struct OnboardingCommandChip: View {
             } label: {
                 Image(systemName: self.didCopy ? "checkmark" : "doc.on.doc")
                     .font(OpenClawType.subheadSemiBold)
-                    .foregroundStyle(
-                        self.didCopy ? OpenClawBrand.activationPrimaryAction : Color.secondary.opacity(0.56))
+                    .foregroundStyle(self.didCopy ? Color.primary : Color.secondary.opacity(0.56))
                     .frame(width: 38, height: 38)
                     .contentTransition(.symbolEffect(.replace))
             }
@@ -195,7 +215,8 @@ private struct OnboardingCommandChip: View {
             .accessibilityLabel("Copy setup code command")
             .accessibilityValue(self.didCopy ? "Copied" : self.command)
         }
-        .foregroundStyle(OpenClawBrand.activationPrimaryAction)
+        // Neutral ink: the accent belongs to the one primary action on the screen.
+        .foregroundStyle(.primary)
         .padding(.horizontal, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 54)
@@ -236,7 +257,6 @@ struct OnboardingIntroStep: View {
                     subtitle: isPad
                         ? "Your agent, in your pocket. Pair this iPad with your gateway to get started."
                         : "Your agent, in your pocket. Pair this iPhone with your gateway to get started.")
-                    .padding(.top, 18)
 
                 OnboardingIntroPanel {
                     VStack(alignment: .leading, spacing: 14) {
@@ -291,7 +311,6 @@ struct OnboardingWelcomeStep: View {
                     title: "Connect Gateway",
                     subtitle: nil,
                     mood: self.isConnecting ? .working : .idle)
-                    .padding(.top, 18)
 
                 VStack(spacing: 36) {
                     VStack(spacing: 14) {
@@ -332,7 +351,7 @@ struct OnboardingWelcomeStep: View {
                         Button(action: onShowNewUserGuide) {
                             Text("New to OpenClaw? Start here")
                                 .font(OpenClawType.subheadSemiBold)
-                                .foregroundStyle(OpenClawBrand.activationPrimaryAction)
+                                .foregroundStyle(.primary)
                                 .frame(maxWidth: .infinity, minHeight: 44)
                         }
                         .buttonStyle(.plain)
@@ -366,30 +385,11 @@ struct OnboardingSuccessStep: View {
     var body: some View {
         OnboardingActivationCanvas {
             VStack(spacing: 0) {
-                Spacer(minLength: 54)
-
-                ZStack(alignment: .bottomTrailing) {
-                    OpenClawActivationGlyph(size: 86, mood: .celebrating, interactive: true)
-                        .shadow(color: OpenClawBrand.activationGlow.opacity(0.18), radius: 12, x: 0, y: 6)
-
-                    Image(systemName: "checkmark")
-                        .font(OpenClawType.headlineBold)
-                        .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
-                        .background {
-                            Circle()
-                                .fill(OpenClawBrand.ok)
-                        }
-                        .overlay {
-                            Circle()
-                                .stroke(OpenClawBrand.activationCanvas, lineWidth: 3)
-                        }
-                }
-                .padding(.bottom, 22)
-
-                Text("You're connected")
-                    .font(OpenClawType.title1)
-                    .multilineTextAlignment(.center)
+                OnboardingHeroHeader(
+                    title: "You're connected",
+                    subtitle: nil,
+                    mood: .celebrating,
+                    showsConnectedBadge: true)
                     .padding(.bottom, 8)
 
                 Text(verbatim: self.gatewayName)

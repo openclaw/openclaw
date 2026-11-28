@@ -187,11 +187,6 @@ const workloads: Record<string, (entries: Entry[]) => unknown> = {
       }),
       { strict: false },
     ),
-  "responses-strict": (entries) =>
-    convertResponsesToolPayload(
-      entries.map(({ tool }) => tool),
-      { strict: true },
-    ),
   completions: (entries) =>
     buildOpenAICompletionsParams(model, context(entries), { cacheRetention: "none" }),
   "moonshot-completions": (entries) =>

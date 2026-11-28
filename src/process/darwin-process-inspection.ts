@@ -1,3 +1,5 @@
+import { constants } from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
 import { readProcessIdentity } from "@openclaw/proc-safe/identity";
 import {
   listProcesses,
@@ -12,8 +14,10 @@ export type DarwinProcess = {
   state: string;
   owner: ProcessSnapshot["owner"];
   startedAt: string;
+  /** Kernel birth identity for live observations; durable registrations use startedAt. */
+  startTimeMicros?: number;
 };
-type DarwinCensusProcess = Omit<DarwinProcess, "startedAt">;
+type DarwinCensusProcess = Omit<DarwinProcess, "startedAt" | "startTimeMicros">;
 type DarwinSnapshot = ProcessSnapshot &
   Required<Pick<ProcessSnapshot, "parentPid" | "processGroupId" | "state">>;
 
@@ -124,7 +128,10 @@ export async function readDarwinProcessSnapshot(
     return [];
   }
   const rows = census(deadline, pids).map((row) =>
-    Object.assign(topology(row), { startedAt: startIdentity(row.identity) }),
+    Object.assign(topology(row), {
+      startedAt: startIdentity(row.identity),
+      startTimeMicros: row.identity?.startTimeMicros,
+    }),
   );
   remaining(deadline);
   return rows;
@@ -172,15 +179,61 @@ export function* readDarwinProcessCensus(timeoutMs: number): Generator<DarwinCen
   remaining(deadline);
 }
 
-/** Arguments only: never request or return process environment values. */
-export async function readDarwinProcessCommandLine(pid: number, deadline: number): Promise<string> {
-  remaining(deadline);
-  try {
-    const command = readProcessCommand(pid);
+const EXEC_ARGV_RETRY_MS = 10;
+
+type SpawnedProcess = Pick<DarwinProcess, "pid" | "ppid" | "pgid" | "startTimeMicros">;
+
+function requireSameSpawnedProcess(child: SpawnedProcess, deadline: number): void {
+  const [current] = census(deadline, [child.pid]);
+  if (
+    !current?.identity ||
+    current.pid !== child.pid ||
+    current.identity.startTimeMicros !== child.startTimeMicros ||
+    current.parentPid !== child.ppid ||
+    current.processGroupId !== child.pgid ||
+    current.identity.exited ||
+    current.state === "zombie"
+  ) {
+    throw new DarwinProcessInspectionError("unavailable");
+  }
+}
+
+// proc-safe reports native I/O failures as operation-failed with the OS errno in the message.
+function isNativeEio(cause: unknown): boolean {
+  return (
+    cause instanceof Error &&
+    "code" in cause &&
+    cause.code === "operation-failed" &&
+    cause.message.endsWith(`(os error ${constants.errno.EIO})`)
+  );
+}
+
+/** Read argv only. Pass the observed child at startup to wait for argv across exec. */
+export async function readDarwinProcessCommandLine(
+  target: number | SpawnedProcess,
+  deadline: number,
+): Promise<string> {
+  const pid = typeof target === "number" ? target : target.pid;
+  let retryOwner: SpawnedProcess | undefined;
+  for (;;) {
+    remaining(deadline);
+    let command: ReturnType<typeof readProcessCommand>;
+    try {
+      command = readProcessCommand(pid);
+    } catch (cause) {
+      const left = remaining(deadline);
+      if (typeof target === "number" || !target.startTimeMicros || !isNativeEio(cause)) {
+        throw failure(cause);
+      }
+      await delay(Math.min(EXEC_ARGV_RETRY_MS, left));
+      requireSameSpawnedProcess(target, deadline);
+      retryOwner = target;
+      continue;
+    }
+    if (retryOwner) {
+      requireSameSpawnedProcess(retryOwner, deadline);
+    }
     remaining(deadline);
     return command?.argv.join(" ") ?? "";
-  } catch (cause) {
-    remaining(deadline);
-    throw failure(cause);
   }
 }

@@ -2,6 +2,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveStatusUtilityModel } from "../commands/models/list.status-utility.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
@@ -12,23 +14,30 @@ import {
   resolveAutomaticUtilityRuntimeOverride,
   resolveConfiguredSetupModelForAgent,
   resolveUtilityModelRefForAgent,
+  resolveUtilityModelSelectionForAgent,
 } from "./utility-model.js";
 
 /** A string declares the provider's small model; a map declares a router's per-vendor models. */
-function snapshotWithDefaults(defaults: Record<string, string | Record<string, string>>) {
-  return createPluginMetadataSnapshotFixture({
-    plugins: Object.entries(defaults).map(([provider, utility], index) => ({
-      id: `plugin-${index}`,
-      modelCatalog: {
-        providers: {
-          [provider]:
-            typeof utility === "string"
-              ? { defaultUtilityModel: utility, models: [{ id: utility }] }
-              : { defaultUtilityModels: utility, models: [] },
+function snapshotWithDefaults(
+  defaults: Record<string, string | Record<string, string>>,
+  policyHash?: string,
+) {
+  return createPluginMetadataSnapshotFixture(
+    {
+      plugins: Object.entries(defaults).map(([provider, utility], index) => ({
+        id: `plugin-${index}`,
+        modelCatalog: {
+          providers: {
+            [provider]:
+              typeof utility === "string"
+                ? { defaultUtilityModel: utility, models: [{ id: utility }] }
+                : { defaultUtilityModels: utility, models: [] },
+          },
         },
-      },
-    })),
-  });
+      })),
+    },
+    policyHash,
+  );
 }
 
 describe("resolveConfiguredSetupModelForAgent", () => {
@@ -232,7 +241,7 @@ it.each([
     listedIds: ["primary"],
     expected: "fixture/primary@work",
   },
-  { name: "no offered recovery", ids: ["other"], expected: "fixture/small@work" },
+  { name: "no offered recovery", ids: ["other"], expected: undefined },
   {
     name: "failed provider with retained rows",
     ids: ["primary"],
@@ -336,6 +345,73 @@ it.each([
     );
   },
 );
+
+it.each([
+  { name: "primary substituted", declared: "small", ref: "fixture/primary", notOffered: true },
+  { name: "declared small model", declared: "small", ref: "fixture/small", notOffered: false },
+  // A provider whose declared small model is the primary was offered; no note.
+  {
+    name: "declared model is the primary",
+    declared: "primary",
+    ref: "fixture/primary",
+    notOffered: false,
+  },
+])(
+  "status names the main-model fallback only when it runs: $name",
+  ({ declared, ref, notOffered }) => {
+    const cfg: OpenClawConfig = { agents: { defaults: { model: "fixture/primary" } } };
+    setCurrentPluginMetadataSnapshot(
+      snapshotWithDefaults({ fixture: declared }, resolveInstalledPluginIndexPolicyHash(cfg)),
+      { config: cfg },
+    );
+    try {
+      expect(
+        resolveStatusUtilityModel({
+          cfg,
+          agentId: "main",
+          gatewayCatalog: {
+            models: [],
+            utilityModel: { modelRef: ref, source: "provider-default" },
+          },
+        }),
+      ).toMatchObject({ ref, notOffered });
+    } finally {
+      setCurrentPluginMetadataSnapshot(undefined);
+    }
+  },
+);
+
+it("disables utility work for a role that refuses it instead of spending the main model", () => {
+  const cfg: OpenClawConfig = { agents: { defaults: { model: "fixture/primary" } } };
+  const catalog = {
+    entries: [
+      { provider: "fixture", id: "small" },
+      { provider: "fixture", id: "primary" },
+    ],
+    providerOutcomes: [{ provider: "fixture", status: "ready" as const }],
+  };
+  const metadataSnapshot = snapshotWithDefaults({ fixture: "small" });
+  const onlyPrimary = { allows: (ref: { model: string }) => ref.model === "primary" };
+  const withoutSmall = { ...catalog, entries: [{ provider: "fixture", id: "primary" }] };
+  const select = (inventory: typeof catalog, modelPolicy: typeof onlyPrimary) =>
+    resolveUtilityModelSelectionForAgent({
+      cfg,
+      agentId: "main",
+      catalog: inventory,
+      metadataSnapshot,
+      modelPolicy,
+    });
+  // A refusal does not depend on whether the catalog has published the small model.
+  expect([select(catalog, onlyPrimary), select(withoutSmall, onlyPrimary)]).toEqual([
+    { disabled: "role-policy" },
+    { disabled: "role-policy" },
+  ]);
+  // Absence, unlike a refusal, still recovers to the offered primary.
+  expect(select(withoutSmall, { allows: () => true })).toEqual({
+    modelRef: "fixture/primary",
+    source: "provider-default",
+  });
+});
 
 it.each([
   { fallback: "gpt-6-luna", provider: "openai", modelId: "gpt-6-luna" },

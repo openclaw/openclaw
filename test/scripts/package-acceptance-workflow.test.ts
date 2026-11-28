@@ -2834,6 +2834,7 @@ type Workflow = {
     schedule?: Array<{ cron?: string }>;
     workflow_call?: {
       inputs?: Record<string, { default?: boolean | number | string }>;
+      secrets?: Record<string, { required?: boolean }>;
     };
     workflow_dispatch?: {
       inputs?: Record<string, unknown>;
@@ -10935,6 +10936,72 @@ describe("package artifact reuse", () => {
     },
   );
 
+  it("enables mandatory native harness proofs with their configured credentials", () => {
+    const job = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
+    const suite = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-test",
+    );
+    const names = [
+      "OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT",
+      "OPENCLAW_LIVE_CODEX_GOAL_RESUME",
+      "OPENCLAW_LIVE_OWNER_ASSIGNMENT",
+      "OPENCLAW_LIVE_RESEARCH_ACCEPTANCE",
+      "OPENCLAW_LIVE_CODEX_HARNESS_AUTH",
+      "OPENCLAW_LIVE_CODEX_HARNESS_MODEL",
+    ];
+    // Execute the actual workflow assignments, replacing only the live child.
+    // This proves shell scoping without credentials or paid provider calls.
+    const result = spawnSync("bash", ["-c", ["node() { env; };", suite.command].join("\n")], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const assigned = Object.fromEntries(
+      result.stdout
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const index = line.indexOf("=");
+          return [line.slice(0, index), line.slice(index + 1)];
+        }),
+    );
+    expect(Object.fromEntries(names.map((name) => [name, assigned[name]]))).toEqual({
+      OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT: "1",
+      OPENCLAW_LIVE_CODEX_GOAL_RESUME: "1",
+      OPENCLAW_LIVE_OWNER_ASSIGNMENT: "1",
+      OPENCLAW_LIVE_RESEARCH_ACCEPTANCE: "1",
+      OPENCLAW_LIVE_CODEX_HARNESS_AUTH: "api-key",
+      OPENCLAW_LIVE_CODEX_HARNESS_MODEL: "openai/gpt-5.6-luna",
+    });
+    expect(suite.profiles).toBe("stable full");
+    for (const name of [
+      "CELERIS_API_KEY",
+      "FASTINO_API_KEY",
+      "NACE_API_KEY",
+      "PERPLEXITY_API_KEY",
+    ]) {
+      expect(job.env?.[name]).toBe(
+        "${{ matrix.suite_id == 'native-live-test' && secrets." + name + " || '' }}",
+      );
+      for (const path of [LIVE_E2E_WORKFLOW, PACKAGE_ACCEPTANCE_WORKFLOW]) {
+        expect(readWorkflow(path).on?.workflow_call?.secrets?.[name]).toEqual({ required: false });
+      }
+      for (const [path, jobName] of [
+        [SCHEDULED_LIVE_CHECKS_WORKFLOW, "live_and_openwebui_checks"],
+        [RELEASE_CHECKS_WORKFLOW, "live_repo_e2e_release_checks"],
+        [RELEASE_CHECKS_WORKFLOW, "package_acceptance_release_checks"],
+        [PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance"],
+        [PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance_registry"],
+      ] as const) {
+        expect(workflowJob(path, jobName).secrets, `${path}: ${jobName}`).toMatchObject({
+          [name]: "${{ secrets." + name + " }}",
+        });
+      }
+    }
+  });
+
   it("shards broad native live tests instead of one serial live-all job", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const nativeLiveJob = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
@@ -11048,7 +11115,7 @@ describe("package artifact reuse", () => {
       "command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends",
       "suite_id: native-live-src-infra",
       "command: OPENCLAW_LIVE_APNS_REACHABILITY=1 OPENCLAW_LIVE_SESSION_EVENT_WAKE=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra",
-      "command: OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT=1 node .release-harness/scripts/test-live-shard.mjs native-live-test",
+      "command: OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT=1 OPENCLAW_LIVE_CODEX_GOAL_RESUME=1 OPENCLAW_LIVE_OWNER_ASSIGNMENT=1 OPENCLAW_LIVE_RESEARCH_ACCEPTANCE=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/gpt-5.6-luna node .release-harness/scripts/test-live-shard.mjs native-live-test",
       "suite_id: native-live-src-gateway-profiles-anthropic-smoke",
       "suite_id: native-live-src-gateway-profiles-anthropic-opus",
       "suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku",
@@ -16040,7 +16107,14 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
   });
 
   it("documents checked extended-stable dispatch instead of a raw-SHA workflow ref", () => {
-    const releaseCi = readFileSync(".agents/skills/release-openclaw-ci/SKILL.md", "utf8");
+    const readSkillDocs = (skillRoot: string) =>
+      listDirectoryTreeStrictSync(skillRoot)
+        .map((walkEntry) => walkEntry.relativePath)
+        .filter((name) => name.endsWith(".md"))
+        .toSorted()
+        .map((name) => readFileSync(`${skillRoot}/${name}`, "utf8"))
+        .join("\n");
+    const releaseCi = readSkillDocs(".agents/skills/release-openclaw-ci");
     // The CI page is an index over docs/ci/**. Read the whole tree so this
     // assertion follows the content instead of a single file path. The walk is
     // recursive because docs/ci pages are themselves split into subdirectories
@@ -16063,7 +16137,7 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
         .toSorted()
         .map((name) => readFileSync(`docs/reference/full-release-validation/${name}`, "utf8")),
     ].join("\n");
-    const liveUpdater = readFileSync(".agents/skills/openclaw-live-updater/SKILL.md", "utf8");
+    const liveUpdater = readSkillDocs(".agents/skills/openclaw-live-updater");
 
     const canonicalExtendedStableDispatch = [
       'VALIDATION_SHA="<exact-candidate-sha>"',

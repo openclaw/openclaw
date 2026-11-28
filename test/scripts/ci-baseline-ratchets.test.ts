@@ -8,7 +8,7 @@ afterEach(() => {
 });
 
 it.each([false, true])(
-  "retains all checks with two slots and PR line-cap selection=%s",
+  "keeps large database checks apart while two slots drain all checks (PR line-cap=%s)",
   async (pr) => {
     vi.stubEnv("RATCHET_PR_HEAD_SHA", pr ? "head" : "");
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -17,6 +17,8 @@ it.each([false, true])(
     const database = new Promise<void>((resolve) => {
       releaseDatabase = resolve;
     });
+    let inventoryFinished = false;
+    let dialectStartedAfterInventory = false;
     let running = 0;
     let peak = 0;
     const run = vi.spyOn(managed, "runManagedCommand").mockImplementation(async ({ args }) => {
@@ -24,6 +26,9 @@ it.each([false, true])(
       peak = Math.max(peak, running);
       if (args?.[0] === "check:database-worker-ratchet") {
         await database;
+        inventoryFinished = true;
+      } else if (args?.[0] === "check:database-dialect-ratchet") {
+        dialectStartedAfterInventory = inventoryFinished;
       } else if (args?.[0] === "plugins:inventory:check") {
         releaseDatabase();
       }
@@ -32,6 +37,7 @@ it.each([false, true])(
     });
 
     expect(await main(["--base", "exact-base", "--no-merge-base"])).toBe(1);
+    expect(dialectStartedAfterInventory).toBe(true);
     expect(peak).toBe(2);
     expect(running).toBe(0);
     expect(run.mock.calls.map(([command]) => command.args)).toEqual([
@@ -39,14 +45,17 @@ it.each([false, true])(
       ["check:max-lines-ratchet", "--base", "exact-base", "--no-merge-base"],
       ...(pr ? [["check:line-cap-ratchet", "--base", "exact-base", "--no-merge-base"]] : []),
       ["check:assertion-safety", "--base", "exact-base", "--no-merge-base"],
-      ["check:database-dialect-ratchet", "--base", "exact-base", "--no-merge-base"],
       ["check:session-identity-ratchet", "--base", "exact-base", "--no-merge-base"],
+      ["check:provider-branching-ratchet", "--base", "exact-base", "--no-merge-base"],
       ["check:runtime-process-lifecycle", "--base", "exact-base", "--no-merge-base"],
       ["check:test-timeout-race-ratchet", "--base", "exact-base", "--no-merge-base"],
       ["check:test-mock-exports", "--base", "exact-base", "--no-merge-base"],
       ["check:test-lines-ratchet", "--base", "exact-base", "--no-merge-base"],
       ["config:docs:check"],
       ["plugins:inventory:check"],
+      ["plugin-sdk:check-exports"],
+      ["check:database-dialect-ratchet", "--base", "exact-base", "--no-merge-base"],
+      ["plugin-sdk:surface:check"],
     ]);
   },
 );

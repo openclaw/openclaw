@@ -89,6 +89,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner.prompt-cache.test.ts",
   "src/agents/embedded-agent-runner/session-prompt-state.tool-usage.worker.test.ts",
   "src/agents/embedded-agent-runner.responses-cold-prefix.test.ts",
+  "src/agents/embedded-agent-runner.settled-recovery-prefix.test.ts",
   "src/agents/workspace-sandbox.test.ts",
   "src/agents/workspace-sandbox.restore.test.ts",
   "src/agents/bash-tools.exec-approval-followup.incognito.test.ts",
