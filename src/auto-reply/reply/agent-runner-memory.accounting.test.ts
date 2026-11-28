@@ -6,7 +6,7 @@ import {
   clearMemoryPluginState,
   registerMemoryCapability,
 } from "../../plugins/memory-state.test-fixtures.js";
-import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
+import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { createModifiedMemoryFlushPlan } from "./agent-runner-memory.test-support.js";
 import { createTestFollowupRun, withTestModelContextTokens } from "./agent-runner.test-fixtures.js";
 
@@ -37,7 +37,7 @@ beforeEach(() => {
 });
 afterEach(() => clearMemoryPluginState());
 
-function runAccounting(kind: "memory" | "compaction", alreadyFlushed = false) {
+function runAccounting(alreadyFlushed: boolean) {
   const followupRun = createTestFollowupRun();
   const params = {
     followupRun,
@@ -49,10 +49,6 @@ function runAccounting(kind: "memory" | "compaction", alreadyFlushed = false) {
       totalTokensFresh: false,
       totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       memoryFlush: alreadyFlushed ? { kind: "succeeded" as const, compactionCount: 0 } : undefined,
-      transcriptByteCompactionLatch:
-        kind === "compaction"
-          ? { sessionId: "session", activeBytes: 3000, maxBytes: 1000 }
-          : undefined,
     },
     sessionKey: "main",
     storePath: path.join(followupRun.run.workspaceDir, "sessions.json"),
@@ -61,8 +57,7 @@ function runAccounting(kind: "memory" | "compaction", alreadyFlushed = false) {
       agents: { defaults: { compaction: { maxActiveTranscriptBytes: 1000, memoryFlush: {} } } },
     },
   };
-  const execute = kind === "memory" ? runMemoryFlushIfNeeded : runSessionCompactionIfNeeded;
-  return execute({
+  return runMemoryFlushIfNeeded({
     ...params,
     cfg: withTestModelContextTokens({ ...params, contextTokens: 100000 }),
     resolvedVerboseLevel: "off",
@@ -74,7 +69,7 @@ it.each([
   { state: "already flushed", alreadyFlushed: true, reads: 0 },
 ])("skips memory flush with $state without retrying history", async ({ alreadyFlushed, reads }) => {
   accounting.mockRejectedValue(new Error("accounting worker unavailable"));
-  const result = await runAccounting("memory", alreadyFlushed);
+  const result = await runAccounting(alreadyFlushed);
   expect(accounting).toHaveBeenCalledTimes(reads);
   expect(result).toMatchObject({ outcome: "skipped" });
   expect(flush).not.toHaveBeenCalled();
