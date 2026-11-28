@@ -208,6 +208,7 @@ test("sessions.create rejects a Gateway worktree targeting a node", async () => 
 });
 
 test.each([
+  ["file", "INVALID_REQUEST", "sessions.create cwd is not a directory"],
   ["outside", "FORBIDDEN", "missing scope: operator.admin"],
   ["escape", "INVALID_REQUEST", "sessions.create cwd is outside the sandboxed agent workspace"],
 ] as const)(
@@ -215,17 +216,21 @@ test.each([
   async (kind, code, message) => {
     const root = tempDirs.make("openclaw-session-cwd-");
     const workspace = path.join(root, "workspace");
-    let cwd = path.join(root, "outside");
+    let cwd = path.join(root, kind === "file" ? "workspace.txt" : "outside");
     await fs.mkdir(workspace);
-    await fs.mkdir(cwd);
-    testState.agentConfig = {
-      workspace,
-      ...(kind === "escape" ? { sandbox: { mode: "all" as const } } : {}),
-    };
-    if (kind === "escape") {
-      const link = path.join(workspace, "escape");
-      await fs.symlink(cwd, link, directoryLinkType);
-      cwd = link;
+    if (kind === "file") {
+      await fs.writeFile(cwd, "not a directory\n");
+    } else {
+      await fs.mkdir(cwd);
+      testState.agentConfig = {
+        workspace,
+        ...(kind === "escape" ? { sandbox: { mode: "all" as const } } : {}),
+      };
+      if (kind === "escape") {
+        const link = path.join(workspace, "escape");
+        await fs.symlink(cwd, link, directoryLinkType);
+        cwd = link;
+      }
     }
     const { storePath } = await createSessionStoreDir();
     using client = await openWorkspaceClient(

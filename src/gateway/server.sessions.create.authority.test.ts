@@ -398,7 +398,12 @@ test("createGatewaySession rejects explicit and key-derived unconfigured creatio
       owner: { key: "agent:main:dashboard:unconfigured-owner" },
       message: 'Unknown agent id "main"',
     },
+    { owner: { agentId: "   " }, message: 'Unknown agent id "   "' },
     { owner: { parentSessionKey: "agent:retired:main" }, message: 'Unknown agent id "retired"' },
+    {
+      owner: { agentId: "   ", parentSessionKey: "agent:ops:main" },
+      message: 'Unknown agent id "   "',
+    },
   ]) {
     await expect(
       createGatewaySession({ cfg, ...owner, commandSource: "test" }),

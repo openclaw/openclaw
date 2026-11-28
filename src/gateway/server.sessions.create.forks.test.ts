@@ -152,6 +152,14 @@ test.each<{
     limit: "200000/100000 tokens",
   },
   {
+    name: "visible spawn with inherited large model",
+    model: "gpt-large",
+    provider: "openai",
+    tokens: 391_869,
+    window: 922_000,
+    limit: undefined,
+  },
+  {
     name: "visible spawn with selected window clamping configured capacity",
     model: "gpt-selectable",
     provider: "openai",
@@ -254,7 +262,7 @@ test.each<{
         });
       }
     }
-    const inherited = !window || Boolean(nativeCatalog);
+    const inherited = !window || model === "gpt-large" || Boolean(nativeCatalog);
     await seedSizedForkParent(dir, {
       totalTokens: tokens,
       ...(inherited ? { providerOverride: provider, modelOverride: model } : {}),
@@ -580,6 +588,32 @@ test.each<{
       modelOverride: "gpt-5.5",
       modelOverrideSource: "user",
       agentRuntimeOverride: "codex",
+      modelProvider: "codex",
+      model: "gpt-5.5",
+      contextTokens: 272000,
+      inputTokens: 12000,
+      outputTokens: 340,
+      totalTokens: 12340,
+      totalTokensFresh: false,
+      contextBudgetStatus: {
+        schemaVersion: 1,
+        source: "pre-prompt-estimate",
+        updatedAt: 1,
+        provider: "codex",
+        model: "gpt-5.5",
+        route: "compact_then_truncate",
+        shouldCompact: true,
+        estimatedPromptTokens: 250000,
+        contextTokenBudget: 128000,
+        promptBudgetBeforeReserve: 112000,
+        reserveTokens: 16000,
+        effectiveReserveTokens: 16000,
+        remainingPromptBudgetTokens: 0,
+        overflowTokens: 138000,
+        toolResultReducibleChars: 5000,
+        messageCount: 12,
+        unwindowedMessageCount: 12,
+      },
       thinkingLevel: "off",
       fastMode: "auto",
       traceLevel: "debug",
@@ -597,7 +631,14 @@ test.each<{
       authProfileOverride: "codex-oauth",
       authProfileOverrideSource: "user",
     },
-    absent: [],
+    absent: [
+      "modelProvider",
+      "model",
+      "contextTokens",
+      "inputTokens",
+      "outputTokens",
+      "contextBudgetStatus",
+    ],
     resolved: { modelProvider: "codex", model: "gpt-5.5" },
   },
   {
@@ -645,6 +686,9 @@ test.each<{
       expect(entry).toMatchObject({
         parentSessionKey: "agent:main:main",
         ...inherited,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       });
       for (const field of absent) {
         expect(entry?.[field], field).toBeUndefined();

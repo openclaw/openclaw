@@ -30,6 +30,7 @@ import {
   chatSendOwner,
 } from "./server.sessions.create.test-support.js";
 import { gatewayConnect } from "./server/client-fixtures.test-support.js";
+import { readSessionGroupCatalog } from "./session-group-catalog.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   sessionStoreEntry,
@@ -186,6 +187,26 @@ test.for([
     });
   },
 );
+
+test("sessions.create registers a category only after the session commit succeeds", async () => {
+  const category = "Deferred category";
+  const bindCreation = vi.fn(() => {
+    throw new Error("session commit rejected");
+  });
+  await expect(
+    createSession(
+      { category, key: "agent:main:dashboard:failed-category-create" },
+      {
+        sessionMutationAuthorization: {
+          assertCurrent: vi.fn(),
+          assertTargetCurrent: vi.fn(),
+          bindCreation,
+        },
+      },
+    ),
+  ).rejects.toThrow("session commit rejected");
+  expect(readSessionGroupCatalog().groups.map((group) => group.name)).not.toContain(category);
+});
 
 test("concurrent sessions.create requests adopt one canonical keyed session", async () => {
   const key = "agent:main:dashboard:concurrent-keyed-session";
