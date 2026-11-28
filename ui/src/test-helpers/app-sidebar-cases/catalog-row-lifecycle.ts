@@ -53,6 +53,17 @@ async function fixture(
 }
 
 describe("AppSidebar catalog row lifecycle", () => {
+  it("keeps live catalog updates working when an adopted run has no sidebar root", async () => {
+    const hiddenKey = "agent:main:subagent:hidden";
+    const { sessions } = createSessionsHarness("main", [key, hiddenKey]);
+    const { sidebar } = await mountSidebar(createGateway({} as GatewayBrowserClient), sessions);
+    const hidden = { threadId: "hidden", name: "Hidden run", sessionKey: hiddenKey };
+    await publish(sidebar, catalogPage([hidden, seed]).catalogs);
+    expect(sidebar.catalogSessionRows().has(hiddenKey)).toBe(false);
+    expect(sidebar.catalogSessionRows().get(key)?.key).toBe(key);
+    expect(() => sidebar.childSessionParents()).not.toThrow();
+  });
+
   it("keeps an adopted catalog row archived after it leaves the active roster", async () => {
     const row: GatewaySessionRow = { key, sessionId: "adopted-id", kind: "direct", updatedAt: 1 };
     let archived = false;

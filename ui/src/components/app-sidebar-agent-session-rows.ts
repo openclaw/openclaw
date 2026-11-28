@@ -334,14 +334,15 @@ export function projectSidebarSessionReference({
     resolveAttention,
     toSidebarSession: (session, isChild) =>
       isChild ? navigationState.toSidebarSession(session, true) : own,
-  })[0]!;
-  const session = ownerId
-    ? applySidebarSessionOwnerFilter({
-        projected: [projected],
-        ownerFacet: [],
-        selectedOwnerId: ownerId,
-      }).rows[0]!
-    : projected;
+  }).at(0);
+  const session =
+    projected && ownerId
+      ? applySidebarSessionOwnerFilter({
+          projected: [projected],
+          ownerFacet: [],
+          selectedOwnerId: ownerId,
+        }).rows.find((candidate) => candidate.key === row.key)
+      : projected;
   return { session, own, visibility };
 }
 
@@ -361,11 +362,7 @@ export function projectSidebarHomeSession({
   navigationState: SidebarSessionNavigationState;
   resolveAttention: Parameters<typeof projectSessionTree>[0]["resolveAttention"];
 }): SidebarHomeSession {
-  const {
-    session: home,
-    own,
-    visibility,
-  } = projectSidebarSessionReference({
+  const { session, own, visibility } = projectSidebarSessionReference({
     host,
     row,
     agentId,
@@ -374,6 +371,7 @@ export function projectSidebarHomeSession({
     resolveAttention,
     mainSessionKeys: new Set([row.key, host.selectedAgentMainSessionKey(agentId)]),
   });
+  const home = session ?? own;
   if (result === undefined) {
     return { ...home, metadataVisible: true };
   }
