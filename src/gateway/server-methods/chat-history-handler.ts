@@ -137,7 +137,7 @@ export async function handleChatHistoryRequest({
   if (!selection) {
     return;
   }
-  try {
+  const readSelectedHistory = async () => {
     const {
       selectedSession,
       entry,
@@ -238,7 +238,6 @@ export async function handleChatHistoryRequest({
           messageId,
           client,
           method,
-          respond,
         },
       );
     const { sessionModelCatalog, defaultModelCatalog } = startupProjection ?? {};
@@ -523,7 +522,7 @@ export async function handleChatHistoryRequest({
               }
             }
             if (!hasCompatibleQueue(sessionInfo)) {
-              return undefined;
+              return "queue-changed" as const;
             }
             sessionInfo.activeLeafEntryId = delta.activeLeafEntryId;
             const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
@@ -549,7 +548,7 @@ export async function handleChatHistoryRequest({
         };
       }
       if (!hasCompatibleQueue(sessionInfo)) {
-        return undefined;
+        return "queue-changed" as const;
       }
       const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
         snapshot: inFlightRun,
@@ -629,7 +628,22 @@ export async function handleChatHistoryRequest({
       preambleReserve = 0;
       publish = await presentPage(page);
     }
-    await publish?.();
+    return typeof publish === "function" ? publish() : publish;
+  };
+  try {
+    // A run can finish between the queue snapshot and row publication. Read the
+    // same selection once more so its transcript, receipts and terminal run agree.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      signal?.throwIfAborted();
+      if ((await readSelectedHistory()) !== "queue-changed") {
+        return;
+      }
+    }
+    respondChatHistoryUnavailable(
+      method,
+      respond,
+      "session run changed while reading history; reload the conversation",
+    );
   } finally {
     selection.release();
   }

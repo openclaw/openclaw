@@ -6,11 +6,13 @@ import {
   isSameSubagentRun,
   isSameSubagentRunOwner,
 } from "../../../agents/subagents/registry/subagent-run-generation.js";
+import { hasSubagentRunEnded } from "../../../agents/subagents/registry/subagent-run-liveness.js";
 import { resolveSubagentDisplayStatus } from "../../../agents/subagents/registry/subagent-session-metrics.js";
 import { withSubagentSessionEntry } from "../../../agents/subagents/registry/subagent-session-reconciliation.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { commandReply } from "../command-gates.js";
+import { formatExecutionObservation } from "../commands-status-subagents.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
 import { resolveSubagentEntryForToken, type SubagentsCommandContext } from "./shared.js";
@@ -82,9 +84,22 @@ export async function handleSubagentsInfoAction(
         { errorContext: true },
       );
 
+      const status = resolveSubagentDisplayStatus(
+        run,
+        readContext.list.pendingDescendants.get(run.childSessionKey) ?? 0,
+      );
+      // Old runs can still be selected by ID after they leave the activity snapshot.
+      const observation = readContext.list.execution.get(run.runId);
+      const activity =
+        hasSubagentRunEnded(run) || run.execution.status === "terminal"
+          ? undefined
+          : formatExecutionObservation(observation ?? { state: "unknown" });
+
       const lines = [
         "ℹ️ Subagent info",
-        `Status: ${resolveSubagentDisplayStatus(run, readContext.list.pendingDescendants.get(run.childSessionKey) ?? 0)}`,
+        ...(activity && activity !== status
+          ? [`Recorded status: ${status}`, `Activity: ${activity}`]
+          : [`Status: ${status}`]),
         `Label: ${formatRunLabel(run)}`,
         `Task: ${taskText}`,
         `Run: ${run.runId}`,

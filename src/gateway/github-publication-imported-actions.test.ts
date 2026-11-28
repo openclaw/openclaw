@@ -115,6 +115,7 @@ async function fixture(previousPublication = false, prepared = true, bound = tru
     merge_commit_sha: null as string | null,
     title: "Original title",
     body: "Original contributor description",
+    assignees: [{ login: "existing" }],
   };
   const writes: { endpoint: string; input: Record<string, unknown> }[] = [];
   const previous = mocks.runCommand.getMockImplementation()!;
@@ -122,6 +123,7 @@ async function fixture(previousPublication = false, prepared = true, bound = tru
   let permission = "write";
   let loseEditResponse = false;
   let loseReviewResponse = false;
+  let assignmentIgnored = false;
   mocks.runCommand.mockImplementation(async (argv: string[], options) => {
     if (argv[0] !== "gh" || !argv.includes("--method")) {
       return await previous(argv, options);
@@ -167,6 +169,11 @@ async function fixture(previousPublication = false, prepared = true, bound = tru
           user: { id: 42 },
         }),
       );
+    } else if (endpoint.endsWith("/assignees")) {
+      if (!assignmentIgnored) {
+        state.assignees.push({ login: "Contributor" });
+        throw new Error("Connection lost after GitHub accepted the assignment");
+      }
     } else if (endpoint.endsWith("/pulls/7")) {
       Object.assign(state, input);
       if (loseEditResponse) {
@@ -204,6 +211,9 @@ async function fixture(previousPublication = false, prepared = true, bound = tru
     loseReviewResponse() {
       loseReviewResponse = true;
     },
+    ignoreAssignment() {
+      assignmentIgnored = true;
+    },
     setPermission(value: string) {
       permission = value;
     },
@@ -215,6 +225,45 @@ describe("actions on the imported original PR", () => {
     creatorEmail: "publication-guest@example.test",
     sandbox: "required",
     realWorktree: true,
+  });
+
+  it("adds a PR assignee without replacing others, even when GitHub loses the write response", async () => {
+    const f = await fixture(false, false, false);
+    const args = {
+      action: "add_assignee",
+      pullRequestUrl: url,
+      expectedHeadCommit: headCommit,
+      assignee: "contributor",
+    };
+    await expect(f.invoke("guest", args)).rejects.toThrow(/scope|permission/iu);
+    expect(f.writes).toEqual([]);
+    const first = (await f.invoke("admin", args)).details;
+    expect(first).toMatchObject({ assignment: { status: "assigned", login: "Contributor" } });
+    expect(Value.Check(SessionGitHubActionResultSchema, first)).toBe(true);
+    expect((await f.invoke("admin", args)).details).toMatchObject({
+      assignment: { status: "already_assigned", login: "Contributor" },
+    });
+    expect(f.state.assignees).toEqual([{ login: "existing" }, { login: "Contributor" }]);
+    expect(f.writes).toEqual([
+      {
+        endpoint: "repos/example/repository/issues/7/assignees",
+        input: { assignees: ["contributor"] },
+      },
+    ]);
+  });
+
+  it("does not claim assignment when GitHub silently ignores the requested login", async () => {
+    const f = await fixture(false, false, false);
+    f.ignoreAssignment();
+    await expect(
+      f.invoke("admin", {
+        action: "add_assignee",
+        pullRequestUrl: url,
+        expectedHeadCommit: headCommit,
+        assignee: "not-assignable",
+      }),
+    ).rejects.toThrow(/GitHub did not confirm that not-assignable was assigned/u);
+    expect(f.writes).toHaveLength(1);
   });
 
   it("refuses native read-only edit of the bound PR without a selected linked account", async () => {

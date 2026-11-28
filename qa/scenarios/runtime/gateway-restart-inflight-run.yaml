@@ -44,7 +44,7 @@ scenario:
       prompt: "Code Mode restart wait QA check. Original prompt marker: RESTART-CODE-MODE-PROMPT. After each standard Gateway resume input, inspect the transcript and advance to the next checkpoint without retrying an old wait. Complete three sequential checkpoints, then reply with exactly RESTART-CODE-MODE-WAIT-OK"
       promptMarker: RESTART-CODE-MODE-PROMPT
       finalMarker: RESTART-CODE-MODE-WAIT-OK
-      resumeNeedle: "The Gateway restarted while you were working. Resume your work:"
+      resumeNeedle: "The Gateway restarted while you were working. Resume without replaying the request."
 
 flow:
   steps:

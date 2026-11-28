@@ -1,26 +1,14 @@
 import fs from "node:fs/promises";
-import { registerHooks } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isPidAlive, runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
-import { afterAll, afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { createMemoryCliHarness } from "./memory-cli.test-support.js";
 import { readMemoryStats } from "./memory-stats.js";
 import { installTmpDirHarness } from "./test-helpers.js";
 
 const { getDbPath, getTmpDir } = installTmpDirHarness({ prefix: "openclaw-memory-stats-" });
-
-// Source children do not inherit the host's plugin SDK resolver.
-const fileLockUrl = new URL("../../src/plugin-sdk/file-lock.ts", import.meta.url).href;
-const sdkHook = registerHooks({
-  resolve(specifier, context, nextResolve) {
-    return specifier === "openclaw/plugin-sdk/file-lock"
-      ? { shortCircuit: true, url: fileLockUrl }
-      : nextResolve(specifier, context);
-  },
-});
-afterAll(() => sdkHook.deregister());
 
 const readStats = (dbPath: string) => readMemoryStats({ dbPath }, "main");
 const transport = vi.hoisted(() => ({
@@ -61,8 +49,7 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
 
 // Only the native dependency is fake; the stats command and child lifecycle remain real.
 const fixtureModuleUrl = `data:text/javascript,${encodeURIComponent(`
-import { readdirSync, readFileSync, writeSync } from "node:fs";
-import { join } from "node:path";
+import { writeSync } from "node:fs";
 function hold() {
   writeSync(2, "ready:" + process.pid + "\\n");
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
@@ -70,21 +57,12 @@ function hold() {
 export async function connect(dbPath, options) {
   const local = !dbPath.startsWith("fixture:");
   const mode = local ? "populated" : new URL(dbPath).hostname;
-  function assertChildLease() {
-    if (!local) return;
-    const directory = join(dbPath, ".openclaw-custody");
-    const leases = readdirSync(directory).filter((name) => name.startsWith("use-"));
-    if (leases.length !== 1) throw new Error("missing child lease");
-    const lease = JSON.parse(readFileSync(join(directory, leases[0]), "utf8"));
-    if (lease.pid !== process.pid) throw new Error("lease is not child-owned");
-  }
   if (mode === "connect") hold();
   return {
     tableNames: async () => mode === "empty" ? [] : ["memories"],
     openTable: async () => ({
       schema: async () => ({ fields: mode === "legacy" ? [] : [{ name: "agentId" }] }),
       countRows: async (predicate) => {
-        assertChildLease();
         if (mode === "count") hold();
         if (mode === "failed") throw new Error("fixture database unavailable");
         if (mode === "legacy") throw new Error("unknown column agentId");
@@ -92,9 +70,9 @@ export async function connect(dbPath, options) {
         if (options.storageOptions?.fixture !== "stdin-only") throw new Error("missing storage options");
         return 7;
       },
-      close: assertChildLease,
+      close() {},
     }),
-    close: assertChildLease,
+    close() {},
   };
 }
 export async function loadLanceDbModule() { return { connect }; }
@@ -109,7 +87,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it("stats preserves agent scope and child-owned custody", async () => {
+it("stats preserves agent scope and takes no custody", async () => {
   transport.tsconfigPath = path.join(getTmpDir(), "tsconfig.json");
   const configUrl = new URL("../../tsconfig.json", import.meta.url);
   const { compilerOptions }: { compilerOptions: { paths: Record<string, string[]> } } = JSON.parse(
@@ -123,6 +101,7 @@ it("stats preserves agent scope and child-owned custody", async () => {
   }
   await fs.writeFile(transport.tsconfigPath, JSON.stringify({ compilerOptions }));
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  await fs.mkdir(getDbPath());
   const { run, embed } = createMemoryCliHarness({
     statsSource: { dbPath: getDbPath(), storageOptions: { fixture: "stdin-only" } },
   });
@@ -130,11 +109,16 @@ it("stats preserves agent scope and child-owned custody", async () => {
 
   expect(log).toHaveBeenCalledWith("Total memories: 7");
   expect(embed).not.toHaveBeenCalled();
-  await expect(fs.readdir(path.join(getDbPath(), ".openclaw-custody"))).resolves.toEqual([]);
+  await expect(fs.readdir(getDbPath())).resolves.toEqual([]);
 });
 
 it("reports an empty database without creating a table", async () => {
   await expect(readStats("fixture://empty")).resolves.toBe(0);
+});
+
+it("reports a missing local database without creating it", async () => {
+  await expect(readStats(getDbPath())).resolves.toBe(0);
+  await expect(fs.access(getDbPath())).rejects.toThrow();
 });
 
 it.each([
