@@ -418,7 +418,7 @@ export function guardSessionManager(
   });
   setSessionToolResultPreparer(guardedSessionManager, {
     cap: (message) => truncateToolResultMessage(message, maxToolResultChars),
-    bound: (result, spill) => boundToolResult(result, maxToolResultChars, spill),
+    bound: (result, spill) => boundToolResult(result, options?.contextWindowTokens, spill),
   });
   guardedSessionManager.hasPendingToolResults = guard.hasPendingToolResults;
   guardedSessionManager.flushPendingToolResults = guard.flushPendingToolResults;

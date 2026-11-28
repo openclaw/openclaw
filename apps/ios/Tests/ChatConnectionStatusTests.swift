@@ -1,8 +1,9 @@
-import OpenClawChatUI
 import OpenClawKit
+import SwiftUI
 import Testing
 import UIKit
 @testable import OpenClaw
+@testable import OpenClawChatUI
 
 struct ChatConnectionStatusTests {
     private func problem(
@@ -129,6 +130,58 @@ struct ChatConnectionStatusTests {
     @Test
     func `an approval that failed for lack of connection turns reconnecting into can't reach`() {
         #expect(ChatConnectionStatus.resolve(self.input(.connecting, approvalFailed: true)) == .unreachable)
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor
+    func `background time does not spend the connection strip's wait`(previouslyConnected: Bool) {
+        var now = ContinuousClock.now
+        let strip = OpenClawChatStatusStrip(now: { now }, voiceOverRunning: { false })
+        let model = NodeAppModel()
+        let controller = GatewayConnectionController(appModel: model, startDiscovery: false)
+        func content(_ phase: ScenePhase, _ state: GatewayDisplayState) -> some View {
+            Color.clear
+                .modifier(ChatConnectionStrip(strip: strip, input: self.input(state)))
+                .environment(model)
+                .environment(controller)
+                .environment(\.scenePhase, phase)
+        }
+        let host = UIHostingController(rootView: content(.active, previouslyConnected ? .connected : .connecting))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        host.view.layoutIfNeeded()
+        func show(_ phase: ScenePhase, _ state: GatewayDisplayState) {
+            host.rootView = content(phase, state)
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+        }
+        show(.background, .connecting)
+        now += .seconds(10)
+        show(.inactive, .connecting)
+        let wait: Duration = previouslyConnected ? .seconds(1) : .seconds(3)
+        #expect(strip.current == nil)
+        now += .milliseconds(100)
+        // Auto-connect briefly reports disconnected while restoring its route. These are
+        // different sentences about the same uninterrupted wait.
+        show(.active, .disconnected)
+        now += .milliseconds(100)
+        show(.active, .connecting)
+        now += wait - .milliseconds(201)
+        #expect(strip.current == nil)
+        now += .milliseconds(1)
+        #expect(strip.current?.appearDelay == wait)
+        show(.active, .disconnected)
+        #expect(strip.current?.priority == OpenClawChatStatusPriority.notConnected)
+        let firstPost = strip.entries[ChatConnectionStatus.stripID]?.postedAt
+        show(.inactive, .disconnected)
+        #expect(strip.current?.priority == OpenClawChatStatusPriority.notConnected)
+        show(.active, .disconnected)
+        #expect(strip.current?.priority == OpenClawChatStatusPriority.notConnected)
+        #expect(strip.entries[ChatConnectionStatus.stripID]?.postedAt == firstPost)
+        show(.active, .connected)
+        #expect(strip.current == nil)
     }
 
     @Test

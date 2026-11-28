@@ -184,6 +184,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "boardFace",
   "boardPresentation",
   "displayName",
+  "titleFallbackReady",
   "delivery",
   "groupId",
   "subject",

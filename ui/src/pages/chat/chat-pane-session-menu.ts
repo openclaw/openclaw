@@ -51,7 +51,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         areUiSessionKeysEquivalent(hydration.sessionKey, this.sessionKey),
       ),
       created && areUiSessionKeysEquivalent(created.creation.sessionKey, this.sessionKey)
-        ? created.displayName
+        ? (created.displayName ?? "")
         : undefined,
     );
   }

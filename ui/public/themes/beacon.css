@@ -131,6 +131,11 @@
 
   --text: #000000;
   --text-strong: #000000;
+  --chat-composer-placeholder: color-mix(
+    in srgb,
+    var(--text-strong) 67%,
+    var(--chat-composer-surface)
+  );
   --chat-text: #000000;
   --muted: #3a3a3a;
   --muted-strong: #262626;
