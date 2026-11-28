@@ -44,7 +44,7 @@ it("discards a rejected Git candidate without leaking its registration or touchi
   await git("worktree", "add", "--detach", unrelated, target.sha);
   const before = (await git("worktree", "list", "--porcelain")).stdout;
   const registrations = path.join(target.checkout, ".git", "worktrees");
-  const beforeRegistrations = (await fs.readdir(registrations)).sort();
+  const beforeRegistrations = (await fs.readdir(registrations)).toSorted();
   const beforeManifest = await fs.readFile(path.join(unrelated, "package.json"), "utf8");
   try {
     openOpenClawStateDatabase({ env: process.env });
@@ -70,7 +70,7 @@ it("discards a rejected Git candidate without leaking its registration or touchi
     expect(await readTrial()).toBeNull();
     expect(await fs.readdir(path.join(resolvePrefix(), "releases"))).toEqual([]);
     expect((await git("worktree", "list", "--porcelain")).stdout).toBe(before);
-    expect((await fs.readdir(registrations)).sort()).toEqual(beforeRegistrations);
+    expect((await fs.readdir(registrations)).toSorted()).toEqual(beforeRegistrations);
     expect(await fs.readFile(path.join(unrelated, "package.json"), "utf8")).toBe(beforeManifest);
     expect((await git("status", "--porcelain")).stdout).toBe("");
   } finally {

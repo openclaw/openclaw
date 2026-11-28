@@ -91,7 +91,7 @@ export async function repository(
     `import { spawnSync } from 'node:child_process';
     import fs from 'node:fs';
     if (process.argv[3] === 'check-release') {
-      ${releaseAware ? `console.log(JSON.stringify(${JSON.stringify(check)})); process.exit(${check.ok ? 0 : 1});` : "throw new Error('unsupported command');"}
+      ${releaseAware ? `console.log(JSON.stringify(${JSON.stringify(check)})); process.exitCode = ${check.ok ? 0 : 1};` : "throw new Error('unsupported command');"}
     } else { ${pluginCommand} }`,
   );
   await fs.writeFile(
