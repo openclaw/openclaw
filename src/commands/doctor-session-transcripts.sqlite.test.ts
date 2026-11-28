@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PreparedPostSessionPluginMigration } from "../infra/state-migrations.types.js";
+import type {
+  LegacyStateMigrationStepReceipt,
+  PreparedPostSessionPluginMigration,
+} from "../infra/state-migrations.types.js";
 
 const note = vi.hoisted(() => vi.fn());
 const repairReservedIncognitoSessionKeys = vi.hoisted(() => vi.fn());
@@ -76,6 +79,7 @@ import { runSessionTranscriptsHealth } from "../flows/doctor-health-contribution
 import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
 import { showDoctorHealthSummary } from "../flows/doctor-health-contribution.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
+import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import type { DoctorSessionSqliteReport } from "./doctor-session-sqlite-types.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
@@ -471,6 +475,50 @@ describe("doctor session transcript repair", () => {
     expectNote("ENOSYS");
     expectNote('run "openclaw doctor --fix" for session-store maintenance');
   });
+
+  it.each([
+    {
+      name: "a store that is not a database",
+      seed: (storePath: string) => fs.writeFile(storePath, "not a database"),
+      cause: /cannot read legacy session store for agent ops: .*file is not a database/u,
+    },
+    {
+      name: "a store behind a dangling link",
+      seed: (storePath: string) => fs.symlink(`${storePath}.missing`, storePath),
+      cause: /cannot read legacy session store for agent ops: .*ENOENT/u,
+    },
+  ])(
+    "keeps the agent and cause of $name in the public refusal without its path",
+    async ({ seed, cause }) => {
+      const storePath = path.join(root, "private stores", "sessions.sqlite");
+      await fs.mkdir(path.dirname(storePath));
+      await seed(storePath);
+      const actual = await vi.importActual<
+        typeof import("../config/sessions/legacy-main-session-migration.js")
+      >("../config/sessions/legacy-main-session-migration.js");
+      migrateLegacyMainSessionKeys.mockImplementationOnce(actual.migrateLegacyMainSessionKeys);
+      const receipts: LegacyStateMigrationStepReceipt[] = [];
+
+      await expect(
+        repair({
+          cfg: { agents: { entries: { ops: {} } }, session: { store: storePath } },
+          postSessionPluginMigration: preparedPostSessionPluginMigration,
+          onStepReceipt: (receipt) => receipts.push(receipt),
+        }),
+      ).rejects.toThrow(cause);
+
+      const refusal = new DoctorStateMigrationRefusalError(receipts);
+      expect(refusal.failureFacts).toEqual([
+        expect.objectContaining({
+          check: "plugin-doctor-post-session-state",
+          code: "blocked-by-session-repair-failure",
+          message: expect.stringMatching(cause),
+        }),
+      ]);
+      expect(refusal.message).not.toContain(root);
+      expect(refusal.message).not.toContain("private stores");
+    },
+  );
 
   it("keeps non-lock session SQLite import failures fatal", async () => {
     runDoctorSessionSqlite.mockRejectedValueOnce(new Error("SQLite import failed"));

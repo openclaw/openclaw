@@ -23,6 +23,7 @@ import {
   readClaimsFromStores,
   prepareComparisonClaimsFromStores,
   storesHaveLegacyAgentSessionKey,
+  unreadableStoreError,
   readDeferredLegacyMainSessionInspection,
 } from "./legacy-main-session-key-scan.js";
 import { claimsMatch } from "./legacy-main-session-migration-claims.js";
@@ -130,11 +131,9 @@ function resolvePhysicalStores(params: {
   const jsonPaths = new Set<string>();
   const unreadable: LegacyMainSessionMigrationOutcome[] = [];
   const warnings: string[] = [];
-  const recordUnreadable = (storePath: string, error: unknown) => {
+  const recordUnreadable = (agentId: string, storePath: string, error: unknown) => {
     if (params.mode === "doctor-fix") {
-      throw new Error(`cannot inspect legacy session store ${storePath}: ${String(error)}`, {
-        cause: error,
-      });
+      throw unreadableStoreError("inspect", agentId, storePath, error);
     }
     unreadable.push({
       kind: "store-unreadable",
@@ -152,7 +151,7 @@ function resolvePhysicalStores(params: {
       });
       return [{ target, resolved, sqlitePath: resolved.path }];
     } catch (error) {
-      recordUnreadable(target.storePath, error);
+      recordUnreadable(target.agentId, target.storePath, error);
       return [];
     }
   });
@@ -185,7 +184,7 @@ function resolvePhysicalStores(params: {
         stores.set(key, physical);
       }
     } catch (error) {
-      recordUnreadable(target.storePath, error);
+      recordUnreadable(target.agentId, target.storePath, error);
     }
   }
   return {
@@ -463,9 +462,7 @@ async function migrateLegacyMainSessionKeysInternal(
     stores: resolved.stores,
     onUnreadable: (store: PhysicalStore, error: unknown) => {
       if (params.mode === "doctor-fix") {
-        throw new Error(`cannot read legacy session store ${store.path}: ${String(error)}`, {
-          cause: error,
-        });
+        throw unreadableStoreError("read", store.databaseAgentId, store.path, error);
       }
       outcomes.push({ kind: "store-unreadable", detail: String(error), paths: [store.path] });
       warnings.push(
