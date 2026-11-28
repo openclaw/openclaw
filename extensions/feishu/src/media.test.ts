@@ -11,7 +11,11 @@ import {
 import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { saveMessageResourceFeishu, sendMediaFeishu } from "./media.js";
+import {
+  saveMessageResourceFeishu,
+  sendMediaFeishu,
+  shouldSuppressFeishuTextForVoiceMedia,
+} from "./media.js";
 import { withFeishuSendContext } from "./send-context.js";
 
 type FileUploadData = {
@@ -165,6 +169,19 @@ beforeEach(() => {
     im: { messageResource: { get: messageResourceGetMock } },
   });
   messageResourceGetMock.mockImplementation(async () => resourceResponse("fake-audio-data"));
+});
+
+describe("shouldSuppressFeishuTextForVoiceMedia", () => {
+  it.each([
+    ["voice%2Eogg?token=sample", true],
+    ["voice%2eopus", true],
+    ["voice.ogg", true],
+    ["voice.ogg%2Fpreview", false],
+    ["report.pdf", false],
+  ])("recognizes the voice extension in %s", (file, expected) => {
+    const mediaUrl = `https://example.com/${file}`;
+    expect(shouldSuppressFeishuTextForVoiceMedia({ mediaUrl })).toBe(expected);
+  });
 });
 
 describe("sendMediaFeishu msg_type routing", () => {
