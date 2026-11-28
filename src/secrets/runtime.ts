@@ -38,10 +38,12 @@ import {
   canUseSecretsRuntimeFastPath,
   collectCandidateAgentDirs,
   createEmptyRuntimeWebToolsMetadata,
+  hasRuntimeWebToolConfigSurface,
   mergeSecretsRuntimeEnv,
   resolveRefreshAgentDirs,
 } from "./runtime-fast-path.js";
-import { mergeProviderAuthRuntimeWarnings } from "./runtime-provider-auth-warnings.js";
+import { hasPluginConfigValues } from "./runtime-secret-scan.js";
+import type { SecretResolverWarning } from "./runtime-shared.js";
 import {
   activateProviderAuthRuntimeSnapshot,
   activateSecretsRuntimeSnapshotState,
@@ -91,11 +93,14 @@ async function resolveLoadablePluginOrigins(params: {
 
 function shouldLoadPluginMetadataForSecrets(config: OpenClawConfig): boolean {
   const entries = config.plugins?.entries;
-  if (isRecord(entries) && Object.keys(entries).length > 0) {
+  if (isRecord(entries) && Object.values(entries).some(hasPluginConfigValues)) {
     return true;
   }
   const channels = config.channels;
   if (isRecord(channels) && Object.keys(channels).some((channelId) => channelId !== "defaults")) {
+    return true;
+  }
+  if (hasRuntimeWebToolConfigSurface(config)) {
     return true;
   }
   const providers = config.secrets?.providers;
@@ -212,7 +217,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       includeConfigRefs,
       includeAuthStoreRefs,
       loadAuthStore: fastPathLoadAuthStore,
-      loadablePluginOrigins: params.loadablePluginOrigins ?? new Map<string, PluginOrigin>(),
+      loadablePluginOrigins: params.loadablePluginOrigins,
       ...(manifestRegistry ? { manifestRegistry } : {}),
     });
     return snapshot;
@@ -227,18 +232,21 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   const { listSecretAssignmentOwners, resolveAndApplySecretAssignments } =
     await loadRuntimeOwnerAssignmentHelpers();
   let manifestRegistry = params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
-  if (!manifestRegistry && shouldLoadPluginMetadataForSecrets(sourceConfig)) {
-    const { resolveConfigWidePluginManifestRegistry } = await loadRuntimeManifestHelpers();
-    manifestRegistry = resolveConfigWidePluginManifestRegistry({
-      config: sourceConfig,
-      env: runtimeEnv,
-    });
+  if (
+    !manifestRegistry &&
+    (shouldLoadPluginMetadataForSecrets(sourceConfig) ||
+      (params.assignmentConfig && shouldLoadPluginMetadataForSecrets(assignmentSourceConfig)))
+  ) {
+    const { resolveConfigWidePluginMetadataSnapshotAsync } = await loadRuntimeManifestHelpers();
+    manifestRegistry = (
+      await resolveConfigWidePluginMetadataSnapshotAsync({ config: sourceConfig, env: runtimeEnv })
+    ).manifestRegistry;
   }
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??
     (manifestRegistry
       ? await resolveLoadablePluginOrigins({ plugins: manifestRegistry })
-      : new Map<string, PluginOrigin>());
+      : undefined);
   const context = createResolverContext({
     sourceConfig,
     env: runtimeEnv,
@@ -498,14 +506,13 @@ function patchResolvedSecretRefLeaves(params: {
   defaults: NonNullable<OpenClawConfig["secrets"]>["defaults"];
 }): ResolvedSecretRefPatch {
   if (parseSecretRef(params.source, params.defaults)) {
-    return isDeepStrictEqual(params.source, params.resolved)
+    return isDeepStrictEqual(params.current, params.resolved) ||
+      isDeepStrictEqual(params.source, params.resolved)
       ? { changed: false, value: params.current }
       : { changed: true, value: params.resolved };
   }
   if (Array.isArray(params.source) && Array.isArray(params.resolved)) {
-    const next = Array.isArray(params.current)
-      ? [...params.current]
-      : structuredClone(params.resolved);
+    const next = Array.isArray(params.current) ? [...params.current] : [...params.resolved];
     let changed = false;
     for (const [index, source] of params.source.entries()) {
       const patch = patchResolvedSecretRefLeaves({
@@ -522,9 +529,7 @@ function patchResolvedSecretRefLeaves(params: {
     return { changed, value: changed ? next : params.current };
   }
   if (isRecord(params.source) && isRecord(params.resolved)) {
-    const next = isRecord(params.current)
-      ? { ...params.current }
-      : structuredClone(params.resolved);
+    const next = isRecord(params.current) ? { ...params.current } : { ...params.resolved };
     let changed = false;
     for (const [key, source] of Object.entries(params.source)) {
       const patch = patchResolvedSecretRefLeaves({
@@ -548,6 +553,14 @@ function selectProviderAuthConfig(config: OpenClawConfig): OpenClawConfig {
     ...(config.secrets === undefined ? {} : { secrets: config.secrets }),
     ...(config.models === undefined ? {} : { models: config.models }),
   };
+}
+
+function isProviderAuthRuntimeWarning(warning: SecretResolverWarning): boolean {
+  return (
+    warning.path.startsWith("models.providers.") ||
+    warning.path.startsWith("models.providers[") ||
+    warning.path.includes(".auth-profiles.")
+  );
 }
 
 function mergeProviderAuthOwners(
@@ -581,7 +594,6 @@ function createSecretsRuntimeSnapshotActivation(snapshot: PreparedSecretsRuntime
       explicitAgentDirs: null,
       includeAuthStoreRefs: snapshot.authStores.length > 0,
       loadAuthStore: loadSecretsRuntimeAuthStore,
-      loadablePluginOrigins: new Map<string, PluginOrigin>(),
     } satisfies SecretsRuntimeRefreshContext);
 
   return {
@@ -632,10 +644,10 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
       authStores: candidate.snapshot.authStores,
       authStoreCredentialsRevision: candidate.snapshot.authStoreCredentialsRevision,
       authStoreSnapshotsRevision: candidate.snapshot.authStoreSnapshotsRevision,
-      warnings: mergeProviderAuthRuntimeWarnings(
-        activeSnapshot.warnings,
-        candidate.snapshot.warnings,
-      ),
+      warnings: [
+        ...activeSnapshot.warnings.filter((warning) => !isProviderAuthRuntimeWarning(warning)),
+        ...candidate.snapshot.warnings.filter(isProviderAuthRuntimeWarning),
+      ],
       ...mergeProviderAuthOwners(activeSnapshot, candidate.snapshot),
     };
     // The revision check and activation are synchronous. A queued auth refresh must retry
@@ -644,14 +656,13 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
       if (getRuntimeConfigSnapshotMetadata()?.revision !== runtimeMetadata.revision) {
         return false;
       }
-      return activateSecretsRuntimeSnapshotIfCurrent(
-        refreshedSnapshot,
-        candidate.expectedRevision,
-        {
-          preserveActivationLineage: true,
-          runtimeSourceConfig,
-        },
-      );
+      return activateSecretsRuntimeSnapshotStateIfCurrent({
+        ...createSecretsRuntimeSnapshotActivation(refreshedSnapshot),
+        expectedRevision: candidate.expectedRevision,
+        preserveActivationLineage: true,
+        runtimeSourceConfig,
+        preserveRuntimeConfigPublication: !modelsPatch.changed,
+      });
     };
     const activated = await activateProviderAuthRuntimeSnapshot({
       snapshot: refreshedSnapshot,

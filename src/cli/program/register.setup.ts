@@ -13,7 +13,7 @@ import {
   registerOnboardGatewayOptions,
   registerOnboardRemoteOptions,
   registerOnboardRuntimeOptions,
-  resolveOnboardCommandOptions,
+  runOnboardCommand,
 } from "./register.onboard.js";
 
 const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
@@ -35,38 +35,6 @@ async function runSystemAgentEntry(
   );
 }
 
-async function runOnboardingEntry(
-  options: Record<string, unknown>,
-  commandRuntime: Command,
-  runtime: RuntimeEnv,
-): Promise<void> {
-  if (options.baseline) {
-    const unsupportedOptions = listExplicitOptionFlagsExcept(commandRuntime, BASELINE_OPTION_NAMES);
-    if (unsupportedOptions.length > 0) {
-      const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
-      const message = `--baseline cannot be combined with: ${unsupportedOptions.join(", ")}.`;
-      rejectOnboardingOption({ json: options.json === true }, runtime, message);
-      return;
-    }
-    const { setupCommand } = await import("../../commands/setup.js");
-    await setupCommand(
-      {
-        workspace: readStringValue(options.workspace),
-        skipBootstrap: options.skipBootstrap === true,
-        json: Boolean(options.json),
-      },
-      runtime,
-    );
-    return;
-  }
-  const onboardingOptions = await resolveOnboardCommandOptions(options, commandRuntime, runtime);
-  if (!onboardingOptions) {
-    return;
-  }
-  const { setupWizardCommand } = await import("../../commands/onboard.js");
-  await setupWizardCommand(onboardingOptions, runtime);
-}
-
 function addSystemAgentOptions(command: Command): Command {
   return command
     .option("-m, --message <text>", "Run one OpenClaw request")
@@ -79,6 +47,7 @@ export function registerSetupCommand(program: Command): void {
   const command = program
     .command("setup")
     .description("Chat with OpenClaw; onboard when setup is incomplete")
+    .option("--explain-error <text>", "Explain a redacted error locally without a model")
     .addHelpText(
       "after",
       () =>
@@ -99,6 +68,10 @@ export function registerSetupCommand(program: Command): void {
     .option("--team", "Create a coordinator with researcher, writer, and reviewer specialists")
     .option("--wizard", "Run interactive onboarding", false)
     .option(
+      "--terminal-path <launcher>",
+      "Expose an app-managed CLI in new terminals; do not run setup",
+    )
+    .option(
       "--baseline",
       "Create baseline config/workspace/session folders without onboarding",
       false,
@@ -117,9 +90,45 @@ export function registerSetupCommand(program: Command): void {
   registerOnboardRemoteOptions(command);
 
   addSystemAgentOptions(command).action(async (rawOptions, commandRuntime: Command) => {
-    const { defaultRuntime } = await import("../../runtime.js");
+    const { defaultRuntime, writeRuntimeJson } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       const options = rawOptions as Record<string, unknown>;
+      if (typeof options.explainError === "string") {
+        const unsupported = listExplicitOptionFlagsExcept(
+          commandRuntime,
+          new Set(["explainError", "json"]),
+        );
+        if (unsupported.length > 0) {
+          throw new Error(
+            "--explain-error cannot be combined with: " + unsupported.join(", ") + ".",
+          );
+        }
+        const { explainSystemAgentError } = await import("../../system-agent/error-explanation.js");
+        const reply = explainSystemAgentError(options.explainError);
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, { reply });
+        } else {
+          defaultRuntime.log(reply);
+        }
+        return;
+      }
+      if (options.terminalPath !== undefined) {
+        if (typeof options.terminalPath !== "string") {
+          throw new Error("--terminal-path requires an app-managed launcher path.");
+        }
+        const unsupported = listExplicitOptionFlagsExcept(
+          commandRuntime,
+          new Set(["terminalPath"]),
+        );
+        if (unsupported.length > 0) {
+          throw new Error(
+            "--terminal-path cannot be combined with: " + unsupported.join(", ") + ".",
+          );
+        }
+        const { installDesktopTerminalPath } = await import("../../daemon/terminal-cli.js");
+        defaultRuntime.log(await installDesktopTerminalPath(options.terminalPath, process.env));
+        return;
+      }
       const hasOnboardingFlag =
         listExplicitOptionFlagsExcept(commandRuntime, SYSTEM_AGENT_OPTION_NAMES).length > 0;
       const hasSystemAgentRequest = hasExplicitOptions(commandRuntime, ["message", "yes"]);
@@ -136,7 +145,29 @@ export function registerSetupCommand(program: Command): void {
         await runSystemAgentEntry(options, defaultRuntime);
         return;
       }
-      await runOnboardingEntry(options, commandRuntime, defaultRuntime);
+      if (options.baseline) {
+        const unsupportedOptions = listExplicitOptionFlagsExcept(
+          commandRuntime,
+          BASELINE_OPTION_NAMES,
+        );
+        if (unsupportedOptions.length > 0) {
+          const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
+          const message = `--baseline cannot be combined with: ${unsupportedOptions.join(", ")}.`;
+          rejectOnboardingOption({ json: options.json === true }, defaultRuntime, message);
+          return;
+        }
+        const { setupCommand } = await import("../../commands/setup.js");
+        await setupCommand(
+          {
+            workspace: readStringValue(options.workspace),
+            skipBootstrap: options.skipBootstrap === true,
+            json: Boolean(options.json),
+          },
+          defaultRuntime,
+        );
+        return;
+      }
+      await runOnboardCommand(options, commandRuntime, defaultRuntime);
     });
   });
 

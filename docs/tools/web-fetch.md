@@ -12,6 +12,18 @@ sidebarTitle: "Web Fetch"
 markdown or text). It does **not** execute JavaScript. For JS-heavy sites or
 login-protected pages, use the [Web Browser](/tools/browser) instead.
 
+Basic HTML extraction preserves boundaries around block content such as quotes,
+figure captions, and collapsible sections.
+
+HTML cleanup excludes text hidden by recognized inline styles, including scale
+transforms that collapse the X or Y axis, such as `scale(0, 0)` and
+`scale3d(0, 0, 0)`. Nonzero scales and a zero Z axis alone remain visible.
+Basic HTML extraction keeps definition-list terms and values on separate lines.
+
+Document charset detection ignores declarations inside HTML or XML comments.
+Byte-order marks and HTTP charset headers retain precedence over active document
+declarations; commented-out metadata does not change the fetched bytes.
+
 ## Quick start
 
 Enabled by default, no configuration needed:
@@ -27,7 +39,15 @@ URL to fetch. `http(s)` only.
 </ParamField>
 
 <ParamField path="extractMode" type="'markdown' | 'text'" default="markdown">
-Output format after main-content extraction.
+Output format after main-content extraction. For Markdown responses, text mode
+normalizes prose whitespace but preserves indentation, repeated spaces, tabs,
+and blank lines inside code blocks fenced with backticks or tildes.
+Text mode removes complete link destinations, including nested parentheses.
+An escaped `!` before a link stays literal rather than causing the link text to
+be omitted as an image.
+Readability text output keeps headings, paragraphs, and list items on separate lines.
+HTML text output preserves visible literal syntax, including link and image examples,
+backticks, and leading punctuation, rather than interpreting it as Markdown.
 </ParamField>
 
 <ParamField path="maxChars" type="number">
@@ -71,7 +91,8 @@ truncated. The caller's requested URL is preserved.
     header. Blocks private/internal hostnames and re-checks redirects.
   </Step>
   <Step title="Extract">
-    Runs Readability (main-content extraction) on the HTML response.
+    Runs Readability (main-content extraction) on a background worker so HTML
+    parsing does not block the Gateway.
   </Step>
   <Step title="Fallback (optional)">
     If Readability fails and a fetch provider is available, retries through
@@ -113,6 +134,10 @@ ignores cancellation. Already-canceled calls reject even when a cached result
 exists. If cancellation occurs during fetching, fallback processing, or
 connection cleanup, OpenClaw rejects the call instead of returning success or
 adding a result to the fetch cache.
+
+Readability extraction stops waiting when the fetch is canceled or its request
+timeout expires. Extraction already admitted to a worker finishes under the
+existing HTML limits; its late result is discarded.
 
 ## Config
 
@@ -284,6 +309,25 @@ outbound policy after DNS resolution.
   either the URL or the `NO_PROXY` entry.
 </Note>
 
+## Saved output
+
+When fetched content exceeds the inline limit, `web_fetch` includes a `spill.path`
+and a **Full output** location. Use `read` with that path and bounded `offset`/`limit`
+arguments to retrieve the omitted content. Saved output retains the untrusted-content
+warning and is capped at 2,000,000 characters; `spill.truncated` indicates an
+incomplete saved response.
+
+Local Docker and Podman sandboxes save this output in their existing private
+input-staging area, accessible through the sandbox reader. Cached saved paths remain
+scoped to the requesting session and sandbox workspace. Recovery also works when
+guest workspace access is read-only: the trusted input-staging owner prepares the
+file without granting guest write access.
+
+Other backends, including remote-shell sandboxes, need a prepared input-staging
+capability before saved output is available. Without it, the inline result reports
+that full output is unavailable, makes no staging write, and advertises no host-only
+path. An unsuccessful save is not cached.
+
 ## Limits and safety
 
 - `maxChars` is clamped to `tools.web.fetch.maxCharsCap` (default `20000`)
@@ -291,7 +335,7 @@ outbound policy after DNS resolution.
   32000-10000000) before parsing; oversized responses are truncated with a warning
 - Private/internal hostnames are blocked
 - `tools.web.fetch.ssrfPolicy.allowedHostnames` allows exact trusted hosts while leaving other private/internal targets blocked
-- `tools.web.fetch.ssrfPolicy.blockedHostnames` denies exact hosts and wildcard subdomains before DNS and allow rules, including on redirects and with private-network access enabled. For example, `["tracker.example.com", "*.ads.example.com"]` blocks those hosts without requiring a full allowlist. Wildcards do not match the apex; add `ads.example.com` separately to block it. Matching ignores case and trailing dots; use ASCII/Punycode for internationalized domains. Empty or unset adds no denials
+- `tools.web.fetch.ssrfPolicy.blockedHostnames` denies exact hosts and wildcard subdomains before DNS and allow rules, including on redirects and with private-network access enabled. For example, `["tracker.example.com", "*.ads.example.com"]` blocks those hosts without requiring a full allowlist. Wildcards do not match the apex; add `ads.example.com` separately to block it. Matching ignores case and trailing dots; use ASCII/Punycode for internationalized domains. Empty or unset adds no denials. The same deny list also applies when OpenClaw downloads remote media to send to a channel, including `message` tool attachments and sends and channel reply media; the other `ssrfPolicy` settings do not
 - `tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork` broadly permits private-network targets; enable it only when model-selected URLs are trusted in this deployment
 - `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` and
   `tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange` are narrow opt-ins

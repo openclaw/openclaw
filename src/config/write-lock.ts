@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { assertDirectoryIdentitySync, readDirectoryIdentity } from "@openclaw/fs-safe/advanced";
 import { isMissingPathError } from "../infra/errno.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage, isErrno } from "../infra/errors.js";
 import {
   acquireFileLock,
@@ -15,7 +16,7 @@ import {
 import {
   getUpdateDoctorConfigWriteAuthority,
   recordUpdateDoctorConfigWriteRefusal,
-} from "../infra/update-doctor-result.js";
+} from "../infra/update-doctor-config-capture.js";
 import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -330,12 +331,7 @@ export async function withConfigSourceLocks<T>(
         released.resolve();
         await Promise.all(reservations);
       }
-      if (failures.length === 1) {
-        throw failures[0];
-      }
-      if (failures.length > 1) {
-        throw new AggregateError(failures, "Config source ownership did not settle successfully.");
-      }
+      throwCollectedErrors(failures, "Config source ownership did not settle successfully.");
       if (outcome) {
         return outcome.value;
       }

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
+import { applyImplicitAgentRosterDefaults } from "../../config/implicit-agent-roster.js";
 import type {
   OpenClawConfig,
   ConfigFileSnapshot,
@@ -10,17 +11,15 @@ import type {
 import { hasErrnoCode } from "../../infra/errno.js";
 import { safeParseWithSchema } from "../../utils/zod-parse.js";
 
-type ConfigSummary = {
-  path: string;
-  exists: boolean;
-  valid: boolean;
-  issues?: Array<{ path: string; message: string }>;
-  warnings?: ConfigFileSnapshot["warnings"];
-  controlUi?: GatewayControlUiConfig;
-};
-
 type StatusConfigRead = {
-  summary: ConfigSummary;
+  summary: {
+    path: string;
+    exists: boolean;
+    valid: boolean;
+    issues?: Array<{ path: string; message: string }>;
+    warnings?: ConfigFileSnapshot["warnings"];
+    controlUi?: GatewayControlUiConfig;
+  };
   cfg: OpenClawConfig;
   mode: "fast" | "full";
 };
@@ -98,7 +97,7 @@ async function readFastStatusConfig(
     return null;
   }
   const { validateConfigObjectRaw } = await import("../../config/validation-core.js");
-  const validated = validateConfigObjectRaw(parsed, { env });
+  const validated = validateConfigObjectRaw(applyImplicitAgentRosterDefaults(parsed), { env });
   const cfg = validated.ok ? validated.config : await resolveInvalidStatusConfig(parsed);
 
   return {

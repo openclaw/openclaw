@@ -7,8 +7,10 @@ import type {
   RepairShortTermPromotionArtifactsResult,
   ShortTermAuditSummary,
   ShortTermDreamingStats,
-} from "../memory-host-sdk/dreaming.js";
+} from "../memory-host-sdk/dreaming-report-types.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
+import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
+import { capturePluginStateOperationModuleSource } from "../plugins/plugin-state-operation-source.js";
 // Memory core bundled runtime helpers load the internal memory plugin through SDK facades.
 import { loadBundledPluginPublicSurfaceModuleSyncCore } from "./facade-loader.js";
 import type {
@@ -126,8 +128,13 @@ function loadFacadeModule<Artifact extends keyof FacadeModules>(
     dirName: "memory-core",
     artifactBasename,
   });
+  const instance = getPluginValueInstance(module);
+  const assertCurrent = instance ? () => instance.run(() => {}) : undefined;
+  const moduleSource = assertCurrent
+    ? capturePluginStateOperationModuleSource(instance, assertCurrent)
+    : undefined;
   module.configureMemoryCoreDreamingState(<Value>(options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStore<Value>("memory-core", options),
+    createPluginStateKeyedStore<Value>("memory-core", options, assertCurrent, moduleSource),
   );
   return module;
 }

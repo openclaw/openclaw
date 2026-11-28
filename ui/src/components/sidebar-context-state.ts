@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import type { ApplicationRouter, RouteId } from "../app-routes.ts";
-import { selectRenderedRouteMatch } from "../app/router-outlet-controller.ts";
+import { selectRenderedRouteMatch } from "../app/router-outlet-presentation.ts";
 
 export type ContextualSidebar = {
   key: RouteId;

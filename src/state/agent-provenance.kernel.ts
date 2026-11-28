@@ -2,14 +2,30 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
+  sqliteStringSetEntries,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { agentProvenancePublication } from "./agent-provenance-publication.js";
 import type { AgentProvenance } from "./agent-provenance.types.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
 
 type AgentProvenanceDatabase = Pick<OpenClawStateKyselyDatabase, "agent_provenance">;
+
+export const agentProvenanceReadOperations = {
+  "agentProvenance.readBatch": (input: { agentIds: readonly string[] }, db) => ({
+    type: "agentProvenance.readBatch" as const,
+    records: tableExists(db, "agent_provenance")
+      ? readAgentProvenanceBatchInDatabase(db, input.agentIds)
+      : [],
+  }),
+  "agentProvenance.list": (_input: undefined, db) => ({
+    type: "agentProvenance.list" as const,
+    records: tableExists(db, "agent_provenance") ? listAgentProvenanceInDatabase(db) : [],
+  }),
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
 export function recordAgentProvenanceInDatabase(
   database: EngineConnection,
@@ -38,10 +54,24 @@ export function recordAgentProvenanceInDatabase(
   agentProvenancePublication.stagePostimages(database, [provenance]);
 }
 
+/** Delete one row inside the caller's authoritative state transaction. */
+export function deleteAgentProvenanceForAgent(database: EngineConnection, agentId: string): void {
+  const db = getNodeSqliteKysely<AgentProvenanceDatabase>(database);
+  executeSqliteQuerySync(
+    database,
+    db.deleteFrom("agent_provenance").where("agent_id", "=", normalizeAgentId(agentId)),
+  );
+  agentProvenancePublication.stageDeletions(database, [normalizeAgentId(agentId)]);
+}
+
 export function agentProvenanceFromRow(
   row: AgentProvenanceDatabase["agent_provenance"],
 ): AgentProvenance {
-  if (row.created_via !== "operator" && row.created_via !== "agent" && row.created_via !== "claw") {
+  if (
+    row.created_via !== "operator" &&
+    row.created_via !== "agent" &&
+    row.created_via !== "template"
+  ) {
     throw new Error(`Invalid agent provenance created_via: ${row.created_via}`);
   }
   return {
@@ -71,9 +101,7 @@ export function readAgentProvenanceBatchInDatabase(
   const db = getNodeSqliteKysely<AgentProvenanceDatabase>(database);
   const requestedIds = JSON.stringify(agentIds.map(normalizeAgentId));
   const query = db
-    .selectFrom((eb) =>
-      eb.fn<{ key: number; value: string }>("json_each", [eb.val(requestedIds)]).as("requested"),
-    )
+    .selectFrom(sqliteStringSetEntries(requestedIds).as("requested"))
     .innerJoin("agent_provenance", "agent_provenance.agent_id", "requested.value")
     .selectAll("agent_provenance")
     .orderBy("requested.key", "asc");

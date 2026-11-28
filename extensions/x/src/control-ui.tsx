@@ -1,20 +1,62 @@
 /** @jsxImportSource @solidjs/web */
-import { render } from "@solidjs/web";
+import { render, type JSX } from "@solidjs/web";
 import { defineControlUiPlugin, type ControlUiView } from "openclaw/plugin-sdk/control-ui";
-import { createStore, For } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  createStore,
+  Errored,
+  For,
+  Loading,
+  reconcile,
+  Show,
+} from "solid-js";
 import type { XAllowlistSnapshot } from "./admin.js";
 import "./control-ui.css";
+import { createTranslator } from "./i18n/index.ts";
+
+type Notice = "" | "added" | "removed" | "guestsBlocked" | "guestsOn" | "guestsOff";
 
 type RepliesState = {
   accountId: string | undefined;
   snapshot: XAllowlistSnapshot | undefined;
-  github: XAllowlistSnapshot["verifiedFromGitHub"];
   username: string;
   busy: boolean;
-  error: string;
-  notice: string;
+  notice: Notice;
   connected: boolean;
   canAdmin: boolean;
+  locale: string;
+};
+
+const failureKinds = {
+  "x.allowlist.list": "list",
+  "x.allowlist.add": "add",
+  "x.allowlist.remove": "remove",
+  "x.guests.set": "guests",
+} as const;
+
+type RequestMethod = keyof typeof failureKinds;
+
+class RequestFailure extends Error {
+  constructor(
+    readonly kind: (typeof failureKinds)[RequestMethod],
+    cause: unknown,
+  ) {
+    super("X replies request failed", { cause });
+  }
+}
+
+/** Places inline elements at `{name}` placeholders in translated copy. */
+function withSlots(text: string, slots: Record<string, JSX.Element>): JSX.Element[] {
+  return text
+    .split(/\{(\w+)\}/)
+    .map((part, index) => (index % 2 ? (slots[part] ?? `{${part}}`) : part));
+}
+
+type SnapshotIdentityFields = {
+  accountId?: XAllowlistSnapshot["accountId"];
+  userId?: XAllowlistSnapshot["entries"][number]["userId"];
+  xUserId?: NonNullable<XAllowlistSnapshot["verifiedFromGitHub"]>["entries"][number]["xUserId"];
 };
 
 const mountXReplies: ControlUiView = (container, initialContext) => {
@@ -24,23 +66,23 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
   let snapshot: XAllowlistSnapshot | undefined;
   let username = "";
   let busy = false;
-  let error = "";
-  let notice = "";
+  let notice: Notice = "";
   let generation = 0;
   let disposed = false;
   let available = false;
+  const [completion, setCompletion] = createSignal<Promise<void>>();
   // Request authority stays synchronous; the store only publishes presentation.
   const [view, setView] = createStore<RepliesState>({
     accountId,
     snapshot,
-    github: undefined,
     username,
     busy,
-    error,
     notice,
     connected: host.connection.connected,
     canAdmin: host.connection.canAdmin,
+    locale: host.locale,
   });
+  const t = createTranslator(() => view.locale);
   const canManage = () => host.connection.connected && host.connection.canAdmin;
   const usd = new Intl.NumberFormat(host.locale, {
     style: "currency",
@@ -53,414 +95,508 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
   const isCurrent = (id: number) =>
     !disposed && !context.signal.aborted && generation === id && canManage();
 
-  async function request(method: string, params: Record<string, unknown> = {}) {
+  function request(method: RequestMethod, params: Record<string, unknown> = {}) {
     if (busy || !canManage()) {
       return;
     }
     const id = ++generation;
     const selectedAccount = accountId;
     busy = true;
-    error = "";
     notice = "";
     publish();
-    try {
-      const result = await host.request<XAllowlistSnapshot>(method, {
-        ...(selectedAccount ? { accountId: selectedAccount } : {}),
-        ...params,
-      });
-      if (!isCurrent(id)) {
-        return;
+    const pending = (async () => {
+      let result: XAllowlistSnapshot | undefined;
+      try {
+        result = await host.request<XAllowlistSnapshot>(method, {
+          ...(selectedAccount ? { accountId: selectedAccount } : {}),
+          ...params,
+        });
+        if (!isCurrent(id)) {
+          return;
+        }
+        snapshot = result;
+        accountId = result.accountId;
+        if (method === "x.allowlist.add") {
+          username = "";
+          notice = "added";
+        } else if (method === "x.allowlist.remove") {
+          notice = "removed";
+        } else if (method === "x.guests.set") {
+          notice = result.guests.enabled
+            ? result.guests.blockedReason
+              ? "guestsBlocked"
+              : "guestsOn"
+            : "guestsOff";
+        }
+      } catch (cause) {
+        if (isCurrent(id)) {
+          throw new RequestFailure(failureKinds[method], cause);
+        }
+      } finally {
+        if (isCurrent(id)) {
+          busy = false;
+          publish(result);
+        }
       }
-      snapshot = result;
-      accountId = result.accountId;
-      if (method === "x.allowlist.add") {
-        username = "";
-        notice = "Account added. Its mentions can now receive replies.";
-      } else if (method === "x.allowlist.remove") {
-        notice = "Stored entry removed. Any other allowlist source still applies.";
-      } else if (method === "x.guests.set") {
-        notice = result.guests.enabled
-          ? result.guests.blockedReason
-            ? "Guest mode is on. Complete the setup below before guests can receive replies."
-            : "Guest mode is on. Guest replies use the configured repository restrictions and limits."
-          : "Guest mode is off. Only maintainers can receive replies.";
-      }
-    } catch (cause) {
-      if (isCurrent(id)) {
-        error = host.redact(
-          cause instanceof Error ? cause.message : "The request failed. Try again.",
-        );
-      }
-    } finally {
-      if (isCurrent(id)) {
-        busy = false;
-        publish();
-      }
-    }
+    })();
+    void setCompletion(pending);
+    // Errored consumes current failures; retired or disposed requests still need a consumer.
+    void pending.catch(() => {});
   }
 
   function XReplies() {
+    const completed = createMemo(() => completion()?.then(() => null) ?? null);
     return (
       <section class="x-replies" aria-labelledby="x-replies-title">
         <header class="x-replies__header">
           <div>
-            <h1 id="x-replies-title">X replies</h1>
-            <p>Choose whose mentions the bot can answer publicly.</p>
+            <h1 id="x-replies-title" class="plugin-page-title">
+              {t("xReplies.title")}
+            </h1>
+            <p>{t("xReplies.subtitle")}</p>
           </div>
           <button
             class="btn"
             type="button"
             disabled={view.busy || !view.connected || !view.canAdmin}
-            onClick={() => void request("x.allowlist.list")}
+            onClick={() => request("x.allowlist.list")}
           >
-            Refresh
+            {t("xReplies.refresh")}
           </button>
         </header>
         {!view.connected ? (
-          <p role="status">Connect to the Gateway to manage X replies.</p>
+          <p role="status">{t("xReplies.disconnected")}</p>
         ) : !view.canAdmin ? (
-          <p role="status">Administrator access is required to manage X replies.</p>
+          <p role="status">{t("xReplies.adminRequired")}</p>
         ) : (
           <>
             <div class="x-replies__controls">
               <label class="x-replies__field">
-                <span>Bot account</span>
+                <span>{t("xReplies.xAccount")}</span>
                 <select
                   value={view.accountId ?? ""}
                   disabled={view.busy || !view.snapshot}
-                  onChange={(event: Event) => {
-                    if (!(event.currentTarget instanceof HTMLSelectElement)) {
-                      return;
-                    }
+                  onChange={(event) => {
                     accountId = event.currentTarget.value;
                     snapshot = undefined;
-                    void request("x.allowlist.list");
+                    request("x.allowlist.list");
                   }}
                 >
-                  {view.snapshot ? (
-                    <For each={view.snapshot.accounts} keyed={(row) => row.accountId}>
-                      {(account) => (
-                        <option
-                          value={account().accountId}
-                          selected={account().accountId === view.accountId}
-                        >
-                          {account().username ? `@${account().username}` : account().accountId} (
-                          {account().accountId})
-                        </option>
-                      )}
-                    </For>
-                  ) : (
-                    <option value={view.accountId ?? ""}>
-                      {view.accountId ?? "Select an account"}
-                    </option>
-                  )}
+                  <Show
+                    when={view.snapshot}
+                    fallback={
+                      <option value={view.accountId ?? ""}>
+                        {view.accountId ?? t("xReplies.selectAccount")}
+                      </option>
+                    }
+                  >
+                    {(currentSnapshot) => (
+                      <For each={currentSnapshot().accounts} keyed={(row) => row.accountId}>
+                        {(account) => (
+                          <option
+                            value={account().accountId}
+                            selected={account().accountId === view.accountId}
+                          >
+                            {t("xReplies.accountOption", {
+                              account: account().username
+                                ? `@${account().username}`
+                                : account().accountId,
+                              accountId: account().accountId,
+                            })}
+                          </option>
+                        )}
+                      </For>
+                    )}
+                  </Show>
                 </select>
               </label>
               <form
                 class="x-replies__add"
                 onSubmit={(event: Event) => {
                   event.preventDefault();
-                  void request("x.allowlist.add", { username });
+                  request("x.allowlist.add", { username });
                 }}
               >
                 <label class="x-replies__field">
-                  <span>Add by X handle</span>
+                  <span>{t("xReplies.addByHandle")}</span>
                   <input
                     name="username"
                     autocomplete="off"
-                    placeholder="@handle"
+                    placeholder={t("xReplies.handlePlaceholder")}
                     maxlength="16"
                     required
                     value={view.username}
                     disabled={view.busy}
-                    onInput={(event: Event) => {
-                      if (event.currentTarget instanceof HTMLInputElement) {
-                        username = event.currentTarget.value;
-                        publish();
-                      }
+                    onInput={(event) => {
+                      username = event.currentTarget.value;
+                      publish();
                     }}
                   />
                 </label>
                 <button class="btn primary" type="submit" disabled={view.busy}>
-                  Add account
+                  {t("xReplies.addAccount")}
                 </button>
               </form>
             </div>
-            <p class="x-replies__hint">
-              Handle lookup costs $0.01. Config entries are read-only here.
-            </p>
-            {view.error ? (
-              <p class="x-replies__error" role="alert">
-                {view.error}
-              </p>
-            ) : null}
-            <div aria-live="polite">
-              {view.busy ? <p>Updating X replies…</p> : view.notice ? <p>{view.notice}</p> : null}
-            </div>
-            {view.snapshot ? (
-              <>
-                <section class="x-replies__guests" aria-labelledby="x-guests-title">
-                  <div class="x-replies__guest-header">
-                    <div>
-                      <h2 id="x-guests-title">Guest mode</h2>
-                      <p>Let anyone ask questions about the OpenClaw repository.</p>
-                    </div>
-                    <button
-                      class="x-replies__switch"
-                      type="button"
-                      role="switch"
-                      aria-label="Guest mode"
-                      aria-checked={view.snapshot.guests.enabled ? "true" : "false"}
-                      disabled={view.busy}
-                      onClick={() =>
-                        void request("x.guests.set", { enabled: !view.snapshot?.guests.enabled })
+            <p class="x-replies__hint">{t("xReplies.lookupHint")}</p>
+            <Loading on={completion()}>
+              <Errored
+                fallback={(error) => {
+                  const message = () => {
+                    const failure = error();
+                    if (!(failure instanceof RequestFailure)) {
+                      return t("xReplies.errors.request");
+                    }
+                    const cause = failure.cause;
+                    if (cause instanceof Error && "details" in cause) {
+                      const details = cause.details;
+                      if (details && typeof details === "object") {
+                        if ("xHandleRequired" in details && details.xHandleRequired === true) {
+                          return t("xReplies.errors.handleRequired");
+                        }
+                        if (
+                          "xBudgetResumesAt" in details &&
+                          typeof details.xBudgetResumesAt === "number" &&
+                          Number.isFinite(new Date(details.xBudgetResumesAt).getTime())
+                        ) {
+                          return t("xReplies.errors.budget", {
+                            time: dateTime.format(details.xBudgetResumesAt),
+                          });
+                        }
                       }
-                    >
-                      <span class="x-replies__switch-track" aria-hidden="true"></span>
-                      <span>{view.snapshot.guests.enabled ? "On" : "Off"}</span>
-                    </button>
-                  </div>
-                  <dl class="x-replies__guest-counts">
+                    }
+                    return t("xReplies.errors." + failure.kind);
+                  };
+                  return (
+                    <p class="x-replies__error" role="alert">
+                      {message()}
+                    </p>
+                  );
+                }}
+              >
+                {completed()}
+              </Errored>
+            </Loading>
+            <div aria-live="polite">
+              {view.busy ? (
+                <p>{t("xReplies.updating")}</p>
+              ) : view.notice ? (
+                <p>{t(`xReplies.notices.${view.notice}`)}</p>
+              ) : null}
+            </div>
+            <Show when={view.snapshot}>
+              {(currentSnapshot) => (
+                <>
+                  <section class="x-replies__guests" aria-labelledby="x-guests-title">
+                    <div class="x-replies__guest-header">
+                      <div>
+                        <h2 id="x-guests-title">{t("xReplies.guests.title")}</h2>
+                        <p>{t("xReplies.guests.subtitle")}</p>
+                      </div>
+                      <button
+                        class="x-replies__switch"
+                        type="button"
+                        role="switch"
+                        aria-label={t("xReplies.guests.title")}
+                        aria-checked={currentSnapshot().guests.enabled ? "true" : "false"}
+                        disabled={view.busy}
+                        onClick={() =>
+                          request("x.guests.set", {
+                            enabled: !currentSnapshot().guests.enabled,
+                          })
+                        }
+                      >
+                        <span class="x-replies__switch-track" aria-hidden="true"></span>
+                        <span>
+                          {t(
+                            currentSnapshot().guests.enabled
+                              ? "xReplies.guests.on"
+                              : "xReplies.guests.off",
+                          )}
+                        </span>
+                      </button>
+                    </div>
+                    <dl class="x-replies__guest-counts">
+                      <div>
+                        <dt>{t("xReplies.guests.perGuestLimit")}</dt>
+                        <dd>{currentSnapshot().guests.maxMentionsPerAuthorPerDay}</dd>
+                      </div>
+                      <div>
+                        <dt>{t("xReplies.guests.admittedToday")}</dt>
+                        <dd>{currentSnapshot().guests.admittedToday}</dd>
+                      </div>
+                      <div>
+                        <dt>{t("xReplies.guests.rateLimitedToday")}</dt>
+                        <dd>{currentSnapshot().guests.rateLimitedToday}</dd>
+                      </div>
+                    </dl>
+                    <p class="x-replies__hint">
+                      {t("xReplies.guests.hint")}{" "}
+                      <a
+                        href="https://docs.openclaw.ai/channels/x#guest-mode"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {t("xReplies.guests.docsLink")}
+                      </a>
+                    </p>
+                    {currentSnapshot().guests.blockedReason ? (
+                      <p class="x-replies__error" role="alert">
+                        {currentSnapshot().guests.blockedReason}
+                      </p>
+                    ) : null}
+                  </section>
+                  <dl class="x-replies__spend" aria-label={t("xReplies.spend.label")}>
                     <div>
-                      <dt>Per guest, per UTC day</dt>
-                      <dd>{view.snapshot.guests.maxMentionsPerAuthorPerDay} mentions</dd>
+                      <dt>{t("xReplies.spend.today")}</dt>
+                      <dd>
+                        <strong>{usd.format(currentSnapshot().spend.dayUsd)}</strong>
+                        <span> / {usd.format(currentSnapshot().spend.dailyLimitUsd)}</span>
+                      </dd>
                     </div>
                     <div>
-                      <dt>Admitted today</dt>
-                      <dd>{view.snapshot.guests.admittedToday}</dd>
-                    </div>
-                    <div>
-                      <dt>Rate-limited today</dt>
-                      <dd>{view.snapshot.guests.rateLimitedToday}</dd>
+                      <dt>
+                        {t("xReplies.spend.cycle", { date: currentSnapshot().spend.cycleStart })}
+                      </dt>
+                      <dd>
+                        <strong>{usd.format(currentSnapshot().spend.cycleUsd)}</strong>
+                        <span> / {usd.format(currentSnapshot().spend.monthlyLimitUsd)}</span>
+                      </dd>
                     </div>
                   </dl>
-                  <p class="x-replies__hint">
-                    Applies to the selected bot account. Guests get repository answers with hidden
-                    helpers of the same agent. No writes, commands, visible work sessions, or other
-                    agents. Maintainers keep their normal access.{" "}
-                    <a
-                      href="https://docs.openclaw.ai/channels/x#guest-mode"
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Guest setup and limits
-                    </a>
-                  </p>
-                  {view.snapshot.guests.blockedReason ? (
-                    <p class="x-replies__error" role="alert">
-                      {view.snapshot.guests.blockedReason}
-                    </p>
-                  ) : null}
-                </section>
-                <dl class="x-replies__spend" aria-label="X API spend">
-                  <div>
-                    <dt>Today (UTC)</dt>
-                    <dd>
-                      <strong>{usd.format(view.snapshot.spend.dayUsd)}</strong>
-                      <span> / {usd.format(view.snapshot.spend.dailyLimitUsd)}</span>
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Billing cycle since {view.snapshot.spend.cycleStart}</dt>
-                    <dd>
-                      <strong>{usd.format(view.snapshot.spend.cycleUsd)}</strong>
-                      <span> / {usd.format(view.snapshot.spend.monthlyLimitUsd)}</span>
-                    </dd>
-                  </div>
-                </dl>
-                {view.snapshot.spend.exhaustedUntil ? (
-                  <p class="x-replies__budget" role="status">
-                    X API budget reached. Paid requests resume at{" "}
-                    <time datetime={view.snapshot.spend.exhaustedUntil}>
-                      {view.snapshot.spend.exhaustedUntil}
-                    </time>
-                    .
-                  </p>
-                ) : null}
-                <div class="x-replies__list" aria-busy={view.busy ? "true" : "false"}>
-                  {view.snapshot.entries.length ? (
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Account</th>
-                          <th>Source</th>
-                          <th>Added by</th>
-                          <th>
-                            <span class="x-replies__sr-only">Actions</span>
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <For each={view.snapshot.entries} keyed={(row) => row.userId}>
-                          {(entry) => (
-                            <tr>
-                              <td>
-                                <strong>
-                                  {entry().username ? `@${entry().username}` : entry().userId}
-                                </strong>
-                                {entry().name ? <span>{entry().name}</span> : null}
-                                {entry().username ? <small>{entry().userId}</small> : null}
-                              </td>
-                              <td>
-                                {entry().configured
-                                  ? entry().editable
-                                    ? "Config + stored"
-                                    : "Config"
-                                  : "Stored"}
-                              </td>
-                              <td>{entry().addedBy ?? "—"}</td>
-                              <td>
-                                {entry().editable ? (
-                                  <button
-                                    class="btn"
-                                    type="button"
-                                    aria-label={`Remove stored entry for ${entry().username ? `@${entry().username}` : entry().userId}`}
-                                    disabled={view.busy}
-                                    onClick={() =>
-                                      void request("x.allowlist.remove", {
-                                        userId: entry().userId,
-                                      })
-                                    }
-                                  >
-                                    Remove
-                                  </button>
-                                ) : (
-                                  <span class="x-replies__hint">Read-only</span>
-                                )}
-                              </td>
-                            </tr>
-                          )}
-                        </For>
-                      </tbody>
-                    </table>
-                  ) : (
-                    <p class="x-replies__empty">
-                      No manual entries yet. Add a maintainer above or set <code>allowFrom</code> in
-                      config.
-                    </p>
-                  )}
-                </div>
-                {view.github ? (
-                  <section class="x-replies__github" aria-labelledby="x-github-title">
-                    <h2 id="x-github-title">From GitHub</h2>
-                    <p>
-                      Verified through{" "}
-                      <a
-                        href={`https://github.com/${view.github.repo}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {view.github.repo}
-                      </a>
-                      . To enable yourself, add your X handle to your GitHub profile.{" "}
-                      <a
-                        href="https://docs.openclaw.ai/channels/x#enable-yourself"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Profile setup
-                      </a>
-                    </p>
-                    <p class="x-replies__hint" role="status">
-                      {view.github.stale ? "Sync is stale. " : ""}
-                      {view.github.lastSyncAt !== undefined ? (
-                        <>
-                          Last successful sync:{" "}
-                          <time datetime={new Date(view.github.lastSyncAt).toISOString()}>
-                            {dateTime.format(view.github.lastSyncAt)}
-                          </time>
-                          . {view.github.stale ? "The last good set remains active. " : ""}
-                        </>
-                      ) : (
-                        "No successful sync yet."
-                      )}
-                      Entries update automatically and are read-only here.
-                    </p>
-                    {view.github.message ? (
-                      <p class="x-replies__error" role="alert">
-                        {host.redact(view.github.message)}
+                  <Show when={currentSnapshot().spend.exhaustedUntil}>
+                    {(until) => (
+                      <p class="x-replies__budget" role="status">
+                        {withSlots(t("xReplies.spend.exhausted"), {
+                          time: <time datetime={until()}>{until()}</time>,
+                        })}
                       </p>
-                    ) : null}
-                    {view.github.unresolvedHandles.length ? (
-                      <p class="x-replies__hint">
-                        Could not resolve on X:{" "}
-                        {view.github.unresolvedHandles.map((handle) => `@${handle}`).join(", ")}.
-                        Check the declared profiles.
-                      </p>
-                    ) : null}
-                    <div class="x-replies__list">
-                      {view.github.entries.length ? (
-                        <table>
-                          <thead>
-                            <tr>
-                              <th>X account</th>
-                              <th>GitHub account</th>
-                              <th>Permission</th>
-                              <th>Last sync</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            <For each={view.github.entries} keyed={(row) => row.xUserId}>
-                              {(entry) => (
-                                <tr>
-                                  <td>
-                                    <strong>@{entry().xHandle}</strong>
-                                    <small>{entry().xUserId}</small>
-                                  </td>
-                                  <td>
-                                    <a
-                                      href={`https://github.com/${encodeURIComponent(entry().githubLogin)}`}
-                                      target="_blank"
-                                      rel="noreferrer"
+                    )}
+                  </Show>
+                  <div class="x-replies__list" aria-busy={view.busy ? "true" : "false"}>
+                    {currentSnapshot().entries.length ? (
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>{t("xReplies.allowlist.account")}</th>
+                            <th>{t("xReplies.allowlist.source")}</th>
+                            <th>{t("xReplies.allowlist.addedBy")}</th>
+                            <th>
+                              <span class="x-replies__sr-only">
+                                {t("xReplies.allowlist.actions")}
+                              </span>
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <For each={currentSnapshot().entries}>
+                            {(entry) => (
+                              <tr>
+                                <td>
+                                  <strong>
+                                    {entry.username ? `@${entry.username}` : entry.userId}
+                                  </strong>
+                                  {entry.name ? <span>{entry.name}</span> : null}
+                                  {entry.username ? <small>{entry.userId}</small> : null}
+                                </td>
+                                <td>
+                                  {t(
+                                    entry.configured
+                                      ? entry.editable
+                                        ? "xReplies.allowlist.configAndStored"
+                                        : "xReplies.allowlist.config"
+                                      : "xReplies.allowlist.stored",
+                                  )}
+                                </td>
+                                <td>{entry.addedBy ?? "—"}</td>
+                                <td class="x-replies__row-action">
+                                  {entry.editable ? (
+                                    <button
+                                      class="btn"
+                                      type="button"
+                                      aria-label={t("xReplies.allowlist.removeLabel", {
+                                        account: entry.username
+                                          ? `@${entry.username}`
+                                          : entry.userId,
+                                      })}
+                                      disabled={view.busy}
+                                      onClick={() =>
+                                        request("x.allowlist.remove", {
+                                          userId: entry.userId,
+                                        })
+                                      }
                                     >
-                                      @{entry().githubLogin}
-                                    </a>
-                                  </td>
-                                  <td>{entry().permission}</td>
-                                  <td>
-                                    <time datetime={new Date(entry().syncedAt).toISOString()}>
-                                      {dateTime.format(entry().syncedAt)}
-                                    </time>
-                                  </td>
-                                </tr>
+                                      {t("xReplies.allowlist.remove")}
+                                    </button>
+                                  ) : (
+                                    <span class="x-replies__hint">
+                                      {t("xReplies.allowlist.readOnly")}
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            )}
+                          </For>
+                        </tbody>
+                      </table>
+                    ) : (
+                      <p class="x-replies__empty">{t("xReplies.allowlist.empty")}</p>
+                    )}
+                  </div>
+                  <Show when={currentSnapshot().verifiedFromGitHub}>
+                    {(github) => {
+                      const lastSync = createMemo(() => {
+                        const timestamp = github().lastSyncAt;
+                        return timestamp === undefined ? undefined : new Date(timestamp);
+                      });
+                      return (
+                        <section class="x-replies__github" aria-labelledby="x-github-title">
+                          <h2 id="x-github-title">{t("xReplies.github.title")}</h2>
+                          <p>
+                            {withSlots(t("xReplies.github.verifiedThrough"), {
+                              repo: (
+                                <a
+                                  href={`https://github.com/${github().repo}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {github().repo}
+                                </a>
+                              ),
+                            })}{" "}
+                            <a
+                              href="https://docs.openclaw.ai/channels/x#enable-yourself"
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              {t("xReplies.github.profileSetup")}
+                            </a>
+                          </p>
+                          <p class="x-replies__hint" role="status">
+                            {github().stale ? `${t("xReplies.github.stale")} ` : ""}
+                            <Show
+                              when={lastSync()}
+                              fallback={`${t("xReplies.github.neverSynced")} `}
+                            >
+                              {(date) => (
+                                <>
+                                  {withSlots(t("xReplies.github.lastSync"), {
+                                    time: (
+                                      <time datetime={date().toISOString()}>
+                                        {dateTime.format(date())}
+                                      </time>
+                                    ),
+                                  })}{" "}
+                                  {github().stale
+                                    ? `${t("xReplies.github.lastGoodSetActive")} `
+                                    : ""}
+                                </>
                               )}
-                            </For>
-                          </tbody>
-                        </table>
-                      ) : (
-                        <p class="x-replies__empty">No GitHub-derived accounts yet.</p>
-                      )}
-                    </div>
-                  </section>
-                ) : null}
-                <p class="x-replies__hint">
-                  {view.snapshot.guests.enabled
-                    ? view.snapshot.guests.blockedReason
-                      ? "Guest replies are blocked until the setup above is complete."
-                      : "Allowlisted users are maintainers. Other users receive limited guest replies."
-                    : "Guest mode is off. Only allowlisted maintainers receive replies."}
-                </p>
-              </>
-            ) : null}
+                            </Show>
+                            {t("xReplies.github.readOnly")}
+                          </p>
+                          <Show when={github().message}>
+                            {(message) => (
+                              <p class="x-replies__error" role="alert">
+                                {host.redact(message())}
+                              </p>
+                            )}
+                          </Show>
+                          {github().unresolvedHandles.length ? (
+                            <p class="x-replies__hint">
+                              {t("xReplies.github.unresolved", {
+                                handles: github()
+                                  .unresolvedHandles.map((handle) => `@${handle}`)
+                                  .join(", "),
+                              })}
+                            </p>
+                          ) : null}
+                          <div class="x-replies__list">
+                            {github().entries.length ? (
+                              <table>
+                                <thead>
+                                  <tr>
+                                    <th>{t("xReplies.github.xAccount")}</th>
+                                    <th>{t("xReplies.github.githubAccount")}</th>
+                                    <th>{t("xReplies.github.permission")}</th>
+                                    <th>{t("xReplies.github.lastSyncColumn")}</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  <For each={github().entries}>
+                                    {(entry) => (
+                                      <tr>
+                                        <td>
+                                          <strong>@{entry.xHandle}</strong>
+                                          <small>{entry.xUserId}</small>
+                                        </td>
+                                        <td>
+                                          <a
+                                            href={`https://github.com/${encodeURIComponent(entry.githubLogin)}`}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                          >
+                                            @{entry.githubLogin}
+                                          </a>
+                                        </td>
+                                        <td>{entry.permission}</td>
+                                        <td>
+                                          <time datetime={new Date(entry.syncedAt).toISOString()}>
+                                            {dateTime.format(entry.syncedAt)}
+                                          </time>
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </For>
+                                </tbody>
+                              </table>
+                            ) : (
+                              <p class="x-replies__empty">{t("xReplies.github.empty")}</p>
+                            )}
+                          </div>
+                        </section>
+                      );
+                    }}
+                  </Show>
+                  <p class="x-replies__hint">
+                    {t(
+                      currentSnapshot().guests.enabled
+                        ? currentSnapshot().guests.blockedReason
+                          ? "xReplies.footer.guestsBlocked"
+                          : "xReplies.footer.guestsOn"
+                        : "xReplies.footer.guestsOff",
+                    )}
+                  </p>
+                </>
+              )}
+            </Show>
           </>
         )}
       </section>
     );
   }
 
-  function publish() {
+  function publish(nextSnapshot?: XAllowlistSnapshot) {
     if (!disposed) {
-      setView(() => ({
-        accountId,
-        snapshot,
-        github: snapshot?.verifiedFromGitHub,
-        username,
-        busy,
-        error,
-        notice,
-        connected: host.connection.connected,
-        canAdmin: host.connection.canAdmin,
-      }));
+      setView((current) => {
+        if (nextSnapshot && current.snapshot?.accountId === nextSnapshot.accountId) {
+          // These are the identities of account, manual, and GitHub rows in this snapshot.
+          reconcile(
+            nextSnapshot,
+            (row: SnapshotIdentityFields) => row.accountId ?? row.userId ?? row.xUserId,
+          )(current.snapshot);
+        }
+        return {
+          accountId,
+          snapshot,
+          username,
+          busy,
+          notice,
+          connected: host.connection.connected,
+          canAdmin: host.connection.canAdmin,
+          locale: host.locale,
+        };
+      });
     }
   }
 
@@ -471,10 +607,10 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
       generation += 1;
       busy = false;
       snapshot = undefined;
-      error = "";
+      setCompletion(undefined);
       notice = "";
       if (next) {
-        void request("x.allowlist.list");
+        request("x.allowlist.list");
         return;
       }
     }
@@ -500,16 +636,17 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
 export default defineControlUiPlugin({
   id: "x",
   activate(host) {
+    const t = createTranslator(() => host.locale);
     const disposePage = host.ui.registerPage({
       id: "replies",
-      label: "X replies",
+      label: t("xReplies.title"),
       mount: mountXReplies,
     });
     const disposeNavigation = host.ui.registerNavigation({
       id: "replies",
-      label: "X replies",
+      label: t("xReplies.title"),
       page: { id: "replies" },
-      icon: "at-sign",
+      icon: "atSign",
       order: 40,
     });
     return () => {

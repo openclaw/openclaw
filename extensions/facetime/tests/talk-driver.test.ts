@@ -19,7 +19,7 @@ describe("FaceTime talk driver lifecycle", () => {
     await withEnvAsync({ SELECTED_REALTIME_KEY: "selected-key" }, async () => {
       await resolveFaceTimeRealtimeProvider({
         config: resolveFaceTimeConfig({
-          ownerHandles: ["caller@example.com"],
+          allowedCallers: ["caller@example.com"],
           realtime: {
             provider: "selected",
             providers: {
@@ -340,11 +340,30 @@ describe("FaceTime talk driver lifecycle", () => {
     }
   });
 
+  it("does not talk over a caller who speaks during the settle window", async () => {
+    const driver = await startReadyFaceTimeTalkDriver();
+
+    vi.useFakeTimers();
+    try {
+      driver.activate();
+      mocks.sessionParams?.onTranscript?.("user", "I have a question", true);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(mocks.bridge.triggerGreeting).not.toHaveBeenCalled();
+    } finally {
+      try {
+        await driver.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
   it("keeps direct hangup available without consult tools and deduplicates requests", async () => {
     await startReadyFaceTimeTalkDriver(
       startParams({
         config: resolveFaceTimeConfig({
-          ownerHandles: ["caller@example.com"],
+          allowedCallers: ["caller@example.com"],
           realtime: { toolPolicy: "none" },
         }),
       }),
@@ -385,7 +404,7 @@ describe("FaceTime talk driver lifecycle", () => {
     await startReadyFaceTimeTalkDriver(
       startParams({
         config: resolveFaceTimeConfig({
-          ownerHandles: ["caller@example.com"],
+          allowedCallers: ["caller@example.com"],
           realtime: {
             sessionKey: "agent:lobster:facetime",
             instructions: "Speak warmly and keep answers short.",
@@ -403,7 +422,7 @@ describe("FaceTime talk driver lifecycle", () => {
     expect(mocks.sessionParams?.instructions).toContain("Name: Tide");
     expect(mocks.sessionParams?.instructions).toContain("same configured OpenClaw agent");
     expect(mocks.sessionParams?.instructions).toContain(
-      "authenticated owner/user described by the loaded workspace profile context",
+      "usually the owner/user described by the loaded workspace profile context",
     );
     expect(mocks.sessionParams?.instructions).toContain(
       "Answer greetings, acknowledgements, and questions about your own identity or persona directly",

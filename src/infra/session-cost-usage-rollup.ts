@@ -1,4 +1,5 @@
 import { usageDailyModelIdentity, usageModelIdentity } from "../shared/usage-aggregates.js";
+import { includesUsageDay } from "../shared/usage-calendar.js";
 import {
   addCostUsageTotals,
   cloneCostUsageTotals,
@@ -16,6 +17,7 @@ import type {
   SessionUtcQuarterHourMessageCounts,
   SessionUtcQuarterHourTokenUsage,
   SessionToolUsage,
+  UsageCivilDays,
 } from "./session-cost-usage.types.js";
 
 const MAX_LATENCY_MS = 12 * 60 * 60 * 1000;
@@ -35,6 +37,9 @@ type SessionUsageLatencyAggregate = {
   max: number;
   min?: number;
   sum: number;
+  timedMs?: number;
+  timedTokens?: number;
+  timedCost?: number;
 };
 
 export type SessionUsageRollupBucket = SessionUsageUntimestampedRollup & {
@@ -67,6 +72,10 @@ type SessionUsageRollupContribution = {
   toolNames: string[];
   toolResultCounts: { total: number; errors: number };
   usageTotals?: CostUsageTotals;
+  /** True when the scan resolved canonical navigation and owns the cursor. */
+  navigated?: boolean;
+  /** This row's own user turn on its canonical path, when navigation named one. */
+  userTimestamp?: number;
 };
 
 function emptyMessageCounts(): SessionMessageCounts {
@@ -103,10 +112,19 @@ function compressLatencyCentroids(aggregate: SessionUsageLatencyAggregate): void
   }
 }
 
-function addLatencyValue(aggregate: SessionUsageLatencyAggregate, value: number): void {
+function addLatencyValue(
+  aggregate: SessionUsageLatencyAggregate,
+  value: number,
+  usage: CostUsageTotals | undefined,
+): void {
   const wasEmpty = aggregate.count === 0;
   aggregate.count += 1;
   aggregate.sum += value;
+  if (usage && value > 0) {
+    aggregate.timedMs = (aggregate.timedMs ?? 0) + value;
+    aggregate.timedTokens = (aggregate.timedTokens ?? 0) + usage.totalTokens;
+    aggregate.timedCost = (aggregate.timedCost ?? 0) + usage.totalCost;
+  }
   aggregate.min = wasEmpty ? value : Math.min(aggregate.min ?? value, value);
   aggregate.max = Math.max(aggregate.max, value);
   aggregate.centroids.push({ count: 1, value });
@@ -124,6 +142,11 @@ function mergeLatencyAggregate(
   const sourceMin = source.min ?? source.max;
   target.count += source.count;
   target.sum += source.sum;
+  if (source.timedMs !== undefined) {
+    target.timedMs = (target.timedMs ?? 0) + source.timedMs;
+    target.timedTokens = (target.timedTokens ?? 0) + (source.timedTokens ?? 0);
+    target.timedCost = (target.timedCost ?? 0) + (source.timedCost ?? 0);
+  }
   target.min = targetWasEmpty ? sourceMin : Math.min(target.min ?? target.max, sourceMin);
   target.max = Math.max(target.max, source.max);
   target.centroids.push(
@@ -222,18 +245,27 @@ export function appendSessionUsageRollupContribution(
     return;
   }
   if (contribution.role === "assistant") {
+    // Latency follows the turn this reply answers: its own canonical user ancestor,
+    // whichever branch it belongs to. A flat transcript and an appended tail have
+    // no navigation to resolve, so they measure from the running cursor.
     const sourceUserTimestamp =
-      contribution.durationMs === undefined ? rollup.lastUserTimestamp : undefined;
+      contribution.durationMs !== undefined
+        ? undefined
+        : contribution.navigated === true
+          ? contribution.userTimestamp
+          : rollup.lastUserTimestamp;
     const latencyMs =
       contribution.durationMs ??
       (sourceUserTimestamp !== undefined
         ? Math.max(0, timedBucket.timestampMs - sourceUserTimestamp)
         : undefined);
     if (latencyMs !== undefined && Number.isFinite(latencyMs) && latencyMs <= MAX_LATENCY_MS) {
-      addLatencyValue(timedBucket.latency, latencyMs);
+      addLatencyValue(timedBucket.latency, latencyMs, contribution.usageTotals);
     }
   }
-  if (contribution.role === "user") {
+  if (contribution.role === "user" && contribution.navigated !== true) {
+    // Without navigation facts the file order is the branch; a navigated scan
+    // publishes the active path's own cursor once it has read every row.
     rollup.lastUserTimestamp = timedBucket.timestampMs;
   }
 }
@@ -264,7 +296,7 @@ export function mergeSessionUsageRollupBucket(
   );
 }
 
-function computeLatencyStats(
+export function computeLatencyStats(
   aggregate: SessionUsageLatencyAggregate,
 ): SessionLatencyStats | undefined {
   if (aggregate.count === 0) {
@@ -286,6 +318,9 @@ function computeLatencyStats(
     p95Ms,
     minMs: aggregate.min ?? aggregate.max,
     maxMs: aggregate.max,
+    timedMs: aggregate.timedMs,
+    timedTokens: aggregate.timedTokens,
+    timedCost: aggregate.timedCost,
   };
 }
 
@@ -311,9 +346,6 @@ function addQuarterHourTokens(
   target: SessionUtcQuarterHourTokenUsage,
   source: SessionUtcQuarterHourTokenUsage,
 ): void {
-  if (source.usageReport?.state === "unavailable") {
-    target.usageReport = { state: "unavailable" };
-  }
   target.input += source.input;
   target.output += source.output;
   target.cacheRead += source.cacheRead;
@@ -323,9 +355,6 @@ function addQuarterHourTokens(
 }
 
 function addDailyModelUsage(target: SessionDailyModelUsage, source: SessionDailyModelUsage): void {
-  if (source.usageReport?.state === "unavailable") {
-    target.usageReport = { state: "unavailable" };
-  }
   target.tokens += source.tokens;
   target.cost += source.cost;
   target.count += source.count;
@@ -440,6 +469,9 @@ function mergeLatencyStats(
       right?.minMs ?? Number.POSITIVE_INFINITY,
     ),
     maxMs: Math.max(left?.maxMs ?? 0, right?.maxMs ?? 0),
+    timedMs: (left?.timedMs ?? 0) + (right?.timedMs ?? 0) || undefined,
+    timedTokens: (left?.timedTokens ?? 0) + (right?.timedTokens ?? 0) || undefined,
+    timedCost: (left?.timedCost ?? 0) + (right?.timedCost ?? 0) || undefined,
   };
 }
 
@@ -551,6 +583,7 @@ export function buildSessionCostSummaryFromRollup(params: {
   endMs: number;
   includeUntimestamped: boolean;
   formatDay: UsageDayKeyFormatter;
+  civilDays?: UsageCivilDays;
 }): SessionCostSummary {
   const totals = createEmptyCostUsageTotals();
   const messageCounts = emptyMessageCounts();
@@ -571,6 +604,9 @@ export function buildSessionCostSummaryFromRollup(params: {
   for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
     const date = new Date(bucket.firstTimestampMs ?? bucket.timestampMs);
     const dayKey = params.formatDay(date);
+    if (!includesUsageDay(dayKey, params.civilDays)) {
+      continue;
+    }
     const quarter = getUtcQuarterHourBucketKey(date);
     firstActivity ??= bucket.firstTimestampMs ?? bucket.timestampMs;
     lastActivity = bucket.lastTimestampMs ?? bucket.timestampMs;
@@ -585,10 +621,9 @@ export function buildSessionCostSummaryFromRollup(params: {
 
     dailyMessages.add([{ date: dayKey, ...bucket.messageCounts }]);
     quarterMessages.add([{ ...quarter, ...bucket.messageCounts }]);
-    const { input, output, cacheRead, cacheWrite, totalTokens, totalCost, usageReport } =
-      bucket.totals;
+    const { input, output, cacheRead, cacheWrite, totalTokens, totalCost } = bucket.totals;
     quarterTokens.add([
-      { ...quarter, input, output, cacheRead, cacheWrite, totalTokens, totalCost, usageReport },
+      { ...quarter, input, output, cacheRead, cacheWrite, totalTokens, totalCost },
     ]);
     dailyModels.add(
       bucket.models.map((model) => ({
@@ -598,7 +633,6 @@ export function buildSessionCostSummaryFromRollup(params: {
         tokens: model.totals.totalTokens,
         cost: model.totals.totalCost,
         count: model.count,
-        usageReport: model.totals.usageReport,
       })),
     );
 
@@ -652,11 +686,15 @@ export function addRollupToCostUsageSummary(params: {
   startMs: number;
   endMs: number;
   formatDay: UsageDayKeyFormatter;
+  civilDays?: UsageCivilDays;
   daily: Map<string, CostUsageTotals>;
   totals: CostUsageTotals;
 }): void {
   for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
     const dayKey = params.formatDay(new Date(bucket.firstTimestampMs ?? bucket.timestampMs));
+    if (!includesUsageDay(dayKey, params.civilDays)) {
+      continue;
+    }
     const daily = params.daily.get(dayKey) ?? createEmptyCostUsageTotals();
     addCostUsageTotals(daily, bucket.totals);
     params.daily.set(dayKey, daily);

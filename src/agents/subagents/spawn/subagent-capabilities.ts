@@ -10,13 +10,14 @@ import {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
   isSubagentSpawnDepthAllowed,
 } from "../../../config/agent-limits.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../routing/session-key.js";
+import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import { readDelegatedToolPolicy, type DelegatedToolPolicy } from "../../delegated-tool-policy.js";
 import {
   normalizeInheritedToolAllowlist,
@@ -37,7 +38,7 @@ export type {
   SessionCapabilityStore,
 } from "./subagent-session-store.js";
 
-export type SubagentSessionRole = "main" | "orchestrator" | "leaf";
+type SubagentSessionRole = "main" | "orchestrator" | "leaf";
 type SubagentControlScope = "children" | "none";
 
 type PersistedSubagentToolPolicyEnvelope = {
@@ -73,16 +74,12 @@ function isDashboardSessionKey(sessionKey: string): boolean {
 }
 
 function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string): boolean {
-  const leftAgentId = normalizeOptionalLowercaseString(
-    parseAgentSessionKey(leftSessionKey)?.agentId,
-  );
-  const rightAgentId = normalizeOptionalLowercaseString(
-    parseAgentSessionKey(rightSessionKey)?.agentId,
-  );
+  const leftAgentId = parseAgentSessionKey(leftSessionKey)?.agentId;
+  const rightAgentId = parseAgentSessionKey(rightSessionKey)?.agentId;
   return Boolean(leftAgentId) && leftAgentId === rightAgentId;
 }
 
-function resolveSessionCapabilityEntry(params: {
+export function resolveSessionCapabilityEntry(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
   store?: SessionCapabilityStore;
@@ -161,8 +158,6 @@ export function resolveSubagentCapabilities(params: { depth: number; maxSpawnDep
     depth,
     role,
     controlScope,
-    canSpawn: role === "main" || role === "orchestrator",
-    canControlChildren: controlScope === "children",
   };
 }
 
@@ -262,6 +257,39 @@ export function isSubagentEnvelopeSession(
   });
 }
 
+/** Visible spawns are interactive sessions; a dashboard key alone grants nothing. */
+export function isVisibleSpawnedSession(
+  sessionKey: string,
+  opts?: {
+    cfg?: OpenClawConfig;
+    store?: SessionCapabilityStore;
+    entry?: SessionCapabilityEntry;
+  },
+): boolean {
+  if (!isDashboardSessionKey(sessionKey)) {
+    return false;
+  }
+  const entry =
+    opts?.entry ??
+    resolveSessionCapabilityEntry({ sessionKey, cfg: opts?.cfg, store: opts?.store });
+  return (
+    entry?.createdVia === "spawn" &&
+    isStoredSubagentEnvelopeSession({ sessionKey, cfg: opts?.cfg, store: opts?.store, entry })
+  );
+}
+
+export function visibleParentInputProvenance(
+  sourceSessionKey: string | undefined,
+  targetSessionKey: string,
+  entry: SessionCapabilityEntry | undefined,
+): Pick<InputProvenance, "sourceRelation"> {
+  return sourceSessionKey &&
+    entry?.spawnedBy === sourceSessionKey &&
+    isVisibleSpawnedSession(targetSessionKey, { entry })
+    ? { sourceRelation: "parent" }
+    : {};
+}
+
 /**
  * Resolve a persisted child envelope that is strong enough to carry authority.
  * Session-key shape alone is useful for fail-closed subagent restrictions, but
@@ -315,7 +343,7 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
       (!direct &&
         (parent?.delegatedToolPolicy?.requesterSessionKey !==
           delegatedToolPolicy.requesterSessionKey ||
-          parent?.delegatedToolPolicy?.targetAgentId !== targetAgentId))
+          parent.delegatedToolPolicy?.targetAgentId !== targetAgentId))
     ) {
       delegatedToolPolicy = undefined;
     }
@@ -328,7 +356,7 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     inheritedToolDeny: normalizeInheritedToolDenylist(entry.inheritedToolDeny),
     delegatedToolPolicy,
     ...(entry.inheritedToolPolicySource === "sender"
-      ? { inheritedToolPolicySource: "sender" as const }
+      ? { inheritedToolPolicySource: entry.inheritedToolPolicySource }
       : {}),
   };
 }

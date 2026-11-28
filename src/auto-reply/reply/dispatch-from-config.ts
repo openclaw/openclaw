@@ -1,7 +1,5 @@
 import { scopePreparedModelRuntimeLease } from "../../agents/prepared-model-runtime-generation-scope.js";
-import { SessionRestartRecoveryTombstoneError } from "../../config/sessions/lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
 import { createInboundMessageAuditTerminal } from "./dispatch-from-config.audit.js";
@@ -18,10 +16,26 @@ import type {
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
-import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
-import { sendReplyRestartRecoveryNotice } from "./reply-turn-recovery-notice.js";
+import { prepareInternalGetReplyOptions } from "./get-reply.types.js";
+import { prepareReplySourceInput, retireUnadoptedReplySource } from "./reply-source-binding.js";
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
+
+type DispatchRuntimeResources = {
+  stack: AsyncDisposableStack;
+  lease?: ReturnType<typeof scopePreparedModelRuntimeLease>;
+};
+
+function retainDispatchRuntimeLease(
+  this: DispatchRuntimeResources,
+  lease: Parameters<typeof scopePreparedModelRuntimeLease>[0],
+): void {
+  this.lease = this.stack.use(scopePreparedModelRuntimeLease(lease));
+}
+
+function releaseDispatchRuntimeLeaseReference(this: DispatchRuntimeResources): void {
+  this.lease = undefined;
+}
 
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
@@ -38,27 +52,22 @@ export async function dispatchLowLevelChannelReplyFromConfig(
 }
 
 async function dispatchReplyFromConfigWithQueuePolicy(
-  params: DispatchFromConfigParams,
+  inputParams: DispatchFromConfigParams,
   allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
-  // Gateway ingress reserves before ACK so deferred preparation cannot reorder sends.
-  const inheritedTicket = params.replyOptions?.[REPLY_ADMISSION_TICKET];
-  const ticket =
-    inheritedTicket ??
-    reserveReplyAdmissionTicket([params.ctx.SessionKey, params.ctx.CommandTargetSessionKey]);
-  const ticketedParams = ticket
-    ? {
-        ...params,
-        replyOptions: { ...params.replyOptions, [REPLY_ADMISSION_TICKET]: ticket },
-      }
-    : params;
+  const source = await prepareReplySourceInput(
+    inputParams.ctx,
+    inputParams.cfg,
+    prepareInternalGetReplyOptions(inputParams.replyOptions, inputParams.ctx),
+  );
+  const params = { ...inputParams, replyOptions: source.options };
   const messageAuditTerminal = createInboundMessageAuditTerminal(params);
   let refreshedSessionSnapshot = false;
   try {
     while (true) {
       try {
         const result = await dispatchReplyFromConfigInner(
-          ticketedParams,
+          params,
           messageAuditTerminal,
           allowActiveQueueResolution,
         );
@@ -68,6 +77,8 @@ async function dispatchReplyFromConfigWithQueuePolicy(
         if (
           error instanceof DispatchSessionRefreshRequiredError &&
           !refreshedSessionSnapshot &&
+          source.input?.retirementRequested !== true &&
+          source.input?.claim?.releaseRequested !== true &&
           params.replyOptions?.abortSignal?.aborted !== true
         ) {
           // Rebuild once from the latest store entry. If another lifecycle mutation wins the
@@ -80,9 +91,8 @@ async function dispatchReplyFromConfigWithQueuePolicy(
       }
     }
   } finally {
-    // Ingress owns retries until queue handoff or terminal dispatch cleanup.
-    if (!inheritedTicket) {
-      ticket?.release();
+    if (source.created) {
+      retireUnadoptedReplySource(source.input);
     }
   }
 }
@@ -93,15 +103,16 @@ async function dispatchReplyFromConfigInner(
   allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
   await using runtimeResources = new AsyncDisposableStack();
-  let runtimeLease: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
+  const runtime: DispatchRuntimeResources = { stack: runtimeResources };
+  // Gathered callbacks outlive dispatch in native async contexts. Bind only this
+  // resource cell, not the execution context; LIFO clears it after its leases drain.
+  runtimeResources.defer(releaseDispatchRuntimeLeaseReference.bind(runtime));
   const gathered = await gatherDispatchRequest(
     params,
     messageAuditTerminal,
     allowActiveQueueResolution,
-    (lease) => {
-      runtimeLease = runtimeResources.use(scopePreparedModelRuntimeLease(lease));
-    },
-    (dispose) => runtimeResources.defer(dispose),
+    retainDispatchRuntimeLease.bind(runtime),
+    runtimeResources.defer.bind(runtimeResources),
   );
   if (gathered.status === "complete") {
     return gathered.result;
@@ -165,45 +176,10 @@ async function dispatchReplyFromConfigInner(
         markIdle("message_error");
       }
       failDispatchReplyOperation(err);
-      if (
-        err instanceof SessionRestartRecoveryTombstoneError &&
-        params.ctx.InboundAccessAuthorized === true &&
-        params.ctx.InboundEventKind !== "room_event" &&
-        params.ctx.InternalTurnSource === undefined &&
-        classifySessionStateActor({ inputProvenance: params.ctx.InputProvenance }).actorType ===
-          "human" &&
-        !errorState.isInternalWebchatTurn &&
-        !errorState.sendPolicyDenied &&
-        !errorState.suppressAcpChildUserDelivery &&
-        params.replyOptions?.abortSignal?.aborted !== true &&
-        errorState.dispatchOperationSessionKey &&
-        errorState.operationSessionStoreEntry.storePath
-      ) {
-        await sendReplyRestartRecoveryNotice({
-          agentId: errorState.operationSessionStoreEntry.agentId ?? errorState.sessionAgentId,
-          cfg: errorState.cfg,
-          channel: errorState.deliveryChannel,
-          sessionKey: errorState.dispatchOperationSessionKey,
-          storePath: errorState.operationSessionStoreEntry.storePath,
-          deliver: async (text) => {
-            const payload = { text, isError: true };
-            const routed = await errorState.routeReplyToOriginating(payload, { mirror: false });
-            if (routed) {
-              return errorState.isRoutedReplyDelivered(routed);
-            }
-            if (!params.dispatcher.sendFinalReply(payload)) {
-              return false;
-            }
-            const receipt = await params.dispatcher.waitForIdle();
-            // Ambiguous sends suppress retries but do not confirm notice delivery.
-            return receipt ? receipt.counts.final.delivered > 0 : false;
-          },
-        });
-      }
       throw err;
     }
   };
   const runWithRegistry = () =>
     withPluginRuntimeRegistryScope(gathered.state.pluginRegistry, execute);
-  return runtimeLease ? await runtimeLease.run(runWithRegistry) : await runWithRegistry();
+  return runtime.lease ? await runtime.lease.run(runWithRegistry) : await runWithRegistry();
 }

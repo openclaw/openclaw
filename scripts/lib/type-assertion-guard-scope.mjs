@@ -81,7 +81,6 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "extensions/reef/protocol/envelope.ts", // signed version fields authenticate before unsupported versions are rejected
   "extensions/signal/src/approval-native.ts", // approval runtime dynamically implements the public channel adapter seam
   "extensions/slack/src/approval-native.ts", // approval runtime dynamically implements the public channel adapter seam
-  "extensions/slack/src/monitor/events/agent.ts", // Slack app typings omit the agent event registrar
   "extensions/slack/src/monitor/events/assistant.ts", // Slack app typings omit the assistant event registrar
   "extensions/slack/src/monitor/events/messages.ts", // app mentions adapt into the shared Slack message pipeline
   "extensions/slack/src/monitor/slash.ts", // Slack action and options overloads omit runtime middleware fields
@@ -93,7 +92,7 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "extensions/telegram/src/approval-native.ts", // approval runtime dynamically implements the public channel adapter seam
   "extensions/telegram/src/client-fetch.ts", // Telegram and DOM fetch signatures use distinct body namespaces
   "extensions/telegram/src/doctor-contract.ts", // legacy doctor migration normalizes retired untyped config shapes
-  "extensions/telegram/src/fetch.ts", // Node DNS and Undici fetch overloads bridge DOM-compatible runtime calls
+  "extensions/telegram/src/fetch-transport.ts", // Node DNS and Undici fetch overloads bridge DOM-compatible runtime calls
   "extensions/telegram/src/outbound-media.ts", // Telegram API operation selection crosses overloaded method signatures
   "extensions/telegram/src/telegram-ingress-supersede-auth.ts", // Telegraf message input narrows into the ingress message contract
   "extensions/voice-call/src/webhook.ts", // voice runtime layers a core config subset into the full config contract

@@ -1,6 +1,5 @@
-import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { beforeAll, describe, expect, it } from "vitest";
-import { listBundledPackageChannelMetadata } from "../../../plugins/bundled-package-channel-metadata.js";
+import { listChannelCatalogEntries } from "../../../plugins/channel-catalog-registry.js";
 import {
   getBundledChannelPluginAsync,
   listBundledChannelPluginIds,
@@ -8,7 +7,7 @@ import {
 
 const bundledChannelPluginIds = listBundledChannelPluginIds();
 const packageMetadataById = new Map(
-  listBundledPackageChannelMetadata().map((channel) => [channel.id, channel]),
+  listChannelCatalogEntries({ origin: "bundled" }).map(({ channel }) => [channel.id, channel]),
 );
 const SHARED_SANITIZER_CHANNEL_IDS = [
   "nextcloud-talk",
@@ -46,10 +45,8 @@ describe("bundled channel plugin shape coherence", () => {
         "<think>secret</think>",
         visible,
       ].join("\n");
-      const expected = sanitizeAssistantVisibleText(text);
 
-      expect(expected).toBe(visible);
-      expect(sanitizeText({ text, payload: { text } })).toBe(expected);
+      expect(sanitizeText({ text, payload: { text } })).toBe(visible);
     },
   );
 

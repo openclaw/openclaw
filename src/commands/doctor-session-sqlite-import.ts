@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { importSqliteSessionRowsBatch } from "../config/sessions/session-accessor.sqlite-import.js";
+import {
+  importSqliteSessionRowsBatch,
+  restoreColdSessionTranscriptsForImport,
+} from "../config/sessions/session-accessor.sqlite-import.js";
 import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { prepareLegacyAcpMigrationSource } from "../infra/legacy-acp-migration-source.js";
@@ -20,11 +23,12 @@ import {
   readSessionSqliteMigrationManifest,
   updateMigrationManifestTarget,
   type ActiveSessionSqliteMigrationRun,
+  type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
 import {
   countTranscriptEventsForPath,
   createTranscriptEventReader,
-  readOnlySqliteValidationSnapshot,
+  readSessionImportValidationSnapshot,
   readTranscriptFingerprint,
   resolveTargetSqlitePath,
   type ReadOnlySqliteValidationSnapshot,
@@ -81,41 +85,50 @@ export async function importLegacySessionRecords(
       return;
     }
     const importedTranscriptSources = new Set<string>();
-    const existingSnapshot = readOnlySqliteValidationSnapshot(target);
+    const existingSnapshot = readSessionImportValidationSnapshot(target, env);
     if (!existingSnapshot.ok) {
       report.issues.push({
         code: "legacy_import_deferred",
-        message: `Cannot verify the destination for ${target.storePath}: ${formatErrorMessage(existingSnapshot.error)}. Originals retained; repair the named SQLite destination before retrying openclaw doctor --fix.`,
+        message: `Cannot verify the destination for ${target.storePath}: ${formatErrorMessage(existingSnapshot.error)}. Originals retained; repair the named destination before retrying openclaw doctor --fix.`,
       });
       return;
     }
     for (let offset = 0; offset < records.length; offset += SESSION_IMPORT_BATCH_SIZE) {
-      const pending = records
-        .slice(offset, offset + SESSION_IMPORT_BATCH_SIZE)
-        .flatMap((record) => {
-          // Unreadable history cannot authorize replay of a current node's metadata or generation.
-          record.preserveCurrentSession ||=
-            recoveryHistoryUnverified || Boolean(assertRestoredIndexCurrent);
-          try {
-            const prepared = prepareLegacySessionImport(
-              target,
-              record,
-              report,
-              importedTranscriptSources,
-              existingSnapshot.snapshot,
-              env,
-              recoveryHistoryUnverified,
-            );
-            return prepared ? [{ ...prepared, params: { ...prepared.params, env }, record }] : [];
-          } catch (error) {
-            report.issues.push({
-              code: "legacy_import_deferred",
-              sessionKey: record.sessionKey,
-              message: `${record.transcriptPath ?? target.storePath}: ${formatErrorMessage(error)}. Original retained; verify this source against a backup and rerun openclaw doctor --fix.`,
-            });
-            return [];
-          }
-        });
+      const batch = records.slice(offset, offset + SESSION_IMPORT_BATCH_SIZE);
+      // Reimported history may have been cold-archived since its first import. Restore those
+      // archives before verification reads them and before the batch reserves the exclusive
+      // writer (same offline-custody policy as canonical repair).
+      await restoreColdSessionTranscriptsForImport({
+        agentId: target.agentId,
+        ...(assertRestoredIndexCurrent ? { assertCurrent: assertRestoredIndexCurrent } : {}),
+        env,
+        sessionIds: batch.map((record) => record.entry.sessionId),
+        storePath: target.sqlitePath ?? target.storePath,
+      });
+      const pending = batch.flatMap((record) => {
+        // Unreadable history cannot authorize replay of a current node's metadata or generation.
+        record.preserveCurrentSession ||=
+          recoveryHistoryUnverified || Boolean(assertRestoredIndexCurrent);
+        try {
+          const prepared = prepareLegacySessionImport(
+            target,
+            record,
+            report,
+            importedTranscriptSources,
+            existingSnapshot.snapshot,
+            env,
+            recoveryHistoryUnverified,
+          );
+          return prepared ? [{ ...prepared, params: { ...prepared.params, env }, record }] : [];
+        } catch (error) {
+          report.issues.push({
+            code: "legacy_import_deferred",
+            sessionKey: record.sessionKey,
+            message: `${record.transcriptPath ?? target.storePath}: ${formatErrorMessage(error)}. Original retained; verify this source against a backup and rerun openclaw doctor --fix.`,
+          });
+          return [];
+        }
+      });
       const imported = await importSqliteSessionRowsBatch(
         pending.map((entry, index) => ({
           ...entry.params,
@@ -168,6 +181,15 @@ function prepareRestoredSessionIndex(
   const storePath = canonicalMigrationFilePath(target.storePath);
   const sqlitePath = resolveTargetSqlitePath(target, params.env);
   const evidence = new Map<string, MigrationArtifactIdentity>();
+  const completedMoves = new Map<SessionSqliteMigrationTargetManifest, Set<string>>();
+  const hasCompletedMove = (owner: SessionSqliteMigrationTargetManifest, key: string) => {
+    let keys = completedMoves.get(owner);
+    if (!keys) {
+      keys = new Set(owner.completedMoves.map(migrationMoveKey));
+      completedMoves.set(owner, keys);
+    }
+    return keys.has(key);
+  };
   let hasSelectedOwner = false;
   for (const refs of recoveryInventory.references.values()) {
     for (const ref of refs) {
@@ -176,9 +198,7 @@ function prepareRestoredSessionIndex(
         ref.move.sourcePath !== storePath ||
         (!ref.consumedByRestore &&
           !ref.run.manifest.restore?.restoredFiles.includes(storePath) &&
-          !ref.target.completedMoves.some(
-            (move) => migrationMoveKey(move) === migrationMoveKey(ref.move),
-          ))
+          !hasCompletedMove(ref.target, migrationMoveKey(ref.move)))
       ) {
         continue;
       }

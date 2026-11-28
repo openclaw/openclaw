@@ -4,7 +4,7 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import { resolveFailureAlert } from "../service/failure-alerts.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import { applyJobResult } from "../service/timer-outcomes.js";
-import { ownsStreamSource } from "../stream-schedule.js";
+import { ownsCronSource, cronSourceIdentity, setCronSourceIdentity } from "../source-schedule.js";
 import { createCronMutationLogger } from "./runtime-mutation.worker.js";
 import { mutateCronRuntimeRowsInDatabase } from "./runtime-rows.kernel.js";
 import type {
@@ -37,27 +37,28 @@ export function mutateCronExternalStateInWorker(
           if (
             change.kind !== "counters" &&
             change.source &&
-            !ownsStreamSource(job, change.source.scheduleKey, change.source.identity)
+            !ownsCronSource(job, change.source.scheduleKey, change.source.identity)
           ) {
             return { value: outcome };
           }
           switch (change.kind) {
             case "state":
             case "failure": {
-              const sourceIdentity = job.state.streamSourceIdentity;
+              const sourceIdentity = cronSourceIdentity(job);
               Object.assign(job.state, change.statePatch);
-              job.state.streamSourceIdentity = sourceIdentity;
+              setCronSourceIdentity(job, sourceIdentity);
               if (change.kind === "failure") {
-                const { nowMs, cronConfig } = policy;
+                const { nowMs, cronConfig, defaultAgentId } = policy;
                 const state: CronJobPolicyContext = {
                   deps: {
                     nowMs: () => nowMs,
                     cronConfig,
+                    defaultAgentId,
                     log: createCronMutationLogger(outcome.logs),
                   },
                   preparedFailureAlert: {
                     jobId: input.jobId,
-                    value: resolveFailureAlert({ deps: { cronConfig } }, job),
+                    value: resolveFailureAlert({ deps: { cronConfig, defaultAgentId } }, job),
                   },
                 };
                 job.state.consecutiveErrors = Math.max(job.state.consecutiveErrors ?? 0, 4);
@@ -67,6 +68,7 @@ export function mutateCronExternalStateInWorker(
                   {
                     status: "error",
                     error: change.error,
+                    errorReason: undefined,
                     executionStarted: false,
                     startedAt: nowMs,
                     endedAt: nowMs,
@@ -78,7 +80,7 @@ export function mutateCronExternalStateInWorker(
               break;
             }
             case "retire":
-              job.state.streamSourceIdentity = change.nextIdentity;
+              setCronSourceIdentity(job, change.nextIdentity);
               break;
             case "counters":
               if (job.schedule.kind !== "stream") {

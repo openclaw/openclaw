@@ -29,12 +29,10 @@ import type {
   AgentTool,
   AgentToolResult,
   AgentToolUpdateCallback,
-  StreamFn,
   ThinkingLevel,
-  ToolExecutionMode,
 } from "../../runtime/index.js";
 import type { BashResult } from "../bash-executor.js";
-import type { CompactionPreparation, CompactionResult } from "../compaction/index.js";
+import type { CompactionResult } from "../compaction/compaction.js";
 import type { EventBus } from "../event-bus.js";
 import type { ExecOptions, ExecResult } from "../exec.js";
 import type { ReadonlyFooterDataProvider } from "../footer-data-provider.js";
@@ -44,7 +42,6 @@ import type { ModelRegistry } from "../model-registry.js";
 import type { ProviderConfig } from "../provider-config.js";
 import type {
   BranchSummaryEntry,
-  CompactionEntry,
   ReadonlySessionManager,
   SessionEntry,
   SessionManager,
@@ -68,6 +65,7 @@ import type {
   ReadToolInput,
   WriteToolInput,
 } from "../tools/tool-contracts.js";
+import type { SessionBeforeCompactEvent, SessionCompactEvent } from "./compaction-events.types.js";
 
 export type { ProviderConfig, OAuthLoginCallbacks } from "../provider-config.js";
 export type {
@@ -76,7 +74,7 @@ export type {
   OAuthPrompt,
   OAuthSelectOption,
   OAuthSelectPrompt,
-} from "../../../plugin-sdk/provider-oauth-runtime.js";
+} from "../../../llm/utils/oauth/types.js";
 
 interface ExtensionUIDialogOptions {
   /** AbortSignal to programmatically dismiss the dialog. */
@@ -85,14 +83,10 @@ interface ExtensionUIDialogOptions {
   timeout?: number;
 }
 
-type WidgetPlacement = "aboveEditor" | "belowEditor";
-
 interface ExtensionWidgetOptions {
   /** Where the widget is rendered. Defaults to "aboveEditor". */
-  placement?: WidgetPlacement;
+  placement?: "aboveEditor" | "belowEditor";
 }
-
-type TerminalInputHandler = (data: string) => { consume?: boolean; data?: string } | undefined;
 
 /** Working indicator configuration for the interactive streaming loader. */
 interface WorkingIndicatorOptions {
@@ -102,7 +96,6 @@ interface WorkingIndicatorOptions {
   intervalMs?: number;
 }
 
-type AutocompleteProviderFactory = (current: AutocompleteProvider) => AutocompleteProvider;
 type EditorFactory = (
   tui: TUI,
   theme: EditorTheme,
@@ -131,7 +124,9 @@ export interface ExtensionUIContext {
   notify(message: string, type?: "info" | "warning" | "error"): void;
 
   /** Listen to raw terminal input (interactive mode only). Returns an unsubscribe function. */
-  onTerminalInput(handler: TerminalInputHandler): () => void;
+  onTerminalInput(
+    handler: (data: string) => { consume?: boolean; data?: string } | undefined,
+  ): () => void;
 
   /** Set status text in the footer/status bar. Pass undefined to clear. */
   setStatus(key: string, text: string | undefined): void;
@@ -215,7 +210,7 @@ export interface ExtensionUIContext {
   editor(title: string, prefill?: string): Promise<string | undefined>;
 
   /** Stack additional autocomplete behavior on top of the built-in provider. */
-  addAutocompleteProvider(factory: AutocompleteProviderFactory): void;
+  addAutocompleteProvider(factory: (current: AutocompleteProvider) => AutocompleteProvider): void;
 
   /**
    * Set a custom editor component via factory function.
@@ -391,9 +386,6 @@ export interface ToolRenderContext<
   cwd: string;
   executionStarted: boolean;
   argsComplete: boolean;
-  /** Whether the tool result is partial/streaming. */
-  isPartial: boolean;
-  expanded: boolean;
   /** Whether inline images are currently shown in the TUI. */
   showImages: boolean;
   isError: boolean;
@@ -418,6 +410,8 @@ export interface ToolDefinition<
   | "outputSchema"
   | "prepareArguments"
   | "async"
+  | "interruptible"
+  | "executionMode"
 > {
   /** Optional one-line snippet for the Available tools section in the default system prompt. Custom tools are omitted from that section when this is not provided. */
   promptSnippet?: string;
@@ -425,7 +419,6 @@ export interface ToolDefinition<
   promptGuidelines?: string[];
   /** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
   renderShell?: "default" | "self";
-  executionMode?: ToolExecutionMode;
 
   execute(
     toolCallId: string,
@@ -449,21 +442,6 @@ export interface ToolDefinition<
     ],
     Component
   >;
-}
-
-type AnyToolDefinition = ToolDefinition;
-
-/**
- * Preserve parameter inference for standalone tool definitions.
- *
- * Use this when assigning a tool to a variable or passing it through arrays such
- * as `customTools`, where contextual typing would otherwise widen params to
- * `unknown`.
- */
-export function defineTool<TParams extends TSchema, TDetails = unknown, TState = unknown>(
-  tool: ToolDefinition<TParams, TDetails, TState>,
-): ToolDefinition<TParams, TDetails, TState> & AnyToolDefinition {
-  return tool as ToolDefinition<TParams, TDetails, TState> & AnyToolDefinition;
 }
 
 /** Fired after session_start to allow extensions to provide additional resource paths. */
@@ -499,26 +477,6 @@ interface SessionBeforeForkEvent {
   type: "session_before_fork";
   entryId: string;
   position: "before" | "at";
-}
-
-/** Fired before context compaction (can be cancelled or customized) */
-interface SessionBeforeCompactEvent {
-  type: "session_before_compact";
-  preparation: CompactionPreparation;
-  branchEntries: SessionEntry[];
-  customInstructions?: string;
-  signal: AbortSignal;
-  /** Prepared reasoning level for extension-owned summarization. */
-  thinkingLevel?: ThinkingLevel;
-  /** Prepared provider stream for extension-owned summarization. */
-  streamFn?: StreamFn;
-}
-
-/** Fired after context compaction */
-interface SessionCompactEvent {
-  type: "session_compact";
-  compactionEntry: CompactionEntry;
-  fromExtension: boolean;
 }
 
 /** Fired before an extension runtime is torn down due to quit, reload, or session replacement. */
@@ -557,16 +515,6 @@ interface SessionTreeEvent {
   summaryEntry?: BranchSummaryEntry;
   fromExtension?: boolean;
 }
-
-type SessionEvent =
-  | SessionStartEvent
-  | SessionBeforeSwitchEvent
-  | SessionBeforeForkEvent
-  | SessionBeforeCompactEvent
-  | SessionCompactEvent
-  | SessionShutdownEvent
-  | SessionBeforeTreeEvent
-  | SessionTreeEvent;
 
 /** Fired before each LLM call. Can modify messages. */
 export interface ContextEvent {
@@ -642,13 +590,11 @@ export interface ToolExecutionEndEvent extends Omit<
   "assistantTurnId" | "executionStarted" | "errorKind" | "hideFromChannelProgress"
 > {}
 
-type ModelSelectSource = "set" | "cycle" | "restore";
-
 interface ModelSelectEvent {
   type: "model_select";
   model: Model;
   previousModel: Model | undefined;
-  source: ModelSelectSource;
+  source: "set" | "cycle" | "restore";
 }
 
 export interface ThinkingLevelSelectEvent {
@@ -688,15 +634,6 @@ interface ToolCallEventBase<TName extends string, TInput> {
   input: TInput;
 }
 
-type BashToolCallEvent = ToolCallEventBase<"bash", BashToolInput>;
-type ReadToolCallEvent = ToolCallEventBase<"read", ReadToolInput>;
-type EditToolCallEvent = ToolCallEventBase<"edit", EditToolInput>;
-type WriteToolCallEvent = ToolCallEventBase<"write", WriteToolInput>;
-type GrepToolCallEvent = ToolCallEventBase<"grep", GrepToolInput>;
-type FindToolCallEvent = ToolCallEventBase<"find", FindToolInput>;
-type LsToolCallEvent = ToolCallEventBase<"ls", LsToolInput>;
-type CustomToolCallEvent = ToolCallEventBase<string, Record<string, unknown>>;
-
 /**
  * Fired before a tool executes. Can block.
  *
@@ -704,14 +641,14 @@ type CustomToolCallEvent = ToolCallEventBase<string, Record<string, unknown>>;
  * Later `tool_call` handlers see earlier mutations. No re-validation is performed after mutation.
  */
 export type ToolCallEvent =
-  | BashToolCallEvent
-  | ReadToolCallEvent
-  | EditToolCallEvent
-  | WriteToolCallEvent
-  | GrepToolCallEvent
-  | FindToolCallEvent
-  | LsToolCallEvent
-  | CustomToolCallEvent;
+  | ToolCallEventBase<"bash", BashToolInput>
+  | ToolCallEventBase<"read", ReadToolInput>
+  | ToolCallEventBase<"edit", EditToolInput>
+  | ToolCallEventBase<"write", WriteToolInput>
+  | ToolCallEventBase<"grep", GrepToolInput>
+  | ToolCallEventBase<"find", FindToolInput>
+  | ToolCallEventBase<"ls", LsToolInput>
+  | ToolCallEventBase<string, Record<string, unknown>>;
 
 interface ToolResultEventBase<TName extends string, TDetails> {
   type: "tool_result";
@@ -724,104 +661,29 @@ interface ToolResultEventBase<TName extends string, TDetails> {
   terminate?: boolean;
 }
 
-type BashToolResultEvent = ToolResultEventBase<"bash", BashToolDetails | undefined>;
-type ReadToolResultEvent = ToolResultEventBase<"read", ReadToolDetails | undefined>;
-type EditToolResultEvent = ToolResultEventBase<"edit", EditToolDetails | undefined>;
-type WriteToolResultEvent = ToolResultEventBase<"write", undefined>;
-type GrepToolResultEvent = ToolResultEventBase<"grep", GrepToolDetails | undefined>;
-type FindToolResultEvent = ToolResultEventBase<"find", FindToolDetails | undefined>;
-type LsToolResultEvent = ToolResultEventBase<"ls", LsToolDetails | undefined>;
-type CustomToolResultEvent = ToolResultEventBase<string, unknown>;
-
 /** Fired after a tool executes. Can modify result. */
 export type ToolResultEvent =
-  | BashToolResultEvent
-  | ReadToolResultEvent
-  | EditToolResultEvent
-  | WriteToolResultEvent
-  | GrepToolResultEvent
-  | FindToolResultEvent
-  | LsToolResultEvent
-  | CustomToolResultEvent;
-
-export function isBashToolResult(e: ToolResultEvent): e is BashToolResultEvent {
-  return e.toolName === "bash";
-}
-export function isReadToolResult(e: ToolResultEvent): e is ReadToolResultEvent {
-  return e.toolName === "read";
-}
-export function isEditToolResult(e: ToolResultEvent): e is EditToolResultEvent {
-  return e.toolName === "edit";
-}
-export function isWriteToolResult(e: ToolResultEvent): e is WriteToolResultEvent {
-  return e.toolName === "write";
-}
-export function isGrepToolResult(e: ToolResultEvent): e is GrepToolResultEvent {
-  return e.toolName === "grep";
-}
-export function isFindToolResult(e: ToolResultEvent): e is FindToolResultEvent {
-  return e.toolName === "find";
-}
-export function isLsToolResult(e: ToolResultEvent): e is LsToolResultEvent {
-  return e.toolName === "ls";
-}
-
-/**
- * Type guard for narrowing ToolCallEvent by tool name.
- *
- * Built-in tools narrow automatically (no type params needed):
- * ```ts
- * if (isToolCallEventType("bash", event)) {
- *   event.input.command;  // string
- * }
- * ```
- *
- * Custom tools require explicit type parameters:
- * ```ts
- * if (isToolCallEventType<"my_tool", MyToolInput>("my_tool", event)) {
- *   event.input.action;  // typed
- * }
- * ```
- *
- * Note: Direct narrowing via `event.toolName === "bash"` doesn't work because
- * CustomToolCallEvent.toolName is `string` which overlaps with all literals.
- */
-export function isToolCallEventType(
-  toolName: "bash",
-  event: ToolCallEvent,
-): event is BashToolCallEvent;
-export function isToolCallEventType(
-  toolName: "read",
-  event: ToolCallEvent,
-): event is ReadToolCallEvent;
-export function isToolCallEventType(
-  toolName: "edit",
-  event: ToolCallEvent,
-): event is EditToolCallEvent;
-export function isToolCallEventType(
-  toolName: "write",
-  event: ToolCallEvent,
-): event is WriteToolCallEvent;
-export function isToolCallEventType(
-  toolName: "grep",
-  event: ToolCallEvent,
-): event is GrepToolCallEvent;
-export function isToolCallEventType(
-  toolName: "find",
-  event: ToolCallEvent,
-): event is FindToolCallEvent;
-export function isToolCallEventType(toolName: "ls", event: ToolCallEvent): event is LsToolCallEvent;
-export function isToolCallEventType<TName extends string, TInput extends Record<string, unknown>>(
-  toolName: TName,
-  event: ToolCallEvent,
-): event is ToolCallEvent & { toolName: TName; input: TInput };
-export function isToolCallEventType(toolName: string, event: ToolCallEvent): boolean {
-  return event.toolName === toolName;
-}
+  | ToolResultEventBase<"bash", BashToolDetails | undefined>
+  | ToolResultEventBase<"read", ReadToolDetails | undefined>
+  | ToolResultEventBase<"edit", EditToolDetails | undefined>
+  | ToolResultEventBase<"write", undefined>
+  | ToolResultEventBase<"grep", GrepToolDetails | undefined>
+  | ToolResultEventBase<"find", FindToolDetails | undefined>
+  | ToolResultEventBase<"ls", LsToolDetails | undefined>
+  | ToolResultEventBase<string, unknown>;
 
 export type ExtensionEvent =
   | ResourcesDiscoverEvent
-  | SessionEvent
+  | (
+      | SessionStartEvent
+      | SessionBeforeSwitchEvent
+      | SessionBeforeForkEvent
+      | SessionBeforeCompactEvent
+      | SessionCompactEvent
+      | SessionShutdownEvent
+      | SessionBeforeTreeEvent
+      | SessionTreeEvent
+    )
   | ContextEvent
   | BeforeProviderRequestEvent
   | AfterProviderResponseEvent
@@ -1018,13 +880,13 @@ export interface ExtensionAPI {
     options?: { deliverAs?: "steer" | "followUp" },
   ): void;
 
-  /** @deprecated Use appendEntryAsync; removal follows a stable deprecation period. */
+  /** @deprecated Await appendEntryAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   appendEntry(customType: string, data?: unknown): void;
 
   /** Persist a custom entry and return its id after the worker commits. */
   appendEntryAsync(customType: string, data?: unknown): Promise<string>;
 
-  /** @deprecated Use setSessionNameAsync; removal follows a stable deprecation period. */
+  /** @deprecated Await setSessionNameAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   setSessionName(name: string): void;
 
   /** Set the display name and publish the change after the worker commits. */
@@ -1032,7 +894,7 @@ export interface ExtensionAPI {
 
   getSessionName(): string | undefined;
 
-  /** @deprecated Use setLabelAsync; removal follows a stable deprecation period. */
+  /** @deprecated Await setLabelAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   setLabel(entryId: string, label: string | undefined): void;
 
   /** Set or clear an entry label after the worker commits. */
@@ -1151,8 +1013,6 @@ export interface ExtensionShortcut {
   extensionPath: string;
 }
 
-type HandlerFn = (...args: unknown[]) => Promise<unknown>;
-
 export type SetSessionNameHandler = ExtensionAPI["setSessionName"];
 export type GetSessionNameHandler = ExtensionAPI["getSessionName"];
 export type RefreshToolsHandler = () => void;
@@ -1190,7 +1050,7 @@ export interface ExtensionRuntimeState {
 /**
  * Action implementations for ExtensionAPI methods.
  * Provided to runner.initialize(), copied into the shared runtime.
- * @deprecated Use ExtensionActionsV2; removal follows a stable deprecation period.
+ * @deprecated Use ExtensionActionsV2. Supported through 2026-12-31. Removal in the first January 2027 stable release.
  */
 export interface ExtensionActions extends Pick<
   ExtensionAPI,
@@ -1241,7 +1101,7 @@ export interface ExtensionCommandContextActions extends Pick<
 /**
  * Full runtime = state + actions.
  * Created by loader with throwing action stubs, completed by runner.initialize().
- * @deprecated Use ExtensionRuntimeV2; removal follows a stable deprecation period.
+ * @deprecated Use ExtensionRuntimeV2. Supported through 2026-12-31. Removal in the first January 2027 stable release.
  */
 export interface ExtensionRuntime
   extends
@@ -1254,12 +1114,11 @@ export interface ExtensionRuntime
 /** Host runtime with required worker-backed persistence capabilities. */
 export interface ExtensionRuntimeV2 extends ExtensionRuntimeState, ExtensionActionsV2 {}
 
-/** Loaded extension with all registered items. */
 export interface Extension {
   path: string;
   resolvedPath: string;
   sourceInfo: SourceInfo;
-  handlers: Map<string, HandlerFn[]>;
+  handlers: Map<string, ((...args: unknown[]) => Promise<unknown>)[]>;
   tools: Map<string, RegisteredTool>;
   messageRenderers: Map<string, MessageRenderer>;
   commands: Map<string, RegisteredCommand>;

@@ -1,7 +1,14 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import type { Compilable, CompiledQuery, Kysely, QueryResult, RawBuilder } from "kysely";
+import type {
+  Compilable,
+  CompiledQuery,
+  Expression,
+  Kysely,
+  QueryResult,
+  RawBuilder,
+} from "kysely";
 import {
   InsertQueryNode,
   Kysely as KyselyInstance,
@@ -11,6 +18,7 @@ import {
 } from "kysely";
 import { isNodeVersionAtLeast, parseNodeReleaseVersion } from "../../node-version.mjs";
 import {
+  disposeSqliteStatement,
   executeWithCachedStatement,
   installStatementInvalidation,
   kyselyByDatabase,
@@ -26,6 +34,7 @@ import {
   sqliteStringSetEntriesFragments,
   sqliteStringSetFragments,
 } from "./sql-query-compiler.js";
+import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
 import { captureSqliteReaderOwner, retainSqliteReader } from "./sqlite-reader-lifecycle.js";
 
 // Node 24.20 and 26.6 fixed all() column counts after statement reprepare (nodejs/node#64219).
@@ -56,6 +65,15 @@ const compileOnlyPostgresDialect = new OpenClawPostgresDialect({
     throw new Error("getNodeSqliteKysely() returns a compile-only Kysely facade.");
   },
 });
+
+let compileOnlyPostgresKysely: Kysely<unknown> | undefined;
+
+/** For asynchronous PostgreSQL callers that compile with the shared owners and run the query themselves. */
+export function getCompileOnlyPostgresKysely<Database>(): Kysely<Database> {
+  compileOnlyPostgresKysely ??= new KyselyInstance({ dialect: compileOnlyPostgresDialect });
+  // SAFETY: this compile-only facade stores no rows; Database supplies the caller's schema types.
+  return compileOnlyPostgresKysely as Kysely<Database>;
+}
 
 export function getNodeSqliteKysely<Database>(
   db: DatabaseSync | PostgresSqlConnection,
@@ -100,7 +118,7 @@ export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
 
 /** Expands encoded string tuples without adding one SQLite parameter per field. */
 export function sqliteStringSetEntries(
-  encoded: string | RawBuilder<string>,
+  encoded: string | Expression<string>,
 ): RawBuilder<{ key: number; value: string | null }> {
   return kyselySql<{ key: number; value: string | null }>(sqliteStringSetEntriesFragments, encoded);
 }
@@ -276,6 +294,52 @@ export function prepareSqliteQuerySync<Params, Row = unknown>(
   return (params) => executeCompiledSqliteQuerySync(db, compiled, false, bind(params));
 }
 
+/** A non-returning write whose only effect-time work is the prepared native run. */
+export function prepareSqliteTerminalWrite<Params>(
+  db: DatabaseSync,
+  build: SqliteQueryBindingBuilder<Params, unknown>,
+): (params: Params) => void {
+  const { compiled, bind } = compileSqliteQueryBindings(build);
+  return (params) => {
+    const parameters = bind(params);
+    installStatementInvalidation(db);
+    try {
+      executeWithCachedStatement(
+        db,
+        compiled.sql,
+        parameters,
+        (statement) => {
+          // Retain bigint mode for this write-only SQL shape. Resetting it or
+          // constructing QueryResult after run could fail after the commit.
+          statement.setReadBigInts(true);
+          statement.run(...parameters);
+        },
+        (release) => {
+          let released = false;
+          const finish = () => {
+            if (!released) {
+              released = true;
+              release();
+            }
+          };
+          if (
+            !stageSqliteTransactionState(db, {
+              commit: finish,
+              rollback: finish,
+              invalidate: finish,
+            })
+          ) {
+            throw new Error("Terminal SQLite writes require an owning publication scope");
+          }
+        },
+      );
+    } catch (error) {
+      reportNodeSqliteKyselyQueryError(db, error);
+      throw error;
+    }
+  };
+}
+
 /** Compile a fixed first-row read once and bind fresh values on every execution. */
 export function prepareSqliteQueryTakeFirstSync<Params, Row = unknown>(
   db: DatabaseSync | PostgresSqlConnection,
@@ -313,10 +377,11 @@ export function iterateSqliteQuerySync<Row>(
   const owner = captureSqliteReaderOwner();
   return (function* () {
     const compiledQuery = query.compile();
+    let statement: ReturnType<DatabaseSync["prepare"]> | undefined;
     try {
       // Iterators keep statement state across yields. A private statement prevents
       // nested iteration of identical SQL from resetting an earlier iterator.
-      const statement = db.prepare(compiledQuery.sql);
+      statement = db.prepare(compiledQuery.sql);
       if (!SelectQueryNode.is(compiledQuery.query) && statement.columns().length === 0) {
         return;
       }
@@ -338,6 +403,10 @@ export function iterateSqliteQuerySync<Row>(
     } catch (error) {
       reportNodeSqliteKyselyQueryError(db, error);
       throw error;
+    } finally {
+      if (statement) {
+        disposeSqliteStatement(statement);
+      }
     }
   })();
 }

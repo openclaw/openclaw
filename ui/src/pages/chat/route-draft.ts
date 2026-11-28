@@ -1,9 +1,22 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { SESSION_COMPOSER_FOCUS_PARAM } from "../../lib/sessions/route-navigation.ts";
+import {
+  SESSION_COMPOSER_FOCUS_PARAM,
+  SESSION_DASHBOARD_EXPANDED_PARAM,
+} from "../../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 
-type RouteDraftHint = { draft?: string; focusComposer?: boolean };
 type RouteDraftData = { sessionKey: string; draft?: string };
+
+export function sessionRouteHints(location: RouteLocation) {
+  const search = new URLSearchParams(location.search);
+  return {
+    draft: search.get("draft") || undefined,
+    ...(search.get(SESSION_COMPOSER_FOCUS_PARAM) === "1" ? { focusComposer: true as const } : {}),
+    ...(search.get(SESSION_DASHBOARD_EXPANDED_PARAM) === "expanded"
+      ? { dashboardExpanded: true as const }
+      : {}),
+  };
+}
 
 export function locationWithoutDraft(
   location: RouteLocation,
@@ -19,18 +32,9 @@ export function locationWithoutDraft(
   return { ...location, ...destination, search: search ? `?${search}` : "" };
 }
 
-export function draftRouteDataFromLocation(location: RouteLocation): RouteDraftHint {
-  const search = new URLSearchParams(location.search);
-  const focusComposer = search.get(SESSION_COMPOSER_FOCUS_PARAM) === "1";
-  return {
-    draft: search.get("draft") || undefined,
-    ...(focusComposer ? { focusComposer: true } : {}),
-  };
-}
-
 export function draftSearchFromLocation(location: RouteLocation): string {
   const search = new URLSearchParams();
-  const { draft, focusComposer } = draftRouteDataFromLocation(location);
+  const { draft, focusComposer } = sessionRouteHints(location);
   if (draft) {
     search.set("draft", draft);
   }

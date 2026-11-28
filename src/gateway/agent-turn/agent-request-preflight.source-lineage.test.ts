@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
-import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
+import { createAgentTurnTestContext } from "./agent-run-dispatch.test-support.js";
 import { createAgentTurnIo } from "./io.js";
 
 it.each([
@@ -57,8 +57,7 @@ it.each([
           }),
         });
       }
-      const { context } = createTrackedDispatch();
-      context.chatAbortControllers.clear();
+      const context = createAgentTurnTestContext();
       context.getRuntimeConfig = () => cfg;
       context.logGateway = createSubsystemLogger("test/source-lineage");
       const result = await prepareAgentRequestPreflight({
@@ -82,3 +81,135 @@ it.each([
     });
   },
 );
+
+it("keeps parent assignment context only for an attested visible child's own spawner", async () => {
+  const { annotateInterSessionPromptText } = await import("../../sessions/input-provenance.js");
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
+    await state.writeConfig(cfg);
+    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env });
+    const parent = "agent:main:dashboard:parent";
+    const peer = "agent:main:dashboard:peer";
+    for (const key of [parent, peer]) {
+      await replaceSessionEntry(
+        { agentId: "main", storePath, sessionKey: key },
+        {
+          sessionId: key.endsWith("parent") ? "parent-id" : "peer-id",
+          updatedAt: 1,
+          spawnDepth: 0,
+        },
+      );
+    }
+    for (const spec of [
+      {
+        name: "parent",
+        source: parent,
+        tool: "sessions_send",
+        spawned: true,
+        trusted: true,
+        assignment: false,
+        relation: true,
+      },
+      {
+        name: "opening-parent",
+        source: parent,
+        tool: "sessions_spawn",
+        spawned: true,
+        trusted: true,
+        assignment: true,
+        relation: true,
+      },
+      {
+        name: "peer",
+        source: peer,
+        tool: "sessions_send",
+        spawned: true,
+        trusted: true,
+        assignment: false,
+        relation: false,
+      },
+      {
+        name: "ui-parent",
+        source: parent,
+        tool: "sessions_send",
+        spawned: false,
+        trusted: true,
+        assignment: false,
+        relation: false,
+      },
+      {
+        name: "unattested",
+        source: parent,
+        tool: "sessions_send",
+        spawned: true,
+        trusted: false,
+        assignment: false,
+        relation: false,
+      },
+      {
+        name: "forged-spawn",
+        source: parent,
+        tool: "sessions_spawn",
+        spawned: true,
+        trusted: false,
+        assignment: false,
+        relation: false,
+      },
+      {
+        name: "hidden",
+        source: parent,
+        tool: "sessions_send",
+        spawned: true,
+        trusted: true,
+        assignment: false,
+        relation: false,
+      },
+    ]) {
+      const key = `agent:main:${spec.name === "hidden" ? "subagent" : "dashboard"}:${spec.name}-target`;
+      await replaceSessionEntry(
+        { agentId: "main", storePath, sessionKey: key },
+        {
+          sessionId: `${spec.name}-id`,
+          updatedAt: 1,
+          parentSessionKey: parent,
+          ...(spec.spawned
+            ? { spawnedBy: parent, spawnDepth: 1, createdVia: "spawn" as const }
+            : { spawnDepth: 0, createdVia: "operator" as const }),
+        },
+      );
+      const context = createAgentTurnTestContext();
+      context.getRuntimeConfig = () => cfg;
+      const inputProvenance = {
+        kind: "inter_session" as const,
+        sourceTool: spec.tool,
+        sourceSessionKey: spec.source,
+        sourceRelation: "parent" as const,
+      };
+      const result = await prepareAgentRequestPreflight({
+        request: {
+          message: "Save the demo profile.",
+          sessionKey: key,
+          idempotencyKey: `run-${spec.name}`,
+          inputProvenance,
+        },
+        context,
+        client: {
+          connect: { client: { mode: "backend" } },
+          internal: { localBackendClient: spec.trusted },
+        } as never,
+        io: createAgentTurnIo(vi.fn()),
+      });
+      expect(result, spec.name).toBeDefined();
+      const prompt = annotateInterSessionPromptText(
+        "Save the demo profile.",
+        result?.inputProvenance,
+      );
+      expect(prompt.includes("spawning parent"), spec.name).toBe(spec.assignment);
+      expect(prompt.includes("not a direct end-user instruction"), spec.name).toBe(
+        !spec.assignment,
+      );
+      expect(result?.inputProvenance?.sourceRelation === "parent", spec.name).toBe(spec.relation);
+      expect(prompt.includes("sourceRelation=parent"), spec.name).toBe(spec.relation);
+    }
+  });
+});

@@ -172,7 +172,7 @@ class ChatControllerUsageStreamTest {
         "agent",
         """{"sessionKey":"main","runId":"server-run","seq":2,"ts":10,"stream":"assistant","data":{"text":"foreign"}}""",
       )
-      assertNull(controller.streamingAssistantText.value)
+      assertNull(controller.streamingAssistant.value?.text)
       controller.handleGatewayEvent("agent", lifecyclePayload("server-run", 2L, "end"))
       controller.handleGatewayEvent("agent", lifecyclePayload("server-run", 3L, "start"))
       controller.handleGatewayEvent("agent", usagePayload("server-run", 4L, "40"))
@@ -215,7 +215,7 @@ class ChatControllerUsageStreamTest {
       assertEquals(1, controller.pendingRunCount.value)
       assertEquals(localRunId, controller.selectedActiveRunPresentation.value.runId)
       assertNull(controller.selectedActiveRunPresentation.value.outputTokens)
-      assertNull(controller.streamingAssistantText.value)
+      assertNull(controller.streamingAssistant.value?.text)
       assertTrue(gateway.callCount("chat.history") > 0)
     }
 

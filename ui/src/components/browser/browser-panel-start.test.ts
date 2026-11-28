@@ -14,6 +14,33 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("warms stopped Chrome on the first address edit without sending the draft", async () => {
+  const panel = document.createElement("openclaw-browser-panel");
+  panel.available = panel.embedded = panel.presented = true;
+  const writes: unknown[] = [];
+  panel.client = createBrowserClient(async (request) => {
+    if (request.path === "/tabs") {
+      return { running: false, tabs: [] };
+    }
+    writes.push(request);
+    return {};
+  }).client;
+  const mounted = mountSolid(() => panel);
+  await waitForSolid(() =>
+    expect(mounted.getByRole("button", { name: "Start browser" })).toBeTruthy(),
+  );
+  const address = panel.querySelector<HTMLInputElement>(".bp-url")!;
+  address.focus();
+  expect(writes).toEqual([]);
+  for (const value of ["e", "example.test"]) {
+    address.value = value;
+    address.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  expect(writes).toEqual([{ method: "POST", path: "/prewarm", body: {} }]);
+  address.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  expect(writes).toHaveLength(1);
+});
+
 it.each(["success", "failure"] as const)(
   "shows pending browser startup and recovers after %s",
   async (outcome) => {
@@ -56,7 +83,7 @@ it.each(["success", "failure"] as const)(
       if (outcome === "failure") {
         start.reject(new Error("Synthetic startup failure"));
         await waitForSolid(() => {
-          expect(mounted.getByRole("alert").textContent).toContain("Synthetic startup failure");
+          expect(mounted.getByRole("status").textContent).toContain("Synthetic startup failure");
           expect(startButton().hasAttribute("disabled")).toBe(false);
           expect(mounted.queryByRole("status", { name: "Loading page…" })).toBeNull();
         });
@@ -69,6 +96,7 @@ it.each(["success", "failure"] as const)(
         expect(mounted.queryByRole("button", { name: "Start browser" })).toBeNull();
         expect(mounted.queryByRole("status", { name: "Loading page…" })).toBeNull();
         expect(mounted.queryByRole("alert")).toBeNull();
+        expect(panel.textContent).not.toContain("Synthetic startup failure");
       });
       expect(starts).toBe(outcome === "failure" ? 2 : 1);
     } finally {

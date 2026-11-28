@@ -1,16 +1,10 @@
 import type { PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { defaultCodexAppInventoryCache } from "./app-server/app-inventory-cache.js";
-import { resolveCodexAppServerAuthAccountCacheKey } from "./app-server/auth-bridge.js";
-import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./app-server/auth-cache-key.js";
-import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
+import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import { readCodexPluginConfig } from "./app-server/config-parsing.js";
+import { listAllCodexAppServerModels } from "./app-server/models.js";
 import { refreshCodexPluginRuntimeState } from "./app-server/plugin-activation.js";
-import { buildCodexPluginAppCacheKey } from "./app-server/plugin-app-cache-key.js";
 import { defaultCodexPluginMetadataCache } from "./app-server/plugin-metadata-cache.js";
-import type { JsonValue, v2 } from "./app-server/protocol.js";
-import {
-  getLeasedSharedCodexAppServerClient,
-  releaseLeasedSharedCodexAppServerClient,
-} from "./app-server/shared-client.js";
 import { readCodexAccountAuthOverview } from "./command-account.js";
 import { refreshCodexHostedApps } from "./command-apps-refresh.js";
 import {
@@ -23,6 +17,7 @@ import {
 import { handleCodexDiagnosticsFeedback } from "./command-diagnostics.js";
 import {
   buildHelp,
+  CODEX_REVIEW_USAGE,
   formatAccount,
   formatCodexDisplayText,
   formatCodexStatus,
@@ -46,7 +41,8 @@ import {
   buildCodexChoiceMenuReply,
   buildCodexSubcommandPickerReply,
   isMenuVerb,
-  splitArgs,
+  parseReviewArgs,
+  splitArgsWithTail,
 } from "./command-handler-args.js";
 import {
   bindConversation,
@@ -56,20 +52,23 @@ import {
   detachConversation,
   resumeThread,
 } from "./command-handler-bindings.js";
-import {
-  CODEX_CONTROL_METHODS,
-  resolveCodexCommandDeps,
-  type CodexCommandDepsOverride,
-} from "./command-handler-deps.js";
+import type { CodexCommandDeps } from "./command-handler-deps.js";
 import {
   resolveCodexConversationControlScope,
   resolveCommandAppServerScope,
 } from "./command-handler-scope.js";
 import { handleCodexPluginsSubcommand } from "./command-plugins-management.js";
 import { withCodexPluginCommandContext } from "./command-plugins-runtime.js";
-import { readCodexConversationBindingData } from "./conversation-binding-data.js";
-
-export type { CodexCommandDepsOverride } from "./command-handler-deps.js";
+import {
+  codexControlRequest,
+  readCodexStatusProbes,
+  requestOptions,
+  safeCodexControlRequest,
+} from "./command-rpc.js";
+import {
+  readCodexConversationBindingData,
+  resolveCodexDefaultWorkspaceDir,
+} from "./conversation-binding-data.js";
 
 const CODEX_HOST_INSPECTION_SUBCOMMANDS = new Set([
   "account",
@@ -82,10 +81,10 @@ const CODEX_HOST_INSPECTION_SUBCOMMANDS = new Set([
 
 export async function handleCodexSubcommand(
   inputCtx: CodexCommandContext,
-  options: { pluginConfig?: unknown; deps: CodexCommandDepsOverride },
+  options: { pluginConfig?: unknown; deps: CodexCommandDeps },
 ): Promise<PluginCommandResult> {
-  const deps = resolveCodexCommandDeps(options.deps);
-  const args = splitArgs(inputCtx.args);
+  const { deps } = options;
+  const { args, tail, hasUnclosedQuote } = splitArgsWithTail(inputCtx.args);
   if (args.length === 0) {
     return buildCodexSubcommandPickerReply();
   }
@@ -97,15 +96,24 @@ export async function handleCodexSubcommand(
   if (CODEX_HOST_INSPECTION_SUBCOMMANDS.has(normalized) && !canMutateCodexHost(inputCtx)) {
     return { text: CODEX_HOST_INSPECTION_AUTH_ERROR };
   }
+  const reviewTarget =
+    normalized === "review" ? parseReviewArgs(rest, tail, hasUnclosedQuote) : undefined;
+  const skipsNativeExecution =
+    returnsBeforeNativeCodexExecution(normalized, rest, reviewTarget) ||
+    isReadOnlyCodexGoalCommand(normalized, rest);
   if (
     CODEX_NATIVE_CONTROL_SUBCOMMANDS.has(normalized) &&
-    !returnsBeforeNativeCodexExecution(normalized, rest) &&
-    !isReadOnlyCodexGoalCommand(normalized, rest) &&
+    !skipsNativeExecution &&
     !canMutateCodexHost(inputCtx)
   ) {
     return { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR };
   }
-  const nativePolicy = await resolveCodexNativeCommandSandboxBlock(inputCtx, normalized, rest);
+  const nativePolicy = await resolveCodexNativeCommandSandboxBlock(
+    inputCtx,
+    normalized,
+    rest,
+    skipsNativeExecution,
+  );
   try {
     if (nativePolicy.block) {
       return { text: nativePolicy.block };
@@ -122,14 +130,23 @@ export async function handleCodexSubcommand(
     const usageCommand = normalized === "unbind" ? "detach" : normalized;
     if (
       rest.length > 0 &&
-      ["status", "models", "detach", "binding", "stop", "mcp", "skills", "account"].includes(
-        usageCommand,
-      )
+      [
+        "status",
+        "models",
+        "detach",
+        "binding",
+        "stop",
+        "mcp",
+        "skills",
+        "account",
+        "compact",
+      ].includes(usageCommand)
     ) {
       return { text: `Usage: /codex ${usageCommand}` };
     }
+    const pluginConfig = readCodexPluginConfig(options.pluginConfig);
     if (normalized === "plugins") {
-      // Account-wide hosted refresh does not require plugin-management configuration IO.
+      // Hosted refresh is account-wide; it does not mutate plugin configuration.
       if (rest[0]?.toLowerCase() === "refresh") {
         if (rest.length !== 1) {
           return {
@@ -141,17 +158,9 @@ export async function handleCodexSubcommand(
             text: "Only an owner or operator.admin gateway client can refresh hosted app inventory.",
           };
         }
-        return await withCodexPluginCommandContext(
-          { deps, ctx, pluginConfig: options.pluginConfig },
-          (context) => refreshCodexHostedApps(context),
+        return await withCodexPluginCommandContext({ deps, ctx, pluginConfig }, (context) =>
+          refreshCodexHostedApps(context),
         );
-      }
-      if (!deps.codexPluginsManagementIo) {
-        return {
-          text:
-            "Codex sub-plugin management is not wired up (codexPluginsManagementIo dep is undefined). " +
-            "Edit ~/.openclaw/openclaw.json or use `openclaw config patch` until the runtime exposes the IO.",
-        };
       }
       let appServerScope: ReturnType<typeof resolveCommandAppServerScope> | undefined;
       await using _ = {
@@ -163,29 +172,28 @@ export async function handleCodexSubcommand(
         },
       };
       const getAppServerScope = () =>
-        (appServerScope ??= resolveCommandAppServerScope(deps, ctx, options.pluginConfig));
+        (appServerScope ??= resolveCommandAppServerScope(deps, ctx, pluginConfig));
       return await handleCodexPluginsSubcommand(ctx, rest, deps.codexPluginsManagementIo, {
-        withContext: (run) =>
-          withCodexPluginCommandContext({ deps, ctx, pluginConfig: options.pluginConfig }, run),
+        withContext: (run) => withCodexPluginCommandContext({ deps, ctx, pluginConfig }, run),
         workspaceDir: async () => {
           const data = readCodexConversationBindingData(await ctx.getCurrentConversationBinding());
           const workspaceDir =
             data?.kind === "codex-app-server-session" ? data.workspaceDir : undefined;
-          return workspaceDir?.trim() || deps.resolveCodexDefaultWorkspaceDir(options.pluginConfig);
+          return workspaceDir?.trim() || resolveCodexDefaultWorkspaceDir(pluginConfig);
         },
         list: async (requestParams) => {
           const scope = await getAppServerScope();
-          return (await deps.codexControlRequest(
-            options.pluginConfig,
+          return await codexControlRequest(
+            pluginConfig,
             CODEX_CONTROL_METHODS.listPlugins,
             requestParams,
             { ...scope, config: ctx.config },
-          )) as v2.PluginListResponse;
+          );
         },
         install: async (requestParams) => {
           const scope = await getAppServerScope();
-          return (await deps.codexControlRequest(
-            options.pluginConfig,
+          return await codexControlRequest(
+            pluginConfig,
             CODEX_CONTROL_METHODS.installPlugin,
             requestParams,
             {
@@ -193,94 +201,50 @@ export async function handleCodexSubcommand(
               config: ctx.config,
               assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx),
             },
-          )) as v2.PluginInstallResponse;
+          );
         },
-        refresh: async (workspaceDir) => {
-          const scope = await getAppServerScope();
-          const configuredAppServer = resolveCodexAppServerRuntimeOptions({
-            pluginConfig: options.pluginConfig,
-          });
-          const appServer = scope.startOptions
-            ? { ...configuredAppServer, start: scope.startOptions }
-            : configuredAppServer;
-          const authProfileId = scope.authProfileId ?? undefined;
-          const accountId = await resolveCodexAppServerAuthAccountCacheKey({
-            authProfileId,
-            agentDir: scope.agentDir,
-            config: ctx.config,
-          });
-          const client = await getLeasedSharedCodexAppServerClient({
-            startOptions: appServer.start,
-            pluginConfig: options.pluginConfig,
-            authProfileId: scope.authProfileId,
-            agentDir: scope.agentDir,
-            config: ctx.config,
-          });
-          try {
-            const appCacheKey = buildCodexPluginAppCacheKey({
-              appServer,
-              agentDir: scope.agentDir,
-              authProfileId,
-              accountId,
-              envApiKeyFingerprint: authProfileId
-                ? undefined
-                : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start }),
-              appServerVersion: client.getServerVersion(),
-              runtimeIdentity: client.getRuntimeIdentity(),
-            });
-            return await refreshCodexPluginRuntimeState({
+        refresh: (workspaceDir) =>
+          withCodexPluginCommandContext({ deps, ctx, pluginConfig }, (context) =>
+            refreshCodexPluginRuntimeState({
               configCwd: workspaceDir,
               appCache: defaultCodexAppInventoryCache,
-              appCacheKey,
+              appCacheKey: context.appCacheKey,
               metadataCache: defaultCodexPluginMetadataCache,
-              request: async (method, requestParams) => {
-                const requestMethod = resolvePluginRuntimeRefreshMethod(method);
-                return await deps.codexControlRequest(
-                  options.pluginConfig,
-                  requestMethod,
-                  requestParams as JsonValue | undefined,
-                  { ...scope, config: ctx.config },
-                );
-              },
-            });
-          } finally {
-            releaseLeasedSharedCodexAppServerClient(client);
-          }
-        },
+              request: context.request,
+            }),
+          ),
       });
     }
     if (normalized === "status") {
       const { agentDir } = resolveCodexConversationControlScope(ctx);
       return {
-        text: formatCodexStatus(
-          await deps.readCodexStatusProbes(options.pluginConfig, ctx.config, agentDir),
-        ),
+        text: formatCodexStatus(await readCodexStatusProbes(pluginConfig, ctx.config, agentDir)),
       };
     }
     if (normalized === "models") {
       const { agentDir } = resolveCodexConversationControlScope(ctx);
       return {
         text: formatModels(
-          await deps.listCodexAppServerModels(
-            deps.requestOptions(options.pluginConfig, 100, ctx.config, agentDir),
+          await listAllCodexAppServerModels(
+            requestOptions(pluginConfig, 100, ctx.config, agentDir),
           ),
         ),
       };
     }
     if (normalized === "threads") {
-      return { text: await buildThreads(deps, ctx, options.pluginConfig, rest.join(" ")) };
+      return { text: await buildThreads(deps, ctx, pluginConfig, rest.join(" ")) };
     }
     if (normalized === "goal") {
-      return { text: await handleNativeGoal(deps, ctx, options.pluginConfig, rest) };
+      return { text: await handleNativeGoal(deps, ctx, pluginConfig, rest) };
     }
     if (normalized === "sessions") {
       return { text: await buildCodexCliSessions(deps, rest) };
     }
     if (normalized === "resume") {
-      return { text: await resumeThread(deps, ctx, options.pluginConfig, rest) };
+      return { text: await resumeThread(deps, ctx, pluginConfig, rest) };
     }
     if (normalized === "bind") {
-      return await bindConversation(deps, ctx, options.pluginConfig, rest);
+      return await bindConversation(deps, ctx, pluginConfig, rest);
     }
     if (normalized === "detach" || normalized === "unbind") {
       return { text: await detachConversation(deps, ctx) };
@@ -300,25 +264,35 @@ export async function handleCodexSubcommand(
       }
       return { text: await setConversationPreference(deps, ctx, rest, normalized) };
     }
-    if (normalized === "compact" || normalized === "review") {
-      return { text: await startThreadAction(deps, ctx, options.pluginConfig, normalized, rest) };
+    if (normalized === "compact") {
+      return { text: await startThreadAction(deps, ctx, pluginConfig, { kind: "compact" }) };
+    }
+    if (normalized === "review") {
+      return {
+        text: reviewTarget
+          ? await startThreadAction(deps, ctx, pluginConfig, {
+              kind: "review",
+              target: reviewTarget,
+            })
+          : `Usage: ${CODEX_REVIEW_USAGE}`,
+      };
     }
     if (normalized === "diagnostics") {
-      return await handleCodexDiagnosticsFeedback(deps, ctx, options.pluginConfig, rest.join(" "));
+      return await handleCodexDiagnosticsFeedback(deps, ctx, pluginConfig, rest.join(" "));
     }
     if (normalized === "computer-use" || normalized === "computeruse") {
       if (isMenuVerb(rest)) {
         return buildCodexChoiceMenuReply("computer-use");
       }
       return {
-        text: await handleComputerUseCommand(deps, ctx, options.pluginConfig, rest),
+        text: await handleComputerUseCommand(ctx, pluginConfig, rest),
       };
     }
     if (normalized === "mcp" || normalized === "skills") {
-      const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
+      const scope = await resolveCommandAppServerScope(deps, ctx, pluginConfig);
       using _ = { [Symbol.dispose]: scope.release };
-      const response = await deps.codexControlRequest(
-        options.pluginConfig,
+      const response = await codexControlRequest(
+        pluginConfig,
         normalized === "mcp"
           ? CODEX_CONTROL_METHODS.listMcpServers
           : CODEX_CONTROL_METHODS.listSkills,
@@ -330,18 +304,18 @@ export async function handleCodexSubcommand(
       };
     }
     if (normalized === "account") {
-      const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
+      const scope = await resolveCommandAppServerScope(deps, ctx, pluginConfig);
       using _ = { [Symbol.dispose]: scope.release };
       const requestScope = { config: ctx.config, ...scope };
       const [account, limits] = await Promise.all([
-        deps.safeCodexControlRequest(
-          options.pluginConfig,
+        safeCodexControlRequest(
+          pluginConfig,
           CODEX_CONTROL_METHODS.account,
           { refreshToken: false },
           requestScope,
         ),
-        deps.safeCodexControlRequest(
-          options.pluginConfig,
+        safeCodexControlRequest(
+          pluginConfig,
           CODEX_CONTROL_METHODS.rateLimits,
           undefined,
           requestScope,
@@ -355,8 +329,7 @@ export async function handleCodexSubcommand(
             ctx,
             agentDir: scope.agentDir,
             authProfileId: scope.authProfileId,
-            pluginConfig: options.pluginConfig,
-            safeCodexControlRequest: deps.safeCodexControlRequest,
+            pluginConfig,
             account,
             limits,
           }),
@@ -369,17 +342,4 @@ export async function handleCodexSubcommand(
   } finally {
     nativePolicy.release();
   }
-}
-
-function resolvePluginRuntimeRefreshMethod(method: string) {
-  const supported = [
-    CODEX_CONTROL_METHODS.listPlugins,
-    CODEX_CONTROL_METHODS.installedApps,
-    CODEX_CONTROL_METHODS.readApps,
-  ] as const;
-  const recognized = supported.find((candidate) => candidate === method);
-  if (!recognized) {
-    throw new Error(`Unexpected Codex plugin refresh method: ${method}`);
-  }
-  return recognized;
 }

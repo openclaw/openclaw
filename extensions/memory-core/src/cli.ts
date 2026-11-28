@@ -61,6 +61,7 @@ function runMemoryCliCommand(run: () => Promise<void>): Promise<void> {
     method: "memory.cli",
     params: {},
     target: "memory stores",
+    databaseEngine: "configured",
     onForeignOwner: "refuse",
     runLocal: run,
   });

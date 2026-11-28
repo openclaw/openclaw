@@ -1,8 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   assertSqliteSchemaContains,
-  getCanonicalSqliteNamedIndexContracts,
+  createSqliteTableContractReader,
+  getCanonicalSqliteNamedIndexNames,
   getCanonicalSqliteTableNames,
 } from "../infra/sqlite-schema-contract.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
@@ -12,6 +14,7 @@ import {
   CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
   CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
 } from "./openclaw-state-db-additive-columns.js";
+import { ensureStatePostgresFragment } from "./openclaw-state-db-engine.js";
 import {
   backfillAcpReplayEstimatedBytes,
   backfillCronJobsFromJobJson,
@@ -32,12 +35,15 @@ function ensureTable(
   table: string,
   options?: Parameters<typeof extractSqliteTableSchema>[2],
 ): void {
+  if (isPostgresSqlConnection(database)) {
+    return ensureStatePostgresFragment(database, table);
+  }
   let ensure = tableEnsurers.get(table);
   if (!ensure) {
     const schema = getOpenClawStateFeatureSchemaSql(table, options);
     ensure = createSqliteSchemaEnsurer(() => schema, {
       tables: getCanonicalSqliteTableNames(schema),
-      indexes: getCanonicalSqliteNamedIndexContracts(schema).map(({ name }) => name),
+      indexes: getCanonicalSqliteNamedIndexNames(schema),
     });
     tableEnsurers.set(table, ensure);
   }
@@ -92,6 +98,13 @@ export function ensureMcpOAuthPendingSchema(database: EngineConnection): void {
 export function ensureDevicePairingJoinCodeSchema(database: EngineConnection): void {
   ensureTable(database, "device_pairing_join_codes", {
     errorMessage: "OpenClaw device pairing join-code schema marker is missing.",
+  });
+}
+
+/** Lazily install the additive browser pairing request table on first use. */
+export function ensureDevicePairingBrowserRequestSchema(database: EngineConnection): void {
+  ensureTable(database, "device_pairing_browser_requests", {
+    errorMessage: "OpenClaw device pairing browser request schema marker is missing.",
   });
 }
 
@@ -190,15 +203,8 @@ export function ensurePersonalGitHubPublicationSchema(db: EngineConnection): voi
 }
 
 /**
- * Add the feature-owned first-use columns that a STRICT rebuild cannot skip.
- *
- * These columns normally stay absent until their owning feature first writes
- * them, and the persistent schema contract accepts that shape. The STRICT
- * table rebuild is the one caller that cannot: it recreates each table from
- * canonical SQL, which already declares these columns, so a database missing
- * them fails the canonical column check and rolls the entire repair back.
- * Ensuring them immediately before that rebuild matches the shape the rebuild
- * produces anyway, and stays scoped to databases old enough to need it.
+ * Complete first-use columns before a STRICT rebuild or in a private port copy.
+ * Both require canonical layouts; ordinary admission leaves these columns lazy.
  */
 export function ensureFirstUseAdditiveStateColumnsForStrictMigration(db: DatabaseSync): void {
   for (const {
@@ -224,6 +230,43 @@ function ensureColumns(
   return added;
 }
 
+const RETIRED_DIAGNOSTIC_EVENT_INDEX = "idx_diagnostic_events_scope_created";
+
+/**
+ * Read-only: whether repair-scope {@link ensureAdditiveStateColumns} would change the
+ * catalog: create a worker tool-state table, add a startup column to a present table, or
+ * drop the retired diagnostic index. Its row backfills are decided by their own owners.
+ */
+export function hasAdditiveStateSchemaRepairWork(db: DatabaseSync): boolean {
+  if (
+    ["worker_turn_tool_authorities", "worker_session_tool_operations"].some(
+      (table) => !tableExists(db, table),
+    )
+  ) {
+    return true;
+  }
+  const definitions = [
+    ...CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+    ...Object.values(columns)
+      .flat()
+      .map(([tableName, definition]) => ({
+        tableName,
+        columnName: definition.trim().split(/\s+/, 1)[0] ?? "",
+      })),
+  ];
+  return (
+    definitions.some(
+      ({ tableName, columnName }) =>
+        tableExists(db, tableName) && !tableHasColumn(db, tableName, columnName),
+    ) ||
+    Boolean(
+      createSqliteTableContractReader(db)("diagnostic_events")?.indexes.some(
+        (index) => index.name === RETIRED_DIAGNOSTIC_EVENT_INDEX,
+      ),
+    )
+  );
+}
+
 /** Runtime pairs new columns with their transforms; full historical repair stays explicit. */
 export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | "repair"): void {
   const repairHistoricalRows = scope === "repair";
@@ -236,7 +279,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
     ensureColumn(db, tableName, `${columnName} ${dataType}`);
   }
   if (ensureColumn(db, ...columns.packageUpdatedAt[0])) {
-    db.exec("UPDATE claw_package_refs SET updated_at_ms = installed_at_ms;");
+    db.exec("UPDATE template_package_refs SET updated_at_ms = installed_at_ms;");
   }
   ensureColumns(db, columns.packageIntegrity);
   const addedDiagnosticEventSequence = ensureColumn(db, ...columns.diagnosticSequence[0]);
@@ -262,7 +305,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
     `);
   }
   if (addedDiagnosticEventSequence || repairHistoricalRows) {
-    db.exec("DROP INDEX IF EXISTS idx_diagnostic_events_scope_created;");
+    db.exec(`DROP INDEX IF EXISTS ${RETIRED_DIAGNOSTIC_EVENT_INDEX};`);
   }
   const addedCronLogColumns = ensureColumns(db, columns.cronRunLogs);
   if (
@@ -271,8 +314,9 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
   ) {
     backfillCronRunLogEntryJson(db);
   }
-  if (ensureColumns(db, columns.acpReplay).length > 0 || repairHistoricalRows) {
-    backfillAcpReplayEstimatedBytes(db);
+  const addedAcpReplayColumns = ensureColumns(db, columns.acpReplay).length > 0;
+  if (addedAcpReplayColumns || repairHistoricalRows) {
+    backfillAcpReplayEstimatedBytes(db, addedAcpReplayColumns);
   }
   const addedCronJobColumns = ensureColumns(db, columns.cronJobs);
   if (

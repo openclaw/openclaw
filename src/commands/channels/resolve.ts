@@ -13,9 +13,11 @@ import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolu
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { formatUnsupportedChannelActionMessage } from "../../cli/error-format.js";
+import { throwExpectedCliError } from "../../cli/expected-cli-error.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 
@@ -73,16 +75,10 @@ function detectAutoKindForPlugin(input: string, plugin: ChannelPlugin): ChannelR
   return "group";
 }
 
-function formatResolveResult(result: ChannelResolveResult): string {
-  const name = result.name ? ` (${result.name})` : "";
-  const note = result.note ? ` [${result.note}]` : "";
-  return `${result.input} -> ${result.id}${name}${note}`;
-}
-
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
   const entries = normalizeStringEntries(opts.entries);
   if (entries.length === 0) {
-    throw new Error(
+    throwExpectedCliError(
       `At least one entry is required. Example: ${formatCliCommand("openclaw channels resolve --channel discord <name-or-id>")}.`,
     );
   }
@@ -90,7 +86,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   const loadedRaw = await captureRuntimeConfigAsyncReader()();
   const requestedAgent = opts.agent?.trim();
   if (opts.agent !== undefined && !requestedAgent) {
-    throw new Error("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
   const agentId = requestedAgent ? resolveConfiguredAgentId(loadedRaw, requestedAgent) : undefined;
   const { effectiveConfig: cfg } = await resolveCommandConfigWithSecrets({
@@ -115,7 +111,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
       })
     : null;
   if (explicitChannel && resolvedExplicit?.catalogEntry && !resolvedExplicit.plugin) {
-    throw new Error(
+    throwExpectedCliError(
       `Channel plugin "${resolvedExplicit.catalogEntry.id}" is not installed. Run ${formatCliCommand(`openclaw channels add --channel ${resolvedExplicit.catalogEntry.id}`)} first.`,
     );
   }
@@ -142,15 +138,9 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   const preferredKind =
     !opts.kind || opts.kind === "auto" ? undefined : opts.kind === "user" ? "user" : "group";
 
-  const byKind = new Map<ChannelResolveKind, string[]>();
-  if (preferredKind) {
-    byKind.set(preferredKind, entries);
-  } else {
-    for (const entry of entries) {
-      const kind = detectAutoKindForPlugin(entry, plugin);
-      byKind.set(kind, [...(byKind.get(kind) ?? []), entry]);
-    }
-  }
+  const byKind: Map<ChannelResolveKind, string[]> = preferredKind
+    ? new Map([[preferredKind, entries]])
+    : groupRecords(entries, (entry) => detectAutoKindForPlugin(entry, plugin));
   const resolved: ChannelResolveResult[] = [];
   for (const [kind, inputs] of byKind) {
     resolved.push(
@@ -182,7 +172,9 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
 
   for (const result of results) {
     if (result.resolved && result.id) {
-      runtime.log(formatResolveResult(result));
+      const name = result.name ? ` (${result.name})` : "";
+      const note = result.note ? ` [${result.note}]` : "";
+      runtime.log(`${result.input} -> ${result.id}${name}${note}`);
     } else {
       runtime.error(
         danger(`${result.input} -> unresolved${result.note ? ` (${result.note})` : ""}`),

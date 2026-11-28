@@ -18,6 +18,7 @@ import {
   readPluginCacheDirectory,
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
+import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot-readers.js";
 
 // Plugin manifest files are small metadata descriptors. Bound reads to prevent
 // a corrupted or hostile manifest from exhausting memory during metadata scan.
@@ -219,3 +220,5 @@ export function listOpenClawPluginManifestMetadata(
   }
   return records;
 }
+
+registerPluginMetadataSnapshotReaders({ listOpenClawPluginManifestMetadata });

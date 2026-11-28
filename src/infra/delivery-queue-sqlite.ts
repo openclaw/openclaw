@@ -1,7 +1,12 @@
 // Stores durable delivery queue entries through their connection-bound owner.
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import type { DeliveryQueueReadMode } from "./delivery-queue-sqlite-bound.js";
+import {
+  failedDeliveryQueueHealthAdmission,
+  isDeliveryQueueTombstonePruneDue,
+  nextDeliveryQueueTombstoneExpiryAdmission,
+  type FailedDeliveryQueueHealth,
+} from "./delivery-queue-cache.js";
 import {
   countPendingDeliveryQueueEntriesInDatabase,
   loadDeliveryQueueEntriesInDatabase,
@@ -17,6 +22,7 @@ import {
   type DeliveryQueueStateContext,
 } from "./delivery-queue-state-context.js";
 import { executeDeliveryQueueOperation } from "./delivery-queue-worker-store.js";
+import { peekSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 
 export type {
   DeliveryQueueCompletionRetention,
@@ -54,18 +60,24 @@ export async function inspectDeliveryQueueReceipt(
 export function loadDeliveryQueueEntries(
   queueName: string,
   stateDir?: string,
-  mode: DeliveryQueueReadMode = "pending",
-  context?: DeliveryQueueStateContext,
 ): DeliveryQueueEntryState[] {
-  return loadDeliveryQueueEntriesInDatabase(openStateDatabase(stateDir, context), queueName, mode);
+  return loadDeliveryQueueEntriesInDatabase(openStateDatabase(stateDir), queueName);
 }
 
 /** Count dead-lettered entries per queue namespace for coarse health reporting. */
 export async function countFailedDeliveryQueueEntries(
   stateDir?: string,
   context?: DeliveryQueueStateContext,
-): Promise<Array<{ queueName: string; count: number; oldestFailedAt?: number }>> {
-  return executeDeliveryQueueOperation(context, stateDir, {
+): Promise<FailedDeliveryQueueHealth> {
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
+  const cached = peekSqliteDatabaseAdmissionForPath(
+    captured.workerContext.admission.databasePath,
+    failedDeliveryQueueHealthAdmission,
+  );
+  if (cached !== undefined) {
+    return cached;
+  }
+  return executeDeliveryQueueOperation(captured, undefined, {
     type: "deliveryQueue.countFailed",
     input: undefined,
   });
@@ -122,7 +134,15 @@ export async function pruneExpiredDeliveryQueueTombstones(
   stateDir?: string,
   context?: DeliveryQueueStateContext,
 ): Promise<void> {
-  await executeDeliveryQueueOperation(context, stateDir, {
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
+  const expiry = peekSqliteDatabaseAdmissionForPath(
+    captured.workerContext.admission.databasePath,
+    nextDeliveryQueueTombstoneExpiryAdmission,
+  );
+  if (!isDeliveryQueueTombstonePruneDue(expiry, Date.now())) {
+    return;
+  }
+  await executeDeliveryQueueOperation(captured, undefined, {
     type: "deliveryQueue.pruneTombstones",
     input: undefined,
   });

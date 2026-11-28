@@ -9,6 +9,7 @@ import {
 import type { GatewayWebSocketClientOptions } from "../../packages/gateway-client/src/websocket.js";
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { workerProtocolObject } from "./protocol-record.js";
 
 const ENDPOINT_FIELD_MAX_LENGTH = 4_096;
@@ -44,6 +45,7 @@ const AccessCredential = z
 const EndpointSchema = z.union([
   workerProtocolObject({
     kind: z.literal("unix"),
+    path: z.literal(WORKER_PUBLIC_INGRESS_PATH).optional(),
     socketPath: z
       .string()
       .refine(
@@ -101,8 +103,9 @@ export function resolveWorkerConnectionTarget(
   env: NodeJS.ProcessEnv = process.env,
 ): WorkerConnectionTarget {
   if (endpoint.kind === "unix") {
+    registerSecretValueForRedaction(endpoint.socketPath);
     return {
-      url: `ws+unix://${endpoint.socketPath}:/`,
+      url: `ws+unix:${endpoint.socketPath}:${endpoint.path ?? "/"}`,
       options: {},
     };
   }

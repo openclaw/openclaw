@@ -1,4 +1,3 @@
-// Builds provider auth choice lists from plugin setup metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
@@ -14,9 +13,15 @@ import {
 } from "./official-external-plugin-catalog.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-import { isProviderAuthChoicePlatformSupported } from "./provider-auth-choice-platform.js";
 import { parseProviderPluginMethodChoice } from "./provider-plugin-choice.js";
-import { groupPluginRecords } from "./record-groups.js";
+import { groupPluginRecords, PLUGIN_ORIGIN_PRIORITIES } from "./record-groups.js";
+
+/** Keep setup and cold-install choices on the platforms their provider supports. */
+export function isProviderAuthChoicePlatformSupported(platforms: unknown): boolean {
+  return (
+    platforms === undefined || (Array.isArray(platforms) && platforms.includes(process.platform))
+  );
+}
 
 export type ProviderAuthChoiceMetadata = Omit<
   PluginManifestProviderAuthChoice,
@@ -56,12 +61,6 @@ type ManifestProviderAuthChoiceParams = {
   includeUnsupportedPlatforms?: boolean;
 };
 
-const PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
-  config: 0,
-  bundled: 1,
-  global: 2,
-  workspace: 3,
-};
 const DESCRIPTOR_LABEL_ACRONYMS: ReadonlyMap<string, string> = new Map([
   ["api", "API"],
   ["jwt", "JWT"],
@@ -73,7 +72,7 @@ const DESCRIPTOR_LABEL_ACRONYMS: ReadonlyMap<string, string> = new Map([
 ] as const);
 
 function resolveProviderAuthChoiceOriginPriority(origin: PluginOrigin): number {
-  return PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY[origin] ?? Number.MAX_SAFE_INTEGER;
+  return PLUGIN_ORIGIN_PRIORITIES[origin]?.provider ?? Number.MAX_SAFE_INTEGER;
 }
 
 function projectProviderAuthChoice(

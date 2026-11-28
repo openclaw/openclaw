@@ -6,7 +6,7 @@ import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-ca
 
 registerSkillWorkshopEnglish();
 
-export type SkillWorkshopMode = "off" | "auto";
+export type SkillWorkshopMode = "off" | "propose" | "auto";
 
 export function resolveWorkshopMode(
   runtimeConfig: RuntimeConfigCapability | undefined,
@@ -16,19 +16,32 @@ export function resolveWorkshopMode(
     return null;
   }
   // The Gateway defaults an absent mode to auto; any other value learns nothing.
-  const configured = asRecord(asRecord(asRecord(config.skills)?.workshop)?.autonomous)?.mode;
-  return configured === undefined || configured === "auto" ? "auto" : "off";
+  const entry = asRecord(asRecord(asRecord(config.plugins)?.entries)?.["skill-workshop"]);
+  const configured = asRecord(asRecord(entry?.config)?.autonomous)?.mode;
+  if (configured === undefined || configured === "auto") {
+    return "auto";
+  }
+  return configured === "propose" ? "propose" : "off";
 }
 
-/** Patch the canonical config key; returns an error message or null on success. */
+/** True only when the loaded config turns every plugin off; unknown stays false. */
+export function arePluginsDisabled(runtimeConfig: RuntimeConfigCapability | undefined): boolean {
+  const config = resolveEditableSnapshotConfig(runtimeConfig?.state.configSnapshot);
+  return asRecord(config?.plugins)?.enabled === false;
+}
+
+/** Patch the plugin's own config key; returns an error message or null on success. */
 export async function setWorkshopMode(
   runtimeConfig: RuntimeConfigCapability,
   mode: SkillWorkshopMode,
 ): Promise<string | null> {
   const patch = {
-    raw: { skills: { workshop: { autonomous: { mode } } } },
-    note:
-      mode === "auto" ? "Enable Skill Workshop auto-learning" : "Disable Skill Workshop learning",
+    raw: { plugins: { entries: { "skill-workshop": { config: { autonomous: { mode } } } } } },
+    note: {
+      auto: "Enable Skill Workshop auto-learning",
+      propose: "Have Skill Workshop propose drafts",
+      off: "Disable Skill Workshop learning",
+    }[mode],
   };
   const patched = await runtimeConfig.patch(patch);
   if (!patched) {

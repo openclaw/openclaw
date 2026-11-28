@@ -41,6 +41,7 @@ import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
@@ -1613,6 +1614,15 @@ class ChatFullMessageOwnershipLayoutTest {
         .single()
         .text,
     )
+    // Background history must not steal the open reader's viewport. Move away
+    // explicitly before checking that its in-flight full read keeps its owner.
+    composeRule.onNodeWithText(gateway.backgroundText(39)).assertIsNotDisplayed()
+    composeRule
+      .onNode(hasContentDescription("Jump to latest") and hasClickAction())
+      .assertIsDisplayed()
+      .assertIsEnabled()
+      .performClick()
+    composeRule.waitForIdle()
     composeRule.onNodeWithText(gateway.backgroundText(39)).assertIsDisplayed()
   }
 
@@ -2123,7 +2133,7 @@ internal class FullMessageGateway : AutoCloseable {
                 if (omitMethodCatalog) {
                   ""
                 } else {
-                  "\"methods\":[\"chat.history\",${if (advertiseFullRead) "\"chat.message.get\"," else ""}\"chat.metadata\",\"models.list\",\"health\",\"sessions.list\"],"
+                  "\"methods\":[\"agents.list\",\"chat.history\",${if (advertiseFullRead) "\"chat.message.get\"," else ""}\"chat.metadata\",\"models.list\",\"health\",\"sessions.list\"],"
                 }
               json.parseToJsonElement(
                 """{"type":"hello-ok","protocol":3,"server":{"host":"full-message-$connection","version":"proof"},"features":{$methods"events":[],"capabilities":["session-scoped-model-catalog"]},"auth":{"role":"$role","scopes":${if (role == "operator") "[\"operator.read\",\"operator.write\"]" else "[]"}},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}""",
@@ -2180,6 +2190,10 @@ internal class FullMessageGateway : AutoCloseable {
 
             "models.list" -> {
               json.parseToJsonElement("""{"models":[]}""")
+            }
+
+            "agents.list" -> {
+              json.parseToJsonElement("""{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}""")
             }
 
             "sessions.list" -> {

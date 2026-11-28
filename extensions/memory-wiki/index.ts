@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { definePluginEntry, type OpenClawConfig } from "./api.js";
 import {
   activateMemoryWikiCompiledCacheOwner,
   configureMemoryWikiCompiledCacheStore,
   createMemoryWikiCompiledCacheStore,
   deactivateMemoryWikiCompiledCacheOwnersExcept,
-  reconcileMemoryWikiCompiledCacheOwner,
   resolveMemoryWikiCompiledCacheOwnerId,
 } from "./src/compiled-cache.js";
 import { memoryWikiConfigSchema } from "./src/config-schema.js";
@@ -15,6 +15,7 @@ import {
   resolveMemoryWikiConfig,
   resolveMemoryWikiConfiguredAgentIds,
   type MemoryWikiConfigResolver,
+  type ResolvedMemoryWikiConfig,
 } from "./src/config.js";
 import { createWikiCorpusSupplement } from "./src/corpus-supplement.js";
 import { registerMemoryWikiGatewayMethods } from "./src/gateway.js";
@@ -30,11 +31,15 @@ import {
   createWikiPromptSectionBuilder,
   createWikiPromptSectionPreparer,
 } from "./src/prompt-section.js";
+import { closeMemoryWikiQueryReader } from "./src/query-reader.js";
 import {
   configureMemoryWikiSourceSyncStateStore,
   createMemoryWikiSourceSyncStateStore,
 } from "./src/source-sync-state.js";
-import { waitForMemoryWikiImportedSourceSyncs } from "./src/source-sync.js";
+import {
+  refreshMemoryWikiImportedSources,
+  waitForMemoryWikiImportedSourceSyncs,
+} from "./src/source-sync.js";
 import {
   createWikiApplyTool,
   createWikiGetTool,
@@ -112,6 +117,15 @@ export default definePluginEntry({
     });
     configureMemoryWikiCompiledCacheStore(compiledCacheStore);
     let sourceSyncAbortController: AbortController | undefined;
+    const refreshSources = (activeConfig: ResolvedMemoryWikiConfig, appConfig?: OpenClawConfig) => {
+      const signal = sourceSyncAbortController?.signal;
+      if (!signal) {
+        return;
+      }
+      refreshMemoryWikiImportedSources({ config: activeConfig, appConfig, signal }, (error) => {
+        api.logger.warn(`memory-wiki: background source sync failed: ${formatErrorMessage(error)}`);
+      });
+    };
     api.registerService({
       id: "memory-wiki-compiled-cache-owner-cleanup",
       async start() {
@@ -149,9 +163,6 @@ export default definePluginEntry({
               identity.vaultGeneration,
               identity.compiledCachePublicationId,
             );
-            await reconcileMemoryWikiCompiledCacheOwner(activeConfig, () =>
-              loadMemoryWikiValidatedVaultIdentity(activeConfig.vault.path),
-            );
             activeOwnerIds.add(resolveMemoryWikiCompiledCacheOwnerId(activeConfig));
           }
           deactivateMemoryWikiCompiledCacheOwnersExcept(activeOwnerIds);
@@ -171,6 +182,7 @@ export default definePluginEntry({
         deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
         await waitForMemoryWikiImportedSourceSyncs();
         deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
+        await closeMemoryWikiQueryReader();
       },
     });
 
@@ -179,10 +191,10 @@ export default definePluginEntry({
     api.registerMemoryCorpusSupplement(createWikiCorpusSupplement({ resolveConfig, getAppConfig }));
     registerMemoryWikiGatewayMethods({
       api,
-      config,
       getAppConfig,
       resolveConfig,
       resolveSourceSyncSignal: () => sourceSyncAbortController?.signal,
+      refreshSources,
     });
     for (const [name, createTool] of [
       ["wiki_status", createWikiStatusTool],
@@ -200,6 +212,9 @@ export default definePluginEntry({
               return null;
             }
             return createTool(resolved.config, resolved.appConfig, {
+              ...(resolved.signal
+                ? { refreshSources: () => refreshSources(resolved.config, resolved.appConfig) }
+                : {}),
               agentId: resolved.config.agentId ?? ctx.agentId,
               agentSessionKey: ctx.sessionKey,
               sandboxed: ctx.sandboxed,

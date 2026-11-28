@@ -1,80 +1,51 @@
-// Control UI E2E tests cover composable skill references in the chat composer.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({
-  name: "Control UI skill references",
+const suite = createControlUiE2eSuite({ name: "Control UI skill references" });
+const command = (name: string, skillDisplayName?: string) => ({
+  acceptsArgs: Boolean(skillDisplayName),
+  description: name,
+  name,
+  scope: "both",
+  source: skillDisplayName ? "skill" : "native",
+  ...(skillDisplayName
+    ? { skillDisplayName, skillReferenceable: true, skillModelVisible: true }
+    : {}),
 });
 
 suite.define(() => {
   it("references multiple skills inside a normal prompt and sends their raw names", async () => {
-    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("chat-skill-references", artifactRoot)
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
+      ? createControlUiE2eArtifactDir("chat-skill-references")
       : undefined;
+    const viewport = { width: 1280, height: 900 };
     await suite.withPage(
       {
-        viewport: { width: 1280, height: 900 },
-        ...(artifactDir
-          ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
-          : {}),
+        viewport,
+        ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
       },
       async ({ page }) => {
         const commands = [
+          { ...command("autoreview", "Mu\u0308nchen"), skillModelVisible: false },
+          command("technical_documentation", "Home Caf\u00e9"),
+          command("status_report", "Status Report"),
           {
-            acceptsArgs: true,
-            description: "Pre-commit and ship code review.",
-            name: "autoreview",
-            skillDisplayName: "Auto Review",
-            scope: "both",
-            source: "skill",
-            skillModelVisible: true,
-            textAliases: ["/autoreview"],
+            ...command("bundle_review", "Bundle Review"),
+            skillModelVisible: false,
+            skillReferenceable: false,
           },
-          {
-            acceptsArgs: true,
-            description: "Build and review technical documentation.",
-            name: "technical_documentation",
-            skillDisplayName: "Technical Documentation",
-            scope: "both",
-            source: "skill",
-            skillModelVisible: true,
-            textAliases: ["/technical_documentation"],
-          },
-          {
-            acceptsArgs: true,
-            description: "Prepare a detailed status report.",
-            name: "status_report",
-            skillDisplayName: "Status Report",
-            scope: "both",
-            source: "skill",
-            skillModelVisible: true,
-            textAliases: ["/status_report"],
-          },
-          {
-            acceptsArgs: false,
-            description: "Show gateway status.",
-            name: "status",
-            scope: "both",
-            source: "native",
-            textAliases: ["/status"],
-          },
+          command("status"),
         ];
         const gateway = await installMockGateway(page, {
           deferredMethods: ["chat.send"],
           methodResponses: {
             "chat.startup": {
-              agentsList: {
-                agents: [{ id: "main", name: "OpenClaw" }],
-                defaultId: "main",
-                mainKey: "main",
-                scope: "agent",
-              },
               messages: [],
               metadata: { commands, models: [] },
               sessionId: "skill-reference-session",
@@ -85,70 +56,87 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await composer.fill("Review this with $auto");
-
+        const rich = page.locator(".agent-chat__composer-combobox [data-composer-editor]");
+        const active = () =>
+          page.locator(
+            ".agent-chat__composer-combobox textarea:visible, .agent-chat__composer-combobox [data-composer-editor]",
+          );
+        const draft = (value: string) => expect.poll(() => composer.inputValue()).toBe(value);
+        const screenshot = async (name: string, target: Locator) => {
+          if (artifactDir) {
+            await writeFile(
+              path.join(artifactDir, name),
+              await takeControlUiViewportScreenshot(page, page.locator(".shell"), [target]),
+            );
+          }
+        };
+        await active().fill("$");
         const picker = page.getByRole("listbox", { name: "Skill references" });
         await picker.waitFor({ state: "visible" });
-        await expect.poll(() => picker.getByRole("option").count()).toBe(1);
+        await screenshot("skill-reference-manual-only.png", picker);
         await expect
-          .poll(() => picker.getByRole("option").first().textContent())
-          .toContain("Auto Review");
-        if (artifactDir) {
-          await writeFile(
-            path.join(artifactDir, "skill-reference-picker.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [picker]),
-          );
-        }
-        await composer.press("Enter");
-        await expect.poll(() => composer.inputValue()).toBe("Review this with $autoreview ");
-
-        await composer.fill(`${await composer.inputValue()}and $technical`);
-        await expect.poll(() => picker.getByRole("option").count()).toBe(1);
-        await composer.press("Tab");
+          .poll(() => picker.getByRole("option").allTextContents())
+          .toContainEqual(expect.stringContaining("Mu\u0308nchen"));
+        expect(await picker.getByRole("option").allTextContents()).not.toContainEqual(
+          expect.stringContaining("Bundle Review"),
+        );
+        await active().fill("Review this with $m\u00fcnchen");
         await expect
-          .poll(() => composer.inputValue())
-          .toBe("Review this with $autoreview and $technical_documentation ");
-
-        if (artifactDir) {
-          await writeFile(
-            path.join(artifactDir, "skill-references-selected.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [composer]),
-          );
-        }
+          .poll(() => picker.getByRole("option").allTextContents())
+          .toEqual([expect.stringContaining("Mu\u0308nchen")]);
+        await screenshot("skill-reference-picker.png", picker);
+        await active().press("Enter");
+        const firstSkillDraft = "Review this with $autoreview ";
+        await draft(firstSkillDraft);
+        // The draft is published before the native textarea hands focus to CodeMirror.
+        await rich.and(page.locator(":focus")).waitFor();
+        await page.keyboard.insertText("and $cafe\u0301");
+        await expect.poll(() => picker.getByRole("option").count()).toBe(1);
+        await active().press("Tab");
+        await draft("Review this with $autoreview and $technical_documentation ");
+        await screenshot("skill-references-selected.png", active());
 
         await page.getByRole("button", { name: "Send message" }).click();
         const request = await gateway.waitForRequest("chat.send");
-        expect((request.params as { message?: unknown }).message).toBe(
-          "Review this with $autoreview and $technical_documentation",
-        );
+        expect(request.params).toMatchObject({
+          message: "Review this with $autoreview and $technical_documentation",
+        });
 
-        await composer.fill("Print $HOME");
+        await active().fill("Print $HOME");
         await expect.poll(() => picker.count()).toBe(0);
-        await composer.fill("Review this with /auto");
+        await active().fill("Review this with /bundle_review");
+        await expect
+          .poll(() => page.getByRole("listbox", { name: "Slash commands" }).count())
+          .toBe(0);
+        await active().fill("/bundle_review");
+        await expect
+          .poll(() => page.getByRole("option", { name: /bundle_review/u }).count())
+          .toBe(1);
+        await active().fill("Review this with /auto");
         const slashPicker = page.getByRole("listbox", { name: "Slash commands" });
         await slashPicker.waitFor({ state: "visible" });
         await expect.poll(() => slashPicker.getByRole("option").count()).toBe(1);
-        await composer.press("Enter");
-        await expect.poll(() => composer.inputValue()).toBe("Review this with $autoreview ");
+        await active().press("Enter");
+        await draft(firstSkillDraft);
 
-        await composer.fill("/");
-        await page.getByRole("listbox", { name: "Slash commands" }).waitFor({ state: "visible" });
-        await expect.poll(() => page.getByRole("option", { name: /\/status/u }).count()).toBe(2);
+        await rich.fill("/");
+        await slashPicker.waitFor({ state: "visible" });
+        await expect
+          .poll(() => page.getByRole("option", { name: /^(?:\/status|Status Report)\b/u }).count())
+          .toBe(2);
 
-        const slashOptions = page
-          .getByRole("listbox", { name: "Slash commands" })
-          .getByRole("option");
-        await composer.fill("/sta");
+        const slashOptions = slashPicker.getByRole("option");
+        await active().fill("/sta");
         await expect
           .poll(async () => {
             const names = await slashOptions.locator(".slash-menu-name").allTextContents();
             return { first: names[0], last: names.at(-1) };
           })
-          .toEqual({ first: "/status", last: "/status_report" });
-        await composer.press("Tab");
-        await expect.poll(() => composer.inputValue()).toBe("/status");
+          .toEqual({ first: "/status", last: "Status Report" });
+        await active().press("Tab");
+        await draft("/status");
       },
     );
   });

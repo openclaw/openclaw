@@ -33,7 +33,7 @@ describe("createHtmlEntityToolCallArgumentDecodingWrapper", () => {
     return { assistant, baseStreamFn };
   };
 
-  const drive = async (baseStreamFn: never): Promise<DecodedMessage> => {
+  const drive = async (baseStreamFn: never, onEvent?: () => void): Promise<DecodedMessage> => {
     const wrapped = createHtmlEntityToolCallArgumentDecodingWrapper(baseStreamFn);
     const stream = wrapped({} as never, {} as never, {} as never) as unknown as {
       [Symbol.asyncIterator](): AsyncIterator<unknown>;
@@ -41,6 +41,7 @@ describe("createHtmlEntityToolCallArgumentDecodingWrapper", () => {
     };
     for await (const event of stream as AsyncIterable<unknown>) {
       void event;
+      onEvent?.();
     }
     return stream.result();
   };
@@ -50,7 +51,9 @@ describe("createHtmlEntityToolCallArgumentDecodingWrapper", () => {
       query: "Rock &amp; Roll &#65; &#39;ok&#39; &#x27;hex&#x27;",
       emoji: "ok &#x1F600;",
       args: ["--flag=&quot;value&quot;", "&lt;input&gt;", 42, true, null],
-      nested: { deep: "a &amp; b &mdash; &copy;" },
+      nested: JSON.parse(
+        '{"deep":"a &amp; b &mdash; &copy;","__proto__":{"note":"&lt;metadata&gt;"}}',
+      ),
       invalid: "bad &#x110000; and &#9999999999; and &#xD800; and &#55296;",
     });
 
@@ -60,7 +63,7 @@ describe("createHtmlEntityToolCallArgumentDecodingWrapper", () => {
       query: "Rock & Roll A 'ok' 'hex'",
       emoji: "ok 😀",
       args: ['--flag="value"', "<input>", 42, true, null],
-      nested: { deep: "a & b — ©" },
+      nested: { deep: "a & b — ©", ["__proto__"]: { note: "<metadata>" } },
       invalid: "bad &#x110000; and &#9999999999; and &#xD800; and &#55296;",
     });
   });
@@ -76,7 +79,9 @@ describe("createHtmlEntityToolCallArgumentDecodingWrapper", () => {
       },
     })) as never;
 
-    const first = await drive(baseStreamFn);
+    const first = await drive(baseStreamFn, () => {
+      expect(assistant.content[0]?.arguments.content).toBe("&amp;");
+    });
     const second = await drive(secondStreamFn);
 
     expect(first.content[0]?.arguments.content).toBe("&amp;");

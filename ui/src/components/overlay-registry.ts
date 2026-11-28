@@ -1,4 +1,11 @@
+import { listen } from "../lib/reactive/listener.ts";
 import type { Overlay, OverlayOptions } from "./overlay-types.ts";
+
+declare global {
+  interface Document {
+    openClawModalLayers?: Set<HTMLElement>;
+  }
+}
 
 type OverlayRoot = Document | ShadowRoot;
 type RegisteredOverlay = {
@@ -19,6 +26,31 @@ export type OverlayRegistry = {
   events?: ReturnType<typeof createRegistryEvents>;
 };
 const registries = new WeakMap<Document, OverlayRegistry>();
+const modalSurfaces = new Set<HTMLElement>();
+
+/** Non-popover modal surfaces publish their owned element for keyboard admission. */
+export function registerModalSurface(surface: HTMLElement): () => void {
+  modalSurfaces.add(surface);
+  return () => modalSurfaces.delete(surface);
+}
+
+export function hasModalSurface(doc: Document): boolean {
+  if (doc.openClawModalLayers?.size) {
+    return true;
+  }
+  for (const surface of modalSurfaces) {
+    if (
+      surface.ownerDocument === doc &&
+      surface.isConnected &&
+      surface.matches("dialog[open], [aria-modal='true']")
+    ) {
+      return true;
+    }
+  }
+  return [...(registries.get(doc)?.members.keys() ?? [])].some(
+    (overlay) => overlay.open && overlay.surface.getAttribute("aria-modal") === "true",
+  );
+}
 
 export function containsComposed(container: Element | undefined, target: Node | null): boolean {
   if (!container) {
@@ -193,6 +225,7 @@ function createRegistryEvents(registry: OverlayRegistry) {
     started?: Press;
     target: Node | null;
     pointerId: number;
+    touch: boolean;
     frame?: number;
     finished: boolean;
   };
@@ -204,6 +237,9 @@ function createRegistryEvents(registry: OverlayRegistry) {
     delivered: boolean;
   };
   let press: Press | undefined;
+  // Touch releases precede their compatibility mousedown, where focus moves.
+  let lastRelease: Release | undefined;
+  let stopAbsorbingClick: (() => void) | undefined;
   const starts = new WeakMap<Event, Press>();
   const releases = new WeakMap<Event, Release>();
   const pending = new Set<Release>();
@@ -290,6 +326,7 @@ function createRegistryEvents(registry: OverlayRegistry) {
       return options?.dismissOutsidePointer !== false && !entry.contains(target);
     });
   const keydown = (event: KeyboardEvent) => {
+    lastRelease = undefined;
     if (keys.has(event)) {
       return;
     }
@@ -299,7 +336,35 @@ function createRegistryEvents(registry: OverlayRegistry) {
       registry.stack.at(-1)?.keydown(event);
     }
   };
+  // A tap outside only dismisses: the click that follows it must not act on the page beneath.
+  // Keyboard activation reports no clicks in `detail` and still goes through. The tap can release
+  // the registry's last root before its click arrives, so this holds its own listeners, and a tap
+  // that produces no click stops holding them at the next press.
+  const absorbNextClick = () => {
+    const { document } = registry;
+    stopAbsorbingClick?.();
+    const stops = [
+      listen(
+        document,
+        "click",
+        (event: MouseEvent) => {
+          if (event.detail > 0) {
+            stopAbsorbingClick?.();
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        },
+        true,
+      ),
+      listen(document, "pointerdown", () => stopAbsorbingClick?.(), true),
+    ];
+    stopAbsorbingClick = () => {
+      stops.forEach((stop) => stop());
+      stopAbsorbingClick = undefined;
+    };
+  };
   const pointerdown = (event: PointerEvent) => {
+    lastRelease = undefined;
     let started = starts.get(event);
     if (!started) {
       reconcileNative(registry);
@@ -331,13 +396,23 @@ function createRegistryEvents(registry: OverlayRegistry) {
     const branch = started.branch;
     if (branch?.open && branch.revision === started.revision && !branch.contains(released.target)) {
       branch.request(false);
+      if (released.touch) {
+        absorbNextClick();
+      }
     }
   };
   const pointerupCapture = (event: PointerEvent) => {
     let release = releases.get(event);
     if (!release) {
-      release = { started: press, target: null, pointerId: event.pointerId, finished: false };
+      release = {
+        started: press,
+        target: null,
+        pointerId: event.pointerId,
+        touch: event.pointerType === "touch",
+        finished: false,
+      };
       releases.set(event, release);
+      lastRelease = release;
       const released = release;
       pending.add(release);
       // A stopped event never reaches root bubble listeners. Keep capture
@@ -360,6 +435,19 @@ function createRegistryEvents(registry: OverlayRegistry) {
       press = undefined;
     }
   };
+  // WebKit leaves a tapped button unfocused and focuses its nearest focusable
+  // ancestor instead. Return the released target when focus landed on such an
+  // ancestor, so a tap inside an overlay is not mistaken for focus leaving it.
+  // Each release explains at most one focus change.
+  const releasedFocusFallback = (event: FocusEvent): Node | null => {
+    const released = lastRelease?.target ?? null;
+    lastRelease = undefined;
+    const focused = eventNode(event);
+    const view = registry.document.defaultView;
+    return view && focused instanceof view.Element && containsComposed(focused, released)
+      ? released
+      : null;
+  };
   const focusin = (event: FocusEvent) => {
     interactionBubble(event);
     if (focuses.has(event)) {
@@ -369,11 +457,13 @@ function createRegistryEvents(registry: OverlayRegistry) {
     if (press) {
       return;
     }
+    const fallback = releasedFocusFallback(event);
     reconcileNative(registry);
     const branch = registry.stack.find(
       (entry) =>
         registry.members.get(entry)?.options.dismissOutsideFocus !== false &&
-        !entry.containsFocus(),
+        !entry.containsFocus() &&
+        !(fallback && entry.contains(fallback)),
     );
     if (!branch) {
       return;
@@ -435,18 +525,14 @@ function retainRoot(registry: OverlayRegistry, root: OverlayRoot): () => void {
       ["focusin", events.focusinCapture, true],
       ["focusin", events.focusin, false],
     ] as const;
-    for (const [type, listener, capture] of listeners) {
+    const releaseListeners = listeners.map(([type, listener, capture]) =>
       // SAFETY: Each table entry pairs its native event name with that event's handler.
-      root.addEventListener(type, listener as EventListener, capture);
-    }
+      listen(root, type, listener as EventListener, capture),
+    );
     const observer = new MutationObserver(() => {
-      const entries = Array.from(registry.members);
-      for (const [entry, registration] of entries) {
-        if (registry.members.get(entry) !== registration) {
-          continue;
-        }
+      for (const [entry, registration] of registry.members) {
         refreshOverlayRoots(registry, entry);
-        if (!registration.valid()) {
+        if (entry.phase !== "hidden" && !registration.valid()) {
           entry.retire();
         }
       }
@@ -456,10 +542,7 @@ function retainRoot(registry: OverlayRegistry, root: OverlayRoot): () => void {
       references: 1,
       release() {
         observer.disconnect();
-        for (const [type, listener, capture] of listeners) {
-          // SAFETY: These are the same native event/handler pairs installed above.
-          root.removeEventListener(type, listener as EventListener, capture);
-        }
+        releaseListeners.forEach((release) => release());
       },
     };
     registry.roots.set(root, binding);

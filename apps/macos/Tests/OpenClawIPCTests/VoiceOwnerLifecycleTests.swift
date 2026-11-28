@@ -23,16 +23,16 @@ struct VoiceOwnerLifecycleTests {
         }
     }
 
-    @Test func `preference observation admits fresh denied holds`() async throws {
+    @Test(.testWaitLimit) func `preference observation admits fresh denied holds`() async throws {
         try await withVoiceOwnerFixture { fixture, state, menu in
             let hotkey = state.voiceRuntime.hotkey
             menu.startVoiceObservation()
             state.voicePushToTalkEnabled = true
             // A positive permission receipt establishes the scheduled Observation
             // route. Repeated down flags do not manufacture a fresh hold.
-            try await waitForVoiceOwner("observed preference enables PTT") { [log = fixture.log] in
-                await MainActor.run { hotkey._testUpdateModifierState(modifierFlags: .init(rawValue: 0x80040)) }
-                return log.count("ptt.permission.request") == 1
+            try await TestWait.state("observed preference enables PTT") {
+                hotkey._testUpdateModifierState(modifierFlags: .init(rawValue: 0x80040))
+                return fixture.log.count("ptt.permission.request") == 1
             }
             hotkey._testUpdateModifierState(modifierFlags: [])
             state.voicePushToTalkEnabled = false
@@ -40,9 +40,8 @@ struct VoiceOwnerLifecycleTests {
             state.voicePushToTalkEnabled = true
             menu.startVoiceObservation()
             hotkey._testUpdateModifierState(modifierFlags: .init(rawValue: 0x80040))
-            try await waitForVoiceOwner("fresh denied hold") { [log = fixture.log] in
-                log.count("ptt.permission.request") == 2
-            }
+            try await fixture.log.wait(for: "ptt.permission.request", atLeast: 2)
+            #expect(fixture.log.count("ptt.permission.request") == 2)
             hotkey._testUpdateModifierState(modifierFlags: [])
             #expect(fixture.log.count("app.permission.request") == 0)
             #expect(fixture.log.count("talk.permission.request") == 0)
@@ -220,11 +219,11 @@ struct VoiceOwnerLifecycleTests {
     @Test func `stale originating dismissal cannot hide replacement`() async throws {
         try await withVoiceOwnerFixture { fixture, state, _ in
             let voice = state.voiceRuntime
-            let first = voice.sessions.startSession(source: .pushToTalk, text: "first draft")
+            let first = voice.sessions.startSession(text: "first draft")
             let blink = state.blinkTick
             voice.overlay.dismiss(token: first)
             #expect(fixture.log.count("overlay.request:\(first)") == 1)
-            let second = voice.sessions.startSession(source: .pushToTalk, text: "second draft")
+            let second = voice.sessions.startSession(text: "second draft")
             fixture.completeDismissal(first)
             #expect(voice.sessions.snapshot().token == second)
             #expect(voice.overlay.snapshot().text == "second draft")
@@ -246,15 +245,21 @@ struct VoiceOwnerLifecycleTests {
         try await withVoiceOwnerFixture(activate: false) { fixture, state, _ in
             let voice = state.voiceRuntime
             let celebration = state.sendCelebrationTick
-            let token = voice.sessions.startSession(source: .pushToTalk, text: "owned transcript")
+            let lease = UUID()
+            await voice.wake.pauseForPushToTalk(lease: lease)
+            await fixture.sendPreparation.hold()
+            let token = voice.sessions.startSession(text: "owned transcript")
             voice.overlay.updateText("edited owned transcript")
             #expect(voice.sessions.snapshot().text == "edited owned transcript")
             voice.overlay.requestSend(token: token)
+            // Ordinary PTT lease release refreshes Wake while route preparation is pending.
+            await voice.wake.resumeAfterPushToTalk(lease: lease)
+            await fixture.sendPreparation.releaseAll()
             try await fixture.log.wait(for: "forward:edited owned transcript")
             try await fixture.log.wait(for: "overlay.request:\(token)")
             #expect(fixture.log.count("forward:edited owned transcript") == 1)
             #expect(fixture.log.count("overlay.request:\(token)") == 1)
-            #expect(voice.sessions.snapshot().token == token)
+            #expect(voice.sessions.snapshot().token == nil)
             fixture.completeDismissal(token)
             #expect(voice.sessions.snapshot().token == nil)
             #expect(!voice.overlay.isVisible)

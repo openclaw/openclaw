@@ -15,11 +15,10 @@ To inspect registry clone shape, run
 `openclaw doctor --lint --only core/doctor/project-clone-shape --json`.
 This check also runs in ordinary Doctor and `--lint --all`. Unreadable clones
 produce a skipped-inspection warning without aborting the remaining checks.
-Repair guidance removes all partial-clone filters, refetches from origin
-(unshallowing only when needed), fetches missing objects by ID, clears promisor
-settings and `extensions.partialclone`, then repacks. See the
-[repair sequence](/gateway/doctor#11e-project-clone-shape) before running these
-network and disk operations manually.
+`openclaw doctor --fix` unshallows managed project clones while retaining
+`blob:none` under the project checkout lifecycle lease. It skips busy clones and
+does not repack or remove promisor settings. See
+[project clone repair](/gateway/doctor/gateway-and-services#11e-project-clone-shape).
 
 Doctor checks that use the structured health registry declare a small split contract:
 
@@ -36,14 +35,28 @@ Repair contexts can carry `dryRun`/`diff` requests; repair results can return st
 
 A finding includes:
 
-| Field             | Purpose                                                |
-| ----------------- | ------------------------------------------------------ |
-| `checkId`         | Stable id for skip/only filters and CI allowlists.     |
-| `severity`        | `info`, `warning`, or `error`.                         |
-| `message`         | Human-readable problem statement.                      |
-| `path`            | Config, file, or logical path when available.          |
-| `line` / `column` | Source location when available.                        |
-| `ocPath`          | Precise `oc://` address when a check can point to one. |
-| `fixHint`         | Suggested operator action or repair summary.           |
+| Field             | Purpose                                                                                        |
+| ----------------- | ---------------------------------------------------------------------------------------------- |
+| `checkId`         | Stable id for skip/only filters and CI allowlists.                                             |
+| `severity`        | `info`, `warning`, or `error`.                                                                 |
+| `message`         | Human-readable problem statement.                                                              |
+| `path`            | Config, file, or logical path when available.                                                  |
+| `line` / `column` | Source location when available.                                                                |
+| `ocPath`          | Precise `oc://` address when a check can point to one.                                         |
+| `fixHint`         | Concrete next step; say when no action is needed.                                              |
+| `category`        | Optional `fix-now`, `recommended`, or `historical` operator priority, independent of severity. |
+| `docsUrl`         | Documentation explaining the finding and its remedy.                                           |
 
 Core doctor checks that declare structured health checks stay attached to the ordered doctor contribution that owns their human `doctor` / `doctor --fix` behavior. The shared structured health registry is the extension point: bundled and plugin-backed checks run after core doctor checks once their owning package registers them in the active command path. `openclaw/plugin-sdk/health` exposes the same contract for plugin authors.
+
+Set `category` at the producing check. Do not classify free-form message text. Absent a category, warning/error findings require attention and info findings are recommendations. Historical findings describe retained evidence, not current readiness. Doctor summarizes remaining findings after repair verification.
+
+### Model-reference retirement inventory
+
+The internal `openclaw/plugin-sdk/doctor-repair-runtime` surface exports
+`inspectDoctorModelReferences({ cfg, env, matches })`
+for provider retirement checks. It resolves configured model aliases and reads
+saved session selectors and the selected cron partition without editing state
+or loading transcripts. The result contains `references` (path, canonical model
+reference, optional agent ID) and `warnings` for incomplete scans. Report those
+warnings as findings; an unreadable store is not evidence of a clean migration.

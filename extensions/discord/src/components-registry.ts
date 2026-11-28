@@ -262,6 +262,20 @@ export function registerDiscordComponentEntries(params: {
     for (const entry of normalizedModals) {
       discordComponentRegistryState.modalEntries.set(entry.id, entry);
     }
+    const pruneAt = Date.now();
+    for (const store of [
+      discordComponentRegistryState.componentEntries,
+      discordComponentRegistryState.modalEntries,
+    ]) {
+      for (const [id, entry] of store) {
+        if (
+          entry.expiresAt !== undefined &&
+          !isFutureDateTimestampMs(entry.expiresAt, { nowMs: pruneAt })
+        ) {
+          store.delete(id);
+        }
+      }
+    }
     await Promise.all([
       registerPersistentRegistryEntries({
         entries: normalizedEntries,

@@ -9,17 +9,16 @@ export type WorkboardHost = object;
 export type WorkboardClientContext = {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
 };
 
 type WorkboardLiveRefreshEntry = {
   client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
   refresh?: () => Promise<boolean>;
   shouldDefer?: () => boolean;
 };
 
 type WorkboardRuntime = {
+  listeners?: Set<() => void>;
   state?: WorkboardUiState;
   cardsRevision?: WorkboardChange | null;
   loadPromise?: Promise<boolean>;
@@ -33,6 +32,19 @@ type WorkboardRuntime = {
 };
 
 const workboardRuntimes = new WeakMap<WorkboardHost, WorkboardRuntime>();
+export function subscribeWorkboard(host: WorkboardHost, listener: () => void) {
+  const runtime = getWorkboardRuntime(host);
+  const listeners = (runtime.listeners ??= new Set());
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+export function notifyWorkboard(host: WorkboardHost) {
+  for (const listener of getWorkboardRuntime(host).listeners ?? []) {
+    listener();
+  }
+}
+
 export function invalidateWorkboardLoads(host: WorkboardHost) {
   const runtime = getWorkboardRuntime(host);
   const state = runtime.state;
@@ -79,6 +91,7 @@ export function resetWorkboardConnectionState(host: WorkboardHost) {
     // Keep cached cards visible across disconnects, but require a canonical
     // reload before accepting writes against data that may now be stale.
     state.mutationReadiness = "canonical_reload_required";
+    state.inlinePreviews.clear();
     state.loaded = false;
     state.loadAttempted = false;
   }
@@ -93,6 +106,9 @@ function createDefaultState(): WorkboardUiState {
     mutationReadiness: "ready",
     error: null,
     cards: [],
+    inlinePreviews: new Map(),
+    pendingDrops: new Map(),
+    nextCursor: null,
     boards: [],
     statuses: WORKBOARD_STATUSES,
     lastDispatchSummary: null,

@@ -23,7 +23,7 @@ export function setOwnSchemaProperty(
   });
 }
 
-type SchemaDefs = {
+export type SchemaDefs = {
   $defs: Map<string, unknown>;
   definitions: Map<string, unknown>;
 };
@@ -36,7 +36,7 @@ export function copySchemaMeta(from: Record<string, unknown>, to: Record<string,
   }
 }
 
-function extendSchemaDefs(
+export function extendSchemaDefs(
   defs: SchemaDefs | undefined,
   schema: Record<string, unknown>,
 ): SchemaDefs | undefined {
@@ -213,32 +213,27 @@ function inlineLocalSchemaRefsWithDefs(
   return result;
 }
 
-/** Inline local $ref pointers so providers receive self-contained tool schemas. */
+/** Inline local $ref pointers in the normalizer's already-bounded input. */
 export function inlineLocalToolSchemaRefs(schema: unknown, toolName?: string): unknown {
-  if (!schema || typeof schema !== "object") {
-    return schema;
-  }
-  const boundedSchema = truncateToolSchemaDepth(schema, toolName);
   const state = { unresolvedLocalRefs: false, truncated: false };
   // SAFETY: Objects, including legacy array roots, can carry definition-table keys.
-  const schemaRecord = boundedSchema as Record<string, unknown>;
+  const schemaRecord = schema as Record<string, unknown>;
   const normalized = inlineLocalSchemaRefsWithDefs(
-    boundedSchema,
-    Array.isArray(boundedSchema) ? extendSchemaDefs(undefined, schemaRecord) : undefined,
+    schema,
+    Array.isArray(schema) ? extendSchemaDefs(undefined, schemaRecord) : undefined,
     undefined,
     state,
-    boundedSchema,
+    schema,
   );
   const bounded = truncateToolSchemaDepth(normalized);
   if (state.truncated || bounded !== normalized) {
     reportToolSchemaTruncation(schema, toolName);
   }
-  return inheritToolSchemaTruncation(boundedSchema, bounded, state.truncated);
+  return inheritToolSchemaTruncation(schema, bounded, state.truncated);
 }
 
 /** Keep compact root definitions. Fall back for scopes or refs we must rewrite. */
-export function canPreserveRootSchemaRefs(inputSchema: unknown): boolean {
-  const schema = truncateToolSchemaDepth(inputSchema);
+export function canPreserveRootSchemaRefs(schema: unknown): boolean {
   if (
     !isSchemaRecord(schema) ||
     schema.type !== "object" ||
@@ -250,13 +245,11 @@ export function canPreserveRootSchemaRefs(inputSchema: unknown): boolean {
     return false;
   }
   let hasRefs = false;
-  const ancestors = new Set<object>();
   function visit(node: unknown, inDefinitions = false): boolean {
     if (!isSchemaRecord(node)) {
       return true;
     }
     if (
-      ancestors.has(node) ||
       "$id" in node ||
       "id" in node ||
       "components" in node ||
@@ -276,26 +269,21 @@ export function canPreserveRootSchemaRefs(inputSchema: unknown): boolean {
       // Unused definitions must not keep an otherwise reference-free schema large.
       hasRefs ||= !inDefinitions;
     }
-    ancestors.add(node);
-    try {
-      for (const [key, value] of Object.entries(node)) {
-        if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
-          const childInDefinitions = inDefinitions || key === "$defs" || key === "definitions";
-          if (!Object.values(value).every((entry) => visit(entry, childInDefinitions))) {
-            return false;
-          }
-        } else if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
-          if (!value.every((entry) => visit(entry, inDefinitions))) {
-            return false;
-          }
-        } else if (SCHEMA_OBJECT_KEYS.has(key) && !visit(value, inDefinitions)) {
+    for (const [key, value] of Object.entries(node)) {
+      if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
+        const childInDefinitions = inDefinitions || key === "$defs" || key === "definitions";
+        if (!Object.values(value).every((entry) => visit(entry, childInDefinitions))) {
           return false;
         }
+      } else if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
+        if (!value.every((entry) => visit(entry, inDefinitions))) {
+          return false;
+        }
+      } else if (SCHEMA_OBJECT_KEYS.has(key) && !visit(value, inDefinitions)) {
+        return false;
       }
-      return true;
-    } finally {
-      ancestors.delete(node);
     }
+    return true;
   }
   return visit(schema) && hasRefs;
 }

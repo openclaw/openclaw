@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import {
+  existsSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
@@ -15,6 +16,7 @@ import {
   createPublicationSourceFact,
   normalizePublicationIntent,
   publicationSourceJson,
+  validatePublicationVersionSelection,
 } from "./full-release-publication-contract.mjs";
 import {
   assertPluginReleaseVersionFloors,
@@ -25,11 +27,7 @@ import {
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import { collectPublishablePluginPackagesFromCandidates } from "./lib/plugin-publication-collector.ts";
 import { publicationSourceToolingPaths as toolingPaths } from "./lib/publication-source-paths.mjs";
-import {
-  classifyReleaseTrain,
-  parsePinnedReleaseVersion,
-  parseReleaseVersion,
-} from "./lib/release-version.mjs";
+import { classifyReleaseTrain, parsePinnedReleaseVersion } from "./lib/release-version.mjs";
 import { produceVerifiedReleaseInventory } from "./release-plan-producer.mts";
 
 const executionRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -41,7 +39,12 @@ type Request = ReturnType<
 >;
 type SourceEntry = { oid: string; mode: string; path: string; type: string };
 
-function localGit(root: string, args: string[], input?: Buffer | string) {
+function localGit(
+  root: string,
+  args: string[],
+  input?: Buffer | string,
+  maxBuffer = 64 * 1024 * 1024,
+) {
   return execFileSync("git", ["--no-lazy-fetch", "--no-replace-objects", "-C", root, ...args], {
     env: {
       PATH: process.env.PATH,
@@ -53,7 +56,7 @@ function localGit(root: string, args: string[], input?: Buffer | string) {
     },
     input,
     timeout: 120_000,
-    maxBuffer: 64 * 1024 * 1024,
+    maxBuffer,
     stdio: ["pipe", "pipe", "pipe"],
   });
 }
@@ -145,10 +148,14 @@ function retainSource(root: string, sha: string, store: string, tooling: boolean
   if (sizes.length !== objectIds.length + 1 || sizes.at(-1) !== "") {
     throw new Error("invalid publication source object-size response");
   }
+  // This retained pack is local and short-lived; skip cross-object delta search.
   const pack = localGit(
     root,
-    ["pack-objects", "--stdout", "--no-reuse-delta", "--no-reuse-object"],
+    ["pack-objects", "--stdout", "--no-reuse-delta", "--no-reuse-object", "--window=0"],
     objectInput,
+    // Up to 8192 zlib streams and pack headers add overhead beyond the 64 MiB
+    // raw-object limit. Reserve 1 MiB for that framing, only for pack output.
+    65 * 1024 * 1024,
   );
   localGit(store, ["index-pack", "--stdin"], pack);
   return selected.filter((entry) => entry.type === "blob");
@@ -166,33 +173,9 @@ function projectSource(
   if (!selection) {
     throw new Error("publication source selection required");
   }
-  const parsed = parseReleaseVersion(plan.version);
-  if (!parsed) {
-    throw new Error("invalid publication source version");
-  }
-  if (parsed.channel === "alpha") {
-    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
-  }
+  const parsed = validatePublicationVersionSelection(plan.version, selection);
   const train = classifyReleaseTrain(parsed);
-  if (train === "unsupported-extended-stable-correction") {
-    throw new Error("unsupported extended-stable correction");
-  }
   const extended = selection.route === "extended-stable";
-  const allowedTags =
-    train === "stable"
-      ? ["beta", "latest"]
-      : train === "extended-stable"
-        ? ["extended-stable"]
-        : [parsed.channel];
-  if (!allowedTags.includes(selection.npmDistTag) || (train === "extended-stable") !== extended) {
-    throw new Error("publication selection does not match the committed release version");
-  }
-  if (selection.route === "prepared" && !["beta", "stable"].includes(train)) {
-    throw new Error("prepared publication requires a regular beta/stable candidate");
-  }
-  if (selection.windowsNodeTag && train !== "stable") {
-    throw new Error("Windows assets require a stable publication");
-  }
   const mode = parsePluginReleaseSelectionMode(selection.pluginPublishScope);
   const names = parsePluginReleaseSelection(selection.plugins.join(","));
   if ((mode === "selected") !== names.length > 0) {
@@ -235,9 +218,12 @@ function projectSource(
       if (!selection.publishOpenclawNpm || train !== "stable") {
         return false;
       }
-      const pin = JSON.parse(
-        readFileSync(join(snapshot, "apps/android/version.json"), "utf8"),
-      )?.version;
+      const legacyPinPath = join(snapshot, "apps/android/version.json");
+      // Build-time version defaults do not opt new Gateway releases into APK publication.
+      if (!existsSync(legacyPinPath)) {
+        return false;
+      }
+      const pin = JSON.parse(readFileSync(legacyPinPath, "utf8"))?.version;
       // Match the publisher's exact pin syntax before comparing the parsed base.
       if (typeof pin !== "string" || !/^[0-9]{4}\.([1-9]|1[0-2])\.[0-9]{1,3}$/u.test(pin)) {
         throw new Error("apps/android/version.json must pin an exact YYYY.M.PATCH Android version");

@@ -5,12 +5,14 @@ import {
   isRecord,
   normalizeOptionalString as nonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
+import { runCrabboxProcess } from "./crabbox-process.js";
+import { CRABBOX_SANDBOX_TYPES } from "./crabbox-worker-machine-types.js";
 import {
   type CrabboxMachineShape,
   type CrabboxOperatingSystem,
   CRABBOX_ENROLLABLE_TARGETS,
   CRABBOX_OS_LABELS,
+  isCrabboxSetupTargetCompatible,
   listCrabboxMachineOptions,
   parseCrabboxProfile,
 } from "./crabbox-worker-profile.js";
@@ -24,7 +26,6 @@ type CrabboxMachineShapes = ReadonlyMap<string, CrabboxCatalog>;
 
 type CrabboxMachineOptionsResolverDependencies = {
   resolveBinary: (explicit?: string) => Promise<string>;
-  runCommand: CrabboxCommandRunner;
   warn: (message: string) => void;
 };
 
@@ -77,7 +78,13 @@ function parseCrabboxMachineShapes(stdout: string): CrabboxMachineShapes {
           ];
         });
       });
-      return [[provider, { operatingSystems, machines }]];
+      // Crabbox owns canonical IDs and aliases; both select the same catalog.
+      const catalog = { operatingSystems, machines };
+      const selectors = [provider, ...(Array.isArray(entry.aliases) ? entry.aliases : [])];
+      return selectors.flatMap<[string, CrabboxCatalog]>((value) => {
+        const selector = nonEmptyString(value)?.toLowerCase();
+        return selector ? [[selector, catalog]] : [];
+      });
     }),
   );
 }
@@ -89,7 +96,7 @@ export function createCrabboxMachineCatalogResolver(
   const loadMachineShapes = async (binary: string): Promise<CrabboxMachineShapes> => {
     // The full provider matrix exceeds the lifecycle command's 64 KiB log cap.
     // Keep catalog JSON intact or every provider loses its machine shapes.
-    const result = await dependencies.runCommand([binary, "providers", "--json"], {
+    const result = await runCrabboxProcess([binary, "providers", "--json"], {
       maxOutputBytes: 1024 * 1024,
       killProcessTree: true,
       timeoutMs: CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,
@@ -131,14 +138,21 @@ export function createCrabboxMachineOptionsResolver(
   return {
     async listMachineOptions(profile) {
       const { parsed, catalog } = await resolveCatalog(profile);
-      return listCrabboxMachineOptions(parsed.class, catalog?.machines);
+      const sandbox = parsed.provider === "azure-sandbox";
+      const shapes = sandbox ? CRABBOX_SANDBOX_TYPES : catalog?.machines;
+      return listCrabboxMachineOptions(
+        parsed.type ?? (sandbox && parsed.class ? "2cpu-4gib" : parsed.class),
+        catalog && shapes?.filter(({ os }) => isCrabboxSetupTargetCompatible(parsed, os)),
+      );
     },
     async listOperatingSystems(profile) {
       const { parsed, catalog } = await resolveCatalog(profile);
-      return (catalog?.operatingSystems ?? []).map((id) => {
-        const label = CRABBOX_OS_LABELS[id];
-        return id === parsed.target ? { id, label, default: true } : { id, label };
-      });
+      return (catalog?.operatingSystems ?? [])
+        .filter((id) => isCrabboxSetupTargetCompatible(parsed, id))
+        .map((id) => {
+          const label = CRABBOX_OS_LABELS[id];
+          return id === parsed.target ? { id, label, default: true } : { id, label };
+        });
     },
   };
 }

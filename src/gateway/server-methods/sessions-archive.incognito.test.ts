@@ -1,5 +1,5 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
-import "../../claws/tool-policy-runtime.js";
+import "../../templates/tool-policy-runtime.js";
 import assert from "node:assert/strict";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -22,9 +22,10 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import type { SessionWorkerPlacementContext } from "../worker-environments/session-placement-lifecycle.js";
 import {
-  prepareSessionPatchArchive,
+  prepareSessionPatchArchives,
   releaseSessionPatchArchive,
 } from "./sessions-patch-archive.js";
+import type { MutationOutcome, PreparedPatchTarget } from "./sessions-patch-types.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
@@ -49,31 +50,42 @@ afterAll(() => {
   vi.unstubAllEnvs();
 });
 
-function archive(key: string, entry: SessionEntry, placement: PlacementContext = {}) {
+async function archive(key: string, entry: SessionEntry, placement: PlacementContext = {}) {
   const context = createDirectChatContext({ getRuntimeConfig: () => cfg, ...placement });
-  return prepareSessionPatchArchive({
+  const scope = { canonicalKey: key, storePath };
+  const target: PreparedPatchTarget = {
+    index: 0,
+    targetAgentId: "main",
+    archiveActor: undefined,
+    ...scope,
+    fullPatch: { key, archived: true, expectedSessionId: entry.sessionId },
+    initialEntry: entry,
+    initialTarget: {
+      agentId: "main",
+      ...scope,
+      storeKeys: [key],
+      store: { [key]: entry },
+    },
+    key,
+    lifecycleIdentities: [key, entry.sessionId],
+    requestedAgentId: "main",
+  };
+  const outcomes: (MutationOutcome | undefined)[] = [];
+  await prepareSessionPatchArchives({
     cfg,
     context,
-    commitGuard: () => undefined,
-    loadGatewayModelCatalogSnapshot: () => context.loadGatewayModelCatalogSnapshot(),
-    target: {
-      archiveActor: undefined,
-      canonicalKey: key,
-      fullPatch: { key, archived: true, expectedSessionId: entry.sessionId },
-      initialEntry: entry,
-      initialTarget: {
-        agentId: "main",
-        canonicalKey: key,
-        storePath,
-        storeKeys: [key],
-        store: { [key]: entry },
-      },
-      key,
-      lifecycleIdentities: [key, entry.sessionId],
-      requestedAgentId: "main",
-      storePath,
-    },
+    targets: [target],
+    mutationTargets: [{ key, commitGuard: () => undefined }],
+    outcomes,
+    loadCatalog: () => context.loadGatewayModelCatalogSnapshot(),
   });
+  const outcome = outcomes[0];
+  if (outcome) {
+    assert(!outcome.ok);
+    return outcome;
+  }
+  assert(target.archivePreparation);
+  return { ok: true as const, value: target.archivePreparation };
 }
 
 async function restore(key: string, entry: SessionEntry, placement: PlacementContext = {}) {
@@ -99,16 +111,21 @@ async function restore(key: string, entry: SessionEntry, placement: PlacementCon
   }
 }
 
-it("prepares archive and restores an admitted human turn without opening host SQLite", async () => {
-  const key = "agent:main:dashboard:incognito-archive";
+async function seedArchive(key: string, sessionId: string) {
   const entry: SessionEntry = {
-    sessionId: "archive",
+    sessionId,
     lifecycleRevision: "archive-original",
     updatedAt: Date.now(),
     incognito: true,
     archivedAt: 1,
   };
   await replaceSessionEntry({ sessionKey: key, storePath }, entry);
+  return entry;
+}
+
+it("prepares archive and restores an admitted human turn without opening host SQLite", async () => {
+  const key = "agent:main:dashboard:incognito-archive";
+  const entry = await seedArchive(key, "archive");
   const sql = observeHostDataSql();
   try {
     const prepared = await archive(key, entry);
@@ -127,14 +144,7 @@ it.each(["archive", "restore"] as const)(
   "refuses %s after its same-ID row changes lifecycle during placement preparation",
   async (operation) => {
     const key = `agent:main:dashboard:incognito-${operation}-replacement`;
-    const entry: SessionEntry = {
-      sessionId: operation,
-      lifecycleRevision: "archive-original",
-      updatedAt: Date.now(),
-      incognito: true,
-      archivedAt: 1,
-    };
-    await replaceSessionEntry({ sessionKey: key, storePath }, entry);
+    const entry = await seedArchive(key, operation);
     const entered = createDeferred();
     const resume = createDeferred();
     const placement: PlacementContext = {
@@ -147,13 +157,10 @@ it.each(["archive", "restore"] as const)(
         },
       },
     };
-    const pending = (async () => {
-      if (operation === "restore") {
-        await restore(key, entry, placement);
-        return { ok: true };
-      }
-      return archive(key, entry, placement);
-    })();
+    const pending =
+      operation === "restore"
+        ? restore(key, entry, placement).then(() => ({ ok: true }))
+        : archive(key, entry, placement);
     const settled = pending.then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
@@ -174,7 +181,15 @@ it.each(["archive", "restore"] as const)(
     expect(await settled).toMatchObject(
       operation === "restore"
         ? { error: expect.objectContaining({ message: expect.stringMatching(/is archived/) }) }
-        : { value: { ok: false } },
+        : {
+            value: {
+              ok: false,
+              error: {
+                code: "INVALID_REQUEST",
+                message: `Session ${key} changed before patch. Retry.`,
+              },
+            },
+          },
     );
     expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
       sessionId: entry.sessionId,

@@ -21,6 +21,10 @@ fi
 
 set -euo pipefail
 
+# Distros with user private groups (Ubuntu, Fedora) default to umask 002; the
+# installed runtime must not be group-writable or owned-path checks refuse it.
+umask go-w
+
 # BEGIN GENERATED UPDATE NETWORK BUDGET
 # Source: src/infra/update-network-budget.ts; regenerate: node scripts/generate-update-network-budget.mjs
 UPDATE_NETWORK_TIMEOUT_SECONDS=300
@@ -43,9 +47,11 @@ installer_error() {
   local msg="$1"
   emit_json error message "$msg"
   log "ERROR: $msg"
+  log "Support: https://community.openclaw.ai/"
 }
 installer_npm_version_error() {
   log "ERROR: unable to determine npm version; no package changes were made"
+  log "Support: https://community.openclaw.ai/" >&2
 }
 installer_clone_error() {
   fail "Could not publish the cloned checkout: ${1}. Inspect the destination for partial files, move it or choose another --git-dir, then retry."
@@ -121,12 +127,13 @@ OPENCLAW_EFFECTIVE_HOME="$(resolve_home_path "${OPENCLAW_HOME:-$HOME}")"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 REQUIRED_COMPATIBLE_VERSION=""
-DEFAULT_NODE_VERSION="24.21.0"
+DEFAULT_NODE_VERSION="24.22.1"
 NODE_VERSION="${OPENCLAW_NODE_VERSION:-${DEFAULT_NODE_VERSION}}"
 NODE_VERSION_REQUESTED=0
 if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
   NODE_VERSION_REQUESTED=1
 fi
+# Compatibility floors mirror node-version.mjs, not the patched download default.
 MIN_NODE_24_VERSION="24.16.0"
 MIN_NODE_26_VERSION="26.1.0"
 SUPPORTED_NODE_VERSION_LABEL="Node 24.16.0+ or Node 26.1.0+"
@@ -137,6 +144,7 @@ INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
 GIT_DIR="${OPENCLAW_GIT_DIR:-${OPENCLAW_EFFECTIVE_HOME}/openclaw}"
 GIT_UPDATE="${OPENCLAW_GIT_UPDATE:-1}"
 JSON=0
+JSON_EVENT_FD=1
 RUN_ONBOARD=0
 NODE_ONLY=0
 RUNTIME_ONLY=0
@@ -148,15 +156,20 @@ FRESH_GIT_MIN_FREE_KIB=$((6 * 1024 * 1024))
 print_usage() {
   cat <<EOF
 Usage: install-cli.sh [options]
+
+Support: https://community.openclaw.ai/
+FAQ: https://docs.openclaw.ai/start/faq
+
   --json                              Emit NDJSON events (no human output)
   --prefix <path>                     Install prefix (default: ~/.openclaw; use \$OPENCLAW_PREFIX to override)
   --install-method, --method npm|git  Install via npm (default) or from a git checkout
   --npm                               Shortcut for --install-method npm
   --git, --github                     Shortcut for --install-method git
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
+  --no-git-update                     Skip rebasing local main (Git fetches can still occur)
   --version <ver>                     OpenClaw version (default: latest)
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
-  --node-version <ver>                Node version (default: 24.21.0)
+  --node-version <ver>                Node version (default: 24.22.1)
   --node-only                         Install only a private Node runtime (no system package changes)
   --runtime-only                      Install CLI runtime without Gateway probes, service changes, or onboarding
   --onboard                           Run "openclaw onboard" after install
@@ -250,12 +263,36 @@ emit_json() {
     quote_json_string "$value"
     output+="$JSON_STRING"
   done
-  printf '%s}\n' "$output"
+  printf '%s}\n' "$output" >&"$JSON_EVENT_FD"
 }
 
 fail() {
   installer_error "$@"
   exit 1
+}
+
+# Returns true when a controlling terminal device can be opened.
+has_controlling_tty() {
+  if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+    return 1
+  fi
+  if ! { : </dev/tty; } 2>/dev/null; then
+    return 1
+  fi
+  return 0
+}
+
+# Prints the controlling terminal's own device, such as /dev/ttys003, for OpenClaw stdin.
+# macOS resolves /dev/tty against the caller's session on every use, so a detached
+# Node grandchild that inherits it aborts at startup (#200244). The device keeps working.
+controlling_tty_path() {
+  local name=""
+  name="$(ps -o tty= -p $$ 2>/dev/null | tr -d '[:space:]')" || true
+  if [[ -n "$name" && -c "/dev/$name" && -r "/dev/$name" && -w "/dev/$name" ]]; then
+    echo "/dev/$name"
+  else
+    echo "/dev/tty"
+  fi
 }
 
 fail_freebsd_source_install() {
@@ -297,7 +334,7 @@ preflight_fresh_git_disk_space() {
   local available_kib
   local available_gib
 
-  if [[ -d "$repo_dir/.git" ]]; then
+  if [[ -e "$repo_dir/.git" ]]; then
     return 0
   fi
 
@@ -547,7 +584,7 @@ link_node_runtime_paths() {
   dir="$(node_dir)"
   runtime_bin="${node_path%/*}"
 
-  mkdir -p "${dir}/bin" "${PREFIX}/tools"
+  (umask 077; mkdir -p "${dir}/bin" "${PREFIX}/tools")
   ln -sfn "$node_path" "${dir}/bin/node"
   ln -sfn "$npm_path" "${dir}/bin/npm"
   for name in npx corepack; do
@@ -629,7 +666,7 @@ parse_node_release_version() {
   NODE_RELEASE_VERSION_CORE=""
   while [[ "$version" == [[:space:]]* ]]; do version="${version#?}"; done
   while [[ "$version" == *[[:space:]] ]]; do version="${version%?}"; done
-  if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+  if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
     return 1
   fi
   major="${BASH_REMATCH[1]}"
@@ -640,6 +677,9 @@ parse_node_release_version() {
       return 1
     fi
   done
+  if [[ -n "${BASH_REMATCH[4]}" ]] && ((major <= 26)); then
+    return 1
+  fi
 
   NODE_RELEASE_VERSION_CORE="${major}.${minor}.${patch}"
 }
@@ -651,7 +691,7 @@ node_release_version_is_supported() {
 
 # Download labels are plain numeric Node distribution versions. Installed
 # runtimes use node_release_version_is_supported, which accepts canonical
-# release labels with a leading v or build metadata.
+# release labels with a leading v, build metadata, or future-major prereleases.
 node_version_is_supported() {
   local version="${1#v}"
   local major minor patch
@@ -898,24 +938,27 @@ install_node() {
     link_node_runtime_paths "$system_node" "$system_npm"
     installed_version="$("$(node_bin)" -v)"
     emit_json step name node status ok method system version "$installed_version"
+    warn_node_security_patch "$installed_version"
     return
   fi
 
   if [[ "$os" == "linux" ]] && command -v apk >/dev/null 2>&1 && is_musl_linux; then
     install_alpine_node
+    warn_node_security_patch "$("$(node_bin)" -v)"
     return
   fi
 
   if linked_node_is_usable; then
     ln -sfn "$dir" "${PREFIX}/tools/node"
     emit_json step name node status skip path "$dir"
+    warn_node_security_patch "$("$(node_bin)" -v)"
     return
   fi
 
   emit_json step name node status start version "$NODE_VERSION"
   log "Installing Node ${NODE_VERSION} (user-space)..."
 
-  mkdir -p "${PREFIX}/tools"
+  (umask 077; mkdir -p "${PREFIX}/tools")
   # Darwin's default mktemp location can ignore TMPDIR; use the prepared path explicitly.
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-node.XXXXXX")"
   TMPFILES+=("$tmp")
@@ -939,7 +982,7 @@ install_node() {
   fi
 
   rm -rf "$dir"
-  mkdir -p "$dir"
+  (umask 077; mkdir -p "$dir")
   tar -xzf "$tmp/node.tgz" -C "$dir" --strip-components=1
   rm -rf "$tmp"
 
@@ -950,18 +993,19 @@ install_node() {
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
     sqlite_version="$(node_binary_sqlite_version "$(node_bin)")"
-    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.21.0 (or newer)"
+    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.22.1 (or newer)"
   fi
   # Existing CLI wrappers use this alias; activate only a runtime that can start.
   ln -sfn "$dir" "${PREFIX}/tools/node"
   emit_json step name node status ok version "$NODE_VERSION"
+  warn_node_security_patch "$("$(node_bin)" -v)"
 }
 
 ensure_pnpm() {
   local repo_dir="${1:-$PWD}"
   local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
   spec="$(repo_pnpm_spec "$repo_dir" || true)"
-  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.9.0"
+  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.15.0"
   version="${spec#pnpm@}"
   version="${version%%+*}"
   pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -1014,11 +1058,12 @@ fix_npm_prefix_if_needed() {
   fi
 
   local target="${HOME}/.npm-global"
-  mkdir -p "$target"
+  (umask 077; mkdir -p "$target")
   "$(npm_bin)" config set prefix "$target"
 
   local path_line="export PATH=\"${target}/bin:\$PATH\""
-  for rc in "${HOME}/.bashrc" "${HOME}/.zshrc"; do
+  local zsh_rc_dir="${ZDOTDIR:-$HOME}"
+  for rc in "${HOME}/.bashrc" "${zsh_rc_dir}/.zshrc"; do
     if [[ -f "$rc" ]] && ! grep -q ".npm-global" "$rc"; then
       echo "$path_line" >> "$rc"
     fi
@@ -1032,10 +1077,11 @@ fix_npm_prefix_if_needed() {
 publish_executable_wrapper() {
   local target="$1" target_dir="" temp="" backup=""
   target_dir="${target%/*}"
-  mkdir -p "$target_dir"
+  (umask 077; mkdir -p "$target_dir")
   temp="$(mktemp "${target_dir}/.openclaw-wrapper.XXXXXX")" || return 1
   TMPFILES+=("$temp")
-  cat > "$temp"
+  # Generated Bash must execute literal paths, not expand their shell characters.
+  printf '#!/usr/bin/env bash\nset -euo pipefail\nexec %q %q "$@"\n' "$2" "$3" > "$temp"
   chmod +x "$temp"
   if [[ -z "$WRAPPER_BACKUP_PATH" && ( -e "$target" || -L "$target" ) ]]; then
     backup="$(mktemp "${target}.backup.XXXXXX")" || return 1
@@ -1103,18 +1149,13 @@ install_openclaw() {
   if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" "${npm_install_args[@]}" || [[ ! -f "$installed_entry" || -e "$lifecycle_pending" || -e "$legacy_install_guard" ]]; then
     log "npm install openclaw@${resolved_requested} did not produce a usable package; retrying once"
     if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" "${npm_install_args[@]}" || [[ ! -f "$installed_entry" || -e "$lifecycle_pending" || -e "$legacy_install_guard" ]]; then
-      emit_json error message "npm install did not produce a usable OpenClaw package"
-      log "ERROR: npm install did not produce a usable OpenClaw package"
+      installer_error "npm install did not produce a usable OpenClaw package"
       return 1
     fi
   fi
 
-  mkdir -p "${PREFIX}/bin"
-  publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-exec "${PREFIX}/tools/node/bin/node" "$(node_dir)/lib/node_modules/openclaw/dist/entry.js" "\$@"
-EOF
+  publish_executable_wrapper "${PREFIX}/bin/openclaw" \
+    "${PREFIX}/tools/node/bin/node" "$(node_dir)/lib/node_modules/openclaw/dist/entry.js"
   emit_json step name openclaw status ok version "$requested"
 }
 
@@ -1126,7 +1167,7 @@ install_openclaw_from_git() {
   if [[ -z "$repo_dir" ]]; then
     fail "Git install dir cannot be empty"
   fi
-  mkdir -p "$(dirname "$repo_dir")"
+  (umask 077; mkdir -p "$(dirname "$repo_dir")")
   if [[ -d "$repo_dir" ]]; then
     repo_dir="$(cd "$repo_dir" && pwd -P)"
   else
@@ -1134,7 +1175,7 @@ install_openclaw_from_git() {
   fi
 
   emit_json step name openclaw status start method git repo "$repo_url"
-  if [[ -d "$repo_dir/.git" ]]; then
+  if [[ -e "$repo_dir/.git" ]]; then
     log "Installing Openclaw from git checkout: ${repo_dir}"
   else
     log "Installing Openclaw from GitHub (${repo_url})..."
@@ -1144,15 +1185,9 @@ install_openclaw_from_git() {
   ensure_git
   emit_json step name git-tools status ok
 
-  if [[ -d "$repo_dir/.git" ]] &&
-    ! git --git-dir="$repo_dir/.git" --work-tree="$repo_dir" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1; then
-    fail "Git checkout has no commit: ${repo_dir}. Move or remove this incomplete checkout, then retry."
-  fi
+  validate_git_checkout "$repo_dir" || return 1
 
-  if [[ ! -d "$repo_dir/.git" ]]; then
-    if [[ -d "$repo_dir" && -n "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
-      fail "Git install dir exists but is not a git repo: ${repo_dir}"
-    fi
+  if [[ ! -e "$repo_dir/.git" ]]; then
     emit_json step name git-clone status start
     clone_git_checkout_transactionally "$repo_url" "$repo_dir" --filter=blob:none
     emit_json step name git-clone status ok
@@ -1212,12 +1247,8 @@ install_openclaw_from_git() {
   run_pnpm -C "$repo_dir" build
   emit_json step name cli-build status ok
 
-  mkdir -p "${PREFIX}/bin"
-  publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-exec "${PREFIX}/tools/node/bin/node" "${repo_dir}/dist/entry.js" "\$@"
-EOF
+  publish_executable_wrapper "${PREFIX}/bin/openclaw" \
+    "${PREFIX}/tools/node/bin/node" "${repo_dir}/dist/entry.js"
   emit_json step name openclaw status ok method git
 }
 
@@ -1297,6 +1328,15 @@ refresh_gateway_service_if_loaded() {
 
 main() {
   parse_args "$@"
+  if [[ "$JSON" -eq 1 ]]; then
+    # --json promises NDJSON-only stdout: keep it for events and send child-process output to stderr.
+    exec 3>&1 1>&2
+    JSON_EVENT_FD=3
+  fi
+  # Node-only recovery ignores the method; normal installs validate before any writes.
+  if [[ "$NODE_ONLY" -eq 0 && "$INSTALL_METHOD" != "npm" && "$INSTALL_METHOD" != "git" ]]; then
+    fail "Unknown install method: ${INSTALL_METHOD} (use npm or git)"
+  fi
   # Reject unsupported source installs before changing runtime links or checkouts.
   # Node-only recovery owns its separate platform refusal and ignores the method.
   if [[ "$NODE_ONLY" -eq 0 && "$INSTALL_METHOD" == "git" && "$(os_detect)" == "freebsd" ]]; then
@@ -1324,13 +1364,14 @@ main() {
   fi
 
   select_node_version_for_platform "$(os_detect)" "$(arch_detect)"
+  local original_path="${PATH-}"
   PATH="$(node_dir)/bin:${PREFIX}/bin:${PATH}"
   export PATH
 
   install_node "$(os_detect)" "$(arch_detect)"
   if [[ "$INSTALL_METHOD" == "git" ]]; then
     install_openclaw_from_git "$GIT_DIR"
-  elif [[ "$INSTALL_METHOD" == "npm" ]]; then
+  else
     if [[ "$RUNTIME_ONLY" -eq 0 ]]; then
       ensure_git
     fi
@@ -1338,8 +1379,6 @@ main() {
       fix_npm_prefix_if_needed
     fi
     install_openclaw
-  else
-    fail "Unknown install method: ${INSTALL_METHOD} (use npm or git)"
   fi
 
   local installed_version
@@ -1360,11 +1399,67 @@ main() {
   else
     refresh_gateway_service_if_loaded
   fi
+  local onboard_tty="" onboard_with_stdio=0
+  if [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then
+    if [[ -t 0 && -t 1 ]]; then
+      onboard_with_stdio=1
+    elif has_controlling_tty; then
+      onboard_tty="$(controlling_tty_path)"
+    else
+      # The install already succeeded; onboarding cannot run without a terminal, so
+      # defer it with a hint instead of failing the installer.
+      emit_json step name onboarding status skip reason no-terminal
+    fi
+  fi
   emit_json "done" version "$installed_version"
   log "OpenClaw installed (${installed_version})."
+  local bin_dir="${PREFIX%/}/bin"
+  if [[ "$JSON" -eq 0 && ":${original_path}:" != *":${bin_dir}:"* ]]; then
+    local shell_name="${SHELL:-}" quoted_dir="$bin_dir" fish_dir="$bin_dir" quote_escape="'\\''"
+    shell_name="${shell_name##*/}"
+    quoted_dir="${quoted_dir//\'/$quote_escape}"
+    quoted_dir="'$quoted_dir'"
+    fish_dir="${fish_dir//\\/\\\\}"
+    fish_dir="${fish_dir//\"/\\\"}"
+    fish_dir="${fish_dir//\$/\\\$}"
 
-  if [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then
+    echo ""
+    echo "Warning: PATH missing prefix bin dir: ${bin_dir}"
+    echo "  This directory was not on PATH when the installer started."
+    case "$shell_name" in
+      bash|zsh)
+        echo "  For this shell, run:"
+        printf "    export PATH=%s:\"\$PATH\"; hash -r\n" "$quoted_dir"
+        ;;
+      fish)
+        echo "  For this shell, run:"
+        printf "    set -gx PATH \"%s\" \$PATH\n" "$fish_dir"
+        ;;
+      *)
+        echo "  Add this directory to PATH using your shell's syntax. Examples:"
+        printf "    Bash/zsh: export PATH=%s:\"\$PATH\"; hash -r\n" "$quoted_dir"
+        printf "    Fish: set -gx PATH \"%s\" \$PATH\n" "$fish_dir"
+        ;;
+    esac
+    echo "  For future shells, check your shell startup file."
+
+    if [[ "$RUN_ONBOARD" -eq 0 || "$RUNTIME_ONLY" -eq 1 ]]; then
+      local quoted_claw=""
+      printf -v quoted_claw '%q' "${bin_dir}/openclaw"
+      echo "Run ${quoted_claw} onboard to finish setup."
+    fi
+  fi
+  log "Support: https://community.openclaw.ai/"
+
+  if [[ "$onboard_with_stdio" -eq 1 ]]; then
     "${PREFIX}/bin/openclaw" onboard
+  elif [[ -n "$onboard_tty" ]]; then
+    # The wizard requires both descriptors to be terminals, even when install output is redirected.
+    "${PREFIX}/bin/openclaw" onboard <>"$onboard_tty" >&0
+  elif [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then
+    local quoted_claw=""
+    printf -v quoted_claw '%q' "${bin_dir}/openclaw"
+    printf '%s\n' "No terminal available; run ${quoted_claw} onboard to finish setup." >&2
   fi
 }
 

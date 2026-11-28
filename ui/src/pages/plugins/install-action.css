@@ -37,14 +37,13 @@ openclaw-plugin-install-action {
   inset: -16px 0;
 }
 .plugin-install-progress {
-  box-sizing: border-box;
   width: 380px;
   max-width: calc(100vw - 24px);
   max-height: min(var(--oc-overlay-available-height, 420px), calc(100dvh - 16px));
   overflow-y: auto;
   padding: 20px;
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   color: var(--text);
   box-shadow: var(--shadow-lg);
@@ -77,9 +76,9 @@ openclaw-plugin-install-action {
 }
 .plugin-install-progress__activities {
   display: grid;
-  gap: 17px;
+  gap: 12px;
   list-style: none;
-  padding: 23px 0 0;
+  padding: 18px 0 0;
   margin: 0;
 }
 .plugin-install-progress__activities:empty {
@@ -88,9 +87,9 @@ openclaw-plugin-install-action {
 .plugin-install-progress__activity {
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 9px;
   min-width: 0;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.35;
 }
 .plugin-install-progress__activity--started {
@@ -104,28 +103,27 @@ openclaw-plugin-install-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 20px;
-  width: 20px;
-  height: 20px;
-  box-sizing: border-box;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
 }
 .plugin-install-progress__activity--started .plugin-install-progress__icon {
   border: 1px solid var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-subtle);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
 }
 .plugin-install-progress__activity--completed .plugin-install-progress__icon {
   background: var(--ok);
   color: var(--bg);
 }
 .plugin-install-progress__activity--completed svg {
-  width: 13px;
-  height: 13px;
-  stroke-width: 2;
+  width: 10px;
+  height: 10px;
+  stroke-width: 2.5;
 }
 .plugin-install-progress__activity--failed .plugin-install-progress__icon {
   border: 1px solid var(--warn);
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 700;
 }
 @media (max-width: 400px) {
@@ -133,6 +131,6 @@ openclaw-plugin-install-action {
     padding: 16px;
   }
   .plugin-install-progress__activity {
-    font-size: 13px;
+    font-size: 12px;
   }
 }

@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -10,6 +11,7 @@ import { withUpdateFailureTriage } from "../cli/update-cli/update-command-triage
 import type { HealthFinding } from "../flows/health-checks.js";
 import { resolveInstallationTarget } from "../infra/installation-target-context.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
+import * as logTailModule from "../logging/log-tail.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { triageCommand } from "./triage.js";
@@ -334,7 +336,7 @@ describe("triageCommand", () => {
     expect(mocks.confirm).not.toHaveBeenCalled();
   });
 
-  it("preserves local diagnostics and redacted snapshot failures while the Gateway is offline", async () => {
+  it("keeps separate-installation diagnostics without inspecting the host service", async () => {
     const { writeDiagnosticSupportExport } = await vi.importActual<
       typeof import("../logging/diagnostic-support-export.js")
     >("../logging/diagnostic-support-export.js");
@@ -343,21 +345,17 @@ describe("triageCommand", () => {
     await fs.writeFile(configPath, JSON.stringify({ gateway: { auth: { token: secret } } }));
     mocks.callGatewayFromCliWithTransport.mockRejectedValue(new Error(`Offline token=${secret}`));
     mocks.gatherDaemonStatus.mockRejectedValue(new Error("Status unavailable"));
-    mocks.writeDiagnosticSupportExport.mockImplementation((options) =>
-      writeDiagnosticSupportExport({
-        ...options,
-        stateDir,
-        env: { HOME: stateDir, OPENCLAW_CONFIG_PATH: configPath },
-        readLogTail: async () => ({
-          file: path.join(stateDir, "gateway.log"),
-          cursor: 0,
-          size: 0,
-          lines: [],
-          truncated: false,
-          reset: false,
-        }),
-      }),
-    );
+    vi.stubEnv("HOME", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    vi.spyOn(logTailModule, "readConfiguredLogTail").mockResolvedValue({
+      file: path.join(stateDir, "gateway.log"),
+      cursor: 0,
+      size: 0,
+      lines: [],
+      truncated: false,
+      reset: false,
+    });
+    mocks.writeDiagnosticSupportExport.mockImplementation(writeDiagnosticSupportExport);
     const runtime = createTriageRuntime();
 
     await triageCommand(runtime, { json: true });
@@ -373,7 +371,8 @@ describe("triageCommand", () => {
     const diagnostics = JSON.parse(await zip.file("diagnostics.json")!.async("string"));
     expect(diagnostics.config).toMatchObject({ exists: true, parseOk: true });
     expect(diagnostics.health).toMatchObject({ status: "failed" });
-    expect(diagnostics.status).toMatchObject({ status: "failed" });
+    expect(diagnostics.status).toMatchObject({ status: "skipped" });
+    expect(mocks.gatherDaemonStatus).not.toHaveBeenCalled();
     const entries = await Promise.all(
       Object.values(zip.files)
         .filter((entry) => !entry.dir)
@@ -388,43 +387,6 @@ describe("triageCommand", () => {
       }
       expect((await fs.stat(path.dirname(report.promptPath))).mode & 0o777).toBe(0o700);
     }
-  });
-
-  it("reuses the sanitized support exporter with Gateway status and health snapshots", async () => {
-    const health = { ok: true };
-    const status = { gateway: { reachable: true } };
-    const bundlePath = path.join(stateDir, "diagnostics.zip");
-    mocks.callGatewayFromCliWithTransport.mockResolvedValue(health);
-    mocks.gatherDaemonStatus.mockResolvedValue(status);
-    mocks.writeDiagnosticSupportExport.mockImplementation(async (options) => {
-      expect(await options.readHealthSnapshot()).toBe(health);
-      expect(await options.readStatusSnapshot()).toBe(status);
-      return { path: bundlePath };
-    });
-    const runtime = createTriageRuntime();
-
-    await triageCommand(runtime, { json: true });
-
-    const report = runtime.writeJson.mock.calls[0]?.[0] as {
-      promptPath: string;
-      bundlePath: string;
-      bundleError: null;
-      suggestedCommands: string[];
-    };
-    expect(report).toMatchObject({ bundlePath, bundleError: null });
-    expect(path.isAbsolute(report.promptPath)).toBe(true);
-    expect(path.isAbsolute(report.bundlePath)).toBe(true);
-    expect(report.suggestedCommands[0]).toContain(report.promptPath);
-    expect(report.suggestedCommands[1]).toContain(report.promptPath);
-    expect(await fs.readFile(report.promptPath, "utf8")).toContain(
-      "Sanitized ZIP: $OPENCLAW_STATE_DIR/diagnostics.zip",
-    );
-    expect(mocks.gatherDaemonStatus).toHaveBeenCalledWith({
-      rpc: { timeout: "3000", json: true },
-      probe: true,
-      requireRpc: false,
-      deep: false,
-    });
   });
 
   it.each([false, true])(
@@ -548,6 +510,33 @@ describe("triageCommand", () => {
       expect(mocks.spawn).not.toHaveBeenCalled();
     },
   );
+
+  it("stops before starting an agent when the terminal hangs up during Doctor collection", async () => {
+    const signals = await import("../cli/signal-exit-barrier.js");
+    const staging = await import("../infra/sqlite-snapshot-staging.js");
+    mocks.resolveExecutablePath.mockImplementation((binary: string) => `/usr/local/bin/${binary}`);
+    const root = tempDirs.make("triage-hangup-snapshots-");
+    const exitCode = process.exitCode;
+    const releaseSignals = signals.installCliSignalExitHandlers();
+    signals.installCliDoctorSignalExitHandlers();
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    mocks.collectDoctorFindings.mockImplementation(async () => {
+      // Doctor's inspection still holds its private snapshot copy when the hangup arrives.
+      staging.createSqliteSnapshotStagingDirectorySync(root);
+      process.emit("SIGHUP", "SIGHUP");
+      return [];
+    });
+    const runtime = createTriageRuntime();
+    try {
+      await withTriageTerminal(true, () => triageCommand(runtime, { noExport: true }));
+      expect(await signals.waitForCliSignalExit()).toBe(129);
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(fsSync.readdirSync(root)).toEqual([]);
+    } finally {
+      releaseSignals();
+      process.exitCode = exitCode;
+    }
+  });
 
   it("reports a failed launch without trying another installed agent", async () => {
     mocks.resolveExecutablePath.mockImplementation((binary: string) => `/usr/local/bin/${binary}`);

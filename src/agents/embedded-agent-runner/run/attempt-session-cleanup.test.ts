@@ -27,19 +27,16 @@ import { cleanupEmbeddedAttemptSessionPhase } from "./attempt-session-settle.js"
 const attempt = {
   runId: "run-1",
   sessionId: "session-1",
-  sessionFile: "/tmp/session.jsonl",
 } as never;
 
 function createInput(overrides: Record<string, unknown> = {}) {
   const transcriptLifecycle = {
-    beginCleanup: vi.fn(async () => undefined),
+    beginCleanup: vi.fn(async (onDrained?: () => void) => onDrained?.()),
     dispose: vi.fn(async () => undefined),
   };
   const emitDiagnosticRunCompleted = vi.fn();
   const trajectoryRecorder = {
     recordEvent: vi.fn(),
-    describeFlushState: vi.fn(),
-    flush: vi.fn(),
   };
   const state: { terminal: AgentRunAttemptTerminal; beforeAgentRunBlockedBy?: string } = {
     terminal: { kind: "ok" },
@@ -65,7 +62,11 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
   });
 
   it("records the terminal event before transcript-safe resource cleanup", async () => {
-    const input = createInput();
+    const clearTranscriptRunCallbacks = vi.fn();
+    const input = createInput({ sessionManager: { clearTranscriptRunCallbacks } });
+    hoisted.cleanupEmbeddedAttemptResources.mockImplementation(async () => {
+      expect(clearTranscriptRunCallbacks).toHaveBeenCalledOnce();
+    });
 
     await cleanupEmbeddedAttemptSessionPhase(input as never);
 

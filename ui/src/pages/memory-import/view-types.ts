@@ -3,6 +3,7 @@ import type {
   MigrationsMemoryPlanResult,
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
 import type { GatewayAgentRow } from "../../../../src/shared/session-types.js";
+import type { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 
 export type SessionBackfillGatewayResult = {
   days: number;
@@ -28,9 +29,13 @@ export type SessionBackfillRollbackResult = {
 export type MemoryImportViewProps = {
   connected: boolean;
   canAdmin: boolean;
+  actorAuth: Parameters<typeof hasOperatorAdminAccess>[0];
   agents: GatewayAgentRow[];
   selectedAgentId: string | null;
   plan: MigrationsMemoryPlanResult | null;
+  readPlan: () => MigrationsMemoryPlanResult | null;
+  readPreview: () => SessionBackfillGatewayResult | null;
+  readScope: object;
   loading: boolean;
   error: string | null;
   applyError: string | null;
@@ -44,7 +49,6 @@ export type MemoryImportViewProps = {
   backfillTo: string;
   backfillBusy: "preview" | "apply" | "rollback" | null;
   backfillError: string | null;
-  backfillPreview: SessionBackfillGatewayResult | null;
   backfillProgress: SessionBackfillProgress | null;
   backfillRollbackResult: SessionBackfillRollbackResult | null;
   backfillRollbackPending: boolean;

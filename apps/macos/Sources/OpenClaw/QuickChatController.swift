@@ -148,7 +148,6 @@ final class QuickChatController: NSObject {
             }
         }
         self.hotkeyRegistered = true
-        quickChatLogger.info("quick chat hotkey handler registered")
     }
 
     private func unregisterHotkeyIfNeeded() {
@@ -201,8 +200,6 @@ final class QuickChatController: NSObject {
         self.visibleFrame = self.cursorScreen()?.visibleFrame ?? .zero
         self.ensurePanel()
         let target = self.targetFrame()
-        quickChatLogger.info(
-            "quick chat present visible=\(NSStringFromRect(self.visibleFrame)) target=\(NSStringFromRect(target))")
         guard let panel = self.panel else { return }
         panel.alphaValue = 1
         if wasVisible {
@@ -218,9 +215,6 @@ final class QuickChatController: NSObject {
     func dismiss(immediate: Bool = false) {
         self.stopDictation()
         self.cancelPasteRequest()
-        if self.isVisible {
-            quickChatLogger.info("quick chat dismiss immediate=\(immediate)")
-        }
         self.windowPicker?.cancel()
         self.invalidateRecentsFetch()
         SimpleTaskSupport.stop(task: &self.presentationTask)
@@ -603,12 +597,10 @@ final class QuickChatController: NSObject {
 
     private func showModelMenu() {
         guard self.model.canUseModelControls else { return }
-        self.withMenuInteraction { panel, contentView in
-            QuickChatModelMenuPresenter.present(model: self.model, panel: panel, contentView: contentView)
-        }
+        self.presentMenu(QuickChatModelMenu.make(model: self.model))
     }
 
-    private func withMenuInteraction(_ present: (NSPanel, NSView) -> Void) {
+    private func presentMenu(_ menu: NSMenu, invalidatingRecents: Bool = false) {
         guard let panel, let contentView = panel.contentView else { return }
         self.isMenuActive = true
         self.removeDismissMonitors()
@@ -618,17 +610,11 @@ final class QuickChatController: NSObject {
             self.focusEditor()
         }
 
-        present(panel, contentView)
-    }
-
-    private func presentMenu(_ menu: NSMenu, invalidatingRecents: Bool = false) {
-        self.withMenuInteraction { panel, contentView in
-            let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
-            let contentPoint = contentView.convert(windowPoint, from: nil)
-            // Competing interactions retire a pending recents fetch before AppKit starts tracking.
-            if invalidatingRecents { self.invalidateRecentsFetch() }
-            _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
-        }
+        let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
+        let contentPoint = contentView.convert(windowPoint, from: nil)
+        // Competing interactions retire a pending recents fetch before AppKit starts tracking.
+        if invalidatingRecents { self.invalidateRecentsFetch() }
+        _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
     }
 
     private func showRecentSessionsPicker() {

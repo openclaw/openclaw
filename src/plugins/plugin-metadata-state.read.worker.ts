@@ -1,8 +1,5 @@
 import type { EngineConnection } from "../infra/sql-connection.js";
-import type {
-  WorkerOperationHandlers,
-  WorkerOperations,
-} from "../state/worker-operation-registry.js";
+import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import {
   INSTALLED_PLUGIN_INDEX_STATE_KEY,
   readPluginMetadataStateRowsInDatabase,
@@ -30,5 +27,3 @@ export const pluginMetadataReadOperations = {
     ),
   }),
 } satisfies WorkerOperationHandlers<EngineConnection>;
-
-export type PluginMetadataReadOperations = WorkerOperations<typeof pluginMetadataReadOperations>;

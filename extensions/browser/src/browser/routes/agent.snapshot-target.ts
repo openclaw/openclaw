@@ -1,21 +1,35 @@
-import type { RelayOperationReference } from "../extension-relay/owner-client.js";
+import { readCdpTargetCrashState } from "../cdp.js";
+import type { BrowserTab } from "../client.types.js";
+import { BROWSER_TAB_CRASHED_MESSAGE, BrowserConflictError } from "../errors.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { getProfileLifecycle } from "../server-context.lifecycle.js";
 
-export type BrowserOperationTargetResolver = (() =>
-  | string
-  | undefined
-  | Promise<string | undefined>) & {
-  reference?: RelayOperationReference;
-  release: () => Promise<void>;
-};
+export async function assertTabNotCrashed(
+  ctx: BrowserRouteContext,
+  profileName: string,
+  tab: BrowserTab,
+  signal: AbortSignal,
+) {
+  if (!tab.wsUrl) {
+    return;
+  }
+  const runtime = ctx.state().profiles.get(profileName);
+  const crashed = await readCdpTargetCrashState({ wsUrl: tab.wsUrl, lookup: tab.wsLookup, signal });
+  const entry = runtime?.tabAliases?.byTargetId[tab.targetId];
+  if (entry && crashed !== undefined) {
+    entry.crashedAt = crashed ? Date.now() : undefined;
+  }
+  if (crashed) {
+    throw new BrowserConflictError(BROWSER_TAB_CRASHED_MESSAGE);
+  }
+}
 
 /** Pin capture at the actual bridge; a failed capture must never enable generic recovery. */
 export async function captureBrowserOperationTarget(opts: {
   ctx: BrowserRouteContext;
   profileName: string;
   targetId: string;
-}): Promise<BrowserOperationTargetResolver | undefined> {
+}) {
   const state = opts.ctx.state();
   const relay = state.extensionRelays?.get(opts.profileName);
   if (!relay) {

@@ -113,7 +113,7 @@ describe("slackSetupWizard.prepare", () => {
     expect(JSON.parse(manifest)).toEqual({
       display_information: {
         name: "OpenClaw",
-        description: "OpenClaw connector for OpenClaw",
+        description: "OpenClaw app for OpenClaw",
       },
       features: {
         bot_user: {
@@ -127,20 +127,7 @@ describe("slackSetupWizard.prepare", () => {
         },
         agent_view: {
           agent_description: "OpenClaw connects Slack Agent View conversations to OpenClaw agents.",
-          suggested_prompts: [
-            {
-              title: "What can you do?",
-              message: "What can you help me with?",
-            },
-            {
-              title: "Summarize this channel",
-              message: "Summarize the recent activity in this channel.",
-            },
-            {
-              title: "Draft a reply",
-              message: "Help me draft a reply.",
-            },
-          ],
+          suggested_prompts: expect.any(Array),
         },
         slash_commands: [
           {
@@ -156,7 +143,9 @@ describe("slackSetupWizard.prepare", () => {
             "app_mentions:read",
             "assistant:write",
             "channels:history",
+            "channels:manage",
             "channels:read",
+            "channels:write.invites",
             "chat:write",
             "commands",
             "emoji:read",

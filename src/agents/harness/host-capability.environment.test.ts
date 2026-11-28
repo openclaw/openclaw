@@ -4,7 +4,7 @@ import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { withInstallationTarget } from "../../infra/installation-target-context.js";
 import * as gatewayCliShim from "../../infra/openclaw-cli-shim.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 
 afterEach(() => {
@@ -28,10 +28,9 @@ describe("prepared harness tool environment", () => {
           config,
         },
         {
-          operatorAuthority: createAdmittedRunOperatorAuthority({
+          operatorAuthority: createTestOperatorAuthority({
             profileId: "requester",
             scopes: ["operator.read"],
-            assertCurrent: () => {},
           }),
         },
       ),
@@ -41,6 +40,7 @@ describe("prepared harness tool environment", () => {
         credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
         localIdentityEnv: expect.objectContaining({ GH_CONFIG_DIR: expect.any(String) }),
         managedLocalIdentity: true,
+        hostExecutionRequired: true,
         localProcessEnv: {
           OPENCLAW_STATE_DIR: "/state",
           OPENCLAW_CONFIG_PATH: "/config",
@@ -101,6 +101,7 @@ describe("prepared harness tool environment", () => {
       expect(environment?.localToolPathPrepend).toEqual(["/fixture/cli", "/fixture/global"]);
       expect(environment?.localProcessEnv).toBeUndefined();
       expect(environment?.localIdentityEnv).toEqual({});
+      expect(environment?.hostExecutionRequired).toBeUndefined();
       expect(Object.isFrozen(environment?.localToolEnv)).toBe(true);
       expect(Object.isFrozen(environment?.localToolPathPrepend)).toBe(true);
       host.closeHost();

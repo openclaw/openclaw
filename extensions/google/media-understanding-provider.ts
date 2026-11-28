@@ -85,11 +85,12 @@ async function generateGeminiInlineDataText(params: {
   });
 
   try {
-    await assertOkOrThrowProviderError(res, params.httpErrorLabel);
+    await assertOkOrThrowProviderError(res, params.httpErrorLabel, { requestHeaders: headers });
 
     const payload = await readProviderJsonResponse<GoogleGenerateContentResponse>(
       res,
       params.httpErrorLabel,
+      { requestHeaders: headers },
     );
     const parts = payload.candidates?.[0]?.content?.parts ?? [];
     const text = parts
@@ -108,8 +109,12 @@ async function generateGeminiInlineDataText(params: {
 export async function transcribeGeminiAudio(
   params: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
+  const language = params.language?.trim();
   return await generateGeminiInlineDataText({
     ...params,
+    prompt: language
+      ? `${params.prompt?.trim() || DEFAULT_GOOGLE_AUDIO_PROMPT}\nTranscription language: ${language}.`
+      : params.prompt,
     defaultModel: GOOGLE_MEDIA_UNDERSTANDING_DEFAULT_MODELS.audio,
     defaultPrompt: DEFAULT_GOOGLE_AUDIO_PROMPT,
     defaultMime: "audio/wav",

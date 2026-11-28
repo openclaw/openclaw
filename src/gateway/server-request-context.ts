@@ -10,10 +10,19 @@ import { getResidentUserProfileDisplay } from "../state/user-profile-list.js";
 import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import { ScopeUpgradeCoordinator } from "./device-scope-upgrade.js";
+import { participationExecApprovalRecipient } from "./exec-approval-delivery.js";
+import type { ExecApprovalRecord } from "./exec-approval-manager.js";
+import { canResolveParticipationExecApproval } from "./exec-approval-participation.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
+import { currentOwnerDevicePrincipal } from "./openclaw-id/tunnel-principal.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
+import {
+  canAccessInvitedApprovalSession,
+  readApprovalRequestSource,
+  prepareProjectedApprovalSessionAccess,
+} from "./server-methods/approval-record-lookup.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import {
   disconnectStaleSharedGatewayAuthClients,
@@ -26,6 +35,7 @@ import {
 } from "./server/client-presence.js";
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { getHealthCache } from "./server/health-state.js";
+import { disconnectDisallowedGatewayPolicyClients } from "./server/ws-origin-policy.js";
 import { invalidateGatewayPolicyClient } from "./server/ws-policy-close.js";
 import { resolveSessionRequestTargets } from "./session-request-targets.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
@@ -64,13 +74,12 @@ type GatewayRequestContextRuntime = Pick<
   | "nodeRegistry"
   | "workerEnvironmentService"
   | "hostDesktopService"
+  | "openclawIdService"
   | "gatewayComputerService"
   | "githubPublicationService"
   | "validateAgentRuntimeApprovalAuthority"
   | "terminalSessions"
   | "agentRunSeq"
-  | "chatAbortControllers"
-  | "chatQueuedTurns"
   | "chatRunState"
   | "addChatRun"
   | "removeChatRun"
@@ -101,6 +110,7 @@ type GatewayRequestContextRuntime = Pick<
     | "resolveSharedGatewaySessionGenerationForRuntimeSnapshot"
     | "workerPlacementControlAvailable"
     | "getAttachedGatewayMethodRegistry"
+    | "getReadiness"
   > & {
     sessionObserver: NonNullable<GatewayRequestContext["sessionObserver"]>;
     sessionActivitySummaries?: GatewayRequestContext["sessionActivitySummaries"];
@@ -138,7 +148,7 @@ type GatewayRequestContextRuntime = Pick<
     >;
     sessionMessageSubscribers: Pick<
       GatewayCoreRuntime["sessionMessageSubscribers"],
-      "unsubscribeAll"
+      "get" | "unsubscribeAll"
     >;
     toolEventRecipients: Pick<
       GatewayCoreRuntime["toolEventRecipients"],
@@ -148,7 +158,12 @@ type GatewayRequestContextRuntime = Pick<
     kernel: Pick<
       GatewayCoreRuntime["kernel"],
       "applyPluginLifecycleChange" | "getConfigReloaderHotReloadStatus"
-    >;
+    > & {
+      pluginRuntimeGeneration: Pick<
+        GatewayCoreRuntime["kernel"]["pluginRuntimeGeneration"],
+        "getReloadStatus"
+      >;
+    };
     workerEnvironmentStartup:
       | Pick<NonNullable<GatewayCoreRuntime["workerEnvironmentStartup"]>, "placementStore">
       | undefined;
@@ -183,13 +198,17 @@ const EXEC_APPROVAL_CLIENT_IDS: ReadonlySet<GatewayClientId> = new Set([
 function canDeliverApprovals(
   gatewayClient: GatewayClient,
   approvalKind: "exec" | "plugin" | "system-agent",
+  record?: Pick<ExecApprovalRecord, "participation">,
 ): boolean {
   if (gatewayClient.invalidated) {
     return false;
   }
-  const scopes = Array.isArray(gatewayClient.connect.scopes) ? gatewayClient.connect.scopes : [];
+  const scopes = gatewayClient.connect.scopes ?? [];
   const hasApprovalScope =
-    scopes.includes("operator.admin") || scopes.includes("operator.approvals");
+    (approvalKind === "exec"
+      ? canResolveParticipationExecApproval(record, gatewayClient)
+      : undefined) ??
+    (scopes.includes("operator.admin") || scopes.includes("operator.approvals"));
   if (!hasApprovalScope) {
     return false;
   }
@@ -254,6 +273,13 @@ export function createGatewayRequestContext(
     }
     return connIds;
   };
+  function* deviceClients(deviceId: string, role?: string) {
+    for (const client of clients) {
+      if (client.connect.device?.id === deviceId && (!role || client.connect.role === role)) {
+        yield client;
+      }
+    }
+  }
   const context: GatewayRequestContext = {
     trackExecution: (run) => connectionWork.track(run),
     deps: runtime.deps,
@@ -269,13 +295,7 @@ export function createGatewayRequestContext(
     getRuntimeConfig,
     ...(agentDatabaseStartup
       ? {
-          agentDatabaseStartup: {
-            get hasPendingAgents() {
-              return agentDatabaseStartup.hasPendingAgents;
-            },
-            waitForAgentPreparation:
-              agentDatabaseStartup.waitForAgentPreparation.bind(agentDatabaseStartup),
-          },
+          agentDatabaseStartup: agentDatabaseStartup.observation,
         }
       : {}),
     resolveSessionRequestTargets: (request) =>
@@ -338,13 +358,32 @@ export function createGatewayRequestContext(
       ? { readChatStartupProjection: params.chatMetadataLifecycle.readStartup }
       : {}),
     getHealthCache,
+    getReadiness: runtime.getReadiness,
     refreshHealthSnapshot: runtime.refreshGatewayHealthSnapshotWithRuntime,
     logHealth: params.logHealth,
     logGateway: params.log,
     broadcast,
     publishPresence: runtime.publishPresence,
     getPresenceSnapshot: () => snapshotClientPresence(clients),
-    broadcastToConnIds: runtime.broadcastToConnIds,
+    broadcastToConnIds: (event, payload, connIds, opts) => {
+      const id =
+        (event === "exec.approval.requested" || event === "exec.approval.resolved") &&
+        payload &&
+        typeof payload === "object" &&
+        "id" in payload &&
+        typeof payload.id === "string"
+          ? payload.id
+          : undefined;
+      const participationApprovalRecipient = id
+        ? participationExecApprovalRecipient(runtime.execApprovalManager, id)
+        : undefined;
+      runtime.broadcastToConnIds(
+        event,
+        payload,
+        connIds,
+        participationApprovalRecipient ? { ...opts, participationApprovalRecipient } : opts,
+      );
+    },
     nodeSendToSession: runtime.nodeSendToSession,
     nodeSendToAllSubscribed: runtime.nodeSendToAllSubscribed,
     nodeSubscribe: runtime.nodeSubscribe,
@@ -372,7 +411,23 @@ export function createGatewayRequestContext(
       getClientConnIds(
         (gatewayClient) =>
           (!opts.excludeConnId || gatewayClient.connId !== opts.excludeConnId) &&
-          canDeliverApprovals(gatewayClient, opts.approvalKind ?? "exec") &&
+          (!opts.record?.participation ||
+            runtime.execApprovalManager?.getLiveSnapshot(opts.record.id) === opts.record) &&
+          canDeliverApprovals(gatewayClient, opts.approvalKind ?? "exec", opts.record) &&
+          (!opts.record ||
+            (((opts.approvalKind ?? "exec") === "exec"
+              ? canResolveParticipationExecApproval(opts.record, gatewayClient)
+              : undefined) ??
+              canAccessInvitedApprovalSession({
+                ...readApprovalRequestSource(opts.record),
+                client: gatewayClient,
+                cfg: getRuntimeConfig(),
+                prepared: prepareProjectedApprovalSessionAccess({
+                  cfg: getRuntimeConfig(),
+                  client: gatewayClient,
+                  projection: runtime.getSessionRowProjection(),
+                }),
+              }))) &&
           (!opts.filter || opts.filter(gatewayClient, opts.record)),
       ),
     getClientConnIds,
@@ -438,17 +493,15 @@ export function createGatewayRequestContext(
       if (presenceChanged) {
         runtime.publishPresence();
       }
+      disconnectDisallowedGatewayPolicyClients(
+        clients.authorityClients,
+        context.getCommittedRuntimeConfig?.() ?? getRuntimeConfig(),
+      );
     },
     invalidateClientsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
       const reason = opts?.reason ?? "device-invalidated";
       invalidateGatewayDeviceRevocation(context, deviceId, opts?.role);
-      for (const gatewayClient of clients) {
-        if (gatewayClient.connect.device?.id !== deviceId) {
-          continue;
-        }
-        if (opts?.role && gatewayClient.connect.role !== opts.role) {
-          continue;
-        }
+      for (const gatewayClient of deviceClients(deviceId, opts?.role)) {
         // Retire node-owned projections and pending invokes synchronously; socket
         // close remains separate so already-buffered requests fail authorization.
         if (gatewayClient.connId) {
@@ -461,13 +514,7 @@ export function createGatewayRequestContext(
     },
     disconnectClientsForDevice: (deviceId: string, opts?: { role?: string }) => {
       invalidateGatewayDeviceRevocation(context, deviceId, opts?.role);
-      for (const gatewayClient of clients) {
-        if (gatewayClient.connect.device?.id !== deviceId) {
-          continue;
-        }
-        if (opts?.role && gatewayClient.connect.role !== opts.role) {
-          continue;
-        }
+      for (const gatewayClient of deviceClients(deviceId, opts?.role)) {
         invalidateGatewayPolicyClient(gatewayClient, {
           reason: "device-removed",
           code: 4001,
@@ -476,9 +523,12 @@ export function createGatewayRequestContext(
       }
       disconnectDeviceTransports?.(deviceId, opts);
     },
-    disconnectClientsForUserProfile: (profileId: string) => {
+    disconnectClientsForUserProfile: (profileId: string, opts?: { roleOnly?: boolean }) => {
       for (const gatewayClient of clients.authorityClients) {
         if (gatewayClient.authenticatedUserProfile?.profileId !== profileId) {
+          continue;
+        }
+        if (opts?.roleOnly && currentOwnerDevicePrincipal(gatewayClient)) {
           continue;
         }
         invalidateGatewayPolicyClient(gatewayClient, {
@@ -514,6 +564,7 @@ export function createGatewayRequestContext(
       ? { workerEnvironmentService: runtime.workerEnvironmentService }
       : {}),
     ...(runtime.hostDesktopService ? { hostDesktopService: runtime.hostDesktopService } : {}),
+    ...(runtime.openclawIdService ? { openclawIdService: runtime.openclawIdService } : {}),
     ...(runtime.gatewayComputerService
       ? { gatewayComputerService: runtime.gatewayComputerService }
       : {}),
@@ -533,8 +584,6 @@ export function createGatewayRequestContext(
       : {}),
     terminalSessions: runtime.terminalSessions,
     agentRunSeq: runtime.agentRunSeq,
-    chatAbortControllers: runtime.chatAbortControllers,
-    chatQueuedTurns: runtime.chatQueuedTurns,
     chatRunState: runtime.chatRunState,
     addChatRun: runtime.addChatRun,
     removeChatRun: runtime.removeChatRun,
@@ -553,6 +602,7 @@ export function createGatewayRequestContext(
       runtimeState.sessionViewerPresence?.unsubscribe(connId);
     },
     getSessionEventSubscriberConnIds: sessionEventSubscribers.getAll,
+    getSessionMessageSubscriberConnIds: sessionMessageSubscribers.get,
     registerToolEventRecipient: runtime.toolEventRecipients.add,
     dedupe: runtime.dedupe,
     wizardSessions: runtime.wizardSessions,
@@ -562,6 +612,7 @@ export function createGatewayRequestContext(
     getRuntimeSnapshot: runtime.getRuntimeSnapshot,
     getEventLoopHealth: runtime.readinessEventLoopHealth.snapshot,
     getConfigReloaderHotReloadStatus: runtime.kernel.getConfigReloaderHotReloadStatus,
+    getPluginReloadStatus: runtime.kernel.pluginRuntimeGeneration.getReloadStatus,
     startChannel: runtime.startChannel,
     stopChannel: runtime.stopChannel,
     markChannelLoggedOut: runtime.markChannelLoggedOut,

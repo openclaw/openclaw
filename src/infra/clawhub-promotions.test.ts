@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { useMockHttp } from "../test-utils/mock-http.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchClawHubPromotion, fetchClawHubPromotions } from "./clawhub-promotions.js";
+import { captureClawHubJson } from "./clawhub.test-support.js";
 
 const CLAWHUB_URL = "https://clawhub.ai";
-const mockHttp = useMockHttp();
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const validPromotion = {
   slug: "spring-models",
@@ -24,11 +27,9 @@ describe("promotion payload validation", () => {
     overrides: Record<string, unknown>,
     expected: RegExp,
   ): Promise<void> {
-    mockHttp.intercept({
-      url: `${CLAWHUB_URL}/api/v1/promotions/spring-models`,
-      reply: { json: { ...validPromotion, ...overrides } },
-    });
+    const request = captureClawHubJson({ ...validPromotion, ...overrides });
     await expect(fetchClawHubPromotion({ slug: "spring-models" })).rejects.toThrow(expected);
+    expect(request.url().toString()).toBe(`${CLAWHUB_URL}/api/v1/promotions/spring-models`);
   }
 
   it("rejects payloads without models", async () => {
@@ -68,19 +69,14 @@ describe("promotion payload validation", () => {
 
 describe("promotion fetches", () => {
   it("fetches and validates the active promotions list", async () => {
-    mockHttp.intercept({
-      url: `${CLAWHUB_URL}/api/v1/promotions`,
-      reply: { json: { promotions: [validPromotion] } },
-    });
+    const request = captureClawHubJson({ promotions: [validPromotion] });
     const promotions = await fetchClawHubPromotions();
     expect(promotions).toHaveLength(1);
+    expect(request.url().toString()).toBe(`${CLAWHUB_URL}/api/v1/promotions`);
   });
 
   it("rejects a list response without a promotions array", async () => {
-    mockHttp.intercept({
-      url: `${CLAWHUB_URL}/api/v1/promotions`,
-      reply: { json: { nope: true } },
-    });
+    captureClawHubJson({ nope: true });
     await expect(fetchClawHubPromotions()).rejects.toThrow(/promotions array/);
   });
 });

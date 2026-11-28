@@ -26,11 +26,15 @@ it.each(["cleanup failure", "admission refusal"] as const)(
     const events: string[] = [];
     const refusal = new Error("Auth source admission revoked");
     const cleanupFailure = new Error("Auth child failed to close");
-    vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation(() => ({
+    vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation(async () => ({
+      agentId: "main",
       identity: undefined,
+      databaseIdentity: undefined,
+      source: { kind: "shared-state", databasePath: "/fixture/shared.sqlite" },
       captureCredentialAuthority: () => undefined,
       signal: new AbortController().signal,
       assertCurrent: () => {},
+      track: (operation) => operation,
       dispose: async () => {
         events.push("disposed");
         if (change === "cleanup failure") {

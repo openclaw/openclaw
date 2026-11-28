@@ -11,6 +11,8 @@ import zipfile
 
 mode, source, destination = sys.argv[1:]
 limit = 16 * 1024 * 1024
+# Built UI bundles include locale chunks, source maps, and precompressed assets.
+entry_limit = 8192 if mode == "bundle" else 4096
 seen = set()
 total = 0
 
@@ -21,7 +23,7 @@ def admit(name, size):
     parts = name.rstrip("/").split("/")
     if any(part in ("", ".", "..") for part in parts) or PurePosixPath(name).is_absolute():
         raise ValueError("unsafe archive path")
-    if name in seen or len(seen) >= 4096 or size < 0 or size > limit:
+    if name in seen or len(seen) >= entry_limit or size < 0 or size > limit:
         raise ValueError("duplicate or oversized archive entry")
     seen.add(name)
     total += size

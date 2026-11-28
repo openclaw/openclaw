@@ -1,5 +1,6 @@
 // Shared startup tracing for the entry wrapper and CLI dispatcher.
 import process from "node:process";
+import { getHeapStatistics } from "node:v8";
 import { isForegroundGatewayRunArgv } from "../../gateway-run-argv.mjs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -8,30 +9,31 @@ import {
   supportsUpdateCanaryProgress,
   UPDATE_CANARY_PROGRESS_PREFIX,
 } from "../infra/update-candidate-canary-progress.js";
+import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 
 type GatewayStartupTraceSource = "entry" | "cli.main";
 type GatewayStartupTraceLineFormatter = (message: string) => string;
 type DiagnosticsTimelineModule = typeof import("../infra/diagnostics-timeline.js");
-type StartupTraceMeasureOptions = {
-  timeline?: boolean;
-};
 type PendingTimelineEvent =
   | {
       type: "mark";
       name: string;
+      observedAt: number;
       durationMs: number;
       totalMs: number;
     }
   | {
       type: "span";
       name: string;
-      durationMs: number;
+      startedAt: number;
+      completedAt: number;
     };
 
 const CLI_STARTUP_TIMELINE_PHASE = "cli.startup";
 const STARTUP_PROGRESS_PHASES = new Set([
   "entry.run-main-import",
   "cli.main.gateway-run-select-environment",
+  "cli.main.gateway-run-select-environment-imports",
   "cli.main.gateway-run-imports",
   "cli.main.gateway-run-pre-bootstrap",
   "cli.main.gateway-run-bootstrap",
@@ -41,6 +43,15 @@ const BOOTSTRAP_PROGRESS_PHASES = new Set([
   "cli.bootstrap.admission.database-readiness",
   "gateway.server-start-import",
 ]);
+const ENVIRONMENT_PROGRESS_PHASES = new Set([
+  "cli.environment.imports",
+  "cli.environment.config-import",
+  "cli.environment.config-read",
+  "cli.environment.config-recovery",
+  "cli.environment.config.recovery.health-read",
+  "cli.environment.config-guard",
+  "cli.environment.pin-runtime-paths",
+]);
 
 type GatewayBootstrapStep = {
   name: string;
@@ -48,18 +59,28 @@ type GatewayBootstrapStep = {
   completedAt: number;
   durationMs: number;
   calls: number;
-  metrics: Record<string, number>;
+  metrics: Record<string, number | string>;
 };
 
 const MAX_BOOTSTRAP_STEPS = 128;
 let bootstrapSteps: Map<string, GatewayBootstrapStep> | undefined = new Map();
+
+export function formatGatewayStartupMemoryUsage(): string {
+  const workers = sampleTrackedWorkerMemory({ refresh: false });
+  const workerHeap =
+    workers.workerHeapTotalBytes === undefined
+      ? ""
+      : ` workerHeapMb=${(workers.workerHeapTotalBytes / 1024 / 1024).toFixed(1)} workerHeapSource=cached`;
+  // MiB: RSS includes worker isolates; the heap belongs to the main isolate.
+  return `rssMb=${(process.memoryUsage.rss() / 1024 / 1024).toFixed(1)} heapUsedMb=${(getHeapStatistics().used_heap_size / 1024 / 1024).toFixed(1)} workers=${workers.workerCount} workerHeapSamples=${workers.workerHeapSampledCount}/${workers.workerCount}${workerHeap}`;
+}
 
 /** Collect process facts once; Gateway startup consumes them before serving. */
 export function recordGatewayBootstrapStep(
   name: string,
   startedAt: number,
   completedAt: number,
-  metrics: Readonly<Record<string, number>> = {},
+  metrics: Readonly<Record<string, number | string>> = {},
 ): void {
   if (!bootstrapSteps || !isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE)) {
     return;
@@ -76,7 +97,9 @@ export function recordGatewayBootstrapStep(
   step.durationMs += completedAt - startedAt;
   step.calls += 1;
   for (const [key, value] of Object.entries(metrics)) {
-    step.metrics[key] = (step.metrics[key] ?? 0) + value;
+    const previous = step.metrics[key];
+    step.metrics[key] =
+      typeof value === "number" ? (typeof previous === "number" ? previous : 0) + value : value;
   }
 }
 
@@ -89,13 +112,14 @@ export function consumeGatewayBootstrapSteps(): GatewayBootstrapStep[] {
 export async function measureGatewayBootstrapStep<T>(
   name: string,
   run: () => T | Promise<T>,
-  metrics?: () => Readonly<Record<string, number>>,
+  metrics?: () => Readonly<Record<string, number | string>>,
 ): Promise<T> {
   const traceEnabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
   const progressEnabled =
     BOOTSTRAP_PROGRESS_PHASES.has(name) ||
     (isForegroundGatewayRunArgv(process.argv) &&
-      (name.startsWith("cli.bootstrap.") ||
+      (ENVIRONMENT_PROGRESS_PHASES.has(name) ||
+        name.startsWith("cli.bootstrap.") ||
         name === "cli.command.config-ready" ||
         name === "cli.command.config-guard-import"));
   if (!traceEnabled && !progressEnabled) {
@@ -103,23 +127,19 @@ export async function measureGatewayBootstrapStep<T>(
   }
   const startedAt = performance.now();
   const { formatConsoleDiagnosticLine } = await import("../logging/json-console-line.js");
-  if (progressEnabled) {
-    process.stderr.write(
-      `${formatConsoleDiagnosticLine({ level: "info", message: `[gateway] startup phase: ${name} starting total=${startedAt.toFixed(1)}ms` })}\n`,
-    );
-  }
-  try {
-    return await run();
-  } finally {
-    const completedAt = performance.now();
-    const facts = metrics?.() ?? {};
-    recordGatewayBootstrapStep(name, startedAt, completedAt, facts);
-    const counts = Object.entries(facts)
-      .map(([key, value]) => ` ${key}=${value}`)
-      .join("");
-    const message = `[gateway] startup ${traceEnabled ? "trace" : "phase"}: ${name} ${(completedAt - startedAt).toFixed(1)}ms total=${completedAt.toFixed(1)}ms start=${startedAt.toFixed(1)}ms${counts}`;
-    process.stderr.write(`${formatConsoleDiagnosticLine({ level: "info", message })}\n`);
-  }
+  // Update filters the trace it enables internally; keep ordinary progress visible.
+  const starting = `[gateway] startup ${progressEnabled ? "phase" : "trace"}: ${name} starting total=${startedAt.toFixed(1)}ms`;
+  process.stderr.write(`${formatConsoleDiagnosticLine({ level: "info", message: starting })}\n`);
+  const result = await run();
+  const completedAt = performance.now();
+  const facts = metrics?.() ?? {};
+  recordGatewayBootstrapStep(name, startedAt, completedAt, facts);
+  const counts = Object.entries(facts)
+    .map(([key, value]) => ` ${key}=${value}`)
+    .join("");
+  const message = `[gateway] startup ${traceEnabled ? "trace" : "phase"}: ${name} ${(completedAt - startedAt).toFixed(1)}ms total=${completedAt.toFixed(1)}ms start=${startedAt.toFixed(1)}ms${counts} ${formatGatewayStartupMemoryUsage()}`;
+  process.stderr.write(`${formatConsoleDiagnosticLine({ level: "info", message })}\n`);
+  return result;
 }
 
 export function createGatewayDispatchStartupTrace(
@@ -184,6 +204,7 @@ export function createGatewayDispatchStartupTrace(
         {
           type: "mark",
           name: event.name,
+          timestamp: new Date(performance.timeOrigin + event.observedAt).toISOString(),
           phase: CLI_STARTUP_TIMELINE_PHASE,
           durationMs: event.durationMs,
           attributes: { totalMs: event.totalMs },
@@ -192,7 +213,7 @@ export function createGatewayDispatchStartupTrace(
       );
       return;
     }
-    module.emitCompletedDiagnosticsTimelineSpan(event.name, event.durationMs, {
+    module.emitCompletedDiagnosticsTimelineSpan(event.name, event, {
       phase: CLI_STARTUP_TIMELINE_PHASE,
       ...commonOptions,
     });
@@ -253,9 +274,9 @@ export function createGatewayDispatchStartupTrace(
     }
     process.stderr.write(`${lineFormatter(message)}\n`);
   };
-  const emit = (name: string, durationMs: number, completedAt: number, completed = true) => {
+  const emit = (name: string, durationMs: number, completedAt: number) => {
     const milestone = `${source}.${name}`;
-    if (updateCanary && completed && isUpdateCanaryStartupMilestone(milestone)) {
+    if (updateCanary && isUpdateCanaryStartupMilestone(milestone)) {
       process.stderr.write(`${UPDATE_CANARY_PROGRESS_PREFIX}${milestone}\n`);
     }
     if (!enabled && !(progressEnabled && STARTUP_PROGRESS_PHASES.has(milestone))) {
@@ -264,7 +285,7 @@ export function createGatewayDispatchStartupTrace(
     const startedAt = completedAt - durationMs;
     recordGatewayBootstrapStep(`${source}.${name}`, startedAt, completedAt);
     writeMessage(
-      `[gateway] startup ${enabled ? "trace" : "phase"}: ${source}.${name} ${durationMs.toFixed(1)}ms total=${completedAt.toFixed(1)}ms start=${startedAt.toFixed(1)}ms${completed ? "" : " failed"}`,
+      `[gateway] startup ${enabled ? "trace" : "phase"}: ${source}.${name} ${durationMs.toFixed(1)}ms total=${completedAt.toFixed(1)}ms start=${startedAt.toFixed(1)}ms ${formatGatewayStartupMemoryUsage()}`,
     );
   };
   return {
@@ -292,6 +313,7 @@ export function createGatewayDispatchStartupTrace(
       enqueueTimelineEvent({
         type: "mark",
         name: timelineName(name),
+        observedAt: now,
         durationMs,
         totalMs,
       });
@@ -300,7 +322,9 @@ export function createGatewayDispatchStartupTrace(
     async measure<T>(
       name: string,
       run: () => T | PromiseLike<T>,
-      options: StartupTraceMeasureOptions = {},
+      options: {
+        timeline?: boolean;
+      } = {},
     ): Promise<T> {
       const before = performance.now();
       if (progressEnabled && STARTUP_PROGRESS_PHASES.has(timelineName(name))) {
@@ -309,6 +333,7 @@ export function createGatewayDispatchStartupTrace(
         );
       }
       let bufferCompletedTimelineSpan = false;
+      let timelineStartedAt = before;
       let completed = false;
       try {
         if (timelineModule && options.timeline !== false) {
@@ -330,6 +355,10 @@ export function createGatewayDispatchStartupTrace(
           }
           bufferCompletedTimelineSpan = timelineActivation === "unknown";
         }
+        // Match live spans: activation/import waits precede the measured operation.
+        if (bufferCompletedTimelineSpan) {
+          timelineStartedAt = performance.now();
+        }
         const result = await run();
         completed = true;
         return result;
@@ -339,10 +368,13 @@ export function createGatewayDispatchStartupTrace(
           enqueueTimelineEvent({
             type: "span",
             name: timelineName(name),
-            durationMs: now - before,
+            startedAt: timelineStartedAt,
+            completedAt: now,
           });
         }
-        emit(name, now - before, now, completed);
+        if (completed) {
+          emit(name, now - before, now);
+        }
         last = now;
       }
     },

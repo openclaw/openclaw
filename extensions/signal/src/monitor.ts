@@ -10,6 +10,7 @@ import {
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-runtime";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
@@ -38,12 +39,14 @@ import {
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveSignalAccount, resolveSignalReplyToMode } from "./accounts.js";
 import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";
-import { addSignalApprovalReactionHintToStructuredPayload } from "./approval-reactions.js";
+import {
+  addSignalApprovalReactionHintToStructuredPayload,
+  registerSignalApprovalReactionTargetForDeliveredPayload,
+} from "./approval-reactions.js";
 import { signalRpcRequest } from "./client-adapter.js";
-import type { SignalTransportKind } from "./client-adapter.js";
-import { createSignalDaemonLifecycle } from "./daemon-lifecycle.js";
 import {
   assertSignalDaemonEndpointAvailable,
+  formatSignalDaemonExit,
   spawnSignalDaemon,
   type SignalDaemonHandle,
   waitForSignalDaemonReady,
@@ -52,7 +55,6 @@ import { createSignalEventHandler } from "./monitor/event-handler.js";
 import type { SignalEventHandlerDeps } from "./monitor/event-handler.types.js";
 import { createSignalNativeReplyIdPlan } from "./native-reply.js";
 import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
-import { registerSignalReactionTargetsForDeliveredPayload } from "./reaction-targets.js";
 import { sendMessageSignal } from "./send.js";
 import { startSignalIngressMonitor, type SignalIngressMonitor } from "./signal-ingress.js";
 import {
@@ -122,66 +124,6 @@ function deriveSignalAttachmentRpcMaxResponseBytes(maxBytes: number): number | u
   return base64Bytes + SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES;
 }
 
-async function fetchAttachment(
-  params: Parameters<SignalEventHandlerDeps["fetchAttachment"]>[0] & {
-    transportKind?: SignalTransportKind;
-  },
-) {
-  const { attachment } = params;
-  if (!attachment?.id) {
-    return null;
-  }
-  if (typeof attachment.size === "number" && attachment.size > params.maxBytes) {
-    throw new Error(
-      `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
-    );
-  }
-  const rpcParams: Record<string, unknown> = {
-    id: attachment.id,
-  };
-  if (params.account) {
-    rpcParams.account = params.account;
-  }
-  if (params.groupId) {
-    rpcParams.groupId = params.groupId;
-  } else if (params.sender) {
-    rpcParams.recipient = params.sender;
-  } else {
-    return null;
-  }
-
-  const result = await signalRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
-    baseUrl: params.baseUrl,
-    maxResponseBytes: deriveSignalAttachmentRpcMaxResponseBytes(params.maxBytes),
-    transportKind: params.transportKind,
-  });
-  if (!result?.data) {
-    return null;
-  }
-  if (estimateBase64DecodedBytes(result.data) > params.maxBytes) {
-    throw new Error(
-      `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
-    );
-  }
-  const canonicalData = canonicalizeBase64(result.data);
-  if (!canonicalData) {
-    throw new Error(`Signal attachment ${attachment.id} returned malformed base64 data`);
-  }
-  const buffer = Buffer.from(canonicalData, "base64");
-  const originalFilename = normalizeOptionalString(attachment.filename ?? undefined);
-  const contentType =
-    normalizeOptionalString(attachment.contentType ?? undefined) ??
-    (await detectMime({ buffer, filePath: originalFilename }));
-  const saved = await saveMediaBuffer(
-    buffer,
-    contentType,
-    "inbound",
-    params.maxBytes,
-    originalFilename,
-  );
-  return { path: saved.path, contentType: saved.contentType };
-}
-
 export async function deliverReplies(
   params: Parameters<SignalEventHandlerDeps["deliverReplies"]>[0] & {
     chunkMode: "length" | "newline";
@@ -235,7 +177,9 @@ export async function deliverReplies(
         account,
         maxBytes,
         accountId,
-        ...(mediaUrl ? { mediaUrl } : {}),
+        ...(mediaUrl
+          ? { mediaUrl, mediaAccess: resolveOutboundMediaAccessForConfig(params.cfg) }
+          : {}),
         ...(replyToId
           ? {
               replyToId,
@@ -264,7 +208,7 @@ export async function deliverReplies(
       sendMedia: ({ mediaUrl, caption }) => send(caption ?? "", mediaUrl),
     });
     if (delivered !== "empty") {
-      await registerSignalReactionTargetsForDeliveredPayload({
+      await registerSignalApprovalReactionTargetForDeliveredPayload({
         cfg: params.cfg,
         target: {
           channel: "signal",
@@ -342,9 +286,18 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     Math.max(1_000, opts.startupTimeoutMs ?? managedTransport?.startupTimeoutMs ?? 30_000),
   );
   const readReceiptsViaDaemon = autoStart && sendReadReceipts;
-  const daemonLifecycle = createSignalDaemonLifecycle({ abortSignal: opts.abortSignal });
+  const callerAbortSignal = opts.abortSignal;
+  let daemonExitError: Error | undefined;
+  const daemonAbortController = new AbortController();
+  const abortSignal = callerAbortSignal
+    ? AbortSignal.any([callerAbortSignal, daemonAbortController.signal])
+    : daemonAbortController.signal;
   const monitorTaskRunner = createSignalMonitorTaskRunner(runtime);
   let daemonHandle: SignalDaemonHandle | null = null;
+  const stopDaemon = (): Promise<void> => {
+    daemonAbortController.abort(callerAbortSignal?.reason ?? new Error("Signal monitor stopped"));
+    return daemonHandle?.stop() ?? Promise.resolve();
+  };
   let ingressMonitor: SignalIngressMonitor | undefined;
   const startupDeadline = Date.now() + startupTimeoutMs;
 
@@ -405,22 +358,27 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       sendReadReceipts,
       runtime,
     });
-    daemonLifecycle.attach(daemonHandle);
+    void daemonHandle.exited.then((exit) => {
+      if (abortSignal.aborted) {
+        return;
+      }
+      daemonExitError = new Error(formatSignalDaemonExit(exit));
+      daemonAbortController.abort(daemonExitError);
+    });
   }
 
-  const onAbort = () => void daemonLifecycle.stop();
+  const onAbort = () => void stopDaemon();
   opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
   try {
     if (daemonHandle) {
       await waitForSignalDaemonReady({
         baseUrl,
-        abortSignal: daemonLifecycle.abortSignal,
+        abortSignal,
         startupDeadlineMs: startupDeadline,
         runtime,
         waitForTransportReadyFn,
       });
-      const daemonExitError = daemonLifecycle.getExitError();
       if (daemonExitError) {
         throw daemonExitError;
       }
@@ -448,7 +406,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     const handleEvent = createSignalEventHandler({
       runtime,
       channelRuntime: opts.channelRuntime,
-      abortSignal: daemonLifecycle.abortSignal,
+      abortSignal,
       runTrackedTask: (task) => {
         void monitorTaskRunner.runTask(task);
       },
@@ -471,7 +429,62 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       ignoreAttachments,
       sendReadReceipts,
       readReceiptsViaDaemon,
-      fetchAttachment: (params) => fetchAttachment({ ...params, transportKind }),
+      fetchAttachment: async (attachmentInput) => {
+        const params = { ...attachmentInput, transportKind };
+        const { attachment } = params;
+        if (!attachment?.id) {
+          return null;
+        }
+        if (typeof attachment.size === "number" && attachment.size > params.maxBytes) {
+          throw new Error(
+            `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
+          );
+        }
+        const rpcParams: Record<string, unknown> = {
+          id: attachment.id,
+        };
+        if (params.account) {
+          rpcParams.account = params.account;
+        }
+        if (params.groupId) {
+          rpcParams.groupId = params.groupId;
+        } else if (params.sender) {
+          rpcParams.recipient = params.sender;
+        } else {
+          return null;
+        }
+
+        const result = await signalRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
+          baseUrl: params.baseUrl,
+          maxResponseBytes: deriveSignalAttachmentRpcMaxResponseBytes(params.maxBytes),
+          transportKind: params.transportKind,
+        });
+        if (!result?.data) {
+          return null;
+        }
+        if (estimateBase64DecodedBytes(result.data) > params.maxBytes) {
+          throw new Error(
+            `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
+          );
+        }
+        const canonicalData = canonicalizeBase64(result.data);
+        if (!canonicalData) {
+          throw new Error(`Signal attachment ${attachment.id} returned malformed base64 data`);
+        }
+        const buffer = Buffer.from(canonicalData, "base64");
+        const originalFilename = normalizeOptionalString(attachment.filename ?? undefined);
+        const contentType =
+          normalizeOptionalString(attachment.contentType ?? undefined) ??
+          (await detectMime({ buffer, filePath: originalFilename }));
+        const saved = await saveMediaBuffer(
+          buffer,
+          contentType,
+          "inbound",
+          params.maxBytes,
+          originalFilename,
+        );
+        return { path: saved.path, contentType: saved.contentType };
+      },
       deliverReplies: (params) => deliverReplies({ ...params, cfg, chunkMode }),
     });
 
@@ -484,7 +497,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     await runSignalSseLoop({
       baseUrl,
       account,
-      abortSignal: daemonLifecycle.abortSignal,
+      abortSignal,
       runtime,
       // signal-cli can keep the SSE event endpoint idle until the next inbound event.
       timeoutMs: 0,
@@ -494,12 +507,10 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       onEvent: (event) =>
         monitorTaskRunner.runTask(async () => await ingressMonitor?.receive(event)),
     });
-    const daemonExitError = daemonLifecycle.getExitError();
     if (daemonExitError) {
       throw daemonExitError;
     }
   } catch (err) {
-    const daemonExitError = daemonLifecycle.getExitError();
     if (opts.abortSignal?.aborted && !daemonExitError) {
       return;
     }
@@ -511,7 +522,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     await ingressMonitor?.stop();
     // Daemon attachment finishes before monitor tasks start. Keep teardown open until both the
     // child has exited and already-started reply work has drained.
-    await Promise.all([daemonLifecycle.stop(), monitorTaskRunner.waitForIdle()]);
+    await Promise.all([stopDaemon(), monitorTaskRunner.waitForIdle()]);
     opts.abortSignal?.removeEventListener("abort", onAbort);
   }
 }

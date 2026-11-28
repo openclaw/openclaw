@@ -1,4 +1,4 @@
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -8,13 +8,17 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { pathExists, root } from "../infra/fs-safe.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { readMainTableList } from "../infra/sqlite-strict.js";
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { isUpdateRehearsalReadOnlyPath } from "../infra/update-rehearsal-paths.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   prepareWorkspaceSkillRestoration,
@@ -22,14 +26,34 @@ import {
   readWorkspaceSupportFile,
   restoreWorkspaceSkillMutation,
 } from "../skills/lifecycle/workspace-skill-write.js";
-import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
+import { resolveAgentSkillsRoot } from "../skills/loading/skill-paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { dropRetiredSkillWorkshopProposalTables } from "../state/openclaw-state-db-table-retirements.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+
+// The skill-workshop plugin's manifest `agentSkillsDir`, and the drafts folder inside it that
+// proposal-era exports retire into. This migration runs even while the plugin is disabled.
+function resolveWorkshopSkillsDir(
+  config: OpenClawConfig,
+  agentId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return resolveAgentSkillsRoot({ config, agentId, dirName: "workshop-skills", env });
+}
+
+function resolveWorkshopDraftsDir(
+  config: OpenClawConfig,
+  agentId: string,
+  env?: NodeJS.ProcessEnv,
+): string {
+  return path.join(resolveWorkshopSkillsDir(config, agentId, env), ".drafts");
+}
 
 // Retired proposal storage: `<state>/skill-workshop/proposals/<id>/[generations/<uuid>/]PROPOSAL.md`
 // plus support files beside the draft; pre-SQLite bundles also carry `proposal.json`.
@@ -42,6 +66,8 @@ const MAX_EXPORT_FILE_BYTES = 8 * 1024 * 1024;
 // Legacy rollback JSON holds a whole SKILL.md plus every replaced support file.
 const MAX_ROLLBACK_BYTES = 128 * 1024 * 1024;
 const EXPORTED_STATUSES = new Set(["pending", "quarantined"]);
+// Where Doctor exported drafts before they became the Workshop drafts inbox.
+const EARLIER_EXPORT_DIR = path.join(".archive", ".retired-proposals");
 
 type RetiredProposal = {
   id: string;
@@ -142,14 +168,16 @@ function parseUnfinishedApply(
   return { proposalId, skillFile, previousContent, supportFiles };
 }
 
+const RETIRED_PROPOSAL_TABLES = [
+  "skill_workshop_proposals",
+  "skill_workshop_proposal_events",
+  "skill_workshop_proposal_rollbacks",
+  "skill_workshop_collection_reviews",
+] as const;
+
 function readDatabaseProposals(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
   const { db } = openOpenClawStateDatabase({ env });
-  const hasTables = [
-    "skill_workshop_proposals",
-    "skill_workshop_proposal_events",
-    "skill_workshop_proposal_rollbacks",
-    "skill_workshop_collection_reviews",
-  ].some((table) => tableExists(db, table));
+  const hasTables = RETIRED_PROPOSAL_TABLES.some((table) => tableExists(db, table));
   const proposals: RetiredProposal[] = [];
   const unfinishedApplies: UnfinishedApply[] = [];
   // Every proposal id with a row, whatever its status; their bundles need no sidecar.
@@ -297,7 +325,9 @@ async function appendLegacyJsonProposals(params: {
         ...readOptions,
         maxBytes: MAX_EXPORT_FILE_BYTES,
       });
-      const record: unknown = JSON.parse(read.buffer.toString("utf8"));
+      const record: unknown = JSON.parse(
+        decodeUtf8Input(read.buffer, `Skill Workshop proposal ${entry.name}`),
+      );
       if (!isRecord(record) || typeof record.status !== "string") {
         throw new Error("proposal record has no status");
       }
@@ -314,7 +344,9 @@ async function appendLegacyJsonProposals(params: {
             throw error;
           });
         if (rollback) {
-          const facts: unknown = JSON.parse(rollback.buffer.toString("utf8"));
+          const facts: unknown = JSON.parse(
+            decodeUtf8Input(rollback.buffer, `Skill Workshop rollback ${entry.name}`),
+          );
           if (!isRecord(facts)) {
             throw new Error("rollback is not an object");
           }
@@ -383,8 +415,8 @@ async function undoUnfinishedApply(apply: UnfinishedApply): Promise<boolean> {
   await restoreWorkspaceSkillMutation(restoration);
   // An undone create leaves only empty directories; remove them so the name is usable again.
   if (apply.previousContent === null) {
-    const entries = await fs.readdir(skillDir, { recursive: true, withFileTypes: true });
-    if (entries.every((entry) => entry.isDirectory())) {
+    const entries = await listDirectoryTreeStrict(skillDir);
+    if (entries.every(({ dirent }) => dirent.isDirectory())) {
       await fs.rm(skillDir, { recursive: true });
     }
   }
@@ -437,6 +469,88 @@ async function exportProposal(
   return "exported";
 }
 
+function earlierExportDirs(config: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
+  return listAgentIds(config)
+    .map((agentId) => path.join(resolveWorkshopSkillsDir(config, agentId, env), EARLIER_EXPORT_DIR))
+    .filter((from) => !isUpdateRehearsalReadOnlyPath(from, env));
+}
+
+/**
+ * Whether retirement has anything to do: a retired proposal table, legacy proposal files, or an
+ * earlier Doctor export still under the archive. It reads the state database's catalog through a
+ * read-only connection and never opens it for writing. PostgreSQL state is not read here.
+ */
+export function hasSkillWorkshopProposalRetirementWork(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  const { config, env } = params;
+  if (isStatePostgres()) {
+    throw new Error("Skill Workshop proposal tables are read through the PostgreSQL state owner.");
+  }
+  if (
+    existsSync(path.join(resolveStateDir(env), LEGACY_PROPOSALS_DIR)) ||
+    earlierExportDirs(config, env).some((from) => existsSync(from))
+  ) {
+    return true;
+  }
+  const databasePath = resolveOpenClawStateSqlitePath(env);
+  if (!existsSync(databasePath)) {
+    return false;
+  }
+  using db = openNodeSqliteDatabase(databasePath, { readOnly: true });
+  // The live catalog, not admitted schema facts an earlier connection published.
+  const tables = new Set(readMainTableList(db).map((row) => row.name));
+  return RETIRED_PROPOSAL_TABLES.some((table) => tables.has(table));
+}
+
+/** Moves drafts that earlier Doctor runs exported under the archive into the drafts inbox. */
+async function moveEarlierExports(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  assertCurrent: () => void,
+): Promise<MigrationMessages> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  for (const agentId of listAgentIds(config)) {
+    const from = path.join(resolveWorkshopSkillsDir(config, agentId, env), EARLIER_EXPORT_DIR);
+    if (isUpdateRehearsalReadOnlyPath(from, env)) {
+      continue;
+    }
+    let entries: string[];
+    try {
+      entries = await fs.readdir(from);
+    } catch (error) {
+      if (isMissingPathError(error)) {
+        continue;
+      }
+      throw error;
+    }
+    const to = resolveWorkshopDraftsDir(config, agentId, env);
+    await fs.mkdir(to, { recursive: true });
+    let moved = 0;
+    // Dot entries are interrupted export staging; an existing draft is never overwritten.
+    for (const entry of entries.filter((name) => !name.startsWith("."))) {
+      assertCurrent();
+      if (await pathExists(path.join(to, entry))) {
+        warnings.push(
+          `Kept Skill Workshop proposal export ${path.join(from, entry)}: a draft with the same id already exists in ${to}. Compare the two, keep the one you want in ${to}, and delete the other.`,
+        );
+        continue;
+      }
+      await fs.rename(path.join(from, entry), path.join(to, entry));
+      moved += 1;
+    }
+    await fs.rmdir(from).catch(() => undefined);
+    if (moved > 0) {
+      changes.push(
+        `Moved ${moved} exported Skill Workshop proposal draft${moved === 1 ? "" : "s"} from ${from} to ${to}; review them with /learn drafts.`,
+      );
+    }
+  }
+  return { changes, warnings };
+}
+
 async function retireProposals(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -446,8 +560,19 @@ async function retireProposals(params: {
   const stateDir = resolveStateDir(env);
   const legacyDirExists = await pathExists(path.join(stateDir, LEGACY_PROPOSALS_DIR));
   const inventory = readDatabaseProposals(config, env);
+  // A kept earlier export is reported, but never holds back retiring the proposal tables.
+  const earlier = await moveEarlierExports(config, env, assertCurrent);
+  const changes = earlier.changes;
+  const withEarlierWarnings = (warnings: string[]): MigrationMessages => {
+    const all = [...warnings, ...earlier.warnings];
+    return {
+      changes,
+      warnings: all,
+      ...(all.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
+    };
+  };
   if (!inventory.hasTables && !legacyDirExists) {
-    return { changes: [], warnings: [] };
+    return withEarlierWarnings([]);
   }
   if (legacyDirExists) {
     await appendLegacyJsonProposals({ stateDir, inventory, config, env });
@@ -455,12 +580,7 @@ async function retireProposals(params: {
   const warnings = inventory.failures;
   // Any unread or unexported proposal keeps the tables and files for the next Doctor run.
   let blocked = warnings.length > 0;
-  const changes: string[] = [];
-  const migrationResult = (): MigrationMessages => ({
-    changes,
-    warnings,
-    ...(warnings.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
-  });
+  const migrationResult = () => withEarlierWarnings(warnings);
   // Dropping the rollbacks forgets what an interrupted apply half-wrote, so undo that first.
   for (const apply of inventory.unfinishedApplies) {
     assertCurrent();
@@ -503,11 +623,7 @@ async function retireProposals(params: {
       );
       continue;
     }
-    const exportRoot = path.join(
-      resolveWorkshopSkillsDir(config, proposal.ownerAgentId, env),
-      ".archive",
-      ".retired-proposals",
-    );
+    const exportRoot = resolveWorkshopDraftsDir(config, proposal.ownerAgentId, env);
     // An update rehearsal must not write outside its copied state; the real Doctor run exports.
     if (isUpdateRehearsalReadOnlyPath(exportRoot, env)) {
       blocked = true;
@@ -537,7 +653,7 @@ async function retireProposals(params: {
   }
   for (const [exportRoot, count] of exportedByRoot) {
     changes.push(
-      `Exported ${count} pending Skill Workshop proposal draft${count === 1 ? "" : "s"} to ${exportRoot}${path.sep}.`,
+      `Exported ${count} pending Skill Workshop proposal draft${count === 1 ? "" : "s"} to ${exportRoot}${path.sep}; review them with /learn drafts.`,
     );
   }
   if (blocked) {
@@ -591,13 +707,20 @@ async function retireProposals(params: {
 
 /**
  * Exports pending and quarantined Skill Workshop proposal drafts into each owning agent's
- * Workshop archive, then drops the retired proposal tables and legacy proposal files.
+ * Workshop drafts inbox, then drops the retired proposal tables and legacy proposal files.
  */
 export async function retireSkillWorkshopProposals(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<MigrationMessages> {
   const env = params.env ?? process.env;
+  // Read first: a store with nothing to retire is never opened for writing or locked.
+  if (
+    !isStatePostgres() &&
+    !hasSkillWorkshopProposalRetirementWork({ config: params.config, env })
+  ) {
+    return { changes: [], warnings: [] };
+  }
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   if (maintenance?.ownsSchemaMaintenance) {
     return await maintenance.run(() =>

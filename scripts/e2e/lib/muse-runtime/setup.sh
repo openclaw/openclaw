@@ -23,7 +23,7 @@ npm install --prefix /tmp/plugins/muse --omit=dev --ignore-scripts --no-audit --
 # The candidate plugins are this checkout's sources, so the local-source trust prompt is expected.
 openclaw_e2e_fixture_plugin_command openclaw -- plugins install --link --force /tmp/plugins/meta
 openclaw_e2e_fixture_plugin_command openclaw -- plugins install --link --force /tmp/plugins/muse
-if [ "$MODE" = deterministic ]; then
+if [ "$MODE" != live ]; then
   cat >"$HOME/.local/bin/muse" <<'BIN'
 #!/usr/bin/env bash
 exec node /tmp/plugins/muse/src/test-support/fake-muse.mjs "$@"

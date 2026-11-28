@@ -6,6 +6,7 @@ import { composeSessionEntryCommitGuards } from "openclaw/plugin-sdk/session-bin
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-profile.js";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
+import type { CodexPluginConfig } from "./app-server/config-contracts.js";
 import {
   resolveCodexSessionBinding,
   sessionBindingIdentity,
@@ -154,7 +155,7 @@ export async function resolvePreparedCodexCommandAuthority(
 export async function resolveCommandAppServerContext(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
 ) {
   const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
   try {
@@ -202,7 +203,7 @@ export async function resolveCommandAppServerContext(
 export async function resolveCommandAppServerScope(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
 ): Promise<CommandAppServerScope> {
   return (await resolveCommandAppServerContext(deps, ctx, pluginConfig)).scope;
 }

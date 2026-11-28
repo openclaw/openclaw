@@ -260,7 +260,7 @@ defineDiscordVoiceTests(
         original.bridgeParams.onTranscript?.("assistant", "Budget comes first.", true);
         agentCommandMock.mockImplementationOnce(async () => {
           const input = lastAgentCommandArgs();
-          expect(input.senderIsOwner).toBe(false);
+          expect(input).toMatchObject({ runContext: { senderId: "u-guest" } });
           expect(bindRun).toHaveBeenCalledOnce();
           const binding = bindRun.mock.calls[0]![0];
           expect(input.runId).toBe(binding.runId);
@@ -774,7 +774,7 @@ defineDiscordVoiceTests(
       }
     });
 
-    it("closes candidates on cancellation and aborts retained delegation when the room leaves", async () => {
+    it("closes candidates on cancellation and aborts retained delegation when the manager stops", async () => {
       useNativeVoices();
       const { entry, manager } = await createJoinedAgentProxyFixture();
       const connection = createDeferred<void>();
@@ -808,7 +808,7 @@ defineDiscordVoiceTests(
         const consultation = original.bridgeParams.runAgentConsult!({
           prompt: "Switch voice and check the agenda.",
         });
-        const abandoned = expect(consultation).rejects.toThrow("Discord voice call closed");
+        const abandoned = expect(consultation).rejects.toThrow("Discord voice manager stopped");
         await vi.waitFor(() => expect(selectionOwner().read()).toMatchObject({ voice: "cedar" }));
         await manager.destroy();
         expect(sourceSignal?.aborted).toBe(true);

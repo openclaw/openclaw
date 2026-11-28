@@ -65,92 +65,6 @@ function isUnsupportedModelResult(result: ProbeResult): boolean {
   );
 }
 
-async function probeZaiChatCompletions(params: {
-  baseUrl: string;
-  apiKey: string;
-  modelId: string;
-  timeoutMs: number;
-  fetchFn?: typeof fetch;
-}): Promise<ProbeResult> {
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs,
-    label: "Z.AI endpoint check",
-  });
-  const resolveTimeoutMs = createProviderOperationTimeoutResolver({
-    deadline,
-    defaultTimeoutMs: params.timeoutMs,
-  });
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), params.timeoutMs);
-  timeout.unref?.();
-  let res: Response | undefined;
-  try {
-    const fetchFn = params.fetchFn ?? globalThis.fetch;
-    res = await fetchFn(`${params.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${params.apiKey}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: params.modelId,
-        stream: false,
-        max_tokens: 1,
-        messages: [{ role: "user", content: "ping" }],
-      }),
-      signal: controller.signal,
-    });
-
-    if (res.ok) {
-      return { ok: true };
-    }
-
-    let errorCode: string | undefined;
-    let errorMessage: string | undefined;
-    try {
-      // Invalid UTF-8 must not become an endpoint-classification signal.
-      const json = await readProviderJsonResponse<{
-        error?: { code?: unknown; message?: unknown };
-        code?: unknown;
-        msg?: unknown;
-        message?: unknown;
-      }>(res, "Z.AI endpoint check", {
-        maxBytes: ZAI_DETECT_ERROR_BODY_MAX_BYTES,
-        // Resolve immediately before body consumption so headers and every
-        // body shape share one operation budget, including slow-drip streams.
-        timeoutMs: resolveTimeoutMs,
-        // The probe's deadline owns the budget, including caller timeouts over 30s.
-        chunkTimeoutMs: 0,
-        onTimeout: ({ timeoutMs }) =>
-          new Error(`Z.AI check error body timed out after ${timeoutMs}ms`),
-        onOverflow: ({ maxBytes }) =>
-          new Error(`Z.AI check error body exceeded size limit (${maxBytes} bytes)`),
-      });
-      const code = json?.error?.code ?? json?.code;
-      const msg = json?.error?.message ?? json?.msg ?? json?.message;
-      if (typeof code === "string") {
-        errorCode = code;
-      } else if (typeof code === "number") {
-        errorCode = String(code);
-      }
-      if (typeof msg === "string") {
-        errorMessage = msg;
-      }
-    } catch {
-      // ignore malformed / stalled / oversized error bodies
-    }
-
-    return { ok: false, status: res.status, errorCode, errorMessage };
-  } catch {
-    return { ok: false };
-  } finally {
-    clearTimeout(timeout);
-    if (res?.bodyUsed !== true) {
-      await res?.body?.cancel().catch(() => undefined);
-    }
-  }
-}
-
 export async function detectZaiEndpoint(params: {
   apiKey: string;
   endpoint?: ZaiEndpointId;
@@ -163,6 +77,87 @@ export async function detectZaiEndpoint(params: {
   }
 
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 5_000);
+  async function probeZaiChatCompletions(baseUrl: string, modelId: string): Promise<ProbeResult> {
+    const { apiKey, fetchFn: providedFetchFn } = params;
+    const deadline = createProviderOperationDeadline({
+      timeoutMs,
+      label: "Z.AI endpoint check",
+    });
+    const resolveTimeoutMs = createProviderOperationTimeoutResolver({
+      deadline,
+      defaultTimeoutMs: timeoutMs,
+    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    timeout.unref?.();
+    let res: Response | undefined;
+    try {
+      const fetchFn = providedFetchFn ?? globalThis.fetch;
+      res = await fetchFn(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: modelId,
+          stream: false,
+          max_tokens: 1,
+          messages: [{ role: "user", content: "ping" }],
+        }),
+        signal: controller.signal,
+      });
+
+      if (res.ok) {
+        return { ok: true };
+      }
+
+      let errorCode: string | undefined;
+      let errorMessage: string | undefined;
+      try {
+        // Invalid UTF-8 must not become an endpoint-classification signal.
+        const json = await readProviderJsonResponse<{
+          error?: { code?: unknown; message?: unknown };
+          code?: unknown;
+          msg?: unknown;
+          message?: unknown;
+        }>(res, "Z.AI endpoint check", {
+          maxBytes: ZAI_DETECT_ERROR_BODY_MAX_BYTES,
+          // Resolve immediately before body consumption so headers and every
+          // body shape share one operation budget, including slow-drip streams.
+          timeoutMs: resolveTimeoutMs,
+          // The probe's deadline owns the budget, including caller timeouts over 30s.
+          chunkTimeoutMs: 0,
+          onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+            new Error(`Z.AI check error body timed out after ${bodyTimeoutMs}ms`),
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Z.AI check error body exceeded size limit (${maxBytes} bytes)`),
+        });
+        const code = json?.error?.code ?? json?.code;
+        const msg = json?.error?.message ?? json?.msg ?? json?.message;
+        if (typeof code === "string") {
+          errorCode = code;
+        } else if (typeof code === "number") {
+          errorCode = String(code);
+        }
+        if (typeof msg === "string") {
+          errorMessage = msg;
+        }
+      } catch {
+        // ignore malformed / stalled / oversized error bodies
+      }
+
+      return { ok: false, status: res.status, errorCode, errorMessage };
+    } catch {
+      return { ok: false };
+    } finally {
+      clearTimeout(timeout);
+      if (res?.bodyUsed !== true) {
+        await res?.body?.cancel().catch(() => undefined);
+      }
+    }
+  }
+
   const probeCandidates = (() => {
     const general = PROBE_ENDPOINTS.map<ProbeCandidate>(({ endpoint, baseUrl }) => ({
       endpoint,
@@ -175,13 +170,13 @@ export async function detectZaiEndpoint(params: {
         endpoint: `coding-${endpoint}`,
         baseUrl: codingBaseUrl,
         modelId: ZAI_CODING_DEFAULT_MODEL_ID,
-        note: `Verified GLM-5.3 on coding-${endpoint} endpoint.`,
+        note: `Verified GLM-5.4 on coding-${endpoint} endpoint.`,
       },
       {
         endpoint: `coding-${endpoint}`,
         baseUrl: codingBaseUrl,
         modelId: "glm-5.1",
-        note: `Verified GLM-5.1 on coding-${endpoint} endpoint; GLM-5.3 is unavailable.`,
+        note: `Verified GLM-5.1 on coding-${endpoint} endpoint; GLM-5.4 is unavailable.`,
         fallback: true,
       },
     ]);
@@ -189,7 +184,7 @@ export async function detectZaiEndpoint(params: {
       endpoint: `coding-${endpoint}`,
       baseUrl: codingBaseUrl,
       modelId: "glm-4.7",
-      note: `Coding Plan${endpoint === "cn" ? " CN" : ""} endpoint verified, but this key/plan does not expose GLM-5.3 or GLM-5.1 there. Defaulting to GLM-4.7.`,
+      note: `Coding Plan${endpoint === "cn" ? " CN" : ""} endpoint verified, but this key/plan does not expose GLM-5.4 or GLM-5.1 there. Defaulting to GLM-4.7.`,
       fallback: true,
     }));
 
@@ -214,13 +209,7 @@ export async function detectZaiEndpoint(params: {
     ) {
       continue;
     }
-    const result = await probeZaiChatCompletions({
-      baseUrl: candidate.baseUrl,
-      apiKey: params.apiKey,
-      modelId: candidate.modelId,
-      timeoutMs,
-      fetchFn: params.fetchFn,
-    });
+    const result = await probeZaiChatCompletions(candidate.baseUrl, candidate.modelId);
     if (result.ok) {
       return {
         endpoint: candidate.endpoint,

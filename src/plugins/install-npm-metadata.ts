@@ -1,23 +1,18 @@
-import {
-  loadNpmPackageVersions,
-  resolveNpmSpecMetadata,
-  type NpmSpecResolution,
-} from "../infra/install-source-utils.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { loadNpmPackageVersions, resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import {
   isPrereleaseSemverVersion,
+  type NpmSpecResolution,
   type ParsedRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
 import { comparePackageUpdateVersions } from "../infra/package-update-utils.js";
-import {
-  validateOpenClawPackageInstallCompatibility,
-  type PluginInstallRuntime,
-} from "./install-shared.js";
+import type { PluginInstallRuntime } from "./install-shared.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   type PluginInstallFailureResult,
   type PluginInstallLogger,
 } from "./install-types.js";
-import type { OpenClawPackageManifest } from "./manifest.js";
+import { validateOpenClawPackageInstallCompatibility } from "./package-compat.js";
 
 export function isNpmPackageNotFoundMessage(error: string): boolean {
   const normalized = error.trim();
@@ -138,9 +133,9 @@ export function validateNpmResolutionCompatibility(params: {
   resolution: NpmSpecResolution;
 }): PluginInstallFailureResult | null {
   return validateOpenClawPackageInstallCompatibility({
-    runtime: params.runtime,
+    currentHostVersion: params.runtime.resolveCompatibilityHostVersion(),
     pluginId: params.expectedPluginId ?? params.resolution.name ?? params.parsedSpec.name,
-    packageMetadata: params.resolution.packageOpenClaw as OpenClawPackageManifest | undefined,
+    packageMetadata: params.resolution.packageOpenClaw,
   });
 }
 
@@ -196,7 +191,7 @@ export async function resolveLatestCompatibleNpmResolution(params: {
     });
     if (!metadataResult.ok) {
       params.logger.warn?.(
-        `Could not inspect ${spec} while looking for a compatible plugin version: ${metadataResult.error}`,
+        terminalText`Could not inspect ${spec} while looking for a compatible plugin version: ${metadataResult.error}`,
       );
       continue;
     }
@@ -208,7 +203,7 @@ export async function resolveLatestCompatibleNpmResolution(params: {
     });
     if (!compatibilityError) {
       params.logger.warn?.(
-        `Resolved ${params.parsedSpec.raw} to ${params.currentResolution.resolvedSpec ?? currentVersion}, but that version is incompatible with this OpenClaw runtime; using newest compatible ${metadataResult.metadata.resolvedSpec ?? spec}.`,
+        terminalText`Resolved ${params.parsedSpec.raw} to ${params.currentResolution.resolvedSpec ?? currentVersion}, but that version is incompatible with this OpenClaw runtime; using newest compatible ${metadataResult.metadata.resolvedSpec ?? spec}.`,
       );
       return metadataResult.metadata;
     }

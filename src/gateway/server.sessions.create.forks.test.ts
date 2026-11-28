@@ -2,13 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, onTestFinished, test, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import { prepareDiscoveredContextTokenCache } from "../agents/context-cache-projection.js";
-import { replaceDiscoveredContextTokenCache } from "../agents/context-cache.js";
+import {
+  providerContextTokenCacheKey,
+  replaceDiscoveredContextTokenCache,
+} from "../agents/context-cache.js";
 import { resetContextWindowCacheForTest } from "../agents/context.test-support.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { SessionCatalogProvider } from "../plugins/session-catalog.js";
@@ -16,17 +18,20 @@ import {
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import {
-  setupSessionCreateTestHarness,
+  forkableClaudeCliBackend,
+  registerForkableCliBackend,
+} from "./server.sessions.create.forks.test-support.js";
+import {
+  setupSessionCreateHandlerTestHarness,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import type { GatewaySessionCommitResult } from "./session-create-service.types.js";
-import {
-  agentDiscoveryMock,
-  embeddedRunMock,
-  testState,
-  writeSessionStore,
-} from "./test-helpers.js";
+import { agentDiscoveryMock, testState, writeSessionStore } from "./test-helpers.js";
+import { createClaudeCliRegistrationFixture } from "./test-helpers.plugin-registry.js";
 import {
   createCompactedSessionFixture,
   sessionStoreEntry,
@@ -35,33 +40,19 @@ import {
   getGatewayConfigModule,
 } from "./test/server-sessions.test-helpers.js";
 
-const forkableClaudeCliBackend = {
-  id: "claude-cli",
-  pluginId: "anthropic",
-  modelProvider: "anthropic",
-  config: { command: "claude", forkArg: "--fork-session", resumeAtArg: "--resume-session-at" },
-  bundleMcp: false,
-  ownsNativeCompaction: false,
-} satisfies ReturnType<
-  (typeof import("../plugins/cli-backends.runtime.js"))["resolveRuntimeCliBackends"]
->[number];
+const { createSessionStoreDir } = setupSessionCreateHandlerTestHarness();
 
-const { createSessionStoreDir } = setupSessionCreateTestHarness();
-
-test("sessions.create parents dashboard sessions to agent main by default", async () => {
+test("sessions.create keeps ordinary dashboard chats independent of Home", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.sessionConfig = undefined;
   testState.agentConfig = { model: { primary: "openai/current-model" } };
-  await writeSessionStore({
-    entries: {
-      "agent:main:main": {
-        ...sessionStoreEntry("sess-grouping-parent"),
-        providerOverride: "anthropic",
-        modelOverride: "parent-model",
-        modelOverrideSource: "user",
-      },
-    },
-  });
+  const home = {
+    ...sessionStoreEntry("sess-home"),
+    providerOverride: "anthropic",
+    modelOverride: "parent-model",
+    modelOverrideSource: "user" as const,
+  };
+  await writeSessionStore({ entries: { "agent:main:main": home } });
 
   const created = await directSessionReq<{
     key?: string;
@@ -71,17 +62,11 @@ test("sessions.create parents dashboard sessions to agent main by default", asyn
 
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
-  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
-  // Auto-parented operator sessions must stay depth-zero roots. This preserves
-  // their operator identity and makes explicit finite spawn-depth caps apply
-  // from the correct origin.
+  expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
   expect(created.payload?.entry?.spawnDepth).toBe(0);
   const key = requireNonEmptyString(created.payload?.key, "created session key");
   const child = expectDefined(loadSessionEntry({ sessionKey: key, storePath }), "created session");
-  const parent = expectDefined(
-    loadSessionEntry({ sessionKey: "agent:main:main", storePath }),
-    "grouping parent session",
-  );
+  expect(child.parentSessionKey).toBeUndefined();
   const { createModelSelectionState } = await import("../auto-reply/reply/model-selection.js");
   const cfg = getRuntimeConfig();
   const reply = await createModelSelectionState({
@@ -89,7 +74,7 @@ test("sessions.create parents dashboard sessions to agent main by default", asyn
     agentId: "main",
     agentCfg: cfg.agents?.defaults,
     sessionEntry: child,
-    sessionStore: { "agent:main:main": parent },
+    sessionStore: { "agent:main:main": home },
     sessionKey: key,
     parentSessionKey: child.parentSessionKey,
     defaultProvider: "openai",
@@ -109,8 +94,6 @@ test("sessions.create parents dashboard sessions to agent main by default", asyn
 });
 
 test.each([
-  { params: { agentId: "main", spawnDepth: 1 }, message: "spawnDepth requires parentSessionKey" },
-  { params: { fork: true }, message: "fork requires parentSessionKey" },
   {
     params: { agentId: "ops", parentSessionKey: "agent:main:missing" },
     message: "unknown parent session: agent:main:missing",
@@ -124,10 +107,6 @@ test.each([
     },
     message: "sessions.create key must differ from parentSessionKey",
   },
-  {
-    params: { parentSessionKey: "main", forkFrom: "last-completed" },
-    message: "forkFrom requires fork=true",
-  },
 ] as const)(
   "sessions.create rejects invalid child intent: $message",
   async ({ params, message }) => {
@@ -140,133 +119,6 @@ test.each([
   },
 );
 
-test("sessions.create forks the parent transcript into the new session", async () => {
-  cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [forkableClaudeCliBackend],
-    resolvePluginSetupCliBackend: () => undefined,
-  });
-  onTestFinished(() => cliBackendsTesting.resetDepsForTest());
-  const { dir, storePath } = await createSessionStoreDir();
-  testState.sessionConfig = { scope: "per-sender" };
-  const parent = await createCompactedSessionFixture(dir);
-  const projectRoot = path.join(dir, "qa-writer");
-  await fs.mkdir(projectRoot);
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry(parent.sessionId, {
-        sessionFile: parent.sessionFile,
-        projectId: "qa-writer",
-        spawnedCwd: projectRoot,
-        sessionRoot: projectRoot,
-        totalTokens: 123,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-        cliSessionBindings: {
-          "claude-cli": { sessionId: "native-parent", resumeCheckpointId: "parent-checkpoint" },
-        },
-      }),
-    },
-  });
-  await seedSessionTranscript({
-    sessionId: parent.sessionId,
-    sessionKey: "agent:main:main",
-    storePath,
-    messages: [
-      { role: "user", content: "before compaction" },
-      { role: "assistant", content: [{ type: "text", text: "working on it" }] },
-    ],
-  });
-
-  const created = await directSessionReq<{
-    key?: string;
-    sessionId?: string;
-    entry?: {
-      sessionFile?: string;
-      parentSessionKey?: string;
-      forkSource?: { sessionKey: string; sessionId: string };
-      forkedFromParent?: boolean;
-      totalTokens?: number;
-      totalTokensFresh?: boolean;
-    };
-  }>("sessions.create", {
-    agentId: "main",
-    parentSessionKey: "main",
-    key: "agent:main:dashboard:fork-publication",
-    fork: true,
-  });
-
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
-  expect(created.payload?.entry?.forkSource).toEqual({
-    sessionKey: "agent:main:main",
-    sessionId: parent.sessionId,
-  });
-  expect(created.payload?.entry?.forkedFromParent).toBe(true);
-  expect(created.payload?.entry?.totalTokens).toBeUndefined();
-  expect(created.payload?.entry?.totalTokensFresh).toBe(false);
-  expect(created.payload?.sessionId).not.toBe(parent.sessionId);
-  expect(created.payload?.entry).not.toHaveProperty("sessionFile");
-  const readMessages = async (scope: {
-    sessionFile?: string;
-    sessionId: string;
-    sessionKey: string;
-    storePath: string;
-  }) =>
-    (await loadTranscriptEvents(scope))
-      .filter((entry): entry is { type: "message"; message: unknown } => {
-        return (
-          entry !== null &&
-          typeof entry === "object" &&
-          "type" in entry &&
-          entry.type === "message" &&
-          "message" in entry
-        );
-      })
-      .map((entry) => entry.message);
-  const forkedSessionId = requireNonEmptyString(created.payload?.sessionId, "forked session id");
-  expect(
-    await readMessages({
-      sessionId: forkedSessionId,
-      sessionKey: created.payload?.key ?? "",
-      storePath,
-    }),
-  ).toEqual(
-    await readMessages({
-      sessionId: parent.sessionId,
-      sessionKey: "agent:main:main",
-      storePath,
-    }),
-  );
-
-  const key = requireNonEmptyString(created.payload?.key, "forked session key");
-  expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
-    projectId: "qa-writer",
-    spawnedCwd: projectRoot,
-    sessionRoot: projectRoot,
-    sessionId: created.payload?.sessionId,
-    cliSessionBindings: {
-      "claude-cli": {
-        sessionId: "native-parent",
-        resumeCheckpointId: "parent-checkpoint",
-        forkNextResume: true,
-      },
-    },
-    forkSource: {
-      sessionKey: "agent:main:main",
-      sessionId: parent.sessionId,
-    },
-  });
-  expect(loadSessionEntry({ sessionKey: key, storePath })).not.toHaveProperty("forkedFromParent");
-  const listed = await directSessionReq<{
-    sessions?: Array<{
-      key: string;
-      forkedFromParent?: boolean;
-    }>;
-  }>("sessions.list", {});
-  expect(listed.payload?.sessions?.find((row) => row.key === key)?.forkedFromParent).toBe(true);
-  testState.sessionConfig = undefined;
-});
-
 async function seedSizedForkParent(dir: string, entry: Parameters<typeof sessionStoreEntry>[1]) {
   const parent = await createCompactedSessionFixture(dir);
   await writeSessionStore({
@@ -274,7 +126,7 @@ async function seedSizedForkParent(dir: string, entry: Parameters<typeof session
       main: sessionStoreEntry(parent.sessionId, {
         sessionFile: parent.sessionFile,
         totalTokensFresh: true,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         ...entry,
       }),
     },
@@ -292,7 +144,7 @@ test.each<{
   configuredTokens?: number;
 }>([
   {
-    name: "provider-scoped fallback",
+    name: "visible spawn with provider-scoped fallback",
     model: "unresolved-model",
     provider: "unresolved-provider",
     tokens: 200_000,
@@ -300,7 +152,7 @@ test.each<{
     limit: "200000/100000 tokens",
   },
   {
-    name: "inherited large model",
+    name: "visible spawn with inherited large model",
     model: "gpt-large",
     provider: "openai",
     tokens: 391_869,
@@ -308,20 +160,19 @@ test.each<{
     limit: undefined,
   },
   {
-    name: "explicit small model",
-    model: "gpt-small",
-    provider: "openai",
-    tokens: 150_000,
-    window: 128_000,
-    limit: "150000/128000 tokens",
-  },
-  {
-    name: "selected window clamps configured capacity",
+    name: "visible spawn with selected window clamping configured capacity",
     model: "gpt-selectable",
     provider: "openai",
     tokens: 300_000,
     window: 200_000,
     limit: "300000/200000 tokens",
+  },
+  {
+    name: "explicit fork to a registered CLI provider",
+    model: "cli-model",
+    provider: "claude-cli",
+    tokens: 150_000,
+    limit: "150000/100000 tokens",
   },
   {
     name: "missing native capacity beside API inventory",
@@ -361,14 +212,18 @@ test.each<{
       agentDiscoveryMock.models = [];
       testState.sessionConfig = undefined;
     });
+    const cli = provider === forkableClaudeCliBackend.id;
+    if (cli) {
+      registerForkableCliBackend();
+    }
+    const visibleSpawn = !cli && !nativeCatalog;
     const selectable = model === "gpt-selectable";
     if (!window) {
       replaceDiscoveredContextTokenCache(
-        await prepareDiscoveredContextTokenCache({
-          modelCatalog: {
-            entries: [{ id: model, provider: "other-provider", contextTokens: 300_000 }],
-          },
-        }),
+        new Map([
+          [model, 300_000],
+          [providerContextTokenCacheKey("other-provider", model), 300_000],
+        ]),
       );
     } else {
       agentDiscoveryMock.models = [
@@ -389,10 +244,14 @@ test.each<{
       ];
     }
     if (nativeCatalog) {
+      if (!window) {
+        throw new Error("native catalog fixture requires a context window");
+      }
       replaceDiscoveredContextTokenCache(
-        await prepareDiscoveredContextTokenCache({
-          modelCatalog: { entries: agentDiscoveryMock.models },
-        }),
+        new Map([
+          [model, window],
+          [providerContextTokenCacheKey(provider, model), window],
+        ]),
       );
       if (nativeCatalog === "unknown") {
         agentDiscoveryMock.models.push({
@@ -422,12 +281,28 @@ test.each<{
       "sessions.create",
       {
         agentId: "main",
-        parentSessionKey: "main",
+        parentSessionKey: "agent:main:main",
         fork: true,
+        ...(visibleSpawn ? { spawnDepth: 1 } : {}),
         ...(!inherited ? { model: `${provider}/${model}` } : {}),
         ...(selectable ? { contextWindow: "200k" } : {}),
       },
-      selectable || configuredTokens ? { context: { getRuntimeConfig: () => cfg } } : undefined,
+      {
+        ...(selectable || configuredTokens ? { context: { getRuntimeConfig: () => cfg } } : {}),
+        client: visibleSpawn
+          ? {
+              connect: gatewayConnect(["operator.write"]),
+              internal: {
+                syntheticClient: true,
+                sessionCreation: {
+                  via: "spawn",
+                  actor: { type: "agent", id: "main" },
+                  requesterSessionKey: "agent:main:main",
+                },
+              },
+            }
+          : undefined,
+      },
     );
     expect(created.ok, JSON.stringify(created.error)).toBe(limit === undefined);
     if (limit) {
@@ -445,11 +320,12 @@ test.each([undefined, "last-completed"] as const)(
     await writeSessionStore({
       entries: {
         main: sessionStoreEntry(parentSessionId, {
+          visibility: "draft",
           // The in-flight tail can make the whole parent exceed the cap; only the
           // selected completed prefix should govern this fork.
           totalTokens: 200_000,
           totalTokensFresh: true,
-          totalTokensVersion: 1,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         }),
       },
     });
@@ -472,7 +348,19 @@ test.each([undefined, "last-completed"] as const)(
         },
       ],
     });
-    embeddedRunMock.activeIds.add(parentSessionId);
+    const parentOperation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: parentSessionId,
+      agentId: "main",
+      resetTriggered: false,
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey: "agent:main:main",
+        incarnation: parentSessionId,
+        agentId: "main",
+      }),
+    });
+    parentOperation.setPhase("running");
     try {
       const created = await directSessionReq<{ key: string; sessionId: string }>(
         "sessions.create",
@@ -494,6 +382,9 @@ test.each([undefined, "last-completed"] as const)(
         return;
       }
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      expect(
+        loadSessionEntry({ sessionKey: created.payload?.key ?? "", storePath })?.visibility,
+      ).toBe("draft");
       const messages = await loadTranscriptEvents({
         sessionId: created.payload?.sessionId ?? "",
         sessionKey: created.payload?.key ?? "",
@@ -514,7 +405,7 @@ test.each([undefined, "last-completed"] as const)(
         expect.objectContaining({ role: "assistant", stopReason: "stop" }),
       ]);
     } finally {
-      embeddedRunMock.activeIds.delete(parentSessionId);
+      parentOperation.complete();
       testState.sessionConfig = undefined;
     }
   },
@@ -531,16 +422,7 @@ function installSessionCatalog(
 ) {
   const registry = createEmptyPluginRegistry();
   if (cli) {
-    registry.cliBackends.push({
-      pluginId: "anthropic",
-      source: "test",
-      backend: {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        config: { command: "claude" },
-        bundleMcp: false,
-      },
-    });
+    registry.cliBackends.push(createClaudeCliRegistrationFixture());
   }
   registry.sessionCatalogs.push({
     pluginId: "anthropic",
@@ -655,50 +537,40 @@ test.each(["cli", "enabled", "disabled"] as const)(
   },
 );
 
-test.each(["caller key", "unauthorized agent"])(
-  "sessions.create rejects a catalog target with %s",
-  async (conflict) => {
-    const { storePath } = await createSessionStoreDir();
-    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, research: {} } };
-    const existing = sessionStoreEntry("sess-existing-catalog-target", {
+test("sessions.create rejects a catalog target with a caller key", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentsConfig = { ownership: "explicit", entries: { main: {}, research: {} } };
+  const existing = sessionStoreEntry("sess-existing-catalog-target", {
+    providerOverride: "openai",
+    modelOverride: "gpt-existing",
+  });
+  await writeSessionStore({ entries: { main: existing } });
+  installSessionCatalog(() => ({
+    model: "anthropic/claude-opus-4-8",
+    agentRuntime: "claude-cli",
+  }));
+  try {
+    const created = await directSessionReq("sessions.create", {
+      catalogId: "claude",
+      key: "main",
+      agentId: "main",
+    });
+    expect(created).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "sessions.create catalogId cannot include key" },
+    });
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
+    ).toMatchObject({
+      sessionId: existing.sessionId,
       providerOverride: "openai",
       modelOverride: "gpt-existing",
     });
-    await writeSessionStore({ entries: { main: existing } });
-    const resolveCreateSession = vi.fn(({ agentId }: { agentId?: string }) =>
-      agentId === "research"
-        ? undefined
-        : { model: "anthropic/claude-opus-4-8", agentRuntime: "claude-cli" },
-    );
-    installSessionCatalog(resolveCreateSession);
-    try {
-      const created = await directSessionReq("sessions.create", {
-        catalogId: "claude",
-        ...(conflict === "caller key" ? { key: "main", agentId: "main" } : { agentId: "research" }),
-      });
-      expect(created).toMatchObject({
-        ok: false,
-        error:
-          conflict === "caller key"
-            ? { code: "INVALID_REQUEST", message: "sessions.create catalogId cannot include key" }
-            : { code: "UNAVAILABLE", message: "session catalog claude cannot create sessions" },
-      });
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
-      ).toMatchObject({
-        sessionId: existing.sessionId,
-        providerOverride: "openai",
-        modelOverride: "gpt-existing",
-      });
-      if (conflict === "unauthorized agent") {
-        expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "research" });
-      }
-    } finally {
-      testState.agentsConfig = undefined;
-      setActivePluginRegistry(createEmptyPluginRegistry());
-    }
-  },
-);
+  } finally {
+    testState.agentsConfig = undefined;
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  }
+});
 
 test.each<{
   name: string;
@@ -765,8 +637,6 @@ test.each<{
       "contextTokens",
       "inputTokens",
       "outputTokens",
-      "totalTokens",
-      "totalTokensFresh",
       "contextBudgetStatus",
     ],
     resolved: { modelProvider: "codex", model: "gpt-5.5" },
@@ -799,7 +669,7 @@ test.each<{
   },
 ])(
   "sessions.create inherits only durable selection: $name",
-  async ({ name, defaults, parent, inherited, absent, resolved }) => {
+  async ({ defaults, parent, inherited, absent, resolved }) => {
     const { storePath } = await createSessionStoreDir();
     testState.agentConfig = { model: { primary: defaults } };
     await writeSessionStore({ entries: { main: sessionStoreEntry("sess-parent", parent) } });
@@ -813,19 +683,16 @@ test.each<{
     const key = requireNonEmptyString(created.payload?.key, "created session key");
     const stored = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
     for (const entry of [created.payload?.entry, stored]) {
-      expect(entry).toMatchObject({ parentSessionKey: "agent:main:main", ...inherited });
+      expect(entry).toMatchObject({
+        parentSessionKey: "agent:main:main",
+        ...inherited,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      });
       for (const field of absent) {
         expect(entry?.[field], field).toBeUndefined();
       }
-    }
-    if (name === "explicit selection") {
-      const overridden = await directSessionReq<CreatedSession>("sessions.create", {
-        agentId: "main",
-        fastMode: false,
-        parentSessionKey: "main",
-      });
-      expect(overridden.ok, JSON.stringify(overridden.error)).toBe(true);
-      expect(overridden.payload?.entry?.fastMode).toBe(false);
     }
   },
 );

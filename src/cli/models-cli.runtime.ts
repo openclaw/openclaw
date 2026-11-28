@@ -14,7 +14,7 @@ export function resolveModelAgentOption(command: Command): string | undefined {
 }
 
 /** `models` subcommands that operate on global state only, never per-agent. */
-export type GlobalOnlyModelCommandName =
+type GlobalOnlyModelCommandName =
   | "set"
   | "set-image"
   | "scan"
@@ -22,7 +22,7 @@ export type GlobalOnlyModelCommandName =
   | "aliases add"
   | "aliases remove"
   | "refresh"
-  | `${"fallbacks" | "image-fallbacks"} ${"add" | "remove" | "clear"}`;
+  | `${"fallbacks" | "image-fallbacks"} ${"add" | "remove" | "clear" | "list"}`;
 
 export function rejectAgentScopedModelCommand(
   command: Command,

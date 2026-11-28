@@ -1,3 +1,5 @@
+/// <reference lib="es2024.collection" />
+
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -59,7 +61,7 @@ export function collectKnownSessionGroups(
   const catalogSet = new Set(catalog);
   const discovered = rows
     .map((row) => normalizeOptionalString(row.category))
-    .filter((name): name is string => typeof name === "string" && !catalogSet.has(name))
+    .filter((name): name is string => name !== undefined && !catalogSet.has(name))
     .toSorted((a, b) => a.localeCompare(b));
   return [...catalog, ...new Set(discovered)];
 }
@@ -131,7 +133,7 @@ function createDateGroupResolver(now: number): (row: GatewaySessionRow) => strin
   const startOfYesterday = startOfDay(1);
   const startOfWeek = startOfDay(6);
   return ({ updatedAt }) => {
-    if (typeof updatedAt !== "number" || !Number.isFinite(updatedAt) || updatedAt <= 0) {
+    if (updatedAt == null || updatedAt <= 0) {
       return UNGROUPED_ID;
     }
     if (updatedAt >= startOfToday) {
@@ -172,20 +174,12 @@ export function groupSessionRows(params: {
   rows: readonly GatewaySessionRow[];
   mode: SessionsGroupBy;
   knownCategories?: readonly string[];
-  now?: number;
 }): SessionRowGroup[] {
-  const now = params.now ?? Date.now();
   const groupId =
     params.mode === "date"
-      ? createDateGroupResolver(now)
+      ? createDateGroupResolver(Date.now())
       : (row: GatewaySessionRow) => resolveSessionGroupId(row, params.mode);
-  const byId = new Map<string, GatewaySessionRow[]>();
-  for (const row of params.rows) {
-    const id = groupId(row);
-    const bucket = byId.get(id) ?? [];
-    bucket.push(row);
-    byId.set(id, bucket);
-  }
+  const byId = Map.groupBy(params.rows, groupId);
   const ids = orderedGroupIds(params.mode, byId, params.knownCategories ?? []);
   return ids.map((id) => ({ id, rows: byId.get(id) ?? [] }));
 }
@@ -303,9 +297,28 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   if (grouping !== "category") {
     // Derived groups sort ahead of persisted zones; each group's first row owns its metadata.
     sections.push(
-      ...[...grouped.values()].toSorted((left, right) =>
-        compareSidebarGroups(left, right, options.selfOwnerId),
-      ),
+      ...[...grouped.values()].toSorted((left, right): number => {
+        const selfOwnerId = options.selfOwnerId;
+        if (left.project && right.project) {
+          return (
+            left.project.name.localeCompare(right.project.name) ||
+            left.project.path.localeCompare(right.project.path)
+          );
+        }
+        const rank = (owner: NonNullable<typeof left.personOwner>) =>
+          owner.identity?.type === "agent"
+            ? 2
+            : owner.identity?.type === "profile" && owner.id === selfOwnerId
+              ? 0
+              : 1;
+        const leftOwner = left.personOwner!;
+        const rightOwner = right.personOwner!;
+        return (
+          rank(leftOwner) - rank(rightOwner) ||
+          (leftOwner.label || leftOwner.id).localeCompare(rightOwner.label || rightOwner.id) ||
+          leftOwner.id.localeCompare(rightOwner.id)
+        );
+      }),
     );
   }
   orderedSections.push({ id: "ungrouped", rows: threads });
@@ -377,32 +390,6 @@ function sidebarRowGroup<Row extends SidebarGroupableRow>(
     : undefined;
 }
 
-function compareSidebarGroups(
-  left: SidebarSessionSection<unknown>,
-  right: SidebarSessionSection<unknown>,
-  selfOwnerId?: string | null,
-): number {
-  if (left.project && right.project) {
-    return (
-      left.project.name.localeCompare(right.project.name) ||
-      left.project.path.localeCompare(right.project.path)
-    );
-  }
-  const rank = (owner: NonNullable<typeof left.personOwner>) =>
-    owner.identity?.type === "agent"
-      ? 2
-      : owner.identity?.type === "profile" && owner.id === selfOwnerId
-        ? 0
-        : 1;
-  const leftOwner = left.personOwner!;
-  const rightOwner = right.personOwner!;
-  return (
-    rank(leftOwner) - rank(rightOwner) ||
-    (leftOwner.label || leftOwner.id).localeCompare(rightOwner.label || rightOwner.id) ||
-    leftOwner.id.localeCompare(rightOwner.id)
-  );
-}
-
 function orderedGroupIds(
   mode: SessionsGroupBy,
   byId: ReadonlyMap<string, GatewaySessionRow[]>,
@@ -411,17 +398,12 @@ function orderedGroupIds(
   if (mode === "date") {
     return DATE_BUCKET_ORDER.filter((id) => byId.has(id));
   }
-  if (mode === "category") {
-    const known = normalizeUniqueTrimmedStringList(knownCategories);
-    const extras = [...byId.keys()]
-      .filter((id) => id !== UNGROUPED_ID && !known.includes(id))
-      .toSorted((a, b) => a.localeCompare(b));
-    return [...known, ...extras, UNGROUPED_ID];
-  }
-  const ids = [...byId.keys()].filter((id) => id !== UNGROUPED_ID);
-  ids.sort((a, b) => a.localeCompare(b));
-  if (byId.has(UNGROUPED_ID)) {
+  const known = mode === "category" ? normalizeUniqueTrimmedStringList(knownCategories) : [];
+  const ids = [...byId.keys()]
+    .filter((id) => id !== UNGROUPED_ID && !known.includes(id))
+    .toSorted((a, b) => a.localeCompare(b));
+  if (mode === "category" || byId.has(UNGROUPED_ID)) {
     ids.push(UNGROUPED_ID);
   }
-  return ids;
+  return [...known, ...ids];
 }

@@ -5,7 +5,7 @@ export const AgentKindSchema = Type.Union([Type.Literal("agent"), Type.Literal("
 export const AgentCreatedViaSchema = Type.Union([
   Type.Literal("operator"),
   Type.Literal("agent"),
-  Type.Literal("claw"),
+  Type.Literal("template"),
 ]);
 
 export const AgentOwnershipSchema = Type.Union([

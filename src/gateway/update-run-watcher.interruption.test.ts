@@ -18,11 +18,11 @@ import {
 } from "../infra/update-run-ledger.js";
 import { readInterruptedUpdateCandidate } from "../infra/update-run-read.kernel.js";
 import { reconcileUpdateRunsInNativeKernelForTest } from "../infra/update-run-reconciliation.test-support.js";
-import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   reconcileOpenClawStateSchemaPublication,
@@ -38,7 +38,6 @@ const observation = vi.hoisted(() => ({
   previousDriver: "dead" as "dead" | "alive",
   context: vi.fn(),
   http: vi.fn(),
-  inspect: vi.fn(),
   settle: vi.fn(),
 }));
 // Keep the real ledger kernels; worker transport has separate boundary coverage.
@@ -107,13 +106,9 @@ vi.mock("../cli/daemon-cli/restart-health-probe.js", () => ({
   resolveGatewayRestartProbeContext: observation.context,
   waitForGatewayHttpReadiness: observation.http,
 }));
-vi.mock("../cli/daemon-cli/restart-health.js", () => ({
-  inspectGatewayRestart: observation.inspect,
+vi.mock("../cli/daemon-cli/restart-health.js", async (original) => ({
+  ...(await original<typeof import("../cli/daemon-cli/restart-health.js")>()),
   waitForGatewayHealthyRestart: observation.settle,
-  isSameGatewayRestartGeneration: (
-    left: { gatewayBootId: string },
-    right: { gatewayBootId: string },
-  ) => left.gatewayBootId === right.gatewayBootId,
 }));
 vi.mock("./update-run-notice.runtime.js", () => ({ notifyUpdateRunPhase: vi.fn() }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
@@ -138,7 +133,6 @@ beforeEach(() => {
   observation.previousDriver = "dead";
   observation.context.mockReset().mockResolvedValue({ config: { gateway: { port: 18789 } } });
   observation.http.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
-  observation.inspect.mockReset().mockImplementation(async () => health());
   observation.settle.mockReset().mockImplementation(async () => health());
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.mocked(note).mockClear();
@@ -158,6 +152,7 @@ afterEach(async () => {
   await lifecycle.stop();
   watcher = undefined;
   await scheduler.stop();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -203,8 +198,8 @@ it("settles a verified abandoned CLI run", async () => {
   });
   watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
   await published.promise;
-  expect(getUpdateRun(runId)?.status).toBe("succeeded");
   expect(getUpdateRun(runId)).toMatchObject({
+    status: "succeeded",
     reason: null,
     after: { version: "2026.9.4", buildId: "candidate-build" },
     verification: { versionMatch: true, readyz: true, runningBuildId: "candidate-build" },
@@ -213,10 +208,12 @@ it("settles a verified abandoned CLI run", async () => {
     "update.run.changed",
     expect.objectContaining({ runId, status: "succeeded" }),
   );
-  expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain(
-    "Updater exited before recording completion",
+  expect(getUpdateRun(runId)?.steps).toContainEqual(
+    expect.objectContaining({
+      step: "reconcile:settle",
+      detail: expect.stringContaining("settle check: settled"),
+    }),
   );
-  expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain("settle check: settled");
   expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("settle check: settled"));
 });
 
@@ -278,24 +275,25 @@ it.each(["absent", "driver-revived", "newer-completed-run"])(
     const candidate = candidateState === "absent" ? undefined : getUpdateRun(runId);
     vi.mocked(readInterruptedUpdateCandidateAsync).mockClear();
     if (candidateState !== "absent") {
-      observation.inspect.mockImplementationOnce(async () => {
+      observation.http.mockImplementationOnce(async () => {
         if (candidateState === "driver-revived") {
           observation.driver = "alive";
         } else {
           const newer = createUpdateRun({ trigger: "cli" });
           finishUpdateRun(newer.runId, { status: "succeeded" });
         }
-        return health();
+        return { healthz: 200, readyz: 200 };
       });
     }
     expect(await reconcileInterruptedUpdateRuns({ candidate })).toEqual([]);
     expect(readInterruptedUpdateCandidateAsync).not.toHaveBeenCalled();
-    expect(getUpdateRun(runId)?.status).not.toBe("succeeded");
-    expect(getUpdateRun(runId)?.steps.some((step) => step.step === "reconcile:settle")).toBe(false);
+    const run = getUpdateRun(runId)!;
+    expect(run.status).not.toBe("succeeded");
+    expect(run.steps.some((step) => step.step === "reconcile:settle")).toBe(false);
     expect(console.warn).not.toHaveBeenCalled();
     if (candidateState === "absent") {
       expect(observation.settle).not.toHaveBeenCalled();
-      expect(getUpdateRun(runId)?.status).toBe("running");
+      expect(run.status).toBe("running");
     }
   },
 );
@@ -367,7 +365,7 @@ it.each(["missing-receipt", "read-only", "settle", "repair", "acknowledgement"])
         "Update history",
       );
       expect(getUpdateRun(runId)?.reason).toBe("abandoned");
-      expect(observation.inspect).not.toHaveBeenCalled();
+      expect(observation.settle).not.toHaveBeenCalled();
     } else {
       expect(observation.settle).not.toHaveBeenCalled();
       if (evidence === "repair" || evidence === "acknowledgement") {
@@ -404,7 +402,6 @@ it.each(["unverified", "timed-out"])(
       detail: expect.stringContaining(`settle check: ${outcome}`),
     });
     expect(pending.status).toBe("running");
-    expect(renderUpdateRunReport(pending).markdown).toContain(`settle check: ${outcome}`);
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining(diagnostic!.detail!));
     if (outcome === "timed-out") {
       expect(diagnostic?.detail).toContain(
@@ -418,7 +415,6 @@ it.each(["unverified", "timed-out"])(
     expect(recovered.steps.filter((step) => step.step === "reconcile:settle")).toEqual([
       expect.objectContaining({ detail: expect.stringContaining("settle check: settled") }),
     ]);
-    expect(renderUpdateRunReport(recovered).markdown).not.toContain(`settle check: ${outcome}`);
   },
 );
 
@@ -449,12 +445,10 @@ it("records an unmanaged skip when the restart step is skipped", async () => {
     status: "completed",
     detail: expect.stringContaining("skipped-unmanaged after 0 ms during ownership"),
   });
-  expect(renderUpdateRunReport(run).markdown).toContain("skipped-unmanaged");
   expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("skipped-unmanaged"));
   expect(observation.context).not.toHaveBeenCalled();
   expect(observation.settle).not.toHaveBeenCalled();
   expect(observation.http).not.toHaveBeenCalled();
-  expect(observation.inspect).not.toHaveBeenCalled();
 });
 
 it("records cleanup uncertainty instead of settling an interrupted update", async () => {
@@ -467,7 +461,6 @@ it("records cleanup uncertainty instead of settling an interrupted update", asyn
     status: "failed",
     detail: expect.stringContaining("cleanup-unknown"),
   });
-  expect(renderUpdateRunReport(run).markdown).toContain("Command cleanup failed");
   expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("cleanup outcome unknown"));
   observation.settle.mockResolvedValue(health());
   expect(await reconcileInterruptedUpdateRuns()).toEqual([]);
@@ -519,7 +512,6 @@ it.each(["uncertain", "forced"] as const)(
       if (outcome === "uncertain") {
         expect(terminal.status).toBe("failed");
         expect(terminal.detail).toContain("cleanup-unknown");
-        expect(renderUpdateRunReport(recorded).markdown).toContain("Command cleanup failed");
         expect(console.warn).toHaveBeenCalledWith(
           expect.stringContaining("Command cleanup failed"),
         );

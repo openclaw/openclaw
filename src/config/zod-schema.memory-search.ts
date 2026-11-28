@@ -9,12 +9,20 @@ export const MemorySearchSchema = z
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
     extraPaths: z
       .array(
-        z.union([z.string(), z.strictObject({ path: z.string(), pattern: z.string().optional() })]),
+        z.union([
+          z.string(),
+          z.strictObject({
+            path: z.string(),
+            pattern: z.string().optional(),
+            evergreen: z.boolean().optional(),
+          }),
+        ]),
       )
       .optional(),
     multimodal: z
       .strictObject({
         enabled: z.boolean().optional(),
+        allowPartial: z.boolean().optional(),
         modalities: z
           .array(z.union([z.literal("image"), z.literal("audio"), z.literal("all")]))
           .optional(),
@@ -37,8 +45,10 @@ export const MemorySearchSchema = z
       .optional(),
     fallback: z.string().optional(),
     model: z.string().optional(),
+    inputFormat: z.strictObject({ query: z.string(), document: z.string() }).optional(),
     inputType: z.string().min(1).optional(),
     queryInputType: z.string().min(1).optional(),
+    queryInstruction: z.string().optional(),
     documentInputType: z.string().min(1).optional(),
     outputDimensionality: z.number().int().positive().optional(),
     local: z

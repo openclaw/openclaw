@@ -13,10 +13,7 @@ function hasAuthenticatedControlUiIdentity(clients: GatewayClientRegistry): bool
       client.socket.readyState === WEBSOCKET_OPEN_READY_STATE &&
       client.internal?.authenticatedControlUi === true &&
       Boolean(client.authenticatedUserId || client.authenticatedUserProfile) &&
-      authorizeOperatorScopesForMethod(
-        "sessions.create",
-        Array.isArray(client.connect.scopes) ? client.connect.scopes : [],
-      ).allowed &&
+      authorizeOperatorScopesForMethod("sessions.create", client.connect.scopes ?? []).allowed &&
       isBrowserOperatorUiClient(client.connect.client),
   );
 }
@@ -57,11 +54,11 @@ export async function startWorkerHumanPresence(params: {
     }
     refresh();
   };
-  const unsubscribe = clients.subscribe(observeClients);
+  clients.onChange = observeClients;
   observeClients();
   params.registerSidecar({
     stop: () => {
-      unsubscribe();
+      clients.onChange = undefined;
       for (const stop of invalidationSubscriptions.values()) {
         stop();
       }

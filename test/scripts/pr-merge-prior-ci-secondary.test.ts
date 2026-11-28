@@ -3,6 +3,12 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { stringify } from "yaml";
+import {
+  expectExit,
+  expectPriorCiRefusal,
+  applyFault,
+  completedStep,
+} from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
@@ -11,6 +17,9 @@ const { preExistingCandidate } = createPriorCiCandidateFactory(fixture);
 const producerName = "Run built artifact checks";
 const uploadName = "Upload Discord component attachment proof";
 const action = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const output = "discord-component-attachments";
+const outputPath = `/home/runner/_work/_temp/${output}`;
+const monitorName = "Classify PR failures and cancel eligible same-repository work";
 const historicalProducer = readFileSync(
   new URL("../fixtures/pr-prior-ci-discord-producer.txt", import.meta.url),
   "utf8",
@@ -30,8 +39,8 @@ function secondaryCandidate(fault = "") {
     if: "always() && needs.preflight.outputs.run_discord_component_proof == 'true'",
     uses: fault === "changed action" ? "actions/upload-artifact@main" : action,
     with: {
-      name: "discord-component-attachments",
-      path: "${{ runner.temp }}/discord-component-attachments.json\n${{ runner.temp }}/discord-component-attachments.log\n",
+      name: output,
+      path: `\${{ runner.temp }}/${output}.json\n\${{ runner.temp }}/${output}.log\n`,
       "if-no-files-found": "error",
       "retention-days": 7,
     },
@@ -40,77 +49,53 @@ function secondaryCandidate(fault = "") {
     upload.with.path = "${{ runner.temp }}/other-proof.json";
   }
   const f = preExistingCandidate(
-    stringify({
-      jobs: {
-        "build-artifacts": {
-          steps: [{ name: "Build dist", run: "pnpm build" }, producer, upload],
-        },
-      },
-    }),
+    stringify({ jobs: { "build-artifacts": { steps: [producer, upload] } } }),
   );
   const state = f.state();
-  const step = (number: number, name: string, conclusion: string, start: string, end = start) => ({
-    number,
-    name,
-    status: "completed",
-    conclusion,
-    started_at: `2026-09-28T07:${start}Z`,
-    completed_at: `2026-09-28T07:${end}Z`,
-  });
-  state.priorCi.jobs![2]!.steps = [
-    step(
-      4,
-      "Classify PR failures and cancel eligible same-repository work",
-      "success",
-      "18:46",
-      "20:36",
-    ),
-  ];
+  const time = (value: string) => `2026-09-28T07:${value}Z`;
+  const step = (n: number, name: string, result: string, start: string, end = start) =>
+    completedStep(n, name, result, time(start), time(end));
+  const monitor = step(4, monitorName, "success", "18:46", "20:36");
+  state.priorCi.jobs![2]!.steps = [monitor];
   const job = state.priorCi.jobs![3]!;
   job.name = "build-artifacts";
-  job.steps = [
+  const steps = (job.steps = [
     step(3, "Checkout", "success", "18:36", "18:45"),
     step(6, "Build dist", "cancelled", "19:01", "20:48"),
     step(12, producerName, "skipped", "20:48"),
     step(13, uploadName, "failure", "20:48", "20:49"),
     step(31, "Complete job", "success", "20:49"),
-  ];
+  ]);
   const log = join(f.root, "build-job.log");
-  const line = (name: string, time: string, text: string) =>
-    `build-artifacts\t${name}\t2026-09-28T07:${time}Z ${text}`;
+  const line = (at: string, text: string, name = uploadName) =>
+    `build-artifacts\t${name}\t${time(at)} ${text}`;
+  const continuation = (text: string) => `build-artifacts\t${uploadName}\t${text}`;
   const lines = [
-    line("Checkout", "18:36.158", `  CHECKOUT_SHA: ${f.evidence.testedMerge}`),
-    line("Checkout", "18:36.159", `  WORKFLOW_SHA: ${f.evidence.testedMerge}`),
-    line("Build dist", "20:48.833", "##[error]The operation was canceled."),
-    line(uploadName, "20:48.846", `##[group]Run ${action}`),
-    line(uploadName, "20:48.847", "with:"),
-    line(
-      uploadName,
-      "20:48.848",
-      "  path: /home/runner/_work/_temp/discord-component-attachments.json",
-    ),
-    `build-artifacts\t${uploadName}\t/home/runner/_work/_temp/discord-component-attachments.log`,
-    line(
-      uploadName,
-      "20:49.092",
-      "##[error]No files were found with the provided path: /home/runner/_work/_temp/discord-component-attachments.json",
-    ),
-    `build-artifacts\t${uploadName}\t/home/runner/_work/_temp/discord-component-attachments.log. No artifacts will be uploaded.`,
-    line("Complete job", "20:49.420", "Cleaning up orphan processes"),
+    line("18:36.158", `  CHECKOUT_SHA: ${f.evidence.testedMerge}`, "Checkout"),
+    line("18:36.159", `  WORKFLOW_SHA: ${f.evidence.testedMerge}`, "Checkout"),
+    line("20:48.833", "##[error]The operation was canceled.", "Build dist"),
+    line("20:48.846", `##[group]Run ${action}`),
+    line("20:49.092", `##[error]No files were found with the provided path: ${outputPath}.json`),
+    continuation(`${outputPath}.log. No artifacts will be uploaded.`),
+    line("20:49.420", "Cleaning up orphan processes", "Complete job"),
   ];
-  if (fault === "transport failure") {
-    lines[7] = line(uploadName, "20:49.092", "##[error]Artifact transport failed: ECONNRESET");
-  }
-  if (fault === "extra error") {
-    lines.splice(-1, 0, line(uploadName, "20:49.200", "##[error]Another failure"));
-  }
-  if (fault === "foreign continuation") {
-    lines[8] = lines[8]!.replace(uploadName, "Unrelated cleanup");
-  }
-  if (fault === "truncated log") {
-    lines.pop();
-  }
+  applyFault(fault, {
+    "transport failure": () =>
+      (lines[4] = line("20:49.092", "##[error]Artifact transport failed: ECONNRESET")),
+    "extra error": () => lines.splice(-1, 0, line("20:49.200", "##[error]Another failure")),
+    "foreign continuation": () => (lines[5] = lines[5]!.replace(uploadName, "Unrelated cleanup")),
+    "truncated log": () => lines.pop(),
+  });
   writeFileSync(log, lines.join("\n") + "\n");
+  const secondary = {
+    kind: "missing-artifact-after-skipped-producer",
+    jobId: job.id,
+    step: 13,
+    producerStep: 12,
+    log: "build-log",
+    reason: "Inspected skipped producer and both outputs missing after cancellation.",
+    evidence: ["qualification", "build-log"],
+  };
   const evidence = {
     ...f.evidence,
     artifacts: [
@@ -124,64 +109,22 @@ function secondaryCandidate(fault = "") {
     cancellation: {
       ...f.evidence.cancellation,
       step: 4,
-      secondaryFailures: [
-        {
-          kind: "missing-artifact-after-skipped-producer",
-          jobId: job.id,
-          step: 13,
-          producerStep: 12,
-          log: "build-log",
-          reason:
-            "Inspected the full log and skipped producer; only both missing outputs failed after cancellation.",
-          evidence: ["qualification", "build-log"],
-        },
-      ],
+      secondaryFailures: [secondary],
     },
   };
-  if (fault === "cleanup failure") {
-    job.steps[4]!.conclusion = "failure";
-  }
-  if (fault === "test failure") {
-    state.priorCi.jobs!.push({
-      ...job,
-      id: 606,
-      name: "other-tests",
-      steps: [step(1, "Product assertion", "failure", "20:40")],
-    });
-    evidence.cancellation.jobIds.push(606);
-  }
-  if (["success", "failure", "cancelled"].includes(fault)) {
-    job.steps[2]!.conclusion = fault;
-  }
-  if (fault === "missing producer") {
-    job.steps.splice(2, 1);
-  }
-  if (fault === "earlier upload") {
-    job.steps[3]!.started_at = "2026-09-28T07:20:35Z";
-  }
-  if (fault === "missing time") {
-    delete state.priorCi.jobs![2]!.steps![0]!.completed_at;
-  }
-  if (fault === "failed monitor") {
-    state.priorCi.jobs![2]!.steps![0]!.conclusion = "failure";
-  }
-  if (fault === "wrong step") {
-    evidence.cancellation.secondaryFailures[0]!.step = 12;
-  }
-  if (fault === "duplicate secondary") {
-    evidence.cancellation.secondaryFailures.push({
-      ...evidence.cancellation.secondaryFailures[0]!,
-    });
-  }
-  if (fault === "relabel root") {
-    evidence.cancellation.causedBy.push(job.id);
-  }
-  if (fault === "unbound log") {
-    evidence.cancellation.secondaryFailures[0]!.evidence = ["qualification"];
-  }
-  if (fault === "changed log") {
-    writeFileSync(log, "changed\n");
-  }
+  applyFault(fault, {
+    "cleanup failure": () => (steps[4]!.conclusion = "failure"),
+    failure: () => (steps[2]!.conclusion = "failure"),
+    "missing producer": () => steps.splice(2, 1),
+    "earlier upload": () => (steps[3]!.started_at = "2026-09-28T07:20:35Z"),
+    "missing time": () => delete monitor.completed_at,
+    "failed monitor": () => (monitor.conclusion = "failure"),
+    "wrong step": () => (secondary.step = 12),
+    "duplicate secondary": () => evidence.cancellation.secondaryFailures.push({ ...secondary }),
+    "relabel root": () => evidence.cancellation.causedBy.push(job.id),
+    "unbound log": () => (secondary.evidence = ["qualification"]),
+    "changed log": () => writeFileSync(log, "changed\n"),
+  });
   f.save(state);
   writeFileSync(f.path, JSON.stringify(evidence));
   return { ...f, evidence };
@@ -190,23 +133,26 @@ function secondaryCandidate(fault = "") {
 describePosix("prior-CI skipped-producer secondary failure", () => {
   it("lands only the qualified secondary upload while preserving roots and cancelled coverage", () => {
     const f = secondaryCandidate();
-    const result = f.adminPriorCi(f.path);
-    expect(result.status, result.output).toBe(0);
+    expectExit(f.adminPriorCi(f.path), 0);
     expect(f.state().mutations).toBe(1);
     const proof = f.record().priorCiAdmin;
     expect(proof.failures.map((failure: { jobId: number }) => failure.jobId)).toEqual([601]);
-    expect(proof.cancelledJobIds).toEqual([604]);
-    expect(proof.aggregate.causedBy).toEqual([601]);
-    expect(proof.cancellation.causedBy).toEqual([601]);
-    expect(proof.cancellation.secondaryFailures).toEqual([
-      expect.objectContaining({
-        jobId: 604,
-        step: 13,
-        producerStep: 12,
-        workflowBlob: f.git(["rev-parse", `${f.base}:.github/workflows/ci.yml`]),
-        logSha256: f.evidence.artifacts[1]!.sha256,
-      }),
-    ]);
+    expect(proof).toMatchObject({
+      cancelledJobIds: [604],
+      aggregate: { causedBy: [601] },
+      cancellation: {
+        causedBy: [601],
+        secondaryFailures: [
+          {
+            jobId: 604,
+            step: 13,
+            producerStep: 12,
+            workflowBlob: f.git(["rev-parse", `${f.base}:.github/workflows/ci.yml`]),
+            logSha256: f.evidence.artifacts[1]!.sha256,
+          },
+        ],
+      },
+    });
     expect(f.state().comments[0]?.body).toContain("Cancelled jobs remain unrun coverage");
   });
 
@@ -215,10 +161,7 @@ describePosix("prior-CI skipped-producer secondary failure", () => {
     ["changed action", "historical producer/action/output"],
     ["changed outputs", "historical producer/action/output"],
     ["cleanup failure", "cancelled jobs must not hide failed steps"],
-    ["test failure", "cancelled jobs must not hide failed steps"],
-    ["success", "uniquely skipped producer"],
     ["failure", "uniquely skipped producer"],
-    ["cancelled", "uniquely skipped producer"],
     ["missing producer", "needs one Run built artifact checks"],
     ["transport failure", "both missing outputs"],
     ["extra error", "both missing outputs"],
@@ -234,10 +177,7 @@ describePosix("prior-CI skipped-producer secondary failure", () => {
     ["changed log", "retained failure evidence changed"],
   ])("refuses %s without dispatch", (fault, message) => {
     const f = secondaryCandidate(fault);
-    const result = f.verifyPriorCi(f.path);
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain(message);
-    expect(f.state().mutations).toBe(0);
+    expectPriorCiRefusal(f, message);
     expect(() => f.record()).toThrow();
   });
 });

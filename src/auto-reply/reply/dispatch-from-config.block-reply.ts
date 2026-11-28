@@ -1,11 +1,13 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { buildCaptionedFinalTextFallback } from "../../tts/captioned-final.js";
+import { appendTtsBlockSource } from "../../tts/directive-facts.js";
 import type { BlockReplyContext } from "../get-reply-options.types.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
+  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { createBlockReplySource, setBlockReplyDelivery } from "./block-reply-delivery.js";
@@ -39,10 +41,6 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
   const dispatchBlockReply = (operation: ReplyDispatchOperation, context?: BlockReplyContext) => {
     const inputPayload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
     setBlockReplyDelivery(Promise.resolve({ outcome: "cancelled" }));
-    // A monitor decides notify only after its structured final result.
-    if (state.replyOperationRunState.heartbeat) {
-      return Promise.resolve();
-    }
     markProgress();
     const run = async () => {
       if (isDispatchOperationAborted()) {
@@ -85,17 +83,15 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
         payload.isReasoning !== true &&
         payload.isCommentary !== true;
       if (payload.text && contributesToFinalReply) {
-        const joinsBufferedTtsDirective =
-          cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
         if (state.progressState.accumulatedBlockText.length > 0) {
           state.progressState.accumulatedBlockText += "\n";
         }
         state.progressState.accumulatedBlockText += payload.text;
-        if (state.progressState.accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
-          state.progressState.accumulatedBlockTtsText += "\n";
-        }
-        state.progressState.accumulatedBlockTtsText += payload.text;
-        state.progressState.blockCount++;
+        state.progressState.accumulatedBlockTtsText = appendTtsBlockSource(
+          state.progressState.accumulatedBlockTtsText,
+          payload.text,
+          cleanBlockTtsDirectiveText,
+        );
       }
       let source: BlockReplySource | undefined;
       let cleanedPayload = payload;
@@ -111,6 +107,7 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
           ...payload,
           text: text.trim() ? text : undefined,
         });
+        setReplyPayloadMetadata(cleanedPayload, { ttsDirectivesParsed: true });
       }
       const sendPrepared = async (preparedPayload: ReplyPayload, terminal = false) => {
         let visiblePayload = preparedPayload;
@@ -185,6 +182,7 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
         } else {
           markInboundDedupeReplayUnsafe();
           const delivery = state.sendTrackedBlockReply(deliveryOperation);
+          state.observeDeliveryProgress(delivery.outcome, "reply:block_delivered");
           if (delivery.queued) {
             // This block's receipt owns its settlement. A turn-wide no-send
             // verdict is premature while a recovery final can still arrive.
@@ -224,7 +222,7 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
           if (isDispatchOperationAborted()) {
             return;
           }
-          const tail = buildCaptionedFinalTextFallback(payload);
+          const tail = buildCaptionedFinalTextFallback(cleanedPayload);
           tail.text = text;
           source?.setComplete(true);
           await sendWithSource(tail, true);

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { assertSupportedJobSpec, assertTriggerSupport } from "./jobs-validation.js";
+import {
+  assertExternalSourceScheduleSupport,
+  assertSupportedJobSpec,
+  assertTriggerSupport,
+} from "./jobs-validation.js";
 
 describe("cron target and payload guidance", () => {
   it.each(["current", "session:agent:main:dashboard:continuation"] as const)(
@@ -30,12 +34,34 @@ describe("cron target and payload guidance", () => {
     );
   });
 
-  it("points main-session agent turns to the supported targets", () => {
+  it("accepts ordinary agent turns in the main session", () => {
     expect(() =>
       assertSupportedJobSpec({ sessionTarget: "main", payload: { kind: "agentTurn" } }),
-    ).toThrow(
-      'cron sessionTarget "main" requires payload.kind="systemEvent" or "script"; agent turns use "isolated", "current", or "session:<key>"',
-    );
+    ).not.toThrow();
+  });
+});
+
+describe("event source schedule validation", () => {
+  it("validates source definitions and agent-turn payloads without widening target validation", () => {
+    const schedule = { kind: "event" as const, source: "mcp-events", options: {} };
+    expect(() =>
+      assertExternalSourceScheduleSupport({
+        schedule,
+        payload: { kind: "agentTurn", message: "Handle the event." },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertExternalSourceScheduleSupport({
+        schedule: { ...schedule, source: "invalid source" },
+        payload: { kind: "agentTurn", message: "Handle the event." },
+      }),
+    ).toThrow("event schedules require");
+    expect(() =>
+      assertExternalSourceScheduleSupport({
+        schedule,
+        payload: { kind: "command", argv: ["echo", "event"] },
+      }),
+    ).toThrow("event schedules require");
   });
 });
 

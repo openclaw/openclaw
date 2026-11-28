@@ -8,7 +8,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 
-const acceptedUsage = new AsyncLocalStorage<{ owner: UsageWork; active: boolean }>();
+const acceptedUsage = new AsyncLocalStorage<UsageWork>();
 
 type UsageWork = {
   work: AsyncWorkScope;
@@ -66,20 +66,14 @@ export async function runAuthProfileUsage<T>(operation: () => Promise<T>): Promi
   }
   const owner = usageWork(host);
   const inherited = acceptedUsage.getStore();
-  const alreadyAccepted = inherited?.owner === owner && inherited.active;
+  const alreadyAccepted = inherited === owner;
   if (owner.closing && !alreadyAccepted) {
     throw new Error("Auth profile usage owner is closed");
   }
   if (!alreadyAccepted) {
     host.scheduler.signal.throwIfAborted();
   }
-  // Each child retains its own settlement when its parent's observer stops waiting.
-  const custody = { owner, active: true };
-  return owner.work
-    .track(() => acceptedUsage.run(custody, run))
-    .finally(() => {
-      custody.active = false;
-    });
+  return owner.work.track(() => acceptedUsage.run(owner, run));
 }
 
 /** Fence synchronously, then join accepted work before its worker transports close. */

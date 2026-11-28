@@ -3,7 +3,7 @@ import { validateProviderSettings } from "../config/provider-settings.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { normalizePluginsConfig } from "./config-state.js";
-import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
+import { isManifestPluginOwnerAllowedByControlPlanePolicy } from "./manifest-contract-eligibility.js";
 import { normalizeCapabilityProviderId } from "./provider-registry-shared.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -40,7 +40,16 @@ export async function maintainConfiguredWorkerProviders(params: {
     if (!registration || !provider || !maintain || !owner || !isOwnerCurrent?.()) {
       return [];
     }
-    if (!passesManifestOwnerBasePolicy({ plugin: owner, normalizedConfig })) {
+    // Use the same bundled compatibility policy that admitted the configured provider at startup.
+    if (
+      !normalizedConfig.enabled ||
+      !isManifestPluginOwnerAllowedByControlPlanePolicy({
+        plugin: owner,
+        config,
+        normalizedConfig,
+        allowBundledProviderCompat: true,
+      })
+    ) {
       return [];
     }
     const settings = configuredSettings(config, providerId);

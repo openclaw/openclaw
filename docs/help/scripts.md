@@ -14,6 +14,16 @@ title: "Scripts"
 - Prefer CLI surfaces when they exist (example: `openclaw models status --check`).
 - Assume scripts are host-specific. Read them before running on a new machine.
 
+## Formatting and linting
+
+`pnpm format` writes formatting, `pnpm format:check` checks it, and `pnpm lint`
+runs the lint pipeline. The [local development tool selector](/reference/test/local#openclaw-bun-fork)
+reference explains the pinned OpenClaw Bun fork, installation cache, supported
+platforms, overrides, fallbacks, and CI parity. Use
+`OPENCLAW_FORMAT_TOOL=oxfmt pnpm format` to force oxfmt. The
+[formatter caller inventory](https://github.com/openclaw/openclaw/blob/main/scripts/README.md#formatting-and-lint-selection)
+lists dedicated formatters that retain oxfmt.
+
 ## Auth monitoring scripts
 
 General model auth is covered in [Authentication](/gateway/authentication). The scripts below are a separate, optional system. They monitor a **Claude Code CLI subscription token** on a remote/headless host. They also let you re-authenticate from a phone:

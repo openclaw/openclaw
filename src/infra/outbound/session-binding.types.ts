@@ -89,22 +89,22 @@ type SessionBindingAdapterCapabilities = {
   unbindSupported?: boolean;
 };
 
-/** @deprecated Implement SessionBindingAdapterV2; removal follows a stable deprecation period. */
+/** @deprecated Implement SessionBindingAdapterV2; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export type SessionBindingAdapter = {
   channel: string;
   accountId: string;
   capabilities?: SessionBindingAdapterCapabilities;
   bind?: (input: SessionBindingBindInput) => Promise<SessionBindingRecord | null>;
-  /** @deprecated Use listBySessionAsync; removal follows a stable deprecation period. */
+  /** @deprecated Use listBySessionAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   listBySession: (targetSessionKey: string) => SessionBindingRecord[];
-  /** @deprecated Use resolveByConversationAsync; removal follows a stable deprecation period. */
+  /** @deprecated Use resolveByConversationAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
-  /** @deprecated Use inspectByConversationAsync; removal follows a stable deprecation period. */
+  /** @deprecated Use inspectByConversationAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   inspectByConversation?: (ref: ConversationRef) => SessionBindingRecord | null;
   /** Inspects committed ownership without creating storage or pruning rows. */
   inspectByConversationAsync?: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
   resolveByConversationAsync?: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
-  /** @deprecated Use touchAsync; removal follows a stable deprecation period. */
+  /** @deprecated Use touchAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   touch?: (bindingId: string, at?: number) => void;
   /** Settles accepted persistence before resolving. */
   touchAsync?: (bindingId: string, at?: number) => Promise<void>;

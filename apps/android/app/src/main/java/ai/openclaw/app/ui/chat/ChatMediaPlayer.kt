@@ -48,6 +48,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -532,7 +534,7 @@ private fun MediaPlaybackPresentation.AudioPlayerSurface(
           color = ClawTheme.colors.primary,
           contentColor = ClawTheme.colors.primaryText,
         ) {
-          Box(modifier = Modifier.size(34.dp), contentAlignment = Alignment.Center) {
+          Box(modifier = Modifier.size(ClawTheme.spacing.touchTarget), contentAlignment = Alignment.Center) {
             if (loading) {
               CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
             } else {
@@ -547,14 +549,17 @@ private fun MediaPlaybackPresentation.AudioPlayerSurface(
         Icon(Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(16.dp), tint = ClawTheme.colors.textMuted)
         Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = content.fileName?.takeIf(String::isNotBlank) ?: nativeString("Voice note"),
+            text = content.fileName?.takeIf { it.isNotBlank() && !isGeneratedVoiceNoteName(it) } ?: nativeString("Voice note"),
             style = ClawTheme.type.body,
             color = ClawTheme.colors.text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
           )
           MediaPlaybackStatus()
         }
       }
       Slider(
+        modifier = Modifier.semantics { contentDescription = nativeString("Audio position") },
         value = positionMs.coerceIn(0L, durationMs.coerceAtLeast(0L)).toFloat(),
         onValueChange = onSeek,
         valueRange = 0f..durationMs.coerceAtLeast(1L).toFloat(),
@@ -753,7 +758,7 @@ internal fun ChatMediaAttachmentLabel(content: ChatMessageContent) {
     )
     Text(
       text =
-        content.fileName?.takeIf(String::isNotBlank)
+        content.fileName?.takeIf { it.isNotBlank() && !(isAudio && isGeneratedVoiceNoteName(it)) }
           ?: if (isAudio) nativeString("Voice note") else nativeString("Video"),
       style = ClawTheme.type.body,
       color = ClawTheme.colors.text,
@@ -770,3 +775,10 @@ internal fun ChatMediaAttachmentLabel(content: ChatMessageContent) {
     }
   }
 }
+
+/** Recorder-generated names (`voice-note-<uuid>.m4a`) carry no meaning; show "Voice note" instead. */
+internal fun isGeneratedVoiceNoteName(fileName: String): Boolean = GENERATED_VOICE_NOTE_NAME.matches(fileName.trim())
+
+/** Matches only VoiceNoteRecorderController's `voice-note-<uuid>.m4a`, never a user-named file. */
+private val GENERATED_VOICE_NOTE_NAME =
+  Regex("^voice-note-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.m4a$", RegexOption.IGNORE_CASE)

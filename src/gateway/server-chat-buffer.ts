@@ -14,6 +14,8 @@ export type ChatRunBufferState = {
     string | symbol | undefined,
     {
       committed?: true;
+      /** False while saved history has not taken over this live occurrence. */
+      published?: boolean;
       start?: number;
       end?: number | null;
       scope?: number;
@@ -29,6 +31,8 @@ export type ChatRunBufferState = {
     current: ReturnType<ReturnType<typeof createLiveAssistantTextProjection>["replace"]>;
     pendingRawDelta?: string | null;
     reset?: boolean;
+    textScope?: AssistantTextSnapshot["scope"];
+    toolTextAfterSeq?: number;
     unsentDelta: string | null;
     sentText?: string;
   };
@@ -47,7 +51,8 @@ export const bufferVisibleText = (record: ChatRunBufferState) => {
   const items = [...(record.assistantItems?.values() ?? [])]
     .filter((item) => typeof item.end === "number" && item.end > offset)
     .toSorted((a, b) => (a.start ?? 0) - (b.start ?? 0));
-  if (!items.some((item) => item.committed)) {
+  const retired = (item: (typeof items)[number]) => item.committed && item.published !== false;
+  if (!items.some(retired)) {
     return text;
   }
   let visible = "";
@@ -61,7 +66,7 @@ export const bufferVisibleText = (record: ChatRunBufferState) => {
     const start = Math.max(offset, item.start ?? 0);
     gap += text.slice(cursor - offset, start - offset);
     cursor = Math.max(cursor, item.end);
-    if (item.committed) {
+    if (retired(item)) {
       continue;
     }
     let part = text.slice(start - offset, item.end - offset);

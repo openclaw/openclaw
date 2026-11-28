@@ -1,31 +1,11 @@
 // Plugin install plan tests cover install planning for local, registry, and bundled plugins.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   resolveBundledInstallPlanForCatalogEntry,
-  resolveBundledInstallPlanForNpmFailure,
   resolvePluginInstallSourcePlan,
 } from "../plugins/install-source-plan.js";
-import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
 import { resolveCatalogOfficialExternalNpmPackageTrust } from "../plugins/official-external-install-trust.js";
-
-function createSourceCheckoutPlugin(pluginId: string): {
-  packageRoot: string;
-  pluginRoot: string;
-} {
-  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-plan-"));
-  fs.mkdirSync(path.join(packageRoot, ".git"));
-  fs.mkdirSync(path.join(packageRoot, "src"));
-  fs.mkdirSync(path.join(packageRoot, "extensions"));
-  const pluginRoot = path.join(packageRoot, "dist", "extensions", pluginId);
-  fs.mkdirSync(pluginRoot, { recursive: true });
-  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
-  fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages: []\n");
-  return { packageRoot, pluginRoot };
-}
 
 describe("plugin install plan helpers", () => {
   it.each([" ClAwHuB:demo@ "])(
@@ -66,103 +46,38 @@ describe("plugin install plan helpers", () => {
     expect(result).toBeNull();
   });
 
-  it("rejects npm-spec matches that resolve to a different plugin id", () => {
+  it.each([
+    [
+      "rejects npm-spec matches that resolve to a different plugin id",
+      "npmSpec",
+      { pluginId: "voice-call", npmSpec: "@openclaw/voice-call" },
+      { pluginId: "not-voice-call", npmSpec: "@openclaw/voice-call" },
+    ],
+    [
+      "rejects plugin-id bundled matches when the catalog npm spec was overridden",
+      "pluginId",
+      { pluginId: "whatsapp", npmSpec: "@vendor/whatsapp-fork" },
+      { pluginId: "whatsapp", npmSpec: "@openclaw/whatsapp" },
+    ],
+  ] as const)("%s", (_name, matchKind, catalog, bundled) => {
     const findBundledSource = vi
       .fn()
       .mockImplementation(({ kind }: { kind: "pluginId" | "npmSpec"; value: string }) => {
-        if (kind === "npmSpec") {
+        if (kind === matchKind) {
           return {
-            pluginId: "not-voice-call",
-            localPath: installedPluginRoot("/tmp", "not-voice-call"),
-            npmSpec: "@openclaw/voice-call",
+            pluginId: bundled.pluginId,
+            localPath: installedPluginRoot("/tmp", bundled.pluginId),
+            npmSpec: bundled.npmSpec,
           };
         }
         return undefined;
       });
 
     const result = resolveBundledInstallPlanForCatalogEntry({
-      pluginId: "voice-call",
-      npmSpec: "@openclaw/voice-call",
+      ...catalog,
       findBundledSource,
     });
 
-    expect(result).toBeNull();
-  });
-
-  it("rejects plugin-id bundled matches when the catalog npm spec was overridden", () => {
-    const findBundledSource = vi
-      .fn()
-      .mockImplementation(({ kind }: { kind: "pluginId" | "npmSpec"; value: string }) => {
-        if (kind === "pluginId") {
-          return {
-            pluginId: "whatsapp",
-            localPath: installedPluginRoot("/tmp", "whatsapp"),
-            npmSpec: "@openclaw/whatsapp",
-          };
-        }
-        return undefined;
-      });
-
-    const result = resolveBundledInstallPlanForCatalogEntry({
-      pluginId: "whatsapp",
-      npmSpec: "@vendor/whatsapp-fork",
-      findBundledSource,
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("does not fall back to source checkout bundles after npm package-not-found", () => {
-    const { packageRoot, pluginRoot } = createSourceCheckoutPlugin("codex");
-    try {
-      const findBundledSource = vi.fn().mockReturnValue({
-        pluginId: "codex",
-        localPath: pluginRoot,
-        npmSpec: "@openclaw/codex",
-      });
-
-      const result = resolveBundledInstallPlanForNpmFailure({
-        rawSpec: "@openclaw/codex",
-        code: PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND,
-        findBundledSource,
-      });
-
-      expect(result).toBeNull();
-    } finally {
-      fs.rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("allows bare plugin ids to fall back to source checkout bundles", () => {
-    const { packageRoot, pluginRoot } = createSourceCheckoutPlugin("codex");
-    try {
-      const findBundledSource = vi.fn().mockReturnValue({
-        pluginId: "codex",
-        localPath: pluginRoot,
-        npmSpec: "@openclaw/codex",
-      });
-
-      const result = resolveBundledInstallPlanForNpmFailure({
-        rawSpec: "codex",
-        code: PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND,
-        findBundledSource,
-      });
-
-      expect(result?.bundledSource.pluginId).toBe("codex");
-    } finally {
-      fs.rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("skips fallback for non-not-found npm failures", () => {
-    const findBundledSource = vi.fn();
-    const result = resolveBundledInstallPlanForNpmFailure({
-      rawSpec: "@openclaw/voice-call",
-      code: "INSTALL_FAILED",
-      findBundledSource,
-    });
-
-    expect(findBundledSource).not.toHaveBeenCalled();
     expect(result).toBeNull();
   });
 });

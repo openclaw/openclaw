@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { loadTranscriptEventsSync } from "../../../config/sessions/session-accessor.sqlite-read.js";
-import { SessionEntryChangedDuringReadError } from "../../../config/sessions/session-entry-read-errors.js";
 import * as transcriptReaders from "../../../config/sessions/session-transcript-execution-read.js";
+import { SessionTranscriptProjectionUnavailableError } from "../../../config/sessions/session-transcript-projection-error.js";
+import { SessionTranscriptReadFenceError } from "../../../config/sessions/session-transcript-read-fence-error.js";
 import { waitForSessionTranscriptProjection } from "../../../config/sessions/session-transcript-reconcile.js";
 import * as historyReaders from "../../../config/sessions/session-transcript-worker-readers.js";
+import { SessionWorkStartChangedError } from "../../../config/sessions/work-start-error.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../../state/openclaw-agent-db.js";
@@ -13,6 +15,7 @@ import {
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { sessionManagerPrepareCurrentTurnReplay } from "../../sessions/session-manager-current-turn.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { withInterruptedTurn } from "./attempt-session-replay.test-support.js";
 import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
@@ -20,6 +23,61 @@ import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.
 registerAgentSessionLoopTestLifecycle();
 
 describe("transcript replay cohorts", () => {
+  it.each(["metadata", "new-user", "keeps-advancing"] as const)(
+    "re-prepares initial admission once after concurrent %s",
+    async (change) => {
+      await withInterruptedTurn(false, async (fixture) => {
+        const select = SessionManager.prototype[sessionManagerPrepareCurrentTurnReplay];
+        let selections = 0;
+        const spy = vi
+          .spyOn(SessionManager.prototype, sessionManagerPrepareCurrentTurnReplay)
+          .mockImplementation(async function (this: SessionManager, ...args) {
+            const prepared = await select.apply(this, args);
+            selections++;
+            if (selections === 1 || change === "keeps-advancing") {
+              const writer = await SessionManager.openAsync(fixture.target);
+              if (change === "new-user") {
+                await writer.appendMessageAsync({
+                  role: "user",
+                  content: "A newer request",
+                  timestamp: 2,
+                });
+              } else {
+                await writer.appendThinkingLevelChange("high");
+              }
+            }
+            return prepared;
+          });
+        try {
+          if (change !== "metadata") {
+            await expect(fixture.prepare()).rejects.toBeInstanceOf(
+              change === "new-user"
+                ? SessionWorkStartChangedError
+                : SessionTranscriptReadFenceError,
+            );
+            expect(selections).toBe(2);
+            return;
+          }
+          const prepared = await fixture.prepare();
+          expect(selections).toBe(2);
+          expect(prepared.sessionManager.getLeafEntry()?.type).toBe("thinking_level_change");
+          const admit = await prepared.prepareInitialUserTurnReplay?.();
+          const admitted = vi.fn();
+          await admit!(admitted);
+          expect(admitted).toHaveBeenCalledOnce();
+          expect(await prepared.prepareInitialUserTurnReplay?.()).toBeUndefined();
+          expect(
+            prepared.sessionManager
+              .getBranch()
+              .filter((entry) => entry.type === "message" && entry.message.role === "user"),
+          ).toHaveLength(1);
+        } finally {
+          spy.mockRestore();
+        }
+      });
+    },
+  );
+
   it("retains bootstrap presence when the bounded active path has no messages", async () => {
     await withInterruptedTurn(
       false,
@@ -253,7 +311,8 @@ describe("transcript replay cohorts", () => {
                     };
                   });
           const consume = vi.fn();
-          const pending = phase === "selected-initial" ? fixture.prepare() : admit!(consume);
+          const preparation = phase === "selected-initial" ? fixture.prepare() : undefined;
+          const pending = preparation ?? admit!(consume);
           let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
           try {
             await awaitGateBeforeSettlement(
@@ -269,8 +328,15 @@ describe("transcript replay cohorts", () => {
               fixture.revoke();
             }
             release.resolve();
-            if (change === "rewrite" && phase !== "legacy-final") {
-              await expect(pending).rejects.toBeInstanceOf(SessionEntryChangedDuringReadError);
+            if (change === "rewrite" && phase === "selected-initial") {
+              // Hydration refreshes after the mutation; the removed user cannot authorize replay.
+              const refreshed = await preparation!;
+              expect(refreshed.prepareInitialUserTurnReplay).toBeUndefined();
+              expect(refreshed.sessionManager.getBranch()).toEqual([]);
+            } else if (change === "rewrite" && phase === "selected-final") {
+              await expect(pending).rejects.toBeInstanceOf(
+                SessionTranscriptProjectionUnavailableError,
+              );
             } else {
               await expect(pending).rejects.toThrow(/replay|revoked|closed|current|admission/i);
             }

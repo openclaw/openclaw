@@ -8,6 +8,7 @@ import {
   acpMocks,
   createDispatcher,
   emptyConfig,
+  hookMocks,
   mocks,
   sessionStoreMocks,
   ttsMocks,
@@ -22,6 +23,7 @@ import {
 } from "./dispatch-from-config.test-support.js";
 import { createBlockReplyDeliveryHandler, type DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { createQuietTypingSignaler } from "./reply.test-helpers.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 export function registerDurableBlockRoutingTests(): void {
@@ -37,11 +39,13 @@ export function registerDurableBlockRoutingTests(): void {
       OriginatingTo: "imessage:+15550001111",
     });
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.suppressTyping).toBe(false);
+      expect(opts?.typingPolicy).toBe("auto");
       await requireBlockReplyHandler(opts?.onBlockReply)(
         { text: "Private dashboard update" },
         { deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:private" },
       );
-      return undefined;
+      return { text: "Private dashboard final" };
     };
 
     await dispatchReplyFromConfig({
@@ -53,9 +57,10 @@ export function registerDurableBlockRoutingTests(): void {
 
     expect(mocks.routeReply).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "Private dashboard update" });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Private dashboard final" });
   });
 
-  it("never lets a durable block intent deliver directly from a parent-owned background session", async () => {
+  it.each(["telegram", "discord"])("keeps parent-owned %s blocks private", async (provider) => {
     setNoAbort();
     mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "telegram" });
@@ -78,6 +83,7 @@ export function registerDurableBlockRoutingTests(): void {
     });
     const dispatcher = createDispatcher();
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.suppressTyping).toBe(true);
       await requireBlockReplyHandler(opts?.onBlockReply)(
         { text: "Private delegated progress" },
         { deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:child" },
@@ -87,8 +93,8 @@ export function registerDurableBlockRoutingTests(): void {
 
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({
-        Provider: "telegram",
-        Surface: "telegram",
+        Provider: provider,
+        Surface: provider,
         SessionKey: "agent:main:background-child",
         OriginatingChannel: "telegram",
         OriginatingTo: "telegram:999",
@@ -100,6 +106,15 @@ export function registerDurableBlockRoutingTests(): void {
 
     expect(mocks.routeReply).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        originatingChannel: "telegram",
+        shouldRouteToOriginating: false,
+        suppressUserDelivery: true,
+      }),
+      expect.anything(),
+      expect.any(Function),
+    );
   });
 
   it("routes external origin replies for internal webchat turns when explicit delivery is set", async () => {
@@ -172,18 +187,7 @@ export function registerDurableBlockRoutingTests(): void {
           onBlockReply: requireBlockReplyHandler(opts?.onBlockReply),
           normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
           applyReplyToMode: (payload) => payload,
-          typingSignals: {
-            mode: "never",
-            shouldStartImmediately: false,
-            shouldStartOnMessageStart: false,
-            shouldStartOnText: false,
-            shouldStartOnReasoning: false,
-            signalRunStart: async () => {},
-            signalMessageStart: async () => {},
-            signalTextDelta: async () => {},
-            signalReasoningDelta: async () => {},
-            signalToolStart: async () => {},
-          },
+          typingSignals: createQuietTypingSignaler(),
           blockStreamingEnabled: false,
           blockReplyPipeline: null,
           directBlockDeliveries,

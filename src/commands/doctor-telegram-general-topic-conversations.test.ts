@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listConversations } from "../config/sessions/conversation-registry.js";
 import {
@@ -7,14 +7,18 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
-  getSessionKysely,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createDoctorHealthFlowContext,
+  createDoctorPrompterFixture,
+  decideDoctorContributionPending,
+} from "../flows/doctor-health-context.test-support.js";
+import { initialDoctorHealthContribution } from "../flows/doctor-health-contributions-selection.test-support.js";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
 import { runDoctorHealthRepairs } from "../flows/doctor-repair-flow.js";
-import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
@@ -25,6 +29,7 @@ const CHECK_ID = "core/doctor/telegram-general-topic-conversations";
 describe("doctor Telegram General-topic conversation repair", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(async () => {
+      vi.unstubAllEnvs();
       for (const root of tempDirs.dirs) {
         await cleanupSessionStateForTest({ stateDir: path.join(root, "state"), rootPath: root });
       }
@@ -34,6 +39,49 @@ describe("doctor Telegram General-topic conversation repair", () => {
   let cfg: OpenClawConfig;
   let env: NodeJS.ProcessEnv;
   let storePath: string;
+  async function repair() {
+    const check = (await resolveDoctorContributionHealthChecks()).find(
+      (candidate) => candidate.id === CHECK_ID,
+    );
+    expect(check).toBeDefined();
+    return runDoctorHealthRepairs(
+      { mode: "fix", runtime: { log() {}, error() {}, exit() {} }, cfg, env },
+      { checks: [check!] },
+    );
+  }
+
+  const delivery = (to: string) =>
+    normalizeSessionDeliveryState({
+      context: { channel: "telegram", accountId: "default", to, threadId: "1" },
+    });
+  function session(group: string, sessionId: string) {
+    const scope = {
+      agentId: "main",
+      env,
+      sessionKey: `agent:main:telegram:group:${group}:topic:1`,
+      storePath,
+    };
+    return {
+      scope,
+      write: (to: string, updatedAt = 100) =>
+        upsertSessionEntryCore(scope, {
+          sessionId,
+          updatedAt,
+          chatType: "group",
+          delivery: delivery(to),
+        }),
+      expectCanonical: async (extra: { conversationRef?: string } = {}) =>
+        expect(await listConversations(scope, { channel: "telegram" })).toEqual([
+          expect.objectContaining({
+            target: `telegram:${group}`,
+            threadId: "1",
+            role: "primary",
+            sessionId,
+            ...extra,
+          }),
+        ]),
+    };
+  }
 
   beforeEach(() => {
     const root = tempDirs.make("openclaw-doctor-telegram-topic-");
@@ -47,24 +95,9 @@ describe("doctor Telegram General-topic conversation repair", () => {
   });
 
   it("merges an upgraded General-topic related binding exactly once", async () => {
-    const sessionKey = "agent:main:telegram:group:-1001234567890:topic:1";
-    const scope = { agentId: "main", env, sessionKey, storePath };
-    const delivery = (to: string) =>
-      normalizeSessionDeliveryState({
-        context: { channel: "telegram", accountId: "default", to, threadId: "1" },
-      });
-    await upsertSessionEntryCore(scope, {
-      sessionId: "topic-1-session",
-      updatedAt: 100,
-      chatType: "group",
-      delivery: delivery("telegram:-1001234567890:topic:1"),
-    });
-    await upsertSessionEntryCore(scope, {
-      sessionId: "topic-1-session",
-      updatedAt: 200,
-      chatType: "group",
-      delivery: delivery("telegram:-1001234567890"),
-    });
+    const { scope, write, expectCanonical } = session("-1001234567890", "topic-1-session");
+    await write("telegram:-1001234567890:topic:1");
+    await write("telegram:-1001234567890", 200);
 
     const before = await listConversations(scope, { channel: "telegram" });
     expect(
@@ -81,121 +114,64 @@ describe("doctor Telegram General-topic conversation repair", () => {
     expect(canonical).toBeDefined();
 
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteReadScope(scope)));
-    const db = getSessionKysely(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      db.insertInto("conversation_deliveries").values({
-        operation_id: "legacy-delivery",
-        operation_kind: "send",
-        conversation_id: legacy!.conversationRef,
-        source_session_key: sessionKey,
-        message_hash: "hash",
-        status: "sent",
-        prepared_message_id: null,
-        platform_message_id: "message-1",
-        queue_id: null,
-        rejection_error: null,
-        reply_message_id: null,
-        reply_to_id: null,
-        reply_thread_id: "1",
-        reply_text: null,
-        reply_timestamp: null,
-        created_at: 100,
-        updated_at: 100,
-      }),
-    );
+    database.db
+      .prepare(`INSERT INTO conversation_deliveries
+      (operation_id, operation_kind, conversation_id, source_session_key, message_hash,
+       status, platform_message_id, reply_thread_id, created_at, updated_at)
+      VALUES ('legacy-delivery', 'send', ?, ?, 'hash', 'sent', 'message-1', '1', 100, 100)`)
+      .run(legacy!.conversationRef, scope.sessionKey);
     expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
 
-    const check = (await resolveDoctorContributionHealthChecks()).find(
-      (candidate) => candidate.id === CHECK_ID,
-    );
-    expect(check).toBeDefined();
-    const runtime = { log() {}, error() {}, exit() {} };
-    const repaired = await runDoctorHealthRepairs(
-      { mode: "fix", runtime, cfg, env },
-      { checks: [check!] },
-    );
-    expect(repaired.remainingFindings).toEqual([]);
-    expect(repaired.changes).toEqual([
-      "Merged 1 stale Telegram General-topic conversation identity row(s).",
-    ]);
+    const repaired = await repair();
+    expect(repaired).toMatchObject({
+      remainingFindings: [],
+      changes: ["Merged 1 stale Telegram General-topic conversation identity row(s)."],
+    });
 
-    expect(await listConversations(scope, { channel: "telegram" })).toEqual([
-      expect.objectContaining({
-        conversationRef: canonical!.conversationRef,
-        target: "telegram:-1001234567890",
-        threadId: "1",
-        role: "primary",
-        sessionId: "topic-1-session",
-      }),
-    ]);
+    await expectCanonical({ conversationRef: canonical!.conversationRef });
     expect(
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .selectFrom("conversation_deliveries")
-          .select("conversation_id")
-          .where("operation_id", "=", "legacy-delivery"),
-      ).rows,
+      database.db
+        .prepare("SELECT conversation_id FROM conversation_deliveries WHERE operation_id = ?")
+        .all("legacy-delivery"),
     ).toEqual([{ conversation_id: canonical!.conversationRef }]);
     expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
 
-    const repeated = await runDoctorHealthRepairs(
-      { mode: "fix", runtime, cfg, env },
-      { checks: [check!] },
-    );
-    expect(repeated.findings).toEqual([]);
-    expect(repeated.changes).toEqual([]);
+    const repeated = await repair();
+    expect(repeated).toMatchObject({ findings: [], changes: [] });
     expect(await listConversations(scope, { channel: "telegram" })).toHaveLength(1);
   });
 
   it("canonicalizes a legacy-only current entry before later session writes", async () => {
-    const sessionKey = "agent:main:telegram:group:-1002223334444:topic:1";
-    const scope = { agentId: "main", env, sessionKey, storePath };
-    await upsertSessionEntryCore(scope, {
-      sessionId: "legacy-only-session",
-      updatedAt: 100,
-      chatType: "group",
-      delivery: normalizeSessionDeliveryState({
-        context: {
-          channel: "telegram",
-          accountId: "default",
-          to: "telegram:-1002223334444:topic:1",
-          threadId: "1",
-        },
-      }),
-    });
+    const { scope, write, expectCanonical } = session("-1002223334444", "legacy-only-session");
+    await write("telegram:-1002223334444:topic:1");
+    const contribution = initialDoctorHealthContribution(
+      "doctor:telegram-general-topic-conversations",
+    );
+    // Core contributions read the process environment, as in a Doctor run.
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", env.OPENCLAW_CONFIG_PATH);
+    const ctx = (shouldRepair: boolean) =>
+      createDoctorHealthFlowContext({
+        cfg,
+        env,
+        prompter: createDoctorPrompterFixture(shouldRepair),
+      });
+    const before = await listConversations(scope, { channel: "telegram" });
 
-    const check = (await resolveDoctorContributionHealthChecks()).find(
-      (candidate) => candidate.id === CHECK_ID,
-    );
-    expect(check).toBeDefined();
-    const runtime = { log() {}, error() {}, exit() {} };
-    const repaired = await runDoctorHealthRepairs(
-      { mode: "fix", runtime, cfg, env },
-      { checks: [check!] },
-    );
-    expect(repaired.remainingFindings).toEqual([]);
-    expect(await listConversations(scope, { channel: "telegram" })).toEqual([
-      expect.objectContaining({
-        target: "telegram:-1002223334444",
-        threadId: "1",
-        role: "primary",
-        sessionId: "legacy-only-session",
-      }),
-    ]);
+    // Doctor's pending check reads the same detect the repair runs, without writing.
+    await expect(decideDoctorContributionPending(contribution, ctx(true))).resolves.toBe("work");
+    await expect(decideDoctorContributionPending(contribution, ctx(false))).resolves.toBe("none");
+    expect(await listConversations(scope, { channel: "telegram" })).toEqual(before);
+
+    await contribution.run(ctx(true));
+    await expectCanonical();
+    await expect(decideDoctorContributionPending(contribution, ctx(true))).resolves.toBe("none");
 
     await patchSessionEntryCore(scope, () => ({ displayName: "harmless later write" }));
-    expect(await listConversations(scope, { channel: "telegram" })).toEqual([
-      expect.objectContaining({
-        target: "telegram:-1002223334444",
-        role: "primary",
-        sessionId: "legacy-only-session",
-      }),
-    ]);
+    await expectCanonical();
   });
 });

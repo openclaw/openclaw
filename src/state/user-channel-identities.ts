@@ -14,16 +14,18 @@ import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infr
 import { generateSecureUuid } from "../infra/secure-random.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import { updateConfigMachineStateInDatabase } from "./config-machine-state-write.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
+import { isStateSchemaVersionAtLeast } from "./openclaw-state-db-admission.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { parseUserChannelAuthorizationReference } from "./user-channel-authorization-reference.js";
 import {
   publishUserProfileAliasChange,
   publishUserChannelIdentityAuthorityChange,
@@ -31,6 +33,7 @@ import {
 } from "./user-profile-events.js";
 import { selectStoredGitHubIdentities } from "./user-profile-github-identity.js";
 import { publishUserProfilesChange } from "./user-profile-list.js";
+import { openClawIdProfileProvider } from "./user-profile-openclaw-id.types.js";
 import {
   requireResolvedUserProfileMetadataById,
   selectResolvedUserProfileMetadataById,
@@ -52,19 +55,10 @@ import type {
 // The dot keeps administrator-attested channel links outside Tailscale login namespaces.
 export const CHANNEL_IDENTITY_PROVIDER = "channel.identity";
 const POLICY_KEY = "operator.channelPolicy";
-const referenceSchema = z.strictObject({ version: z.literal(1), id: z.uuid() });
-const configuredReferenceSchema = referenceSchema.extend({ version: z.literal(2) });
 const configuredPolicySchema = z.strictObject({
   fingerprint: z.string().length(43),
   id: z.uuid(),
 });
-const commandReferenceSchema = z.union([referenceSchema, configuredReferenceSchema]);
-export type CommandOwnerReference = Readonly<z.infer<typeof commandReferenceSchema>>;
-
-export function parseCommandOwnerReference(value: unknown) {
-  return commandReferenceSchema.safeParse(value).data;
-}
-
 export function configuredCommandOwnerPolicyFingerprint(owners?: readonly (string | number)[]) {
   const entries = normalizeSortedUniqueStringEntries(owners);
   return entries.length ? sha256Base64Url(JSON.stringify(entries)) : undefined;
@@ -84,10 +78,6 @@ export function readConfiguredCommandOwnerPolicy(value: unknown, fingerprint: st
 const grantSchema = z
   .strictObject({ pluginId: z.string().min(1).max(128), grantId: z.uuid() })
   .nullable();
-export function parseUserChannelAuthorizationReference(value: unknown) {
-  return referenceSchema.safeParse(value).data;
-}
-
 export function resolveUserChannelAuthorizationPolicy(
   gateway: Pick<GatewayConfig, "roles" | "auth"> | undefined,
 ): UserChannelAuthorizationPolicy {
@@ -115,7 +105,7 @@ export function publishUserChannelPolicyInDatabase(
       const previous = splitPolicy(current);
       if (
         !isDeepStrictEqual(previous.policy, policy) &&
-        getAdmittedSqliteSchemaFacts(db)?.tables.has("user_profile_identities")
+        tableExists(db, "user_profile_identities")
       ) {
         profiles = executeSqliteQuerySync(
           db,
@@ -157,10 +147,7 @@ export function authorizeUserChannelIdentityInDatabase(
     grant: GatewayAccessGrantRef | null;
   },
 ): UserChannelAuthorizationReference | undefined {
-  if (
-    (getAdmittedSqliteSchemaFacts(db)?.userVersion ?? 0) < 19 ||
-    !matchesPolicy(db, input.policy)
-  ) {
+  if (!isStateSchemaVersionAtLeast(db, 19) || !matchesPolicy(db, input.policy)) {
     return undefined;
   }
   const subject = userChannelIdentitySubject(input.identity);
@@ -177,7 +164,7 @@ export function authorizeUserChannelIdentityInDatabase(
     return undefined;
   }
   const basis = JSON.stringify(grantSchema.parse(input.grant));
-  const original = referenceSchema.safeParse({ version: 1, id: row.authorization_id }).data;
+  const original = parseUserChannelAuthorizationReference({ version: 1, id: row.authorization_id });
   if (row.authorization_basis_json === basis && original) {
     return original;
   }
@@ -198,7 +185,7 @@ function readAuthorization(
   id: string,
   policy: UserChannelAuthorizationPolicy,
 ) {
-  if ((getAdmittedSqliteSchemaFacts(db)?.userVersion ?? 0) < 19 || !matchesPolicy(db, policy)) {
+  if (!isStateSchemaVersionAtLeast(db, 19) || !matchesPolicy(db, policy)) {
     return undefined;
   }
   const row = executeSqliteQueryTakeFirstSync(
@@ -338,15 +325,14 @@ export function unlinkUserChannelIdentity(
 }
 
 function hasIdentityTables(db: EngineConnection): boolean {
-  const tables = getAdmittedSqliteSchemaFacts(db)?.tables;
-  return tables?.has("user_profiles") === true && tables.has("user_profile_identities");
+  return tableExists(db, "user_profiles") && tableExists(db, "user_profile_identities");
 }
 
 export function listUserChannelIdentitiesInDatabase(
   db: EngineConnection,
   profileId: string,
 ): UserChannelIdentityLink[] {
-  return runSqliteDeferredTransactionSync(db, () => {
+  return runSqliteReadSnapshotSync(db, () => {
     if (!hasIdentityTables(db)) {
       return [];
     }
@@ -371,7 +357,7 @@ export function resolveUserChannelIdentityInDatabase(
   db: EngineConnection,
   identity: UserChannelIdentitySelector,
 ): UserChannelIdentityAuthorityFacts | undefined {
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     db,
     () => {
       if (!hasIdentityTables(db)) {
@@ -388,6 +374,10 @@ export function resolveUserChannelIdentityInDatabase(
       } else {
         subject = userChannelIdentitySubject(identity);
       }
+      const nativeIdentity = "authorizationId" in identity ? readIdentity(subject) : identity;
+      if (!nativeIdentity) {
+        return undefined;
+      }
       const link = selectLink(db, subject);
       const profile = link ? selectResolvedUserProfileMetadataById(db, link.profile_id) : undefined;
       if (!profile || profile.id === GATEWAY_OWNER_PROFILE_ID) {
@@ -400,16 +390,20 @@ export function resolveUserChannelIdentityInDatabase(
         // Legacy email-shaped GitHub aliases must not revive a renamed login's grant.
         return login.kind !== "provider" || login.provider !== "github";
       });
-      const providerLogins = executeSqliteQuerySync(
+      const providerIdentities = executeSqliteQuerySync(
         db,
         kysely
           .selectFrom("user_profile_identities")
           .select(["provider", "subject"])
           .where("profile_id", "=", profile.id)
           .where("canonical_login", "is", null),
-      )
+      ).rows;
+      const openclawIdAccountIds = providerIdentities
+        .filter((row) => row.provider === openClawIdProfileProvider)
+        .map((row) => row.subject);
+      const providerLogins = providerIdentities
         // Retired attribution rows are not authenticated provider-login aliases.
-        .rows.filter(
+        .filter(
           (row) =>
             row.provider !== "github" &&
             row.provider !== "github-attribution" &&
@@ -421,8 +415,10 @@ export function resolveUserChannelIdentityInDatabase(
       const githubLogins =
         githubAccounts?.map((account) => `${account.login.toLowerCase()}@github`) ?? [];
       return {
+        identity: nativeIdentity,
         ...(authorization ? { authorization } : {}),
         profileId: profile.id,
+        ...(openclawIdAccountIds.length ? { openclawIdAccountIds } : {}),
         displayName: profile.display_name,
         role: profile.role ?? null,
         emails,

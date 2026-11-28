@@ -4,9 +4,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -68,8 +69,8 @@ function readReceipt(
   }
   if (turn.state === "running" && owner.state !== "pending" && owner.state !== "running") {
     // A predecessor can finish the physical journal without knowing about turn receipts.
-    settleNodeWorkerActiveTurns(database, owner);
-    turn = readRow(database, turnId)!;
+    // The active-owner index bounds settlement to this one running turn.
+    turn = settleNodeWorkerActiveTurns(database, owner, undefined, true)!;
   }
   return turnReceiptFromRow(turn, owner);
 }
@@ -144,7 +145,11 @@ export class NodeWorkerTurnKernel {
           stage: "transaction",
           facts: { kind: "node-worker-journal" },
         });
-        turnSchema(db);
+        if (isPostgresSqlConnection(db)) {
+          ensureStatePostgresFragment(db, "node_worker_turns");
+        } else {
+          turnSchema(db);
+        }
         return operation(db);
       },
       this.databaseOptions,

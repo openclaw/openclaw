@@ -40,10 +40,12 @@ import { buildCommandTestParams } from "./commands.test-harness.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
 
+const channelAccount = { channel: "discord", accountId: "default" };
+
 it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"] as const)(
   "dispatches %s ACP sessions without confusing the configured owner and harness storage",
-  async (kind) => {
-    await withOpenClawTestState(
+  (kind) =>
+    withOpenClawTestState(
       { label: "acp-spawn-owner", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
         const backendId = "synthetic-owner";
@@ -70,7 +72,6 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
           id: "acpx",
           origin: "bundled",
           source: state.path("acpx", "index.ts"),
-          status: "loaded",
         });
         const api = registry.createApi(plugin, { config: cfg });
         registry.registry.plugins.push(plugin);
@@ -89,7 +90,6 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
               throw new Error(`No published runtime for ${agentId}`);
             }
             afterRuntimePrepared?.();
-            return undefined;
           });
         const turns: Array<{ agentId: string | undefined; sessionKey: string }> = [];
         registerAcpRuntimeBackend({
@@ -116,8 +116,7 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
         let manager = getAcpSessionManager();
         let binding: SessionBindingRecord | null = null;
         const adapter = {
-          channel: "discord",
-          accountId: "default",
+          ...channelAccount,
           listBySession: () => (binding ? [binding] : []),
           resolveByConversation: () => binding,
         };
@@ -135,19 +134,14 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
           const storeAgentId =
             kind === "spawned" ? "main" : kind === "configured" ? "work" : "free-harness";
           if (kind === "spawned") {
+            const args = ["free-harness", "--thread", "off", "--label", "owner-proof"];
             const params = buildCommandTestParams(
-              "/acp spawn free-harness --thread off --label owner-proof",
+              `/acp spawn ${args.join(" ")}`,
               cfg,
               { AgentId: "main", SessionKey: "agent:main:main" },
               { workspaceDir: state.workspaceDir },
             );
-            const result = await handleAcpSpawnAction(params, [
-              "free-harness",
-              "--thread",
-              "off",
-              "--label",
-              "owner-proof",
-            ]);
+            const result = await handleAcpSpawnAction(params, args);
             expect(result?.reply?.text).toContain("Spawned ACP session agent:main:acp:");
             sessionKey = result?.reply?.text?.match(/Spawned ACP session (\S+)/)?.[1] ?? "";
             expect(loadSessionEntryReadOnly({ agentId: storeAgentId, sessionKey })?.label).toBe(
@@ -163,6 +157,7 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
               mode: "persistent",
             });
           }
+          const scope = { agentId: storeAgentId, sessionKey };
           if (kind === "reopened") {
             await disposeAcpSessionManagerInstance(manager, "simulate-restart");
             testing.resetAcpSessionManagerForTests();
@@ -174,17 +169,12 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
             targetKind: "session",
             status: "active",
             boundAt: 1,
-            conversation: {
-              channel: "discord",
-              accountId: "default",
-              conversationId: "owner-room",
-            },
+            conversation: { ...channelAccount, conversationId: "owner-room" },
           };
           const { route } = inspectRuntimeConversationBindingRoute({
             route: {
               agentId: "main",
-              channel: "discord",
-              accountId: "default",
+              ...channelAccount,
               sessionKey: "agent:main:source",
               mainSessionKey: "agent:main:main",
               lastRoutePolicy: "session",
@@ -193,8 +183,7 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
             inspection: { status: "available", binding },
           });
           const ctx = buildChannelInboundEventContext({
-            channel: "discord",
-            accountId: "default",
+            ...channelAccount,
             messageId: "owner-" + kind,
             from: "synthetic-user",
             sender: { id: "synthetic-user" },
@@ -227,33 +216,22 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
           expect(delivered.join("")).toContain("owner reply");
           expect(turns).toEqual([{ agentId: storeAgentId, sessionKey }]);
           await waitForSessionParticipantRecording({
-            agentId: storeAgentId,
-            sessionKey,
+            ...scope,
             storePath: resolveSessionStorePathCore(undefined, { agentId: storeAgentId }),
           });
-          expect(
-            listSessionParticipantsReadOnly({ agentId: storeAgentId, sessionKey }).get(sessionKey),
-          ).toHaveLength(1);
-          const entry = loadSessionEntryReadOnly({ agentId: storeAgentId, sessionKey });
+          expect(listSessionParticipantsReadOnly(scope).get(sessionKey)).toHaveLength(1);
+          const entry = loadSessionEntryReadOnly(scope);
           if (!entry) {
             throw new Error("ACP dispatch lost its canonical session");
           }
+          expect((await readAcpSessionMetaAsync({ cfg, ...scope }))?.agent).toBe("free-harness");
           expect(
-            (await readAcpSessionMetaAsync({ cfg, agentId: storeAgentId, sessionKey }))?.agent,
-          ).toBe("free-harness");
-          expect(
-            await loadTranscriptEvents({
-              agentId: storeAgentId,
-              sessionKey,
-              sessionId: entry.sessionId,
+            await loadTranscriptEvents({ ...scope, sessionId: entry.sessionId }),
+          ).toContainEqual(
+            expect.objectContaining({
+              type: "message",
+              message: expect.objectContaining({ role: "assistant" }),
             }),
-          ).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                type: "message",
-                message: expect.objectContaining({ role: "assistant" }),
-              }),
-            ]),
           );
           expect(
             loadSessionEntryReadOnly({
@@ -264,7 +242,7 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
         } finally {
           dispatcher.markComplete();
           await dispatcher.waitForIdle();
-          unregisterSessionBindingAdapter({ channel: "discord", accountId: "default", adapter });
+          unregisterSessionBindingAdapter({ ...channelAccount, adapter });
           await disposeAcpSessionManagerInstance(manager, "test-complete");
           testing.resetAcpSessionManagerForTests();
           unregisterAcpRuntimeBackend(backendId);
@@ -275,6 +253,5 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
           resetInboundDedupe();
         }
       },
-    );
-  },
+    ),
 );

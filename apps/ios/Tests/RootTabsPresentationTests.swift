@@ -21,10 +21,11 @@ struct RootTabsPresentationTests {
 
     @Test func `every sidebar destination resolves to a native screen or a valid Dashboard route`() {
         let expected: [RootTabs.SidebarDestination: RootTabs.SidebarScreen] = [
-            .chat: .chat, .overview: .overview, .agents: .agents, .sessions: .sessions,
-            .files: .files, .desktop: .desktop, .terminal: .terminal, .docs: .docs,
+            .chat: .chat, .sessions: .sessions,
+            .files: .files, .desktop: .desktop, .terminal: .terminal,
             .settings: .settings, .gateway: .gateway,
             .activity: .dashboard("/activity"), .workboard: .dashboard("/workboard"),
+            .systems: .dashboard("/systems"),
             .skillWorkshop: .dashboard("/skills/workshop"), .instances: .dashboard("/settings/devices"),
             .dreaming: .dashboard("/settings/memory/dreams"), .usage: .dashboard("/usage"),
             .cron: .dashboard("/automations"),
@@ -41,15 +42,15 @@ struct RootTabsPresentationTests {
     @Test func `session activity clamps current and future timestamps to just now`() {
         let now = Date(timeIntervalSince1970: 1_750_000_000)
 
-        #expect(CommandCenterTab.relativeTimeText(
+        #expect(SessionPresentation.relativeTimeText(
             forMilliseconds: now.timeIntervalSince1970 * 1000,
             relativeTo: now) == "just now")
-        #expect(CommandCenterTab.relativeTimeText(
+        #expect(SessionPresentation.relativeTimeText(
             forMilliseconds: now.addingTimeInterval(30).timeIntervalSince1970 * 1000,
             relativeTo: now) == "just now")
     }
 
-    @Test func `dashboard deep link requests overview navigation`() async throws {
+    @Test func `dashboard deep link requests root navigation`() async throws {
         let appModel = NodeAppModel()
         let initialRequestID = appModel.dashboardNavigationRequestID
         let url = try #require(URL(string: "openclaw://dashboard"))
@@ -80,21 +81,7 @@ struct RootTabsPresentationTests {
         #expect(appModel.consumeNewChatRequest(appModel.newChatRequestID))
     }
 
-    @Test func `overview session metrics exclude snoozed archived and internal sessions`() {
-        let now = Date(timeIntervalSince1970: 1_750_000_000)
-        let visible = CommandCenterTab.visibleOverviewSessions([
-            Self.sessionEntry(key: "main"),
-            Self.sessionEntry(key: "onboarding"),
-            Self.sessionEntry(key: "agent:main:onboarding"),
-            Self.sessionEntry(key: "archived", archived: true),
-            Self.sessionEntry(key: "snoozed", snoozedUntil: now.addingTimeInterval(3600).timeIntervalSince1970 * 1000),
-            Self.sessionEntry(key: "expired", snoozedUntil: now.timeIntervalSince1970 * 1000),
-        ], now: now)
-
-        #expect(visible.map(\.key) == ["main", "expired"])
-    }
-
-    @Test func `overview token usage sums known totals and marks stale or missing rows partial`() {
+    @Test func `roster token usage sums known totals and marks stale or missing rows partial`() {
         let summary = RootSidebarModel.tokenUsageSummary(for: [
             Self.sessionEntry(key: "fresh", totalTokens: 1200, totalTokensFresh: true, contextTokens: 200_000),
             Self.sessionEntry(key: "stale", totalTokens: 300, totalTokensFresh: false, contextTokens: 200_000),
@@ -191,6 +178,22 @@ struct RootTabsPresentationTests {
         #expect(snapshot.sessions.count == 200)
         #expect(snapshot.totalCount == 350)
         #expect(!snapshot.isComplete)
+        #expect(snapshot.incompleteLoadMessage == "Couldn’t load some sessions. Try again.")
+    }
+
+    @Test func `incomplete-load notice stays silent for complete and cached rosters`() {
+        let rows = [Self.sessionEntry(key: "one")]
+        let complete = ChatSessionRosterSnapshot(
+            sessions: rows,
+            isCached: false,
+            totalCount: 1,
+            isComplete: true)
+        let cached = ChatSessionRosterSnapshot(sessions: rows, isCached: true, isComplete: false)
+        let unknownTotal = ChatSessionRosterSnapshot(sessions: rows, isCached: false, isComplete: false)
+
+        #expect(complete.incompleteLoadMessage == nil)
+        #expect(cached.incompleteLoadMessage == nil)
+        #expect(unknownTotal.incompleteLoadMessage == "Couldn’t load some sessions. Try again.")
     }
 
     @Test func `session roster rejects a nonadvancing gateway cursor without losing rows`() async throws {
@@ -261,12 +264,6 @@ struct RootTabsPresentationTests {
         #expect(!RootSidebarModel.isFailedCronJob(Self.cronJob(enabled: true, status: "ok")))
     }
 
-    @Test func `recent session cap is disabled while search is active`() {
-        #expect(RootSidebar.recentSessionCap(searchText: "") == 20)
-        #expect(RootSidebar.recentSessionCap(searchText: "  \n") == 20)
-        #expect(RootSidebar.recentSessionCap(searchText: "deploy") == nil)
-    }
-
     @Test func `configured gateway bypasses launch request and stale onboarding markers`() {
         let route = RootTabs.startupPresentationRoute(
             gatewayConnected: false,
@@ -276,6 +273,19 @@ struct RootTabsPresentationTests {
             shouldPresentOnLaunch: true)
 
         #expect(route == .none)
+    }
+
+    @Test func `first gateway help requires a loaded empty registry and no configured route`() {
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: nil, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: true, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: true))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: true, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: false))
     }
 
     @Test func `fresh install presents onboarding`() {
@@ -341,26 +351,23 @@ struct RootTabsPresentationTests {
 
         #expect(RootTabs.sidebarDestinations == [
             .chat,
-            .overview,
             .workboard,
             .usage,
             .cron,
             .sessions,
             .activity,
+            .systems,
             .skillWorkshop,
-            .agents,
             .instances,
             .files,
             .dreaming,
             .desktop,
             .terminal,
-            .docs,
         ])
         #expect(destinationIDs == [
             "chat",
-            "overview",
             "activity",
-            "agents",
+            "systems",
             "workboard",
             "skillWorkshop",
             "instances",
@@ -371,7 +378,6 @@ struct RootTabsPresentationTests {
             "cron",
             "desktop",
             "terminal",
-            "docs",
             "settings",
             "gateway",
         ])
@@ -395,10 +401,10 @@ struct RootTabsPresentationTests {
 
     @Test func `app launch uses requested destination before chat fallback`() {
         #expect(RootTabs
-            .initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "overview"]) == .overview)
+            .initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "overview"]) == .chat)
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "chat"]) == .chat)
         #expect(RootTabs
-            .initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "agents"]) == .agents)
+            .initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "agents"]) == .chat)
         #expect(RootTabs
             .initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "gateway"]) == .gateway)
         #expect(
@@ -412,12 +418,12 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `legacy initial tab aliases map directly to sidebar destinations`() {
-        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "control"]) == .overview)
-        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "overview"]) == .overview)
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "control"]) == .chat)
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "overview"]) == .chat)
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "chat"]) == .chat)
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "talk"]) == .chat)
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "voice"]) == .chat)
-        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "agents"]) == .agents)
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "agents"]) == .chat)
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "settings"]) == .settings)
     }
 
@@ -464,29 +470,30 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `wide i pad portrait uses persistent sidebar`() {
-        let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 1024, height: 1366), isPad: true)
+        let mode = RootTabs.sidebarLayoutMode(
+            containerSize: CGSize(width: 1024, height: 1366),
+            horizontalSizeClass: .regular,
+            verticalSizeClass: .regular)
 
         #expect(mode == .split)
         #expect(RootTabs.sidebarVisibility(layoutMode: mode, splitPreference: nil))
     }
 
-    @Test func `keyboard contracted content uses portrait window for sidebar layout`() {
-        let size = RootTabs.sidebarLayoutContainerSize(
-            contentSize: CGSize(width: 1032, height: 973),
-            windowSize: CGSize(width: 1032, height: 1376))
+    @Test func `expanded phone space uses persistent sidebar`() {
+        let mode = RootTabs.sidebarLayoutMode(
+            containerSize: CGSize(width: 951, height: 669),
+            horizontalSizeClass: .regular,
+            verticalSizeClass: .regular)
 
-        #expect(size == CGSize(width: 1032, height: 1376))
-        #expect(RootTabs.sidebarLayoutMode(containerSize: size, isPad: true) == .split)
-    }
-
-    @Test func `sidebar layout container falls back to content size without a window`() {
-        let contentSize = CGSize(width: 900, height: 600)
-
-        #expect(RootTabs.sidebarLayoutContainerSize(contentSize: contentSize, windowSize: nil) == contentSize)
+        #expect(mode == .split)
+        #expect(RootTabs.sidebarVisibility(layoutMode: mode, splitPreference: nil))
     }
 
     @Test func `i pad wide landscape uses visible split sidebar`() {
-        let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 1366, height: 1024), isPad: true)
+        let mode = RootTabs.sidebarLayoutMode(
+            containerSize: CGSize(width: 1366, height: 1024),
+            horizontalSizeClass: .regular,
+            verticalSizeClass: .regular)
 
         #expect(mode == .split)
         #expect(RootTabs.sidebarVisibility(layoutMode: mode, splitPreference: nil))
@@ -494,26 +501,54 @@ struct RootTabsPresentationTests {
 
     @Test(arguments: [CGFloat(400), 900, 1366])
     func `persistent sidebar threshold depends on width not height`(height: CGFloat) {
-        #expect(RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 799, height: height), isPad: true) == .drawer)
-        #expect(RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 800, height: height), isPad: true) == .split)
-        #expect(RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 801, height: height), isPad: true) == .split)
+        #expect(RootTabs.sidebarLayoutMode(
+            containerSize: CGSize(width: 799, height: height),
+            horizontalSizeClass: .regular,
+            verticalSizeClass: .regular) == .drawer)
+        #expect(RootTabs.sidebarLayoutMode(
+            containerSize: CGSize(width: 800, height: height),
+            horizontalSizeClass: .regular,
+            verticalSizeClass: .regular) == .split)
+        #expect(RootTabs.sidebarLayoutMode(
+            containerSize: CGSize(width: 801, height: height),
+            horizontalSizeClass: .regular,
+            verticalSizeClass: .regular) == .split)
     }
 
     @Test(arguments: [CGFloat(744), 800, 852, 932, 1032, 1366])
-    func `phones and accessibility text retain single column navigation`(width: CGFloat) {
+    func `compact height and accessibility text retain single column navigation`(width: CGFloat) {
         let size = CGSize(width: width, height: 430)
-        #expect(RootTabs.sidebarLayoutMode(containerSize: size, isPad: false) == .drawer)
         #expect(RootTabs.sidebarLayoutMode(
-            containerSize: size, isPad: true, usesAccessibilityText: true) == .drawer)
+            containerSize: size,
+            horizontalSizeClass: .regular,
+            verticalSizeClass: .compact) == .drawer)
+        #expect(RootTabs.sidebarLayoutMode(
+            containerSize: size,
+            horizontalSizeClass: .regular,
+            verticalSizeClass: .regular,
+            usesAccessibilityText: true) == .drawer)
     }
 
     @Test(arguments: [CGFloat(800), 810, 820, 834, 1024, 1366])
     func `tablet split preserves minimum detail width`(width: CGFloat) {
         #expect(RootTabs.sidebarLayoutMode(
-            containerSize: CGSize(width: width, height: 1180), isPad: true) == .split)
+            containerSize: CGSize(width: width, height: 1180),
+            horizontalSizeClass: .regular,
+            verticalSizeClass: .regular) == .split)
         let sidebar = RootTabs.sidebarWidth(containerWidth: width, isDrawerLayout: false)
         #expect(sidebar >= 300 && sidebar <= 320)
         #expect(width - sidebar >= 500)
+    }
+
+    @Test func `compact width and unspecified traits keep drawer navigation`() {
+        for (horizontal, vertical): (UserInterfaceSizeClass?, UserInterfaceSizeClass?) in [
+            (.compact, .regular), (nil, .regular), (.regular, nil), (nil, nil),
+        ] {
+            #expect(RootTabs.sidebarLayoutMode(
+                containerSize: CGSize(width: 951, height: 669),
+                horizontalSizeClass: horizontal,
+                verticalSizeClass: vertical) == .drawer)
+        }
     }
 
     @Test func `split visibility preference survives an intervening drawer layout`() {
@@ -576,13 +611,15 @@ struct RootTabsPresentationTests {
         #expect(RootSidebar.sessionAccessibilityValue(isPinned: true, isUnread: true) == "Pinned, Unread")
     }
 
-    @Test(arguments: ["recent", "agent:main:later", "later"])
-    func `iOS sidebar groups awake sessions without restoring a snoozed selection`(currentSessionKey: String) {
+    @Test(arguments: ["recent", "agent:main:later", "later", "agent:main:archived", "archived"])
+    func `iOS sidebar keeps archived and snoozed selections out of active rows`(currentSessionKey: String) {
         let now = Date(timeIntervalSince1970: 1_750_000_000)
         let sections = RootSidebarModel.sections(
             sessions: [
                 Self.sessionEntry(key: "pinned", pinned: true),
                 Self.sessionEntry(key: "recent"),
+                Self.sessionEntry(key: "agent:main:archived", archived: true, pinned: true),
+                Self.sessionEntry(key: "archived-unpinned", archived: true),
                 Self.sessionEntry(
                     key: "agent:main:later",
                     snoozedUntil: now.addingTimeInterval(3600).timeIntervalSince1970 * 1000),
@@ -602,14 +639,60 @@ struct RootTabsPresentationTests {
         #expect(Set(layout.sections.flatMap(\.nodes).map(\.session.key)) == ["recent", "expired"])
     }
 
-    @Test func `sidebar agent badges use canonical identity fallback`() {
-        #expect(RootSidebar.agentBadge(
-            name: "Research Agent",
-            identity: ["emoji": AnyCodable(" 🦞 ")]) == "🦞")
-        #expect(RootSidebar.agentBadge(
-            name: "Research Agent",
-            identity: ["emoji": AnyCodable("?")]) == "RA")
-        #expect(RootSidebar.agentBadge(name: "Research Agent", identity: nil) == "RA")
+    @Test(arguments: [false, true])
+    func `sidebar retains a missing selection only while the roster is incomplete`(complete: Bool) {
+        let model = RootSidebarModel()
+        #expect(!model.isSessionRosterComplete)
+        model.applyRoster(.init(
+            sessions: [Self.sessionEntry(key: "agent:main:recent")],
+            isCached: false,
+            isComplete: complete))
+        let sections = RootSidebarModel.sections(
+            sessions: model.sessions,
+            query: "",
+            currentSessionKey: "agent:main:removed",
+            mainSessionKey: "main",
+            activeAgentID: "main",
+            groups: [],
+            rosterIsComplete: model.isSessionRosterComplete)
+        #expect(Set(sections.flatMap(\.nodes).map(\.session.key)) == (complete
+                ? ["agent:main:recent"]
+                : ["agent:main:recent", "agent:main:removed"]))
+    }
+
+    @Test(arguments: [
+        ("", "conversation", false, false),
+        ("", "agent:main:cron:daily", false, true),
+        ("Scheduled", "conversation", false, true),
+        ("", "agent:main:cron:daily", true, false),
+        ("Scheduled", "conversation", true, false),
+    ])
+    func `pinned automations stay discoverable through selection and search`(
+        query: String, selected: String, archived: Bool, showsAutomation: Bool) throws
+    {
+        let entries = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data("""
+        [
+          {"key":"agent:main:cron:daily","label":"Scheduled task","pinned":true,"archived":\(archived)},
+          {"key":"conversation"}
+        ]
+        """.utf8))
+        let key = "agent:main:cron:daily"
+        for personallyPinned in [false, true] {
+            let sections = RootSidebarModel.sections(
+                sessions: entries,
+                query: query,
+                currentSessionKey: selected,
+                mainSessionKey: "main",
+                activeAgentID: "main",
+                groups: [],
+                personalPins: IOSSidebarPins(entries: personallyPinned ? ["session:\(key)"] : []))
+            let placements = sections.filter { $0.nodes.contains { $0.session.key == key } }.map(\.id)
+            if personallyPinned {
+                #expect(placements == (archived ? [] : ["pinned"]))
+            } else {
+                #expect(placements == (showsAutomation ? ["recent"] : []))
+            }
+        }
     }
 
     @Test func `session work subtitle mirrors the web repo and branch line`() {
@@ -789,19 +872,20 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `pinned pages storage round trips and preserves pin order`() {
+        #expect(RootTabs.defaultPinnedSidebarPages == [.sessions, .cron, .usage])
         #expect(RootTabs.pinnedSidebarPages(from: "") == RootTabs.defaultPinnedSidebarPages)
         #expect(RootTabs.pinnedSidebarPages(from: "none").isEmpty)
         #expect(RootTabs.pinnedSidebarPagesStorage([]) == "none")
 
         // Storage order is the user's pin order (web parity).
-        let parsed = RootTabs.pinnedSidebarPages(from: "usage,overview,docs")
-        #expect(parsed == [.usage, .overview, .docs])
+        let parsed = RootTabs.pinnedSidebarPages(from: "usage,overview,docs,agents")
+        #expect(parsed == [.usage])
 
-        let storage = RootTabs.pinnedSidebarPagesStorage([.docs, .overview, .usage])
-        #expect(RootTabs.pinnedSidebarPages(from: storage) == [.docs, .overview, .usage])
+        let storage = RootTabs.pinnedSidebarPagesStorage([.sessions, .activity, .usage])
+        #expect(RootTabs.pinnedSidebarPages(from: storage) == [.sessions, .activity, .usage])
 
         // Duplicates collapse to first occurrence.
-        #expect(RootTabs.pinnedSidebarPages(from: "usage,usage,docs") == [.usage, .docs])
+        #expect(RootTabs.pinnedSidebarPages(from: "usage,usage,sessions") == [.usage, .sessions])
 
         // Unknown raw values are dropped; chat is never pinnable.
         #expect(RootTabs.pinnedSidebarPages(from: "chat,bogus").isEmpty)
@@ -855,7 +939,10 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `narrow landscape keeps drawer sidebar`() {
-        let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 744, height: 600), isPad: true)
+        let mode = RootTabs.sidebarLayoutMode(
+            containerSize: CGSize(width: 744, height: 600),
+            horizontalSizeClass: .regular,
+            verticalSizeClass: .regular)
 
         #expect(mode == .drawer)
         #expect(!RootTabs.sidebarVisibility(layoutMode: mode, splitPreference: nil))
@@ -866,23 +953,12 @@ struct RootTabsPresentationTests {
         #expect(!RootTabs.sidebarVisibility(layoutMode: .drawer, splitPreference: nil))
     }
 
-    @Test func `destination headers own hidden sidebar reveal control`() {
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .drawer))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .split))
-        #expect(
-            !RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .drawer))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .split))
+    @Test func `destination header control hides only a visible split sidebar`() {
+        // A drawer opening must not change the destination toolbar, so its control stays Show.
+        #expect(!RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: false, layoutMode: .drawer))
+        #expect(!RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: true, layoutMode: .drawer))
+        #expect(!RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: false, layoutMode: .split))
+        #expect(RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: true, layoutMode: .split))
     }
 
     private static func sessionEntry(

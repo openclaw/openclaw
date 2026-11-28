@@ -1,16 +1,15 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds } from "../agents/agent-scope.js";
-import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
 import { collectCanonicalSessionLookupKeys } from "../config/sessions/main-session-key.js";
-import { captureMemoryExactSessionReader } from "../config/sessions/session-accessor.memory-exact-read.js";
 import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
 import { SessionEntryChangedDuringReadError } from "../config/sessions/session-entry-read-errors.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionMember } from "../config/sessions/session-membership-facts.types.js";
-import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
+import { captureSessionStoreTargetInventory } from "../config/sessions/session-store-target-routing.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
+import { prepareSessionStoreCandidatesInWorker } from "../config/sessions/session-transcript-worker-resources.js";
 import type { ExistingAgentSessionStoreTargetResolver } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -36,7 +35,7 @@ import {
 import { GatewaySessionFactsChangedDuringReadError } from "./session-utils-store-errors.js";
 import { prepareIncognitoGatewaySessionStoreTarget } from "./session-utils-store-incognito.js";
 import {
-  loadGatewaySessionStoreReads,
+  createGatewaySessionStore,
   gatewaySessionStoreReadOptions,
   readGatewaySessionStore,
   type GatewaySessionStoreRead,
@@ -85,7 +84,11 @@ function prepareGatewaySessionStoreLookup(
     // Retired/manual agents require an existing discovered store; lookup never creates one.
     return {
       reads: [],
-      resolve: () => ({ storePath: fallback.storePath, store: {}, match: undefined }),
+      resolve: () => ({
+        storePath: fallback.storePath,
+        store: createGatewaySessionStore([]),
+        match: undefined,
+      }),
     };
   }
   const reads = candidates.map((target, index): GatewaySessionStoreRead => ({
@@ -99,7 +102,7 @@ function prepareGatewaySessionStoreLookup(
     ),
     result:
       index === 0 && target.storePath === fallback.storePath && params.store !== undefined
-        ? ok(params.store)
+        ? params.store
         : undefined,
   }));
   return {
@@ -265,15 +268,7 @@ export function resolveNativeGatewaySessionStoreTargetWithStore(
 ): GatewaySessionStoreTargetWithStore {
   const normalized = { ...params, key: normalizeOptionalString(params.key) ?? "" };
   const deletedMain = prepareExplicitDeletedLegacyMainStoreTarget(normalized)?.resolve();
-  const target = deletedMain ?? prepareGatewaySessionStoreTarget(normalized).resolve();
-  return isIncognitoSessionKey(target.canonicalKey)
-    ? includeIncognitoDirectChildEntries(
-        target,
-        params.includeStoreChildEntries,
-        params.cfg,
-        params.env,
-      )
-    : target;
+  return deletedMain ?? prepareGatewaySessionStoreTarget(normalized).resolve();
 }
 
 /** Durable discovery and rows are acquired by the existing session read worker. */
@@ -353,7 +348,7 @@ export async function withGatewaySessionStoreTarget<T>(
   if (identities.some((selected) => isIncognitoSessionKey(selected.canonicalKey))) {
     throw new Error("Related incognito rows require their captured actor");
   }
-  const inventory = prepareSessionStoreTargetInventory(
+  const capturedInventory = captureSessionStoreTargetInventory(
     params.cfg,
     [
       ...identities.map((selected) => selected.agentId),
@@ -363,6 +358,19 @@ export async function withGatewaySessionStoreTarget<T>(
     ],
     params.env,
   );
+  const preparedInventory = await prepareSessionStoreCandidatesInWorker({
+    inventory: true,
+    captureIdentity: false,
+    ...capturedInventory,
+  });
+  if (!preparedInventory.inventory) {
+    throw new Error("Session discovery worker did not return its prepared inventory");
+  }
+  const inventory = {
+    ...preparedInventory.inventory,
+    config: capturedInventory.config,
+    env: capturedInventory.env,
+  };
   const inventoryRead = prepareSessionStoreTargetInventoryRead(inventory);
   return inventoryRead.withRead(async (sources, assertDiscoveryCurrent) => {
     const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
@@ -448,11 +456,7 @@ export async function withGatewaySessionStoreTarget<T>(
               };
               for (const [index, read] of reads.entries()) {
                 const owner = prepared[index]!;
-                read.result = ok(
-                  Object.fromEntries(
-                    owner.result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-                  ),
-                );
+                read.result = createGatewaySessionStore(owner.result.entries);
                 read.readSource = { agentId: owner.database.agentId, path: owner.database.path };
                 read.capturedReadSource =
                   captureGatewaySessionReadSource(read.readSource, owner.result.databaseIdentity) ??
@@ -561,79 +565,4 @@ export async function prepareGatewaySessionStoreTargetReadPlan(
     prepareReads,
     onSelected,
   });
-}
-
-/** Resolve one synchronous set of logical metadata targets using exact grouped reads. */
-function resolveGatewaySessionStoreTargetsReadOnly(params: {
-  env?: NodeJS.ProcessEnv;
-  cfg: OpenClawConfig;
-  targets: readonly { key: string; agentId?: string }[];
-  projection?: SessionEntryReadScope["projection"];
-}): GatewaySessionStoreTargetWithStore[] {
-  const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  const requests = params.targets.map((target) => {
-    const lookup: GatewaySessionStoreLookupParams = {
-      ...target,
-      key: normalizeOptionalString(target.key) ?? "",
-      cfg: params.cfg,
-      env: params.env,
-      clone: false,
-      readOnly: true,
-      exactRead: true,
-      projection: params.projection ?? "list",
-      targetDiscoveryCache,
-    };
-    return { lookup, legacy: prepareExplicitDeletedLegacyMainStoreTarget(lookup) };
-  });
-  loadGatewaySessionStoreReads(requests.flatMap((request) => request.legacy?.reads ?? []));
-  const selected = requests.map(({ lookup, legacy }) => {
-    // Only a legacy miss permits fallback; a logical error must stay with its target.
-    const target = legacy?.resolve();
-    return target ? { reads: [], resolve: () => target } : prepareGatewaySessionStoreTarget(lookup);
-  });
-  loadGatewaySessionStoreReads(selected.flatMap((selection) => selection.reads));
-  return selected.map((selection) => selection.resolve());
-}
-
-function includeIncognitoDirectChildEntries(
-  target: GatewaySessionStoreTargetWithStore,
-  include: boolean | undefined,
-  cfg: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-): GatewaySessionStoreTargetWithStore {
-  if (!include) {
-    return target;
-  }
-  try {
-    const parentKeys = new Set([target.canonicalKey, ...target.storeKeys]);
-    const childKeys = new Set<string>();
-    const memory = captureMemoryExactSessionReader({
-      agentId: target.agentId,
-      env,
-      sessionKey: target.canonicalKey,
-      storePath: target.storePath,
-    });
-    for (const { sessionKey, entry } of memory?.children([...parentKeys], "list") ?? []) {
-      target.store[sessionKey] = entry;
-    }
-    for (const { childSessionKey } of listSubagentSessionListRunsForControllers([...parentKeys])) {
-      childKeys.add(childSessionKey);
-    }
-    // Retained runs are discovery hints, not existence: deduplicate and batch exact reads.
-    const targets = [...childKeys].filter((key) => !target.store[key]).map((key) => ({ key }));
-    for (const child of resolveGatewaySessionStoreTargetsReadOnly({
-      cfg,
-      env,
-      targets,
-      projection: "list",
-    })) {
-      const entry = child.store[child.canonicalKey];
-      if (entry && !parentKeys.has(child.canonicalKey)) {
-        target.store[child.canonicalKey] = entry;
-      }
-    }
-  } catch {
-    // Match the existing read-only lookup contract: unavailable stores degrade to no rows.
-  }
-  return target;
 }

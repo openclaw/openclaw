@@ -7,6 +7,7 @@ import { isCronSessionDisplayKey } from "../../../src/shared/session-list-visibi
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { pathDisplayName } from "./path-display.ts";
+import { isDashboardSessionKey } from "./sessions/session-key.ts";
 
 const CHANNEL_LABELS = new Map<string, string>([
   ["imessage", "iMessage"],
@@ -30,7 +31,7 @@ const CHANNEL_LABELS = new Map<string, string>([
 const OPAQUE_ID_RUN_RE =
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{10,}/gi;
 
-function shortenOpaqueIdRuns(text: string): string {
+export function shortenOpaqueIdRuns(text: string): string {
   return text.replace(OPAQUE_ID_RUN_RE, (match) => `…${match.slice(-4)}`);
 }
 
@@ -40,9 +41,11 @@ const WORKTREE_BRANCH_PREFIX = "openclaw/";
 // canonical parser still accepts both (src/sessions/session-key-utils.ts).
 // Only direct chats take an account segment (src/routing/session-key.ts), so an
 // account-qualified group or channel key is not a shape any producer emits and
-// must not name a channel here either.
+// must not name a channel here either. `:thread:` is a suffix on a complete base
+// key (resolveThreadSessionKeys), so the segment before it is never a channel:
+// a Telegram DM topic under dmScope=main is `agent:<id>:main:thread:<chat>:<topic>`.
 const CHANNEL_SESSION_KEY_RE =
-  /^agent:[^:]+:([^:]+)(?:(?::[^:]+)?:(?:direct|dm)|:(?:group|channel|thread)):/;
+  /^agent:[^:]+:([^:]+)(?:(?::[^:]+)?:(?:direct|dm)|:(?:group|channel)):/;
 const PEER_SESSION_KEY_RE = /:(?:direct|dm|group|channel|thread):/;
 
 /**
@@ -152,7 +155,45 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   return checkout ?? node;
 }
 
-type SessionKeyInfo = {
+type SessionDisplayRow = {
+  label?: string;
+  displayName?: string;
+  derivedTitle?: string;
+  titlePending?: boolean;
+  /** Canonical account projected from the delivery route by the Gateway. */
+  accountId?: string;
+} & SessionWorktreeDisplayRow;
+
+function usableTitle(value: string | undefined, key: string): string | undefined {
+  const title = normalizeOptionalString(value);
+  return title === key ? undefined : title;
+}
+
+function explicitTitle(key: string, row: SessionDisplayRow) {
+  return usableTitle(row.label, key) ?? usableTitle(row.displayName, key);
+}
+
+/** Naming has a separate lifetime from the first reply; a usable name always wins. */
+export function isSessionTitlePending(key: string, row?: SessionDisplayRow): boolean {
+  return Boolean(row?.titlePending && isDashboardSessionKey(key) && !explicitTitle(key, row));
+}
+
+/** Title text without worktree, account, or channel decoration. */
+export function resolveSessionTitleText(key: string, row?: SessionDisplayRow): string | undefined {
+  return (
+    row &&
+    (explicitTitle(key, row) ??
+      (row.titlePending && isDashboardSessionKey(key)
+        ? undefined
+        : usableTitle(row.derivedTitle, key)))
+  );
+}
+
+export function formatSessionChannelLabel(channel: string): string {
+  return CHANNEL_LABELS.get(channel) ?? channel.charAt(0).toUpperCase() + channel.slice(1);
+}
+
+function parseSessionKey(key: string): {
   /** Typed-session identity; display branching keys off this, not label text. */
   kind?: "subagent" | "automation";
   /** Catalog-backed prefix for typed sessions. Empty for others. */
@@ -161,25 +202,11 @@ type SessionKeyInfo = {
   fallbackName: string;
   /** Raw account segment; only a fallback, Gateway rows carry the real one. */
   accountId?: string;
-};
-
-type SessionDisplayRow = {
-  label?: string;
-  displayName?: string;
-  derivedTitle?: string;
-  /** Canonical account projected from the delivery route by the Gateway. */
-  accountId?: string;
-} & SessionWorktreeDisplayRow;
-
-export function formatSessionChannelLabel(channel: string): string {
-  return CHANNEL_LABELS.get(channel) ?? channel.charAt(0).toUpperCase() + channel.slice(1);
-}
-
-function parseSessionKey(key: string): SessionKeyInfo {
+} {
   const normalized = normalizeLowercaseStringOrEmpty(key);
 
   if (key === "main" || /^agent:[^:]+:main$/u.test(key)) {
-    return { prefix: "", fallbackName: "Main Session" };
+    return { prefix: "", fallbackName: "Main session" };
   }
 
   if (key.includes(":subagent:")) {
@@ -238,7 +265,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
 
   // Dashboard sessions get generated titles asynchronously; the opaque uuid key
   // must not flash in the sidebar while that title is pending.
-  if (/^agent:[^:]+:dashboard:/.test(key)) {
+  if (isDashboardSessionKey(key)) {
     return { prefix: "", fallbackName: "New session" };
   }
 
@@ -255,51 +282,24 @@ function parseSessionKey(key: string): SessionKeyInfo {
 }
 
 export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow): string {
-  const label = normalizeOptionalString(row?.label);
-  const displayName = normalizeOptionalString(row?.displayName);
-  const derivedTitle = normalizeOptionalString(row?.derivedTitle);
   const { kind, prefix, fallbackName, accountId: keyAccountId } = parseSessionKey(key);
   // The Gateway records the account on the row (src/gateway/session-classification.ts);
   // the key is parsed only for panes rendered before their row arrives.
   const accountId = normalizeOptionalString(row?.accountId) ?? keyAccountId;
 
-  const applyTypedPrefix = (rawName: string): string => {
-    if (!kind || !prefix) {
-      return rawName;
-    }
-    // Persisted automation sessions carry pre-rename "Cron:"/"Cron Job:"
-    // labels; strip them so the renamed prefix does not double up as
-    // "Automation: Cron: …".
-    const name =
-      kind === "automation"
-        ? rawName.replace(/^cron(\s+job)?:\s*/i, "").trim() || rawName
-        : rawName;
-    const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`, "i");
+  const title =
+    resolveSessionTitleText(key, row) ?? (row?.worktree && resolveSessionWorkSubtitle(row));
+  let name = title || fallbackName;
+  if (title && kind && prefix) {
+    // Accept persisted automation titles from before the rename.
+    const pattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`, "i");
     if (kind === "subagent") {
-      return name.replace(prefixPattern, "").trim() || fallbackName;
+      name = title.replace(pattern, "").trim() || fallbackName;
+    } else {
+      const automation = title.replace(/^cron(\s+job)?:\s*/i, "").trim() || title;
+      name = pattern.test(automation) ? automation : `${prefix} ${automation}`;
     }
-    return prefixPattern.test(name) ? name : `${prefix} ${name}`;
-  };
-
-  const resolveNamedOrFallback = (): string => {
-    if (label && label !== key) {
-      return applyTypedPrefix(label);
-    }
-    if (displayName && displayName !== key) {
-      return applyTypedPrefix(displayName);
-    }
-    // Unnamed work sessions read as their checkout instead of an opaque key.
-    const workSubtitle = row ? resolveSessionWorkSubtitle(row) : undefined;
-    if (workSubtitle && row?.worktree) {
-      return applyTypedPrefix(workSubtitle);
-    }
-    if (derivedTitle && derivedTitle !== key) {
-      return applyTypedPrefix(derivedTitle);
-    }
-    return fallbackName;
-  };
-
-  const name = resolveNamedOrFallback();
+  }
   if (!accountId || accountId === "default") {
     return name;
   }

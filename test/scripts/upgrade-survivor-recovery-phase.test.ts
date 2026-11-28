@@ -19,7 +19,7 @@ const outer = "recovery-update-restart";
 
 it.skipIf(process.platform === "win32").each([
   { fault: "future-tarball", phase: "prepare-restart-package", code: 124 },
-  { fault: "future-runtime-tarball", phase: "prepare-restart-runtime", code: 137 },
+  { fault: "future-plugin-tarball", phase: "prepare-restart-runtime", code: 137 },
   { fault: "none", phase: "", code: 0 },
 ])("preserves restart fixture timeout diagnostics ($fault)", ({ fault, phase, code }) => {
   const root = dirs.make("survivor-restart-fixture-");
@@ -69,7 +69,7 @@ node() {
     scripts/e2e/lib/update-first-hop-package-fixtures.mjs)
       printf '{"targetVersion":"2026.10.3"}\\n' ;;
     -p) printf '2026.10.3' ;;
-    -) cat >/dev/null; printf 'runtime.tgz' ;;
+    --input-type=module) cat >/dev/null; printf '@openclaw/codex\t%s\n' runtime.tgz ;;
     scripts/e2e/lib/upgrade-survivor/diagnostics.mjs)
       printf 'capture\\t%s\\t%s\\n' "$4" "$5" >&3 ;;
     *) return 91 ;;
@@ -91,7 +91,7 @@ run_completed=1
   const lines = result.stdout.split("\n");
   expect(lines.filter((line) => line.startsWith("budget\t"))).toEqual([
     "budget\t1500s\tfuture-tarball",
-    ...(fault === "future-tarball" ? [] : ["budget\t1500s\tfuture-runtime-tarball"]),
+    ...(fault === "future-tarball" ? [] : ["budget\t1500s\tfuture-plugin-tarball"]),
   ]);
   if (code !== 0) {
     expect(lines).toContain(`capture\t${phase}\t${code}`);
@@ -148,6 +148,7 @@ openclaw_e2e_maybe_timeout() { shift; "$@"; }
 openclaw_e2e_probe_tcp() { [ "$FAULT" = listener ]; }
 openclaw_e2e_print_log() { cat "$1"; }
 prepare_restart_inference() { printf 'inference\n'; }
+prepare_restart_plugin_release_selectors() { printf 'selectors\n'; }
 prepare_restart_fixture() { printf 'fixture\n'; }
 install_update_restart_systemctl_shim() { printf 'manager\n'; }
 run_update_restart_probe_gateway() {
@@ -171,12 +172,81 @@ repair_update_restart_auth
   expect(result.status, result.stderr).toBe(code);
   expect(result.stdout.trim().split("\n")).toEqual(
     code === 0
-      ? ["stop", "inference", "fixture", "manager", "prepared", "auth", "update"]
+      ? ["stop", "inference", "selectors", "fixture", "manager", "prepared", "auth", "update"]
       : ["stop"],
   );
   if (code !== 0) {
     expect(result.stderr).toContain("gateway service shutdown could not be verified");
   }
+});
+
+it.skipIf(process.platform === "win32").each([
+  ["auto-auth", "2026.10.11-first-hop.0"],
+  ["manual", "2026.10.10-beta.3"],
+])("asserts the plugin cohort selected by %s restart recovery", (mode, version) => {
+  const root = dirs.make("survivor-plugin-recovery-");
+  const assertion = source.slice(
+    source.indexOf("assert_prepublish_plugin_install() {"),
+    source.indexOf("configure_plugin_registry() {"),
+  );
+  const repair = source.slice(
+    source.indexOf("repair_fixture_plugin_consent() {"),
+    source.indexOf("assert_volume_idempotence() {"),
+  );
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      `set -euo pipefail
+ARTIFACT_ROOT="$2"
+candidate_version=2026.10.10-beta.3
+baseline_plugin_tarball=""
+baseline_plugin_version=""
+published_plugin_registry_args=()
+SCENARIO=base
+UPDATE_RESTART_MODE="$1"
+OPENCLAW_CLAWHUB_URL=fixture
+restart_fixture_version=2026.10.11-first-hop.0
+restart_plugin_fixture_dir="$2/restart-plugins"
+prepublish_capability_consent_supported=1
+update_repair_required=0
+mkdir -p "$restart_plugin_fixture_dir"
+touch "$restart_plugin_fixture_dir/whatsapp.tgz"
+repair_update_restart_auth() { :; }
+configured_plugin_installs_enabled() { return 1; }
+assert_prepublish_fixture_idle() { printf 'fixture-idle\\n'; }
+phase() { printf 'phase:%s\\n' "$1"; shift; "$@"; }
+node() {
+  [ "$1" = scripts/e2e/lib/upgrade-survivor/assertions.mjs ] || return 90
+  [ "$2" = assert-npm-plugin-install ] || return 91
+  [ "$3" = whatsapp ] || return 92
+  [ "$4" = @openclaw/whatsapp ] || return 93
+  [ "\${11}" = "$candidate_version" ] || return 98
+  if [ "$UPDATE_RESTART_MODE" = auto-auth ]; then
+    [ "$5" = "$restart_fixture_version" ] || return 94
+    [ "\${10}" = "$restart_plugin_fixture_dir/whatsapp.tgz" ] || return 95
+  else
+    [ "$5" = "$candidate_version" ] || return 96
+    [ -z "\${10}" ] || return 97
+  fi
+  printf 'npm-assert:%s:%s\\n' "$3" "$5"
+}
+${assertion}
+${repair}
+repair_fixture_plugin_consent
+`,
+      "fixture",
+      mode,
+      root,
+    ],
+    { encoding: "utf8", timeout: 5_000 },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout.trim().split("\n")).toEqual([
+    "phase:assert-prepublish-recovery-requests",
+    `npm-assert:whatsapp:${version}`,
+    "fixture-idle",
+  ]);
 });
 
 it.skipIf(process.platform === "win32").each([
@@ -257,7 +327,7 @@ openclaw_e2e_maybe_timeout() {
   esac
 }
 node() {
-  if [ "$1" = -e ]; then printf '1000'; return 0; fi
+  if [ "$1" = -e ] && [ "$2" = 'process.stdout.write(String(Date.now()))' ]; then printf '1000'; return 0; fi
   case "$2" in
     assert-successful-update-json)
       printf 'check\tassertion\n' >&3

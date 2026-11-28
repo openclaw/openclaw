@@ -21,6 +21,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { placementClaim } from "./placement-suite.test-support.js";
 import {
   advancePlacementFixtureToActive,
   seedAttachedPlacementEnvironment,
@@ -206,16 +207,7 @@ describe("worker session placement moves", () => {
     ).toBeUndefined();
 
     const active = await seedActiveEnvironment();
-    const workerClaim = await store.claimTurn({
-      ...SESSION,
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-      claimId: "move-source-claim",
-      runId: "move-source-run",
-    });
+    const workerClaim = await store.claimTurn(placementClaim(active, "move-source"));
     const source = sourceFor(active);
 
     const begun = await store.beginPlacementMove({
@@ -308,16 +300,7 @@ describe("worker session placement moves", () => {
 
   it("permits draining an active placement with a pending workspace result when abandoning source", async () => {
     const active = await seedActiveEnvironment();
-    const claim = await store.claimTurn({
-      ...SESSION,
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-      claimId: "pending-claim",
-      runId: "pending-run",
-    });
+    const claim = await store.claimTurn(placementClaim(active, "pending"));
     await store.markWorkspaceResultPending(claim);
     expect(await store.listPendingWorkspaceResultsAsync()).toHaveLength(1);
     await store.prepareWorkspaceResultClaim(claim);

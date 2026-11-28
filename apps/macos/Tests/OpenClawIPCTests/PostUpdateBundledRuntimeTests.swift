@@ -1,9 +1,94 @@
+import AppKit
 import Foundation
 import Testing
 @testable import OpenClaw
 
 @MainActor
 struct PostUpdateBundledRuntimeTests {
+    @Test(arguments: [AppState.ConnectionMode.local, .remote], [false, true])
+    func `uninspectable service recovery reports only the selected runtime`(
+        connectionMode: AppState.ConnectionMode, previouslyIncomplete: Bool) async throws
+    {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let wrapper = URL(fileURLWithPath: CLIInstaller.managedExecutableLocation())
+            .deletingLastPathComponent().appendingPathComponent("custom-host-\(UUID().uuidString).sh")
+        try FileManager.default.createDirectory(
+            at: wrapper.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try "#!/bin/sh\nexec /fixture/runtime-2026.10.4/node /fixture/openclaw.mjs node run\n"
+            .write(to: wrapper, atomically: false, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: wrapper) }
+        let plist = connectionMode == .remote
+            ? home.appendingPathComponent("Library/LaunchAgents/\(nodeLaunchdLabel).plist")
+            : GatewayLaunchAgentManager.plistURL(homeDirectory: home, profile: .current)
+        try FileManager.default.createDirectory(
+            at: plist.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try PropertyListSerialization.data(
+            fromPropertyList: ["ProgramArguments": [wrapper.path]],
+            format: .xml,
+            options: 0).write(to: plist)
+        try await TestIsolation.withIsolatedState(
+            launchAgentHomeDirectory: home,
+            env: ["OPENCLAW_CONFIG_PATH": home.appendingPathComponent("openclaw.json").path],
+            defaults: [postAppUpdateReceiptKey: nil, cliInstallPolicyKey: "exact"])
+        {
+            PostAppUpdateReceiptStore.record(fromVersion: "2026.10.6", toVersion: "2026.10.7")
+            let recorded = try #require(PostAppUpdateReceiptStore.pending(currentVersion: "2026.10.7"))
+            let receipt = PostAppUpdateReceiptStore.setGatewayUpdateIncomplete(previouslyIncomplete, receipt: recorded)
+            var context = try PostUpdateController.captureRuntimeContext(
+                connectionMode: connectionMode, bundledApp: true, usesSeededGateway: false)
+            context.localCompanionVerified = true
+            let resolution = await PostUpdateController.resolveGatewayAction(context: context, receipt: receipt) {
+                Issue.record("An uninspectable service must not probe a different runtime")
+                return .missing(location: "/fixture/openclaw")
+            }
+            #expect(resolution.action == .managedRuntimeUnavailable)
+            let manager = GatewayProcessManager.shared
+            let previousFailure = manager.lastFailureReason
+            manager.lastFailureReason = "Local Gateway fixture inspection failure"
+            defer { manager.lastFailureReason = previousFailure }
+            _ = NSApplication.shared
+            let controller = PostUpdateController()
+            defer { controller.close() }
+            let proceeds = await controller.performGatewayUpdate(
+                resolution: resolution, receipt: receipt,
+                verifiedCompanion: true, repairingNodeMigration: false)
+            #expect(!proceeds)
+            #expect(controller.model.phase == .failed)
+            let pending = try #require(PostAppUpdateReceiptStore.pending(currentVersion: receipt.toVersion))
+            #expect(pending.coreUpdate == .complete)
+            #expect(LaunchAgentPlist.snapshot(url: plist)?.programArguments == [wrapper.path])
+            if connectionMode == .remote {
+                #expect(controller.model.title == "Finishing your OpenClaw update")
+                #expect(controller.model.message == "The Mac node could not be checked.")
+                #expect(controller.model.details?.contains("node LaunchAgent") == true)
+                #expect(controller.model.details?.contains("Local Gateway fixture") == false)
+                #expect(!pending.gatewayUpdateIncomplete)
+
+                let prefix = [
+                    wrapper.deletingLastPathComponent().appendingPathComponent("node").path,
+                    wrapper.deletingLastPathComponent().appendingPathComponent("openclaw.mjs").path,
+                ]
+                try PropertyListSerialization.data(
+                    fromPropertyList: ["ProgramArguments": prefix + ["node", "run"]],
+                    format: .xml, options: 0).write(to: plist)
+                let repaired = try PostUpdateController.captureRuntimeContext(
+                    connectionMode: .remote, bundledApp: true, usesSeededGateway: false)
+                let retry = await PostUpdateController.resolveGatewayAction(context: repaired, receipt: pending) {
+                    .ready(location: prefix[1], version: "2026.10.7")
+                }
+                #expect(retry.needsManagedVerification)
+            } else {
+                #expect(controller.model.title == "Gateway update needs help")
+                #expect(controller.model.message == "Gateway verification failed.")
+                #expect(controller.model.details == "Local Gateway fixture inspection failure")
+                #expect(pending.gatewayUpdateIncomplete)
+            }
+        }
+    }
+
     @Test(arguments: [PostAppUpdateCoreUpdate.complete, .gateway, .node])
     func `core dispatch preserves a superseding target regardless of owner`(_ owner: PostAppUpdateCoreUpdate) throws {
         let suite = "PostUpdateBundledRuntimeTests.dispatchTarget.\(UUID().uuidString)"

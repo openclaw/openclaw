@@ -9,10 +9,8 @@ import { compileMemoryWikiVault } from "./compile.js";
 import {
   loadMemoryWikiCompiledDashboards,
   MemoryWikiDashboardUnavailableError,
-  setMemoryWikiDashboardState,
 } from "./compiled-cache.js";
 import {
-  resolveMemoryWikiAgentConfig,
   WIKI_SEARCH_BACKENDS,
   WIKI_SEARCH_CORPORA,
   type ResolvedMemoryWikiConfig,
@@ -26,7 +24,8 @@ import {
   assertOfficialObsidianCliSupported,
   runObsidianAction,
 } from "./obsidian.js";
-import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
+import { WIKI_SEARCH_MODES } from "./query-scoring.js";
+import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { buildMemoryWikiDoctorReport, resolveMemoryWikiStatus } from "./status.js";
 import { initializeMemoryWikiVault } from "./vault.js";
@@ -99,12 +98,12 @@ function respondError(respond: GatewayRespond, error: unknown) {
 
 export function registerMemoryWikiGatewayMethods(params: {
   api: OpenClawPluginApi;
-  config: ResolvedMemoryWikiConfig;
-  getAppConfig?: () => OpenClawConfig | undefined;
-  resolveConfig?: (agentId?: string, appConfig?: OpenClawConfig) => ResolvedMemoryWikiConfig;
+  getAppConfig: () => OpenClawConfig | undefined;
+  resolveConfig: (agentId?: string, appConfig?: OpenClawConfig) => ResolvedMemoryWikiConfig;
   resolveSourceSyncSignal?: () => AbortSignal | undefined;
+  refreshSources: (config: ResolvedMemoryWikiConfig, appConfig?: OpenClawConfig) => void;
 }) {
-  const { api, config: baseConfig } = params;
+  const { api } = params;
   const registerResultMethod = (
     method: string,
     scope: typeof READ_SCOPE | typeof WRITE_SCOPE | typeof ADMIN_SCOPE,
@@ -125,8 +124,8 @@ export function registerMemoryWikiGatewayMethods(params: {
           signal,
           assertCurrent() {
             signal?.throwIfAborted();
-            if (!active || (hasCurrentClientAuthority && !hasCurrentClientAuthority())) {
-              throw new Error("Memory Wiki request authority is no longer current.");
+            if (!active) {
+              throw new Error("Memory Wiki request ended. Start a new request to retry.");
             }
           },
         };
@@ -142,33 +141,6 @@ export function registerMemoryWikiGatewayMethods(params: {
     );
   };
 
-  const syncImportedSourcesInBackground = (
-    config: ResolvedMemoryWikiConfig,
-    appConfig?: OpenClawConfig,
-  ) => {
-    const signal = params.resolveSourceSyncSignal?.();
-    if (params.resolveSourceSyncSignal && !signal) {
-      return;
-    }
-    void syncMemoryWikiImportedSources({
-      config,
-      appConfig,
-      ...(signal ? { signal } : {}),
-    }).catch((error: unknown) => {
-      if (signal?.aborted) {
-        return;
-      }
-      setMemoryWikiDashboardState(config, { state: "failed" });
-      api.logger.warn(`memory-wiki: background source sync failed: ${formatErrorMessage(error)}`);
-    });
-  };
-
-  const getAppConfig = () => {
-    if (params.getAppConfig) {
-      return params.getAppConfig();
-    }
-    return api.runtime.config.current() as OpenClawConfig;
-  };
   const resolveSourceSyncSignal = () => {
     const signal = params.resolveSourceSyncSignal?.();
     if (params.resolveSourceSyncSignal && !signal) {
@@ -178,15 +150,9 @@ export function registerMemoryWikiGatewayMethods(params: {
   };
   const resolveRequestContext = (requestParams: Record<string, unknown>) => {
     const signal = resolveSourceSyncSignal();
-    const appConfig = getAppConfig();
+    const appConfig = params.getAppConfig();
     const requestedAgentId = readStringParam(requestParams, "agentId");
-    const config = params.resolveConfig
-      ? params.resolveConfig(requestedAgentId, appConfig)
-      : resolveMemoryWikiAgentConfig({
-          config: baseConfig,
-          appConfig,
-          ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-        });
+    const config = params.resolveConfig(requestedAgentId, appConfig);
     const agentId =
       config.agentId ??
       requestedAgentId ??
@@ -208,13 +174,13 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   registerResultMethod("wiki.importInsights", READ_SCOPE, async (requestParams) => {
     const { appConfig, config } = resolveRequestContext(requestParams);
-    syncImportedSourcesInBackground(config, appConfig);
+    params.refreshSources(config, appConfig);
     return (await loadMemoryWikiCompiledDashboards(config)).importInsights;
   });
 
   registerResultMethod("wiki.overview", READ_SCOPE, async (requestParams) => {
     const { appConfig, config } = resolveRequestContext(requestParams);
-    syncImportedSourcesInBackground(config, appConfig);
+    params.refreshSources(config, appConfig);
     return (await loadMemoryWikiCompiledDashboards(config)).overview;
   });
 
@@ -232,7 +198,12 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   registerResultMethod("wiki.compile", WRITE_SCOPE, async (requestParams) => {
     const { appConfig, config, signal } = resolveRequestContext(requestParams);
-    await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
+    await syncMemoryWikiImportedSources({
+      config,
+      appConfig,
+      deferIndexRefresh: true,
+      ...(signal ? { signal } : {}),
+    });
     return await compileMemoryWikiVault(config, signal ? { signal } : undefined);
   });
 
@@ -250,7 +221,12 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   registerResultMethod("wiki.lint", WRITE_SCOPE, async (requestParams) => {
     const { appConfig, config, signal } = resolveRequestContext(requestParams);
-    await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
+    await syncMemoryWikiImportedSources({
+      config,
+      appConfig,
+      deferIndexRefresh: true,
+      ...(signal ? { signal } : {}),
+    });
     return await lintMemoryWikiVault(config, signal ? { signal } : undefined);
   });
 
@@ -277,12 +253,16 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   registerResultMethod("wiki.search", READ_SCOPE, async (requestParams, memoryContext) => {
     const { agentId, appConfig, config, signal } = resolveRequestContext(requestParams);
-    await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
+    if (!signal) {
+      // One-shot hosts have no service to own background work.
+      await syncMemoryWikiImportedSources({ config, appConfig });
+    }
     const query = readStringParam(requestParams, "query", { required: true });
     const maxResults = readPositiveIntegerParam(requestParams, "maxResults");
     const searchBackend = readEnumParam(requestParams, "backend", WIKI_SEARCH_BACKENDS);
     const searchCorpus = readEnumParam(requestParams, "corpus", WIKI_SEARCH_CORPORA);
     const mode = readEnumParam(requestParams, "mode", WIKI_SEARCH_MODES);
+    // Refresh after the search: a cold read owner activates through the vault queue.
     return await searchMemoryWiki({
       memoryContext,
       config,
@@ -293,7 +273,7 @@ export function registerMemoryWikiGatewayMethods(params: {
       searchBackend,
       searchCorpus,
       mode,
-    });
+    }).finally(() => params.refreshSources(config, appConfig));
   });
 
   registerResultMethod("wiki.apply", WRITE_SCOPE, async (requestParams) => {

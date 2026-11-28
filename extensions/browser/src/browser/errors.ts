@@ -85,45 +85,46 @@ export class BrowserCdpEndpointBlockedError extends BrowserError {
 }
 
 export class BrowserValidationError extends BrowserError {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, 400, options);
+  constructor(message: string) {
+    super(message, 400);
   }
 }
 
 export class BrowserTargetAmbiguousError extends BrowserError {
-  constructor(message = "ambiguous browser tab reference", options?: ErrorOptions) {
-    super(message, 409, options);
+  constructor() {
+    super("ambiguous browser tab reference", 409);
   }
 }
 
 export class BrowserTabNotFoundError extends BrowserError {
-  constructor(inputOrMessage?: string | { input?: string }, options?: ErrorOptions) {
-    const input =
-      typeof inputOrMessage === "object" ? inputOrMessage.input?.trim() : inputOrMessage?.trim();
+  constructor(options?: { input?: string }) {
+    const input = options?.input?.trim();
     const message = input
       ? /^\d+$/.test(input)
         ? `tab not found: browser tab "${input}" not found. Numeric values are not tab targets; use a stable tab id like "t1", a label, or a raw targetId. For positional selection, use "openclaw browser tab select ${input}".`
         : `tab not found: browser tab "${input}" not found. Use action=tabs and pass suggestedTargetId, tabId, label, or raw targetId.`
       : "tab not found";
-    super(message, 404, options);
+    super(message, 404);
   }
 }
 
 export class BrowserProfileNotFoundError extends BrowserError {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, 404, options);
+  constructor(message: string) {
+    super(message, 404);
   }
 }
 
 export class BrowserConflictError extends BrowserError {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, 409, options);
+  constructor(message: string) {
+    super(message, 409);
   }
 }
 
+export const BROWSER_TAB_CRASHED_MESSAGE = "This tab crashed. Open the page again in a new tab.";
+
 export class BrowserResetUnsupportedError extends BrowserError {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, 400, options);
+  constructor(message: string) {
+    super(message, 400);
   }
 }
 
@@ -140,8 +141,8 @@ export class BrowserProfileUnavailableError extends BrowserError {
 }
 
 export class BrowserResourceExhaustedError extends BrowserError {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, 507, options);
+  constructor(message: string) {
+    super(message, 507);
   }
 }
 
@@ -158,6 +159,13 @@ export function toBrowserErrorResponse(err: unknown): BrowserErrorResponse | nul
   }
   if (err instanceof BrowserError) {
     return { status: err.status, message: err.message };
+  }
+  // Playwright can observe a crash during an action and append a multiline call log.
+  if (
+    err instanceof Error &&
+    /^(?:[a-z][\w.]*: )?Target crashed[ \t]*(?:\r?\n|$)/.test(err.message)
+  ) {
+    return { status: 409, message: BROWSER_TAB_CRASHED_MESSAGE };
   }
   if (err instanceof Error && err.name === "BlockedBrowserTargetError") {
     return { status: 409, message: err.message, reason: BROWSER_ERROR_REASONS.navigationBlocked };

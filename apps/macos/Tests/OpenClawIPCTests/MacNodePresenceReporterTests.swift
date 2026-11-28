@@ -374,6 +374,7 @@ private final class PresenceSenderRecorder {
 @MainActor
 private final class PresenceClearRecorder {
     private var outcomes: [MacNodePresenceReporter.ClearDeliveryResult]
+    private var callWaiters: [Int: AsyncTestGate] = [:]
     private(set) var calls = 0
     private(set) var unsupportedCalls = 0
 
@@ -383,6 +384,7 @@ private final class PresenceClearRecorder {
 
     func clear() async -> MacNodePresenceReporter.ClearDeliveryResult {
         self.calls += 1
+        self.callWaiters.removeValue(forKey: self.calls)?.open()
         return self.outcomes.isEmpty ? .cleared : self.outcomes.removeFirst()
     }
 
@@ -391,14 +393,11 @@ private final class PresenceClearRecorder {
     }
 
     func waitForCallCount(_ expected: Int) async {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(4))
-        while clock.now < deadline {
-            if self.calls >= expected { return }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        // The final suspension may have completed the work before this waiter resumes.
-        #expect(self.calls >= expected, "timed out waiting for \(expected) presence clear calls")
+        if self.calls >= expected { return }
+        let waiter = AsyncTestGate()
+        self.callWaiters[expected] = waiter
+        await waiter.wait()
+        #expect(self.calls >= expected, "expected \(expected) presence clear calls")
     }
 }
 

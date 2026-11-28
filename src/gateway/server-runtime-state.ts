@@ -1,4 +1,3 @@
-// Gateway HTTP/WebSocket runtime state factory.
 // Builds one server runtime with lazy plugin route handlers.
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
 import type { WebSocketServer } from "ws";
@@ -7,7 +6,9 @@ import { resolveSandboxHostPort } from "../agents/sandbox-host.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import type { DeferredHookWake } from "../cron/wake-contract.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { closeHttpServers } from "../infra/http-server-lifecycle.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -19,6 +20,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
+import type { PreparedReadinessChecker } from "./health/types.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { GatewayHttpRequestLifetime } from "./http-request-authority.js";
 import {
@@ -55,7 +57,8 @@ import {
   createPreauthConnectionBudget,
   type PreauthConnectionBudget,
 } from "./server/preauth-connection-budget.js";
-import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
+import type { StartupChecker } from "./server/readiness.js";
+import { GATEWAY_PER_MESSAGE_DEFLATE } from "./server/ws-compression.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http.js";
@@ -102,14 +105,16 @@ export async function createGatewayHttpTransport(params: {
   getHookClientIpConfig: () => HookClientIpConfig;
   pluginRegistry: PluginRegistry;
   getPluginRouteRegistry?: () => PluginRegistry;
+  isRequestRuntimeReady?: () => boolean;
   isStartupPluginRuntimeReady?: () => boolean;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
   httpRequestLifetime?: GatewayHttpRequestLifetime;
+  deferHookWake?: DeferredHookWake;
   deps: CliDeps;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
   logHooks: ReturnType<typeof createSubsystemLogger>;
   logPlugins: ReturnType<typeof createSubsystemLogger>;
-  getReadiness?: ReadinessChecker;
+  getReadiness?: PreparedReadinessChecker;
   getStartup?: StartupChecker;
   isStartupPending?: () => boolean;
   waitForRequestRuntime?: () => Promise<void>;
@@ -170,6 +175,8 @@ export async function createGatewayHttpTransport(params: {
         createGatewayHookDispatcher({
           deps: params.deps,
           logHooks: params.logHooks,
+          deferHookWake: params.deferHookWake,
+          resolvePluginRegistry: resolvePluginRouteRegistry,
           ...(params.getGatewayRequestContext
             ? { resolveGatewayContext: params.getGatewayRequestContext }
             : {}),
@@ -285,8 +292,11 @@ export async function createGatewayHttpTransport(params: {
       ?.nodeCapability;
   };
 
+  // The live Gateway keeps its Tailscale route while an update candidate validates.
   const managedTailscaleMode =
-    params.tailscaleMode && params.tailscaleMode !== "off" ? params.tailscaleMode : undefined;
+    !params.updateCanary && params.tailscaleMode && params.tailscaleMode !== "off"
+      ? params.tailscaleMode
+      : undefined;
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);
   if (!isLoopbackHost(params.bindHost)) {
     params.log.warn(
@@ -309,10 +319,10 @@ export async function createGatewayHttpTransport(params: {
     // Yield between buffered frames so one RPC burst cannot monopolize the
     // event loop before other connections and HTTP probes can run.
     allowSynchronousEvents: false,
-    // Browsers compress even tiny requests when this extension is negotiated.
-    // Serial inflate callbacks delay each frame behind busy event-loop turns,
-    // before the bounded request-start scheduler can admit the burst.
-    perMessageDeflate: false,
+    // Browsers compress even tiny requests once this is negotiated. Each
+    // connection installs the inline codec (ws-compression.ts) so bursts are not
+    // serialized behind ws's per-frame threadpool round trips.
+    perMessageDeflate: GATEWAY_PER_MESSAGE_DEFLATE,
   });
   const preauthConnectionBudget = createPreauthConnectionBudget();
 
@@ -365,6 +375,7 @@ export async function createGatewayHttpTransport(params: {
       getRuntimeConfig: loadRuntimeConfig,
       getGatewayRequestContext: params.getGatewayRequestContext,
       waitForRequestRuntime: params.waitForRequestRuntime,
+      isRequestRuntimeReady: params.isRequestRuntimeReady,
       isStartupPluginRuntimeReady: params.isStartupPluginRuntimeReady,
       httpRequestLifetime: params.httpRequestLifetime,
       isTerminalEnabled: params.isTerminalEnabled,
@@ -424,7 +435,7 @@ export async function createGatewayHttpTransport(params: {
   }
   if (params.getGatewayRequestContext && controlUiUpgradeHandler) {
     const gatewayLifetime = getGatewayContextLifetime(params.getGatewayRequestContext).signal;
-    const requestLifetime = params.httpRequestLifetime?.requestEntryLifetime?.signal;
+    const requestLifetime = params.httpRequestLifetime?.requestEntryLifetime;
     bindGatewayControlUiIngressHost(params.getGatewayRequestContext, {
       resolveGatewayContext: params.getGatewayRequestContext,
       controlUiBasePath: params.controlUiBasePath,
@@ -432,9 +443,10 @@ export async function createGatewayHttpTransport(params: {
       getRuntimeConfig: loadRuntimeConfig,
       handleRequest: getGatewayHttpRequestHandler(httpServer),
       handleUpgrade: controlUiUpgradeHandler,
-      handleSandboxRequest: createSandboxHostHttpRequestHandler(resolvePluginRouteRegistry),
+      handleSandboxRequest: createSandboxHostHttpRequestHandler({ clients: params.clients }),
+      admissionSignal: requestLifetime?.signal ?? gatewayLifetime,
       signal: requestLifetime
-        ? AbortSignal.any([gatewayLifetime, requestLifetime])
+        ? AbortSignal.any([gatewayLifetime, requestLifetime.retainedSignal])
         : gatewayLifetime,
     });
   }
@@ -459,7 +471,7 @@ export async function createGatewayHttpTransport(params: {
       const sandboxServers = bindHosts.map(() =>
         createSandboxHostHttpServer(
           params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
-          resolvePluginRouteRegistry,
+          { clients: params.clients },
         ),
       );
       // Register before binding so normal runtime cleanup closes a partially
@@ -482,18 +494,7 @@ export async function createGatewayHttpTransport(params: {
           });
         }
       } catch (error) {
-        await Promise.all(
-          sandboxServers.map(
-            (server) =>
-              new Promise<void>((resolve) => {
-                if (!server.listening) {
-                  resolve();
-                  return;
-                }
-                server.close(() => resolve());
-              }),
-          ),
-        );
+        await closeHttpServers(sandboxServers);
         for (const server of sandboxServers) {
           const index = httpServers.indexOf(server);
           if (index >= 0) {

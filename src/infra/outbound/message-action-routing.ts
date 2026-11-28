@@ -85,38 +85,6 @@ function inferPeerKindForAccountBinding(
   return undefined;
 }
 
-function resolveTargetBoundAccountId(params: {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  channelPlugin?: ChannelPlugin;
-  args: Record<string, unknown>;
-  agentId?: string;
-}): string | undefined {
-  if (!params.agentId) {
-    return undefined;
-  }
-  const target = readTrimmedStringAlias(params.args, ["to", "channelId"]);
-  if (!target) {
-    return resolveFirstBoundAccountId({
-      cfg: params.cfg,
-      channelId: params.channel,
-      agentId: params.agentId,
-    });
-  }
-
-  const candidates = new Set<string>();
-  addTargetCandidates(candidates, target, params.channel);
-  const [peerId, ...exactPeerIdAliases] = Array.from(candidates);
-  return resolveFirstBoundAccountId({
-    cfg: params.cfg,
-    channelId: params.channel,
-    agentId: params.agentId,
-    peerId,
-    exactPeerIdAliases,
-    peerKind: inferPeerKindForAccountBinding(params.channel, target, params.channelPlugin),
-  });
-}
-
 function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolean {
   return readTrimmedStringAlias(params, ["target", "to", "channelId"]) !== undefined;
 }
@@ -231,7 +199,11 @@ export async function prepareMessageRoute(params: {
   // Missing targets must fail before channel discovery, which can bootstrap or
   // probe configured plugins. Non-standard params may still be owner aliases.
   if (actionRequiresTarget(action) && !hasPotentialActionTargetInput(input, actionParams)) {
-    throw missingMessageActionTargetError(action);
+    throw missingMessageActionTargetError(action, {
+      hasCurrentSourceConversation: Boolean(
+        resolveImplicitMessageActionTarget(input.toolContext, "send"),
+      ),
+    });
   }
 
   const requestedChannel = readToolStringParam(actionParams, "channel");
@@ -253,7 +225,7 @@ export async function prepareMessageRoute(params: {
   const pluginOwnedAction = action !== "send" && action !== "poll";
   if (
     pluginOwnedAction &&
-    channelPlugin?.actions?.supportsAction &&
+    channelPlugin.actions?.supportsAction &&
     !channelPlugin.actions.supportsAction({ action })
   ) {
     throw new Error(`Message action ${action} not supported for channel ${channel}.`);
@@ -262,24 +234,37 @@ export async function prepareMessageRoute(params: {
     action,
     args: actionParams,
     toolContext: input.toolContext,
-    targetAliasSpec: channelPlugin?.actions?.messageActionTargetAliases?.[action] ?? null,
+    targetAliasSpec: channelPlugin.actions?.messageActionTargetAliases?.[action] ?? null,
     // Trusted direct operators retain opaque resource-id workflows. Native conversation
     // aliases still normalize above and remain subject to the shared cross-context policy.
     allowResourceOnly: input.conversationReadOrigin === "direct-operator",
   });
   let accountId = explicitAccountId ?? input.defaultAccountId;
   if (!accountId && agentId) {
-    accountId = resolveTargetBoundAccountId({
-      cfg,
-      channel,
-      channelPlugin,
-      args: actionParams,
-      agentId,
-    });
+    const target = readTrimmedStringAlias(actionParams, ["to", "channelId"]);
+    if (!target) {
+      accountId = resolveFirstBoundAccountId({
+        cfg,
+        channelId: channel,
+        agentId,
+      });
+    } else {
+      const candidates = new Set<string>();
+      addTargetCandidates(candidates, target, channel);
+      const [peerId, ...exactPeerIdAliases] = Array.from(candidates);
+      accountId = resolveFirstBoundAccountId({
+        cfg,
+        channelId: channel,
+        agentId,
+        peerId,
+        exactPeerIdAliases,
+        peerKind: inferPeerKindForAccountBinding(channel, target, channelPlugin),
+      });
+    }
   }
   const delegatesActionToGateway =
     Boolean(input.gateway) &&
-    channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway";
+    channelPlugin.actions?.resolveExecutionMode?.({ action }) === "gateway";
   // Resolve once for locally owned sends so formatting and delivery share an
   // identity. Remote calls must retain omitted input for the Gateway to resolve.
   if (

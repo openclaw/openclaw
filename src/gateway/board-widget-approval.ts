@@ -84,7 +84,7 @@ export function createBoardWidgetApprovalResolver() {
     }
     // MCP App interactions retain source-session authority and cannot share assessments.
     const key =
-      !incognito && policy.revision && (content.kind === "html" || content.kind === "registered")
+      !incognito && policy.revision && content.kind === "html"
         ? createHash("sha256")
             .update(JSON.stringify([agentId, name, content, declared]))
             .digest("hex")

@@ -30,28 +30,43 @@ enum ConfigStore {
         var isCurrent: Bool {
             self.origin.isCurrent
         }
+
+        var selection: Selection {
+            self.origin.selection
+        }
+    }
+
+    /// The Gateway source a document or a user's choice belongs to. Anything taken under one
+    /// selection never applies to another.
+    struct Selection: Equatable {
+        fileprivate let revision: UInt64?
+        fileprivate let mode: AppState.ConnectionMode
+        fileprivate let localURL: URL
+
+        @MainActor
+        static func current(gateway: GatewayConnection = .shared) -> Selection {
+            Selection(
+                revision: gateway.selectedEndpointRevision,
+                mode: AppStateStore.shared.connectionMode,
+                localURL: OpenClawPaths.configURL)
+        }
     }
 
     @MainActor
     fileprivate final class Origin {
         let gateway: GatewayConnection
-        let revision: UInt64?
-        let mode: AppState.ConnectionMode
-        let localURL: URL
-        var allowsLocalFallback: Bool
+        let selection: Selection
+        let allowsLocalFallback: Bool
         var lease: GatewayConnection.ServerLease?
 
         init(gateway: GatewayConnection) {
             self.gateway = gateway
-            self.revision = gateway.selectedEndpointRevision
-            self.mode = AppStateStore.shared.connectionMode
-            self.localURL = OpenClawPaths.configURL
-            self.allowsLocalFallback = self.mode != .remote
+            self.selection = .current(gateway: gateway)
+            self.allowsLocalFallback = self.selection.mode != .remote
         }
 
         var selectionIsCurrent: Bool {
-            self.gateway.selectedEndpointRevision == self.revision &&
-                AppStateStore.shared.connectionMode == self.mode && OpenClawPaths.configURL == self.localURL
+            Selection.current(gateway: self.gateway) == self.selection
         }
 
         var isCurrent: Bool {
@@ -60,7 +75,6 @@ enum ConfigStore {
     }
 
     struct Overrides {
-        var isRemoteMode: (@Sendable () async -> Bool)?
         var loadLocal: (@MainActor @Sendable () -> [String: Any])?
         var saveLocal: (@MainActor @Sendable ([String: Any]) -> Void)?
         var loadRemote: (@MainActor @Sendable () async -> [String: Any])?
@@ -77,9 +91,6 @@ enum ConfigStore {
     static func load(gateway: GatewayConnection = .shared) async -> Document {
         let origin = Origin(gateway: gateway)
         let overrides = self.overrides
-        if let isRemoteMode = overrides.isRemoteMode {
-            origin.allowsLocalFallback = await !isRemoteMode()
-        }
         let remote = !origin.allowsLocalFallback
         guard origin.selectionIsCurrent else {
             return Document(root: [:], origin: origin, hash: nil, readError: self.sourceChanged())
@@ -129,19 +140,12 @@ enum ConfigStore {
             guard origin.isCurrent else { throw self.sourceChanged() }
         } else if let save = overrides.saveLocal {
             save(document.root)
+        } else if origin.lease == nil, overrides.saveGateway == nil {
+            try self.saveLocal(document, allowGatewayAuthMutation: allowGatewayAuthMutation)
         } else {
-            do {
-                if origin.lease == nil, overrides.saveGateway == nil {
-                    try self.saveLocal(document, allowGatewayAuthMutation: allowGatewayAuthMutation)
-                } else {
-                    try await self.saveToGateway(document, overrides: overrides)
-                }
-            } catch {
-                guard origin.isCurrent, self.permitsLocalFallback(after: error) else {
-                    throw error
-                }
-                try self.saveLocal(document, allowGatewayAuthMutation: allowGatewayAuthMutation)
-            }
+            // A Gateway-loaded root holds config.get's redacted secrets, which only config.set
+            // restores; a failed Gateway save must never reach the local file writer.
+            try await self.saveToGateway(document, overrides: overrides)
         }
         guard origin.selectionIsCurrent else { throw self.sourceChanged() }
         #if DEBUG

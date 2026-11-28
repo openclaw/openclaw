@@ -1,10 +1,9 @@
 // Github Copilot tests cover replay policy transport dispatch.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { ProviderReplayPolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
-import {
-  buildGithubCopilotReplayPolicy,
-  sanitizeGithubCopilotReplayHistory,
-} from "./replay-policy.js";
+import { registerProviderWithPluginConfig } from "./provider.test-support.js";
+import { buildGithubCopilotReplayPolicy } from "./replay-policy.js";
 
 function buildPolicy(modelApi: ProviderReplayPolicyContext["modelApi"], modelId: string) {
   return buildGithubCopilotReplayPolicy({ provider: "github-copilot", modelApi, modelId });
@@ -14,7 +13,6 @@ describe("buildGithubCopilotReplayPolicy", () => {
   it("leaves transcript tool ids to the Copilot stream wrapper", () => {
     const policy = buildPolicy("anthropic-messages", "claude-opus-5");
     expect(policy).toMatchObject({
-      appendOnlyRuntimeContext: false,
       validateAnthropicTurns: true,
       sanitizeMode: "full",
       repairToolUseResultPairing: true,
@@ -22,6 +20,8 @@ describe("buildGithubCopilotReplayPolicy", () => {
       allowSyntheticToolResults: true,
       dropThinkingBlocks: true,
     });
+    // Omission preserves the host default for retained runtime context.
+    expect(policy).not.toHaveProperty("appendOnlyRuntimeContext");
     expect(policy).not.toHaveProperty("sanitizeToolCallIds");
     expect(policy).not.toHaveProperty("toolCallIdMode");
   });
@@ -32,7 +32,11 @@ describe("buildGithubCopilotReplayPolicy", () => {
   });
 });
 
-describe("sanitizeGithubCopilotReplayHistory", () => {
+describe("sanitizeReplayHistoryAsync", () => {
+  const sanitize = expectDefined(
+    registerProviderWithPluginConfig({}).sanitizeReplayHistoryAsync,
+    "replay-history sanitizer",
+  );
   const messages = [
     {
       role: "assistant",
@@ -44,9 +48,9 @@ describe("sanitizeGithubCopilotReplayHistory", () => {
     },
   ];
 
-  it("strips replayed thinking on the Anthropic transport", () => {
+  it("strips replayed thinking on the Anthropic transport", async () => {
     expect(
-      sanitizeGithubCopilotReplayHistory({
+      await sanitize({
         provider: "github-copilot",
         modelApi: "anthropic-messages",
         modelId: "claude-opus-5",
@@ -55,9 +59,9 @@ describe("sanitizeGithubCopilotReplayHistory", () => {
     ).toEqual([{ role: "assistant", content: [{ type: "text", text: "visible" }] }]);
   });
 
-  it("passes history through on the OpenAI Completions transport", () => {
+  it("passes history through on the OpenAI Completions transport", async () => {
     expect(
-      sanitizeGithubCopilotReplayHistory({
+      await sanitize({
         provider: "github-copilot",
         modelApi: "openai-completions",
         modelId: "gpt-5.4",

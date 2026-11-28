@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import { renderToolFixture as render, renderToolCard } from "./chat-tool-render.test-support.ts";
+import { mountCard } from "./chat-tool-cards.test-support.tsx";
 
 describe("tool detail sidebar", () => {
   it.each([
@@ -21,15 +21,16 @@ describe("tool detail sidebar", () => {
       resultMessageId: "result-message",
       callId: "tool-call",
     };
-    await render(
-      renderToolCard(card, {
+    await mountCard(
+      card,
+      {
         messageKey: "test-message",
         sessionKey: "global",
         agentId: "work",
         expanded: true,
         onToggleExpanded: vi.fn(),
         onOpenSidebar,
-      }),
+      },
       container,
     );
     container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn")?.click();

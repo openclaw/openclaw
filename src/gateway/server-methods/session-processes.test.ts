@@ -4,7 +4,6 @@ import { createProcessSessionFixture } from "../../agents/bash-process-registry.
 import { resetProcessRegistryForTests } from "../../agents/bash-process-registry.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
@@ -15,53 +14,30 @@ afterEach(resetProcessRegistryForTests);
 const stateOptions = { scenario: "minimal", prepareProfileCatalog: true } as const;
 
 it.each([
-  {
-    role: "view" as const,
-    scopes: ["operator.read", "operator.write"],
-    own: false,
-    allowed: false,
-  },
-  { role: "write" as const, scopes: ["operator.read"], own: false, allowed: false },
-  {
-    role: "write" as const,
-    scopes: ["operator.read", "operator.write"],
-    own: false,
-    allowed: true,
-  },
-  {
-    role: "write" as const,
-    scopes: ["operator.read", "operator.sessions.write"],
-    own: false,
-    allowed: false,
-  },
-  {
-    role: "write" as const,
-    scopes: ["operator.read", "operator.sessions.write"],
-    own: true,
-    allowed: true,
-  },
-])(
-  "projects and enforces process controls for $role with $scopes (own=$own)",
-  async ({ role, scopes, own, allowed }) => {
+  ["view", "operator.write", false, false],
+  ["write", undefined, false, false],
+  ["write", "operator.write", false, true],
+  ["write", "operator.sessions.write", false, false],
+  ["write", "operator.sessions.write", true, true],
+] as const)(
+  "projects and enforces process controls for %s with %s (own=%s, allowed=%s)",
+  async (role, writeScope, own, allowed) => {
     await withOpenClawTestState(stateOptions, async (state) => {
       const cfg = rolePolicyConfig();
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
       const owner = roleClient("write", "process-owner");
       const viewer = roleClient(role, "process-viewer");
-      viewer.connect.scopes = scopes;
+      viewer.connect.scopes = ["operator.read", ...(writeScope ? [writeScope] : [])];
       const key = "agent:main:process-test";
+      const ownerId = (own ? viewer : owner).authenticatedUserProfile!.profileId;
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: key },
         {
           sessionId: "session-process-test",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: (own ? viewer : owner).authenticatedUserProfile!.profileId,
-          },
+          createdActor: { type: "human", source: "profile", id: ownerId },
         },
       );
       const record = createProcessSessionFixture({ id: "visible-build", backgrounded: true });
@@ -83,7 +59,6 @@ it.each([
         return respond;
       };
       const listed = await dispatch("sessions.processes.list", { key });
-      // A stale incarnation cannot stop any process, even when the viewer can control the session.
       const stopped = await dispatch("sessions.processes.stop", {
         key,
         sessionId: "session-process-test",
@@ -95,65 +70,8 @@ it.each([
         expect(stopped).toHaveBeenCalledWith(true, { requested: false });
       }
       expect(record.cancellationRequested).toBeUndefined();
-      expect(listed).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          processes: [expect.objectContaining({ processId: record.id, canStop: allowed })],
-        }),
-      );
+      const process = expect.objectContaining({ processId: record.id, canStop: allowed });
+      expect(listed).toHaveBeenCalledWith(true, expect.objectContaining({ processes: [process] }));
     });
   },
 );
-
-it("discards a remote process response after the request authority closes", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    setRuntimeConfigSnapshot({});
-    const key = "agent:main:process-remote";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: key },
-      { sessionId: "remote-session", updatedAt: 1 },
-    );
-    const reply = createDeferredCore<{ sessionId: string; processes: []; truncated: false }>();
-    const started = createDeferredCore();
-    let current = true;
-    const context = await createHistoryReadContext();
-    const placement = {
-      state: "active",
-      executionMode: "worker-turn",
-      environmentId: "environment",
-      activeOwnerEpoch: 1,
-      generation: 1,
-    };
-    Object.assign(context, {
-      workerSessionPlacementService: {
-        prepareRuntimeRefresh: async () => ({ placement, assertCurrent() {}, release() {} }),
-      },
-      workerEnvironmentService: {
-        observeProcesses: () => {
-          started.resolve();
-          return reply.promise;
-        },
-      },
-    });
-    const respond = vi.fn();
-    const pending = sessionProcessHandlers["sessions.processes.list"]!({
-      req: { type: "req", id: "read", method: "sessions.processes.list" },
-      params: { key },
-      context,
-      client: null,
-      respond,
-      isWebchatConnect: () => false,
-      hasCurrentClientAuthority: () => current,
-    });
-    await started.promise;
-    current = false;
-    reply.resolve({ sessionId: "remote-session", processes: [], truncated: false });
-    await pending;
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
-    expect(respond.mock.calls.some(([ok]) => ok)).toBe(false);
-  });
-});

@@ -95,6 +95,8 @@ const DashboardToolSchema = Type.Object(
 type DashboardToolOptions = {
   agentSessionKey?: string;
   agentId?: string;
+  /** Fails once the board's owner no longer authorizes this run, checked again inside each board write. */
+  assertTargetCurrent?: () => void;
   callGateway?: InProcessGatewayCaller;
   emitCommand?: typeof emitBoardCommand;
 };
@@ -204,9 +206,8 @@ function emitBoardCommand(
 const WIDGET_CONTENT_UPDATE_PATHS = {
   html: "Use its HTML authoring capability; discover it in the tool catalog and update the same name.",
   plugin: "Use widget_put with the same name and pluginKind.",
-  registered:
-    "Use its registered-source authoring capability; discover it in the tool catalog and update the same source kind and name.",
   "mcp-app": "Update through the originating MCP app.",
+  registered: "This widget format was retired; remove it and recreate it as HTML.",
 } as const;
 
 function snapshotResult(
@@ -239,7 +240,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
     label: "Dashboard",
     name: "dashboard",
     description:
-      "Read and arrange this session dashboard; widget_put updates plugin widgets only. Follow the widget authoring tool's current placement guidance. Actions: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab opens the dashboard side panel; set_presentation shows the dashboard alongside chat (split) or across the task area (expanded). focus_tab and set_presentation require a connected Control UI and do not save a default. set_default_presentation saves split or expanded for subsequent opens without requiring a connected UI; read returns the effective defaultPresentation (split when unset). Personal viewer overrides still take precedence. Widgets use stable names. widget_put creates or updates trusted plugin widgets only; update other content through its owning authoring capability discovered in the tool catalog. Prefer session:report for data reports with text, metrics, tables, charts, and links; it renders directly without a document frame. Use session:progress props {sessionKey?} for live session progress (omit sessionKey for the current session). Use session:website props {url} for a live HTTPS website; size full and expanded presentation fill the task area. Other widget kinds are supplied by enabled plugins. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
+      "Read and arrange this session dashboard; widget_put updates plugin widgets only. Layout/plugin widgets, not HTML authoring or browser side panels. Use focus_tab with tabId for saved widgets; never create/expand a dashboard to open another panel. Inspect widgets in their chat/dashboard frame, not hosting URLs as browser pages; verify interaction or say unverified. Follow the widget authoring tool's current placement guidance. Actions: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab opens the dashboard side panel; set_presentation shows the dashboard alongside chat (split) or across the task area (expanded). focus_tab and set_presentation require a connected Control UI and do not save a default. set_default_presentation saves split or expanded for subsequent opens without requiring a connected UI; read returns the effective defaultPresentation (split when unset). Personal viewer overrides still take precedence. Widgets use stable names. widget_put creates or updates trusted plugin widgets only; update other content through its owning authoring capability discovered in the tool catalog. Prefer session:report for data reports with text, metrics, tables, charts, and links; it renders directly without a document frame. Use session:progress props {sessionKey?} for live session progress (omit sessionKey for the current session). Use session:website props {url} for a live HTTPS website; size full and expanded presentation fill the task area. Other widget kinds are supplied by enabled plugins. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
     parameters: DashboardToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -248,10 +249,16 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
       if (!sessionKey) {
         throw new ToolInputError("agent session required");
       }
+      const assertTargetCurrent = opts.assertTargetCurrent;
+      assertTargetCurrent?.();
       const admittedResolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
-      const gatewayOptions = admittedResolver
-        ? { resolveGatewayContext: admittedResolver }
-        : undefined;
+      const gatewayOptions =
+        admittedResolver || assertTargetCurrent
+          ? {
+              ...(admittedResolver ? { resolveGatewayContext: admittedResolver } : {}),
+              ...(assertTargetCurrent ? { sessionMutationCommitGuard: assertTargetCurrent } : {}),
+            }
+          : undefined;
       const callGateway = <T>(method: string, gatewayParams: Record<string, unknown>) =>
         gatewayCall<T>(method, gatewayParams, gatewayOptions);
       if (action === "read") {
@@ -293,6 +300,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
                 kind: "set_chat_dock",
                 dock: readPresentation(params) === "expanded" ? "hidden" : "right",
               };
+        assertTargetCurrent?.();
         const delivered = emitCommand(
           { sessionKey, agentId: opts.agentId, command },
           admittedResolver,

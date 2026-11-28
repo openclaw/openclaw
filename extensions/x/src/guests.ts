@@ -4,7 +4,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ResolvedXAccount } from "./accounts.js";
 import { resolveXGuestSettings } from "./guest-policy.js";
-import { openXGuestUsage, XGuestUsageUnavailableError } from "./guest-usage.js";
+import { openXGuestUsage } from "./guest-usage.js";
 
 export function resolveXGuestContainmentError(
   cfg: OpenClawConfig,
@@ -78,25 +78,11 @@ export async function getXGuestStatus(
   const blockedReason = enabled
     ? resolveXGuestReadinessError(cfg, account.accountId, routedAgentId)
     : undefined;
-  try {
-    return {
-      enabled,
-      helpersAvailable: true,
-      maxMentionsPerAuthorPerDay,
-      ...(blockedReason ? { blockedReason } : {}),
-      ...(await openXGuestUsage(runtime).counts(account.accountId)),
-    };
-  } catch (error) {
-    if (!(error instanceof XGuestUsageUnavailableError)) {
-      throw error;
-    }
-    return {
-      enabled,
-      helpersAvailable: true,
-      maxMentionsPerAuthorPerDay,
-      admittedToday: 0,
-      rateLimitedToday: 0,
-      blockedReason: error.message,
-    };
-  }
+  return {
+    enabled,
+    helpersAvailable: true,
+    maxMentionsPerAuthorPerDay,
+    ...(blockedReason ? { blockedReason } : {}),
+    ...(await openXGuestUsage(runtime).counts(account.accountId)),
+  };
 }

@@ -2,27 +2,56 @@
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import {
+  isSessionTitlePending,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
   resolveSessionWorkContext,
   resolveSessionWorkSubtitle,
 } from "./session-display.ts";
+import { resolveSessionRenameValue } from "./session-rename.ts";
+
+describe("isSessionTitlePending", () => {
+  const key = "agent:main:dashboard:naming";
+
+  it("uses naming settlement, not the lifetime of the first reply", () => {
+    expect(isSessionTitlePending(key, { titlePending: true, derivedTitle: "First message" })).toBe(
+      true,
+    );
+    expect(isSessionTitlePending(key, { titlePending: false })).toBe(false);
+    expect(isSessionTitlePending(key, {})).toBe(false);
+    expect(isSessionTitlePending("agent:main:main", { titlePending: true })).toBe(false);
+  });
+
+  it.each(["label", "displayName"] as const)("prefers a usable %s", (field) => {
+    expect(isSessionTitlePending(key, { titlePending: true, [field]: "Release readiness" })).toBe(
+      false,
+    );
+    expect(isSessionTitlePending(key, { titlePending: true, [field]: "  " })).toBe(true);
+    expect(isSessionTitlePending(key, { titlePending: true, [field]: key })).toBe(true);
+  });
+});
+
+it("renames the same dashboard title displayed after naming settles", () => {
+  const key = "agent:main:dashboard:release";
+  const row = { key, displayName: key, derivedTitle: "First message" };
+  expect(resolveSessionRenameValue({ ...row, titlePending: true })).toBe("");
+  expect(resolveSessionRenameValue(row)).toBe("First message");
+  expect(resolveSessionRenameValue({ ...row, titlePending: true, label: "My release" })).toBe(
+    "My release",
+  );
+});
 
 describe("resolveSessionDisplayName", () => {
   it.each(["Subagent [worker]:"])("treats translated prefix %s as literal text", (prefix) => {
-    const translation = vi.spyOn(i18n, "t").mockReturnValue(prefix);
-    try {
-      const key = "agent:main:subagent:worker";
-      const row = { label: `${prefix} Research sources` };
-      expect(resolveSessionDisplayName(key, row)).toBe("Research sources");
-    } finally {
-      translation.mockRestore();
-    }
+    using _ = vi.spyOn(i18n, "t").mockReturnValue(prefix);
+    const key = "agent:main:subagent:worker";
+    const row = { label: `${prefix} Research sources` };
+    expect(resolveSessionDisplayName(key, row)).toBe("Research sources");
   });
 
   it("uses the same friendly main-thread name for every agent", () => {
     for (const key of ["main", "agent:main:main", "agent:research:main", "agent:ops-team:main"]) {
-      expect(resolveSessionDisplayName(key)).toBe("Main Session");
+      expect(resolveSessionDisplayName(key)).toBe("Main session");
     }
 
     expect(resolveSessionDisplayName("agent:research:main", { displayName: "Research desk" })).toBe(
@@ -63,19 +92,24 @@ describe("resolveSessionDisplayName", () => {
     );
   });
 
-  it("keeps explicit and worktree names ahead of derived titles", () => {
+  it("names unnamed worktree sessions after their first message before their checkout", () => {
+    const worktree = { branch: "openclaw/warm-krill-066e9a", repoRoot: "/repo/openclaw" };
     expect(
       resolveSessionDisplayName("agent:main:dashboard:uuid", {
         label: "Release room",
+        worktree,
         derivedTitle: "Quarterly launch plan",
       }),
     ).toBe("Release room");
     expect(
       resolveSessionDisplayName("agent:main:dashboard:uuid", {
-        worktree: { branch: "openclaw/wt-3f2a", repoRoot: "/repo/clawdbot" },
+        worktree,
         derivedTitle: "Quarterly launch plan",
       }),
-    ).toBe("clawdbot ⎇ wt-3f2a");
+    ).toBe("Quarterly launch plan");
+    expect(resolveSessionDisplayName("agent:main:dashboard:uuid", { worktree })).toBe(
+      "openclaw ⎇ warm-krill-066e9a",
+    );
   });
 
   it("names named subsessions after their slug, never the raw agent key", () => {
@@ -124,19 +158,6 @@ describe("resolveSessionDisplayName", () => {
 
 describe("resolveSessionWorkSubtitle", () => {
   it("combines repo, branch, and node host", () => {
-    expect(
-      resolveSessionWorkSubtitle({
-        repository: {
-          url: "https://github.com/openclaw/openclaw.git",
-          branch: "openclaw/cloud-task",
-        },
-      }),
-    ).toBe("openclaw ⎇ openclaw/cloud-task");
-    expect(
-      resolveSessionWorkSubtitle({
-        worktree: { branch: "openclaw/session-ui", repoRoot: "/repo/clawdbot" },
-      }),
-    ).toBe("clawdbot ⎇ session-ui");
     expect(
       resolveSessionWorkSubtitle({
         worktree: { branch: "feature/x", repoRoot: "/repo/clawdbot" },
@@ -276,6 +297,19 @@ describe("resolveChannelSessionInfo", () => {
     });
     expect(resolveChannelSessionInfo("agent:main:main", "telegram")).toEqual({
       channelSession: false,
+    });
+    // A thread suffix follows a complete base key, so `main` here is the agent
+    // main session (Telegram DM topics under dmScope=main), not a channel.
+    expect(resolveChannelSessionInfo("agent:main:main:thread:12345:678", "telegram")).toEqual({
+      channel: "telegram",
+      channelSession: true,
+    });
+    expect(resolveChannelSessionInfo("agent:main:main:thread:12345:678")).toEqual({
+      channelSession: false,
+    });
+    expect(resolveChannelSessionInfo("agent:main:telegram:group:-99:thread:7")).toEqual({
+      channel: "telegram",
+      channelSession: true,
     });
     expect(resolveChannelSessionInfo("agent:main:dashboard:uuid")).toEqual({
       channelSession: false,

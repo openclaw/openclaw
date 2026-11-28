@@ -12,12 +12,13 @@ import {
   summarizeMigrationItems,
 } from "openclaw/plugin-sdk/migration";
 import { resolvePlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type {
   MigrationItem,
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { extractErrorCode, pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { asBoolean, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexAuthItems } from "./auth.js";
@@ -60,18 +61,6 @@ function pluginConfigValue(entry: CodexPluginMigrationConfigEntry) {
   };
 }
 
-async function lstatIfExists(filePath: string) {
-  try {
-    return await fs.lstat(filePath);
-  } catch (error) {
-    const code = extractErrorCode(error);
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
 async function buildCodexMemoryItems(params: {
   memoryFiles: readonly CodexMemorySource[];
   workspaceDir: string;
@@ -86,6 +75,30 @@ async function buildCodexMemoryItems(params: {
       "codex",
       path.basename(memory.path),
     );
+    const details = {
+      sourceType: "codex-memory",
+      sourceLabel: memory.label,
+      collectionId: "codex",
+      collectionLabel: "Codex",
+      relativePath: path.basename(memory.path),
+    };
+    if (memory.probeError) {
+      items.push(
+        createMigrationItem({
+          id: memory.id,
+          kind: "memory",
+          action: "copy",
+          source: memory.path,
+          target,
+          status: "error",
+          reason: memory.probeError,
+          message:
+            "Codex memory could not be inspected; fix the source path and re-run the migration.",
+          details,
+        }),
+      );
+      continue;
+    }
     const targetStat = await lstatIfExists(target);
     const targetNotRegular = targetStat !== undefined && !targetStat.isFile();
     if (!targetNotRegular) {
@@ -118,13 +131,7 @@ async function buildCodexMemoryItems(params: {
             ? MIGRATION_REASON_TARGET_EXISTS
             : undefined,
         message: "Copy consolidated Codex memory into the OpenClaw memory index.",
-        details: {
-          sourceType: "codex-memory",
-          sourceLabel: memory.label,
-          collectionId: "codex",
-          collectionLabel: "Codex",
-          relativePath: path.basename(memory.path),
-        },
+        details,
       }),
     );
   }

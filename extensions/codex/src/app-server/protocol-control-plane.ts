@@ -56,11 +56,6 @@ export type CodexPluginMarketplaceEntry = {
   plugins: CodexPluginSummary[];
 };
 
-type CodexMarketplaceLoadErrorInfo = {
-  marketplacePath: string;
-  message: string;
-};
-
 export type CodexPluginInstalledParams = {
   cwds?: string[] | null;
   installSuggestionPluginNames?: string[] | null;
@@ -68,7 +63,10 @@ export type CodexPluginInstalledParams = {
 
 export type CodexPluginInstalledResponse = {
   marketplaces: CodexPluginMarketplaceEntry[];
-  marketplaceLoadErrors: CodexMarketplaceLoadErrorInfo[];
+  marketplaceLoadErrors: {
+    marketplacePath: string;
+    message: string;
+  }[];
 };
 
 export type CodexPluginListResponse = CodexPluginInstalledResponse & {
@@ -79,17 +77,12 @@ export type CodexPluginReadResponse = {
   plugin: CodexPluginDetail;
 };
 
-type CodexPluginListMarketplaceKind =
-  | "local"
-  | "vertical"
-  | "workspace-directory"
-  | "shared-with-me"
-  | "created-by-me-remote";
-
 export type CodexPluginListParams = {
   cwds?: string[] | null;
   forceRefetch?: boolean;
-  marketplaceKinds?: CodexPluginListMarketplaceKind[] | null;
+  marketplaceKinds?:
+    | ("local" | "vertical" | "workspace-directory" | "shared-with-me" | "created-by-me-remote")[]
+    | null;
 };
 
 export type CodexPluginReadParams = {
@@ -158,18 +151,6 @@ type CodexAppToolSummary = {
   isReadOnly: boolean;
 };
 
-type CodexConnectorMetadata = {
-  id: string;
-  name: string;
-  description: string | null;
-  iconUrl: string | null;
-  iconUrlDark: string | null;
-  distributionChannel: string | null;
-  installUrl: string | null;
-  pluginDisplayNames: string[];
-  toolSummaries: CodexAppToolSummary[] | null;
-};
-
 export type CodexAppsReadParams = {
   appIds: string[];
   threadId?: string | null;
@@ -177,37 +158,39 @@ export type CodexAppsReadParams = {
 };
 
 export type CodexAppsReadResponse = {
-  apps: CodexConnectorMetadata[];
+  apps: {
+    id: string;
+    name: string;
+    description: string | null;
+    iconUrl: string | null;
+    iconUrlDark: string | null;
+    distributionChannel: string | null;
+    installUrl: string | null;
+    pluginDisplayNames: string[];
+    toolSummaries: CodexAppToolSummary[] | null;
+  }[];
   missingAppIds: string[];
 };
 
-type CodexSkillScope = "user" | "repo" | "system" | "admin";
-
-type CodexSkillMetadata = {
-  name: string;
-  description: string;
-  shortDescription?: string;
-  interface?: JsonObject;
-  dependencies?: JsonObject;
-  path: string;
-  scope: CodexSkillScope;
-  enabled: boolean;
-  pluginId?: string | null;
-};
-
-type CodexSkillErrorInfo = {
-  path: string;
-  message: string;
-};
-
-type CodexSkillsListEntry = {
-  cwd: string;
-  skills: CodexSkillMetadata[];
-  errors: CodexSkillErrorInfo[];
-};
-
 export type CodexSkillsListResponse = {
-  data: CodexSkillsListEntry[];
+  data: {
+    cwd: string;
+    skills: {
+      name: string;
+      description: string;
+      shortDescription?: string;
+      interface?: JsonObject;
+      dependencies?: JsonObject;
+      path: string;
+      scope: "user" | "repo" | "system" | "admin";
+      enabled: boolean;
+      pluginId?: string | null;
+    }[];
+    errors: {
+      path: string;
+      message: string;
+    }[];
+  }[];
 };
 
 export type CodexHooksListResponse = CodexCursorPage<JsonValue>;
@@ -223,12 +206,10 @@ export type CodexConfigReadParams = {
   cwd?: string | null;
 };
 
-type CodexConfigMergeStrategy = "replace" | "upsert";
-
 type CodexConfigEdit = {
   keyPath: string;
   value: JsonValue;
-  mergeStrategy: CodexConfigMergeStrategy;
+  mergeStrategy: "replace" | "upsert";
 };
 
 export type CodexConfigValueWriteParams = CodexConfigEdit & {
@@ -243,19 +224,17 @@ export type CodexConfigBatchWriteParams = {
   reloadUserConfig?: boolean;
 };
 
-type CodexConfigLayerSource =
-  | { type: "packagedDefaults"; file: string }
-  | { type: "mdm"; domain: string; key: string }
-  | { type: "system"; file: string }
-  | { type: "enterpriseManaged"; id: string; name: string }
-  | { type: "user"; file: string; profile: string | null }
-  | { type: "project"; dotCodexFolder: string }
-  | { type: "sessionFlags" }
-  | { type: "legacyManagedConfigTomlFromFile"; file: string }
-  | { type: "legacyManagedConfigTomlFromMdm" };
-
 type CodexConfigLayerMetadata = {
-  name: CodexConfigLayerSource;
+  name:
+    | { type: "packagedDefaults"; file: string }
+    | { type: "mdm"; domain: string; key: string }
+    | { type: "system"; file: string }
+    | { type: "enterpriseManaged"; id: string; name: string }
+    | { type: "user"; file: string; profile: string | null }
+    | { type: "project"; dotCodexFolder: string }
+    | { type: "sessionFlags" }
+    | { type: "legacyManagedConfigTomlFromFile"; file: string }
+    | { type: "legacyManagedConfigTomlFromMdm" };
   version: string;
 };
 
@@ -268,19 +247,15 @@ type CodexWireJsonValue =
   | CodexWireJsonValue[]
   | { [key in string]?: CodexWireJsonValue };
 
-type CodexConfigOverriddenMetadata = {
-  message: string;
-  overridingLayer: CodexConfigLayerMetadata;
-  effectiveValue: CodexWireJsonValue;
-};
-
-type CodexConfigWriteStatus = "ok" | "okOverridden";
-
 export type CodexConfigWriteResponse = {
-  status: CodexConfigWriteStatus;
+  status: "ok" | "okOverridden";
   version: string;
   filePath: string;
-  overriddenMetadata: CodexConfigOverriddenMetadata | null;
+  overriddenMetadata: {
+    message: string;
+    overridingLayer: CodexConfigLayerMetadata;
+    effectiveValue: CodexWireJsonValue;
+  } | null;
 };
 
 export type CodexConfigRequirementsReadResponse = {

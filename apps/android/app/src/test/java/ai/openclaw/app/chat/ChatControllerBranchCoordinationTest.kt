@@ -1,8 +1,8 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.chat.outboxItemsForSession
 import androidx.room3.Room
 import kotlinx.coroutines.CompletableDeferred
@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -43,6 +44,7 @@ import org.robolectric.RuntimeEnvironment
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.ContinuationInterceptor
 
 @RunWith(RobolectricTestRunner::class)
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -58,6 +60,13 @@ class ChatControllerBranchCoordinationTest {
   @After
   fun tearDown() {
     controllerScopes.forEach { it.cancel() }
+    // Cancellation can leave Room work finishing on IO or queued on a test dispatcher.
+    controllerScopes.forEach { scope ->
+      val dispatcher = scope.coroutineContext[ContinuationInterceptor] as? TestDispatcher
+      runTest(dispatcher ?: StandardTestDispatcher()) {
+        requireNotNull(scope.coroutineContext[Job]).join()
+      }
+    }
     database.close()
   }
 
@@ -100,6 +109,89 @@ class ChatControllerBranchCoordinationTest {
       withTimeout(5_000) { outboxPresentationRestored.first { it } }
     }
   }
+
+  @Test
+  fun supersededBootstrapCannotRetireNewerBranchReadiness() =
+    runTest {
+      val key = "agent:main:startup-proof"
+      val gateway = ScriptedGateway(json)
+      val historyRequests = AtomicInteger()
+      val branchRequests = AtomicInteger()
+      val holdOldPublication = AtomicBoolean(false)
+      val oldPublication = CompletableDeferred<Job>()
+      val releaseOldPublication = CompletableDeferred<Unit>()
+      val currentBranches = CompletableDeferred<Job>()
+      val releaseCurrentBranches = CompletableDeferred<Unit>()
+      lateinit var subject: ChatController
+      val observedOutbox =
+        object : ChatCommandOutbox by outbox {
+          override suspend fun load(gatewayId: String): List<ChatOutboxItem> {
+            val rows = outbox.load(gatewayId)
+            if (
+              holdOldPublication.get() &&
+              subject.messages.value
+                .singleOrNull()
+                ?.content
+                ?.singleOrNull()
+                ?.text == "old history" &&
+              holdOldPublication.compareAndSet(true, false)
+            ) {
+              oldPublication.complete(checkNotNull(currentCoroutineContext()[Job]))
+              releaseOldPublication.await()
+            }
+            return rows
+          }
+        }
+      gateway.respond("chat.history") {
+        val request = historyRequests.incrementAndGet()
+        historyResponse(
+          "startup-proof",
+          listOf(ReplayHistoryMessage("assistant", if (request == 1) "old history" else "current history", 1, entryId = "leaf")),
+        )
+      }
+      gateway.respondWith("health", "{}")
+      gateway.respond("sessions.branches.list") {
+        if (branchRequests.incrementAndGet() == 1) {
+          currentBranches.complete(checkNotNull(currentCoroutineContext()[Job]))
+          releaseCurrentBranches.await()
+        }
+        """{"branches":[{"leafEntryId":"leaf","headline":"Current","messageCount":1,"active":true}]}"""
+      }
+      subject = controller(gateway, commandOutbox = observedOutbox)
+      subject.awaitOutboxRestore()
+      holdOldPublication.set(true)
+      try {
+        subject.load(key)
+        awaitBranchProgress { oldPublication.isCompleted }
+        assertFalse("The old history has not reached its health poll", subject.healthOk.value)
+        // Match ChatScreen mounting between history publication and startup health readiness.
+        subject.load(key)
+        awaitBranchProgress { currentBranches.isCompleted }
+        assertEquals(
+          "current history",
+          subject.messages.value
+            .single()
+            .content
+            .single()
+            .text,
+        )
+        assertTrue(subject.sessionBranchesLoading.value)
+
+        // The superseded owner resumes after current history already owns a branch request.
+        releaseOldPublication.complete(Unit)
+        awaitBranchProgress { oldPublication.await().isCompleted }
+        releaseCurrentBranches.complete(Unit)
+        awaitBranchProgress { currentBranches.await().isCompleted }
+
+        assertEquals(listOf("leaf"), subject.sessionBranches.value.map { it.leafEntryId })
+        assertFalse(subject.sessionBranchesLoading.value)
+        assertTrue(subject.healthOk.value)
+        assertEquals("Only the current history starts branch reconciliation", 1, branchRequests.get())
+      } finally {
+        releaseOldPublication.complete(Unit)
+        releaseCurrentBranches.complete(Unit)
+      }
+    }
 
   @Test
   fun unconfirmedOutboxBlocksRewindForkAndBranchSwitch() =
@@ -404,7 +496,7 @@ class ChatControllerBranchCoordinationTest {
       gateway.respondWith("chat.history", historyResponse(sessionId = "main", messages = emptyList()))
       gateway.respond("sessions.branches.list") {
         throw GatewayRequestRejected(
-          GatewaySession.ErrorShape(
+          ErrorShape(
             code = "INVALID_REQUEST",
             message = "missing scope: operator.admin",
           ),
@@ -1608,7 +1700,7 @@ class ChatControllerBranchCoordinationTest {
         } else if (!canonicalAvailable.get()) {
           if (request != 1) {
             if (orphanRequests.incrementAndGet() == 1) firstOrphanJob.set(currentCoroutineContext()[Job])
-            throw GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "history temporarily unavailable"))
+            throw GatewayRequestRejected(ErrorShape("UNAVAILABLE", "history temporarily unavailable"))
           }
           // An acknowledged pending input can precede canonical placement. The newest
           // remote run owns the snapshot; this process has no ownership of the older row.

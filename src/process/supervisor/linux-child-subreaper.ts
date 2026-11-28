@@ -6,20 +6,21 @@ import {
   isChildSubreaper,
   reapChild,
 } from "@openclaw/proc-safe/reaper";
-import { hasErrnoCode } from "../../infra/errno.js";
+import { runtimeHasSourceLoader } from "../../../cli-invocation.mjs";
+import { hasErrnoCode, ignoreMissingPath } from "../../infra/errno.js";
 
 function childPids(): number[] {
   const children = new Set<number>();
+  let sawChildrenFile = false;
   for (const thread of readdirSync("/proc/self/task")) {
     let value: string;
     try {
       value = readFileSync("/proc/self/task/" + thread + "/children", "utf8");
+      sawChildrenFile = true;
     } catch (error) {
       // A thread can retire during enumeration. This is not extinction evidence.
-      if (hasErrnoCode(error, "ENOENT")) {
-        continue;
-      }
-      throw error;
+      ignoreMissingPath(error);
+      continue;
     }
     for (const pid of value.trim().split(/\s+/u).filter(Boolean)) {
       if (!/^\d+$/u.test(pid) || !Number.isSafeInteger(Number(pid)) || Number(pid) <= 0) {
@@ -28,46 +29,102 @@ function childPids(): number[] {
       children.add(Number(pid));
     }
   }
+  if (!sawChildrenFile) {
+    // Kernels built without CONFIG_PROC_CHILDREN expose no per-thread children
+    // files at all, so the owner would adopt orphans it can never enumerate,
+    // retain their zombies, and never drain. The stat parent map below is the
+    // enumeration for those kernels instead of a silently empty set.
+    return childPidsFromProcStat();
+  }
   return [...children];
+}
+
+/** Parent-id enumeration from /proc stat files, the kernel-independent floor. */
+function childPidsFromProcStat(): number[] {
+  const children: number[] = [];
+  let sawStatFile = false;
+  for (const entry of readdirSync("/proc")) {
+    if (!/^\d+$/u.test(entry)) {
+      continue;
+    }
+    let stat: string;
+    try {
+      stat = readFileSync("/proc/" + entry + "/stat", "utf8");
+    } catch (error) {
+      // A foreign process can retire between the listing and its stat read; the
+      // kernel reports ESRCH when the task is gone by the read despite the open
+      // having succeeded. This is not extinction evidence. The owner's own
+      // entry must stay readable, so its failures are never dismissed here.
+      if (
+        Number(entry) !== process.pid &&
+        (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ESRCH"))
+      ) {
+        continue;
+      }
+      throw error;
+    }
+    sawStatFile = true;
+    // A comm value may contain spaces or parentheses; fields follow its last ')'.
+    // PID 1 legitimately reports parent 0; a non-matching parent is simply not ours.
+    const [, parentText] = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    const parent = Number(parentText);
+    if (!/^\d+$/u.test(parentText ?? "") || !Number.isSafeInteger(parent)) {
+      throw new Error("Linux process owner could not enumerate its children");
+    }
+    if (parent === process.pid) {
+      children.push(Number(entry));
+    }
+  }
+  // A readable /proc always lists this process itself, so reading zero stat
+  // files proves a broken enumeration, never a childless owner.
+  if (!sawStatFile) {
+    throw new Error("Linux process owner could not enumerate its children");
+  }
+  return children;
 }
 
 /** One dedicated process acquires adoption before launching any application work. */
 export function acquireLinuxChildSubreaper() {
-  if (process.platform !== "linux" || process.versions.bun) {
-    throw new Error("Linux child ownership requires the Node runtime");
+  if (process.platform !== "linux") {
+    throw new Error("Linux child ownership requires Linux");
   }
-  if (/\.[cm]?ts$/u.test(new URL(import.meta.url).pathname)) {
-    throw new Error(
-      "Linux child ownership requires the built process owner, without a source loader",
-    );
+  if (runtimeHasSourceLoader()) {
+    throw new Error("Linux child ownership requires a process owner without source-loader hooks");
   }
   becomeChildSubreaper();
   if (!isChildSubreaper()) {
     throw new Error("Linux child ownership admission verification failed");
   }
-  const libuvChildren = new Set<number>();
+  const spawnedChildren = new Set<number>();
   const signaledChildren = new Map<number, "SIGTERM" | "SIGKILL">();
-  const retainLibuvChild = (pid: number, child: Pick<ChildProcess, "pid" | "once">) => {
+  let observingChildExits = false;
+  const retainSpawnedChild = (pid: number, child: Pick<ChildProcess, "pid" | "once">) => {
     if (child.pid !== pid || !Number.isSafeInteger(pid) || pid <= 0) {
       throw new Error("Linux child ownership requires a spawned root");
     }
-    libuvChildren.add(pid);
-    // libuv reaps before emitting exit, in this same event-loop turn. Retire the
+    spawnedChildren.add(pid);
+    if (!observingChildExits) {
+      process.on("SIGCHLD", reapExitedChildren);
+      observingChildExits = true;
+    }
+    // The runtime reaps before emitting exit, in this same event-loop turn. Retire the
     // signal reservation here so a newly adopted reuse of this PID gets its own signal.
     child.once("exit", () => {
-      libuvChildren.delete(pid);
+      spawnedChildren.delete(pid);
       signaledChildren.delete(pid);
     });
   };
   // A loader thread can reap its compiler concurrently with this thread. That
   // would invalidate numeric-PID pinning. Admit only the dedicated built owner,
-  // before its one libuv-owned application root has been spawned.
+  // before its one runtime-owned application root has been spawned.
   if (childPids().length > 0) {
     throw new Error("Linux child ownership requires a dedicated owner without existing children");
   }
   let closed = false;
-  return {
-    retainLibuvChild,
+  const owner = {
+    retainSpawnedChild,
+    /** Current direct and adopted children; observation only, never signal authority. */
+    children: childPids,
     /** Discovery selects candidates; a retained kernel wait pins every signal target. */
     drain(signal?: "SIGTERM" | "SIGKILL"): boolean {
       if (closed) {
@@ -96,7 +153,7 @@ export function acquireLinuxChildSubreaper() {
           }
           signaledChildren.set(pid, signal);
         }
-        if (state.kind === "exited" && !libuvChildren.has(pid) && reapChild(pid)) {
+        if (state.kind === "exited" && !spawnedChildren.has(pid) && reapChild(pid)) {
           signaledChildren.delete(pid);
         }
       }
@@ -105,7 +162,17 @@ export function acquireLinuxChildSubreaper() {
         return false;
       }
       closed = true;
+      process.off("SIGCHLD", reapExitedChildren);
       return true;
     },
   };
+  // The live root can itself be waiting for an adopted child's process group to disappear.
+  const reapExitedChildren = () => {
+    try {
+      owner.drain();
+    } catch {
+      // The final explicit drain remains authoritative if this observation fails.
+    }
+  };
+  return owner;
 }

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type {
   PluginHookMessageContext,
@@ -7,7 +8,6 @@ import type {
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { TurnAdoptionLifecycle } from "./get-reply-options.types.js";
 import type { FinalizedMsgContext } from "./templating.js";
-import { isSilentReplyPayloadText } from "./tokens.js";
 import type { ReplyPayload } from "./types.js";
 
 export type GroupThreadParticipant = { agentId: string; name: string };
@@ -71,11 +71,11 @@ export function finalizeGroupThreadToolReply(
   const capture = toolReplies.getStore();
   let content = text;
   if (capture && currentScope() && (!capture.source || capture.source.matches(event, context))) {
-    if (content?.trim() && !isSilentReplyPayloadText(content)) {
+    if (content?.trim()) {
       content = capture.source?.format(content) ?? content;
     }
     capture.observed = true;
-    capture.text = content?.slice(0, 4_000);
+    capture.text = content === undefined ? undefined : truncateUtf16Safe(content, 4_000);
   }
   return content;
 }

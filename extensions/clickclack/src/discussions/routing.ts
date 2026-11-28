@@ -1,26 +1,22 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { CoreConfig } from "../types.js";
 import { hasPendingDiscussionOpenForDestination } from "./binding-generation.js";
 import {
   attachBindingToCurrentActiveSession,
-  bindingMatchesActiveSessionIncarnation,
   getClickClackDiscussionBindingStore,
   type ClickClackDiscussionBinding,
 } from "./binding-store.js";
-import { resolveDiscussionBindingAccount } from "./eligibility.js";
+import {
+  prepareDiscussionBindingAccount,
+  resolvePreparedDiscussionBindingAccount,
+} from "./eligibility.js";
 import { discussionSessionKey } from "./naming.js";
 import { prepareClickClackDiscussionChannelRevocation } from "./revoked-channel-store.js";
+import { prepareDiscussionSessionEntry } from "./session-authority.js";
 
-type ClickClackDiscussionRoute = {
-  agentId: string;
-  sessionKey: string;
-  systemPrompt: string;
-};
-
-type ClickClackDiscussionRouteResolution =
-  | { state: "unbound" }
-  | { state: "revoked" }
-  | { state: "active"; route: ClickClackDiscussionRoute };
+// The plugin child logger never reaches stdout, where container operators look.
+const discussionsLog = createSubsystemLogger("clickclack/discussions");
 
 export async function resolveClickClackDiscussionRoute(params: {
   runtime: PluginRuntime;
@@ -28,7 +24,18 @@ export async function resolveClickClackDiscussionRoute(params: {
   serverBaseUrl: string;
   workspaceId: string;
   channelId: string;
-}): Promise<ClickClackDiscussionRouteResolution> {
+}): Promise<
+  | { state: "unbound" }
+  | { state: "revoked" }
+  | {
+      state: "active";
+      route: {
+        agentId: string;
+        sessionKey: string;
+        systemPrompt: string;
+      };
+    }
+> {
   const store = getClickClackDiscussionBindingStore(params.runtime);
   await store.prepare();
   let matched = await store.getByChannel(params.serverBaseUrl, params.channelId);
@@ -41,6 +48,7 @@ export async function resolveClickClackDiscussionRoute(params: {
     | Awaited<ReturnType<typeof prepareClickClackDiscussionChannelRevocation>>
     | undefined;
   let bindingFacts: Awaited<ReturnType<typeof store.prepareRead>> | undefined;
+  let session: Awaited<ReturnType<typeof prepareDiscussionSessionEntry>> | undefined;
   try {
     revocation = await prepareClickClackDiscussionChannelRevocation(params);
     if (revocation.isRevoked(matched?.binding)) {
@@ -59,7 +67,8 @@ export async function resolveClickClackDiscussionRoute(params: {
     }
     // SAFETY: account resolution only reads the SDK's deep-readonly, schema-validated config.
     const config = params.runtime.config.current() as CoreConfig;
-    if (resolveDiscussionBindingAccount(config, matched.binding).state !== "active") {
+    const resolved = await prepareDiscussionBindingAccount(config, matched.binding);
+    if (resolved.state !== "active") {
       return { state: "revoked" };
     }
     bindingFacts = await store.prepareRead(matched.sessionKey);
@@ -72,26 +81,30 @@ export async function resolveClickClackDiscussionRoute(params: {
         binding: matched.binding,
       });
     } catch (error) {
-      params.runtime.logging
-        .getChildLogger({ plugin: "clickclack", feature: "discussions" })
-        .warn(
-          `discussion attachment refresh failed for channel ${params.channelId}: ${String(error)}`,
-        );
+      discussionsLog.warn(
+        `discussion attachment refresh failed for channel ${params.channelId}: ${String(error)}`,
+      );
       return { state: "revoked" };
     }
     if (!binding) {
       return { state: "revoked" };
     }
+    session = await prepareDiscussionSessionEntry(params.runtime, matched.sessionKey);
+    session.source();
     const current = bindingFacts.read();
     if (
       !current ||
       current.externalRef !== binding.externalRef ||
       current.channelId !== binding.channelId ||
       revocation.isRevoked(current) ||
-      !bindingMatchesActiveSessionIncarnation(params.runtime, matched.sessionKey, binding) ||
-      // SAFETY: This fresh SDK config is schema-validated; account resolution only reads it.
-      resolveDiscussionBindingAccount(params.runtime.config.current() as CoreConfig, binding)
-        .state !== "active"
+      session.entry?.sessionId !== binding.sessionId ||
+      session.entry.archivedAt !== undefined ||
+      resolvePreparedDiscussionBindingAccount(
+        // SAFETY: This fresh SDK config is schema-validated; account resolution only reads it.
+        params.runtime.config.current() as CoreConfig,
+        binding,
+        resolved.account,
+      ).state !== "active"
     ) {
       return { state: "revoked" };
     }
@@ -126,6 +139,7 @@ export async function resolveClickClackDiscussionRoute(params: {
     // Pending or unknown binding settlement cannot authorize a bound message.
     return { state: "revoked" };
   } finally {
+    session?.release();
     bindingFacts?.release();
     revocation?.release();
   }

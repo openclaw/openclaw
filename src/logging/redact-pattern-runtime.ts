@@ -210,7 +210,21 @@ export function readRedactMatch(args: unknown[]) {
   return { match, groups, input, offset };
 }
 
-export type RedactMatch = ReturnType<typeof readRedactMatch> & { replacement?: string };
+export type RedactMatch = ReturnType<typeof readRedactMatch> & {
+  replacement?: string;
+  /** Offset of a bounded match input inside the complete diagnostic text. */
+  sourceOffset?: number;
+};
+
+export type RedactContext = {
+  pattern: ResolvedRedactPattern;
+  /** Prepend one complete, newline-bounded source block; true means older input cannot matter. */
+  prepend: () => { consume: (text: string) => void; finish: () => boolean };
+  /** Resolve the prepended history from its newline-boundary state (false at byte zero). */
+  resolve: (active: boolean) => void;
+  /** Return the state after a complete, newline-bounded window without changing pattern. */
+  advance: (text: string) => boolean;
+};
 
 /**
  * Programmatic synchronous rule; never serialized into logging.redactPatterns.
@@ -223,11 +237,7 @@ export type RedactMatch = ReturnType<typeof readRedactMatch> & { replacement?: s
 type RedactMatcher = {
   readonly source: string;
   readonly exec: (text: string) => Iterable<RedactMatch>;
-  readonly createContext?: () => {
-    pattern: ResolvedRedactPattern;
-    /** Prepend one complete, newline-bounded source block; true means older input cannot matter. */
-    prepend: () => { consume: (text: string) => void; finish: () => boolean };
-  };
+  readonly createContext?: () => RedactContext;
 };
 export type ResolvedRedactPattern = RegExp | RedactMatcher;
 export type RedactPattern = string | ResolvedRedactPattern;
@@ -260,32 +270,6 @@ export function setRedactPatternPrefilter(
 // Derived matchers live only as long as their owner pattern, never as long as a secret value.
 const indexedPatterns = new WeakMap<RegExp, RegExp>();
 
-function getIndexedCaptureStart(
-  pattern: ResolvedRedactPattern,
-  input: string,
-  match: string,
-  matchOffset: number,
-  captureIndex: number,
-): number | null {
-  if (!(pattern instanceof RegExp) || matchOffset < 0 || !input) {
-    return null;
-  }
-  let indexedPattern = indexedPatterns.get(pattern);
-  if (!indexedPattern) {
-    indexedPattern = new RegExp(
-      pattern.source,
-      `${pattern.flags.replace("d", "").replace("g", "")}dg`,
-    );
-    indexedPatterns.set(pattern, indexedPattern);
-  }
-  indexedPattern.lastIndex = matchOffset;
-  const indexedMatch = indexedPattern.exec(input);
-  const captureIndices = indexedMatch?.indices?.[captureIndex + 1];
-  return indexedMatch?.index === matchOffset && indexedMatch[0] === match && captureIndices
-    ? captureIndices[0] - matchOffset
-    : null;
-}
-
 type SecretCaptureSelection = {
   index: number;
   value: string;
@@ -310,14 +294,24 @@ export function getSecretCaptureStart(
   matchOffset: number,
   selected: SecretCaptureSelection,
 ): number {
-  const indexedTokenStart = getIndexedCaptureStart(
-    pattern,
-    input,
-    match,
-    matchOffset,
-    selected.index,
-  );
-  return indexedTokenStart ?? match.lastIndexOf(selected.value);
+  const captureIndex = selected.index;
+  if (!(pattern instanceof RegExp) || matchOffset < 0 || !input) {
+    return match.lastIndexOf(selected.value);
+  }
+  let indexedPattern = indexedPatterns.get(pattern);
+  if (!indexedPattern) {
+    indexedPattern = new RegExp(
+      pattern.source,
+      `${pattern.flags.replace("d", "").replace("g", "")}dg`,
+    );
+    indexedPatterns.set(pattern, indexedPattern);
+  }
+  indexedPattern.lastIndex = matchOffset;
+  const indexedMatch = indexedPattern.exec(input);
+  const captureIndices = indexedMatch?.indices?.[captureIndex + 1];
+  return indexedMatch?.index === matchOffset && indexedMatch[0] === match && captureIndices
+    ? captureIndices[0] - matchOffset
+    : match.lastIndexOf(selected.value);
 }
 
 const globalPatterns = new WeakMap<RegExp, RegExp>();

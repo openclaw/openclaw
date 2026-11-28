@@ -26,15 +26,11 @@ export type ChatComposerPersistResult =
   | { status: "conflict" }
   | ({ status: "storage-failed" } & ChatComposerDraftRetry);
 
-export type StoredChatQueueReplacement = {
-  id: string;
-  expected: ChatQueueItem;
-};
-
 export type ChatComposerDraftRevisionState = ReturnType<typeof readDraftRevisionState>;
 
 export type StoredChatComposerSnapshot = {
   draft: string;
+  attachmentVersion?: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
   replyTarget?: ChatReplyTarget;
@@ -54,6 +50,7 @@ export type ChatComposerPersistOptions = {
   replyTarget?: ChatReplyTarget | null;
   draftRevision?: number;
   expectedDraftRevision?: number;
+  attachmentVersion?: string;
 };
 
 export type ChatComposerPersistenceState = ChatComposerScope & {
@@ -66,7 +63,6 @@ export type ChatComposerPersistenceState = ChatComposerScope & {
   chatQueue: ChatQueueItem[];
   lastError?: string | null;
   chatError?: string | null;
-  requestUpdate?: () => void;
 };
 
 export type DurableChatComposerPersistenceState = ChatComposerPersistenceState & {

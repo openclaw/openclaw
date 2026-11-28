@@ -1,3 +1,4 @@
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
   ContextEnginePromptCacheInfo,
@@ -16,6 +17,7 @@ import {
 } from "../../../sessions/input-provenance.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { truncateUtf16Safe } from "../../../utils.js";
+import { readAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
@@ -26,8 +28,8 @@ import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js"
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
-import { normalizeContextTokenBudget } from "../utils.js";
 import type { DecisionPromptBuildFields } from "./attempt-decision-prefilter.js";
+import { attachCompactionAccountingRecorder } from "./compaction-accounting-bridge.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export type ResolvedPromptBuildHookResult = PluginHookBeforePromptBuildResult & {
@@ -36,10 +38,8 @@ export type ResolvedPromptBuildHookResult = PluginHookBeforePromptBuildResult & 
 };
 
 type PromptBuildHookRunner = Pick<HookRunner, "runBeforePromptBuild"> &
-  Partial<Pick<HookRunner, "runAgentTurnPrepare" | "runHeartbeatPromptContribution">> & {
-    hasHooks: (
-      hookName: "agent_turn_prepare" | "heartbeat_prompt_contribution" | "before_prompt_build",
-    ) => boolean;
+  Partial<Pick<HookRunner, "runAgentTurnPrepare">> & {
+    hasHooks: (hookName: "agent_turn_prepare" | "before_prompt_build") => boolean;
   };
 
 export async function resolvePromptBuildHookResult(params: {
@@ -48,27 +48,13 @@ export async function resolvePromptBuildHookResult(params: {
   messages: unknown[];
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
+  refreshContinuation?: boolean;
 }): Promise<ResolvedPromptBuildHookResult> {
   const turnContext = await resolvePluginTurnContext(params);
   const logHookFailure = (hookName: string) => (hookErr: unknown) => {
     log.warn(`${hookName} hook failed: ${String(hookErr)}`);
     return undefined;
   };
-  const heartbeatContribution =
-    params.hookCtx.trigger === "heartbeat" &&
-    params.hookRunner?.runHeartbeatPromptContribution &&
-    params.hookRunner.hasHooks("heartbeat_prompt_contribution")
-      ? await params.hookRunner
-          .runHeartbeatPromptContribution(
-            {
-              sessionKey: params.hookCtx.sessionKey,
-              agentId: params.hookCtx.agentId,
-              heartbeatName: "heartbeat",
-            },
-            params.hookCtx,
-          )
-          .catch(logHookFailure("heartbeat_prompt_contribution"))
-      : undefined;
   const promptBuildResult = params.hookRunner?.hasHooks("before_prompt_build")
     ? await params.hookRunner
         .runBeforePromptBuild(
@@ -97,7 +83,7 @@ export async function resolvePromptBuildHookResult(params: {
         ),
       )
     : undefined;
-  const pendingContext = [turnContext, heartbeatContribution];
+  const pendingContext = [turnContext];
   const joinContext = (key: "prependContext" | "appendContext") =>
     joinPresentTextSegments([...pendingContext, promptBuildResult].map((source) => source?.[key]));
   return {
@@ -388,6 +374,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "runtimePlan"
   | "userTurnTranscriptRecorder"
 > & {
+  admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"];
   sessionId?: EmbeddedRunAttemptParams["sessionId"];
 };
 
@@ -416,12 +403,34 @@ export function buildAfterTurnRuntimeContext(params: {
           ...(target?.threadId !== undefined ? { threadId: target.threadId } : {}),
         }
       : undefined;
-  const tokenBudget = normalizeContextTokenBudget(params.tokenBudget);
-  const currentTokenCount = normalizeContextTokenBudget(params.currentTokenCount);
-  return {
+  const tokenBudget = floorPositiveFiniteNumber(params.tokenBudget);
+  const currentTokenCount = floorPositiveFiniteNumber(params.currentTokenCount);
+  const runtimeContext: ContextEngineRuntimeContext = {
     ...buildEmbeddedCompactionRuntimeContext(
       {
-        ...params.attempt,
+        sessionKey: params.attempt.sessionKey,
+        sandboxSessionKey: params.attempt.sandboxSessionKey,
+        sandboxAgentId: params.attempt.sandboxAgentId,
+        messageChannel: params.attempt.messageChannel,
+        messageProvider: params.attempt.messageProvider,
+        agentAccountId: params.attempt.agentAccountId,
+        currentChannelId: params.attempt.currentChannelId,
+        currentThreadTs: params.attempt.currentThreadTs,
+        currentMessageId: params.attempt.currentMessageId,
+        authProfileId: params.attempt.authProfileId,
+        authProfileIdSource: params.attempt.authProfileIdSource,
+        modelSelectionLocked: params.attempt.modelSelectionLocked,
+        config: params.attempt.config,
+        toolsAllow: params.attempt.toolsAllow,
+        skillsSnapshot: params.attempt.skillsSnapshot,
+        senderId: params.attempt.senderId,
+        provider: params.attempt.provider,
+        modelId: params.attempt.modelId,
+        thinkLevel: params.attempt.thinkLevel,
+        reasoningLevel: params.attempt.reasoningLevel,
+        bashElevated: params.attempt.bashElevated,
+        extraSystemPrompt: params.attempt.extraSystemPrompt,
+        ownerNumbers: params.attempt.ownerNumbers,
         modelCallUrgency: resolveModelCallUrgency(params.attempt),
         runtimeAuthPlan: params.attempt.runtimePlan?.auth,
         workspaceDir: params.workspaceDir,
@@ -452,6 +461,10 @@ export function buildAfterTurnRuntimeContext(params: {
     transcriptStorage: { kind: "sqlite" },
     ...(sessionTarget ? { sessionTarget } : {}),
   };
+  attachCompactionAccountingRecorder(runtimeContext, {
+    operatorAuthority: readAdmittedRunOperatorAuthority(params.attempt.admittedRunContext),
+  });
+  return runtimeContext;
 }
 
 export function buildAfterTurnRuntimeContextFromUsage(

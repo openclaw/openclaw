@@ -1,4 +1,5 @@
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
@@ -12,32 +13,47 @@ import {
   isSameSubagentRun,
   isSameSubagentRunOwner,
 } from "../agents/subagents/registry/subagent-run-generation.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
-/** Persist the dispatched follow-up prompt so restart recovery cannot reuse the original task. */
+/** Bind an explicitly requested follow-up to its current child task owner. */
 export async function reactivateCompletedSubagentSession(params: {
   sessionKey: string;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   runId?: string;
   task?: string;
   gatewayContextResolver?: GatewayContextResolver;
   assertCurrent?: () => void;
-  acpSession?: {
+  session?: {
     cfg: OpenClawConfig;
     activeSessionAgentId: string;
     sessionEntry?: SessionEntry;
   };
+  /** A wake continues the task paused on this chat; without a paused task it stays a follow-up. */
+  continuesPausedTask?: true;
 }): Promise<boolean> {
   const runId = params.runId?.trim();
   if (!runId) {
     return false;
   }
+  const admittedEntry = params.session?.sessionEntry;
+  const sessionEntry = admittedEntry
+    ? { sessionId: admittedEntry.sessionId, lifecycleRevision: admittedEntry.lifecycleRevision }
+    : undefined;
   const paused = getLatestLiveSubagentRunByChildSessionKey(
     params.sessionKey,
     (entry) => entry.pauseReason === "sessions_yield",
   );
+  if (
+    params.continuesPausedTask &&
+    // A stopped task stays stopped; its late handoff result runs as an ordinary follow-up.
+    (!paused || paused.killIntent || paused.killReconciliation)
+  ) {
+    return false;
+  }
   const existing = paused ?? (await getLatestSubagentRunByChildSessionKey(params.sessionKey));
   if (!existing || typeof existing.execution.endedAt !== "number") {
     return false;
@@ -45,14 +61,14 @@ export async function reactivateCompletedSubagentSession(params: {
   if (params.gatewayContextResolver && !params.gatewayContextResolver()) {
     return false;
   }
-  if (params.acpSession) {
+  if (params.session) {
     const [acpMeta] = await readAcpSessionMetaForEntries({
-      cfg: params.acpSession.cfg,
+      cfg: params.session.cfg,
       entries: [
         {
-          agentId: params.acpSession.activeSessionAgentId,
+          agentId: params.session.activeSessionAgentId,
           sessionKey: params.sessionKey,
-          entry: params.acpSession.sessionEntry,
+          entry: params.session.sessionEntry,
         },
       ],
     });
@@ -105,7 +121,7 @@ export async function reactivateCompletedSubagentSession(params: {
   const gatewayBinding = params.gatewayContextResolver
     ? { gatewayContextResolver: params.gatewayContextResolver }
     : {};
-  const replaced =
+  const replace = async () =>
     source.pauseReason === "sessions_yield"
       ? await runtime.adoptPausedSubagentRunForFollowUp({
           childSessionKey: params.sessionKey,
@@ -118,11 +134,25 @@ export async function reactivateCompletedSubagentSession(params: {
           previousRunId: source.runId,
           nextRunId: runId,
           preserveCompletedRun: true,
+          sessionEntry,
           runTimeoutSeconds: source.runTimeoutSeconds ?? 0,
           ...(hasTask ? { task } : {}),
           assertCurrent: assertOriginalOwnerCurrent,
           ...gatewayBinding,
         });
+  const replaced = params.operatorAuthority?.participationCeiling
+    ? await withGatewayToolCallerIdentity(
+        {
+          agentId:
+            params.session?.activeSessionAgentId ??
+            params.operatorAuthority.participationCeiling.source.agentId,
+          sessionKey: params.sessionKey,
+          operatorAuthority: params.operatorAuthority,
+          gatewayContextResolver: params.gatewayContextResolver,
+        },
+        replace,
+      )
+    : await replace();
   if (replaced) {
     return true;
   }

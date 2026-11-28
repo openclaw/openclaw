@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { OAuthProviderRegistry } from "../../llm/utils/oauth/index.js";
 import type {
   OAuthCredentials,
@@ -28,12 +29,17 @@ export async function loginAuthStorageOAuthProvider(
   authStorage: object,
   providerId: OAuthProviderId,
   callbacks: OAuthLoginCallbacks,
+  config?: OpenClawConfig,
 ): Promise<OAuthCredentials> {
   const provider = getAuthStorageOAuthProviderRegistry(authStorage).get(providerId);
   if (provider) {
     return await provider.login(callbacks);
   }
-  const resolved = await loginProviderOAuthWithPlugin({ provider: providerId, context: callbacks });
+  const resolved = await loginProviderOAuthWithPlugin({
+    provider: providerId,
+    context: callbacks,
+    config,
+  });
   if (resolved.status === "unowned") {
     throw new Error(`Unknown OAuth provider: ${providerId}`);
   }
@@ -47,11 +53,13 @@ export async function resolveAuthStoragePluginOAuthCredential(
   providerId: OAuthProviderId,
   credential: OAuthCredentials,
   refresh: boolean,
+  config?: OpenClawConfig,
 ): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
   const resolved = await resolveProviderOAuthCredentialWithPlugin({
     provider: providerId,
     credential: { ...credential, type: "oauth", provider: providerId },
     refresh,
+    config,
   });
   if (resolved.status === "configured-unavailable") {
     throw new OAuthProviderConfiguredUnavailableError(providerId);
@@ -63,9 +71,11 @@ export async function resolveAuthStoragePluginOAuthCredential(
 
 export async function canResolveAuthStoragePluginOAuthRefresh(
   providerId: OAuthProviderId,
+  config?: OpenClawConfig,
 ): Promise<boolean> {
   const capability = await resolveProviderOAuthRefreshCapabilityWithPlugin({
     provider: providerId,
+    config,
   });
   if (capability.status === "configured-unavailable") {
     throw new OAuthProviderConfiguredUnavailableError(providerId);

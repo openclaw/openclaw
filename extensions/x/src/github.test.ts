@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createXGitHubReader, type XGitHubPermission } from "./github.js";
-
-type GitHubFetch = NonNullable<Parameters<typeof createXGitHubReader>[0]["fetch"]>;
+import type { XGitHubPermission } from "./github.js";
+import {
+  createXTestGitHubReader as createXGitHubReader,
+  type XFetch as GitHubFetch,
+} from "./test-support/api-client.js";
 
 function collaborator(login: string, permission?: XGitHubPermission) {
   return {

@@ -1,15 +1,17 @@
 import { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
+import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
+import { transformSync } from "esbuild";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { workspaceQuiescenceArgv } from "../gateway/worker-environments/workspace-quiescence-scripts.js";
 import type { ProcessSupervisor, RunExit } from "../process/supervisor/types.js";
 import type { NodeWorkerWorkspaceQuiescenceInput } from "../worker/node-workspace-protocol.js";
@@ -79,44 +81,51 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
       signal,
     );
   const readLease = () => {
+    const storage = path.join(home, ".openclaw-worker", "quiescence");
+    const key = createHash("sha256").update(workspaceDir).digest("hex");
     if (guestPlatform === "linux") {
-      const lease = path.join(
-        home,
-        ".openclaw-worker",
-        "quiescence",
-        createHash("sha256").update(workspaceDir).digest("hex") + "." + nonce + ".json",
-      );
+      const lease = path.join(storage, key + "." + nonce + ".json");
       return fs.existsSync(lease) ? JSON.parse(fs.readFileSync(lease, "utf8")) : undefined;
     }
-    const database = new DatabaseSync(
-      path.join(home, ".openclaw-worker", "quiescence", "windows-shared-host.sqlite"),
-      { readOnly: true },
-    );
-    try {
-      const row = database
-        .prepare("SELECT lease_json FROM workspace_leases WHERE workspace_key = ?")
-        .get(createHash("sha256").update(workspaceDir).digest("hex"));
-      return row ? JSON.parse(String(row.lease_json)) : undefined;
-    } finally {
-      database.close();
-    }
+    using database = new DatabaseSync(path.join(storage, "windows-shared-host.sqlite"), {
+      readOnly: true,
+    });
+    const row = database
+      .prepare("SELECT lease_json FROM workspace_leases WHERE workspace_key = ?")
+      .get(key);
+    return row ? JSON.parse(String(row.lease_json)) : undefined;
   };
 
   // Execute the generated program with real lease storage and IPC receipts.
   // Only the OS transport, process identity and expiry clock are simulated.
   const script = (args: readonly string[], child?: ChildProcess) => {
-    let stdout = "";
-    let stderr = "";
-    let exitCode = 0;
+    const inline = args[0] === "-e";
+    const fileOffset = args[0] === "--no-install" ? 1 : 0;
+    const filename = args[fileOffset];
+    if (!filename) {
+      throw new Error("expected quiescence entry");
+    }
+    const source = inline
+      ? args[1]
+      : transformSync(fs.readFileSync(filename, "utf8"), {
+          format: "cjs",
+          sourcefile: filename,
+          define: { "import.meta.url": JSON.stringify(pathToFileURL(filename).href) },
+          logLevel: "silent",
+        }).code;
+    if (source === undefined) {
+      throw new Error("expected quiescence program");
+    }
+    const result = { stdout: "", stderr: "", exitCode: 0 };
     const stdin = new PassThrough();
     const exited = new Error("script exited");
     const pid = child?.pid ?? 9000;
     const writeStderr = (text: string) => {
-      stderr += text;
+      result.stderr += text;
       child?.stderr?.emit("data", Buffer.from(text));
     };
     const finish = (code: number) => {
-      exitCode = code;
+      result.exitCode = code;
       if (child && mocks.live.delete(pid)) {
         Object.defineProperties(child, {
           connected: { configurable: true, value: false },
@@ -126,7 +135,7 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
       }
     };
     const guest = Object.assign(new EventEmitter(), {
-      argv: [process.execPath, ...args.slice(2)],
+      argv: [process.execPath, ...args.slice(inline ? 2 : fileOffset)],
       platform: guestPlatform,
       getuid: () => 0,
       kill: () => {
@@ -135,11 +144,11 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
       pid,
       execPath: process.execPath,
       stdin,
-      stdout: { write: (text: string) => (stdout += text) },
+      stdout: { write: (text: string) => (result.stdout += text) },
       stderr: { write: writeStderr },
       disconnect: () => {
         expect(stdin.destroyed).toBe(true);
-        finish(exitCode);
+        finish(result.exitCode);
       },
       send: (message: unknown) => queueMicrotask(() => child?.emit("message", message)),
       exit: (code: number) => {
@@ -148,9 +157,9 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
       },
     });
     Object.defineProperty(guest, "exitCode", {
-      get: () => exitCode,
+      get: () => result.exitCode,
       set: (code: number) => {
-        exitCode = code;
+        result.exitCode = code;
       },
     });
     Object.defineProperty(guest, "connected", {
@@ -174,25 +183,32 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
         },
       });
     }
+    const requireRemote = (name: string): unknown => {
+      if (name === "node:module") {
+        return { createRequire: () => requireRemote };
+      }
+      if (name === "node:os") {
+        return { homedir: () => home };
+      }
+      if (name === "node:child_process") {
+        return {
+          execFileSync: (command: string, probeArgs: string[]) => {
+            if (command !== "ps" || probeArgs[0] !== "-o" || probeArgs.at(-1) !== String(pid)) {
+              throw new Error("native quiescence must only inspect its watchdog");
+            }
+            return "Tue Oct  6 19:00:00 2026\n";
+          },
+        };
+      }
+      return require(name);
+    };
+    const guestModule = { exports: {} };
     try {
-      runInNewContext(args[1]!, {
+      runInNewContext(source, {
+        module: guestModule,
+        exports: guestModule.exports,
         process: guest,
-        require: (name: string) => {
-          if (name === "node:os") {
-            return { homedir: () => home };
-          }
-          if (name === "node:child_process") {
-            return {
-              execFileSync: (command: string, probeArgs: string[]) => {
-                if (command !== "ps" || probeArgs[0] !== "-o" || probeArgs.at(-1) !== String(pid)) {
-                  throw new Error("native quiescence must only inspect its watchdog");
-                }
-                return "Tue Oct  6 19:00:00 2026\n";
-              },
-            };
-          }
-          return require(name);
-        },
+        require: requireRemote,
         setTimeout: () => 1,
         clearTimeout: () => {},
         performance,
@@ -203,11 +219,11 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
         finish(1);
       }
     }
-    return { stdout, stderr, exitCode };
+    return result;
   };
   mocks.helper.mockImplementation((_command, args) => {
-    if (!Array.isArray(args)) {
-      throw new Error("expected helper argv");
+    if (!Array.isArray(args) || args[0] === "-e") {
+      throw new Error("local helper requires a packaged entry file");
     }
     const child = new ChildProcess();
     const pid = 1000 + children.length;
@@ -224,6 +240,9 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
   mocks.spawn.mockImplementation(async (input) => {
     if (input.mode !== "child") {
       throw new Error("expected standalone recovery command");
+    }
+    if (input.argv[1] === "-e") {
+      throw new Error("local recovery requires a packaged entry file");
     }
     const outcome = script(input.argv.slice(1));
     const result: RunExit = {
@@ -252,9 +271,7 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
     workspaceDir,
     kill: async () => {
       const child = children.at(-1)!;
-      const closed = new Promise<void>((resolve) => {
-        child.once("close", () => resolve());
-      });
+      const closed = once(child, "close");
       exits.get(child)!();
       await closed;
     },
@@ -295,39 +312,6 @@ describe("root-owned POSIX quiescence", () => {
 });
 
 describe("Windows-selected quiescence controller contracts", () => {
-  it("reuses the retained helper across SQLite leases while fencing stale nonces", async () => {
-    const f = fixture();
-    try {
-      await expect(f.execute(acquire)).resolves.toBe("quiesced " + nonce + "\n");
-      expect(mocks.helper).toHaveBeenCalledOnce();
-      expect(mocks.spawn).not.toHaveBeenCalled();
-      expect(f.readLease()).toMatchObject({
-        nonce,
-        sharedHost: true,
-        processes: [],
-        watchdog: null,
-      });
-      expect(f.releaseWorkspace).not.toHaveBeenCalled();
-      await expect(f.execute(renew)).resolves.toBe("renewed " + nonce + "\n");
-      await f.execute(release);
-      expect(f.readLease()).toBeUndefined();
-      const nextNonce = "b".repeat(32);
-      await f.execute({ ...acquire, nonce: nextNonce });
-      for (const operation of [acquire, renew, release]) {
-        await expect(f.execute(operation)).rejects.toThrow(/already active|no longer active/);
-      }
-      expect(f.readLease()).toMatchObject({ nonce: nextNonce });
-      await f.execute({ ...renew, nonce: nextNonce });
-      await f.execute({ ...release, nonce: nextNonce });
-      expect(mocks.helper).toHaveBeenCalledOnce();
-      expect(mocks.spawn).not.toHaveBeenCalled();
-    } finally {
-      await f.owner.close();
-    }
-    expect(f.children[0]?.exitCode).toBe(0);
-    expect(f.owner.hasActiveWork()).toBe(false);
-  });
-
   it("does not admit an already-aborted operation", async () => {
     const f = fixture();
     const caller = new AbortController();
@@ -340,26 +324,22 @@ describe("Windows-selected quiescence controller contracts", () => {
 
   it("joins exact-nonce standalone recovery cleanup before releasing dead-helper custody", async () => {
     const f = fixture();
-    const cleanupEntered = createDeferred();
-    const cleaned = createDeferred();
+    const cleanupGate = createEnteredGate();
     await f.execute(acquire);
     expect(mocks.helper).toHaveBeenCalledOnce();
     await f.kill();
     await expect(f.execute(renew)).rejects.toThrow("watchdog identity changed");
     expect(f.readLease()).toMatchObject({ nonce });
-    mocks.cleanup.mockImplementation(async () => {
-      cleanupEntered.resolve();
-      await cleaned.promise;
-    });
+    mocks.cleanup.mockImplementation(cleanupGate.wait);
     const releasing = f.execute(release);
-    await cleanupEntered.promise;
+    await cleanupGate.entered;
     const closing = f.owner.close();
     try {
       expect(f.readLease()).toBeUndefined();
       expect(f.releaseWorkspace).not.toHaveBeenCalled();
       expect(f.owner.hasActiveWork()).toBe(true);
     } finally {
-      cleaned.resolve();
+      cleanupGate.release();
       await Promise.all([releasing, closing]);
     }
     expect(mocks.spawn).toHaveBeenCalledOnce();

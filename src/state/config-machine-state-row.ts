@@ -1,10 +1,12 @@
 import { isMainThread } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { publishAuthProfileRowsChanged } from "../agents/auth-profiles/persisted-rows-receipt.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 // Row access shared by worker commands and explicit native administration.
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   getOrLoadSqliteDatabaseAdmissionForPath,
+  peekSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
@@ -16,6 +18,16 @@ export type ConfigMachineStateDatabase = Pick<OpenClawStateKyselyDatabase, "conf
 
 type ConfigMachineStateRow = { value_json: string; updated_at_ms: number };
 type ConfigMachineStateRowAdmission = { row: ConfigMachineStateRow | undefined };
+// Exchange only the committed receipt, not the potentially large catalog payload.
+const catalogReceipt: SqliteDatabaseAdmissionKey<object> = {
+  name: "model-catalog.remote",
+  read: (value) => (isRecord(value) ? value : undefined),
+};
+
+export function readRemoteModelCatalogReceipt(databasePath: string): object | undefined {
+  return peekSqliteDatabaseAdmissionForPath(databasePath, catalogReceipt);
+}
+
 const ttsPathAdmission: SqliteDatabaseAdmissionKey<ConfigMachineStateRowAdmission> = {
   name: "state.tts-prefs-path",
   read(value) {
@@ -37,7 +49,7 @@ const ttsPathAdmission: SqliteDatabaseAdmissionKey<ConfigMachineStateRowAdmissio
   },
 };
 
-/** Only this named key has complete writer coverage; other machine-state owners keep their reads. */
+/** Named row owners publish only the facts covered by this mutation. */
 export function publishConfigMachineStateRow(
   database: EngineConnection,
   key: string,
@@ -45,6 +57,14 @@ export function publishConfigMachineStateRow(
 ): void {
   if (key === "tts.prefsPath") {
     publishSqliteDatabaseAdmission(database, ttsPathAdmission, { row });
+  } else if (key === "authProfiles.store" || key === "authProfiles.state") {
+    publishAuthProfileRowsChanged(database);
+  } else if (
+    key === "modelCatalog.remote.v3" ||
+    key === "modelCatalog.remote.v2" ||
+    key === "modelCatalog.remote"
+  ) {
+    publishSqliteDatabaseAdmission(database, catalogReceipt, {});
   }
 }
 
@@ -53,9 +73,11 @@ export function getTtsMachinePathAdmission(
   databasePath: string,
   load?: () => ConfigMachineStateRow | undefined,
 ): ConfigMachineStateRowAdmission | undefined {
-  return getOrLoadSqliteDatabaseAdmissionForPath(databasePath, ttsPathAdmission, () =>
-    load ? { row: load() } : undefined,
-  );
+  return load
+    ? getOrLoadSqliteDatabaseAdmissionForPath(databasePath, ttsPathAdmission, () => ({
+        row: load(),
+      }))
+    : peekSqliteDatabaseAdmissionForPath(databasePath, ttsPathAdmission);
 }
 
 export function normalizeConfigMachineStateKey(key: string): string {
@@ -87,7 +109,7 @@ export function readConfigMachineStateRowInDatabase(database: EngineConnection, 
       .where("state_key", "=", stateKey),
   );
   // This host read is synchronous; worker results install through getTtsMachinePathAdmission.
-  if (isMainThread) {
+  if (isMainThread && stateKey === "tts.prefsPath") {
     publishConfigMachineStateRow(database, stateKey, row);
   }
   return row;

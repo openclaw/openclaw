@@ -1,5 +1,5 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import type { Usage } from "../types.js";
+import type { AnthropicMessagesCompat, Usage } from "../types.js";
 
 type AnthropicUsagePayload = {
   input_tokens?: unknown;
@@ -36,10 +36,18 @@ type AnthropicBilledUsage = {
   output: number;
   cacheRead: number;
   cacheWrite: number;
-  cacheWrite1h: number;
+  cacheWrite1h?: number;
+  cacheWrite5m?: number;
 };
 
-const BILLED_USAGE_KEYS = ["input", "output", "cacheRead", "cacheWrite", "cacheWrite1h"] as const;
+const BILLED_USAGE_KEYS = [
+  "input",
+  "output",
+  "cacheRead",
+  "cacheWrite",
+  "cacheWrite1h",
+  "cacheWrite5m",
+] as const;
 
 function readAnthropicBilledUsage(
   usage: AnthropicUsagePayload,
@@ -52,7 +60,7 @@ function readAnthropicBilledUsage(
     cacheWrite: readAnthropicUsageTokenCount(
       usage.cache_creation_input_tokens ?? missingCacheTokens,
     ),
-    cacheWrite1h: readAnthropicCacheWriteUsage(usage).cacheWrite1h,
+    ...readAnthropicCacheWriteUsage(usage),
   };
 }
 
@@ -70,7 +78,8 @@ function readAnthropicIterationUsage(value: unknown): AnthropicBilledUsage | und
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
-  const { input, output, cacheRead, cacheWrite, cacheWrite1h } = readAnthropicBilledUsage(value);
+  const { input, output, cacheRead, cacheWrite, cacheWrite1h, cacheWrite5m } =
+    readAnthropicBilledUsage(value);
   if (
     input === undefined ||
     output === undefined ||
@@ -79,7 +88,14 @@ function readAnthropicIterationUsage(value: unknown): AnthropicBilledUsage | und
   ) {
     return undefined;
   }
-  return { input, output, cacheRead, cacheWrite, cacheWrite1h: cacheWrite1h ?? 0 };
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    cacheWrite1h,
+    cacheWrite5m,
+  };
 }
 
 export function readAnthropicUsageTokenCount(value: unknown): number | undefined {
@@ -154,7 +170,6 @@ function readAnthropicCompactionBilledUsage(iterations: unknown): AnthropicBille
     output: 0,
     cacheRead: 0,
     cacheWrite: 0,
-    cacheWrite1h: 0,
   };
   for (const iteration of iterations) {
     const resolved = readAnthropicIterationUsage(iteration);
@@ -163,17 +178,37 @@ function readAnthropicCompactionBilledUsage(iterations: unknown): AnthropicBille
     }
     sawCompaction ||= iteration.type === "compaction";
     for (const key of BILLED_USAGE_KEYS) {
-      billed[key] += resolved[key];
+      const value = resolved[key];
+      if (value !== undefined) {
+        billed[key] = (billed[key] ?? 0) + value;
+      }
     }
   }
   return sawCompaction ? billed : undefined;
 }
 
+/** Rewrite inclusive `input_tokens` to the uncached bucket; omitted cache reads keep the last report. */
+function excludeCacheReadFromInput(
+  target: Usage,
+  usage: AnthropicUsagePayload,
+): AnthropicUsagePayload {
+  const input = readAnthropicUsageTokenCount(usage.input_tokens);
+  if (input === undefined) {
+    return usage;
+  }
+  const cacheRead = readAnthropicUsageTokenCount(usage.cache_read_input_tokens) ?? target.cacheRead;
+  return { ...usage, input_tokens: Math.max(0, input - cacheRead) };
+}
+
 /** Record independent billing buckets without treating zero placeholders as context proof. */
 export function applyAnthropicMessageStartUsage(
   target: Usage,
-  payload: AnthropicUsagePayload,
+  reportedPayload: AnthropicUsagePayload,
+  model?: { compat?: AnthropicMessagesCompat },
 ): AnthropicPromptUsageSnapshot | undefined {
+  const payload = model?.compat?.inputTokensIncludeCacheRead
+    ? excludeCacheReadFromInput(target, reportedPayload)
+    : reportedPayload;
   const promptUsage = readAnthropicPromptUsageSnapshot(payload);
   const promptTokens = promptUsage
     ? promptUsage.input + promptUsage.cacheRead + promptUsage.cacheWrite
@@ -193,16 +228,20 @@ export function applyAnthropicMessageStartUsage(
 /** Keep billing and context distinct; omitted usage preserves the last snapshot. */
 export function applyAnthropicMessageDeltaUsage(
   target: Usage,
-  usage: AnthropicUsagePayload | undefined,
+  reportedUsage: AnthropicUsagePayload | undefined,
   messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined,
+  model?: { compat?: AnthropicMessagesCompat },
 ): void {
-  if (!usage) {
+  if (!reportedUsage) {
     return;
   }
+  const usage = model?.compat?.inputTokensIncludeCacheRead
+    ? excludeCacheReadFromInput(target, reportedUsage)
+    : reportedUsage;
   const billedIterations = readAnthropicCompactionBilledUsage(usage.iterations);
   const reported = readAnthropicBilledUsage(usage);
-  // Match the SDK accumulator: absent or null cache counters preserve prior values.
-  applyAnthropicBilledUsage(target, billedIterations ?? reported);
+  // Iteration totals replace blended counters; omitted TTL buckets keep top-level reports.
+  applyAnthropicBilledUsage(target, { ...reported, ...billedIterations });
   const iterationUsage = readLastAnthropicIterationUsage(usage);
   if (iterationUsage.state === "valid") {
     target.contextUsage = {

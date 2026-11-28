@@ -10,7 +10,10 @@ import { withSetupCredentialAccess } from "../agents/auth-profiles/setup-access.
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
+import {
+  requireDefaultModelForAgent,
+  resolveDefaultModelForAgent,
+} from "../agents/model-selection-config.js";
 import { resolveOnboardingSetupTarget } from "../commands/onboard-agent-target.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
@@ -34,6 +37,7 @@ import type { SystemAgentVerifiedInferenceBinding } from "../system-agent/verifi
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.model-auth.js";
+import { readSetupConfigAuthority } from "./setup.shared.js";
 
 export async function completeSetupModelAuth(params: {
   config: OpenClawConfig;
@@ -46,6 +50,7 @@ export async function completeSetupModelAuth(params: {
   keepExistingModelConfig: boolean;
   importedInferenceVerified: boolean;
   configTarget: SetupInferenceConfigTarget;
+  assertCurrent?: () => void;
 }): Promise<{ config: OpenClawConfig; verified: boolean; persisted: boolean }> {
   const { stagedCandidate, opts, baseConfig } = params;
   const replacementTarget = resolveOnboardingSetupTarget(baseConfig);
@@ -85,6 +90,7 @@ export async function completeSetupModelAuth(params: {
       runtime: params.runtime,
       configTarget: params.configTarget,
       required: params.usedImportFlow && params.keepExistingModelConfig,
+      assertCurrent: params.assertCurrent,
     });
     let config = verification.config;
     if (!verification.verified && verification.attempted && stagedCandidate) {
@@ -113,6 +119,7 @@ export async function offerLiveModelVerification(params: {
   stateDir?: string;
   configTarget: SetupInferenceConfigTarget;
   required?: boolean;
+  assertCurrent?: () => void;
 }): Promise<{
   config: OpenClawConfig;
   attempted: boolean;
@@ -120,10 +127,20 @@ export async function offerLiveModelVerification(params: {
   verified: boolean;
   modelRef?: string;
 }> {
+  const assertCurrent =
+    params.assertCurrent ??
+    (params.opts.nonInteractive
+      ? undefined
+      : (
+          await readSetupConfigAuthority(
+            params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : undefined,
+          )
+        ).assertCurrent);
   const requiresCandidateVerification = (config: OpenClawConfig) => {
-    const provider = resolveDefaultModelForAgent({ cfg: config }).provider;
+    const provider = resolveDefaultModelForAgent({ cfg: config })?.provider;
     return (
       params.opts.nonInteractive !== true &&
+      provider !== undefined &&
       config.models?.providers?.[provider]?.localService !== undefined
     );
   };
@@ -172,7 +189,7 @@ export async function offerLiveModelVerification(params: {
           await import("../system-agent/setup-inference-credentials.js");
         const { projectSetupInferenceConfig } =
           await import("../system-agent/setup-model-selection.js");
-        const model = resolveDefaultModelForAgent({ cfg: config, agentId });
+        const model = requireDefaultModelForAgent({ cfg: config, agentId });
         const modelRef = `${model.provider}/${model.model}`;
         const profile = selectSetupCredential(candidate.authProfiles, modelRef, config);
         if (!profile) {
@@ -220,6 +237,7 @@ export async function offerLiveModelVerification(params: {
             config,
             agentId,
             runtime: params.runtime,
+            candidateSetup: true,
             ...(savedProfile?.credential.setup?.replacement
               ? {
                   onVerifiedExecution: (binding: SystemAgentVerifiedInferenceBinding) => {
@@ -245,8 +263,11 @@ export async function offerLiveModelVerification(params: {
       progress.stop();
     }
     if (result.ok) {
+      const success = t("wizard.setup.testAiSuccess", {
+        seconds: (result.latencyMs / 1000).toFixed(1),
+      });
       await params.prompter.note(
-        t("wizard.setup.testAiSuccess", { seconds: (result.latencyMs / 1000).toFixed(1) }),
+        result.warning ? `${success}\n\n${result.warning}` : success,
         t("wizard.setup.testAiTitle"),
       );
     } else {
@@ -315,7 +336,6 @@ export async function offerLiveModelVerification(params: {
                     }
                   : binding.auth,
               stagedOwnerPluginArtifacts: binding,
-              deps: {},
             });
           },
         );
@@ -334,9 +354,6 @@ export async function offerLiveModelVerification(params: {
       // Saved model rows stay sparse; compare runtime defaults while retaining authored plugin policy.
       const projectRoute = (config: OpenClawConfig) =>
         projectInferenceRoute(materializeRuntimeConfig(config), undefined, {}, config);
-      const verifiedRoute = savedProfile?.credential.setup?.replacement
-        ? await projectRoute(candidate.config)
-        : undefined;
       const config = await commitSetupInferenceActivation({
         config: candidate.config,
         configTarget: {
@@ -344,10 +361,12 @@ export async function offerLiveModelVerification(params: {
           write: verifiedConfig?.write ?? params.configTarget.write,
         },
         assertCurrent: () => {},
-        activate: async () => {
-          if (savedProfile?.credential.setup?.replacement && verifiedRoute) {
+        activate: async (_assertCurrent, committedConfig) => {
+          if (savedProfile?.credential.setup?.replacement) {
             const latest = (await params.configTarget.read()).config;
-            if (!isDeepStrictEqual(await projectRoute(latest), verifiedRoute)) {
+            if (
+              !isDeepStrictEqual(await projectRoute(latest), await projectRoute(committedConfig))
+            ) {
               throw new Error(
                 "The connection changed before activation. Test the saved sign-in again.",
               );
@@ -393,6 +412,7 @@ export async function offerLiveModelVerification(params: {
       opts: { ...params.opts, authChoice: undefined },
       prompter: params.prompter,
       runtime: params.runtime,
+      assertCurrent,
       ...(params.agentDir ? { agentDir: params.agentDir } : {}),
       ...(params.stateDir ? { stateDir: params.stateDir } : {}),
     });

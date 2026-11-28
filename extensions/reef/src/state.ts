@@ -1,10 +1,12 @@
-import { randomBytes } from "@noble/hashes/utils.js";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateKeyedStore,
+  PluginStateOperationReceipt,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 // Import from defining modules, not the protocol barrel: index.js re-exports
 // guard-adapters, whose provider-http graph doctor enumeration must not cold-load.
 import { fromBase64url } from "../protocol/encoding.js";
-import type { ReviewApproval, ReviewRequest } from "../protocol/pipeline.js";
+import type { ReviewApproval, ReviewDecisionState, ReviewRequest } from "../protocol/pipeline.js";
 import { openReefAuditStore } from "./audit-state.js";
 import {
   REEF_REGISTRATION_NAMESPACE,
@@ -45,22 +47,22 @@ const stateOperationHandler = {
 
 function openIdentityState(runtime: PluginRuntime, assertCurrent?: () => void) {
   const stores = [
-    runtime.state.openKeyedStore<ReefDurableMigrationRecord>({
+    runtime.state.openKeyedStoreV2<ReefDurableMigrationRecord>({
       namespace: REEF_DURABLE_MIGRATION_NAMESPACE,
       maxEntries: REEF_DURABLE_MIGRATION_MAX_ENTRIES,
       overflowPolicy: "reject-new",
     }),
-    runtime.state.openKeyedStore<ReefIdentityMigrationRecord>({
+    runtime.state.openKeyedStoreV2<ReefIdentityMigrationRecord>({
       namespace: REEF_KEYS_MIGRATION_NAMESPACE,
       maxEntries: REEF_KEYS_MIGRATION_MAX_ENTRIES,
       overflowPolicy: "reject-new",
     }),
-    runtime.state.openKeyedStore<ReefKeys>({
+    runtime.state.openKeyedStoreV2<ReefKeys>({
       namespace: REEF_KEYS_NAMESPACE,
       maxEntries: REEF_KEYS_MAX_ENTRIES,
       overflowPolicy: "reject-new",
     }),
-    runtime.state.openKeyedStore<ReefIdentityBinding>({
+    runtime.state.openKeyedStoreV2<ReefIdentityBinding>({
       namespace: REEF_REGISTRATION_NAMESPACE,
       maxEntries: REEF_REGISTRATION_MAX_ENTRIES,
       overflowPolicy: "reject-new",
@@ -102,7 +104,7 @@ export async function loadKeys(
 }
 
 type ReefReviewOperationState = {
-  store: PluginStateKeyedStore<ReefReviewRecord>;
+  store: PluginStateKeyedStore<ReefReviewRecord, 2>;
   maxEntries: number;
 };
 const reviewOperationStates = new WeakMap<ReviewApprovalStore, ReefReviewOperationState>();
@@ -114,7 +116,7 @@ export function getReefReviewOperationState(
 }
 
 export class ReviewApprovalStore {
-  readonly #store: PluginStateKeyedStore<ReefReviewRecord>;
+  readonly #store: PluginStateKeyedStore<ReefReviewRecord, 2>;
   readonly #maxEntries: number;
 
   constructor(
@@ -123,7 +125,7 @@ export class ReviewApprovalStore {
     private readonly authoritySignal?: AbortSignal,
   ) {
     this.#maxEntries = maxEntries;
-    this.#store = runtime.state.openKeyedStore<ReefReviewRecord>({
+    this.#store = runtime.state.openKeyedStoreV2<ReefReviewRecord>({
       namespace: REEF_REVIEWS_NAMESPACE,
       maxEntries,
       overflowPolicy: "reject-new",
@@ -141,25 +143,24 @@ export class ReviewApprovalStore {
   }
 
   async request(review: ReviewRequest): Promise<ReviewApproval | undefined> {
-    const captured = structuredClone(review);
     const operation = this.#operation();
     const receipt = await operation.execute(
-      { type: "review.request", input: { review: captured, maxEntries: this.#maxEntries } },
+      { type: "review.request", input: { review, maxEntries: this.#maxEntries } },
       { writeStores: [0] },
     );
     return receipt.value;
   }
 
-  async lookupDecision(
+  async observeDecision(
     approvalDigest: string,
-  ): Promise<"none" | "pending" | { approved: boolean }> {
+  ): Promise<PluginStateOperationReceipt<ReviewDecisionState>> {
     const operation = this.#operation();
     const receipt = await operation.execute(
       { type: "review.lookup", input: { digest: approvalDigest } },
       { writeStores: [], watchStores: [0], missingValue: "none" },
     );
     receipt.assertCurrent();
-    return receipt.value;
+    return receipt;
   }
 
   async decide(
@@ -187,10 +188,10 @@ export class ReviewApprovalStore {
 }
 
 export class ReefDeliveredStore {
-  readonly #delivered: PluginStateKeyedStore<{ id: string }>;
+  readonly #delivered: PluginStateKeyedStore<{ id: string }, 2>;
 
   constructor(runtime: PluginRuntime, maxEntries = REEF_DELIVERED_MAX_ENTRIES) {
-    this.#delivered = runtime.state.openKeyedStore<{ id: string }>({
+    this.#delivered = runtime.state.openKeyedStoreV2<{ id: string }>({
       namespace: REEF_DELIVERED_NAMESPACE,
       maxEntries,
       overflowPolicy: "reject-new",
@@ -214,7 +215,7 @@ export class ReefDeliveredStore {
 
 /** Durable relay progress for the single Reef identity bound to this state DB. */
 export class ReefInboxCursorStore {
-  readonly #store: PluginStateKeyedStore<ReefInboxCursorRecord>;
+  readonly #store: PluginStateKeyedStore<ReefInboxCursorRecord, 2>;
   readonly #binding: ReefIdentityBinding;
 
   constructor(
@@ -228,7 +229,7 @@ export class ReefInboxCursorStore {
       maxEntries: REEF_INBOX_CURSOR_MAX_ENTRIES,
       overflowPolicy: "reject-new" as const,
     };
-    this.#store = runtime.state.openKeyedStore<ReefInboxCursorRecord>(options);
+    this.#store = runtime.state.openKeyedStoreV2<ReefInboxCursorRecord>(options);
   }
 
   #operation() {
@@ -266,7 +267,6 @@ export async function openStores(
   keys: ReefKeys,
   options: {
     auditMaxEntries?: number;
-    replayMaxEntries?: number;
     deliveredMaxEntries?: number;
     authoritySignal?: AbortSignal;
   } = {},
@@ -281,12 +281,7 @@ export async function openStores(
       options.auditMaxEntries,
       options.authoritySignal,
     ),
-    replay: new ReefSqliteReplayStore(
-      runtime,
-      fromBase64url(keys.replayKey),
-      randomBytes,
-      options.replayMaxEntries,
-    ),
+    replay: new ReefSqliteReplayStore(runtime, fromBase64url(keys.replayKey)),
     reviews: new ReviewApprovalStore(runtime, undefined, options.authoritySignal),
     delivered: new ReefDeliveredStore(runtime, options.deliveredMaxEntries),
   };

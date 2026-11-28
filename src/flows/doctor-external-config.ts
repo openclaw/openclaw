@@ -1,3 +1,4 @@
+import type { DoctorMaintenancePending } from "../commands/doctor-maintenance-pending.js";
 import { restoreDoctorConfigEnvRefs } from "../commands/doctor/shared/config-flow-steps.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
@@ -5,6 +6,7 @@ import { createMergePatch } from "../config/merge-patch.js";
 import { resolveIsConfigReadOnly } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { buildRuntimeConfigSchemaFromRegistry } from "../config/runtime-schema.js";
+import { preparePluginDoctorContractModules } from "../plugins/doctor-contract-preparation.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
@@ -13,6 +15,7 @@ export async function reportDoctorExternalConfigRepairs(
   ctx: DoctorHealthFlowContext,
 ): Promise<void> {
   const snapshot = await readConfigFileSnapshot({ observe: false });
+  await preparePluginDoctorContractModules({ config: ctx.cfg, surfaces: ["configRepair"] });
   const candidate = restoreDoctorConfigEnvRefs(
     ctx.cfg,
     ctx.configResult.referenceSource,
@@ -45,14 +48,25 @@ export async function reportDoctorExternalConfigRepairs(
   ctx.cfgForPersistence = structuredClone(snapshot.config);
 }
 
+/** An externally managed config the Gateway would refuse: its validation or legacy issues. */
+async function readDoctorExternalConfigStartupRefusal() {
+  if (!resolveIsConfigReadOnly()) {
+    return undefined;
+  }
+  const persisted = await readConfigFileSnapshot({ observe: false });
+  return persisted.valid && persisted.legacyIssues.length === 0 ? undefined : persisted;
+}
+
+/** Read-only: whether `validateDoctorExternalConfigForStartup` would refuse startup. */
+export async function checkDoctorExternalConfigPending(): Promise<DoctorMaintenancePending> {
+  return (await readDoctorExternalConfigStartupRefusal()) ? "work" : "none";
+}
+
 export async function validateDoctorExternalConfigForStartup(
   runtime: RuntimeEnv,
 ): Promise<boolean> {
-  if (!resolveIsConfigReadOnly()) {
-    return true;
-  }
-  const persisted = await readConfigFileSnapshot({ observe: false });
-  if (persisted.valid && persisted.legacyIssues.length === 0) {
+  const persisted = await readDoctorExternalConfigStartupRefusal();
+  if (!persisted) {
     return true;
   }
   for (const issue of [...persisted.issues, ...persisted.legacyIssues]) {

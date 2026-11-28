@@ -16,10 +16,8 @@ import {
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { definedFields } from "../record-fields.js";
 import type { WorkboardSqlConnection } from "./sqlite-store-schema.js";
-import { normalizeLaunchState } from "./store-normalizers.js";
 export type Row = Record<string, unknown>;
 
 export function jsonValue(value: unknown): string | null {
@@ -63,6 +61,32 @@ export function requiredNumber(row: Row, key: string): number {
     throw new Error(`workboard sqlite row missing ${key}`);
   }
   return value;
+}
+
+export function findCardIdsByPrefix(db: WorkboardSqlConnection, prefix: string): string[] {
+  if (!prefix || !prefix.isWellFormed() || prefix.includes("\0")) {
+    return [];
+  }
+  // SQLite BINARY and PostgreSQL C collations both order these UTF-8 keys bytewise.
+  const chars = Array.from(prefix);
+  let upper: string | undefined;
+  for (let char = chars.pop(); char !== undefined; char = chars.pop()) {
+    const point = char.codePointAt(0) ?? 0;
+    if (point < 0x10ffff) {
+      upper = chars.join("") + String.fromCodePoint(point === 0xd7ff ? 0xe000 : point + 1);
+      break;
+    }
+  }
+  let query = getNodeSqliteKysely<WorkboardCardDatabase>(db)
+    .selectFrom("workboard_cards")
+    .select("id")
+    .where("id", ">=", prefix);
+  if (upper !== undefined) {
+    query = query.where("id", "<", upper);
+  }
+  return Array.from(iterateSqliteQuerySync(db, query.orderBy("id").limit(2)), (row) =>
+    requiredString(row, "id"),
+  );
 }
 
 function optional<T extends object>(value: T): T | undefined {
@@ -358,14 +382,6 @@ function readMetadata(
   const protocol = workerProtocolRow(db, cardId, preloaded);
   // SAFETY: insertCard serializes WorkboardMetadata.automation unchanged.
   const automation = parseJson(row.automation_json) as WorkboardMetadata["automation"] | undefined;
-  if (isRecord(automation)) {
-    const launch = normalizeLaunchState(automation.launch);
-    if (launch) {
-      automation.launch = launch;
-    } else {
-      delete automation.launch;
-    }
-  }
   // SAFETY: insertCard serializes WorkboardMetadata.claim unchanged.
   const claim = parseJson(row.claim_json) as WorkboardMetadata["claim"] | undefined;
   // SAFETY: insertCard serializes WorkboardMetadata.stale unchanged.

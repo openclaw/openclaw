@@ -11,7 +11,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import * as transcriptTurns from "../config/sessions/session-accessor.sqlite-transcript-turn.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
 import * as sleep from "../utils/sleep.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -23,25 +23,7 @@ import { enqueueRelayVoiceTranscript } from "./talk/relay/voice.js";
 import { rememberUnifiedTalkSession } from "./talk/session-registry.js";
 import { prepareTalkSessionTarget } from "./talk/session-target.js";
 
-export async function runTalkRelayCloseHistory({
-  disposition,
-  afterFinal,
-  spokenReplacement,
-  pendingFollowUp,
-  unknownAppendOutcome,
-  scope,
-  sessionKey,
-  connectionId,
-  context,
-  runEmbeddedAgent,
-  rpc,
-  waitForDispatchEnd,
-  drainPublications,
-  historyMessages,
-  liveMessages,
-  answer,
-  args,
-}: {
+export async function runTalkRelayCloseHistory(input: {
   disposition: "abort" | "detach" | undefined;
   afterFinal: boolean;
   spokenReplacement: boolean;
@@ -60,6 +42,7 @@ export async function runTalkRelayCloseHistory({
   answer: string;
   args: Record<string, unknown>;
 }) {
+  const { scope, runEmbeddedAgent, rpc, answer, waitForDispatchEnd } = input;
   const { agentId, sessionId, storePath, sessionKey: canonicalKey } = scope();
   let modelStarted = createDeferred();
   let releaseModel = createDeferred();
@@ -95,10 +78,10 @@ export async function runTalkRelayCloseHistory({
       meta: { durationMs: 0 },
     };
   });
-  const target = await prepareTalkSessionTarget(getRuntimeConfig(), sessionKey);
+  const target = await prepareTalkSessionTarget(getRuntimeConfig(), input.sessionKey);
   const relay = createTalkRealtimeRelaySession({
-    context,
-    connId: connectionId,
+    context: input.context,
+    connId: input.connectionId,
     provider: createIdleRelayProvider(),
     providerConfig: {},
     controlSource: "transcript",
@@ -108,24 +91,35 @@ export async function runTalkRelayCloseHistory({
   });
   rememberUnifiedTalkSession(relay.relaySessionId, {
     kind: "realtime-relay",
-    connId: connectionId,
+    connId: input.connectionId,
     relaySessionId: relay.relaySessionId,
     sessionTarget: target,
   });
-  try {
-    const ack = await rpc("talk.client.toolCall", {
-      sessionKey,
+  const consult = (callId: string, consultArgs: Record<string, unknown>) =>
+    rpc("talk.client.toolCall", {
+      sessionKey: input.sessionKey,
       relaySessionId: relay.relaySessionId,
       voiceSessionId: relay.relaySessionId,
-      callId: "close-held-relay-consult",
+      callId,
       name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-      args,
+      args: consultArgs,
     });
+  const writeVoice = async (text: string) => {
+    const owner = expectDefined(relaySessions.get(relay.relaySessionId), "live relay");
+    expect(enqueueRelayVoiceTranscript(owner, "assistant", text)).toBe(true);
+    await flushTalkRealtimeRelayVoiceWrites({
+      relaySessionId: relay.relaySessionId,
+      connId: input.connectionId,
+    });
+  };
+  try {
+    const ack = await consult("close-held-relay-consult", input.args);
     await Promise.race([
       modelStarted.promise,
-      getSessionWorkAdmissionRelease({
+      captureSessionControllerSettlement({
         scope: storePath,
         identities: [canonicalKey, sessionId],
+        agentId,
       }),
     ]);
     const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "relay model invocation");
@@ -133,52 +127,34 @@ export async function runTalkRelayCloseHistory({
     expect(run).toMatchObject({ agentId, sessionId, sessionKey: canonicalKey });
     expect(signal.aborted).toBe(false);
     expect(ack.runId).toBe(run.runId);
-    if (afterFinal) {
+    if (input.afterFinal) {
       releaseModel.resolve();
       await finalCommitted.promise;
       await waitForDispatchEnd();
     }
-    if (pendingFollowUp) {
+    if (input.pendingFollowUp) {
       modelStarted = createDeferred();
       releaseModel = createDeferred();
-      await rpc("talk.client.toolCall", {
-        sessionKey,
-        relaySessionId: relay.relaySessionId,
-        voiceSessionId: relay.relaySessionId,
-        callId: "pending-follow-up-consult",
-        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-        args: { question: "Save the next requested note." },
+      await consult("pending-follow-up-consult", {
+        question: "Save the next requested note.",
       });
       await modelStarted.promise;
-      expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
-      const owner = expectDefined(relaySessions.get(relay.relaySessionId), "live relay");
-      expect(enqueueRelayVoiceTranscript(owner, "assistant", "Let me check the next note.")).toBe(
-        true,
-      );
-      await flushTalkRealtimeRelayVoiceWrites({
-        relaySessionId: relay.relaySessionId,
-        connId: connectionId,
-      });
-      if (spokenReplacement) {
+      await writeVoice("Let me check the next note.");
+      if (input.spokenReplacement) {
         releaseModel.resolve();
         await waitForDispatchEnd();
       }
     }
-    if (spokenReplacement) {
-      const owner = expectDefined(relaySessions.get(relay.relaySessionId), "live relay");
-      expect(enqueueRelayVoiceTranscript(owner, "assistant", spokenAnswer)).toBe(true);
-      await flushTalkRealtimeRelayVoiceWrites({
-        relaySessionId: relay.relaySessionId,
-        connId: connectionId,
-      });
+    if (input.spokenReplacement) {
+      await writeVoice(spokenAnswer);
     }
     const transcriptBeforeClose = loadTranscriptEventsSync(scope());
-    if (unknownAppendOutcome) {
+    if (input.unknownAppendOutcome) {
       const append = transcriptTurns.appendExpectedSessionTranscriptTurn;
       const injected = vi
         .spyOn(transcriptTurns, "appendExpectedSessionTranscriptTurn")
         .mockImplementationOnce(async (...params) => {
-          if (unknownAppendOutcome === "after") {
+          if (input.unknownAppendOutcome === "after") {
             await append(...params);
           }
           throw new SqliteWorkerError("Detached answer outcome unknown", "outcome-unknown");
@@ -191,21 +167,19 @@ export async function runTalkRelayCloseHistory({
     }
     await rpc("talk.session.close", {
       sessionId: relay.relaySessionId,
-      ...(disposition ? { disposition } : {}),
+      ...(input.disposition ? { disposition: input.disposition } : {}),
     });
-    expect(signal.aborted).toBe(disposition !== "detach");
+    expect(signal.aborted).toBe(input.disposition !== "detach");
     releaseModel.resolve();
     await waitForDispatchEnd();
-    await drainPublications();
-    const expectedAnswers = spokenReplacement ? [spokenAnswer] : [];
-    if (disposition === "detach") {
-      expectedAnswers.push(answer);
-    }
-    if (pendingFollowUp) {
-      expectedAnswers.push(followUpAnswer);
-    }
+    await input.drainPublications();
+    const expectedAnswers = [
+      ...(input.spokenReplacement ? [spokenAnswer] : []),
+      ...(input.disposition === "detach" ? [answer] : []),
+      ...(input.pendingFollowUp ? [followUpAnswer] : []),
+    ];
     expect(
-      (await historyMessages())
+      (await input.historyMessages())
         .map(extractText)
         .filter((text) => text === answer || text === spokenAnswer || text === followUpAnswer),
     ).toEqual(expectedAnswers);
@@ -218,15 +192,14 @@ export async function runTalkRelayCloseHistory({
       return message && extractText(message) === answer ? [message] : [];
     });
     expect(stored.map(extractText)).toEqual(
-      disposition === "detach" ? (afterFinal ? [answer, answer] : [answer]) : [],
+      input.disposition === "detach" ? (input.afterFinal ? [answer, answer] : [answer]) : [],
     );
-    if (disposition === "detach") {
-      expect(liveMessages().map(extractText)).toContain(answer);
+    if (input.disposition === "detach") {
+      expect(input.liveMessages().map(extractText)).toContain(answer);
       expect(stored.at(-1)?.display).toBeUndefined();
-      if (afterFinal) {
-        expect(stored[0]?.display).toBe(false);
+      if (input.afterFinal) {
+        expect(stored[0]).toMatchObject({ display: false, usage: { input: 10, totalTokens: 10 } });
         expect(stored[1]?.excludeFromContext).toBe(true);
-        expect(stored[0]?.usage).toMatchObject({ input: 10, totalTokens: 10 });
         expect(stored[1]?.usage).toBeUndefined();
       }
     }

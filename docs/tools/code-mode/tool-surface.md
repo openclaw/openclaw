@@ -37,20 +37,20 @@ Model-facing input:
 
 ```typescript
 type CodeModeExecInput = {
-  title: string;
+  title?: string;
   code: string;
-  restartSafe?: boolean;
   awaitResults?: boolean;
 };
 ```
 
 Rules:
 
-- Every new cell requires a nonblank `title` of at most 120 characters. Use a
-  short purpose, usually 3–7 words, such as "Inspect the dependency graph".
+- `title` is optional. When provided, it must be nonblank and at most 120
+  characters. Use a short purpose, usually 3–7 words, such as "Inspect the dependency graph".
   Describe intended work without claiming success or including secrets. The
-  Control UI displays this title on the execution row. Nested tools retain their
-  own summaries; `wait` needs no title and resumes activity under the original cell.
+  Control UI displays this title on the execution row, or "run JavaScript" when
+  omitted. Nested tools retain their own summaries; `wait` needs no title and
+  resumes activity under the original cell.
 - `code` is the required model-facing JavaScript field and must be non-empty.
 - `command` is accepted as an exec-compatible alias for hook policies and
   trusted rewrites (the normal OpenClaw shell exec tool also uses a `command`
@@ -65,19 +65,10 @@ Rules:
 - The retired `language` and `typecheck` fields are rejected with `invalid_input`.
   Tool arguments are validated when each call reaches its normal execution owner;
   Code Mode does not typecheck the whole program before execution.
-- Do not set `restartSafe` on a new `exec`. Set it to `true` only when OpenClaw
-  explicitly requests replay after a gateway restart, and never for `write`,
-  `edit`, `exec`, or any mutation. Every catalog call must be explicitly
-  replay-safe. OpenClaw rejects unmarked catalog tools and namespace
-  surfaces that are not proven replay-safe. A generic exec surface is not
-  replay-safe merely because one command appears read-only; use audited read,
-  grep, or find tools.
-  Suspended results are marked replay-safe so
-  [restart recovery](/gateway/restart-recovery) can reconstruct an interrupted
-  turn from its transcript instead of restoring the process-local continuation.
-  Recovery remains limited to audited read-only core tools and explicitly
-  replay-safe plugin tools. `store` and `load` are unavailable in `restartSafe`
-  cells. Leave the field omitted for ordinary calls.
+- A Gateway restart ends the process-local Code Mode continuation. The resumed
+  root session inspects the transcript and current state before running a new cell;
+  it does not reconstruct or replay an unfinished cell. See
+  [Restart recovery](/gateway/restart-recovery).
 - `exec` rejects `import`, `require`, dynamic import, and module-loader
   patterns.
 - `exec` never exposes the normal shell `exec` implementation recursively.
@@ -156,8 +147,11 @@ as text rather than becoming Markdown links.
 Use `awaitResults: true` when this program’s results are required to finish the
 current task. The existing cell owner keeps the tool call open while the VM is
 parked, then resumes that exact continuation when pending tool results settle.
-It does not return a `waiting` handle or make model polling calls. Completed
-actions are not replayed. Failure, Stop, owner replacement, and existing run
+It does not need model polling. If new steering arrives while the parked cell is
+waiting only for shell commands or `process` polls, it can return
+`status: "waiting"` with `reason: "steering"`. The command keeps running. Use `wait` with that `runId` to
+collect the original result without rerunning the program. Without room for a
+continuation, the cell keeps waiting inline. Completed actions are not replayed. Failure, Stop, owner replacement, and existing run
 and tool deadlines still end the operation.
 
 `awaitResults` pauses only off-VM tool waiting. Preparation, guest execution,
@@ -170,8 +164,10 @@ Ordinary cells retain their existing explicit-yield behavior.
 Required cells collect ordinary shell commands to completion. Explicit
 `background: true` remains the opt-out for intentionally detached servers.
 A shell `exec({awaitResults: true, ...})` or `agents_wait({awaitResults: true, ...})`
-inside an ordinary cell also makes that cell required. These declarations do
-not enable `tools.exec.notifyOnExit`.
+inside an ordinary cell also makes that cell required, as does any native
+`ask_user` or `secrets({action: "request", ...})` call, so a pending question
+is never cancelled at turn end. These declarations do not enable
+`tools.exec.notifyOnExit`.
 
 For required collector results, await `agents.run(...)` in a required cell,
 or call `agents_wait({ids, awaitResults: true})`. Ordinary announcing children

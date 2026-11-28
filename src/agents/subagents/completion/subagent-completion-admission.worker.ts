@@ -24,6 +24,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
+import type {
+  WorkerOperationHandlers,
+  WorkerWriteOperationContext,
+} from "../../../state/worker-operation-registry.js";
 import {
   bindSubagentRunRecord,
   rowToSubagentRunRecord,
@@ -31,7 +35,10 @@ import {
 import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import { readSubagentRunRow } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
+import {
+  compareSubagentRunGeneration,
+  isSubagentRunGenerationCandidate,
+} from "../registry/subagent-run-generation.js";
 import {
   decodeSubagentCompletionRecord,
   mutateSubagentCompletionInDatabase,
@@ -65,7 +72,7 @@ function commitCompletionWrite<T extends object>(
 }
 
 /** The shared-state worker owns queue insertion and its exact native completion owner. */
-export function admitSubagentCompletionInWorker(
+function admitSubagentCompletionInWorker(
   input: {
     writeId: string;
     queueEntry: QueuedSessionDelivery;
@@ -121,7 +128,15 @@ export function admitSubagentCompletionInWorker(
     ).rows;
     for (const row of siblings) {
       const candidate = rowToSubagentRunRecord(row);
-      if (!candidate || compareSubagentRunGeneration(candidate, expected) > 0) {
+      if (
+        !candidate ||
+        (isSubagentRunGenerationCandidate(
+          candidate,
+          expected.childSessionKey,
+          expected.childAgentId,
+        ) &&
+          compareSubagentRunGeneration(candidate, expected) > 0)
+      ) {
         throw new Error("subagent completion owner was replaced before admission");
       }
     }
@@ -171,7 +186,7 @@ export function admitSubagentCompletionInWorker(
   });
 }
 
-export function mutateSubagentCompletionInWorker(
+function mutateSubagentCompletionInWorker(
   input: {
     writeId: string;
     mutation: SubagentCompletionMutation;
@@ -182,3 +197,14 @@ export function mutateSubagentCompletionInWorker(
     mutateSubagentCompletionInDatabase(database, input.mutation),
   );
 }
+
+export const subagentCompletionDeliveryOperations = {
+  "sessionDelivery.mutateSubagentCompletion": (
+    input: Parameters<typeof mutateSubagentCompletionInWorker>[0],
+    { open },
+  ) => mutateSubagentCompletionInWorker(input, open()),
+  "sessionDelivery.admitSubagentCompletion": (
+    input: Parameters<typeof admitSubagentCompletionInWorker>[0],
+    { open },
+  ) => admitSubagentCompletionInWorker(input, open()),
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

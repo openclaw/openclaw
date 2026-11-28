@@ -57,12 +57,13 @@ Then configure the provider:
 
 `speakerVoiceId` is optional. Without it, Fish Audio uses its default voice.
 `FISH_AUDIO_API_KEY` is also accepted for compatibility with existing community
-plugins, but `FISH_API_KEY` is the canonical Fish SDK environment variable.
+plugins, but `FISH_API_KEY` is the standard Fish SDK environment variable.
 
 ### Hosted models
 
 | Model             | Use                                                                                                           |
 | ----------------- | ------------------------------------------------------------------------------------------------------------- |
+| `drama-3`         | Released Drama 3. Natural-language voice direction and word-level delivery tags.                              |
 | `drama-3-preview` | Preview. Natural-language voice direction and word-level delivery tags; behavior and availability may change. |
 | `s2.1-pro`        | Default. Production S2.1 service with the hosted service guarantees attached to your plan.                    |
 | `s2.1-pro-free`   | Promotional S2.1 access that ended on August 31, 2026; no TTFA or DPA guarantees.                             |
@@ -85,12 +86,12 @@ S2 and S2.1 accept inline natural-language tags. Put them in the spoken text:
 Common tags include `[whisper]`, `[laughing]`, `[excited]`, `[sad]`, `[pause]`,
 and free-form instructions such as `[professional broadcast tone]`.
 
-### Drama 3 preview
+### Drama 3
 
-Set `tts.providers.fish-audio.model` to `"drama-3-preview"` to opt in. The
-provider continues to default to `s2.1-pro`; existing configurations do not
-automatically switch to the preview. For a Talk-specific override, use
-`talk.providers.fish-audio.modelId: "drama-3-preview"`.
+Set `tts.providers.fish-audio.model` to `"drama-3"` to opt in. The provider
+continues to default to `s2.1-pro`; existing configurations do not
+automatically switch. `"drama-3-preview"` remains accepted. For a Talk-specific
+override, use `talk.providers.fish-audio.modelId: "drama-3"`.
 
 Drama 3 uses the same hosted API, API key, and voice ids. It accepts
 plain-language directions in square brackets, sounds and pauses, and paired
@@ -105,7 +106,7 @@ Supported delivery tags include `<whisper>`, `<emphasis>`, `<soft>`, `<fast>`,
 not a separate model or voice setting.
 
 See [Fish Audio Drama 3](https://docs.fish.audio/features/text-to-speech/drama-3)
-for direction examples and preview limitations. OpenClaw currently selects one
+for direction examples and limitations. OpenClaw currently selects one
 Fish voice per synthesis request; Fish's multi-speaker `reference_id` arrays
 are not exposed by this provider.
 

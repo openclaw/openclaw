@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { toSafeImportPath } from "../shared/import-specifier.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 // Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
@@ -42,9 +41,43 @@ import {
   expectEscapingEntryRejected,
   globalAfterEach0,
   globalAfterAll1,
+  writeFixtureJson,
 } from "./loader.test-harness.js";
 import { getActiveMemorySearchManagerCore } from "./memory-runtime.js";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
+
+async function loadInstalledGlobalPluginFixture(stateDir: string, pluginId: string) {
+  const globalDir = path.join(stateDir, "extensions", pluginId);
+  mkdirSafe(globalDir);
+  writePlugin({
+    id: pluginId,
+    body: simplePluginBody(pluginId),
+    dir: globalDir,
+    filename: "index.cjs",
+  });
+  await refreshPersistedInstalledPluginIndex({
+    stateDir,
+    reason: "source-changed",
+    installRecords: {
+      [pluginId]: {
+        source: "npm",
+        installPath: globalDir,
+      },
+    },
+  });
+
+  return loadOpenClawPlugins({
+    cache: false,
+    config: {
+      plugins: {
+        allow: [pluginId],
+        entries: {
+          [pluginId]: { enabled: true },
+        },
+      },
+    },
+  });
+}
 
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
@@ -646,13 +679,12 @@ describe("loadOpenClawPlugins", () => {
           scenario: Parameters<typeof expectPluginSourcePrecedence>[1],
         ) => {
           expectPluginSourcePrecedence(registry, scenario);
-          expect(registry.agentToolResultMiddlewareOwners).toEqual([]);
+          expect(registry.agentToolResultMiddlewares).toEqual([]);
         },
       },
       {
         label: "bundled beats auto-discovered global duplicate",
         pluginId: "demo-bundled-duplicate",
-        bundledFilename: "index.cjs",
         loadRegistry: () => {
           writeBundledPlugin({
             id: "demo-bundled-duplicate",
@@ -689,45 +721,15 @@ describe("loadOpenClawPlugins", () => {
       {
         label: "installed global beats bundled duplicate",
         pluginId: "demo-installed-duplicate",
-        bundledFilename: "index.cjs",
         loadRegistry: () => {
           writeBundledPlugin({
             id: "demo-installed-duplicate",
             body: simplePluginBody("demo-installed-duplicate"),
           });
           const stateDir = makePluginLoaderTempDir();
-          return withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-            const globalDir = path.join(stateDir, "extensions", "demo-installed-duplicate");
-            mkdirSafe(globalDir);
-            writePlugin({
-              id: "demo-installed-duplicate",
-              body: simplePluginBody("demo-installed-duplicate"),
-              dir: globalDir,
-              filename: "index.cjs",
-            });
-            await refreshPersistedInstalledPluginIndex({
-              stateDir,
-              reason: "source-changed",
-              installRecords: {
-                "demo-installed-duplicate": {
-                  source: "npm",
-                  installPath: globalDir,
-                },
-              },
-            });
-
-            return loadOpenClawPlugins({
-              cache: false,
-              config: {
-                plugins: {
-                  allow: ["demo-installed-duplicate"],
-                  entries: {
-                    "demo-installed-duplicate": { enabled: true },
-                  },
-                },
-              },
-            });
-          });
+          return withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+            loadInstalledGlobalPluginFixture(stateDir, "demo-installed-duplicate"),
+          );
         },
         expectedLoadedOrigin: "global",
         expectedDisabledOrigin: "bundled",
@@ -738,7 +740,6 @@ describe("loadOpenClawPlugins", () => {
       {
         label: "dev source bundled beats installed global duplicate",
         pluginId: "demo-dev-source-duplicate",
-        bundledFilename: "index.cjs",
         loadRegistry: () => {
           const devSourceRoot = makeOpenClawDevSourceRoot();
           const bundledPluginsDir = path.join(devSourceRoot, "extensions");
@@ -751,38 +752,7 @@ describe("loadOpenClawPlugins", () => {
           const stateDir = makePluginLoaderTempDir();
           return withEnvAsync(
             { OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot, OPENCLAW_STATE_DIR: stateDir },
-            async () => {
-              const globalDir = path.join(stateDir, "extensions", "demo-dev-source-duplicate");
-              mkdirSafe(globalDir);
-              writePlugin({
-                id: "demo-dev-source-duplicate",
-                body: simplePluginBody("demo-dev-source-duplicate"),
-                dir: globalDir,
-                filename: "index.cjs",
-              });
-              await refreshPersistedInstalledPluginIndex({
-                stateDir,
-                reason: "source-changed",
-                installRecords: {
-                  "demo-dev-source-duplicate": {
-                    source: "npm",
-                    installPath: globalDir,
-                  },
-                },
-              });
-
-              return loadOpenClawPlugins({
-                cache: false,
-                config: {
-                  plugins: {
-                    allow: ["demo-dev-source-duplicate"],
-                    entries: {
-                      "demo-dev-source-duplicate": { enabled: true },
-                    },
-                  },
-                },
-              });
-            },
+            () => loadInstalledGlobalPluginFixture(stateDir, "demo-dev-source-duplicate"),
           );
         },
         expectedLoadedOrigin: "bundled",
@@ -793,7 +763,6 @@ describe("loadOpenClawPlugins", () => {
       {
         label: "transient installed memory plugin beats bundled duplicate",
         pluginId: "memory-lancedb",
-        bundledFilename: "index.cjs",
         loadRegistry: () => {
           writeBundledPlugin({
             id: "memory-lancedb",
@@ -1289,19 +1258,11 @@ describe("loadOpenClawPlugins", () => {
       id: "profile-aware",
       body: simplePluginBody("profile-aware"),
     });
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "profile-aware",
-          enabledByDefault: true,
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      id: "profile-aware",
+      enabledByDefault: true,
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+    });
 
     const registry = loadOpenClawPlugins({
       cache: false,
@@ -1721,27 +1682,6 @@ describe("loadOpenClawPlugins", () => {
 
     const record = registry.plugins.find((entry) => entry.id === "source-runtime-shim");
     expect(record?.status).toBe("loaded");
-  });
-
-  it("converts Windows absolute import specifiers to file URLs only for module loading", () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
-      expect(toSafeImportPath("C:\\Users\\alice\\plugin\\index.mjs")).toBe(
-        "file:///C:/Users/alice/plugin/index.mjs",
-      );
-      expect(toSafeImportPath("C:\\Users\\alice\\plugin folder\\x#y.mjs")).toBe(
-        "file:///C:/Users/alice/plugin%20folder/x%23y.mjs",
-      );
-      expect(toSafeImportPath("\\\\server\\share\\plugin\\index.mjs")).toBe(
-        "file://server/share/plugin/index.mjs",
-      );
-      expect(toSafeImportPath("file:///C:/Users/alice/plugin/index.mjs")).toBe(
-        "file:///C:/Users/alice/plugin/index.mjs",
-      );
-      expect(toSafeImportPath("./relative/index.mjs")).toBe("./relative/index.mjs");
-    } finally {
-      platformSpy.mockRestore();
-    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

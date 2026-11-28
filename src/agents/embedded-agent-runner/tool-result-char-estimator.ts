@@ -13,6 +13,15 @@ export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
 const IMAGE_CHAR_ESTIMATE = 8_000;
 export const TOOL_IMAGE_CHARS = IMAGE_CHAR_ESTIMATE * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
 
+/** The context guard's notice for images it drops from a tool result to fit the context. */
+export function formatImageOmissionNotice(imageCount: number, retainedImages: number): string {
+  const omittedImages = imageCount - retainedImages;
+  return (
+    `[${omittedImages} image${omittedImages === 1 ? "" : "s"} omitted from context` +
+    `${retainedImages === 0 ? "; no images fit the context limit" : ""}; rerun with fewer images]`
+  );
+}
+
 export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
 
 function estimateUnknownChars(value: unknown): number {
@@ -147,10 +156,6 @@ export function estimateMessageChars(msg: AgentMessage, contentOverride?: unknow
   }
 
   return 256;
-}
-
-export function createMessageCharEstimateCache(): MessageCharEstimateCache {
-  return new WeakMap<AgentMessage, number>();
 }
 
 export function estimateMessageCharsCached(

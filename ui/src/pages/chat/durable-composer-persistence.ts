@@ -1,11 +1,5 @@
 import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
-import type {
-  ChatAttachment,
-  ChatGoalDraftMode,
-  ChatReplyTarget,
-  DurableComposerDraftAttachment,
-  HumanMention,
-} from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, DurableComposerDraftAttachment } from "../../lib/chat/chat-types.ts";
 import type {
   DurableComposerDraft,
   DurableComposerDraftScope,
@@ -26,19 +20,23 @@ export type DurableChatComposerSnapshot = Omit<
 type RestoreBaseline = {
   scope: DurableComposerDraftScope;
   latestRevision: number;
+  attachmentVersion?: string;
   signature: string;
 };
 
 type RestoredDraft = Pick<
   DurableComposerDraft,
-  "revision" | "text" | "mentions" | "goalMode" | "replyTarget"
+  "revision" | "attachmentVersion" | "text" | "mentions" | "goalMode" | "replyTarget"
 > & {
   attachments: ChatAttachment[];
 };
 
 const reportedStorageOwners = new Set<string>();
 
-const durableComposerStore = import("../../lib/chat/composer-draft-store.runtime.ts");
+// Reuse the settled promise so later persistence operations retain their existing ordering.
+let durableComposerStore: Promise<typeof import("../../lib/chat/composer-draft-store.runtime.ts")>;
+const loadDurableComposerStore = () =>
+  (durableComposerStore ??= import("../../lib/chat/composer-draft-store.runtime.ts"));
 
 export function durableComposerScopeIdentity(scope: DurableComposerDraftScope): string {
   return JSON.stringify([scope.gatewayOwner, scope.recoveryScope, scope.scopeKey]);
@@ -56,39 +54,6 @@ export function reportDurableComposerStorageError(
   onStorageError();
 }
 
-export function chatAttachmentDraftSignature(
-  text: string,
-  attachments: readonly ChatAttachment[],
-  goalMode?: ChatGoalDraftMode | null,
-  mentions?: readonly HumanMention[],
-  replyTarget?: ChatReplyTarget | null,
-): string {
-  // Admission and recovery mint a new ID for each payload. Preview URLs and
-  // moving the same bytes between Blob/data-URL storage do not change that owner.
-  return JSON.stringify([
-    text,
-    goalMode ?? null,
-    mentions ?? [],
-    replyTarget
-      ? [
-          replyTarget.messageId,
-          replyTarget.text,
-          replyTarget.senderLabel ?? null,
-          replyTarget.sourceMessageId ?? null,
-        ]
-      : null,
-    attachments.map((attachment) => [
-      attachment.id,
-      attachment.mimeType,
-      attachment.origin ?? null,
-      attachment.fileName ?? "",
-      attachment.sizeBytes ?? -1,
-      attachment.browserAnnotation ?? null,
-      attachment.selectionAnnotation ?? null,
-    ]),
-  ]);
-}
-
 export function captureDurableChatAttachments(
   attachments: readonly ChatAttachment[],
 ): DurableComposerDraftAttachment[] | null {
@@ -104,11 +69,9 @@ export function captureDurableChatAttachments(
       ...(attachment.origin ? { origin: attachment.origin } : {}),
       ...(attachment.fileName ? { fileName: attachment.fileName } : {}),
       ...(typeof attachment.sizeBytes === "number" ? { sizeBytes: attachment.sizeBytes } : {}),
-      ...(attachment.browserAnnotation
-        ? { browserAnnotation: { ...attachment.browserAnnotation } }
-        : {}),
+      ...(attachment.browserAnnotation ? { browserAnnotation: attachment.browserAnnotation } : {}),
       ...(attachment.selectionAnnotation
-        ? { selectionAnnotation: { ...attachment.selectionAnnotation } }
+        ? { selectionAnnotation: attachment.selectionAnnotation }
         : {}),
     });
   }
@@ -127,9 +90,6 @@ export async function hydrateDurableComposerAttachments(
       return {
         ...metadata,
         id: generateAttachmentId(),
-        ...(metadata.browserAnnotation
-          ? { browserAnnotation: { ...metadata.browserAnnotation } }
-          : {}),
         ...(annotation ? { selectionAnnotation: annotation } : {}),
         dataUrl: await readBlobAsDataUrl(source),
       };
@@ -138,17 +98,21 @@ export async function hydrateDurableComposerAttachments(
 }
 
 export async function writeDurableComposerSnapshot(snapshot: DurableChatComposerSnapshot) {
-  const { writeDurableComposerDraft } = await durableComposerStore;
+  const { writeDurableComposerDraft } = await loadDurableComposerStore();
   const payloadUnavailable = snapshot.storedAttachments === null;
   const result = await writeDurableComposerDraft(
     snapshot.scope,
     {
       revision: snapshot.revision,
+      ...(snapshot.attachmentVersion !== undefined
+        ? { attachmentVersion: snapshot.attachmentVersion }
+        : {}),
       text: payloadUnavailable ? "" : snapshot.text,
       ...(snapshot.mentions?.length && !payloadUnavailable ? { mentions: snapshot.mentions } : {}),
       ...(snapshot.goalMode ? { goalMode: snapshot.goalMode } : {}),
       ...(snapshot.replyTarget ? { replyTarget: snapshot.replyTarget } : {}),
       ...(snapshot.modelSelection ? { modelSelection: snapshot.modelSelection } : {}),
+      ...(snapshot.permissionMode ? { permissionMode: snapshot.permissionMode } : {}),
       attachments: snapshot.storedAttachments ?? [],
     },
     {
@@ -192,7 +156,7 @@ export class DurableChatComposerPersistence {
 
   async retire(scope: DurableComposerDraftScope, minimumRevision: number) {
     this.resetRestoreScope();
-    const { retireDurableComposerDraft } = await durableComposerStore;
+    const { retireDurableComposerDraft } = await loadDurableComposerStore();
     const result = await retireDurableComposerDraft(scope, minimumRevision);
     if (result.status === "storage-failed") {
       reportDurableComposerStorageError(scope, this.onStorageError);
@@ -229,7 +193,7 @@ export class DurableChatComposerPersistence {
     };
     void (async () => {
       const { readDurableComposerDraft, prepareDurableComposerRecovery } =
-        await durableComposerStore;
+        await loadDurableComposerStore();
       if (baseline.scope.scopeKey.startsWith("chat:v3:")) {
         const recovery = await prepareDurableComposerRecovery(baseline.scope);
         if (recovery.status === "storage-failed") {
@@ -243,13 +207,19 @@ export class DurableChatComposerPersistence {
         return;
       }
       const revision = result.status === "found" ? result.draft.revision : result.revision;
-      if (revision === undefined || revision < baseline.latestRevision) {
+      const draft = result.status === "found" ? result.draft : undefined;
+      const attachmentVersion = draft?.attachmentVersion ?? draft?.writeId;
+      // A synchronous caption can outlive its IDB write without changing the saved files.
+      const sameAttachments =
+        draft &&
+        baseline.attachmentVersion !== undefined &&
+        baseline.attachmentVersion === attachmentVersion;
+      if (revision === undefined || (revision < baseline.latestRevision && !sameAttachments)) {
         if (isCurrent()) {
           onCurrentWins(revision ?? 0);
         }
         return;
       }
-      const draft = result.status === "found" ? result.draft : undefined;
       let attachments: ChatAttachment[] = [];
       if (draft) {
         try {
@@ -264,6 +234,7 @@ export class DurableChatComposerPersistence {
       }
       apply({
         revision,
+        attachmentVersion,
         text: draft ? draft.text : "",
         ...(draft?.mentions ? { mentions: draft.mentions } : {}),
         ...(draft?.goalMode ? { goalMode: draft.goalMode } : {}),

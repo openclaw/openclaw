@@ -6,14 +6,16 @@ import {
   type SessionObserverHealth,
   type SessionObserverPlanProgress,
 } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
-import type { runIsolatedCompletion } from "../agents/isolated-completion.js";
 import {
   terminalHealthFor,
   type SessionActivityNoteState,
 } from "../agents/session-activity-notes.js";
-import type { prepareUtilityCompletionForAgent } from "../agents/utility-completion.js";
-import type { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
+import type {
+  runUtilityCompletion,
+  prepareUtilityCompletionForAgent,
+} from "../agents/utility-completion.js";
 import { resolveSessionObserverDigestForLifecycle } from "../config/sessions/observer-digest.js";
 import {
   applySessionEntryOperation,
@@ -23,7 +25,7 @@ import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { pruneMapToMaxSize, touchBoundedSet } from "../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
@@ -53,7 +55,7 @@ export function sessionObserverScopeKey(sessionKey: string, agentId: string): st
     : `agent:${normalizeAgentId(agentId)}:${sessionKey}`;
 }
 type PrepareModel = typeof prepareUtilityCompletionForAgent;
-type CompleteModel = typeof runIsolatedCompletion;
+type CompleteModel = typeof runUtilityCompletion;
 type PreparedModel = Awaited<ReturnType<PrepareModel>>;
 
 type SessionObserverLifecycle = Pick<SessionObserverDigest, "sessionId" | "lifecycleRevision">;
@@ -90,6 +92,8 @@ export type SessionObserverState = SessionActivityNoteState & {
   lastPublishedPreambleHeadline?: string;
   previousDigest?: SessionObserverDigest;
   preparedPromise?: Promise<PreparedModel>;
+  /** The session owner's authority, decided once when this run's observation starts. */
+  ownerAuthority?: Promise<AdmittedRunOperatorAuthority | undefined>;
   activeController?: AbortController;
   timer?: ReturnType<typeof setTimeout>;
   inFlight: boolean;
@@ -172,15 +176,7 @@ export function rememberSessionObserverDormantRun(
 }
 
 export function rememberSessionObserverDisabledRun(runs: Set<string>, runId: string): void {
-  runs.delete(runId);
-  runs.add(runId);
-  while (runs.size > MAX_DISABLED_RUNS) {
-    const oldest = runs.values().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    runs.delete(oldest);
-  }
+  touchBoundedSet(runs, runId, MAX_DISABLED_RUNS);
 }
 
 export function markSessionObserverRunSuperseded(
@@ -227,7 +223,6 @@ export type SessionObserverDeps = {
     connIds: ReadonlySet<string>,
     opts?: { dropIfSlow?: boolean },
   ) => void;
-  resolveUtilityModelRef?: typeof resolveUtilityModelRefForAgent;
   prepareModel?: PrepareModel;
   completeModel?: CompleteModel;
   readSession?: (sessionKey: string, agentId: string) => SessionEntry | undefined;
@@ -242,9 +237,6 @@ export type SessionObserverDeps = {
      * digest from a replaced run between acceptance and the async write. */
     stillCurrent?: () => boolean;
   }) => Promise<boolean | null>;
-  now?: () => number;
-  setTimeoutFn?: typeof setTimeout;
-  clearTimeoutFn?: typeof clearTimeout;
 };
 
 export async function defaultPrepareModel(params: Parameters<PrepareModel>[0]) {
@@ -253,8 +245,8 @@ export async function defaultPrepareModel(params: Parameters<PrepareModel>[0]) {
 }
 
 export async function defaultCompleteModel(params: Parameters<CompleteModel>[0]) {
-  const { runIsolatedCompletion } = await import("../agents/isolated-completion.js");
-  return await runIsolatedCompletion(params);
+  const { runUtilityCompletion } = await import("../agents/utility-completion.js");
+  return await runUtilityCompletion(params);
 }
 
 export const SESSION_OBSERVER_SYSTEM_PROMPT = [
@@ -281,7 +273,8 @@ const ModelDigestSchema = z.strictObject({
 
 export function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
   const normalized = value.replace(/\s+/gu, " ").trim();
-  return truncateUtf16Safe(normalized, maxChars);
+  // Persisted digest fields must not retain the full model reply backing string.
+  return Buffer.from(truncateUtf16Safe(normalized, maxChars), "utf16le").toString("utf16le");
 }
 
 export function defaultReadSession(
@@ -346,7 +339,6 @@ export async function synthesizeSessionObserverTerminalDigest(params: {
     agentId: string,
   ) => SessionEntry | undefined | Promise<SessionEntry | undefined>;
   persistDigest: NonNullable<SessionObserverDeps["persistDigest"]>;
-  now: () => number;
   /** Rechecked at persist time: rollover can admit a newer run between the
    * synchronous synthesis start and the async write. */
   stillCurrent?: () => boolean;
@@ -427,7 +419,7 @@ export async function synthesizeSessionObserverTerminalDigest(params: {
     health,
     ...(terminalHeadline ? { headline: terminalHeadline } : {}),
     revision: previous.revision + 1,
-    updatedAt: params.now(),
+    updatedAt: Date.now(),
   };
   // A rejected write (reset session, newer stored revision) must not surface
   // to watchers as a committed terminal status.

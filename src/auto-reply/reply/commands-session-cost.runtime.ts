@@ -5,19 +5,18 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import { DEFAULT_AGENT_ID, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
-import {
-  formatCostUsageCachePrefix,
-  formatTokenCount,
-  formatUsd,
-} from "../../utils/usage-format.js";
+import { formatTokenCount } from "../../utils/token-format.js";
+import { formatCostUsageCachePrefix, formatUsd } from "../../utils/usage-format.js";
 
-export async function formatSessionUsageCostSummary(params: {
+type SessionCostTarget = {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
   sessionEntry?: SessionEntry;
   storePath?: string;
-}): Promise<string> {
+};
+
+function resolveSessionCostAgentId(params: SessionCostTarget): string {
   const sessionAgentId =
     params.sessionKey && !isUnscopedSessionKeySentinel(params.sessionKey)
       ? resolveSessionAgentId({
@@ -26,8 +25,13 @@ export async function formatSessionUsageCostSummary(params: {
           agentId: params.agentId,
         })
       : params.agentId;
-  const agentId = sessionAgentId ?? DEFAULT_AGENT_ID;
-  const sessionSummary = await loadSessionCostSummary({
+  return sessionAgentId ?? DEFAULT_AGENT_ID;
+}
+
+/** Lifetime usage of the current session instance, shared by `/usage cost` and `/context`. */
+export async function loadCurrentSessionCostSummary(params: SessionCostTarget) {
+  const agentId = resolveSessionCostAgentId(params);
+  return await loadSessionCostSummary({
     sessionId: params.sessionEntry?.sessionId,
     ...(params.sessionEntry?.sessionId && params.sessionKey
       ? {
@@ -48,16 +52,23 @@ export async function formatSessionUsageCostSummary(params: {
     config: params.cfg,
     agentId,
   });
+}
+
+export async function formatSessionUsageCostSummary(params: SessionCostTarget): Promise<string> {
+  const agentId = resolveSessionCostAgentId(params);
+  const sessionSummary = await loadCurrentSessionCostSummary(params);
   const summary = await loadCostUsageSummary({ config: params.cfg, agentId });
 
   const sessionCost = formatUsd(sessionSummary?.totalCost);
-  const sessionTokens =
-    sessionSummary?.usageReport?.state === "unavailable"
-      ? `unavailable (${formatTokenCount(sessionSummary.totalTokens)} known)`
-      : sessionSummary?.totalTokens
-        ? formatTokenCount(sessionSummary.totalTokens)
-        : undefined;
-  const sessionSuffix = (sessionSummary?.missingCostEntries ?? 0) > 0 ? " (partial)" : "";
+  const sessionTokens = sessionSummary?.totalTokens
+    ? formatTokenCount(sessionSummary.totalTokens)
+    : undefined;
+  const sessionSuffix =
+    sessionSummary?.staleSince !== undefined
+      ? " (stale)"
+      : (sessionSummary?.missingCostEntries ?? 0) > 0
+        ? " (partial)"
+        : "";
   const sessionLine =
     sessionCost || sessionTokens
       ? `Session ${sessionCost ?? "n/a"}${sessionSuffix}${sessionTokens ? ` · ${sessionTokens} tokens` : ""}`

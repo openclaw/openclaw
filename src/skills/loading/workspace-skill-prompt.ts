@@ -1,10 +1,11 @@
+import { resolveAgentEntry } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { projectSkillSnapshot } from "../runtime/refresh.js";
+import { resolveSkillKey } from "../skill-key.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { hasUnavailableSkillSecretOwners, isSkillSecretOwnerUnavailable } from "./config.js";
-import { resolveSkillKey } from "./frontmatter.js";
 import { compactSkillsPromptForContext, escapeSkillXml } from "./skill-contract.js";
 import { resolveWorkspaceSkillPromptEntries } from "./workspace-skill-loader.js";
 
@@ -21,11 +22,27 @@ export async function buildSkillSnapshot(
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): Promise<SkillSnapshot> {
   const { eligible, skillFilter } = await resolveWorkspaceSkillPromptEntries(workspaceDir, opts);
+  const agent =
+    opts?.config && opts.agentId ? resolveAgentEntry(opts.config, opts.agentId) : undefined;
   const snapshot = await projectSkillSnapshot({
     workspaceDir,
     eligible,
     skillFilter,
-    config: opts?.config,
+    // Eligibility is already selected. Rendering needs no channel, provider, or plugin config.
+    config: opts?.config
+      ? {
+          skills: { limits: opts.config.skills?.limits },
+          ...(agent
+            ? {
+                agents: {
+                  entries: {
+                    [agent.id]: { agentDir: agent.agentDir, skillsLimits: agent.skillsLimits },
+                  },
+                },
+              }
+            : {}),
+        }
+      : undefined,
     agentId: opts?.agentId,
     skillOverrides: opts?.skillOverrides,
     eligibility: opts?.eligibility
@@ -144,7 +161,7 @@ async function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): Pr
       if (!unavailableNames.has(name)) {
         filteredBody += block;
       }
-      cursor = (match.index ?? 0) + block.length;
+      cursor = match.index + block.length;
     }
     const tail = catalogBody.slice(cursor);
     if (tail.trim()) {

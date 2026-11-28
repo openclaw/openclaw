@@ -7,14 +7,14 @@ import { refreshAuthProfileFileState } from "../agents/auth-profiles/file-state.
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
-  getRuntimeAuthProfileStoreSnapshotCore,
+  getRuntimeAuthProfileStoreSnapshotCore as getRuntimeStore,
   refreshRuntimeAuthProfileStoreSources,
   registerRuntimeAuthProfileStoreMutationListener,
-  setRuntimeAuthProfileStoreSnapshot,
+  setRuntimeAuthProfileStoreSnapshot as setRuntimeStore,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import {
-  loadAuthProfileStoreForRuntimeAsync,
+  loadAuthProfileStoreForRuntimeAsync as loadRuntimeStore,
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store-runtime.js";
@@ -53,19 +53,42 @@ vi.mock("../infra/owned-directory-observation.js", () => ({
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 const mutationSubscriptions: Array<() => void> = [];
-function saveOwnedAuthProfiles(store: AuthProfileStore, agentDir: string) {
+function withSchemaLease<T>(run: () => T): T {
   const lease = acquireStateDatabaseSchemaLease(resolveOpenClawStateSqlitePath());
   try {
-    lease.run(() =>
-      saveAuthProfileStore(store, agentDir, {
-        filterExternalAuthProfiles: false,
-        syncExternalCli: false,
-      }),
-    );
+    return lease.run(run);
   } finally {
     lease.release();
   }
 }
+function saveOwnedAuthProfiles(store: AuthProfileStore, agentDir: string) {
+  withSchemaLease(() =>
+    saveAuthProfileStore(store, agentDir, {
+      filterExternalAuthProfiles: false,
+      syncExternalCli: false,
+    }),
+  );
+}
+function fixture() {
+  const root = temporary.make("auth-observation-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  return { root, agentDir: path.join(root, "agents", "main", "agent") };
+}
+function profileStore(key: string, ref = false): AuthProfileStore {
+  return {
+    version: 1,
+    profiles: {
+      example: {
+        type: "api_key",
+        provider: "openai",
+        ...(ref
+          ? { keyRef: { source: "env", provider: "default", id: "OPENCLAW_TEST_AUTH_KEY" } }
+          : { key }),
+      },
+    },
+  };
+}
+const readOptions = { readOnly: true, externalCli: { mode: "none" as const } };
 
 afterEach(async () => {
   for (const unsubscribe of mutationSubscriptions.splice(0)) {
@@ -78,50 +101,31 @@ afterEach(async () => {
 });
 
 it("preserves auth facts through first-file session admission after empty startup", async () => {
-  const root = temporary.make("auth-empty-startup-observation-");
-  const agentDir = path.join(root, "agents", "main", "agent");
-  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  const { agentDir } = fixture();
   await prepareSharedAuthStoreOwnership();
   const prepared = prepareSecretsRuntimeFastPathSnapshot({
     config: { agents: { entries: { main: { agentDir } } }, plugins: { enabled: false } },
-    agentDirs: [agentDir],
   });
   expect(prepared).not.toBeNull();
   activateSecretsRuntimeSnapshot(prepared!.snapshot);
-  const snapshot = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
+  const snapshot = getRuntimeStore(agentDir);
   const revision = getRuntimeAuthProfileStoreCredentialsRevision();
-  const lease = acquireStateDatabaseSchemaLease(resolveOpenClawStateSqlitePath());
-  try {
-    lease.run(() =>
-      openOpenClawAgentDatabase({
-        agentId: "main",
-        path: resolveAuthProfileDatabasePath(agentDir),
-      }),
-    );
-  } finally {
-    lease.release();
-  }
+  withSchemaLease(() =>
+    openOpenClawAgentDatabase({ agentId: "main", path: resolveAuthProfileDatabasePath(agentDir) }),
+  );
   await refreshAuthProfileFileState();
   expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(revision);
-  expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toEqual(snapshot);
+  expect(getRuntimeStore(agentDir)).toEqual(snapshot);
 });
 
 it.each(["native commit", "cold async read"] as const)(
   "retains a %s through observation",
   async (initial) => {
-    const root = temporary.make("auth-own-write-observation-");
-    const agentDir = path.join(root, "agents", "main", "agent");
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    const store = (key: string) => ({
-      version: 1,
-      profiles: { example: { type: "api_key" as const, provider: "openai", key } },
-    });
+    const { agentDir } = fixture();
+    const store = profileStore;
     if (initial === "native commit") {
       saveOwnedAuthProfiles(store("before"), agentDir);
-      setRuntimeAuthProfileStoreSnapshot(
-        loadAuthProfileStoreWithoutExternalProfiles(agentDir),
-        agentDir,
-      );
+      setRuntimeStore(loadAuthProfileStoreWithoutExternalProfiles(agentDir), agentDir);
       saveOwnedAuthProfiles(store("owned"), agentDir);
       const revision = getRuntimeAuthProfileStoreCredentialsRevision();
 
@@ -136,19 +140,13 @@ it.each(["native commit", "cold async read"] as const)(
         JSON.stringify(store("owned")),
       ]);
       await prepareSharedAuthStoreOwnership();
-      setRuntimeAuthProfileStoreSnapshot(
-        await loadAuthProfileStoreForRuntimeAsync(agentDir, {
-          readOnly: true,
-          externalCli: { mode: "none" },
-        }),
-        agentDir,
-      );
+      setRuntimeStore(await loadRuntimeStore(agentDir, readOptions), agentDir);
     }
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles.example).toMatchObject({
+    expect(getRuntimeStore(agentDir)?.profiles.example).toMatchObject({
       key: "owned",
     });
     await refreshAuthProfileFileState();
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles.example).toMatchObject({
+    expect(getRuntimeStore(agentDir)?.profiles.example).toMatchObject({
       key: "owned",
     });
   },
@@ -157,29 +155,10 @@ it.each(["native commit", "cold async read"] as const)(
 it.each(["explicit refresh", "legacy source observation"] as const)(
   "publishes a separate process's auth edit through %s",
   async (refresh) => {
-    const root = temporary.make("auth-observation-publication-");
-    const agentDir = path.join(root, "agents", "main", "agent");
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const { root, agentDir } = fixture();
     vi.stubEnv("OPENCLAW_TEST_AUTH_KEY", "synthetic-before");
     const legacySource = refresh === "legacy source observation";
-    const store = (key: string) => ({
-      version: 1,
-      profiles: {
-        example: {
-          type: "api_key" as const,
-          provider: "openai",
-          ...(legacySource
-            ? {
-                keyRef: {
-                  source: "env" as const,
-                  provider: "default",
-                  id: "OPENCLAW_TEST_AUTH_KEY",
-                },
-              }
-            : { key }),
-        },
-      },
-    });
+    const store = (key: string) => profileStore(key, legacySource);
     saveOwnedAuthProfiles(store("synthetic-before"), agentDir);
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: {
@@ -190,19 +169,10 @@ it.each(["explicit refresh", "legacy source observation"] as const)(
       includeConfigRefs: false,
     });
     activateSecretsRuntimeSnapshot(snapshot);
-    await loadAuthProfileStoreForRuntimeAsync(agentDir, {
-      readOnly: true,
-      externalCli: { mode: "none" },
-    });
+    await loadRuntimeStore(agentDir, readOptions);
     const inactiveAgentDir = path.join(root, "agents", "later", "agent");
     if (legacySource) {
-      setRuntimeAuthProfileStoreSnapshot(
-        await loadAuthProfileStoreForRuntimeAsync(inactiveAgentDir, {
-          readOnly: true,
-          externalCli: { mode: "none" },
-        }),
-        inactiveAgentDir,
-      );
+      setRuntimeStore(await loadRuntimeStore(inactiveAgentDir, readOptions), inactiveAgentDir);
     }
     const expectedKey = legacySource ? "synthetic-before" : "synthetic-after";
     await promisify(execFile)(
@@ -226,7 +196,7 @@ it.each(["explicit refresh", "legacy source observation"] as const)(
     } else {
       const published = new Promise<void>((resolve) => {
         const unsubscribe = registerRuntimeAuthProfileStoreMutationListener(() => {
-          const profile = getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles.example;
+          const profile = getRuntimeStore(agentDir)?.profiles.example;
           if (profile?.type !== "api_key" || profile.key !== expectedKey) {
             return;
           }
@@ -242,7 +212,7 @@ it.each(["explicit refresh", "legacy source observation"] as const)(
       }
       await published;
     }
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles.example).toMatchObject({
+    expect(getRuntimeStore(agentDir)?.profiles.example).toMatchObject({
       type: "api_key",
       key: expectedKey,
     });
@@ -254,7 +224,7 @@ it.each(["explicit refresh", "legacy source observation"] as const)(
       key: expectedKey,
     });
     if (legacySource) {
-      expect(getRuntimeAuthProfileStoreSnapshotCore(inactiveAgentDir)).toBeUndefined();
+      expect(getRuntimeStore(inactiveAgentDir)).toBeUndefined();
     }
   },
 );

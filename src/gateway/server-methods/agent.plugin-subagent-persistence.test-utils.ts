@@ -3,12 +3,15 @@ import { expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import {
   seedPersistedSubagentRunForAgentTest,
+  pluginSubagentClient,
   withPluginSubagentTestState,
 } from "./agent.spawned-child.test-support.js";
 import {
@@ -20,7 +23,6 @@ import {
   requireValue,
   waitForAssertion,
 } from "./agent.test-harness.js";
-import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = getAgentTestMocks();
 
@@ -28,7 +30,7 @@ export function registerPluginSubagentPersistenceFailureTest() {
   it("rejects plugin SDK subagent registration and adoption when persistence fails", async () => {
     await withPluginSubagentTestState(
       "openclaw-gateway-plugin-subagent-registry-fail-",
-      async () => {
+      async ({ stateDir }) => {
         await resetSubagentRegistryForTests({ persist: false });
         const persistenceError = Object.assign(new Error("disk full"), { code: "SQLITE_FULL" });
         mocks.registryWrite.mockImplementationOnce(() => {
@@ -36,13 +38,20 @@ export function registerPluginSubagentPersistenceFailureTest() {
         });
         const runId = "plugin-subagent-registry-fail";
         const childSessionKey = "agent:main:subagent:registry-fail";
+        const storePath = await writeSubagentSessionEntry({
+          stateDir,
+          agentId: "main",
+          sessionKey: childSessionKey,
+          defaultSessionId: "plugin-subagent-registry-fail-session",
+        });
+        mocks.userTurnStorePath = storePath;
         const cfg = {
           session: { mainKey: "main", scope: "per-sender" },
         } satisfies typeof mocks.loadConfigReturn;
         mocks.loadConfigReturn = cfg;
         mocks.loadSessionEntry.mockReturnValue({
           cfg,
-          storePath: getAgentTestStorePath(),
+          storePath,
           entry: {
             sessionId: "plugin-subagent-registry-fail-session",
             updatedAt: Date.now(),
@@ -77,28 +86,23 @@ export function registerPluginSubagentPersistenceFailureTest() {
             context,
             reqId: runId,
             respond,
-            client: {
-              connect: baseClient.connect,
-              internal: {
-                ...baseClient.internal,
-                agentRunTracking: "plugin_subagent",
-                pluginRuntimeOwnerId: "memory-core",
-              },
-            },
+            client: pluginSubagentClient(baseClient),
           },
         );
 
         expect(mocks.registryWrite).toHaveBeenCalledTimes(1);
         expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
         expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
-        expect(context.chatAbortControllers.has(runId)).toBe(false);
+        expect(getRpcSource(runId)).toBeUndefined();
         expectRespondError(respond, {
           code: ErrorCodes.UNAVAILABLE,
           message:
-            "plugin subagent registry persistence failed; run was not started | Queued subagent registry persistence failed: disk full | SQLITE_FULL",
+            "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.",
+          retryable: true,
+          details: { code: "SQLITE_FULL" },
         });
         expect(context.logGateway.warn).toHaveBeenCalledWith(
-          expect.stringContaining("rejecting untracked dispatch"),
+          expect.stringMatching(/rejecting untracked dispatch: .*disk full.*SQLITE_FULL/u),
         );
 
         await resetSubagentRegistryForTests({ persist: false });
@@ -129,14 +133,7 @@ export function registerPluginSubagentPersistenceFailureTest() {
             context,
             reqId: adoptionRunId,
             respond: adoptionRespond,
-            client: {
-              connect: baseClient.connect,
-              internal: {
-                ...baseClient.internal,
-                agentRunTracking: "plugin_subagent",
-                pluginRuntimeOwnerId: "memory-core",
-              },
-            },
+            client: pluginSubagentClient(baseClient),
           },
         );
 
@@ -172,14 +169,7 @@ export function registerPluginSubagentPersistenceFailureTest() {
           {
             context,
             reqId: retryRunId,
-            client: {
-              connect: baseClient.connect,
-              internal: {
-                ...baseClient.internal,
-                agentRunTracking: "plugin_subagent",
-                pluginRuntimeOwnerId: "memory-core",
-              },
-            },
+            client: pluginSubagentClient(baseClient),
           },
         );
 

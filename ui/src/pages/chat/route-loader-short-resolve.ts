@@ -7,6 +7,7 @@ import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionPathTarget } from "../../app-session-route-paths.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
 import { sessionKeyUuid } from "./route-loader-short-cache.ts";
@@ -74,11 +75,11 @@ export async function resolveShortSessionReference(
   let canonicalizationPending = false;
   let stopEvents = () => {};
   let stopGateway = () => {};
+  const listeners = new AbortController();
   const stop = () => {
     stopEvents();
     stopGateway();
-    signal.removeEventListener("abort", abort);
-    lifecycleSignal?.removeEventListener("abort", abort);
+    listeners.abort();
   };
   const retire = () => {
     retired = true;
@@ -116,13 +117,17 @@ export async function resolveShortSessionReference(
       isCurrent,
     });
   });
+  // Retire the prepared result before a later connection publication can reuse its scope.
   stopGateway = gateway.subscribe(() => {
     if (!isCurrent()) {
       retire();
     }
   });
-  signal.addEventListener("abort", abort, { once: true });
-  lifecycleSignal?.addEventListener("abort", abort, { once: true });
+  const listenerOptions = { once: true, signal: listeners.signal };
+  listen(signal, "abort", abort, listenerOptions);
+  if (lifecycleSignal) {
+    listen(lifecycleSignal, "abort", abort, listenerOptions);
+  }
   try {
     signal.throwIfAborted();
     lifecycleSignal?.throwIfAborted();

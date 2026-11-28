@@ -35,7 +35,7 @@ export function replaceSessionActorParticipants(
       entry.participantCount = working.hot.participants.length;
     }
     working.entryRows = writableSessionActorMap(working.entryRows);
-    working.entryRows.set(sessionKey, { ...selected, entry: structuredClone(entry) });
+    working.entryRows.set(sessionKey, { ...selected, entry });
     working.hot.entry = entry;
   }
 }

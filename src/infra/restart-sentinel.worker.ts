@@ -4,34 +4,19 @@ import type {
   WorkerOperationHandlers,
 } from "../state/worker-operation-registry.js";
 import { gitCommitPrefixesMatch } from "./git-commit.js";
+import type { RestartSentinelPayload } from "./restart-sentinel-codec.js";
 import {
   deleteRestartSentinelRowSync,
+  recordManagedHandoffSentinelOutcomeRowSync,
   readRestartSentinelRowSync,
   readRestartSentinelSnapshotSync,
   writeRestartSentinelRowIfRevisionSync,
   writeRestartSentinelRowSync,
   writeUpdateInstallReceiptRowSync,
   type RestartSentinel,
-  type RestartSentinelPayload,
+  type ManagedHandoffSentinelOutcome,
 } from "./restart-sentinel-store.js";
 import type { EngineConnection } from "./sql-connection.js";
-import {
-  deferSqliteWorkerCommitReceipt,
-  requestSqliteWorkerOperationAdmission,
-} from "./sqlite-worker-operation-admission.js";
-import {
-  reserveUpdateFailureReportReceiptRowSync,
-  beginUpdateFailureReportReceiptCleanupRowSync,
-  beginStaleUpdateFailureReportReceiptCleanupRowSync,
-  completeUpdateFailureReportReceiptCleanupRowSync,
-  claimUpdateFailureReportArtifactSweepRowSync,
-  releaseUpdateFailureReportArtifactSweepRowSync,
-  refreshUpdateFailureReportReceiptPreparationRowSync,
-  finalizeUpdateFailureReportReceiptRowSync,
-  markUpdateFailureReportReceiptPendingRowSync,
-  markUpdateFailureReportReceiptPreparedRowSync,
-} from "./update-failure-report-receipt-store.js";
-import type { UpdateFailureReportReceipt } from "./update-failure-report-receipt.js";
 
 function transaction<Input, Output>(
   label: string,
@@ -41,116 +26,11 @@ function transaction<Input, Output>(
     writeAdmitted(({ db }) => operation(db, input), { operationLabel: label });
 }
 
-function receiptTransaction<Input, Output>(
-  label: string,
-  operation: (db: EngineConnection, input: Input) => Output,
-) {
-  return (input: Input, { write }: WorkerWriteOperationContext): Output =>
-    write(
-      ({ db }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        const result = operation(db, input);
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-        deferSqliteWorkerCommitReceipt(db, { kind: "update-report-result", value: result });
-        return result;
-      },
-      { operationLabel: label },
-    );
-}
-
 export const restartSentinelOperations = {
-  "restartSentinel.reserve": receiptTransaction(
-    "update-failure-report.reserve",
-    (db, input: { attemptId: string; reservationId: string; previewDigest: string }) =>
-      reserveUpdateFailureReportReceiptRowSync(
-        db,
-        input.attemptId,
-        input.reservationId,
-        input.previewDigest,
-      ),
-  ),
-  "restartSentinel.beginCleanup": receiptTransaction(
-    "update-failure-report.beginCleanup",
-    (db, input: { attemptId: string; reservationId: string }) =>
-      beginUpdateFailureReportReceiptCleanupRowSync(db, input.attemptId, input.reservationId),
-  ),
-  "restartSentinel.beginStaleCleanup": receiptTransaction(
-    "update-failure-report.beginStaleCleanup",
-    (db, input: { attemptId: string; reservationId: string }) =>
-      beginStaleUpdateFailureReportReceiptCleanupRowSync(db, input.attemptId, input.reservationId),
-  ),
-  "restartSentinel.completeCleanup": receiptTransaction(
-    "update-failure-report.completeCleanup",
-    (db, input: { attemptId: string; reservationId: string }) =>
-      completeUpdateFailureReportReceiptCleanupRowSync(db, input.attemptId, input.reservationId),
-  ),
-  "restartSentinel.claimSweep": receiptTransaction(
-    "update-failure-report.claimSweep",
-    (
-      db,
-      input: {
-        attemptId: string;
-        expectedReservationId: string;
-        sweepOwnerId: string;
-        sweepGeneration: string;
-      },
-    ) =>
-      claimUpdateFailureReportArtifactSweepRowSync(
-        db,
-        input.attemptId,
-        input.expectedReservationId,
-        input.sweepOwnerId,
-        input.sweepGeneration,
-      ),
-  ),
-  "restartSentinel.releaseSweep": receiptTransaction(
-    "update-failure-report.releaseSweep",
-    (
-      db,
-      input: {
-        attemptId: string;
-        expectedReservationId: string;
-        sweepOwnerId: string;
-        sweepGeneration: string;
-      },
-    ) =>
-      releaseUpdateFailureReportArtifactSweepRowSync(
-        db,
-        input.attemptId,
-        input.expectedReservationId,
-        input.sweepOwnerId,
-        input.sweepGeneration,
-      ),
-  ),
-  "restartSentinel.refreshPreparation": receiptTransaction(
-    "update-failure-report.refreshPreparation",
-    (db, input: { attemptId: string; reservationId: string }) =>
-      refreshUpdateFailureReportReceiptPreparationRowSync(db, input.attemptId, input.reservationId),
-  ),
-  "restartSentinel.finalizeReceipt": receiptTransaction(
-    "update-failure-report.finalizeReceipt",
-    (db, input: { attemptId: string; receipt: UpdateFailureReportReceipt }) =>
-      finalizeUpdateFailureReportReceiptRowSync(db, input.attemptId, input.receipt),
-  ),
-  "restartSentinel.markPending": receiptTransaction(
-    "update-failure-report.markPending",
-    (db, input: { attemptId: string; reservationId: string; previewDigest: string }) =>
-      markUpdateFailureReportReceiptPendingRowSync(
-        db,
-        input.attemptId,
-        input.reservationId,
-        input.previewDigest,
-      ),
-  ),
-  "restartSentinel.markPrepared": receiptTransaction(
-    "update-failure-report.markPrepared",
-    (db, input: { attemptId: string; reservationId: string; previewDigest: string }) =>
-      markUpdateFailureReportReceiptPreparedRowSync(
-        db,
-        input.attemptId,
-        input.reservationId,
-        input.previewDigest,
-      ),
+  "restartSentinel.managedHandoffOutcome": transaction(
+    "restart-sentinel.managed-handoff-outcome",
+    (db, input: ManagedHandoffSentinelOutcome) =>
+      recordManagedHandoffSentinelOutcomeRowSync(db, input),
   ),
   "restartSentinel.admit": (_input: undefined, { open }) => {
     open();
@@ -164,7 +44,7 @@ export const restartSentinelOperations = {
     (db, input: { payload: RestartSentinelPayload; expectedRevision: number | null }) => {
       const current = readRestartSentinelSnapshotSync(db);
       return current.state.kind !== "invalid" && current.revision === input.expectedRevision
-        ? writeRestartSentinelRowSync(db, input.payload)
+        ? writeRestartSentinelRowSync(db, input.payload, current.revision)
         : null;
     },
   ),

@@ -301,7 +301,6 @@ internal class MicCaptureManager(
     synchronized(messageQueueLock) { messageQueue.clear() }
     _conversation.value = emptyList()
     _liveTranscript.value = null
-    flushedPartialTranscript = null
     _isSending.value = false
     stopRequested = true
     stopTranscription(preserveStatus = true)
@@ -324,14 +323,9 @@ internal class MicCaptureManager(
     if (event != "chat") return
     val payload = parseJsonParamsObject(payloadJson) ?: return
 
-    val runId =
-      pendingRunId ?: run {
-        Log.d("MicCapture", "no pendingRunId — drop")
-        return
-      }
+    val runId = pendingRunId ?: return
     val eventRunId = payload["runId"].asJsonStringOrNull() ?: return
     if (eventRunId != runId) {
-      Log.d("MicCapture", "runId mismatch: event=$eventRunId pending=$runId")
       return
     }
 
@@ -420,7 +414,6 @@ internal class MicCaptureManager(
             closeTranscriptionSession(session)
             return@launch
           }
-          Log.d(tag, "transcription session started sessionId=${session.id}")
         } catch (err: Throwable) {
           if (err is CancellationException) {
             restartAfterCancellation = _micEnabled.value && gatewayConnected && !stopRequested
@@ -452,6 +445,7 @@ internal class MicCaptureManager(
       val status = _statusText.value
       val session = transcriptionSession
       transcriptionSession = null
+      flushedPartialTranscript = null
       audioInputGeneration.incrementAndGet()
       onAppliedAudioInputChanged(null)
       if (session != null) {
@@ -779,11 +773,13 @@ internal class MicCaptureManager(
         transcriptFlushJob?.cancel()
         transcriptFlushJob = null
         val text = obj["text"].asJsonStringOrNull()?.trim().orEmpty()
+        // An idle flush suppresses only its own final, never a later utterance.
+        val flushed = flushedPartialTranscript
+        flushedPartialTranscript = null
         if (text.isNotEmpty()) {
-          if (text != flushedPartialTranscript) {
+          if (text != flushed) {
             submitTranscribedMessage(text)
           } else {
-            flushedPartialTranscript = null
             _liveTranscript.value = null
           }
         }

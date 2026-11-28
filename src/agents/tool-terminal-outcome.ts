@@ -1,4 +1,5 @@
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   consumeTrackedToolExecutionStarted,
   peekAdjustedParamsForToolCall,
@@ -6,8 +7,8 @@ import {
 } from "./agent-tools.before-tool-call.state.js";
 import { projectPluginMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
+import { isToolCallDispatcherName, unwrapToolCallForDisplay } from "./tool-display-call.js";
 import { buildToolEffectReceipt, readToolEffectReceipt } from "./tool-effect-receipt.js";
-import { createToolErrorState } from "./tool-error-state.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { readToolResultDetails } from "./tool-result-error.js";
@@ -36,7 +37,9 @@ function readTimeoutDiagnostic(result: unknown): ToolErrorSummary["terminalDiagn
 export function createToolTerminalObserver(
   runId: string,
 ): NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]> {
-  const errors = createToolErrorState();
+  let lastToolError: ToolErrorSummary | undefined;
+  // The catalog tool a failed dispatch ran; unset when the catalog resolved no target.
+  let failedDispatchTarget: string | undefined;
 
   return (observation) => {
     const effectReceipt = readToolEffectReceipt(observation.result);
@@ -62,32 +65,52 @@ export function createToolTerminalObserver(
         buildToolMutationState(observation.toolName, executedArguments));
     const replaySafe = observation.replaySafe ?? mutation.replaySafe;
     const details = readToolResultDetails(observation.result);
-    let lastToolError: ToolErrorSummary | undefined;
-    if (!executionStarted && details?.status === "skipped" && details.deniedReason === "steering") {
-      // Skipping work neither creates a failure nor recovers an earlier one.
-      lastToolError = errors.read().lastToolError;
-    } else if (observation.outcome === "failure") {
+    // Steering skips and handled message omissions neither fail nor recover earlier work.
+    const preservesFailure =
+      (!executionStarted && details?.status === "skipped" && details.deniedReason === "steering") ||
+      (observation.outcome !== "failure" &&
+        observation.toolName === "message" &&
+        projectPluginMessageDeliveryFact(observation.result)?.status === "suppressed");
+    // The dispatcher reports the catalog tool its argument reader resolved, so recovery keys
+    // on the target the dispatcher ran, not on its own reading of the arguments.
+    const isDispatch = isToolCallDispatcherName(observation.toolName);
+    const dispatchedToolId = isDispatch ? asRecord(details?.tool)?.id : undefined;
+    if (!preservesFailure && observation.outcome === "failure") {
       const mutatingAction = executionStarted && mutation.mutatingAction;
       const terminalDiagnostic =
         observation.failure?.terminalDiagnostic ??
         (executionStarted ? readTimeoutDiagnostic(observation.result) : undefined);
-      const failure: ToolErrorSummary = {
+      const dispatchedToolName = isDispatch
+        ? unwrapToolCallForDisplay({ name: observation.toolName, args: executedArguments }).name
+        : undefined;
+      failedDispatchTarget = typeof dispatchedToolId === "string" ? dispatchedToolId : undefined;
+      lastToolError = {
         toolName: observation.toolName,
+        ...(dispatchedToolName && dispatchedToolName !== observation.toolName
+          ? { dispatchedToolName }
+          : {}),
         ...(observation.meta ? { meta: observation.meta } : {}),
         ...observation.failure,
         ...(terminalDiagnostic ? { terminalDiagnostic } : {}),
         executionStarted,
         mutatingAction,
       };
-      lastToolError = errors.recordFailure(failure).lastToolError;
     } else if (
-      observation.toolName === "message" &&
-      projectPluginMessageDeliveryFact(observation.result)?.status === "suppressed"
+      !preservesFailure &&
+      lastToolError &&
+      // A call to a missing tool did nothing and has no name a retry could reuse, so the
+      // next successful executed call recovers it. A dispatch recovers by its catalog target;
+      // one the catalog did not resolve has no target to retry, so any later dispatch
+      // recovers it. Otherwise only the same tool recovers.
+      (lastToolError.unknownTool
+        ? executionStarted
+        : isToolCallDispatcherName(lastToolError.toolName)
+          ? isDispatch &&
+            (failedDispatchTarget === undefined || dispatchedToolId === failedDispatchTarget)
+          : normalizeLowercaseStringOrEmpty(lastToolError.toolName) ===
+            normalizeLowercaseStringOrEmpty(observation.toolName))
     ) {
-      // A handled omission does not recover an earlier failed delivery.
-      lastToolError = errors.read().lastToolError;
-    } else {
-      lastToolError = errors.recordSuccess(observation.toolName).lastToolError;
+      lastToolError = undefined;
     }
 
     return {

@@ -15,6 +15,8 @@ import type {
 } from "./protocol.js";
 
 const CODEX_APP_INVENTORY_CACHE_TTL_MS = 60 * 60 * 1_000;
+const CODEX_APP_READINESS_RETRY_INTERVAL_MS = 60_000;
+const CODEX_APP_THREAD_CACHE_KEY_SEPARATOR = ":thread:";
 // Codex app/read rejects metadata requests containing more than 100 app IDs.
 const CODEX_APP_READ_BATCH_LIMIT = 100;
 const MAX_SERIALIZED_ERROR_MESSAGE_LENGTH = 500;
@@ -34,36 +36,24 @@ export type CodexAppInventoryCacheKeyInput = {
   appServerVersion?: string;
 };
 
-type CodexAppInventoryCacheDiagnostic = {
-  message: string;
-  atMs: number;
-};
-
 export type CodexAppInventorySnapshot = {
-  key: string;
   apps: CodexAppServerRequestResult<"app/read">["apps"];
   installedApps: readonly v2.InstalledApp[];
   /** Absent for complete inventory; present for plugin-targeted snapshots. */
   targetAppIds?: readonly string[];
-  fetchedAtMs: number;
   expiresAtMs: number;
-  revision: number;
-  lastError?: CodexAppInventoryCacheDiagnostic;
 };
 
 type CodexAppInventoryReadState = "fresh" | "stale" | "missing";
 
 export type CodexAppInventoryCacheRead = {
   state: CodexAppInventoryReadState;
-  key: string;
-  revision: number;
   snapshot?: CodexAppInventorySnapshot;
-  refreshScheduled: boolean;
-  diagnostic?: CodexAppInventoryCacheDiagnostic;
 };
 
 type CacheEntry = CodexAppInventorySnapshot & {
   invalidated: boolean;
+  lastForcedRefresh?: { atMs: number; targetAppIds: ReadonlySet<string> };
 };
 
 type RefreshParams = {
@@ -71,6 +61,8 @@ type RefreshParams = {
   request: CodexAppInventoryRequest;
   nowMs?: number;
   forceRefetch?: boolean;
+  /** Readiness repair may reuse a recent covering forced refresh, including a negative. */
+  reuseRecentForcedRefresh?: boolean;
   suppressRefresh?: boolean;
   targetAppIds?: readonly string[];
 };
@@ -78,18 +70,12 @@ type RefreshParams = {
 type InFlightRefresh = {
   promise: Promise<CodexAppInventorySnapshot>;
   targetAppIds: ReadonlySet<string>;
+  forceRefetch: boolean;
 };
 
 export class CodexAppInventoryCache {
-  private readonly ttlMs: number;
   private readonly entries = new Map<string, CacheEntry>();
   private readonly inFlight = new Map<string, InFlightRefresh>();
-  private readonly diagnostics = new Map<string, CodexAppInventoryCacheDiagnostic>();
-  private revision = 0;
-
-  constructor(options: { ttlMs?: number } = {}) {
-    this.ttlMs = options.ttlMs ?? CODEX_APP_INVENTORY_CACHE_TTL_MS;
-  }
 
   read(params: RefreshParams): CodexAppInventoryCacheRead {
     const nowMs = resolveDateTimestampMs(params.nowMs);
@@ -99,57 +85,57 @@ export class CodexAppInventoryCache {
       : entry.invalidated || !isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })
         ? "stale"
         : "fresh";
-    const refreshScheduled =
-      (state === "missing"
+    if (
+      state === "missing"
         ? !params.suppressRefresh
-        : state === "stale" || Boolean(params.forceRefetch)) && this.scheduleRefresh(params);
-    let snapshot: CodexAppInventorySnapshot | undefined;
-    if (entry) {
-      const { invalidated: _invalidated, ...rest } = entry;
-      snapshot = rest;
+        : state === "stale" || Boolean(params.forceRefetch)
+    ) {
+      void this.refreshNow(params).catch(() => undefined);
     }
-    const diagnostic = entry ? entry.lastError : this.diagnostics.get(params.key);
     return {
       state,
-      key: params.key,
-      revision: entry?.revision ?? this.revision,
-      ...(snapshot ? { snapshot } : {}),
-      refreshScheduled,
-      ...(diagnostic ? { diagnostic } : {}),
+      ...(entry ? { snapshot: entry } : {}),
     };
   }
 
-  /** Marks a key stale until its next successful refresh. */
-  invalidate(key: string, reason: string, nowMs = Date.now()): number {
-    this.revision += 1;
-    const diagnostic = { message: reason, atMs: nowMs };
-    const entry = this.entries.get(key);
-    if (entry) {
-      entry.invalidated = true;
-      entry.lastError = diagnostic;
-      entry.revision = this.revision;
-    } else {
-      this.diagnostics.set(key, diagnostic);
+  /** Marks a runtime and its derived thread entries stale until refreshed. */
+  invalidate(key: string): void {
+    const threadPrefix = `${key}${CODEX_APP_THREAD_CACHE_KEY_SEPARATOR}`;
+    for (const [entryKey, entry] of this.entries) {
+      if (entryKey === key || entryKey.startsWith(threadPrefix)) {
+        entry.invalidated = true;
+        entry.lastForcedRefresh = undefined;
+      }
     }
-    return this.revision;
   }
 
   clear(): void {
     this.entries.clear();
     this.inFlight.clear();
-    this.diagnostics.clear();
-    this.revision = 0;
-  }
-
-  private scheduleRefresh(params: RefreshParams): boolean {
-    void this.refreshNow(params).catch(() => undefined);
-    return true;
   }
 
   /** Forces or joins an immediate refresh for a cache key. */
   async refreshNow(params: RefreshParams): Promise<CodexAppInventorySnapshot> {
+    const entry = this.entries.get(params.key);
+    const nowMs = resolveDateTimestampMs(params.nowMs);
+    if (
+      params.reuseRecentForcedRefresh &&
+      entry &&
+      !entry.invalidated &&
+      isFutureDateTimestampMs(entry.expiresAtMs, { nowMs }) &&
+      entry.lastForcedRefresh &&
+      nowMs >= entry.lastForcedRefresh.atMs &&
+      nowMs - entry.lastForcedRefresh.atMs < CODEX_APP_READINESS_RETRY_INTERVAL_MS &&
+      doesRefreshCover(entry.lastForcedRefresh, params)
+    ) {
+      return entry;
+    }
     const existing = this.inFlight.get(params.key);
-    if (existing && !params.forceRefetch && doesInFlightRefreshCover(existing, params)) {
+    if (
+      existing &&
+      (!params.forceRefetch || (params.reuseRecentForcedRefresh && existing.forceRefetch)) &&
+      doesRefreshCover(existing, params)
+    ) {
       return existing.promise;
     }
 
@@ -158,6 +144,7 @@ export class CodexAppInventoryCache {
     const currentRefresh = {
       promise,
       targetAppIds: targetAppIdSet(params.targetAppIds),
+      forceRefetch: params.forceRefetch === true,
     };
     this.inFlight.set(params.key, currentRefresh);
     try {
@@ -186,17 +173,18 @@ export class CodexAppInventoryCache {
         }
       }
       const inventory = await readInstalledApps(params.request, {
-        // A cold upstream connector cache is empty until it is deliberately
-        // seeded. Later reads reuse its committed snapshot unless requested.
+        // A missing thread-local entry does not mean Codex's shared snapshot is
+        // cold. Honor an explicit reuse request; unspecified cold reads still seed it.
         forceRefresh:
           params.forceRefetch === true ||
-          (!this.entries.has(params.key) && !previousRefreshSucceeded),
+          (params.forceRefetch !== false &&
+            !this.entries.has(params.key) &&
+            !previousRefreshSucceeded),
         targetAppIds: params.targetAppIds,
       });
-      this.revision += 1;
-      const expiresAtMs = resolveExpiresAtMsFromDurationMs(this.ttlMs, { nowMs }) ?? 0;
+      const expiresAtMs =
+        resolveExpiresAtMsFromDurationMs(CODEX_APP_INVENTORY_CACHE_TTL_MS, { nowMs }) ?? 0;
       const snapshot: CodexAppInventorySnapshot = {
-        key: params.key,
         apps: inventory.apps,
         installedApps: inventory.installedApps,
         ...(params.targetAppIds?.some(Boolean)
@@ -204,28 +192,23 @@ export class CodexAppInventoryCache {
               targetAppIds: Array.from(targetAppIdSet(params.targetAppIds)).toSorted(),
             }
           : {}),
-        fetchedAtMs: nowMs,
         expiresAtMs,
-        revision: this.revision,
       };
       // Invalidation during a pending read is best effort; the next refresh or TTL
       // repairs a snapshot that raced an install or cache clear.
       this.entries.set(params.key, {
         ...resolvePublishedInventorySnapshot(this.entries.get(params.key), snapshot, nowMs),
         invalidated: false,
+        // Only an explicit forced read settles readiness repair. A cheap native
+        // snapshot read must not suppress the first cold-runtime repair. Failed
+        // reads never settle; activation/manual refreshes bypass reuse entirely.
+        lastForcedRefresh:
+          params.forceRefetch === true
+            ? { atMs: nowMs, targetAppIds: targetAppIdSet(params.targetAppIds) }
+            : this.entries.get(params.key)?.lastForcedRefresh,
       });
-      this.diagnostics.delete(params.key);
       return snapshot;
     } catch (error) {
-      const diagnostic = {
-        message: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
-        atMs: nowMs,
-      };
-      this.diagnostics.set(params.key, diagnostic);
-      const entry = this.entries.get(params.key);
-      if (entry) {
-        entry.lastError = diagnostic;
-      }
       embeddedAgentLog.warn("codex app inventory refresh failed", {
         forceRefetch: params.forceRefetch === true,
         keyFingerprint: fingerprintInventoryCacheKey(params.key),
@@ -265,7 +248,6 @@ function resolvePublishedInventorySnapshot(
     ...snapshotBase,
     // Freshness belongs to the still-valid prior fetch: the merge must not
     // renew rows it never re-read.
-    fetchedAtMs: existing.fetchedAtMs,
     expiresAtMs: existing.expiresAtMs,
     apps: mergeRefreshedRows(existing.apps, snapshot.apps, refreshedTargetIds),
     installedApps: mergeRefreshedRows(
@@ -308,7 +290,10 @@ function targetAppIdSet(appIds: readonly string[] | undefined): Set<string> {
   return new Set(appIds?.filter(Boolean).map(codexAppIdentityKey) ?? []);
 }
 
-function doesInFlightRefreshCover(existing: InFlightRefresh, params: RefreshParams): boolean {
+function doesRefreshCover(
+  existing: Pick<InFlightRefresh, "targetAppIds">,
+  params: RefreshParams,
+): boolean {
   if (existing.targetAppIds.size === 0) {
     return true;
   }
@@ -336,6 +321,17 @@ export function serializeCodexAppInventoryError(error: unknown): Record<string, 
 }
 
 export const defaultCodexAppInventoryCache = new CodexAppInventoryCache();
+
+export function resolveCodexPluginThreadAppCacheKey(params: {
+  appCacheKey: string;
+  threadId?: string;
+}): string {
+  // Runtime keys are complete JSON objects; encoding thread IDs keeps a scoped
+  // invalidation from matching another runtime or a sibling thread suffix.
+  return params.threadId
+    ? `${params.appCacheKey}${CODEX_APP_THREAD_CACHE_KEY_SEPARATOR}${encodeURIComponent(params.threadId)}`
+    : params.appCacheKey;
+}
 
 export function buildCodexAppInventoryCacheKey(
   input: CodexAppInventoryCacheKeyInput,

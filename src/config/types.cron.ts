@@ -11,8 +11,11 @@ export type CronFailureAlertConfig = NonNullable<CronSchemaInput["failureAlert"]
 
 export type CronFailureDestinationConfig = Pick<
   CronFailureAlertConfig,
-  "channel" | "to" | "accountId" | "mode"
+  "channel" | "to" | "threadId" | "accountId" | "mode"
 >;
+
+/** Configured announce destination used when an isolated job names no route of its own. */
+export type CronDefaultDeliveryDestinationConfig = NonNullable<CronSchemaInput["delivery"]>;
 
 export type CronConfig = Omit<CronSchemaInput, "webhookToken" | "webhookSsrfPolicy"> & {
   /** Bearer token for cron webhook POST delivery. */

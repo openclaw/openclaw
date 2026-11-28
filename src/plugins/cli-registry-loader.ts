@@ -9,11 +9,20 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  getDatabaseEngineSelection,
+  installDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
+import { listDatabaseEngineStores } from "../infra/database-engine/registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
-import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
+import { bindPluginCliProgram } from "./cli-callback-binding.js";
+import { pluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
+import { withPluginCliServiceScheduler } from "./cli-service-scheduler.js";
 import { resolvePluginControlPlaneWorkspace } from "./control-plane-workspace.js";
+import { preparePluginDoctorContractModules } from "./doctor-contract-preparation.js";
+import { loadPluginDoctorRecoveryCliRegistrar } from "./doctor-contract-registry.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
   acquirePluginRegistryForInspection,
@@ -21,23 +30,20 @@ import {
   loadPluginRegistryHandle,
 } from "./loader.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { getPluginValueInstance } from "./plugin-instance-scope.js";
 import {
   resolvePluginMetadataEnvFingerprint,
   resolvePluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
+import { degradedPluginMatchesRoot, findActiveDegradedPlugin } from "./runtime-degraded-state.js";
 import {
   buildPluginRuntimeLoadOptions,
-  createPluginRuntimeLoaderLogger,
   type PluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
-import type {
-  OpenClawPluginCliContext,
-  OpenClawPluginCliRootCommandDescriptor,
-  PluginLogger,
-} from "./types.js";
+import type { OpenClawPluginCliContext, OpenClawPluginCliRootCommandDescriptor } from "./types.js";
 
 export type PluginCliLoaderOptions = Pick<PluginLoadOptions, "pluginSdkResolution">;
 
@@ -46,7 +52,6 @@ export type PluginCliPublicLoadParams = {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   loaderOptions?: PluginCliLoaderOptions;
-  logger?: PluginLogger;
   primaryCommand?: string;
   session?: PluginCliLoadSession;
 };
@@ -85,7 +90,6 @@ export function createPluginCliLoadSession(
   let current:
     | {
         key: string;
-        logger?: PluginLogger;
         env: NodeJS.ProcessEnv;
         sdk?: PluginCliLoaderOptions["pluginSdkResolution"];
         prepared: PreparedPluginCliLoad;
@@ -128,7 +132,6 @@ export function createPluginCliLoadSession(
         // Equal values permit package reuse, but raw/source identities retain private provenance.
         if (
           current?.key === key &&
-          current.logger === params.logger &&
           current.env === env &&
           current.sdk === sdk &&
           current.prepared.context.rawConfig === config &&
@@ -152,7 +155,6 @@ export function createPluginCliLoadSession(
           env: preparedEnv,
           workspaceDir,
           metadataSnapshot,
-          logger: params.logger ?? createPluginRuntimeLoaderLogger(),
         });
         const prepared: PreparedPluginCliLoad = {
           context,
@@ -161,7 +163,7 @@ export function createPluginCliLoadSession(
           // Metadata stays captured for this preparation; invocation closure still gates use.
           assertCurrent: assertOpen,
         };
-        current = { key, sdk, logger: params.logger, env, prepared };
+        current = { key, sdk, env, prepared };
         return prepared;
       }),
   };
@@ -234,8 +236,17 @@ async function loadPluginCliMetadataRegistryWithContext(
   primaryCommand?: string,
   loaderOptions?: PluginCliLoaderOptions,
 ): Promise<PluginRegistry> {
-  const onlyPluginIds = resolvePrimaryCommandManifestPluginIds(prepared.context, primaryCommand);
+  let onlyPluginIds = resolvePrimaryCommandManifestPluginIds(prepared.context, primaryCommand);
+  if (onlyPluginIds?.length === 0) {
+    // Declared CLI roots are complete; only undeclared legacy registrars need discovery.
+    onlyPluginIds = (prepared.context.manifestRegistry?.plugins ?? [])
+      .filter((plugin) => plugin.cliCommands === undefined)
+      .map((plugin) => plugin.id);
+  }
   prepared.assertCurrent();
+  if (onlyPluginIds?.length === 0) {
+    return createEmptyPluginRegistry();
+  }
   const registry = await (prepared.metadataRegistry ??= prepared.withCache(() => {
     const options = buildPluginRuntimeLoadOptions(prepared.context, {
       ...loaderOptions,
@@ -249,6 +260,108 @@ async function loadPluginCliMetadataRegistryWithContext(
         )
       : loadOpenClawPluginCliRegistry(options);
   }));
+  return prepared.withCache(() => appendPluginRecoveryCliRegistrars(prepared, registry));
+}
+
+/** Recovery uses Doctor's selected source, never the withheld runtime or metadata entrypoint. */
+async function appendPluginRecoveryCliRegistrars(
+  prepared: PreparedPluginCliLoad,
+  registry: PluginRegistry,
+): Promise<PluginRegistry> {
+  const { context } = prepared;
+  for (const record of registry.plugins) {
+    if (
+      !record.enabled ||
+      !registry.diagnostics.some(
+        (diagnostic) =>
+          diagnostic.pluginId === record.id && diagnostic.code === "plugin-state-migration",
+      )
+    ) {
+      continue;
+    }
+    const manifest = context.manifestRegistry?.plugins.find(
+      (candidate) =>
+        candidate.id === record.id &&
+        candidate.source === record.source &&
+        candidate.rootDir === record.rootDir,
+    );
+    const paths = manifest?.doctorContract?.recoveryCli;
+    if (!manifest || !paths?.length) {
+      continue;
+    }
+    // The migration gate precedes quarantine in runtime loading; recovery must honor both.
+    const degraded = findActiveDegradedPlugin(record.id);
+    if (degraded && degradedPluginMatchesRoot(degraded, manifest.rootDir)) {
+      continue;
+    }
+    await preparePluginDoctorContractModules({
+      config: context.config,
+      env: context.env,
+      manifestRegistry: { plugins: [manifest], diagnostics: [] },
+      surfaces: ["recoveryCli"],
+      assertCurrent: prepared.assertCurrent,
+    });
+    prepared.assertCurrent();
+    const register = loadPluginDoctorRecoveryCliRegistrar(manifest);
+    if (!register) {
+      continue;
+    }
+    const instance = getPluginValueInstance(register);
+    if (!instance) {
+      throw new Error(`Plugin ${record.id} recovery CLI has no prepared source owner`);
+    }
+    for (const descriptor of manifest.cliCommands ?? []) {
+      const subtrees = paths.filter((segments) => segments[0] === descriptor.name);
+      if (
+        !subtrees.length ||
+        registry.cliRegistrars.some((entry) => pluginCliRegistrarOwnsRoot(entry, descriptor.name))
+      ) {
+        continue;
+      }
+      registry.cliRegistrars.push({
+        pluginId: record.id,
+        source: record.source,
+        rootDir: record.rootDir,
+        parentPath: [],
+        commands: [descriptor.name],
+        descriptors: [descriptor],
+        register: async ({ program, config }) => {
+          const [{ createPluginDoctorStateMigrationContext }, { toPluginCommandFailure }] =
+            await Promise.all([
+              import("../infra/state-migrations.plugin-doctor-context.js"),
+              import("../cli/failure-output.js"),
+            ]);
+          const { openPluginStateKeyedStore } = createPluginDoctorStateMigrationContext({
+            pluginId: record.id,
+            config,
+            env: context.env,
+          });
+          const root = program.command(descriptor.name).description(descriptor.description);
+          for (const commandPath of subtrees) {
+            let target = root;
+            for (const segment of commandPath.slice(1)) {
+              target =
+                target.commands.find((child) => child.name() === segment) ??
+                target.command(segment);
+            }
+            await instance.run(() =>
+              withPluginCliServiceScheduler(instance, () => {
+                bindPluginCliProgram(target, toPluginCommandFailure);
+                return register({
+                  program: target,
+                  parentPath: commandPath,
+                  config,
+                  env: context.env,
+                  stateDir: resolveStateDir(context.env),
+                  context: { openPluginStateKeyedStore },
+                });
+              }),
+            );
+          }
+        },
+      });
+    }
+  }
   return registry;
 }
 
@@ -272,30 +385,45 @@ async function loadPluginCliCommandRegistryWithContext(params: {
   if (onlyPluginIds && onlyPluginIds.length === 0) {
     return createEmptyPluginRegistry();
   }
+  // Database families need their boot choice before registration can open a store.
+  // Unrelated CLI commands retain their independent credential requirements.
+  if (
+    !getDatabaseEngineSelection() &&
+    listDatabaseEngineStores().some(
+      ({ id, postgres }) => postgres && (!onlyPluginIds || onlyPluginIds.includes(id)),
+    )
+  ) {
+    const { resolveDatabaseEngineSelection } = await import("../infra/database-engine/config.js");
+    installDatabaseEngineSelection(
+      await resolveDatabaseEngineSelection(context.config, context.env),
+    );
+  }
   const options = buildPluginRuntimeLoadOptions(context, {
     ...params.loaderOptions,
     ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
     cache: false,
     channelPluginLoadIntent: "full",
-    runtimeOptions: { nodes: createPluginCliGatewayNodesRuntime() },
+    runtimeOptions: { nodes: pluginCliGatewayNodesRuntime },
   });
   const resources = params.prepared.resources;
-  return params.prepared.withCache(() =>
+  const registry = await params.prepared.withCache(() =>
     resources
       ? resources.acquire(() => acquirePluginRegistryForInspection(options))
       : loadPluginRegistryHandle(options),
   );
+  return params.prepared.withCache(() =>
+    appendPluginRecoveryCliRegistrars(params.prepared, registry),
+  );
 }
 
 export async function loadPluginCliDescriptors(
-  params: PluginCliPublicLoadParams,
+  params: Omit<PluginCliPublicLoadParams, "loaderOptions">,
 ): Promise<OpenClawPluginCliRootCommandDescriptor[]> {
   try {
     const prepared = resolvePreparedPluginCliLoad(params);
     const registry = await loadPluginCliMetadataRegistryWithContext(
       prepared,
       params.primaryCommand,
-      params.loaderOptions,
     );
     return collectUniqueCommandDescriptors(
       registry.cliRegistrars
@@ -303,9 +431,7 @@ export async function loadPluginCliDescriptors(
         .map((entry) => entry.descriptors),
     );
   } catch (error) {
-    // Callers pass a muted per-plugin logger for descriptor scans; a total
-    // load failure still removes every plugin command from help/dispatch and
-    // must not vanish with it.
+    // A total load failure removes plugin commands from help/dispatch; keep it visible.
     log.warn(`plugin CLI descriptor load failed: ${String(error)}`);
     return [];
   }
@@ -362,17 +488,13 @@ export async function loadPluginCliRegistrationEntriesWithDefaults(
 }
 
 export async function resolvePluginCliRootOwnerIds(
-  params: PluginCliPublicLoadParams,
+  params: Omit<PluginCliPublicLoadParams, "loaderOptions">,
 ): Promise<string[] | null> {
   const primaryCommand = normalizeLowercaseStringOrEmpty(params.primaryCommand);
   if (!primaryCommand) {
     return null;
   }
   const prepared = resolvePreparedPluginCliLoad(params);
-  const ownerIds = await resolvePrimaryCommandPluginIds(
-    prepared,
-    primaryCommand,
-    params.loaderOptions,
-  );
+  const ownerIds = await resolvePrimaryCommandPluginIds(prepared, primaryCommand);
   return ownerIds ?? null;
 }

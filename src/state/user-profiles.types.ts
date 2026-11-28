@@ -1,4 +1,5 @@
 import type { SqlBool } from "kysely";
+import type { GitCoauthorIdentity } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { GatewayConfig } from "../config/types.gateway.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
@@ -11,7 +12,13 @@ export type UserProfileAvatarMime = (typeof USER_PROFILE_AVATAR_MIME_TYPES)[numb
 
 export type UserProfile = Omit<
   UserProfileListItem,
-  "emails" | "githubIdentity" | "hasAvatar" | "effectiveRole" | "roleSource"
+  | "emails"
+  | "githubIdentity"
+  | "gitCoauthorAvailable"
+  | "gitCoauthorIdentity"
+  | "hasAvatar"
+  | "effectiveRole"
+  | "roleSource"
 >;
 
 export type UserProfileOwnerErrorCode = "merge" | "role" | "repair-required";
@@ -20,8 +27,9 @@ export type UserProfileDisplay = Pick<UserProfileListItem, "id" | "displayName" 
   avatarRevision: string;
 };
 
-export type UserProfileAuthority = {
+type UserProfileAuthority = {
   profileId: string;
+  openclawIdAccountIds?: readonly string[];
   role: string | null;
   githubLogin?: string | null;
   aliases: string[];
@@ -30,7 +38,7 @@ export type UserProfileAuthority = {
 
 export type UserProfileRoleAuthority = Pick<
   UserProfileAuthority,
-  "profileId" | "role" | "githubLogin"
+  "profileId" | "role" | "githubLogin" | "openclawIdAccountIds"
 >;
 
 export type CachedGitHubIdentity = { profileId: string; updatedAt: number };
@@ -40,7 +48,20 @@ export type CachedGitHubIdentityBinding = { accountId: number; email: string } |
 
 export type StoredGitHubIdentity = { accountId: number; login: string };
 
-export type UserProfileGitHubAttribution = Map<string, StoredGitHubIdentity | null>;
+export type EnterpriseGitHubIdentity = StoredGitHubIdentity & {
+  host: string;
+  verifiedEmail?: string;
+};
+export type UserProfileGitHubAttribution = Map<
+  string,
+  | StoredGitHubIdentity
+  | EnterpriseGitHubIdentity
+  | (GitCoauthorIdentity & {
+      accountId?: number;
+      githubLogin?: string;
+    })
+  | null
+>;
 
 export type UserProfileGitHubAttributionRead = {
   identities: UserProfileGitHubAttribution;
@@ -64,6 +85,8 @@ export type UserChannelIdentitySelector =
   | { authorizationId: string; policy: UserChannelAuthorizationPolicy };
 export type UserChannelIdentityLink = { profileId: string; identity: UserChannelIdentity };
 export type UserChannelIdentityAuthorityFacts = {
+  identity: UserChannelIdentity;
+  openclawIdAccountIds?: readonly string[];
   authorization?: UserChannelAuthorization;
   profileId: string;
   displayName: string | null;
@@ -108,8 +131,12 @@ export type UserProfileEmailBinding = {
 
 export type UserProfileAccessFacts = Readonly<{
   profileId: string;
+  /** Provider identity only; never proof of current membership or role. */
+  hasOpenClawIdIdentity?: boolean;
+  openclawIdAccountIds?: readonly string[];
   emails: readonly string[];
   githubAccountIds?: readonly number[];
+  enterpriseGitHubAccounts?: ReadonlyArray<Readonly<{ host: string; accountId: number }>>;
   assignedRole: string | null;
   githubLogin?: string | null;
 }>;
@@ -119,11 +146,16 @@ export type UserProfileIdentity = Omit<UserProfileAuthority, "aliases" | "displa
 };
 
 export type PreparedUserProfileIdentity = {
+  /** Opaque access-fact revision, after checking the bound owner and email lifetimes; excludes aliases. */
+  readCurrentRevision(this: void, requiredEmailBindingIds?: readonly string[]): object;
   readCurrentProfile(
     this: void,
     requiredEmailBindingIds?: readonly string[],
     requiredGithubAccountIds?: readonly number[],
-  ): Pick<UserProfileAccessFacts, "profileId" | "assignedRole" | "githubLogin">;
+  ): Pick<
+    UserProfileAccessFacts,
+    "profileId" | "assignedRole" | "githubLogin" | "openclawIdAccountIds"
+  >;
   readonly emailBindingIds: readonly string[];
   readCurrentFacts(
     this: void,
@@ -162,11 +194,23 @@ export type UserProfilesDatabase = {
 
 export type ProfileDisplayRow = Pick<
   UserProfilesDatabase["user_profiles"],
-  "id" | "display_name" | "avatar_mime" | "avatar_sha256" | "merged_into" | "updated_at" | "role"
+  | "id"
+  | "display_name"
+  | "avatar_mime"
+  | "avatar_sha256"
+  | "merged_into"
+  | "created_at"
+  | "updated_at"
+  | "role"
 > & {
   has_avatar: SqlBool;
+  hasOpenClawIdIdentity?: boolean;
+  openclawIdAccountIds?: readonly string[];
   githubAccountIds?: readonly number[];
+  /** The canonical Enterprise reader's proof-validated host/account pairs; aliases alone never set them. */
+  enterpriseGitHubAccounts?: ReadonlyArray<Readonly<{ host: string; accountId: number }>>;
   githubLogin?: string | null;
+  githubIdentity?: UserProfileListItem["githubIdentity"];
   /** Present only for the canonical row with its exact local-owner identity binding. */
   gatewayOwnerCreatedAt?: number;
 };

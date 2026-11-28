@@ -1,37 +1,103 @@
+import type { AgentPromptSurfaceKind } from "../plugins/types.js";
+import { decodeSkillXml } from "../skills/loading/skill-contract.js";
 import { parseSkillsPromptCatalog } from "../skills/loading/skill-prompt-catalog.js";
+import { TOOL_CALL_RAW_TOOL_NAME } from "./tool-catalog.js";
+
+// `skills_read(name)` resolves by name, so path-based loading prose and `<location>` only cost context.
+// With `skills_search` usable, descriptions stay out too: search matches them on demand, and they
+// were 4.2 KB of every fresh-install request. Without search they are the only selection signal.
+// Matches the one-tag-per-line shape `formatSkillCatalog` renders.
+const CATALOG_INTRO =
+  /^The following skills provide[^\n]*\n[^\n]*\nWhen a skill file references[^\n]*\n\n/mu;
+const CATALOG_ENTRY =
+  /^ {2}<skill>\n {4}<name>(.*)<\/name>\n(?: {4}<description>([\s\S]*?)<\/description>\n)? {4}<location>.*<\/location>\n(?: {4}<location_note>(.*)<\/location_note>\n)? {2}<\/skill>$/gmu;
+// Names are JSON-quoted and byte-exact: `skills_read` matches them with === and any character
+// (including `: ` or ` (`) may appear in one. Only prose is whitespace-folded.
+const prose = (value: string) => decodeSkillXml(value).replace(/\s+/gu, " ").trim();
+
+/** Idempotent: an already-compact catalog has no XML entries to rewrite. */
+export function compactCatalogForSkillRead(
+  skillsPrompt: string,
+  withDescriptions: boolean,
+): string {
+  return skillsPrompt
+    .replace(CATALOG_INTRO, "")
+    .replace(
+      CATALOG_ENTRY,
+      (_match, name: string, desc?: string, note?: string) =>
+        `- ${JSON.stringify(decodeSkillXml(name))}${withDescriptions && desc ? `: ${prose(desc)}` : ""}${note ? ` (${prose(note)})` : ""}`,
+    );
+}
 
 export function buildSkillsSection(params: {
   skillsPrompt?: string;
   readToolName: string;
   codeModeActive?: boolean;
-  installedSkillSearch?: boolean;
-  installedSkillRead?: boolean;
+  promptSurface: AgentPromptSurfaceKind;
+  availableTools: ReadonlySet<string>;
+  visibleTools: ReadonlyMap<string, string>;
+  deferredToolsDirectlyCallable?: boolean;
 }) {
-  const trimmed = params.skillsPrompt?.trim();
-  const hasListedSkills = parseSkillsPromptCatalog(trimmed ?? "").length > 0;
-  if (!hasListedSkills && !params.installedSkillSearch) {
-    return trimmed ? ["## Skills", trimmed, ""] : [];
+  const { availableTools, visibleTools } = params;
+  const installedSkillRead = availableTools.has("skills_read");
+  // CLI backends own native file tools outside OpenClaw's projected tool list.
+  const canAccess = params.codeModeActive
+    ? visibleTools.has("exec") && installedSkillRead
+    : visibleTools.has("read") || installedSkillRead || params.promptSurface === "cli_backend";
+  const installedSkillSearch = availableTools.has("skills_search");
+  // Code Mode searches the admitted skill catalog; listing it again only consumes context.
+  const skillsPrompt =
+    canAccess && !(params.codeModeActive && installedSkillSearch)
+      ? (params.skillsPrompt?.trim() ?? "")
+      : "";
+  const hasListedSkills = parseSkillsPromptCatalog(skillsPrompt).length > 0;
+  if (!canAccess || (!hasListedSkills && !installedSkillSearch)) {
+    return { skillsPrompt, section: skillsPrompt ? ["## Skills", skillsPrompt, ""] : [] };
   }
-  return [
-    "## Skills",
-    ...(hasListedSkills
-      ? ["Scan <available_skills> for a matching workflow."]
-      : ["No skill entries are listed in this prompt."]),
-    params.codeModeActive && params.installedSkillRead
-      ? 'Known name or clear match: use `skills.read("<name>")` inside `exec`; read the complete instructions before task actions and follow them.'
-      : params.installedSkillRead
-        ? "Known name or clear match: use `skills_read` with its exact name; read the complete instructions before task actions and follow them."
-        : `Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
-    ...(params.installedSkillSearch
-      ? [
-          `Before work involving files, specialized tools, or a reusable workflow, ${hasListedSkills ? "use a listed match or search" : "search"} with ${params.codeModeActive ? "`skills.search(query)` inside `exec`" : "`skills_search`"} for an applicable skill. Read the best match before implementing the workflow yourself.`,
-          "Search by the task goal and distinctive terms. Simple conversation or a self-contained answer does not need a search. Search covers installed skills; it does not install skills.",
-        ]
-      : []),
-    "Several: most specific. No relevant skill: read none.",
-    "Up-front max one. Never invent paths.",
-    "External writes: batch safely; no tight loops; honor 429/Retry-After.",
-    ...(trimmed ? [trimmed] : []),
-    "",
-  ];
+  const renderedSkillsPrompt =
+    installedSkillRead && hasListedSkills
+      ? compactCatalogForSkillRead(skillsPrompt, !installedSkillSearch)
+      : skillsPrompt;
+  const dispatchDeferredSkills =
+    !params.deferredToolsDirectlyCallable && visibleTools.has(TOOL_CALL_RAW_TOOL_NAME);
+  const readCall =
+    dispatchDeferredSkills && !visibleTools.has("skills_read")
+      ? `call \`${TOOL_CALL_RAW_TOOL_NAME}\` with \`{"id":"skills_read","args":{"name":"<name>"}}\``
+      : "use `skills_read` with its exact name";
+  const searchCall = params.codeModeActive
+    ? "with `skills.search(query)` inside `exec`"
+    : dispatchDeferredSkills && !visibleTools.has("skills_search")
+      ? `by calling \`${TOOL_CALL_RAW_TOOL_NAME}\` with \`{"id":"skills_search","args":{"query":"<query>"}}\``
+      : "with `skills_search`";
+  return {
+    skillsPrompt: renderedSkillsPrompt,
+    section: [
+      "## Skills",
+      ...(hasListedSkills
+        ? [
+            params.codeModeActive && installedSkillRead
+              ? 'Scan `<available_skills>` for a matching workflow; load a known name or clear match with `skills.read("<name>")` inside `exec` before acting.'
+              : installedSkillRead && installedSkillSearch
+                ? `\`<available_skills>\` lists names only; load an exact name that clearly fits by ${readCall} before acting.`
+                : installedSkillRead
+                  ? `Scan \`<available_skills>\` for a matching workflow; load a known name or clear match by ${readCall} before acting.`
+                  : `Scan \`<available_skills>\` for a matching workflow; read exact \`<location>\` with \`${params.readToolName}\` before acting.`,
+          ]
+        : [
+            params.codeModeActive && installedSkillRead
+              ? 'No skills listed here; load a known skill with `skills.read("<name>")` inside `exec`.'
+              : installedSkillRead
+                ? `No skills listed here; load a known skill by ${readCall}.`
+                : "No skills listed here.",
+          ]),
+      ...(installedSkillSearch
+        ? [
+            `For specialized, unfamiliar, or reusable workflows, ${hasListedSkills ? "use a clearly matching listed name or search" : "search"} ${searchCall} by goal/terms (it matches descriptions of installed skills only; skip for simple local file work or self-contained answers).`,
+          ]
+        : []),
+      "Pick at most one (most specific) up front; read none if irrelevant; never invent names or paths. Batch external writes safely and honor 429/Retry-After.",
+      ...(renderedSkillsPrompt ? [renderedSkillsPrompt] : []),
+      "",
+    ],
+  };
 }

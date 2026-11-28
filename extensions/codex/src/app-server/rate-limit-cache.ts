@@ -22,13 +22,12 @@ const rateLimitsByClient = defineCodexBuildState(
 export function rememberCodexRateLimitsRead(
   client: CodexAppServerClient,
   value: JsonValue | undefined,
-  nowMs = Date.now(),
 ): void {
   if (value !== undefined) {
     const currentState = rateLimitsByClient.get(client);
     rateLimitsByClient.set(client, {
       value,
-      updatedAtMs: nowMs,
+      updatedAtMs: Date.now(),
       revision: (currentState?.revision ?? 0) + Number(hasCodexRateLimit(value)),
     });
   }
@@ -38,7 +37,6 @@ export function rememberCodexRateLimitsRead(
 export function mergeCodexRateLimitsUpdate(
   client: CodexAppServerClient,
   value: JsonValue | undefined,
-  nowMs = Date.now(),
 ): void {
   const update =
     isJsonObject(value) && isJsonObject(value.rateLimits) ? value.rateLimits : undefined;
@@ -50,7 +48,7 @@ export function mergeCodexRateLimitsUpdate(
   const limitId = readLimitId(update);
   rateLimitsByClient.set(client, {
     value: mergeRateLimitUpdate(current, update),
-    updatedAtMs: nowMs,
+    updatedAtMs: Date.now(),
     revision: (currentState?.revision ?? 0) + Number(limitId === "codex"),
   });
 }
@@ -63,18 +61,13 @@ export function readCodexRateLimitsRevision(client: CodexAppServerClient): numbe
 /** Reads one physical client's cached rate-limit payload within the max-age window. */
 export function readRecentCodexRateLimits(
   client: CodexAppServerClient,
-  options?: {
-    nowMs?: number;
-    maxAgeMs?: number;
-  },
+  maxAgeMs = DEFAULT_CODEX_RATE_LIMIT_CACHE_MAX_AGE_MS,
 ): JsonValue | undefined {
   const state = rateLimitsByClient.get(client);
   if (!state) {
     return undefined;
   }
-  const nowMs = options?.nowMs ?? Date.now();
-  const maxAgeMs = options?.maxAgeMs ?? DEFAULT_CODEX_RATE_LIMIT_CACHE_MAX_AGE_MS;
-  return maxAgeMs >= 0 && nowMs - state.updatedAtMs > maxAgeMs ? undefined : state.value;
+  return maxAgeMs <= 0 || Date.now() - state.updatedAtMs >= maxAgeMs ? undefined : state.value;
 }
 
 function mergeRateLimitUpdate(current: JsonValue | undefined, update: JsonObject): JsonObject {

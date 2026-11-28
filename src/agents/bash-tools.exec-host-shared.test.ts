@@ -1,6 +1,9 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "../../packages/gateway-client/src/protocol-request.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
-import * as logger from "../logger.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
   finalizeExecApprovalFollowupRuntimeHandoff,
@@ -29,7 +32,7 @@ const mocks = vi.hoisted(() => {
   }
   return {
     approvals,
-    followupImports: 0,
+    logWarn: vi.fn(),
     sendExecApprovalFollowup: vi.fn<typeof sendFollowup>(),
     resolveExecApprovals: vi.fn(async () => approvals()),
     approvalRunAbortedError: new Error("approval owning run aborted"),
@@ -37,8 +40,12 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+vi.mock("../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logger.js")>()),
+  logWarn: mocks.logWarn,
+}));
+// mock-isolation: Keep delivery state and outbound effects behind this suite's controllable followup stub.
 vi.mock("./bash-tools.exec-approval-followup.js", () => {
-  mocks.followupImports += 1;
   return { sendExecApprovalFollowup: mocks.sendExecApprovalFollowup };
 });
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
@@ -53,51 +60,16 @@ vi.mock("./bash-tools.exec-approval-request.js", async (importOriginal) => ({
 
 describe("sendExecApprovalFollowupResult", () => {
   const sendExecApprovalFollowup = mocks.sendExecApprovalFollowup;
-  const logWarn = vi.fn();
   const sessionKey = "agent:main:telegram:direct:123";
   const bashElevated = { enabled: true, allowed: true, defaultLevel: "on" as const };
 
   beforeEach(() => {
     sendExecApprovalFollowup.mockReset().mockResolvedValue(true);
-    logWarn.mockReset();
-    vi.spyOn(logger, "logWarn").mockImplementation(logWarn);
     vi.doMock("./bash-tools.exec-approval-followup.js", () => ({ sendExecApprovalFollowup }));
   });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.doUnmock("./bash-tools.exec-approval-followup.js");
-  });
-
-  it("lazily loads delivery and deduplicates import failures", async () => {
-    expect(mocks.followupImports).toBe(0);
-    const loadDelivery = vi.fn(() => {
-      throw new Error("synthetic delivery import failure");
-    });
-    vi.doMock("./bash-tools.exec-approval-followup.js", loadDelivery);
-    try {
-      const target = { approvalId: "approval-import-failure" };
-      await sendExecApprovalFollowupResult(target, "Exec finished");
-      await sendExecApprovalFollowupResult(target, "Exec finished");
-      expect(loadDelivery).toHaveBeenCalled();
-      expect(logWarn).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining(
-          "exec approval followup dispatch failed (id=approval-import-failure):",
-        ),
-      );
-    } finally {
-      vi.doUnmock("./bash-tools.exec-approval-followup.js");
-    }
-  });
-
-  it("suppresses approval-not-found followup dispatch failures", async () => {
-    sendExecApprovalFollowup.mockRejectedValue(
-      Object.assign(new Error("approval not found"), { gatewayCode: "APPROVAL_NOT_FOUND" }),
-    );
-    await sendExecApprovalFollowupResult(
-      { approvalId: "approval-expired", sessionKey },
-      "Exec finished",
-    );
-    expect(logWarn).not.toHaveBeenCalled();
   });
 
   it("authenticates a result handoff to one session and claimant", async () => {
@@ -150,12 +122,12 @@ describe("sendExecApprovalFollowupResult", () => {
   });
 
   it("does not register elevated runtime handoffs when the process clock is invalid", () => {
+    using _ = vi.spyOn(Date, "now").mockReturnValueOnce(Number.NaN);
     expect(
       registerExecApprovalFollowupRuntimeHandoff({
         approvalId: "approval-elevated-invalid-clock",
         sessionKey,
         bashElevated,
-        nowMs: Number.NaN,
       }),
     ).toBeUndefined();
   });
@@ -204,20 +176,11 @@ describe("resolveExecApprovalWaitOutcome", () => {
 
   beforeEach(() => {
     mocks.resolveRegisteredExecApprovalDecision.mockReset().mockResolvedValue("allow-once");
+    mocks.logWarn.mockClear();
   });
 
-  it.each([
-    ["allow-always", true, null],
-    ["deny", false, "user-denied"],
-  ] as const)("returns a resolved %s decision", async (decision, approvedByAsk, deniedReason) => {
-    mocks.resolveRegisteredExecApprovalDecision.mockResolvedValue(decision);
-    await expect(wait()).resolves.toMatchObject({
-      kind: "resolved",
-      decision,
-      state: { approvedByAsk, deniedReason },
-    });
-  });
-
+  const secret = "private-fixture-secret";
+  const privateError = () => new Error(secret, { cause: new Error(secret) });
   it("applies timeout policy before returning a resolved outcome", async () => {
     mocks.resolveRegisteredExecApprovalDecision.mockResolvedValue(null);
     await expect(
@@ -233,11 +196,35 @@ describe("resolveExecApprovalWaitOutcome", () => {
   });
 
   it.each([
-    [new Error("store unavailable"), "request-failed"],
-    [mocks.approvalRunAbortedError, "run-aborted"],
-  ])("classifies approval waiter failure %s as %s", async (error, kind) => {
+    [
+      new GatewayProtocolRequestTimeoutError(
+        { method: secret, timeoutMs: 100, requestSent: true },
+        secret,
+      ),
+      "gateway-timeout",
+    ],
+    [
+      new GatewayProtocolRequestError({
+        code: secret,
+        message: secret,
+        details: { command: secret },
+      }),
+      "gateway-rejected",
+    ],
+    [Object.assign(privateError(), { code: secret, stack: secret }), "unknown"],
+    [mocks.approvalRunAbortedError, null],
+  ])("keeps waiter failures denied and logs only the safe category %s", async (error, reason) => {
     mocks.resolveRegisteredExecApprovalDecision.mockRejectedValue(error);
-    await expect(wait()).resolves.toEqual({ kind });
+    await expect(wait()).resolves.toEqual({
+      kind: reason === null ? "run-aborted" : "request-failed",
+    });
+    if (reason === null) {
+      expect(mocks.logWarn).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.logWarn).toHaveBeenCalledExactlyOnceWith(
+        `exec approval wait failed (id=approval-wait, reason=${reason})`,
+      );
+    }
   });
 
   it("does not consume a decision after the owning signal aborts", async () => {
@@ -276,59 +263,6 @@ describe("createExecApprovalRequestRoute", () => {
 
   it.each(["webchat"])("keeps waiting without a terminal decision on %s", async (channel) => {
     await expect(createRoute(channel)).resolves.toMatchObject({ kind: "wait" });
-  });
-});
-
-describe("buildExecApprovalPendingToolResult", () => {
-  const buildResult = (
-    overrides: Partial<Parameters<typeof buildExecApprovalPendingToolResult>[0]> = {},
-  ) =>
-    buildExecApprovalPendingToolResult({
-      host: "gateway",
-      command: "uname -a",
-      cwd: "/tmp",
-      warningText: "",
-      approvalId: "approval-id",
-      approvalSlug: "approval-slug",
-      expiresAtMs: 60_000,
-      initiatingSurface: {
-        kind: "disabled",
-        channel: "discord",
-        channelLabel: "Discord",
-        accountId: "default",
-      },
-      sentApproverDms: false,
-      unavailableReason: null,
-      ...overrides,
-    });
-
-  it("keeps a local /approve prompt when the initiating Discord surface is disabled", () => {
-    const result = buildResult({ allowedDecisions: ["allow-once", "deny"] });
-    expect(result.details.status).toBe("approval-pending");
-    const text = result.content.find((part) => part.type === "text")?.text ?? "";
-    expect(text).toContain("/approve approval-slug allow-once");
-    expect(text).not.toContain("native chat exec approvals are not configured on Discord");
-  });
-
-  it("preserves node metadata in unavailable recovery guidance", () => {
-    const result = buildResult({
-      host: "node",
-      nodeId: "node-mac-1",
-      initiatingSurface: { kind: "enabled", channel: undefined, channelLabel: "Web UI" },
-      unavailableReason: "no-approval-route",
-    });
-    expect(result.details).toMatchObject({
-      status: "approval-unavailable",
-      host: "node",
-      nodeId: "node-mac-1",
-    });
-    const text = result.content.find((part) => part.type === "text")?.text ?? "";
-    expect(text).toContain(
-      "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
-    );
-    expect(text).toContain(
-      "Inspect the node's effective exec policy with `openclaw approvals get --node node-mac-1`.",
-    );
   });
 });
 
@@ -378,4 +312,57 @@ describe("buildHeadlessExecApprovalDeniedMessage", () => {
       }
     },
   );
+});
+
+describe("buildExecApprovalPendingToolResult", () => {
+  const buildResult = (
+    overrides: Partial<Parameters<typeof buildExecApprovalPendingToolResult>[0]> = {},
+  ) =>
+    buildExecApprovalPendingToolResult({
+      host: "gateway",
+      command: "uname -a",
+      cwd: "/tmp",
+      warningText: "",
+      approvalId: "approval-id",
+      approvalSlug: "approval-slug",
+      expiresAtMs: 60_000,
+      initiatingSurface: {
+        kind: "disabled",
+        channel: "discord",
+        channelLabel: "Discord",
+        accountId: "default",
+      },
+      sentApproverDms: false,
+      unavailableReason: null,
+      ...overrides,
+    });
+
+  it("keeps a local /approve prompt when the initiating Discord surface is disabled", () => {
+    const result = buildResult({ allowedDecisions: ["allow-once", "deny"] });
+    expect(result.details.status).toBe("approval-pending");
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(text).toContain("/approve approval-slug allow-once");
+    expect(text).not.toContain("native chat exec approvals are not configured on Discord");
+  });
+
+  it("preserves node metadata in unavailable recovery guidance", () => {
+    const result = buildResult({
+      host: "node",
+      nodeId: "node-mac-1",
+      initiatingSurface: { kind: "enabled", channel: undefined, channelLabel: "Web UI" },
+      unavailableReason: "no-approval-route",
+    });
+    expect(result.details).toMatchObject({
+      status: "approval-unavailable",
+      host: "node",
+      nodeId: "node-mac-1",
+    });
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(text).toContain(
+      "Print the web app URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
+    );
+    expect(text).toContain(
+      "Inspect the node's effective exec policy with `openclaw approvals get --node node-mac-1`.",
+    );
+  });
 });

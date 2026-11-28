@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { coerceErrorMessage } from "./error-format.mts";
+import { listBundleDependencies } from "./package-bundle-dependencies.mts";
 import {
   collectPatchedMcpArtifactErrors,
   isSupportedPatchedMcpVersion,
@@ -11,6 +12,10 @@ import {
 } from "./package-bundled-mcp.mts";
 import { collectPackageDistImportErrors } from "./package-dist-imports.mjs";
 import { isRecord } from "./record-shared.mjs";
+
+const PATCHED_CIAO_NAME = "@homebridge/ciao";
+const PATCHED_CIAO_ENTRY = `${PATCHED_CIAO_NAME}/native.js`;
+const DIST_SCRIPT_RE = /^dist\/.*\.(?:cjs|js|mjs)$/u;
 
 type BundledPackage = {
   entries: ReadonlySet<string>;
@@ -26,6 +31,7 @@ const REQUIRED_AI_RUNTIME_ENTRIES = [
   { subpath: "", whenExported: false },
   { subpath: "providers", whenExported: false },
   { subpath: "transports", whenExported: true },
+  { subpath: "internal/model-request-body", whenExported: true },
   { subpath: "internal/openai-completions-compat", whenExported: true },
   { subpath: "internal/openai-responses-payload-policy", whenExported: true },
   { subpath: "internal/runtime", whenExported: false },
@@ -35,21 +41,6 @@ const REQUIRED_AI_RUNTIME_ENTRIES = [
   entry: `dist/${subpath || "index"}.mjs`,
   whenExported: whenExported ? `./${subpath}` : undefined,
 }));
-
-function listBundleDependencies(packageJson: unknown): string[] {
-  if (!isRecord(packageJson)) {
-    return [];
-  }
-  if (packageJson.bundleDependencies === true || packageJson.bundledDependencies === true) {
-    return Object.keys(isRecord(packageJson.dependencies) ? packageJson.dependencies : {});
-  }
-  const bundleDependencies = Array.isArray(packageJson.bundleDependencies)
-    ? packageJson.bundleDependencies
-    : packageJson.bundledDependencies;
-  return Array.isArray(bundleDependencies)
-    ? bundleDependencies.filter((name): name is string => typeof name === "string")
-    : [];
-}
 
 function resolveBundledPackageSpecifiers(
   packageRoot: string,
@@ -173,9 +164,17 @@ export function collectBundledDependencyErrors({
   const errors: string[] = [];
   const dependencies = isRecord(packageJson.dependencies) ? packageJson.dependencies : {};
   const bundledDependencies = new Set(listBundleDependencies(packageJson));
-  const required = new Map<string, string>([
-    [PATCHED_MCP_NAME, "its patched runtime must not be replaced by the registry package"],
-  ]);
+  const patchedRuntime = "its patched runtime must not be replaced by the registry package";
+  const required = new Map<string, string>([[PATCHED_MCP_NAME, patchedRuntime]]);
+  // Registry Ciao lacks the patch-only native entry. Released packages that
+  // import the package root stay valid with the registry dependency.
+  if (
+    runtime.files.some(
+      (file) => DIST_SCRIPT_RE.test(file) && runtime.readText(file).includes(PATCHED_CIAO_ENTRY),
+    )
+  ) {
+    required.set(PATCHED_CIAO_NAME, patchedRuntime);
+  }
   if (requireBundledWorkspaceDeps) {
     required.set("@openclaw/ai", "it is private to the OpenClaw workspace");
   }

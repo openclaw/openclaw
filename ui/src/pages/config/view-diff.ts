@@ -5,7 +5,7 @@ import type { ConfigUiHints } from "../../api/types.ts";
 import { hasSensitiveConfigData, hintForPath } from "../../components/config-form.shared.ts";
 import { isJson5Warm, parseJson5Text } from "../../lib/json5-runtime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { ConfigDiffEntry, ConfigDiffPath, ConfigViewState } from "./view-types.ts";
+import type { ConfigDiffEntry, ConfigDiffPath, ConfigViewState } from "./view-state.ts";
 
 const MAX_CONFIG_DIFF_DEPTH = 64;
 const MAX_CONFIG_DIFF_NODES = 20_000;
@@ -34,12 +34,7 @@ function computeDiff(
     if (orig.length !== curr.length || orig.length > MAX_CONFIG_DIFF_ARRAY_COMPARE_ITEMS) {
       return true;
     }
-    for (let index = 0; index < orig.length; index += 1) {
-      if (compare(orig[index], curr[index], null, depth + 1)) {
-        return true;
-      }
-    }
-    return false;
+    return orig.some((value, index) => compare(value, curr[index], null, depth + 1));
   }
 
   // A null path compares array contents without emitting their individual fields.

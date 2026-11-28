@@ -1,6 +1,8 @@
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { findSessionRepositoryWorkspaceInDatabase } from "../../state/session-repository-workspaces.kernel.js";
+import { readWorkerPlacementMovesReadOnly } from "./placement-move-row-codec.js";
 import {
   isCurrentPlacementTurnClaim,
   normalizeEpoch,
@@ -60,6 +62,21 @@ export function drainWorkerSessionPlacement(
   }
   if (input.expectedTurnClaim && !isCurrentPlacementTurnClaim(current, input.expectedTurnClaim)) {
     throw new Error(`Cannot drain stale worker turn for session ${sessionId}`);
+  }
+  const repository = findSessionRepositoryWorkspaceInDatabase(db, current);
+  if (repository?.diskAuthority) {
+    const move = readWorkerPlacementMovesReadOnly(db, [sessionId]).get(sessionId);
+    if (
+      move?.target.kind !== "gateway" ||
+      move.abandonSource ||
+      move.source.environmentId !== environmentId ||
+      move.source.ownerEpoch !== ownerEpoch ||
+      move.source.generation !== current.generation
+    ) {
+      throw new Error(
+        "This repository disk requires Move to Gateway before retirement; its placement and disk are preserved",
+      );
+    }
   }
   // Draining closes new admission first. The already-admitted worker may
   // finish under its old claim before reconciliation advances ownership.

@@ -1,5 +1,7 @@
 /** Rewrites transcript entries by branching and re-appending the active suffix. */
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { readBackgroundResultPlacement } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { withSessionPendingInputRelocation } from "../../config/sessions/session-accessor.js";
 import type {
   TranscriptRewriteReplacement,
@@ -7,6 +9,7 @@ import type {
 } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { getRawSessionAppendMessageAsync } from "../session-raw-append-message.js";
+import { sessionManagerReadTranscriptBranch } from "../sessions/session-manager-view-types.js";
 import type { SessionManager } from "../sessions/session-manager.js";
 
 type SessionBranchEntry = ReturnType<SessionManager["getBranch"]>[number];
@@ -97,8 +100,18 @@ async function appendBranchEntry(params: {
       return sessionManager.appendThinkingLevelChange(entry.thinkingLevel);
     case "model_change":
       return sessionManager.appendModelChange(entry.provider, entry.modelId);
-    case "custom":
-      return sessionManager.appendCustomEntryAsync(entry.customType, entry.data);
+    case "custom": {
+      const placement = readBackgroundResultPlacement(entry);
+      return sessionManager.appendCustomEntryAsync(
+        entry.customType,
+        placement
+          ? {
+              afterEntryId: remapEntryId(placement.afterEntryId, rewrittenEntryIds),
+              resultEntryIds: placement.resultEntryIds.map((id) => rewrittenEntryIds.get(id) ?? id),
+            }
+          : entry.data,
+      );
+    }
     case "custom_message":
       return sessionManager.appendCustomMessageEntryAsync(
         entry.customType,
@@ -147,7 +160,8 @@ export async function rewriteTranscriptEntriesInSessionManager(params: {
     return unchangedRewrite("no replacements requested");
   }
 
-  const activeBranch = params.sessionManager.getBranch();
+  // Matching and replay only read entries; keep sealed payloads shared through rewrite snapshots.
+  const activeBranch = params.sessionManager[sessionManagerReadTranscriptBranch]();
   if (activeBranch.length === 0) {
     return unchangedRewrite("empty session");
   }
@@ -163,7 +177,7 @@ export async function rewriteTranscriptEntriesInSessionManager(params: {
 
   const rewrite = await params.sessionManager.prepareTranscriptRewriteAsync();
   const rewriteManager = rewrite.sessionManager;
-  const branch = rewriteManager.getBranch();
+  const branch = rewriteManager[sessionManagerReadTranscriptBranch]();
   if (
     branch.length !== activeBranch.length ||
     branch.some((entry, index) => entry.id !== activeBranch[index]?.id)
@@ -197,6 +211,7 @@ export async function rewriteTranscriptEntriesInSessionManager(params: {
     return entryId;
   };
   const rewrittenEntryIds = new Map<string, string>();
+  let turnStartedAt = performance.now();
   // Every re-appended message follows the rewritten prefix, so its prefix-bound checkpoint is stale.
   for (const entry of branch.slice(firstMatchedIndex)) {
     const newEntryId = await appendBranchEntry({
@@ -207,6 +222,11 @@ export async function rewriteTranscriptEntriesInSessionManager(params: {
       replacement: entry.type === "message" ? replacementsById.get(entry.id) : undefined,
     });
     rewrittenEntryIds.set(entry.id, newEntryId);
+    // Detached appends settle in microtasks; long rewrites must also admit socket I/O.
+    if (performance.now() - turnStartedAt >= 4) {
+      await nextTurn();
+      turnStartedAt = performance.now();
+    }
   }
 
   await rewrite.commit(rewrittenEntryIds);

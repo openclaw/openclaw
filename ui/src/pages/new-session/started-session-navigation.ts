@@ -1,7 +1,10 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { navigateWithRouteTransition } from "../../app/route-transition.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -12,7 +15,31 @@ type StartedSession = {
   hello: ApplicationContext["gateway"]["snapshot"]["hello"];
   key: string;
   agentId: string;
+  entry?: SessionCreateOutcome["entry"];
 };
+
+/** Capture display identity without retaining a draft or navigation callback. */
+function captureSessionDisplayOwner(gateway: ApplicationContext["gateway"]) {
+  const owner = gatewayPresentationScope(gateway);
+  const gatewayUrl = gateway.connection.gatewayUrl;
+  let recoveryScope =
+    gateway.snapshot.hello?.auth?.recoveryScope ??
+    (gateway.snapshot.client?.recoveryScopeReady
+      ? gateway.snapshot.client.recoveryScope
+      : undefined);
+  return () => {
+    const snapshot = gateway.snapshot;
+    const scope =
+      snapshot.hello?.auth?.recoveryScope ??
+      (snapshot.client?.recoveryScopeReady ? snapshot.client.recoveryScope : undefined);
+    recoveryScope ??= scope;
+    return (
+      gatewayPresentationScope(gateway) === owner &&
+      gateway.connection.gatewayUrl === gatewayUrl &&
+      (!scope || scope === recoveryScope)
+    );
+  };
+}
 
 /** A committed create is retried as navigation, never as a second create. */
 export class StartedSessionNavigation {
@@ -32,26 +59,7 @@ export class StartedSessionNavigation {
     message: ReturnType<typeof buildLocalUserMessage>,
     isCurrent: () => boolean = () => true,
   ) {
-    const gateway = context.gateway;
-    const owner = gatewayPresentationScope(gateway);
-    const gatewayUrl = gateway.connection.gatewayUrl;
-    let recoveryScope =
-      gateway.snapshot.hello?.auth?.recoveryScope ??
-      (gateway.snapshot.client?.recoveryScopeReady
-        ? gateway.snapshot.client.recoveryScope
-        : undefined);
-    const canDisplay = () => {
-      const snapshot = gateway.snapshot;
-      const scope =
-        snapshot.hello?.auth?.recoveryScope ??
-        (snapshot.client?.recoveryScopeReady ? snapshot.client.recoveryScope : undefined);
-      recoveryScope ??= scope;
-      return (
-        gatewayPresentationScope(gateway) === owner &&
-        gateway.connection.gatewayUrl === gatewayUrl &&
-        (!scope || scope === recoveryScope)
-      );
-    };
+    const canDisplay = captureSessionDisplayOwner(context.gateway);
     return (key: string, error?: string) => {
       if (message && isCurrent() && canDisplay()) {
         this.submitted = { context, message, key, agentId, error, canDisplay };
@@ -100,7 +108,7 @@ export class StartedSessionNavigation {
       await this.navigate(context, { client, key: submission.key, agentId: submission.agentId });
     } catch (error) {
       if (isCurrent() && submission.canDisplay()) {
-        failure = error instanceof Error ? error.message : String(error);
+        failure = formatUiError(error);
       }
     } finally {
       if (isCurrent()) {
@@ -149,7 +157,10 @@ export class StartedSessionNavigation {
     }).options;
     await navigateWithRouteTransition({
       document,
-      from: "new-session",
+      getOutlet: () => context.routeOutlet,
+      // The instant-thread handoff already shows Chat; animating it again on
+      // create acceptance would bump the visible transcript.
+      from: context.router.getState().matches[0]?.routeId,
       to: "chat",
       router: context.router,
       signal: context.lifecycleAbortSignal,
@@ -164,6 +175,15 @@ export class StartedSessionNavigation {
         if (commitRoute && !commitRoute()) {
           throw new DOMException("Session navigation superseded", "AbortError");
         }
+        context.chatSubmissions.acceptCreate({
+          creation: { sessionKey: started.key, admitted: true },
+          // An accepted key is not a title. Keep the placeholder until the named row arrives.
+          displayName:
+            normalizeOptionalString(started.entry?.label) ??
+            normalizeOptionalString(started.entry?.displayName),
+          category: normalizeOptionalString(started.entry?.category),
+          canDisplay: captureSessionDisplayOwner(context.gateway),
+        });
         // Carry the confirmed key through the same connection's short route;
         // neither the background roster nor another lookup needs to finish.
         prepareSessionNavigationHandoff(context.gateway, options.pathname, started.key);

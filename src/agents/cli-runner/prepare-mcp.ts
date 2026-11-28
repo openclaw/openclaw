@@ -1,4 +1,6 @@
 import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
+import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
+import { getActiveMcpLoopbackRuntime } from "../../gateway/mcp-http.loopback-runtime.js";
 import type { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
@@ -67,8 +69,14 @@ export async function prepareCliMcpToolProjection(
     defaultMediatedToolNames?: readonly string[];
     scope: Pick<
       McpScope,
-      "cfg" | "skillLibraryAuthoring" | "authProfileStore" | "authProfileStoreAgentDir"
+      | "cfg"
+      | "skillLibraryAuthoring"
+      | "bundledTools"
+      | "authProfileStore"
+      | "authProfileStoreAgentDir"
     >;
+    /** The memory audience a loopback grant on a session carries. */
+    forGrant: (sessionKey: string) => Promise<Pick<McpScope, "memoryAudience">>;
     resolvePolicyTools: ResolveMcpTools;
     resolveScopedTools: ResolveMcpTools;
   },
@@ -84,17 +92,21 @@ export async function prepareCliMcpToolProjection(
       ? options.resolvePolicyTools
       : options.resolveScopedTools;
   const admittedParams = await admitCliRunParams(params, options.agentId);
+  // The projected names become the grant's allowlist, so audience-gated tools are
+  // built with the audience the grant will carry; the grant mints with this same value.
+  const grantAudience = await options.forGrant(context.sessionKey);
   const { tools } = await resolveTools({
     ...options.scope,
+    ...(grantAudience.memoryAudience ? { memoryAudience: grantAudience.memoryAudience } : {}),
     defaultMediatedToolNames: options.defaultMediatedToolNames,
     signal: admittedParams.abortSignal,
     context,
     admittedRunContext: admittedParams.admittedRunContext,
   });
-  return { params: admittedParams, tools };
+  return { params: admittedParams, tools, grantAudience };
 }
 
-/** Resolve default coding ownership without changing exact, standalone, or node runs. */
+/** Resolve native-tool and configured-MCP ownership for this CLI run. */
 export function resolveCliMcpToolOwnership(
   run: RunCliAgentParams,
   options: {
@@ -104,7 +116,7 @@ export function resolveCliMcpToolOwnership(
     skipPreparation: boolean;
   },
 ) {
-  const hostOwnedTools =
+  const nodeExec =
     options.enabled &&
     resolveExecConfigState({
       cfg: run.config,
@@ -112,7 +124,10 @@ export function resolveCliMcpToolOwnership(
       execOverrides: run.execOverrides,
       agentId: run.agentId,
       sessionKey: run.sessionKey,
-    }).host !== "node" &&
+    }).host === "node";
+  const hostOwnedTools =
+    options.enabled &&
+    !nodeExec &&
     run.cliToolAvailability === undefined &&
     options.backend.nativeToolMode === "selectable" &&
     options.backend.toolAvailabilityEnforcement === "execution-args" &&
@@ -121,6 +136,7 @@ export function resolveCliMcpToolOwnership(
       : undefined;
   return {
     hostOwnedTools,
+    bridgeConfiguredMcp: nodeExec && options.backend.id === "claude-cli",
     nodeWorkshopEnabled:
       options.nodePlacement &&
       !options.skipPreparation &&
@@ -161,4 +177,23 @@ export function prepareCliMcpGrant(
       run,
     ),
   };
+}
+
+/** Start the gateway bridge and require its published runtime before constructing CLI grants. */
+export async function startCliMcpLoopbackRuntime() {
+  try {
+    await ensureMcpLoopbackServer();
+  } catch (error) {
+    throw new Error(
+      `Bundled MCP is enabled, but the OpenClaw MCP loopback server failed to start: ${String(error)}`,
+      { cause: error },
+    );
+  }
+  const runtime = getActiveMcpLoopbackRuntime();
+  if (!runtime) {
+    throw new Error(
+      "Bundled MCP is enabled, but the OpenClaw MCP loopback server did not publish a runtime after startup.",
+    );
+  }
+  return runtime;
 }

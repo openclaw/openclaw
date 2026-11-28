@@ -1,17 +1,26 @@
-import { afterEach, expect, it, vi } from "vitest";
-import type { WizardNextResult } from "../../../packages/gateway-protocol/src/index.js";
-import type { GatewayRequestFunction } from "../../gateway/call.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
+import type { WizardNextResult, WizardStep } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  GatewayLocalBackendSharedAuthUnavailableError,
+  type GatewayRequestFunction,
+} from "../../gateway/call.js";
+import { GatewayTransportError } from "../../gateway/transport-error.js";
 import { resolveManifestDeclaredProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { WizardCancelledError } from "../../wizard/prompts.js";
 import { readGatewayLoginParams, runGatewayLoginWizard } from "./auth-login-gateway.js";
+import { refreshRunningGatewayAuthState } from "./auth-refresh.js";
 
-const prompts = vi.hoisted(() => ({
-  note: vi.fn(),
-  text: vi.fn(),
-  select: vi.fn(),
-  confirm: vi.fn(),
-  multiselect: vi.fn(),
+const prompts = vi.hoisted(() => ({ note: vi.fn(), text: vi.fn(), select: vi.fn() }));
+const gatewayMocks = vi.hoisted(() => ({
+  callGateway: vi.fn(),
+  isImplicitLocalGatewayTarget: vi.fn(),
+}));
+vi.mock("../../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/call.js")>()),
+  callGateway: gatewayMocks.callGateway,
+  isImplicitLocalGatewayTarget: gatewayMocks.isImplicitLocalGatewayTarget,
 }));
 // mock-isolation: Exercise remote step handling without reading the test runner's terminal.
 vi.mock("../../wizard/clack-prompter.js", () => ({
@@ -31,40 +40,67 @@ vi.mock("../../plugins/provider-auth-choices.js", () => ({
       choiceLabel: "OpenAI API key",
       appGuidedSecret: true,
     },
+    {
+      pluginId: "openai",
+      providerId: "openai",
+      methodId: "oauth",
+      choiceId: "openai",
+      choiceLabel: "Codex login",
+      appGuidedAuth: "device-code",
+      credentialOnly: true,
+    },
   ]),
 }));
 const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } satisfies RuntimeEnv;
+const next = (stepId?: string, value?: unknown) => ({
+  method: "wizard.next",
+  params: { sessionId: "login", ...(stepId ? { answer: { stepId, value } } : {}) },
+});
+const step = (value: WizardStep): WizardNextResult => ({ done: false, step: value });
+const authUrl = "https://example.test/authorize";
+const browserStep = step({ id: "code", type: "text", externalUrl: authUrl });
+const done: WizardNextResult = { done: true, status: "done" };
 function gateway(results: Array<WizardNextResult | Error>) {
   const calls: Array<{ method: string; params: unknown }> = [];
-  const request: GatewayRequestFunction = async <T>(
-    method: string,
-    params?: unknown,
-  ): Promise<T> => {
+  const request: GatewayRequestFunction = async <T>(method: string, params?: unknown) => {
     calls.push({ method, params });
     const result = method === "wizard.cancel" ? { status: "cancelled" } : results.shift();
-    if (!result) {
-      throw new Error("Unexpected wizard request");
-    }
-    if (result instanceof Error) {
-      throw result;
+    if (!result || result instanceof Error) {
+      throw result ?? new Error("Unexpected wizard request");
     }
     return result as T;
   };
-  return { request, calls };
+  return {
+    calls,
+    run: () => runGatewayLoginWizard(request, "login", new AbortController().signal, runtime),
+  };
 }
 afterEach(() => {
   vi.clearAllMocks();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
+beforeEach(() => {
+  gatewayMocks.callGateway.mockReset();
+  gatewayMocks.isImplicitLocalGatewayTarget.mockResolvedValue(true);
+});
+
+async function expectRefresh(
+  outcome: Awaited<ReturnType<typeof refreshRunningGatewayAuthState>>,
+  warning?: string,
+  operation: "login" | "update" = "login",
+) {
+  const result = await refreshRunningGatewayAuthState("main", operation, runtime);
+  expect({ result, warnings: runtime.error.mock.calls }).toEqual({
+    result: outcome,
+    warnings: warning ? [[warning]] : [],
+  });
+}
 
 it("maps normalized API-key method and agent to the exact plugin choice", async () => {
+  const opts = { provider: "OpenAI", method: "API-KEY", agent: "writer" };
   await expect(
-    readGatewayLoginParams(
-      { provider: "OpenAI", method: "API-KEY", agent: "writer" },
-      "login",
-      new AbortController().signal,
-    ),
+    readGatewayLoginParams(opts, "login", new AbortController().signal),
   ).resolves.toEqual({
     sessionId: "login",
     authChoice: "openai/openai-api-key",
@@ -115,10 +151,9 @@ it("offers searchable sign-in choices in label order across plugin discovery gro
 
 it("keeps preferred providers together with their method priorities and descriptions", async () => {
   const openaiChoices = [
-    ["api-key", "openai-api-key", "OpenAI API Key", "Platform API billing", 5],
-    ["siwc", "openai-token-sharing", "Sign in with ChatGPT (Beta)", "App-specific grant", 0],
-    ["oauth", "openai", "Codex login (browser)", "ChatGPT browser sign-in", -10],
-    ["device-code", "openai-device-code", "Codex login (device code)", "Remote device code", -40],
+    ["api-key", "openai-api-key", "OpenAI API Key", "Use your OpenAI API key directly", 5],
+    ["siwc", "openai-token-sharing", "Sign in with ChatGPT", "Use your ChatGPT plan for eligible Responses API requests", 0],
+    ["oauth", "openai", "Codex login", "Sign in with your ChatGPT account using a one-time code", -10],
   ] as const;
   const otherProviders = [
     ["zeta", "Zeta"],
@@ -149,8 +184,9 @@ it("keeps preferred providers together with their method priorities and descript
       assistantPriority,
       groupId: "openai",
       groupLabel: "OpenAI",
-      appGuidedAuth: "oauth" as const,
-      credentialOnly: true,
+      ...(methodId === "api-key"
+        ? { appGuidedSecret: true as const }
+        : { appGuidedAuth: methodId === "oauth" ? ("device-code" as const) : ("oauth" as const), credentialOnly: true }),
     })),
   ]);
   prompts.select.mockResolvedValueOnce("openai/openai-token-sharing");
@@ -166,7 +202,6 @@ it("keeps preferred providers together with their method priorities and descript
     searchable: true,
   });
   expect(selection?.options.map((option: { value: string }) => option.value)).toEqual([
-    "openai/openai-device-code",
     "openai/openai",
     "openai/openai-token-sharing",
     "openai/openai-api-key",
@@ -177,26 +212,21 @@ it("keeps preferred providers together with their method priorities and descript
     "alpha/alpha-key",
     "zeta/zeta-key",
   ]);
-  expect(selection?.options.slice(0, 4)).toEqual([
-    {
-      value: "openai/openai-device-code",
-      label: "OpenAI · Codex login (device code)",
-      hint: "Remote device code · openai / device-code",
-    },
+  expect(selection?.options.slice(0, 3)).toEqual([
     {
       value: "openai/openai",
-      label: "OpenAI · Codex login (browser)",
-      hint: "ChatGPT browser sign-in · openai / oauth",
+      label: "OpenAI · Codex login",
+      hint: "Sign in with your ChatGPT account using a one-time code · openai / oauth",
     },
     {
       value: "openai/openai-token-sharing",
-      label: "OpenAI · Sign in with ChatGPT (Beta)",
-      hint: "App-specific grant · openai / siwc",
+      label: "OpenAI · Sign in with ChatGPT",
+      hint: "Use your ChatGPT plan for eligible Responses API requests · openai / siwc",
     },
     {
       value: "openai/openai-api-key",
       label: "OpenAI API Key",
-      hint: "Platform API billing · openai / api-key",
+      hint: "Use your OpenAI API key directly · openai / api-key",
     },
   ]);
 });
@@ -244,48 +274,55 @@ it("exits without starting a login when the provider chooser is cancelled", asyn
   );
 });
 
+it("routes --device-code to the declared device-code sign-in under another method id", async () => {
+  await expect(
+    readGatewayLoginParams(
+      { provider: "openai", method: "device-code" },
+      "login",
+      new AbortController().signal,
+    ),
+  ).resolves.toEqual({ sessionId: "login", authChoice: "openai/openai", agentId: undefined });
+});
+
 it("renders device codes and sends selection answers on the admitted session", async () => {
   prompts.select.mockResolvedValueOnce("keep");
   const h = gateway([
-    {
-      done: false,
-      step: {
-        id: "device",
-        type: "note",
-        message: "Approve sign-in",
-        externalUrl: "https://github.com/login/device",
-        deviceCode: { code: "ABCD-1234" },
-      },
-    },
-    {
-      done: false,
-      step: { id: "access", type: "select", options: [{ label: "Keep", value: "keep" }] },
-    },
-    { done: true, status: "done" },
+    step({
+      id: "device",
+      type: "note",
+      message: "Approve sign-in",
+      externalUrl: "https://github.com/login/device",
+      deviceCode: { code: "ABCD-1234" },
+    }),
+    step({ id: "access", type: "select", options: [{ label: "Keep", value: "keep" }] }),
+    done,
   ]);
-  await runGatewayLoginWizard(h.request, "login", new AbortController().signal, runtime);
+  await h.run();
   expect(prompts.note).toHaveBeenCalledWith(
     "https://github.com/login/device",
     "Open this URL to continue",
   );
   expect(prompts.note).toHaveBeenCalledWith("ABCD-1234", "Device code");
-  expect(h.calls).toEqual([
-    { method: "wizard.next", params: { sessionId: "login" } },
-    {
-      method: "wizard.next",
-      params: { sessionId: "login", answer: { stepId: "device", value: undefined } },
-    },
-    {
-      method: "wizard.next",
-      params: { sessionId: "login", answer: { stepId: "access", value: "keep" } },
-    },
-  ]);
+  expect(h.calls).toEqual([next(), next("device"), next("access", "keep")]);
+});
+
+it("keeps the line breaks of multi-line login steps while stripping terminal controls", async () => {
+  const message =
+    "Enter this code.\nCode: ABCD-1234\n\n\u001b[31mxAI OAuth complete\u001b[0m\u0007";
+  await gateway([
+    step({ id: "device", type: "progress", title: "xAI OAuth", message }),
+    done,
+  ]).run();
+  expect(prompts.note).toHaveBeenCalledWith(
+    "Enter this code.\nCode: ABCD-1234\n\nxAI OAuth complete",
+    "xAI OAuth",
+  );
 });
 
 it("closes the admitted session when a terminal prompt is cancelled", async () => {
   prompts.select.mockRejectedValueOnce(new WizardCancelledError());
-  const h = gateway([{ done: false, step: { id: "choice", type: "select", options: [] } }]);
-  await runGatewayLoginWizard(h.request, "login", new AbortController().signal, runtime);
+  const h = gateway([step({ id: "choice", type: "select", options: [] })]);
+  await h.run();
   expect(h.calls.at(-1)).toEqual({
     method: "wizard.cancel",
     params: { sessionId: "login", closeInput: true },
@@ -304,41 +341,100 @@ it("observes browser completion while manual input remains open and retires the 
     signal.addEventListener("abort", () => reject(new WizardCancelledError()), { once: true });
     return promise;
   });
-  const h = gateway([
-    {
-      done: false,
-      step: { id: "code", type: "text", externalUrl: "https://example.test/authorize" },
-    },
-    { done: true, status: "done" },
-  ]);
-  const finished = runGatewayLoginWizard(h.request, "login", new AbortController().signal, runtime);
+  const h = gateway([browserStep, done]);
+  const finished = h.run();
   await vi.advanceTimersByTimeAsync(1_000);
   await finished;
   expect(promptSignal?.aborted).toBe(true);
-  expect(h.calls).toEqual([
-    { method: "wizard.next", params: { sessionId: "login" } },
-    { method: "wizard.next", params: { sessionId: "login" } },
-  ]);
+  expect(h.calls).toEqual([next(), next()]);
   expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("confirmed"));
 });
 
 it("reconciles a browser callback that completes before the manual answer arrives", async () => {
   prompts.text.mockResolvedValueOnce("authorization-code");
-  const h = gateway([
-    {
-      done: false,
-      step: { id: "code", type: "text", externalUrl: "https://example.test/authorize" },
+  const h = gateway([browserStep, new Error("wizard not running"), done]);
+  await h.run();
+  expect(h.calls).toEqual([next(), next("code", "authorization-code"), next()]);
+});
+
+it("acknowledges a published auth update", async () => {
+  gatewayMocks.callGateway.mockResolvedValueOnce({ refreshed: true });
+  await expectRefresh("refreshed", undefined, "update");
+  expect(gatewayMocks.callGateway).toHaveBeenCalledWith(
+    expect.objectContaining({
+      method: "models.authRefresh",
+      params: { operation: "update", agentId: "main" },
+      requireLocalBackendSharedAuth: true,
+    }),
+  );
+});
+
+it("keeps restart guidance when legacy status refresh fails", async () => {
+  const error = new GatewayClientRequestError({
+    code: "INVALID_REQUEST",
+    message: "unknown method: models.authRefresh",
+  });
+  gatewayMocks.callGateway.mockImplementation(
+    async (options: { method: string; onHelloOk?: () => void }) => {
+      options.onHelloOk?.();
+      if (options.method === "models.authRefresh") {
+        throw error;
+      }
+      throw new Error("legacy refresh failed");
     },
-    new Error("wizard not running"),
-    { done: true, status: "done" },
-  ]);
-  await runGatewayLoginWizard(h.request, "login", new AbortController().signal, runtime);
-  expect(h.calls).toEqual([
-    { method: "wizard.next", params: { sessionId: "login" } },
-    {
-      method: "wizard.next",
-      params: { sessionId: "login", answer: { stepId: "code", value: "authorization-code" } },
-    },
-    { method: "wizard.next", params: { sessionId: "login" } },
-  ]);
+  );
+  await expectRefresh(
+    "gateway-rejected",
+    "Warning: Model auth changes were saved, but the running Gateway could not refresh them. Run `openclaw gateway restart` to apply the saved changes.",
+  );
+  expect(gatewayMocks.callGateway).toHaveBeenCalledTimes(2);
+  expect(gatewayMocks.callGateway).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      method: "models.authStatus",
+      params: { refresh: true, agentId: "main" },
+      timeoutMs: 3000,
+      requireLocalBackendSharedAuth: true,
+    }),
+  );
+});
+
+it("stays silent when no gateway is listening", async () => {
+  gatewayMocks.callGateway.mockRejectedValueOnce(
+    new GatewayTransportError({
+      kind: "closed",
+      message: "gateway unreachable",
+      reason: "connect ECONNREFUSED 127.0.0.1:18789",
+      connectionDetails: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+        message: "Local target",
+      },
+    }),
+  );
+  await expectRefresh("gateway-unreachable");
+  expect(gatewayMocks.callGateway).toHaveBeenCalledWith(
+    expect.objectContaining({ requireLocalBackendSharedAuth: true }),
+  );
+});
+
+it("directs remote clients to run auth changes on the gateway host", async () => {
+  gatewayMocks.isImplicitLocalGatewayTarget.mockResolvedValueOnce(false);
+  gatewayMocks.callGateway.mockRejectedValueOnce(
+    new GatewayLocalBackendSharedAuthUnavailableError(
+      "local backend shared auth is limited to the configured local gateway",
+    ),
+  );
+  await expectRefresh(
+    "gateway-rejected",
+    "Warning: Model auth changes were saved on this host, but the configured Gateway does not share this auth state. Run the auth command on the Gateway host (the far end of any SSH tunnel).",
+  );
+});
+
+it("does not guess a restart host when target classification fails", async () => {
+  gatewayMocks.isImplicitLocalGatewayTarget.mockRejectedValueOnce(new Error("invalid config"));
+  await expectRefresh(
+    "gateway-unreachable",
+    "Warning: Model auth changes were saved, but the configured Gateway could not be identified or refreshed. Apply the auth change on the Gateway host, or restart it there.",
+  );
+  expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
 });

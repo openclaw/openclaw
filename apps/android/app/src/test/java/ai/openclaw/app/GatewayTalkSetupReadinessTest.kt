@@ -10,36 +10,27 @@ import org.junit.Test
 
 class GatewayTalkSetupReadinessTest {
   @Test
-  fun targetTitlesStayNestedLocalizedPresentation() {
-    val targets =
+  fun realtimeIssuesKeepExistingLocalizedTemplates() {
+    val title = NativeText.Resource(source = "Realtime Talk", formatArgs = emptyList())
+    val issueCases =
       listOf(
-        GatewayTalkSetupTarget.REALTIME_TALK to "Realtime Talk",
-        GatewayTalkSetupTarget.DICTATION to "Dictation",
+        GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.GroupMissing) to "Gateway did not return \${issue.target.title} setup",
+        GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.NoProvider) to
+          "No \${issue.target.title} provider is configured on the Gateway",
+        GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.MissingReadiness) to
+          "Gateway did not return \${issue.target.title} readiness",
+        GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.ConfigureProvider) to
+          "Configure a \${issue.target.title} provider on the Gateway",
+        GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.MissingActiveProvider) to
+          "Gateway did not identify the active \${issue.target.title} provider",
+        GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.UnsupportedProvider) to
+          "Choose a supported \${issue.target.title} provider on the Gateway",
       )
-
-    for ((target, source) in targets) {
-      val title = NativeText.Resource(source = source, formatArgs = emptyList())
-      assertEquals(title, target.title)
-      val issueCases =
-        listOf(
-          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.GroupMissing, target) to "Gateway did not return \${issue.target.title} setup",
-          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.NoProvider, target) to
-            "No \${issue.target.title} provider is configured on the Gateway",
-          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.MissingReadiness, target) to
-            "Gateway did not return \${issue.target.title} readiness",
-          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.ConfigureProvider, target) to
-            "Configure a \${issue.target.title} provider on the Gateway",
-          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.MissingActiveProvider, target) to
-            "Gateway did not identify the active \${issue.target.title} provider",
-          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.UnsupportedProvider, target) to
-            "Choose a supported \${issue.target.title} provider on the Gateway",
-        )
-      for ((issue, template) in issueCases) {
-        assertEquals(
-          NativeText.Resource(source = template, formatArgs = listOf(title)),
-          gatewayTalkSetupIssueDescriptionText(issue),
-        )
-      }
+    for ((issue, template) in issueCases) {
+      assertEquals(
+        NativeText.Resource(source = template, formatArgs = listOf(title)),
+        gatewayTalkSetupIssueDescriptionText(issue),
+      )
     }
   }
 
@@ -61,7 +52,6 @@ class GatewayTalkSetupReadinessTest {
       ),
       gatewayTalkSetupIssueDescriptionText(
         GatewayTalkSetupIssue.UnknownProvider(
-          target = GatewayTalkSetupTarget.REALTIME_TALK,
           providerId = "future-provider",
         ),
       ),
@@ -78,206 +68,95 @@ class GatewayTalkSetupReadinessTest {
   }
 
   @Test
-  fun mixedProviderStatesRemainDistinct() {
+  fun unconfiguredRealtimeProviderRetainsItsIdentity() {
     val readiness =
       parseGatewayTalkSetupReadiness(
         catalog(
           realtime = providerGroup(id = "openai", label = "OpenAI Realtime", configured = false),
-          transcription = providerGroup(id = "deepgram", label = "Deepgram", configured = true),
         ),
       )
 
     val realtime = readiness.realtimeTalk as GatewayTalkSetupState.NeedsSetup
-    val dictation = readiness.dictation as GatewayTalkSetupState.Ready
     assertEquals("OpenAI Realtime", realtime.provider?.label)
-    assertEquals("Deepgram", dictation.provider.label)
   }
 
   @Test
-  fun browserOnlyModelsSkipAndroidRealtimeRelay() {
-    assertFalse(isAndroidRealtimeRelayModelSupported("gpt-live"))
-    assertFalse(isAndroidRealtimeRelayModelSupported(" GPT-LIVE-future "))
-    assertTrue(isAndroidRealtimeRelayModelSupported("gpt-realtime-2.1"))
-    assertTrue(isAndroidRealtimeRelayModelSupported("gpt-liveness"))
-    assertTrue(isAndroidRealtimeRelayModelSupported(null))
-  }
-
-  @Test
-  fun activeProviderAliasSelectsCanonicalCatalogEntry() {
-    val readiness =
+  fun aliasesResolveButCanonicalProviderIdsWinCollisions() {
+    val alias =
       parseGatewayTalkSetupReadiness(
         catalog(
-          realtime = providerGroup(id = "google", label = "Google Live", configured = true),
-          transcription =
-            providerGroup(
-              id = "openai",
-              label = "OpenAI Realtime Transcription",
-              configured = true,
-              activeProvider = "openai-realtime",
-              aliases = listOf("openai-realtime"),
-            ),
+          realtime = providerGroup(id = "openai", label = "OpenAI Realtime", configured = true, activeProvider = "openai-realtime", aliases = listOf("openai-realtime")),
         ),
       )
-
-    val dictation = readiness.dictation as GatewayTalkSetupState.Ready
-    assertEquals("openai", dictation.provider.id)
-  }
-
-  @Test
-  fun canonicalProviderIdWinsOverAnEarlierAliasCollision() {
-    val readiness =
-      parseGatewayTalkSetupReadiness(
-        json(
-          """
-          {
-            "realtime": {
-              "ready": true,
-              "activeProvider": "google",
-              "providers": [
-                {"id":"bridge","aliases":["google"],"label":"Bridge","configured":false},
-                {"id":"google","label":"Google Live","configured":true}
-              ]
-            },
-            "transcription": ${providerGroup(id = "deepgram", label = "Deepgram", configured = true)}
-          }
-          """.trimIndent(),
-        ),
-      )
-
-    val realtime = readiness.realtimeTalk as GatewayTalkSetupState.Ready
-    assertEquals("google", realtime.provider.id)
-  }
-
-  @Test
-  fun missingActiveProviderStaysUnverifiedInsteadOfGuessingFromRowOrder() {
-    val readiness =
-      parseGatewayTalkSetupReadiness(
-        json(
-          """
-          {
-            "realtime": {
-              "providers": [
-                {"id":"google","label":"Google Live","configured":false},
-                {"id":"openai","label":"OpenAI Realtime","configured":true}
-              ]
-            },
-            "transcription": ${providerGroup(id = "deepgram", label = "Deepgram", configured = true)}
-          }
-          """.trimIndent(),
-        ),
-      )
-
-    assertTrue(readiness.realtimeTalk is GatewayTalkSetupState.Unverified)
-    assertTrue(!readiness.realtimeTalk.requiresSetup)
-  }
-
-  @Test
-  fun authoritativeUnconfiguredProvidersRequireSetupWithoutAnActiveProvider() {
-    val readiness =
+    assertEquals("openai", (alias.realtimeTalk as GatewayTalkSetupState.Ready).provider.id)
+    val canonical =
       parseGatewayTalkSetupReadiness(
         catalog(
-          realtime =
-            providerGroup(
-              id = "openai",
-              label = "OpenAI Realtime",
-              configured = false,
-              activeProvider = null,
-              ready = false,
-            ),
-          transcription = providerGroup(id = "deepgram", label = "Deepgram", configured = true),
+          realtime = """{"ready":true,"activeProvider":"google","providers":[{"id":"bridge","aliases":["google"],"label":"Bridge","configured":false},{"id":"google","label":"Google Live","configured":true}]}""",
         ),
       )
-
-    assertTrue(readiness.realtimeTalk is GatewayTalkSetupState.NeedsSetup)
-    assertTrue(readiness.realtimeTalk.requiresSetup)
+    assertEquals("google", (canonical.realtimeTalk as GatewayTalkSetupState.Ready).provider.id)
   }
 
   @Test
-  fun olderCatalogRowStateStaysUnverified() {
-    val readiness =
-      parseGatewayTalkSetupReadiness(
-        catalog(
-          realtime =
-            providerGroup(
-              id = "openai",
-              label = "OpenAI Realtime",
-              configured = false,
-              ready = null,
-            ),
-          transcription = providerGroup(id = "deepgram", label = "Deepgram", configured = true),
-        ),
+  fun catalogAuthorityDeterminesWhetherSetupIsRequired() {
+    val cases =
+      listOf(
+        Triple("""{"providers":[{"id":"google","label":"Google Live","configured":false},{"id":"openai","label":"OpenAI Realtime","configured":true}]}""", false, null),
+        Triple(providerGroup(id = "openai", label = "OpenAI Realtime", configured = false, activeProvider = null, ready = false), true, null),
+        Triple(providerGroup(id = "openai", label = "OpenAI Realtime", configured = false, ready = null), false, null),
+        Triple(providerGroup(id = "google", label = "Google Live", configured = true, activeProvider = "future-alias"), false, null),
+        Triple(providerGroup(id = "google", label = "Google Live", configured = true, activeProvider = "removed-provider", ready = false), true, "Choose a supported Realtime Talk provider on the Gateway"),
+        Triple("""{"activeProvider":"custom-id","providers":[]}""", false, null),
       )
-
-    assertTrue(readiness.realtimeTalk is GatewayTalkSetupState.Unverified)
-    assertTrue(!readiness.realtimeTalk.requiresSetup)
+    for ((group, requiresSetup, description) in cases) {
+      val state = parseGatewayTalkSetupReadiness(catalog(realtime = group)).realtimeTalk
+      assertEquals(group, requiresSetup, state.requiresSetup)
+      assertTrue(group, if (requiresSetup) state is GatewayTalkSetupState.NeedsSetup else state is GatewayTalkSetupState.Unverified)
+      if (description != null) assertEquals(description, gatewayTalkSetupDescription(state))
+    }
   }
 
   @Test
-  fun unknownActiveProviderStaysUnverifiedInsteadOfBlockingStartup() {
-    val readiness =
-      parseGatewayTalkSetupReadiness(
-        catalog(
-          realtime = providerGroup(id = "google", label = "Google Live", configured = true, activeProvider = "future-alias"),
-          transcription = providerGroup(id = "deepgram", label = "Deepgram", configured = true),
-        ),
+  fun launchAdmissionUsesTheResolvedTalkRouteRatherThanTheRealtimeCatalog() {
+    val catalog = unconfiguredRealtimeCatalog()
+    val configs =
+      listOf(
+        """{"talk":{"provider":"system","realtime":{"mode":"stt-tts","brain":"agent-consult"},"providers":{"system":{}}}}""" to TalkLaunchRoute.Native,
+        """{"talk":{"realtime":{"model":"gpt-live-1"}}}""" to TalkLaunchRoute.Native,
+        """{"talk":{"realtime":{"provider":"openai"}},"clientHints":{"realtime":{"gatewayRelaySupported":false}}}""" to TalkLaunchRoute.Native,
+        """{"talk":{"realtime":{"mode":"realtime"}},"clientHints":{"realtime":{"gatewayRelaySupported":true}}}""" to TalkLaunchRoute.Realtime,
+        null to null,
       )
-
-    assertTrue(readiness.realtimeTalk is GatewayTalkSetupState.Unverified)
-    assertTrue(!readiness.realtimeTalk.requiresSetup)
+    for ((config, route) in configs) {
+      val readiness = talkSetupReadinessFromGateway(catalog, config?.let(::json))
+      assertTrue(readiness.talkRouteKnown)
+      assertTrue(readiness.realtimeTalk.requiresSetup)
+      assertEquals(route, readiness.talkLaunchRoute)
+      assertEquals(route == TalkLaunchRoute.Realtime, readiness.launch.requiresSetup)
+      if (route == TalkLaunchRoute.Realtime) {
+        val launch = readiness.launch as GatewayTalkSetupState.NeedsSetup
+        assertEquals(GatewayTalkSetupTargetIssue.ConfigureProvider, (launch.issue as GatewayTalkSetupIssue.Targeted).reason)
+      }
+    }
+    val unresolved = parseGatewayTalkSetupReadiness(catalog)
+    assertFalse(unresolved.talkRouteKnown)
+    assertTrue(unresolved.launch.requiresSetup)
   }
 
   @Test
-  fun authoritativeUnknownActiveProviderRequiresSetup() {
-    val readiness =
-      parseGatewayTalkSetupReadiness(
-        catalog(
-          realtime =
-            providerGroup(
-              id = "google",
-              label = "Google Live",
-              configured = true,
-              activeProvider = "removed-provider",
-              ready = false,
-            ),
-          transcription = providerGroup(id = "deepgram", label = "Deepgram", configured = true),
-        ),
-      )
-
-    val realtime = readiness.realtimeTalk as GatewayTalkSetupState.NeedsSetup
-    assertEquals("Choose a supported Realtime Talk provider on the Gateway", gatewayTalkSetupDescription(realtime))
-    assertTrue(readiness.realtimeTalk.requiresSetup)
-  }
-
-  @Test
-  fun unknownActiveProviderWithEmptyRegistryStaysUnverified() {
-    val readiness =
-      parseGatewayTalkSetupReadiness(
-        json(
-          """
-          {
-            "realtime": {"activeProvider":"custom-id","providers":[]},
-            "transcription": ${providerGroup(id = "deepgram", label = "Deepgram", configured = true)}
-          }
-          """.trimIndent(),
-        ),
-      )
-
-    assertTrue(readiness.realtimeTalk is GatewayTalkSetupState.Unverified)
-    assertTrue(!readiness.realtimeTalk.requiresSetup)
-  }
-
-  @Test
-  fun missingCatalogIsUnverifiedForBothActions() {
+  fun missingCatalogIsUnverified() {
     val readiness = parseGatewayTalkSetupReadiness(null)
 
     assertTrue(readiness.realtimeTalk is GatewayTalkSetupState.Unverified)
-    assertTrue(readiness.dictation is GatewayTalkSetupState.Unverified)
   }
 
-  private fun catalog(
-    realtime: String,
-    transcription: String,
-  ) = json("""{"realtime":$realtime,"transcription":$transcription}""")
+  private fun catalog(realtime: String) = json("""{"realtime":$realtime}""")
+
+  private fun unconfiguredRealtimeCatalog() =
+    catalog(
+      realtime = providerGroup(id = "openai", label = "OpenAI Realtime", configured = false, activeProvider = null, ready = false),
+    )
 
   private fun providerGroup(
     id: String,

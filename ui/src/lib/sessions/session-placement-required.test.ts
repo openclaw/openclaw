@@ -15,6 +15,7 @@ const catalog = {
 };
 const params = {
   key: "agent:main:required",
+  sessionId: "physical-startup-session",
   agentId: "main",
   target,
   message: "Inspect workspace",
@@ -36,6 +37,29 @@ function clientWith(
 afterEach(() => {
   vi.useRealTimers();
   sessionStorage.clear();
+});
+
+it("reads active placement while required policy is pending, but waits for approval to send", async () => {
+  const policy = createDeferred<typeof catalog>();
+  const active = createDeferred<unknown>();
+  const request = vi.fn(async (method: string) =>
+    method === "agents.list"
+      ? policy.promise
+      : method === "sessions.describe"
+        ? active.promise
+        : { runId: "first-turn", status: "started" },
+  );
+  const pending = startSessionPlacementInitialTurn(clientWith(request), params, () => true);
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "agents.list",
+    "sessions.describe",
+  ]);
+  active.resolve({ session: { placement: { state: "active" } } });
+  await Promise.resolve();
+  expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+  policy.resolve(catalog);
+  expect(await pending).toEqual({ status: "started", messageId: "first-turn" });
+  expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
 });
 
 it("waits for server-started placement and sends exactly once without dispatch", async () => {
@@ -61,7 +85,7 @@ it("waits for server-started placement and sends exactly once without dispatch",
     "agents.list",
     "sessions.describe",
     "sessions.describe",
-    "sessions.send",
+    "chat.send",
   ]);
 });
 
@@ -85,7 +109,7 @@ it.each(["failed", "reclaimed", "local"])(
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "agents.list",
       "sessions.describe",
-      "sessions.send",
+      "chat.send",
     ]);
   },
 );
@@ -93,17 +117,25 @@ it.each(["failed", "reclaimed", "local"])(
 it.each([undefined, "replacement"])(
   "does not send or dispatch when the required policy changes to %s",
   async (requiredProfile) => {
-    const request = vi.fn(async () => ({
-      sessionPlacement: {
-        requiredProfile: requiredProfile
-          ? { id: requiredProfile, providerId: "device" }
-          : undefined,
-      },
-    }));
+    const placement = createDeferred<unknown>();
+    const request = vi.fn(async (method: string) =>
+      method === "sessions.describe"
+        ? placement.promise
+        : {
+            sessionPlacement: {
+              requiredProfile: requiredProfile
+                ? { id: requiredProfile, providerId: "device" }
+                : undefined,
+            },
+          },
+    );
     expect(
       await startSessionPlacementInitialTurn(clientWith(request), params, () => true),
     ).toMatchObject({ status: "dispatch-rejected" });
-    expect(request.mock.calls).toHaveLength(1);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "agents.list",
+      "sessions.describe",
+    ]);
   },
 );
 
@@ -133,9 +165,10 @@ it("Stop fences a late active placement reply and retains the existing reclaim o
   ]);
 });
 
-it("restores a required target and reconciles uncertain delivery without a duplicate send", async () => {
+it("restores a required first input by resending its original key without placement changes", async () => {
   const recovery: SessionPlacementRecovery = {
     sessionKey: params.key,
+    sessionId: params.sessionId,
     agentId: params.agentId,
     target,
     message: params.message,
@@ -151,7 +184,7 @@ it("restores a required target and reconciles uncertain delivery without a dupli
     recovery.sessionKey,
   )!;
   expect(restored.target).toEqual(target);
-  const request = vi.fn(async (_method: string) => ({ messages: [] }));
+  const request = vi.fn(async (_method: string) => ({ runId: params.messageId, status: "ok" }));
   const result = await advanceSessionPlacementDraft({
     ...clientWith(request),
     recovery: restored,
@@ -162,8 +195,13 @@ it("restores a required target and reconciles uncertain delivery without a dupli
     setRecoveryPhase: vi.fn(),
     cleanupOnCancellation: () => false,
   });
-  expect(result).toMatchObject({ status: "paused", recovery: { reason: "unconfirmed", target } });
-  expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
+  expect(result).toEqual({ status: "started", messageId: params.messageId });
+  expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.send"]);
+  expect(request).toHaveBeenCalledWith(
+    "chat.send",
+    expect.objectContaining({ idempotencyKey: params.messageId, message: params.message }),
+    expect.anything(),
+  );
 });
 
 it("retains an explicit native runtime while a required create is restored", () => {

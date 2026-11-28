@@ -96,8 +96,9 @@ vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
   return {
     ...actual,
-    callGatewayFromCli: (...args: Parameters<typeof actual.callGatewayFromCli>) =>
-      callGatewayFromCli(...args),
+    callGatewayFromCliWithTransport: (
+      ...args: Parameters<typeof actual.callGatewayFromCliWithTransport>
+    ) => callGatewayFromCli(...args),
   };
 });
 
@@ -169,7 +170,7 @@ export function captureStderrWrites() {
 export function useLogsCliTestHarness() {
   beforeEach(() => {
     readSystemdServiceRuntime.mockResolvedValue({ status: "stopped" });
-    execFileUtf8Tail.mockResolvedValue({ stdout: "", stderr: "", code: 1, truncated: false });
+    execFileUtf8Tail.mockResolvedValue({ stdout: "", code: 1, truncated: false });
   });
 
   afterEach(() => {

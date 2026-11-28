@@ -4,15 +4,17 @@ export {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
   isSubagentRunLive,
   isSubagentSessionRunActive,
   listSubagentRunsForRequester,
   resolveRequesterForChildSession,
-  resolveSubagentSessionStatus,
   shouldIgnorePostCompletionAnnounceForSession,
 } from "./subagent-registry-read.js";
+export {
+  getSubagentSessionRuntimeMs,
+  getSubagentSessionStartedAt,
+  resolveSubagentSessionStatus,
+} from "./subagent-session-metrics.js";
 
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
@@ -38,14 +40,6 @@ export async function getSubagentRunByChildSessionKey(
 }
 
 type RegistryTestApi = {
-  addSubagentRunForTests(entry: SubagentRunRecord): Promise<void>;
-  finalizeInterruptedSubagentRun(params: {
-    runId: string;
-    expectedEntry?: SubagentRunRecord;
-    error: string;
-    endedAt?: number;
-    suppressSessionEffects?: boolean;
-  }): Promise<number>;
   releaseSubagentRun(runId: string): Promise<void>;
   resetSubagentRegistryForTests(opts?: { persist?: boolean }): Promise<void>;
   testing: {
@@ -68,25 +62,29 @@ function createRegistryRunFixture(entry: SubagentRunRecordOverrides): SubagentRu
   const canonical = createSubagentRunRecord(entry);
   const requesterAgentId =
     entry.requesterAgentId ?? parseAgentSessionKey(canonical.requesterSessionKey)?.agentId;
-  if (!Object.hasOwn(entry, "requesterStorePath") && requesterAgentId) {
-    canonical.requesterStorePath = resolvePhysicalSessionStorePath({
-      sessionKey: canonical.requesterSessionKey,
-      agentId: requesterAgentId,
-    });
-  }
   const controllerKey = canonical.controllerSessionKey ?? canonical.requesterSessionKey;
-  const controllerAgentId = parseAgentSessionKey(controllerKey)?.agentId ?? requesterAgentId;
-  if (!Object.hasOwn(entry, "controllerStorePath") && controllerAgentId) {
-    canonical.controllerStorePath = resolvePhysicalSessionStorePath({
-      sessionKey: controllerKey,
-      agentId: controllerAgentId,
-    });
+  for (const [field, sessionKey, agentId] of [
+    ["requesterStorePath", canonical.requesterSessionKey, requesterAgentId],
+    [
+      "controllerStorePath",
+      controllerKey,
+      parseAgentSessionKey(controllerKey)?.agentId ?? requesterAgentId,
+    ],
+  ] as const) {
+    if (!Object.hasOwn(entry, field) && agentId) {
+      canonical[field] = resolvePhysicalSessionStorePath({ sessionKey, agentId });
+    }
   }
   return canonical;
 }
 
-export function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {
-  return getRegistryTestApi().addSubagentRunForTests(createRegistryRunFixture(entry));
+export async function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {
+  const canonical = createRegistryRunFixture(entry);
+  const { mutateSubagentRuns } = await import("./subagent-registry-persistence.js");
+  await mutateSubagentRuns([canonical.runId], () => ({
+    value: undefined,
+    postimages: new Map([[canonical.runId, canonical]]),
+  }));
 }
 
 /** Read-only fixtures install canonical immutable rows without durable write admission. */
@@ -97,15 +95,6 @@ export function seedSubagentRunForReadTest(entry: SubagentRunRecordOverrides): v
 
 export function releaseSubagentRun(runId: string) {
   return getRegistryTestApi().releaseSubagentRun(runId);
-}
-
-export async function finalizeInterruptedSubagentRun(params: {
-  runId: string;
-  expectedEntry?: SubagentRunRecord;
-  error: string;
-  endedAt?: number;
-}) {
-  return await getRegistryTestApi().finalizeInterruptedSubagentRun(params);
 }
 
 export const testing = {

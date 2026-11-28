@@ -5,8 +5,45 @@ import { truncateToolSchemaDepth, wasToolSchemaTruncated } from "./tool-schema-d
 import { normalizeToolSchema } from "./tool-schema-normalization.js";
 
 /** Repairs recoverable OpenAI tool-schema shapes before canonical normalization. */
-export function normalizeOpenAIStrictCompatSchema(schema: unknown): TSchema {
-  return normalizeToolSchema(schema, "compat") as TSchema;
+export function normalizeOpenAIStrictCompatSchema(schema: unknown, toolName?: string): TSchema {
+  return normalizeToolSchema(schema, "compat", toolName) as TSchema;
+}
+
+/** Finds nested open dictionaries whose keys compatibility normalization closes. */
+export function findCompatClosedObjectPaths(schema: unknown, path: string): string[] {
+  return collectCompatClosedObjectPaths(truncateToolSchemaDepth(schema), path);
+}
+
+function collectCompatClosedObjectPaths(schema: unknown, path: string, nested = false): string[] {
+  if (Array.isArray(schema)) {
+    return schema.flatMap((entry, index) =>
+      collectCompatClosedObjectPaths(entry, `${path}[${index}]`, true),
+    );
+  }
+  if (!isRecord(schema)) {
+    return [];
+  }
+  const violations =
+    nested &&
+    schema.type === "object" &&
+    !("additionalProperties" in schema) &&
+    (!isRecord(schema.patternProperties) || Object.keys(schema.patternProperties).length === 0) &&
+    (!("properties" in schema) ||
+      (isRecord(schema.properties) && Object.keys(schema.properties).length === 0))
+      ? [path]
+      : [];
+  for (const key of SCHEMA_MAP_KEYS) {
+    const map = schema[key];
+    if (isRecord(map)) {
+      for (const [name, child] of Object.entries(map)) {
+        violations.push(...collectCompatClosedObjectPaths(child, `${path}.${key}.${name}`, true));
+      }
+    }
+  }
+  for (const key of SCHEMA_NESTED_KEYS) {
+    violations.push(...collectCompatClosedObjectPaths(schema[key], `${path}.${key}`, true));
+  }
+  return violations;
 }
 
 /**
@@ -61,12 +98,19 @@ function collectStrictSchemaViolations(
 
   const record = schema as Record<string, unknown>;
   const violations: string[] = [];
+  // Unions are outside strict mode's subset (a branch can lack the type it requires); a type
+  // list such as ["string", "null"] is accepted.
   for (const key of ["anyOf", "oneOf", "allOf"] as const) {
     if (key in record) {
       violations.push(`${path}.${key}`);
     }
   }
-  if (Array.isArray(record.type)) {
+  if (Array.isArray(record.type) && !record.type.every((type) => typeof type === "string")) {
+    violations.push(`${path}.type`);
+  }
+  // Strict mode needs every value schema typed; an untyped node ({} or annotations only) is
+  // valid JSON Schema but outside the strict subset.
+  if (!("type" in record) && !("$ref" in record) && !("enum" in record) && !("const" in record)) {
     violations.push(`${path}.type`);
   }
   if (typeof record.pattern === "string" && hasRegexLookaround(record.pattern)) {
@@ -75,7 +119,13 @@ function collectStrictSchemaViolations(
 
   const properties = isRecord(record.properties) ? record.properties : undefined;
 
-  if (record.type === "object") {
+  // A nullable key is ["object", "null"], and a branch with properties but no type is an object
+  // too; both follow the object rules.
+  if (
+    record.type === "object" ||
+    (Array.isArray(record.type) && record.type.includes("object")) ||
+    (record.type === undefined && properties !== undefined)
+  ) {
     if (record.additionalProperties !== false) {
       violations.push(`${path}.additionalProperties`);
     }

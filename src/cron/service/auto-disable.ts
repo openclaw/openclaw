@@ -1,82 +1,56 @@
-/** Shared state and owner-notification policy for cron auto-disable transitions. */
+/** Shared state and owner notification for a cron job that cannot run again as written. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { cronFailureDetailLines } from "../failure-notification-text.js";
-import { isSystemMonitorDeclaration } from "../system-owned-declaration.js";
-import type { CronJob, CronJobState } from "../types.js";
+import type { CronJob } from "../types.js";
 import { cronNotificationJob } from "./notification-intents.js";
 import type { DeferredCronNotifications } from "./state.js";
 
-type CronAutoDisableReason = NonNullable<CronJobState["autoDisabled"]>["reason"];
-
 /**
- * Run failures get more room than schedule errors (10 vs. 3) because provider
- * and network errors are often transient, and restart-interrupted runs count too.
+ * Records one canonical auto-disable fact and queues its owning-agent notification.
+ * `schedule-errors`: the schedule cannot produce a next run. `account-unavailable`: the job's
+ * recorded account was removed, signed out or replaced, and nothing else could run it.
  */
-const MAX_CONSECUTIVE_RUN_FAILURES = 10;
-
-function autoDisableReasonLabel(reason: CronAutoDisableReason): string {
-  return reason === "consecutive-failures" ? "run failures" : "schedule errors";
-}
-
-/** Records one canonical auto-disable fact and queues its owning-agent notification. */
 export function autoDisableCronJob(params: {
   job: CronJob;
-  reason: CronAutoDisableReason;
   atMs: number;
   consecutiveErrors: number;
   deferredNotifications: DeferredCronNotifications;
-  /** A terminal one-shot is already disabled when its notification is finalized. */
-  terminalOneShot?: boolean;
-  notify?: boolean;
-}): boolean {
+  reason?: "schedule-errors" | "account-unavailable";
+  /** Provider sign-in command for `account-unavailable`, when the provider is known. */
+  signInCommand?: string;
+  /**
+   * Enablement the run was admitted with. A run outcome can disable a finished one-shot before
+   * this records why; an operator's own disable still leaves the job untouched.
+   */
+  enabledAtAdmission?: boolean;
+}): void {
   const { job } = params;
-  // Gateway convergence owns these jobs; clients cannot re-enable them, so failures stay visible while they retry on schedule.
-  if (isSystemMonitorDeclaration(job.declarationKey)) {
-    return false;
+  if (!(params.enabledAtAdmission ?? job.enabled) || job.state.autoDisabled) {
+    return;
   }
-  if ((!job.enabled && !params.terminalOneShot) || job.state.autoDisabled) {
-    return false;
-  }
-
+  const reason = params.reason ?? "schedule-errors";
   job.enabled = false;
   job.state.nextRunAtMs = undefined;
   job.state.autoDisabled = {
-    reason: params.reason,
+    reason,
     atMs: params.atMs,
     consecutiveErrors: params.consecutiveErrors,
   };
-
-  if (params.notify === false) {
-    return true;
-  }
   const name = truncateUtf16Safe((job.name || job.id).replace(/\s+/g, " ").trim(), 120);
-  const errorReason =
-    params.reason === "consecutive-failures" ? job.state.lastErrorReason : undefined;
-  const text = [
-    `⚠️ Automation "${name}" was auto-disabled after ${params.consecutiveErrors} consecutive ${autoDisableReasonLabel(params.reason)}.`,
-    ...cronFailureDetailLines(errorReason),
-    `Fix the underlying cause, then run \`openclaw automations enable ${job.id}\` to re-enable it.`,
-  ].join("\n");
-  params.deferredNotifications.push({ kind: "auto-disabled", job: cronNotificationJob(job), text });
-  return true;
-}
-
-/** Auto-disables only time-based recurring jobs once their run-error streak reaches the limit. */
-export function maybeAutoDisableCronJobAfterRunFailure(params: {
-  job: CronJob;
-  atMs: number;
-  deferredNotifications: DeferredCronNotifications;
-}): boolean {
-  const consecutiveErrors = params.job.state.consecutiveErrors ?? 0;
-  if (
-    (params.job.schedule.kind !== "cron" && params.job.schedule.kind !== "every") ||
-    consecutiveErrors < MAX_CONSECUTIVE_RUN_FAILURES
-  ) {
-    return false;
-  }
-  return autoDisableCronJob({
-    ...params,
-    reason: "consecutive-failures",
-    consecutiveErrors,
+  params.deferredNotifications.push({
+    kind: "auto-disabled",
+    job: cronNotificationJob(job),
+    // The refusal in automation history names the account; the notice names only the repair.
+    text: (reason === "account-unavailable"
+      ? [
+          `⚠️ Automation "${name}" was auto-disabled: the account it runs on was removed, signed out or replaced since the automation recorded it.`,
+          `Sign in again if needed${params.signInCommand ? ` (\`${params.signInCommand}\`)` : ""}, then record the account with \`openclaw automations edit ${job.id} --model <provider/model>@<profileId>\` (list accounts: \`openclaw gateway call models.authStatus\`). To use a key in the environment or provider config instead: \`openclaw automations edit ${job.id} --model <provider/model>\`.`,
+          `Then run \`openclaw automations enable ${job.id}\` to re-enable it.`,
+        ]
+      : [
+          `⚠️ Automation "${name}" was auto-disabled after ${params.consecutiveErrors} consecutive schedule errors.`,
+          "Check automation history for details.",
+          `Fix the underlying cause, then run \`openclaw automations enable ${job.id}\` to re-enable it.`,
+        ]
+    ).join("\n"),
   });
 }

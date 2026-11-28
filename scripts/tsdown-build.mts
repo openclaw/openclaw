@@ -9,6 +9,7 @@ import {
   type SpawnSyncReturns,
 } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "@openclaw/fs-safe/path";
@@ -21,6 +22,7 @@ import {
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
 import { toErrorObject } from "./lib/error-format.mts";
+import { applyLocalTsgoPolicy } from "./lib/local-check-runtime.mts";
 import {
   inspectManagedProcessGroup,
   signalExitCode,
@@ -29,7 +31,7 @@ import {
 } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { assertRealOutputRoot, controlUiBuildSiblingPid } from "./lib/output-root-guard.mjs";
-import { readProcessMemoryCapacity, type MemoryLimitParams } from "./lib/process-memory.mts";
+import { readProcessCgroupV2Snapshot, readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { sanitizeBundlerHelperDtsExportTree } from "./lib/sanitize-bundler-helper-dts-exports.mts";
 import {
   TSDOWN_DECLARATION_CONFIG_GROUPS,
@@ -38,6 +40,15 @@ import {
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./lib/tsdown-config-groups.mts";
+import {
+  TSDOWN_MAX_OLD_SPACE_MB_ENV,
+  tsdownBudgetAdmitsParallelNativeWork,
+} from "./lib/tsdown-heap-budget.mts";
+import {
+  describeInsufficientTsdownHeap,
+  resolveTsdownMemoryBudget,
+  type ResolvedMemoryLimitParams,
+} from "./lib/tsdown-memory-admission.mts";
 import {
   TSDOWN_PACKAGE_OUTPUT_ROOTS,
   TSDOWN_PACKAGES_CACHE_INPUT,
@@ -56,11 +67,6 @@ const DEPENDENCY_PATH_MARKERS = ["node_modules/", "openclaw-pnpm-node-modules/"]
 const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
-const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 12288;
-const DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB = 8192;
-export const TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB";
-const DOCKER_TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB";
-const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
 const SERIALIZED_MAIN_CONFIG_GROUPS = [
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -83,35 +89,6 @@ export const TSDOWN_DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
 const SOURCE_DECLARATION_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
 const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
 
-export const TSDOWN_DECLARATION_TOOL_INPUTS = [
-  "package.json",
-  "pnpm-lock.yaml",
-  "tsconfig.json",
-  "scripts/tsdown-build.mts",
-  "scripts/build-all.mts",
-  "scripts/lib/build-artifact-cache.mts",
-  "scripts/lib/dist-artifact-ownership.mts",
-  "scripts/lib/managed-child-process.mts",
-  "scripts/lib/vitest-resource-ownership.mts",
-  "scripts/lib/direct-run.mjs",
-  "scripts/lib/repo-root.mjs",
-  "scripts/lib/local-check-runtime.mts",
-  "scripts/lib/process-memory.mts",
-  "scripts/tsx.mjs",
-  "scripts/lib/tsx-cli-shim.mjs",
-  "scripts/lib/bundled-plugin-build-entries.mjs",
-  "scripts/lib/bundled-plugin-paths.mjs",
-  "scripts/lib/optional-bundled-clusters.mjs",
-  "scripts/lib/plugin-sdk-entries.mts",
-  "scripts/lib/plugin-sdk-entrypoints.json",
-  "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
-  "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
-  "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
-  "scripts/lib/root-package-bundled-plugin-excludes.mjs",
-  "scripts/lib/tsdown-config-groups.mts",
-  "scripts/lib/tsdown-declaration-boundary.mts",
-  "scripts/lib/tsdown-output-roots.mts",
-];
 export { TSDOWN_PACKAGES_CACHE_INPUT };
 export const TSDOWN_UNIFIED_CACHE_ENV = [
   "OPENCLAW_BUILD_PRIVATE_QA",
@@ -125,8 +102,6 @@ type OutputRootParams = {
   pathImpl?: Pick<typeof path, "dirname" | "parse" | "resolve">;
   roots?: string[];
 };
-
-type ResolvedMemoryLimitParams = MemoryLimitParams & { resolvedMaxOldSpaceMb?: number };
 
 type TsdownBuildParams = ResolvedMemoryLimitParams & {
   args?: string[];
@@ -618,99 +593,7 @@ function parseNonNegativeIntegerEnv(value: string | undefined, name: string) {
   return parsed;
 }
 
-function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}) {
-  if (params.resolvedMaxOldSpaceMb !== undefined) {
-    return { maxOldSpaceMb: params.resolvedMaxOldSpaceMb, unresolvedCgroupMemory: false };
-  }
-  const defaultMaxOldSpaceMb =
-    (params.platform ?? process.platform) === "win32"
-      ? DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB
-      : DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
-  const envOverride = parsePositiveIntegerEnv(
-    (params.env ?? process.env)[TSDOWN_MAX_OLD_SPACE_MB_ENV],
-    TSDOWN_MAX_OLD_SPACE_MB_ENV,
-  );
-  if (envOverride !== null) {
-    return { maxOldSpaceMb: envOverride, unresolvedCgroupMemory: false };
-  }
-  const { limitBytes, unresolved } = readProcessMemoryCapacity(params);
-  if (unresolved) {
-    return { maxOldSpaceMb: 1, unresolvedCgroupMemory: true };
-  }
-  if (limitBytes === null) {
-    return { maxOldSpaceMb: defaultMaxOldSpaceMb, unresolvedCgroupMemory: false };
-  }
-
-  const limitMb = Math.floor(limitBytes / 1024 / 1024);
-  // Never exceed the budget just discovered: a floor applied on top of a real limit produces
-  // a heap the cgroup cannot honour, which is an OOM kill rather than a smaller build.
-  const cgroupCap = Math.max(1, limitMb - TSDOWN_CGROUP_MEMORY_HEADROOM_MB);
-  return {
-    maxOldSpaceMb: Math.min(defaultMaxOldSpaceMb, cgroupCap),
-    unresolvedCgroupMemory: false,
-  };
-}
-
-/**
- * Measured against this repo's former eleven-invocation build inside real cgroups.
- * The current four-invocation build retains the runtime graph that sets this floor:
- * a 5GiB slice resolves this heap, completes, and peaks at 4730MiB. A 4GiB slice (3328MB heap)
- * and a 2816MiB slice (2048MB heap) are both killed in the third, unified-runtime invocation,
- * which also runs when declarations are disabled. Roughly 380MiB of the peak is rolldown, a
- * native addon which --max-old-space-size does not govern at all.
- */
-const MEASURED_MIN_TSDOWN_HEAP_MB = 4352;
-
-/**
- * Describes a host that cannot fit the build, or null when it can. Reported before any
- * output is cleaned: a host that cannot rebuild must not also lose the build it already
- * has. Fatal by default because continuing either aborts partway through the invocation
- * list or, when the heap outruns a container limit, thrashes at the ceiling instead of
- * failing, which starves every other process on the machine.
- */
-export function describeInsufficientTsdownHeap(
-  params: ResolvedMemoryLimitParams = {},
-  budget = resolveTsdownMemoryBudget(params),
-) {
-  const { maxOldSpaceMb } = budget;
-  if (maxOldSpaceMb >= MEASURED_MIN_TSDOWN_HEAP_MB) {
-    return null;
-  }
-  const env = params.env ?? process.env;
-  const explicitHeapMb = parsePositiveIntegerEnv(
-    env[TSDOWN_MAX_OLD_SPACE_MB_ENV],
-    TSDOWN_MAX_OLD_SPACE_MB_ENV,
-  );
-  const heapOverrideEnv = Object.hasOwn(env, "OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS")
-    ? DOCKER_TSDOWN_MAX_OLD_SPACE_MB_ENV
-    : TSDOWN_MAX_OLD_SPACE_MB_ENV;
-  const fatal = explicitHeapMb === null;
-  const outcome = fatal
-    ? [
-        "Stopping before any build output is removed. Pick one:",
-        budget.unresolvedCgroupMemory
-          ? "  - run the build where the process cgroup limit is visible"
-          : "  - give this machine or container more memory",
-        `  - set ${heapOverrideEnv}=<MB> to explicitly attempt the build anyway`,
-      ]
-    : [
-        `Continuing because ${heapOverrideEnv} explicitly requests ${explicitHeapMb}MB. Existing build output will now be cleaned; the build may stall or fail.`,
-      ];
-  return {
-    fatal,
-    message: [
-      budget.unresolvedCgroupMemory
-        ? "[tsdown-build] The process memory limit is not visible through this cgroup mount namespace, so OpenClaw cannot choose a safe default heap."
-        : `[tsdown-build] The resolved OpenClaw build heap is ${maxOldSpaceMb}MB, ` +
-          `and a full build needs ${MEASURED_MIN_TSDOWN_HEAP_MB}MB, peaking near 4.7GB once rolldown's ` +
-          `native allocations are counted; those are not covered by --max-old-space-size.`,
-      ...outcome,
-    ].join("\n"),
-  };
-}
-
-function normalizeTsdownNodeOptions(nodeOptions: string, params: ResolvedMemoryLimitParams = {}) {
-  const { maxOldSpaceMb } = resolveTsdownMemoryBudget(params);
+function normalizeTsdownNodeOptions(nodeOptions: string, maxOldSpaceMb: number) {
   const parts = nodeOptions.trim().split(/\s+/u).filter(Boolean);
   const normalized: string[] = [];
   let foundMaxOldSpaceSize = false;
@@ -752,9 +635,18 @@ function resolveTsdownEnv(
   params: ResolvedMemoryLimitParams = {},
 ): NodeJS.ProcessEnv {
   const nodeOptions = env.NODE_OPTIONS?.trim() ?? "";
+  const budget = resolveTsdownMemoryBudget(params);
+  // The native declaration compiler is Go-based; Node's heap limit does not govern it.
+  const { env: compilerEnv } = applyLocalTsgoPolicy([], env, {
+    logicalCpuCount: os.availableParallelism(),
+    totalMemoryBytes: params.physicalMemoryBytes ?? os.totalmem(),
+    memoryCapacityBytes: budget.capacityBytes,
+  });
   return {
-    ...env,
-    NODE_OPTIONS: normalizeTsdownNodeOptions(nodeOptions, params),
+    ...compilerEnv,
+    NODE_OPTIONS: normalizeTsdownNodeOptions(nodeOptions, budget.maxOldSpaceMb),
+    // Descendants keep the frozen budget, including the native declaration emitter.
+    [TSDOWN_MAX_OLD_SPACE_MB_ENV]: String(budget.maxOldSpaceMb),
   };
 }
 
@@ -771,7 +663,7 @@ function tsdownBuildUsage() {
   ].join("\n");
 }
 
-export function parseTsdownBuildArgs(argv: string[]) {
+function parseTsdownBuildArgs(argv: string[]) {
   if (argv.includes("--help") || argv.includes("-h")) {
     return {
       forwardedArgs: [],
@@ -827,7 +719,11 @@ export function createTsdownOutputScanner(params: { maxCaptureBytes?: number } =
 export function resolveTsdownBuildInvocation(
   params: TsdownBuildParams = {},
 ): TsdownBuildInvocation {
-  const env = resolveTsdownEnv(params.env ?? process.env, params);
+  const budget = resolveTsdownMemoryBudget(params);
+  const env = resolveTsdownEnv(params.env ?? process.env, {
+    ...params,
+    resolvedMemoryBudget: budget,
+  });
   const args = params.args ?? [];
   const forwardedArgs = wrapperOwnsTsdownCleanup(args)
     ? args.filter((arg) => arg !== "--clean" && !arg.startsWith("--clean="))
@@ -836,21 +732,30 @@ export function resolveTsdownBuildInvocation(
     (arg) => arg === "--concurrency" || arg.startsWith("--concurrency="),
   );
   const filters = readForwardedOptions(args, ["--filter", "-F"]);
+  const mainConfig = !args.some(isConfigArg) || selectsMainConfig(args);
   const runtimeOnly =
     !args.includes("--dts") &&
-    (!args.some(isConfigArg) || selectsMainConfig(args)) &&
+    mainConfig &&
     filters.length > 0 &&
     filters.every((filter) => filter === TSDOWN_UNIFIED_CONFIG_GROUP);
+  // Native allocations are outside the JS heap. Keep small runtime builds serial
+  // and declaration graphs serialized, regardless of which build entry point is used.
+  const defaultConcurrency =
+    !runtimeOnly && tsdownDeclarationsEnabled(args, env)
+      ? 1
+      : mainConfig
+        ? tsdownBudgetAdmitsParallelNativeWork(budget.maxOldSpaceMb)
+          ? 2
+          : 1
+        : null;
   const tsdownArgs = [
     "--config-loader",
     "unrun",
     "--logLevel",
     logLevel,
     "--no-clean",
-    // Native declaration children retain entire compiler graphs. Let tsdown own
-    // config admission so preparation and trace drainage cannot overlap unboundedly.
-    ...(!explicitConcurrency && !runtimeOnly && tsdownDeclarationsEnabled(args, env)
-      ? ["--concurrency", "1"]
+    ...(!explicitConcurrency && defaultConcurrency !== null
+      ? ["--concurrency", String(defaultConcurrency)]
       : []),
     ...forwardedArgs,
   ];
@@ -1027,7 +932,7 @@ export function resolveTsdownBuildPlan(params: TsdownBuildParams = {}) {
   const maxOldSpaceMb = budget.maxOldSpaceMb;
   const preparedParams = {
     ...params,
-    resolvedMaxOldSpaceMb: maxOldSpaceMb,
+    resolvedMemoryBudget: budget,
   };
   return {
     env: resolveTsdownEnv(params.env ?? process.env, preparedParams),
@@ -1495,6 +1400,20 @@ async function loadDefaultLiveGatewayDistFence(): Promise<LiveGatewayDistFenceFn
   }
 }
 
+function readParentResidentMemoryBytes(): number | null {
+  if (process.platform !== "linux") {
+    return null;
+  }
+  try {
+    const status = fs.readFileSync(`/proc/${process.ppid}/status`, "utf8");
+    const rss = status.match(/^VmRSS:\s+(\d+)\s+kB$/mu)?.[1];
+    const bytes = rss === undefined ? Number.NaN : Number(rss) * 1024;
+    return Number.isSafeInteger(bytes) ? bytes : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function runTsdownBuild(
   argv: string[] = process.argv.slice(2),
   options: {
@@ -1525,6 +1444,43 @@ export async function runTsdownBuild(
       {
         reportShortfall(shortfall) {
           if (shortfall.fatal) {
+            try {
+              console.error(
+                "[tsdown-build:memory-refusal]",
+                JSON.stringify({
+                  sample: "after-refusal",
+                  memoryCapacity: readProcessMemoryCapacity({}),
+                  rssBytes: process.memoryUsage().rss,
+                  parentRssBytes: readParentResidentMemoryBytes(),
+                  cgroup: readProcessCgroupV2Snapshot({}, { includeMemoryDetails: true })
+                    ?.slice(0, 8)
+                    .map(({ counters }, depth) => {
+                      const current = Number(counters["memory.current"] ?? Number.NaN);
+                      const peak = Number(counters["memory.peak"] ?? Number.NaN);
+                      const max = /^\d+\s*$/u.test(counters["memory.max"] ?? "")
+                        ? Number(counters["memory.max"])
+                        : Number.NaN;
+                      const high = /^\d+\s*$/u.test(counters["memory.high"] ?? "")
+                        ? Number(counters["memory.high"])
+                        : Number.NaN;
+                      const inactiveFile = Number(
+                        counters["memory.stat"]?.match(/^inactive_file\s+(\d+)$/mu)?.[1] ??
+                          Number.NaN,
+                      );
+                      return {
+                        depth,
+                        currentBytes: Number.isSafeInteger(current) ? current : null,
+                        peakBytes: Number.isSafeInteger(peak) ? peak : null,
+                        maxBytes: Number.isSafeInteger(max) ? max : null,
+                        highBytes: Number.isSafeInteger(high) ? high : null,
+                        inactiveFileBytes: Number.isSafeInteger(inactiveFile) ? inactiveFile : null,
+                      };
+                    }),
+                }),
+              );
+            } catch {
+              // Diagnostics must preserve the original admission refusal.
+            }
             console.error(shortfall.message);
           } else {
             console.warn(shortfall.message);

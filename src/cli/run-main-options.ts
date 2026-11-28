@@ -17,20 +17,6 @@ export function findSubcommand(
   );
 }
 
-function shouldOptionConsumeFollowingToken(
-  option: CommanderOption | undefined,
-  token: string,
-  next: string | undefined,
-): boolean {
-  if (!option || token.includes("=")) {
-    return false;
-  }
-  if (option.required) {
-    return true;
-  }
-  return option.optional && isValueToken(next);
-}
-
 export function resolveRootOptionRole(
   program: CommanderCommand,
   remainingArgs: readonly string[],
@@ -53,7 +39,10 @@ export function resolveRootOptionRole(
         // Unknown option surfaces may allow arbitrary flags; keep the value-safe behavior there.
         return "value";
       }
-      pendingValue = shouldOptionConsumeFollowingToken(option, arg, remainingArgs[index + 1]);
+      pendingValue =
+        option !== undefined &&
+        !arg.includes("=") &&
+        (option.required || (option.optional && isValueToken(remainingArgs[index + 1])));
       continue;
     }
     command = findSubcommand(command, arg) ?? command;
@@ -66,6 +55,30 @@ export function resolveRootOptionRole(
   return command !== program && arg !== undefined && findCommandOption(command, arg) !== undefined
     ? "command"
     : "root";
+}
+
+export async function isOfflineSetupExplanation({
+  primary,
+  argv,
+}: {
+  primary: string | null;
+  argv: string[];
+}): Promise<boolean> {
+  if (primary !== "setup") {
+    return false;
+  }
+  const args = argv.slice(2);
+  const positions = args.flatMap((arg, i) =>
+    arg === "--explain-error" || arg.startsWith("--explain-error=") ? [i] : [],
+  );
+  if (positions.length === 0) {
+    return false;
+  }
+  const { Command } = await import("commander");
+  const { registerSetupCommand } = await import("./program/register.setup.js");
+  const program = new Command();
+  registerSetupCommand(program);
+  return positions.some((i) => resolveRootOptionRole(program, args, i) === "command");
 }
 
 export function normalizeRootNoColorArgvForProgram(

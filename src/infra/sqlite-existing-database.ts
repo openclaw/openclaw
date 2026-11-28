@@ -2,7 +2,7 @@ import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { enableNodeSqliteKyselyStatementCache } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
-import { runWithSqliteBusyTimeout, setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import { runWithSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
@@ -78,7 +78,9 @@ export function withExistingSqliteRollbackDatabase<T>(
     throw new Error("Existing SQLite storage is empty.");
   }
   const existing = retained?.database;
-  const reader = existing ?? openNodeSqliteDatabase(pathname, { readOnly: true });
+  const reader =
+    existing ??
+    openNodeSqliteDatabase(pathname, { readOnly: true, timeout: options.busyTimeoutMs });
   if (retained && !retained.database) {
     enableNodeSqliteKyselyStatementCache(reader);
     retained.database = reader;
@@ -110,9 +112,6 @@ export function withExistingSqliteRollbackDatabase<T>(
     }
   };
   try {
-    if (!existing) {
-      setSqliteBusyTimeout(reader, options.busyTimeoutMs);
-    }
     // Disable WAL shared-memory admission before the first pager read. A foreign
     // WAL database cannot acquire an exclusive writer lock through a read-only
     // connection, so SQLite refuses without creating WAL/SHM coordination files.
@@ -136,8 +135,9 @@ export function withExistingSqliteRollbackDatabase<T>(
         throw new Error("Read-only SQLite observation cannot admit a writer.");
       });
     }
-    writer = openNodeSqliteDatabase(resolveExistingSqliteFileUri(pathname));
-    setSqliteBusyTimeout(writer, options.busyTimeoutMs);
+    writer = openNodeSqliteDatabase(resolveExistingSqliteFileUri(pathname), {
+      timeout: options.busyTimeoutMs,
+    });
     const database = writer;
     return operation(database, (write, transactionOptions) => {
       // Waiting while our reader blocks another writer's commit would deadlock.

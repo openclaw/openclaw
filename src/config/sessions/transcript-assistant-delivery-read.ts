@@ -1,6 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AssistantDeliveryTtsFacts, AssistantMessage } from "../../llm/types.js";
-import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
+import {
+  extractAssistantPhaseText,
+  prepareAssistantTranscriptText,
+} from "../../shared/chat-message-content.js";
 import type { LatestTranscriptAssistantText } from "./session-accessor.types.js";
 
 type AssistantDeliveryFacts = NonNullable<AssistantMessage["openclawDelivery"]>;
@@ -18,6 +21,9 @@ function readAssistantDeliveryFacts(value: unknown): AssistantDeliveryFacts | un
     facts.replyToId = value.replyToId;
   } else if (value.replyToCurrent === true) {
     facts.replyToCurrent = true;
+  }
+  if (typeof value.sourceMessageId === "string" && /^[1-9]\d{0,19}$/.test(value.sourceMessageId)) {
+    facts.sourceMessageId = value.sourceMessageId;
   }
   if (Array.isArray(value.mediaUrls)) {
     const mediaUrls = value.mediaUrls.filter(
@@ -80,7 +86,7 @@ export function projectAssistantTranscriptText(
   if (!isRecord(message) || message.role !== "assistant") {
     return undefined;
   }
-  const text = extractAssistantPhaseText(message);
+  const text = prepareAssistantTranscriptText(message, extractAssistantPhaseText(message));
   if (!text?.trim()) {
     return undefined;
   }

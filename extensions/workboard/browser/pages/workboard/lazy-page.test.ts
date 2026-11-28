@@ -1,7 +1,7 @@
 import "../../test/dom.setup.ts";
 import assert from "node:assert/strict";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { ControlUiView } from "openclaw/plugin-sdk/control-ui";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
 import { workboardTestHost } from "../../test/host.setup.ts";
 import { createViewContext } from "../../test/host.ts";
@@ -80,7 +80,7 @@ it("reports reload guidance for import failures and preserves mount failure retr
   pending.reject(failure);
   await pending.promise.catch(() => {});
   expect(host.ui.invalidate).toHaveBeenCalledOnce();
-  expect(() => handle.update?.(context)).toThrow("Check your connection and reload this page.");
+  expect(() => handle.update?.(context)).toThrow("Couldn’t load Workboard. Reload this page.");
   handle.dispose?.();
   const mountFailure = new Error("mount failed");
   load.mockResolvedValue(() => {

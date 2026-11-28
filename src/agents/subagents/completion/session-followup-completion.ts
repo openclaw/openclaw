@@ -6,9 +6,11 @@ import {
   registerAgentEventLifecycleRotationHandler,
 } from "../../../infra/agent-events.js";
 import { getAgentRunLifecycleGeneration } from "../../../infra/agent-run-registry.js";
+import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import { createDeferredCore, type Deferred } from "../../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
+import { isSubagentCompletionCancelled } from "../registry/subagent-control-kill-intent.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import { getFollowupCohortOwner, bindFollowupCohortOwner } from "./session-followup-cohort.js";
@@ -153,20 +155,10 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
   }
   promoteYield(runId: string, entries: readonly SubagentRunRecord[], generation: number) {
     this.assertCurrent();
-    if (
-      this.execution.runId !== runId ||
-      this.terminal ||
-      entries.length === 0 ||
-      entries.some(
-        (entry) =>
-          entry.requesterSessionKey !== this.request.targetSessionKey ||
-          entry.requesterSettleWake?.rearmGeneration !== generation ||
-          entry.requesterSettleWake.requesterYieldBatch !== true,
-      )
-    ) {
+    if (this.execution.runId !== runId || this.terminal || entries.length === 0) {
       throw new Error("Followup yield does not own the committed completion cohort.");
     }
-    this.cohort = { entries: [...entries], generation };
+    this.cohort = { entries, generation };
     for (const entry of entries) {
       bindFollowupCohortOwner(entry, this);
     }
@@ -178,9 +170,10 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
   ): FollowupSuccessor {
     const cohort =
       this.cohort ?? (this.execution.runId === runId ? this.execution.admittedCohort : undefined);
+    // The settle wake offers the cohort's last partition; earlier partitions already settled.
     if (
       !cohort ||
-      cohort.entries.length !== entries.length ||
+      entries.length === 0 ||
       !entries.every((entry) =>
         cohort.entries.some((current) => isSameSubagentRunOwner(current, entry)),
       )
@@ -199,9 +192,7 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
             !entry ||
             getFollowupCohortOwner(entry) !== this ||
             entry.requesterSettleWake?.rearmGeneration !== cohort.generation ||
-            entry.killIntent ||
-            entry.killReconciliation ||
-            entry.suppressCompletionDelivery
+            isSubagentCompletionCancelled(entry)
           );
         })
       ) {
@@ -308,12 +299,16 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
     if (this.signal.aborted) {
       return;
     }
-    this.lifetime.abort(error ?? new Error("Followup completion custody ended."));
+    const reason = error ?? new Error("Followup completion custody ended.");
+    materializeErrorStack(reason);
+    this.lifetime.abort(reason);
     if (state.executions.get(this.execution.runId) === this) {
       state.executions.delete(this.execution.runId);
     }
     this.execution.settled.resolve();
-    this.result.reject(error ?? new Error("Followup completion custody ended."));
+    const rejection = error ?? new Error("Followup completion custody ended.");
+    materializeErrorStack(rejection);
+    this.result.reject(rejection);
     this.request.custody.signal.removeEventListener("abort", this.revoked);
     this.request.custody.release();
   }

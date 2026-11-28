@@ -52,7 +52,12 @@ suite.define(() => {
         };
 
         await streamReasoning(24);
+        // Live reasoning starts as a one-line preview. Opening it keeps the reader's
+        // place; returning to the end resumes following the open thought.
+        await pane.getByRole("button", { name: "Reasoning", exact: true }).click();
         await expect.poll(async () => (await geometry()).scrollHeight).toBeGreaterThan(480);
+        await thread.hover();
+        await page.mouse.wheel(0, 100_000);
         await expect.poll(async () => (await geometry()).distanceFromEnd).toBeLessThanOrEqual(8);
         await streamReasoning(12);
         await expect.poll(async () => (await geometry()).distanceFromEnd).toBeLessThanOrEqual(8);

@@ -1,9 +1,10 @@
 /** @jsxImportSource @solidjs/web */
 import { render } from "@solidjs/web";
 import { defineControlUiPlugin, type ControlUiView } from "openclaw/plugin-sdk/control-ui";
-import { createStore, For } from "solid-js";
+import { createMemo, createSignal, createStore, Errored, For, Loading } from "solid-js";
 import type { ClawRouterPool, ClawRouterPoolResult } from "../pool.js";
 import "./control-ui.css";
+import { createTranslator } from "./i18n/index.ts";
 
 type Grant = ClawRouterPool["grants"][number];
 type Traffic = ClawRouterPool["usage"]["lanes"][number];
@@ -17,23 +18,22 @@ type TrafficMetric =
 type ViewState = {
   result?: ClawRouterPoolResult;
   busy: boolean;
-  error: string;
   connected: boolean;
   canRead: boolean;
 };
 
 const mountPool: ControlUiView = (container, initialContext) => {
   const host = initialContext.host;
+  const t = createTranslator(() => host.locale);
   let context = initialContext;
   let result: ClawRouterPoolResult | undefined;
   let busy = false;
-  let error = "";
   let generation = 0;
   let available = false;
   let disposed = false;
+  const [completion, setCompletion] = createSignal<Promise<void>>();
   const [view, setView] = createStore<ViewState>({
     busy,
-    error,
     connected: host.connection.connected,
     canRead: host.connection.canRead,
   });
@@ -47,12 +47,15 @@ const mountPool: ControlUiView = (container, initialContext) => {
   const canRead = () => host.connection.connected && host.connection.canRead;
   const isCurrent = (id: number) =>
     !disposed && !context.signal.aborted && context.presented && generation === id && canRead();
+  const notReported = () => t("clawrouter.values.notReported");
   const count = (value: number | undefined) =>
-    value === undefined ? "Not reported" : integer.format(value);
+    value === undefined ? notReported() : integer.format(value);
   const cost = (value: number | undefined) =>
-    value === undefined ? "Not reported" : usd.format(value / 1_000_000);
+    value === undefined ? notReported() : usd.format(value / 1_000_000);
   const date = (value: string | undefined) =>
-    value ? dateTime.format(new Date(value)) : "Not reported";
+    value ? dateTime.format(new Date(value)) : notReported();
+  const enabledState = (value: boolean) =>
+    t(value ? "clawrouter.values.enabled" : "clawrouter.values.disabled");
 
   function sum(rows: readonly Traffic[], field: TrafficMetric): number | undefined {
     if (!rows.length) {
@@ -71,7 +74,7 @@ const mountPool: ControlUiView = (container, initialContext) => {
 
   function money(value: number | undefined, currency: string | undefined) {
     if (value === undefined) {
-      return "Not reported";
+      return notReported();
     }
     if (currency) {
       try {
@@ -82,50 +85,60 @@ const mountPool: ControlUiView = (container, initialContext) => {
         // An unknown currency still has a useful, unambiguous minor-unit value.
       }
     }
-    return `${integer.format(value)} minor units${currency ? ` (${currency})` : ""}`;
+    const amount = integer.format(value);
+    return currency
+      ? t("clawrouter.values.minorUnitsWithCurrency", { amount, currency })
+      : t("clawrouter.values.minorUnits", { amount });
   }
 
   function windowLabel(window: { window?: string; id?: string; models?: string[] | null }) {
     const value = window.window ?? window.id;
     if (!value) {
-      return "Quota window";
+      return t("clawrouter.windows.fallback");
     }
     if (value === "5h" || value === "5_hour" || value === "five_hour") {
-      return "5-hour";
+      return t("clawrouter.windows.fiveHour");
     }
     // ClawRouter scopes per-model weekly windows (for example Fable) to model families.
     const families = window.models?.filter(Boolean) ?? [];
     if (families.length) {
       const names = families.map((family) => family.charAt(0).toUpperCase() + family.slice(1));
-      return `${names.join(", ")} weekly`;
+      return t("clawrouter.windows.modelWeekly", { models: names.join(", ") });
     }
     if (value === "weekly" || value === "7d" || value === "seven_day") {
-      return "Weekly";
+      return t("clawrouter.windows.weekly");
     }
     return value.replaceAll("_", " ");
   }
 
   const remaining = (value: number | undefined) =>
-    value === undefined ? "Not reported" : `${number.format(value)}% free`;
+    value === undefined
+      ? notReported()
+      : t("clawrouter.values.percentFree", { value: number.format(value) });
 
-  async function refresh() {
+  function refresh() {
     if (busy || !available) {
       return;
     }
     const id = ++generation;
     busy = true;
-    error = "";
     publish();
+    const pending = readPool(id);
+    void setCompletion(pending);
+    // The view can be retired before its admitted request settles.
+    void pending.catch(() => undefined);
+  }
+
+  async function readPool(id: number) {
     try {
       const next = await host.request<ClawRouterPoolResult>("clawrouter.pool.get");
       if (isCurrent(id)) {
         result = next;
       }
-    } catch (cause) {
+    } catch {
       if (isCurrent(id)) {
-        error = host.redact(
-          cause instanceof Error ? cause.message : "Could not load the pool. Try refreshing.",
-        );
+        // The view can recover with Refresh but cannot diagnose a rejected RPC.
+        throw new Error("ClawRouter pool request failed");
       }
     } finally {
       if (isCurrent(id)) {
@@ -139,27 +152,27 @@ const mountPool: ControlUiView = (container, initialContext) => {
     return (
       <dl class="clawrouter-pool__stats clawrouter-pool__traffic">
         <div>
-          <dt>Requests</dt>
+          <dt>{t("clawrouter.traffic.requests")}</dt>
           <dd>{count(sum(props.rows, "requests"))}</dd>
         </div>
         <div>
-          <dt>Input tokens</dt>
+          <dt>{t("clawrouter.traffic.inputTokens")}</dt>
           <dd>{count(sum(props.rows, "inputTokens"))}</dd>
         </div>
         <div>
-          <dt>Output tokens</dt>
+          <dt>{t("clawrouter.traffic.outputTokens")}</dt>
           <dd>{count(sum(props.rows, "outputTokens"))}</dd>
         </div>
         <div>
-          <dt>Cache read tokens</dt>
+          <dt>{t("clawrouter.traffic.cacheReadTokens")}</dt>
           <dd>{count(sum(props.rows, "cacheReadTokens"))}</dd>
         </div>
         <div>
-          <dt>Cache write tokens</dt>
+          <dt>{t("clawrouter.traffic.cacheWriteTokens")}</dt>
           <dd>{count(sum(props.rows, "cacheWriteTokens"))}</dd>
         </div>
         <div>
-          <dt>API-equivalent value</dt>
+          <dt>{t("clawrouter.traffic.apiValue")}</dt>
           <dd>{cost(sum(props.rows, "costMicros"))}</dd>
         </div>
       </dl>
@@ -167,20 +180,26 @@ const mountPool: ControlUiView = (container, initialContext) => {
   }
 
   function GrantCard(props: { grant: Grant; pool: ClawRouterPool; index: number }) {
-    const traffic = () =>
-      props.grant.key && props.grant.provider
-        ? props.pool.usage.grants.filter(
-            (row) =>
-              row.grantKey === props.grant.key?.split("/").at(-1) &&
-              row.provider === props.grant.provider,
-          )
-        : [];
+    const traffic = createMemo(() => {
+      const key = props.grant.key;
+      const provider = props.grant.provider;
+      if (!key || !provider) {
+        return [];
+      }
+      const grantKey = key.split("/").at(-1);
+      return props.pool.usage.grants.filter(
+        (row) => row.grantKey === grantKey && row.provider === provider,
+      );
+    });
     return (
       <article class="clawrouter-pool__grant" aria-labelledby={`clawrouter-grant-${props.index}`}>
         <header class="clawrouter-pool__grant-header">
           <div>
             <h3 id={`clawrouter-grant-${props.index}`}>
-              {props.grant.label ?? props.grant.account?.email ?? props.grant.key ?? "Subscription"}
+              {props.grant.label ??
+                props.grant.account?.email ??
+                props.grant.key ??
+                t("clawrouter.grant.subscription")}
             </h3>
             <p class="clawrouter-pool__hint">
               {[props.grant.provider, props.grant.kind].filter(Boolean).join(" · ")}
@@ -188,40 +207,38 @@ const mountPool: ControlUiView = (container, initialContext) => {
           </div>
           <span class="clawrouter-pool__badge">
             {props.grant.enabled === undefined
-              ? "Enabled state unknown"
-              : props.grant.enabled
-                ? "Enabled"
-                : "Disabled"}
+              ? t("clawrouter.values.enabledNotReported")
+              : enabledState(props.grant.enabled)}
           </span>
         </header>
         <dl class="clawrouter-pool__stats">
           <div>
-            <dt>Account</dt>
-            <dd>{props.grant.account?.email ?? "Not reported"}</dd>
+            <dt>{t("clawrouter.grant.account")}</dt>
+            <dd>{props.grant.account?.email ?? notReported()}</dd>
           </div>
           <div>
-            <dt>Plan</dt>
-            <dd>{props.grant.plan ?? "Not reported"}</dd>
+            <dt>{t("clawrouter.grant.plan")}</dt>
+            <dd>{props.grant.plan ?? notReported()}</dd>
           </div>
           <div>
-            <dt>Credential</dt>
-            <dd>{props.grant.credentialStatus ?? "Not reported"}</dd>
+            <dt>{t("clawrouter.grant.credential")}</dt>
+            <dd>{props.grant.credentialStatus ?? notReported()}</dd>
           </div>
           <div>
-            <dt>Subscription</dt>
-            <dd>{props.grant.account?.subscriptionStatus ?? "Not reported"}</dd>
+            <dt>{t("clawrouter.grant.subscription")}</dt>
+            <dd>{props.grant.account?.subscriptionStatus ?? notReported()}</dd>
           </div>
           <div>
-            <dt>Rate-limit tier</dt>
-            <dd>{props.grant.account?.rateLimitTier ?? "Not reported"}</dd>
+            <dt>{t("clawrouter.grant.rateLimitTier")}</dt>
+            <dd>{props.grant.account?.rateLimitTier ?? notReported()}</dd>
           </div>
           <div>
-            <dt>Last selected</dt>
+            <dt>{t("clawrouter.grant.lastSelected")}</dt>
             <dd>{date(props.grant.lastSelectedAt)}</dd>
           </div>
         </dl>
-        <section class="clawrouter-pool__section" aria-label="Subscription quota windows">
-          <h4>Quota headroom</h4>
+        <section class="clawrouter-pool__section" aria-label={t("clawrouter.grant.quotaLabel")}>
+          <h4>{t("clawrouter.grant.quotaTitle")}</h4>
           {props.grant.windows.length ? (
             <div class="clawrouter-pool__windows">
               <For each={props.grant.windows}>
@@ -235,52 +252,62 @@ const mountPool: ControlUiView = (container, initialContext) => {
                       <progress
                         max="100"
                         value={window.remainingPercent}
-                        aria-label={`${windowLabel(window)} quota remaining`}
+                        aria-label={t("clawrouter.grant.quotaRemaining", {
+                          window: windowLabel(window),
+                        })}
                       />
                     ) : null}
                     <p class="clawrouter-pool__hint">
                       {window.models === null
-                        ? "All models"
-                        : window.models?.join(", ") || "Model scope not reported"}
+                        ? t("clawrouter.grant.allModels")
+                        : window.models?.join(", ") || t("clawrouter.grant.modelScopeNotReported")}
                     </p>
-                    <p class="clawrouter-pool__hint">Resets {date(window.resetAt)}</p>
+                    <p class="clawrouter-pool__hint">
+                      {t("clawrouter.grant.resets", { date: date(window.resetAt) })}
+                    </p>
                     {window.observedAt ? (
-                      <p class="clawrouter-pool__hint">Observed {date(window.observedAt)}</p>
+                      <p class="clawrouter-pool__hint">
+                        {t("clawrouter.pool.observed", { date: date(window.observedAt) })}
+                      </p>
                     ) : null}
                   </div>
                 )}
               </For>
             </div>
           ) : (
-            <p class="clawrouter-pool__hint">No quota windows reported.</p>
+            <p class="clawrouter-pool__hint">{t("clawrouter.grant.noQuotaWindows")}</p>
           )}
         </section>
-        <section class="clawrouter-pool__section" aria-label="Extra usage">
-          <h4>Extra usage</h4>
+        <section class="clawrouter-pool__section" aria-label={t("clawrouter.grant.extraUsage")}>
+          <h4>{t("clawrouter.grant.extraUsage")}</h4>
           {props.grant.extraUsage ? (
             <>
               <p>
                 {props.grant.extraUsage.enabled === undefined
-                  ? "Enabled state not reported"
-                  : props.grant.extraUsage.enabled
-                    ? "Enabled"
-                    : "Disabled"}
+                  ? t("clawrouter.values.enabledNotReported")
+                  : enabledState(props.grant.extraUsage.enabled)}
                 {" · "}
-                {money(props.grant.extraUsage.usedCredits, props.grant.extraUsage.currency)} used
-                {" / "}
-                {money(props.grant.extraUsage.monthlyLimit, props.grant.extraUsage.currency)}{" "}
-                monthly limit
+                {t("clawrouter.grant.extraUsageSpend", {
+                  used: money(props.grant.extraUsage.usedCredits, props.grant.extraUsage.currency),
+                  limit: money(
+                    props.grant.extraUsage.monthlyLimit,
+                    props.grant.extraUsage.currency,
+                  ),
+                })}
               </p>
               {props.grant.extraUsage.spendLimitReached ? (
-                <p class="clawrouter-pool__warning">Spend limit reached</p>
+                <p class="clawrouter-pool__warning">{t("clawrouter.grant.spendLimitReached")}</p>
               ) : null}
             </>
           ) : (
-            <p class="clawrouter-pool__hint">Not reported.</p>
+            <p class="clawrouter-pool__hint">{notReported()}</p>
           )}
         </section>
-        <section class="clawrouter-pool__section" aria-label="Per-model eligibility">
-          <h4>Model eligibility</h4>
+        <section
+          class="clawrouter-pool__section"
+          aria-label={t("clawrouter.grant.eligibilityLabel")}
+        >
+          <h4>{t("clawrouter.grant.eligibilityTitle")}</h4>
           {props.pool.models.length ? (
             <ul class="clawrouter-pool__models">
               <For each={props.pool.models}>
@@ -288,22 +315,21 @@ const mountPool: ControlUiView = (container, initialContext) => {
                   <li>
                     <span>{model}</span>
                     <span class="clawrouter-pool__badge">
-                      {props.grant.eligibility[model]?.replaceAll("_", " ") ?? "Not reported"}
+                      {props.grant.eligibility[model]?.replaceAll("_", " ") ?? notReported()}
                     </span>
                   </li>
                 )}
               </For>
             </ul>
           ) : (
-            <p class="clawrouter-pool__hint">No allowed models reported.</p>
+            <p class="clawrouter-pool__hint">{t("clawrouter.grant.noModels")}</p>
           )}
         </section>
-        <section class="clawrouter-pool__section" aria-label="Subscription traffic">
-          <h4>Traffic</h4>
+        <section class="clawrouter-pool__section" aria-label={t("clawrouter.grant.trafficLabel")}>
+          <h4>{t("clawrouter.grant.trafficTitle")}</h4>
           <TrafficStats rows={traffic()} />
           <p class="clawrouter-pool__hint">
-            Selections: {count(props.grant.selectedCount)}. API-equivalent value is not a
-            subscription charge.
+            {t("clawrouter.grant.selections", { count: count(props.grant.selectedCount) })}
           </p>
         </section>
       </article>
@@ -327,55 +353,54 @@ const mountPool: ControlUiView = (container, initialContext) => {
     return (
       <>
         <p class="clawrouter-pool__hint">
-          Observed {date(props.pool.observedAt)}
-          {props.pool.policyId ? ` · Policy ${props.pool.policyId}` : ""}
+          {props.pool.policyId
+            ? t("clawrouter.pool.observedWithPolicy", {
+                date: date(props.pool.observedAt),
+                policy: props.pool.policyId,
+              })
+            : t("clawrouter.pool.observed", { date: date(props.pool.observedAt) })}
         </p>
         <section class="clawrouter-pool__summary" aria-labelledby="clawrouter-summary-title">
-          <h2 id="clawrouter-summary-title">Pool summary</h2>
+          <h2 id="clawrouter-summary-title">{t("clawrouter.summary.title")}</h2>
           <dl class="clawrouter-pool__stats">
             <div>
-              <dt>Subscriptions</dt>
+              <dt>{t("clawrouter.summary.subscriptions")}</dt>
               <dd>{integer.format(subscriptions().length)}</dd>
             </div>
             <div>
-              <dt>Routing strategy</dt>
-              <dd>{props.pool.routing?.strategy ?? "Not reported"}</dd>
+              <dt>{t("clawrouter.summary.routingStrategy")}</dt>
+              <dd>{props.pool.routing?.strategy ?? notReported()}</dd>
             </div>
             <div>
-              <dt>Included quota reserve</dt>
+              <dt>{t("clawrouter.summary.includedQuotaReserve")}</dt>
               <dd>
                 {props.pool.routing?.includedQuotaReservePercent === undefined
-                  ? "Not reported"
-                  : `${number.format(props.pool.routing.includedQuotaReservePercent)}%`}
+                  ? notReported()
+                  : t("clawrouter.values.percent", {
+                      value: number.format(props.pool.routing.includedQuotaReservePercent),
+                    })}
               </dd>
             </div>
             <div>
-              <dt>Environment fallback</dt>
+              <dt>{t("clawrouter.summary.environmentFallback")}</dt>
               <dd>
                 {props.pool.routing?.environmentFallback === undefined
-                  ? "Not reported"
-                  : props.pool.routing.environmentFallback
-                    ? "Enabled"
-                    : "Disabled"}
+                  ? notReported()
+                  : enabledState(props.pool.routing.environmentFallback)}
               </dd>
             </div>
             <div>
-              <dt>Paid fallback requests</dt>
+              <dt>{t("clawrouter.summary.paidFallbackRequests")}</dt>
               <dd>{count(sum(paidFallback(), "requests"))}</dd>
             </div>
             <div>
-              <dt>Paid fallback value</dt>
+              <dt>{t("clawrouter.summary.paidFallbackValue")}</dt>
               <dd>{cost(sum(paidFallback(), "costMicros"))}</dd>
             </div>
           </dl>
-          <p class="clawrouter-pool__hint">
-            Paid fallback aggregates API-key and environment lanes, including direct paid traffic.
-            Values are API-equivalent USD.
-          </p>
-          <h3>Allowed models and headroom</h3>
-          <p class="clawrouter-pool__hint">
-            Eligibility reported by ClawRouter includes quota reserves and credential health.
-          </p>
+          <p class="clawrouter-pool__hint">{t("clawrouter.summary.paidFallbackHint")}</p>
+          <h3>{t("clawrouter.summary.modelsTitle")}</h3>
+          <p class="clawrouter-pool__hint">{t("clawrouter.summary.modelsHint")}</p>
           {props.pool.models.length ? (
             <ul class="clawrouter-pool__models">
               <For each={props.pool.models}>
@@ -383,25 +408,30 @@ const mountPool: ControlUiView = (container, initialContext) => {
                   <li>
                     <span>{model}</span>
                     <span>
-                      {integer.format(eligible(model))} subscriptions with headroom
-                      {unknown(model) ? ` · ${integer.format(unknown(model))} unknown` : ""}
+                      {unknown(model)
+                        ? t("clawrouter.summary.modelHeadroomWithUnknown", {
+                            count: integer.format(eligible(model)),
+                            unknown: integer.format(unknown(model)),
+                          })
+                        : t("clawrouter.summary.modelHeadroom", {
+                            count: integer.format(eligible(model)),
+                          })}
                     </span>
                   </li>
                 )}
               </For>
             </ul>
           ) : (
-            <p>No allowed models reported for this policy.</p>
+            <p>{t("clawrouter.summary.noModels")}</p>
           )}
           <h3>
-            Pool traffic
             {props.pool.usage.days === undefined
-              ? ""
-              : ` · last ${number.format(props.pool.usage.days)} days`}
+              ? t("clawrouter.summary.trafficTitle")
+              : t("clawrouter.summary.trafficTitleWithDays", {
+                  days: number.format(props.pool.usage.days),
+                })}
           </h3>
-          <p class="clawrouter-pool__hint">
-            Paid fallback is shown by its reported lane. API-equivalent values are in USD.
-          </p>
+          <p class="clawrouter-pool__hint">{t("clawrouter.summary.trafficHint")}</p>
           {props.pool.usage.lanes.length ? (
             <div class="clawrouter-pool__lanes">
               <For each={props.pool.usage.lanes}>
@@ -409,7 +439,7 @@ const mountPool: ControlUiView = (container, initialContext) => {
                   <section class="clawrouter-pool__lane">
                     <h4>
                       {[lane.provider, lane.grantLane].filter(Boolean).join(" · ") ||
-                        "Unspecified lane"}
+                        t("clawrouter.summary.unspecifiedLane")}
                     </h4>
                     <TrafficStats rows={[lane]} />
                   </section>
@@ -417,11 +447,11 @@ const mountPool: ControlUiView = (container, initialContext) => {
               </For>
             </div>
           ) : (
-            <p class="clawrouter-pool__hint">No traffic reported.</p>
+            <p class="clawrouter-pool__hint">{t("clawrouter.summary.noTraffic")}</p>
           )}
         </section>
         <section aria-labelledby="clawrouter-subscriptions-title">
-          <h2 id="clawrouter-subscriptions-title">Subscriptions and grants</h2>
+          <h2 id="clawrouter-subscriptions-title">{t("clawrouter.summary.grantsTitle")}</h2>
           {props.pool.grants.length ? (
             <div class="clawrouter-pool__grants">
               <For each={props.pool.grants}>
@@ -429,7 +459,7 @@ const mountPool: ControlUiView = (container, initialContext) => {
               </For>
             </div>
           ) : (
-            <p class="clawrouter-pool__empty">No subscriptions are reported for this policy.</p>
+            <p class="clawrouter-pool__empty">{t("clawrouter.summary.noGrants")}</p>
           )}
         </section>
       </>
@@ -437,6 +467,7 @@ const mountPool: ControlUiView = (container, initialContext) => {
   }
 
   function PoolPage() {
+    const completed = createMemo(() => completion()?.then(() => null) ?? null);
     return (
       <section
         class="clawrouter-pool"
@@ -445,36 +476,47 @@ const mountPool: ControlUiView = (container, initialContext) => {
       >
         <header class="clawrouter-pool__header">
           <div>
-            <h1 id="clawrouter-pool-title">ClawRouter</h1>
-            <p>Subscription headroom, model access, and traffic for your configured policy.</p>
+            <h1 id="clawrouter-pool-title" class="plugin-page-title">
+              ClawRouter
+            </h1>
+            <p>{t("clawrouter.pool.subtitle")}</p>
           </div>
           <button
             class="clawrouter-pool__refresh"
             type="button"
             disabled={view.busy || !view.connected || !view.canRead}
-            onClick={() => void refresh()}
+            onClick={() => refresh()}
           >
-            {view.busy ? "Refreshing…" : "Refresh"}
+            {view.busy ? t("clawrouter.pool.refreshing") : t("common.refresh")}
           </button>
         </header>
         {!view.connected ? (
           <p class="clawrouter-pool__empty" role="status">
-            Connect to the Gateway to view the ClawRouter pool.
+            {t("clawrouter.pool.disconnected")}
           </p>
         ) : !view.canRead ? (
           <p class="clawrouter-pool__empty" role="status">
-            Read access is required to view the ClawRouter pool.
+            {t("clawrouter.pool.readAccessRequired")}
           </p>
         ) : (
           <>
-            {view.error ? (
-              <p class="clawrouter-pool__error" role="alert">
-                {view.error}
-              </p>
-            ) : null}
+            <Loading on={completion()}>
+              <Errored
+                fallback={() => (
+                  <p class="clawrouter-pool__error" role="alert">
+                    {t("clawrouter.pool.loadFailed")}
+                  </p>
+                )}
+              >
+                {completed()}
+                {!view.result && !view.busy ? (
+                  <p class="clawrouter-pool__empty">{t("clawrouter.pool.notLoaded")}</p>
+                ) : null}
+              </Errored>
+            </Loading>
             {view.busy ? (
               <p class="clawrouter-pool__hint" role="status">
-                Loading the latest pool status…
+                {t("clawrouter.pool.loading")}
               </p>
             ) : null}
             {view.result?.status === "ok" ? (
@@ -483,8 +525,6 @@ const mountPool: ControlUiView = (container, initialContext) => {
               <p class="clawrouter-pool__empty" role="status">
                 {host.redact(view.result.message)}
               </p>
-            ) : !view.busy && !view.error ? (
-              <p class="clawrouter-pool__empty">Refresh to load pool status.</p>
             ) : null}
           </>
         )}
@@ -497,7 +537,6 @@ const mountPool: ControlUiView = (container, initialContext) => {
       setView(() => ({
         result,
         busy,
-        error,
         connected: host.connection.connected,
         canRead: host.connection.canRead,
       }));
@@ -511,9 +550,9 @@ const mountPool: ControlUiView = (container, initialContext) => {
       generation += 1;
       busy = false;
       result = undefined;
-      error = "";
+      setCompletion(undefined);
       if (next) {
-        void refresh();
+        refresh();
         return;
       }
     }
@@ -544,7 +583,7 @@ export default defineControlUiPlugin({
       id: "pool",
       label: "ClawRouter",
       page: { id: "pool" },
-      icon: "layers",
+      icon: "clawrouter",
       order: 45,
     });
     return () => {

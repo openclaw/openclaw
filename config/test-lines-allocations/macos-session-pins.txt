@@ -1,0 +1,5 @@
+# Archive Undo marker for the Mac: one signed Archive occurrence across legacy and personal clients, SDK/Doctor same-value and replacement writes, retired checkout fences, and Mac multi-chunk partial receipts.
+# Exact live transport ownership, admitted-drain settlement when the receipt issuer retires, and negotiated remote Archive without receipts.
+# Agent schema v45: populated v44 upgrade without node DML, restore, divergent preview refusal and pre-existing marker refusal on SQLite and PostgreSQL.
+# Merged onto main: v45 reader-floor assertions, upgrade preflight floor range and historical migration fixtures that now see the nullable marker.
+515

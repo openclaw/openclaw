@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import { jsonScannedValue } from "../../infra/database-engine/json-values.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
+import { scanJsonObjectFields } from "../../state/json-predicate-fields.js";
 import { SESSION_OWNER_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import {
   runOpenClawAgentWriteTransaction,
@@ -64,7 +66,7 @@ export function replaceSessionOwnerInTransaction(
       ensureColumn(database.db, tableName, `${columnName} ${dataType}`);
     }
   }
-  let updated: { current_session_id: string; lifecycle_revision: string | null } | undefined;
+  let updated: { current_session_id: string; metadata_json: string } | undefined;
   const writeGeneration = trackSessionEntryCacheWrite(database, () =>
     withSqliteDatabaseWriteScope(database.db, [sessionKey], () => {
       const query = getSessionKysely(database.db)
@@ -77,15 +79,7 @@ export function replaceSessionOwnerInTransaction(
           owner_assigned_at: owner?.assignedAt ?? null,
         })
         .where("session_key", "=", sessionKey)
-        .returning((eb) => [
-          "current_session_id",
-          eb
-            .fn<string | null>("json_extract", [
-              eb.ref("entry_json"),
-              eb.val("$.lifecycleRevision"),
-            ])
-            .as("lifecycle_revision"),
-        ]);
+        .returning(["current_session_id", "entry_json as metadata_json"]);
       updated = executeSqliteQuerySync(
         database.db,
         expectedSessionId === undefined
@@ -96,6 +90,15 @@ export function replaceSessionOwnerInTransaction(
   );
   if (!updated) {
     return false;
+  }
+  const fields = scanJsonObjectFields(updated.metadata_json, ["lifecycleRevision"]);
+  const lifecycleRevision = jsonScannedValue(fields.first.get("lifecycleRevision"));
+  if (
+    !fields.valid ||
+    fields.maximumDepth > 1000 ||
+    (lifecycleRevision !== null && typeof lifecycleRevision !== "string")
+  ) {
+    throw new Error("Session lifecycle revision metadata requires repair");
   }
   const postimage = postimages?.get(sessionKey);
   if (postimage) {
@@ -111,7 +114,7 @@ export function replaceSessionOwnerInTransaction(
       facts: {
         kind: "owner",
         sessionId: updated.current_session_id,
-        lifecycleRevision: updated.lifecycle_revision,
+        lifecycleRevision,
         owner,
       },
     },

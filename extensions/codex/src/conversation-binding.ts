@@ -5,7 +5,6 @@ import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
-  CodexAppServerUnsafeSubscriptionError,
   retireUnsafeCodexTurnClientBestEffort,
   unsubscribeCodexThreadBestEffort,
 } from "./app-server/attempt-client-cleanup.js";
@@ -30,6 +29,7 @@ import {
   CodexThreadDirectInputError,
 } from "./app-server/protocol-validators.js";
 import type { CodexTurnStartResponse } from "./app-server/protocol.js";
+import { CodexAppServerRpcError, isCodexThreadReadMissingError } from "./app-server/rpc-error.js";
 import { assertNativeConversationApprovalPolicySupported } from "./app-server/sandbox-guard.js";
 import {
   assertCodexBindingMayBeReplaced,
@@ -78,6 +78,15 @@ import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
 
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
 
+class CodexConversationUnloadedThreadError extends Error {
+  constructor(
+    readonly threadId: string,
+    cause: CodexAppServerRpcError,
+  ) {
+    super(cause.message, { cause });
+  }
+}
+
 async function runBoundTurn(params: {
   bindingStore: CodexAppServerBindingStore;
   data: CodexAppServerConversationBindingData;
@@ -88,6 +97,7 @@ async function runBoundTurn(params: {
   sessionKey?: string;
   incognito: boolean;
   timeoutMs?: number;
+  resumeThreadId?: string;
 }): Promise<ReplyPayload> {
   const agentLookup = buildCodexConversationAgentLookup({
     agentDir: params.data.agentDir,
@@ -97,6 +107,11 @@ async function runBoundTurn(params: {
   const binding = await params.bindingStore.readAsync(identity);
   if (!binding?.threadId) {
     throw new Error("bound Codex conversation has no thread binding");
+  }
+  if (params.resumeThreadId && binding.threadId !== params.resumeThreadId) {
+    throw new Error(
+      "Codex conversation binding changed before recovery; review it before resending.",
+    );
   }
   return await withExclusiveCodexAppServerThread({
     bindingStore: params.bindingStore,
@@ -141,6 +156,11 @@ async function runBoundTurn(params: {
       const networkProxyBindingChanged =
         binding.networkProxyProfileName !== permissionProfile ||
         binding.networkProxyConfigFingerprint !== networkProxyConfigFingerprint;
+      if (params.resumeThreadId && networkProxyBindingChanged) {
+        throw new Error(
+          "Codex conversation policy changed before recovery; rebind the conversation and resend your message.",
+        );
+      }
       const serviceTier = binding.serviceTier ?? runtime.serviceTier;
       let useStickyNetworkProfile = permissionProfile !== undefined && !networkProxyBindingChanged;
       assertNativeConversationApprovalPolicySupported(runtime);
@@ -209,6 +229,7 @@ async function runBoundTurn(params: {
           }
         }
         if (
+          params.resumeThreadId ||
           networkProxyBindingChanged ||
           binding.clientId !== client.getInstanceId() ||
           (isCodexAppServerClientRuntimeLive(client) && !incognito && !liveThreadOwnership)
@@ -226,7 +247,6 @@ async function runBoundTurn(params: {
                   ...options,
                   withCurrent: async (write: () => void) => {
                     await assertCurrent();
-                    options.assertCurrent();
                     write();
                   },
                 };
@@ -372,29 +392,44 @@ async function runBoundTurn(params: {
         // The client denies unclaimed approvals and dynamic tools. Its keyed router owns
         // pre-bind buffering so this conversation cannot claim sibling turn requests.
         turnRoute.armTurn();
-        const response: CodexTurnStartResponse = await client.request(
-          "turn/start",
-          {
-            threadId,
-            input: buildCodexConversationTurnInput({
-              prompt: params.prompt,
-              event: params.event,
-            }),
-            cwd: workspaceDir,
-            ...(sessionRoot ? { runtimeWorkspaceRoots: [sessionRoot] } : {}),
-            approvalPolicy,
-            approvalsReviewer: runtime.approvalsReviewer,
-            ...(useStickyNetworkProfile
-              ? {}
-              : {
-                  sandboxPolicy: codexSandboxPolicyForTurn(sandbox, sessionRoot ?? workspaceDir),
-                }),
-            ...(modelSelection?.model ? { model: modelSelection.model } : {}),
-            personality: CODEX_NATIVE_PERSONALITY_NONE,
-            ...(serviceTier ? { serviceTier } : {}),
-          },
-          { timeoutMs: runtime.requestTimeoutMs, withCurrent },
-        );
+        const response: CodexTurnStartResponse = await client
+          .request(
+            "turn/start",
+            {
+              threadId,
+              input: buildCodexConversationTurnInput({
+                prompt: params.prompt,
+                event: params.event,
+              }),
+              cwd: workspaceDir,
+              ...(sessionRoot ? { runtimeWorkspaceRoots: [sessionRoot] } : {}),
+              approvalPolicy,
+              approvalsReviewer: runtime.approvalsReviewer,
+              ...(useStickyNetworkProfile
+                ? {}
+                : {
+                    sandboxPolicy: codexSandboxPolicyForTurn(sandbox, sessionRoot ?? workspaceDir),
+                  }),
+              ...(modelSelection?.model ? { model: modelSelection.model } : {}),
+              personality: CODEX_NATIVE_PERSONALITY_NONE,
+              ...(serviceTier ? { serviceTier } : {}),
+            },
+            { timeoutMs: runtime.requestTimeoutMs, withCurrent },
+          )
+          .catch((error: unknown) => {
+            // turn/start resolves the loaded thread before submitting any input.
+            // Only that exact RPC rejection permits replay, never a transport failure.
+            if (
+              !incognito &&
+              error instanceof CodexAppServerRpcError &&
+              error.method === "turn/start" &&
+              error.code === -32_600 &&
+              error.message === `thread not found: ${threadId}`
+            ) {
+              throw new CodexConversationUnloadedThreadError(threadId, error);
+            }
+            throw error;
+          });
         activeTurnId = response.turn.id;
         activeTurnCleanup = trackCodexConversationActiveTurn({
           identity,
@@ -412,6 +447,12 @@ async function runBoundTurn(params: {
         turnSucceeded = true;
         return { text: replyText || "Codex completed without a text reply." };
       } catch (error) {
+        if (params.resumeThreadId && isCodexThreadReadMissingError(error, threadId)) {
+          throw new Error(
+            "The bound Codex thread is unavailable. Your message was not submitted; rebind the conversation and resend it.",
+            { cause: error },
+          );
+        }
         if (isCodexAppServerOverloadError(error) && error.method === "thread/resume") {
           throw error;
         }
@@ -530,24 +571,11 @@ export async function runBoundTurnWithMissingThreadRecovery(
   try {
     return await runBoundTurn(params);
   } catch (error) {
-    if (!isCodexThreadNotFoundError(error)) {
+    if (!(error instanceof CodexConversationUnloadedThreadError)) {
       throw error;
     }
-    await prepareCodexConversationBinding(params, { forceNew: true });
-    return await runBoundTurn(params);
+    // Resume the same native history through the existing subscription owner.
+    // A second failure stays visible; no new thread or further replay is attempted.
+    return await runBoundTurn({ ...params, resumeThreadId: error.threadId });
   }
-}
-
-function isCodexThreadNotFoundError(error: unknown): boolean {
-  if (
-    isCodexAppServerOverloadError(error) ||
-    error instanceof CodexAppServerUnsafeSubscriptionError
-  ) {
-    return false;
-  }
-  const message = formatErrorMessage(error);
-  return (
-    /\bthread not found:/iu.test(message) ||
-    /\bbound Codex conversation has no thread binding\b/u.test(message)
-  );
 }

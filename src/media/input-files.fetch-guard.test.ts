@@ -1,5 +1,6 @@
 // Input file fetch guard tests cover network fetch limits for media inputs.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeStallingStream } from "../infra/http-body.test-support.js";
 
 const fetchWithSsrFGuardMock = vi.fn();
 const convertHeicToJpegMock = vi.fn();
@@ -385,13 +386,8 @@ describe("guarded input file URL fetches", () => {
     ],
   ] as const)("%s", async (_name, createChunk, createResponseInit, expectedError) => {
     let canceled = false;
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(createChunk());
-      },
-      cancel() {
-        canceled = true;
-      },
+    const stream = makeStallingStream([createChunk()], () => {
+      canceled = true;
     });
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
@@ -621,13 +617,7 @@ describe("base64 size guards", () => {
       run: async (data: string) => {
         return await extractImageContentFromSource(
           { type: "base64", data, mediaType: "image/png" },
-          {
-            allowUrl: false,
-            allowedMimes: new Set(["image/png"]),
-            maxBytes: 6,
-            maxRedirects: 0,
-            timeoutMs: 1,
-          },
+          { ...createImageSourceLimits(["image/png"]), maxBytes: 6 },
         );
       },
     },
@@ -637,15 +627,7 @@ describe("base64 size guards", () => {
       run: async (data: string) => {
         return await extractFileContentFromSource({
           source: { type: "base64", data, mediaType: "text/plain", filename: "x.txt" },
-          limits: {
-            allowUrl: false,
-            allowedMimes: new Set(["text/plain"]),
-            maxBytes: 6,
-            maxChars: 100,
-            maxRedirects: 0,
-            timeoutMs: 1,
-            pdf: { maxPages: 1, maxPixels: 1, minTextChars: 1 },
-          },
+          limits: { ...createFileSourceLimits(["text/plain"]), maxBytes: 6 },
         });
       },
     },
@@ -670,13 +652,7 @@ describe("input image base64 validation", () => {
         data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2N4j8AAAAASUVORK5CYII=" onerror="alert(1)',
         mediaType: "image/png",
       } as const,
-      limits: {
-        allowUrl: false,
-        allowedMimes: new Set(["image/png"]),
-        maxBytes: 1024 * 1024,
-        maxRedirects: 0,
-        timeoutMs: 1,
-      },
+      limits: createImageSourceLimits(["image/png"]),
       expectedError: "invalid 'data' field",
     },
     {

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   createPackageIntegrityReader,
@@ -90,28 +91,77 @@ export async function createNpmPackageRootLinkLifecycle(params: {
         };
       }
     },
-    async retire(assertCurrent = () => {}): Promise<string | null> {
+    /**
+     * `obsolete` means the filesystem refused to remove the link this update
+     * moved aside and that link is still in place. A changed, missing, or
+     * unreadable entry is not classified.
+     */
+    async retire(assertCurrent = () => {}): Promise<{ message: string; obsolete: boolean } | null> {
+      let removalAttempted = false;
       try {
         assertCurrent();
         await assertUnchanged(params.backupRoot);
         // This observation does not exclude concurrent writers. Non-recursive
         // removal protects a substituted directory and the external checkout.
         assertCurrent();
+        removalAttempted = true;
         await fs.unlink(params.backupRoot);
         return null;
       } catch (error) {
         assertCurrent();
-        return `Could not retire retained npm package link: ${formatErrorMessage(error)}; backup retained at ${params.backupRoot}`;
+        // A substituted entry also refuses unlink; only the same link is obsolete.
+        const obsolete =
+          removalAttempted &&
+          (await assertUnchanged(params.backupRoot).then(
+            () => true,
+            () => false,
+          ));
+        assertCurrent();
+        return {
+          message: `Could not retire retained npm package link: ${formatErrorMessage(error)}; backup retained at ${params.backupRoot}`,
+          obsolete,
+        };
       }
     },
   };
 }
 
-/** Verify the same retained/restored npm root and launcher baseline without inference. */
-export async function verifyNpmRootRecovery(
+/**
+ * A directory cannot be renamed over a link, so replacing npm's package link
+ * leaves the package path empty between two renames. An updater killed there
+ * leaves the link under its backup name. The checkout that link names puts it
+ * back before its next update judges the destination; a dry run only finds it.
+ */
+export async function restoreInterruptedNpmPackageRootLink(
+  globalRoot: string,
+  liveRoot: string,
+  checkout: string,
+  dryRun: boolean,
+): Promise<string | undefined> {
+  const names = await fs.readdir(globalRoot).catch((error: unknown) => ignoreMissingPath(error));
+  const owner = await fs.realpath(checkout);
+  // Only the name the swap gives a live backup; a retired "-" name is obsolete.
+  for (const name of (names ?? []).filter((entry) =>
+    /^\.openclaw\.package-backup-\d+-\d+$/u.test(entry),
+  )) {
+    const backup = path.join(globalRoot, name);
+    // An entry removed since the listing matches nothing.
+    const entry = await fs.lstat(backup).catch((error: unknown) => ignoreMissingPath(error));
+    // A link to another checkout, or an old package directory, is not this installation.
+    if (entry?.isSymbolicLink() && (await fs.realpath(backup).catch(() => null)) === owner) {
+      if (!dryRun) {
+        await fs.rename(backup, liveRoot);
+      }
+      return backup;
+    }
+  }
+  return undefined;
+}
+
+/** Verify retained recovery material before replacing the candidate. */
+export async function verifyRetainedNpmRootRecovery(
   params: {
     root: string;
-    fromBackup: boolean;
     hadPackage: boolean;
     previousRoot: PackageRootIntegrityFingerprint | undefined;
     previousIdentity?: PackageDirectoryIdentity;
@@ -124,50 +174,35 @@ export async function verifyNpmRootRecovery(
   },
   timeoutMs?: number,
   verifyGitRuntime?: () => Promise<void>,
-): Promise<boolean> {
-  const { root, fromBackup, hadPackage, previousRoot, targetSwapRoot, shims } = params;
+): Promise<void> {
+  const { root, hadPackage, previousRoot, targetSwapRoot, shims } = params;
   const reader = createPackageIntegrityReader(timeoutMs);
-  return await reader.observe(fromBackup ? "retained" : "restored", async () => {
-    const actual =
-      hadPackage && previousRoot
-        ? await reader.rootEntry(root, targetSwapRoot, previousRoot.kind)
-        : undefined;
-    if (
-      hadPackage
-        ? previousRoot
-          ? !isDeepStrictEqual(actual, previousRoot)
-          : !params.previousIdentity ||
-            !isDeepStrictEqual(await reader.directoryIdentity(root), params.previousIdentity)
-        : !fromBackup && (await reader.exists(root))
-    ) {
-      throw new PackageIntegrityMismatchError(
-        `Package rollback verification failed: ${fromBackup ? "retained" : "restored"} package ${previousRoot?.kind === "link" ? "link" : "tree"} changed at ${root}. Inspect this ${fromBackup ? "backup" : "installation"} and resolve the changes before retrying recovery.`,
-        previousRoot?.kind === "directory" && actual?.kind === "directory"
-          ? packageIntegrityDifferences(previousRoot.tree, actual.tree)
-          : [],
-      );
-    }
-    for (const shim of shims) {
-      const target = fromBackup ? shim.backup : shim.destination;
-      if (
-        shim.backup
-          ? !target ||
-            !shim.fingerprint ||
-            packageLauncherDifferences(shim.fingerprint, await reader.launcher(target)).length > 0
-          : !fromBackup && (await reader.exists(shim.destination))
-      ) {
-        throw new Error(
-          `Package rollback verification failed: launcher ${shim.destination} changed`,
-        );
-      }
-    }
-    await verifyGitRuntime?.();
-    // Restoring absence or an unverified external link does not establish a runnable runtime.
-    return (
-      hadPackage &&
-      (previousRoot?.kind === "directory" ||
-        verifyGitRuntime !== undefined ||
-        (!previousRoot && params.previousIdentity !== undefined))
+  const actual =
+    hadPackage && previousRoot
+      ? await reader.rootEntry(root, targetSwapRoot, previousRoot.kind)
+      : undefined;
+  if (
+    hadPackage &&
+    (previousRoot
+      ? !isDeepStrictEqual(actual, previousRoot)
+      : !params.previousIdentity ||
+        !isDeepStrictEqual(await reader.directoryIdentity(root), params.previousIdentity))
+  ) {
+    throw new PackageIntegrityMismatchError(
+      `Package rollback verification failed: retained package ${previousRoot?.kind === "link" ? "link" : "tree"} changed at ${root}. Inspect this backup and resolve the changes before retrying recovery.`,
+      previousRoot?.kind === "directory" && actual?.kind === "directory"
+        ? packageIntegrityDifferences(previousRoot.tree, actual.tree)
+        : [],
     );
-  });
+  }
+  for (const shim of shims) {
+    if (
+      shim.backup &&
+      (!shim.fingerprint ||
+        packageLauncherDifferences(shim.fingerprint, await reader.launcher(shim.backup)).length > 0)
+    ) {
+      throw new Error(`Package rollback verification failed: launcher ${shim.destination} changed`);
+    }
+  }
+  await verifyGitRuntime?.();
 }

@@ -10,7 +10,6 @@ import type {
 } from "../plugins/runtime/types-session-facts.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
-import { runSynchronousWork } from "../shared/synchronous-work.js";
 import { readUserProfileVersion } from "../state/user-profile-events.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import { operatorReadShareKey } from "./methods/read-share-keys.js";
@@ -110,7 +109,7 @@ export async function readTrustedPluginSessionFacts(
       method: "sessions.list",
       scope: trustedScope(),
       resolveGatewayContext,
-      callerAuthorityError: "Session facts caller authority is no longer active",
+      callerAuthorityError: "Session facts request ended. Start a new request.",
     },
     async (resolved, assertCurrent) => {
       const projection = requireSessionRowProjection(resolved.context);
@@ -145,7 +144,7 @@ export async function readTrustedPluginSessionFacts(
   );
 }
 
-/** Select once through the list owner, then retain caller authority through the plugin consumer. */
+/** Select once through the list owner, retaining the projection through the plugin consumer. */
 export async function withTrustedPluginSessionFacts<T>(
   select: RuntimeSessionFactsSelection,
   run: (snapshot: RuntimeSessionFactsSelectionResult) => Promise<T>,
@@ -157,7 +156,7 @@ export async function withTrustedPluginSessionFacts<T>(
       method: "sessions.list",
       scope: requestScope,
       resolveGatewayContext,
-      callerAuthorityError: "Session facts caller authority is no longer active",
+      callerAuthorityError: "Session facts request ended. Start a new request.",
     },
     async (resolved, assertCurrent) => {
       const { context } = resolved;
@@ -172,16 +171,8 @@ export async function withTrustedPluginSessionFacts<T>(
       const profiles = readUserProfileVersion();
       const assertAuthority = () => {
         assertCurrent();
-        if (
-          callerKey() !== authorityKey ||
-          getSessionRowProjection(context) !== projection ||
-          context.getRuntimeConfig() !== config ||
-          getRuntimeConfigSnapshotMetadata()?.revision !== configRevision ||
-          context.getCommittedRuntimeConfig?.() !== policy ||
-          readGatewayAccessRevision() !== access ||
-          readUserProfileVersion() !== profiles
-        ) {
-          throw new Error("Session read authority changed; retry the request");
+        if (getSessionRowProjection(context) !== projection) {
+          throw new Error("Session projection replaced. Retry the request.");
         }
       };
       let authority: ReadScope | undefined;
@@ -270,9 +261,7 @@ export async function withTrustedPluginSessionFacts<T>(
             visibility: authority?.visibility,
           });
           const selected = presentation.select(opts, () =>
-            withAgentRosterFactsBatch(prepared.cfg, () =>
-              runSynchronousWork(selectSessionEntries(filters)),
-            ),
+            withAgentRosterFactsBatch(prepared.cfg, () => selectSessionEntries(filters)),
           );
           const targets = new Map<string, SelectionRow>();
           const bySessionId = new Map<string, Set<string>>();

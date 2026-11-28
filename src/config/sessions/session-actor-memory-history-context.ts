@@ -2,16 +2,18 @@ import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { iterateSessionContextMessages } from "../../../packages/agent-core/src/harness/session/session.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
-import { projectModelContextMessages } from "../../shared/model-context-message.js";
 import type { SessionActorMemoryHistoryScope } from "./session-actor-memory-history-projection.js";
 import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
+import { readSessionContextSeed } from "./session-context-seed.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import type {
+  SessionContextSeedRequest,
   SessionModelContextLimits,
   SessionTranscriptModelContext,
   SessionTranscriptContextSnapshot,
 } from "./session-history-read.types.js";
+import { projectSessionModelContextEntry } from "./session-model-context-entry.js";
 import { projectSessionModelContextNavigation } from "./session-model-context-navigation.js";
 import { projectSessionModelContext } from "./session-model-context-read.js";
 import type { ContextEntry, ModelContextRequest } from "./session-model-context-window.js";
@@ -105,33 +107,8 @@ export function readSessionActorMemoryContext(
     }),
     tree.nodes,
   );
-  const project = (request: ModelContextRequest): SessionTreeEntry => {
-    const { entry, omitCheckpoint, toolResultOmission } = request;
-    const original = originalEntries.get(entry.seq)!;
-    const event = {
-      ...original,
-      parentId: entry.parentId,
-      ...(entry.type === "compaction" || entry.type === "reset"
-        ? { firstKeptEntryId: entry.firstKeptEntryId }
-        : {}),
-    };
-    if (event.type !== "message") {
-      return event;
-    }
-    const [message] = projectModelContextMessages([event.message]);
-    const projected = { ...event, message: message! };
-    if (omitCheckpoint && projected.message.role === "assistant") {
-      projected.message = { ...projected.message };
-      delete projected.message.providerReplay;
-    }
-    if (toolResultOmission !== undefined && projected.message.role === "toolResult") {
-      projected.message = {
-        ...projected.message,
-        content: [{ type: "text", text: toolResultOmission }],
-      };
-    }
-    return projected;
-  };
+  const project = (request: ModelContextRequest) =>
+    projectSessionModelContextEntry(originalEntries.get(request.entry.seq)!, request);
   return projectSessionModelContext(
     {
       header: rows.find((row) => isRecord(row.event) && row.event.type === "session")?.event,
@@ -154,6 +131,7 @@ export function readSessionActorMemoryContext(
 /** Full-fidelity context uses the same path and boundary policy as the native reader. */
 export function readSessionActorMemoryContextMessages(
   window: SessionActorMemoryWindow,
+  seed?: SessionContextSeedRequest,
 ): SessionTranscriptContextSnapshot {
   const tree = scanSessionTranscriptTree(window.events.map((row) => row.event));
   const entries = normalizeSessionContextEntryBoundaries(
@@ -163,7 +141,9 @@ export function readSessionActorMemoryContextMessages(
     tree.nodes,
   );
   return {
-    messages: Array.from(iterateSessionContextMessages(entries)),
+    ...(seed
+      ? readSessionContextSeed(entries, seed)
+      : { messages: Array.from(iterateSessionContextMessages(entries)) }),
     header: window.events.find((row) => isRecord(row.event) && row.event.type === "session")?.event,
     version: window.hot.transcript.version,
   };

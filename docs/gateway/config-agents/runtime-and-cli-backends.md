@@ -47,16 +47,16 @@ Runtime policy decides which harness executes a model run. It lives on providers
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
 
-| Alias               | Model                           |
-| ------------------- | ------------------------------- |
-| `opus`              | `anthropic/claude-opus-5-5`     |
-| `sonnet`            | `anthropic/claude-sonnet-5-5`   |
-| `gpt`               | `openai/gpt-5.4`                |
-| `gpt-mini`          | `openai/gpt-5.4-mini`           |
-| `gpt-nano`          | `openai/gpt-5.4-nano`           |
-| `gemini`            | `google/gemini-3.1-pro-preview` |
-| `gemini-flash`      | `google/gemini-3-flash-preview` |
-| `gemini-flash-lite` | `google/gemini-3.1-flash-lite`  |
+| Alias               | Model                          |
+| ------------------- | ------------------------------ |
+| `opus`              | `anthropic/claude-opus-5-5`    |
+| `sonnet`            | `anthropic/claude-sonnet-5-5`  |
+| `gpt`               | `openai/gpt-5.4`               |
+| `gpt-mini`          | `openai/gpt-5.4-mini`          |
+| `gpt-nano`          | `openai/gpt-5.4-nano`          |
+| `gemini`            | `google/gemini-4-argon`        |
+| `gemini-flash`      | `google/gemini-3.8-flash`      |
+| `gemini-flash-lite` | `google/gemini-3.5-flash-lite` |
 
 Your configured aliases always win over defaults.
 
@@ -74,7 +74,7 @@ session, image, and parser registration.
 
 ## OpenAI GPT-5 personality
 
-The bundled OpenAI plugin owns the GPT-5 friendly interaction-style setting. Matching GPT-5-family prompts receive the shared behavior contract; `personality` controls only the friendly style layer. Native Codex app-server routes keep Codex-owned base/model instructions instead of this OpenClaw GPT-5 contribution, and OpenClaw disables Codex's built-in personality for native threads.
+The bundled OpenAI plugin owns the GPT-5 friendly interaction-style setting. Matching GPT-5-family prompts receive the shared behavior contract; `personality` controls only the friendly style layer. GPT-6 prompts do not receive either layer. Ordinary native Codex threads that use OpenClaw's base follow the same model rule; Codex's built-in personality is a separate setting that OpenClaw disables for native threads.
 
 ```json5
 {

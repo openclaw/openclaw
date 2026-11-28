@@ -23,6 +23,10 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -621,7 +625,7 @@ class GatewaySessionReconnectTest {
           onEvent = { event, _ -> received += event },
           onInvoke = {
             received += "invoke"
-            GatewaySession.InvokeResult.ok("{}")
+            InvokeResult.ok("{}")
           },
         )
 
@@ -748,7 +752,7 @@ class GatewaySessionReconnectTest {
       val created = CompletableDeferred<Pair<WebSocket, WebSocketListener>>()
       val replacementCreated = CompletableDeferred<Pair<WebSocket, WebSocketListener>>()
       val reconnected = CompletableDeferred<Unit>()
-      val failure = CompletableDeferred<GatewaySession.ErrorShape>()
+      val failure = CompletableDeferred<ErrorShape>()
       val attempts = AtomicInteger()
       val sends = AtomicInteger()
       val cancellations = AtomicInteger()
@@ -850,7 +854,7 @@ class GatewaySessionReconnectTest {
     runBlocking {
       for (disconnectBeforeDeadline in listOf(false, true)) {
         val created = CompletableDeferred<Pair<WebSocket, WebSocketListener>>()
-        val failure = CompletableDeferred<GatewaySession.ErrorShape>()
+        val failure = CompletableDeferred<ErrorShape>()
         val attempts = AtomicInteger()
         val harness =
           createReconnectHarness(
@@ -908,7 +912,7 @@ class GatewaySessionReconnectTest {
       val server = MockWebServer()
       server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
       server.start()
-      val failure = CompletableDeferred<GatewaySession.ErrorShape>()
+      val failure = CompletableDeferred<ErrorShape>()
       val harness =
         createReconnectHarness(connectTimeoutMs = 2_000) { error, _ -> failure.complete(error) }
       try {
@@ -921,6 +925,132 @@ class GatewaySessionReconnectTest {
         withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { harness.session.disconnectAndJoin() }
         harness.sessionJob.cancelAndJoin()
         server.shutdown()
+      }
+    }
+
+  @Test
+  fun failedTalkDetachReconnectsOnlyItsOwningSocket() =
+    runBlocking {
+      val ready = Channel<GatewaySession.RequestLease>(Channel.UNLIMITED)
+      val server =
+        startGatewayServer(json = Json) { webSocket, id, method ->
+          webSocket.send(
+            if (method == "connect") {
+              connectResponseFrame(id, capabilities = setOf("talk-session-close-disposition"))
+            } else {
+              """{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"close unavailable"}}"""
+            },
+          )
+        }
+      val harness = createReconnectHarness()
+      try {
+        connectSession(harness.session, server.port, onReady = {
+          ready.trySend(requireNotNull(harness.session.captureRequestLease()))
+        })
+        val original = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { ready.receive() }
+        val abort = runCatching { original.closeTalkSession("relay-1", TalkSessionCloseDisposition.Abort) }
+        assertTrue(abort.exceptionOrNull() is GatewayRequestRejected)
+        assertTrue(original.isCurrent())
+
+        val detach = runCatching { original.closeTalkSession("relay-1", TalkSessionCloseDisposition.Detach) }
+        assertTrue(detach.exceptionOrNull() is GatewayRequestRejected)
+        val replacement = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { ready.receive() }
+        assertFalse(original.isCurrent())
+
+        val stale = runCatching { original.closeTalkSession("relay-1", TalkSessionCloseDisposition.Detach) }
+        assertTrue(stale.exceptionOrNull() is GatewayRequestNotEnqueued)
+        assertTrue(replacement.isCurrent())
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun pairingChangedCloseAutomaticallyReauthenticatesWithoutReplayingRejectedEvent() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val ready = Channel<GatewaySession.RequestLease>(Channel.UNLIMITED)
+      val disconnected = CompletableDeferred<Pair<Boolean, Boolean>>()
+      val originalLease = AtomicReference<GatewaySession.RequestLease>()
+      val eventCount = AtomicInteger()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          when (method) {
+            "connect" -> {
+              webSocket.send(connectResponseFrame(id))
+            }
+
+            "node.event" -> {
+              if (eventCount.incrementAndGet() == 1) {
+                webSocket.send(
+                  """{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"node pairing changed; reconnect","details":{"code":"PAIRING_CHANGED"}}}""",
+                )
+                webSocket.close(4001, "node pairing changed; reconnect")
+              } else {
+                webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{}}""")
+              }
+            }
+          }
+        }
+      lateinit var session: GatewaySession
+      val harness =
+        createReconnectHarness(
+          onDisconnected = {
+            originalLease.get()?.let { lease ->
+              disconnected.complete(session.isReady() to lease.isCurrent())
+            }
+          },
+        )
+      session = harness.session
+
+      try {
+        connectSession(session, server.port, onReady = {
+          ready.trySend(requireNotNull(session.captureRequestLease()))
+        })
+        originalLease.set(withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { ready.receive() })
+        val rejected = session.sendNodeEventDetailedForEndpoint(null, "node.host.stats", """{"cpuCount":4,"memoryTotalBytes":8192,"memoryFreeBytes":1024}""")
+        assertFalse(rejected.ok)
+        assertEquals("UNAVAILABLE", rejected.error?.code)
+        assertEquals("PAIRING_CHANGED", rejected.error?.details?.code)
+        assertEquals(false to false, withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { disconnected.await() })
+        val replacement = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { ready.receive() }
+        assertFalse(originalLease.get().isCurrent())
+        assertTrue(replacement.isCurrent())
+        assertTrue(session.isReady())
+        assertTrue(session.sendNodeEventDetailedForEndpoint(null, "node.host.stats", """{"cpuCount":4,"memoryTotalBytes":8192,"memoryFreeBytes":6144}""").ok)
+
+        val handshakes = server.requestFrames.filter { it["method"]?.jsonPrimitive?.content == "connect" }
+        assertEquals(2, handshakes.size)
+        val devices =
+          handshakes.map {
+            it
+              .getValue("params")
+              .jsonObject
+              .getValue("device")
+              .jsonObject
+          }
+        assertEquals(devices[0].getValue("id"), devices[1].getValue("id"))
+        devices.forEach {
+          assertTrue(
+            it
+              .getValue("signature")
+              .jsonPrimitive.content
+              .isNotBlank(),
+          )
+        }
+        val events = server.requestFrames.filter { it["method"]?.jsonPrimitive?.content == "node.event" }
+        assertEquals(
+          listOf("""{"cpuCount":4,"memoryTotalBytes":8192,"memoryFreeBytes":1024}""", """{"cpuCount":4,"memoryTotalBytes":8192,"memoryFreeBytes":6144}"""),
+          events.map {
+            it
+              .getValue("params")
+              .jsonObject
+              .getValue("payloadJSON")
+              .jsonPrimitive.content
+          },
+        )
+      } finally {
+        shutdownReconnectHarness(harness, server)
       }
     }
 
@@ -987,7 +1117,7 @@ class GatewaySessionReconnectTest {
         val cancelStarted = CompletableDeferred<Unit>()
         val allowCancel = CountDownLatch(1)
         val requestSeen = CompletableDeferred<Unit>()
-        val errors = ConcurrentLinkedQueue<GatewaySession.ErrorShape>()
+        val errors = ConcurrentLinkedQueue<ErrorShape>()
         val server =
           startGatewayServer(json = Json) { webSocket, id, method ->
             if (method == "connect") {
@@ -1582,7 +1712,7 @@ class GatewaySessionReconnectTest {
   fun retiredAuthenticationFailureCannotPauseReplacementConnection() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
-      val originalFailure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val originalFailure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
       val replacementConnected = CompletableDeferred<Unit>()
       var currentSession: GatewaySession? = null
       val firstServer =
@@ -1626,7 +1756,7 @@ class GatewaySessionReconnectTest {
   fun passwordMissingFromStoredDeviceTokenPausesAndExplicitReconnectSucceeds() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
-      val connectFailure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val connectFailure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
       val secondAttempt = CompletableDeferred<Unit>()
       val reconnected = CompletableDeferred<Unit>()
       val connectAttempts = AtomicInteger()
@@ -1758,7 +1888,7 @@ class GatewaySessionReconnectTest {
           },
           onInvoke = {
             retiredInvokeCount.incrementAndGet()
-            GatewaySession.InvokeResult.ok("{}")
+            InvokeResult.ok("{}")
           },
         )
 
@@ -1946,6 +2076,120 @@ class GatewaySessionReconnectTest {
       }
     }
 
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun startupAdmissionWaitRetainsItsInputBeyondFiveMinutesAndStopsWithoutReplay() =
+    runTest {
+      val params = """{"message":"Keep this voice turn","idempotencyKey":"original-send"}"""
+      val startup =
+        ErrorShape(
+          "UNAVAILABLE",
+          "Synthetic preparation",
+          GatewayErrorDetails(null, false, null, reason = "startup-sidecars", method = "chat.send"),
+          retryable = true,
+        )
+      for (ending in listOf("ready", "cancel", "timeout")) {
+        var preparing = true
+        var attempts = 0
+        val unknown = GatewayRequestOutcomeUnknown("request timeout")
+        val lease =
+          GatewaySession.RequestLease("captured-gateway") { method, payload, timeoutMs, enqueue ->
+            assertEquals("chat.send", method)
+            assertEquals(params, payload)
+            assertEquals(321L, timeoutMs)
+            enqueue { attempts += 1 }
+            if (preparing) throw GatewayRequestRejected(startup)
+            if (ending == "timeout") throw unknown
+            "accepted"
+          }
+        val send = async { runCatching { lease.requestAwaitingStartup("chat.send", params, timeoutMs = 321) } }
+        runCurrent()
+        advanceTimeBy(300_001)
+        runCurrent()
+        assertFalse("Known startup refusals must retain the original caller beyond five minutes", send.isCompleted)
+        val refusedAttempts = attempts
+        assertTrue(refusedAttempts > 1)
+        preparing = false
+        if (ending == "cancel") send.cancel()
+        advanceUntilIdle()
+        when (ending) {
+          "cancel" -> assertTrue(send.isCancelled)
+          "timeout" -> assertEquals(unknown, send.await().exceptionOrNull())
+          else -> assertEquals("accepted", send.await().getOrThrow())
+        }
+        advanceTimeBy(300_001)
+        runCurrent()
+        assertEquals(refusedAttempts + if (ending == "cancel") 0 else 1, attempts)
+      }
+    }
+
+  @Test
+  fun startupAdmissionRetryRequiresTheClosedWireContract() {
+    val details = GatewayErrorDetails(null, false, null, reason = "startup-sidecars", method = "chat.send", retryable = true)
+    val startup = ErrorShape("UNAVAILABLE", "Any display text", details, retryable = true)
+    assertEquals(500L, startup.startupRetryDelayMs("chat.send"))
+    assertEquals(100L, startup.copy(details = details.copy(retryAfterMs = -1)).startupRetryDelayMs("chat.send"))
+    assertEquals(2_000L, startup.copy(details = details.copy(retryAfterMs = Int.MAX_VALUE)).startupRetryDelayMs("chat.send"))
+    val unrelatedErrors =
+      listOf(
+        startup.copy(code = "FORBIDDEN"),
+        startup.copy(retryable = false),
+        startup.copy(details = null),
+        startup.copy(details = details.copy(reason = "other")),
+        startup.copy(details = details.copy(method = null)),
+        startup.copy(details = details.copy(method = "agent")),
+      )
+    for (error in unrelatedErrors) {
+      assertNull(error.startupRetryDelayMs("chat.send"))
+    }
+    assertNull(startup.startupRetryDelayMs("agent"))
+  }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun audioSendWaitsForAdmissionWithoutChangingExplicitRequestDeadlines() =
+    runBlocking {
+      val connected = CompletableDeferred<Unit>()
+      val issued = Channel<Pair<WebSocket, String>>(Channel.UNLIMITED)
+      val server =
+        startGatewayServer(json = Json) { socket, id, method ->
+          when (method) {
+            "connect" -> socket.send(connectResponseFrame(id))
+            "chat.send" -> issued.trySend(socket to id).getOrThrow()
+          }
+        }
+      val harness = createReconnectHarness(onConnected = { connected.complete(Unit) })
+      val scheduler = TestCoroutineScheduler()
+      val dispatcher = StandardTestDispatcher(scheduler)
+      val params = """{"attachments":[{"type":"file","mimeType":"audio/wav","fileName":"voice.wav","content":"abc"}]}"""
+      try {
+        connectSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+        val send = async(dispatcher) { harness.session.requestDetailed("chat.send", params) }
+        scheduler.runCurrent()
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { issued.receive() }
+        scheduler.advanceTimeBy(60_000)
+        scheduler.runCurrent()
+        assertFalse("Slow transcription must retain the original request", send.isCompleted)
+        send.cancel()
+        scheduler.runCurrent()
+        send.join()
+        assertTrue(send.isCancelled)
+
+        val bounded =
+          async(dispatcher) {
+            runCatching { harness.session.requestDetailed("chat.send", params, timeoutMs = 1200) }
+          }
+        scheduler.runCurrent()
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { issued.receive() }
+        scheduler.advanceTimeBy(1200)
+        scheduler.runCurrent()
+        assertTrue(bounded.await().exceptionOrNull() is GatewayRequestOutcomeUnknown)
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
   @Test
   fun staleConnectionDrainCannotCancelReplacementRpc() =
     runBlocking {
@@ -2064,7 +2308,7 @@ class GatewaySessionReconnectTest {
   @Test
   fun bootstrapNodePairingRequiredKeepsReconnectActive() {
     val error =
-      GatewaySession.ErrorShape(
+      ErrorShape(
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
@@ -2091,7 +2335,7 @@ class GatewaySessionReconnectTest {
   @Test
   fun bootstrapNodePairingRequiredWithoutRetryHintPausesReconnect() {
     val error =
-      GatewaySession.ErrorShape(
+      ErrorShape(
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
@@ -2117,7 +2361,7 @@ class GatewaySessionReconnectTest {
   @Test
   fun nonBootstrapPairingRequiredStillPausesReconnect() {
     val error =
-      GatewaySession.ErrorShape(
+      ErrorShape(
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
@@ -2156,7 +2400,7 @@ class GatewaySessionReconnectTest {
 
     for ((code, pendingDeviceTokenRetry, expected) in cases) {
       val error =
-        GatewaySession.ErrorShape(
+        ErrorShape(
           code = "INVALID_REQUEST",
           message = "authentication failed",
           details =
@@ -2193,7 +2437,7 @@ class GatewaySessionReconnectTest {
 
     for ((nextStep, pendingDeviceTokenRetry, expected) in cases) {
       val error =
-        GatewaySession.ErrorShape(
+        ErrorShape(
           code = "INVALID_REQUEST",
           message = "authentication failed",
           details =
@@ -2219,7 +2463,7 @@ class GatewaySessionReconnectTest {
   @Test
   fun authRateLimitPausesDespiteRetryAdvice() {
     val error =
-      GatewaySession.ErrorShape(
+      ErrorShape(
         code = "INVALID_REQUEST",
         message = "authentication rate limited",
         details =
@@ -2244,7 +2488,7 @@ class GatewaySessionReconnectTest {
   @Test
   fun protocolMismatchPausesReconnect() {
     val error =
-      GatewaySession.ErrorShape(
+      ErrorShape(
         code = "INVALID_REQUEST",
         message = "protocol mismatch",
         details =
@@ -2273,7 +2517,7 @@ class GatewaySessionReconnectTest {
   @Test
   fun bootstrapRoleUpgradeStillPausesReconnect() {
     val error =
-      GatewaySession.ErrorShape(
+      ErrorShape(
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
@@ -2300,7 +2544,7 @@ class GatewaySessionReconnectTest {
   fun pairingRequiredFailureNotifiesPauseReconnectProblem() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
-      val connectFailure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val connectFailure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
       val server =
         startGatewayServer(json = json) { webSocket, id, method ->
           if (method == "connect") {
@@ -2333,7 +2577,7 @@ class GatewaySessionReconnectTest {
   fun pairingRequiredFailureDropsUnsafeRequestId() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
-      val connectFailure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val connectFailure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
       val server =
         startGatewayServer(json = json) { webSocket, id, method ->
           if (method == "connect") {
@@ -2366,7 +2610,7 @@ class GatewaySessionReconnectTest {
   fun protocolMismatchFailurePreservesProtocolDetailsAndPausesReconnect() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
-      val connectFailure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val connectFailure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
       val server =
         startGatewayServer(json = json) { webSocket, id, method ->
           if (method == "connect") {
@@ -2442,13 +2686,13 @@ class GatewaySessionReconnectTest {
     onDisconnected: (String) -> Unit = {},
     deviceAuthStore: DeviceAuthTokenStore = ReconnectDeviceAuthStore(),
     onEvent: (String, String?) -> Unit = { _, _ -> },
-    onInvoke: suspend (GatewayNodeInvokeRequest) -> GatewaySession.InvokeResult = {
-      GatewaySession.InvokeResult.ok("""{"handled":true}""")
+    onInvoke: suspend (GatewayNodeInvokeRequest) -> InvokeResult = {
+      InvokeResult.ok("""{"handled":true}""")
     },
     connectTimeoutMs: Long = 20_000,
     webSocketFactory: ((OkHttpClient, Request, WebSocketListener) -> WebSocket)? = null,
     lifecycleDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    onConnectFailure: (GatewaySession.ErrorShape, Boolean) -> Unit = { _, _ -> },
+    onConnectFailure: (ErrorShape, Boolean) -> Unit = { _, _ -> },
   ): ReconnectHarness {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()

@@ -1,6 +1,6 @@
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-import { releaseExitedOpenClawAgentDatabaseLeaseInDatabase } from "./openclaw-agent-db-lease.js";
+import { releaseExitedOpenClawAgentDatabaseLeaseInDatabase } from "./openclaw-agent-db-lease-rows.js";
 import { requireOpenClawStateDatabaseIdentity } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
@@ -21,11 +21,15 @@ export function executeAgentDatabaseCleanupCommand(
       ) {
         throw new Error("Retired agent cleanup cannot adopt a replacement shared database");
       }
-      releaseExitedOpenClawAgentDatabaseLeaseInDatabase(current.db, command.input, () =>
-        requestSqliteWorkerOperationAdmission({
-          stage: "prepare",
-          facts: "agent-integrity-invalidated",
-        }),
+      releaseExitedOpenClawAgentDatabaseLeaseInDatabase(
+        current.db,
+        command.input,
+        command.input.outcome,
+        () =>
+          requestSqliteWorkerOperationAdmission({
+            stage: "prepare",
+            facts: "agent-integrity-invalidated",
+          }),
       );
     },
     { database, path: database.path, env },

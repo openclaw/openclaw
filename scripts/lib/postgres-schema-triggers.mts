@@ -58,12 +58,7 @@ function parseTrigger(item: Item, data: Catalog): TriggerDefinition {
 
 export function translatePostgresTriggers(data: Catalog): TriggerDefinition[] {
   const triggers: TriggerDefinition[] = [];
-  const families = new Set([
-    "session_entry_snapshots",
-    "session_conversations",
-    "memory_index_sources",
-    "memory_index_chunks",
-  ]);
+  const families = new Set(["session_entry_snapshots", "session_conversations"]);
   for (const item of data.objects.filter((entry) => entry.kind === "trigger")) {
     if (item.source.includes("_fts")) {
       item.pendingCapability = "search";

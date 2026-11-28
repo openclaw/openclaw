@@ -4,6 +4,7 @@ import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coer
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
+import { copyOwnedBuffer } from "../shared/owned-buffer.js";
 import type { MeetingAudioRuntime } from "./audio-backend.js";
 import { decodeMeetingAudioBase64 } from "./audio-base64.js";
 import { terminateMeetingBridgeProcess, MeetingOutputProcessOwner } from "./bridge-process.js";
@@ -263,7 +264,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       session.lastInputBytes += audio.byteLength;
       // Keep the existing normal 200-chunk window while bounding custom capture
       // commands whose stdout chunks are much larger than the default 4 KiB.
-      const retainedAudio = Buffer.from(
+      const retainedAudio = copyOwnedBuffer(
         audio.subarray(Math.max(0, audio.byteLength - NODE_BRIDGE_MAX_QUEUED_INPUT_BYTES)),
       );
       session.chunks.push(retainedAudio);

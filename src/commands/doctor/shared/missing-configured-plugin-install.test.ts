@@ -19,6 +19,7 @@ import type { PluginCapabilityConsentHandler } from "../../../plugins/capability
 import { computeDeclaredSurfaceHash } from "../../../plugins/capability-summary.js";
 import {
   attachPluginInstallTransaction,
+  requestDeferredPluginInstall,
   resolvePluginInstallTransactionRequest,
 } from "../../../plugins/install-transaction.js";
 import type { PluginInstallArtifactConsentHandler } from "../../../plugins/install-types.js";
@@ -70,6 +71,29 @@ const {
 
 const { repairMissingConfiguredPluginInstalls, repairMissingPluginInstallsForIds } =
   await import("./missing-configured-plugin-install.js");
+
+function mockBundledChannelWithMissingConfigMetadata() {
+  mocks.listChannelPluginCatalogEntries.mockReturnValue([
+    {
+      id: "bundleddemo",
+      pluginId: "bundleddemo",
+      origin: "bundled",
+      meta: { label: "Matrix" },
+      install: { npmSpec: "@openclaw/bundleddemo" },
+    },
+  ]);
+  mocks.loadPluginMetadataSnapshot.mockReturnValue({
+    plugins: [
+      {
+        id: "bundleddemo",
+        origin: "bundled",
+        packageName: "@openclaw/bundleddemo",
+        channels: ["bundleddemo"],
+      },
+    ],
+    diagnostics: [{ pluginId: "bundleddemo", message: "manifest without channelConfigs metadata" }],
+  });
+}
 
 async function useRealCapabilityConsent() {
   const actual = await vi.importActual<typeof import("../../../plugins/capability-consent.js")>(
@@ -626,6 +650,40 @@ describe("repairMissingConfiguredPluginInstalls", () => {
 
   setupPluginInstallSuite();
 
+  it("returns a cohort repair plan without publishing its pending baseline", async () => {
+    const root = tempDirs.make("openclaw-doctor-cohort-plan-");
+    const env = { ...testEnv, OPENCLAW_STATE_DIR: path.join(root, "state") };
+    const cfg = { plugins: { enabled: false } } satisfies OpenClawConfig;
+    await useRealInstallIndexWrites();
+    const records = { retained: { source: "npm" as const, spec: "retained@1.0.0" } };
+    const baseline = { replacement: { source: "npm" as const, spec: "replacement@2.0.0" } };
+    try {
+      await seedInstalledPluginIndex(records, { env, config: cfg, candidates: [] });
+      const before = await readPersistedInstalledPluginIndex({ env });
+      const { runPostCorePluginConvergence } = await import("./post-core-plugin-convergence.js");
+      const result = await runPostCorePluginConvergence(
+        requestDeferredPluginInstall(
+          { cfg, env, baselineInstallRecords: baseline },
+          undefined,
+          undefined,
+          undefined,
+          {
+            forceFreshGeneration: true,
+            deferRecordPublication: true,
+            beforeManagedNpmPublish: async () => {
+              throw new Error("Disabled fixture plugins must not install packages");
+            },
+          },
+        ),
+      );
+      expect(result.installRecords).toEqual(baseline);
+      expect(await readPersistedInstalledPluginIndex({ env })).toEqual(before);
+      expect(before?.installRecords).toEqual(records);
+    } finally {
+      await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
+    }
+  });
+
   it("fences baseline persistence when authority is revoked after the async callback returns", async () => {
     const root = tempDirs.make("openclaw-doctor-index-fence-");
     const env = { ...testEnv, OPENCLAW_STATE_DIR: path.join(root, "state") };
@@ -998,28 +1056,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       },
     };
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.listChannelPluginCatalogEntries.mockReturnValue([
-      {
-        id: "bundleddemo",
-        pluginId: "bundleddemo",
-        origin: "bundled",
-        meta: { label: "Matrix" },
-        install: { npmSpec: "@openclaw/bundleddemo" },
-      },
-    ]);
-    mocks.loadPluginMetadataSnapshot.mockReturnValue({
-      plugins: [
-        {
-          id: "bundleddemo",
-          origin: "bundled",
-          packageName: "@openclaw/bundleddemo",
-          channels: ["bundleddemo"],
-        },
-      ],
-      diagnostics: [
-        { pluginId: "bundleddemo", message: "manifest without channelConfigs metadata" },
-      ],
-    });
+    mockBundledChannelWithMissingConfigMetadata();
     mockCurrentBundledPlugin("bundleddemo", "@openclaw/bundleddemo", bundledRoot);
 
     const result = await repairMissingConfiguredPluginInstalls({
@@ -1112,28 +1149,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     async (_, record) => {
       const records = { bundleddemo: record };
       mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-      mocks.listChannelPluginCatalogEntries.mockReturnValue([
-        {
-          id: "bundleddemo",
-          pluginId: "bundleddemo",
-          origin: "bundled",
-          meta: { label: "Matrix" },
-          install: { npmSpec: "@openclaw/bundleddemo" },
-        },
-      ]);
-      mocks.loadPluginMetadataSnapshot.mockReturnValue({
-        plugins: [
-          {
-            id: "bundleddemo",
-            origin: "bundled",
-            packageName: "@openclaw/bundleddemo",
-            channels: ["bundleddemo"],
-          },
-        ],
-        diagnostics: [
-          { pluginId: "bundleddemo", message: "manifest without channelConfigs metadata" },
-        ],
-      });
+      mockBundledChannelWithMissingConfigMetadata();
       mockCurrentBundledPlugin("bundleddemo", "@openclaw/bundleddemo");
 
       const result = await repairMissingConfiguredPluginInstalls({
@@ -2224,48 +2240,6 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result).toEqual({ changes: [], warnings: [], records });
   });
 
-  it("installs configured external speech and web-fetch plugins from selected providers", async () => {
-    const packages = [
-      ["firecrawl", "@openclaw/firecrawl-plugin"],
-      ["gradium", "@openclaw/gradium-speech"],
-      ["inworld", "@openclaw/inworld-speech"],
-    ] as const;
-    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue(
-      packages.map(([id, npmSpec]) => officialPluginEntry({ id, npmSpec })),
-    );
-    mocks.resolveOfficialExternalProviderContractPluginIds.mockImplementation(
-      ({ contract }: { contract: string }) => {
-        if (contract === "webFetchProviders") {
-          return ["firecrawl"];
-        }
-        if (contract === "speechProviders") {
-          return ["gradium", "inworld"];
-        }
-        return [];
-      },
-    );
-    for (const [pluginId, npmSpec] of packages) {
-      installNpm.mockResolvedValueOnce(successfulInstall({ pluginId, npmSpec }));
-    }
-
-    const result = await repairConfiguredPlugins({
-      tts: { provider: "gradium", providers: { inworld: {} } },
-      tools: { web: { fetch: { provider: "firecrawl" } } },
-    });
-
-    expect(
-      installNpm.mock.calls.map(
-        ([params]) => (params as { expectedPluginId?: string }).expectedPluginId,
-      ),
-    ).toEqual(["firecrawl", "gradium", "inworld"]);
-    expect(result.changes).toEqual(
-      packages.map(
-        ([pluginId, npmSpec]) =>
-          `Installed missing configured plugin "${pluginId}" from ${expectedNpmInstallSpec(npmSpec)}.`,
-      ),
-    );
-  });
-
   it.each(
     // prettier-ignore
     [
@@ -2396,7 +2370,6 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     );
 
     expect(mocks.resolveOfficialExternalWebProviderContractPluginIdsForEnv).toHaveBeenCalledWith({
-      contract: "webFetchProviders",
       env: { ...testEnv, ...env },
     });
     expectRecordFields(mockCallArg(installNpm), {

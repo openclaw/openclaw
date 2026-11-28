@@ -216,7 +216,6 @@ describe("repository project admission", () => {
     const cached = await prepareRepositoryWorkerProjectSource({
       ...initial,
       knownRecipe: () => ({
-        project: result.project,
         setupRecipe: result.setupRecipe,
         recipe: result.recipe,
       }),
@@ -240,7 +239,7 @@ describe("repository project admission", () => {
     fetchImpl.mockClear();
     const refreshed = await prepareRepositoryWorkerProjectSource({
       ...initial,
-      knownRecipe: () => ({ project: admitted.project, setupRecipe: blob, recipe: legacyRecipe }),
+      knownRecipe: () => ({ setupRecipe: blob, recipe: legacyRecipe }),
     });
     expect(refreshed.recipe?.secretNames).toEqual(["PACKAGE_TOKEN"]);
     expect(requestPaths()).toContain(`/repos/acme/project/git/blobs/${blob}`);
@@ -248,7 +247,6 @@ describe("repository project admission", () => {
     const reused = await prepareRepositoryWorkerProjectSource({
       ...initial,
       knownRecipe: () => ({
-        project: refreshed.project,
         setupRecipe: blob,
         recipe: refreshed.recipe,
       }),
@@ -263,7 +261,6 @@ describe("repository project admission", () => {
       prepareRepositoryWorkerProjectSource({
         ...initial,
         knownRecipe: () => ({
-          project: admitted.project,
           setupRecipe: admitted.setupRecipe,
           recipe: {
             source: "script",
@@ -478,7 +475,7 @@ describe("repository project admission", () => {
       const admitted = await prepareRepositoryWorkerProjectSource(initial);
       expect(admitted.setupRecipe).toBe(setupRecipe);
       fetchImpl.mockClear();
-      const knownRecipe = vi.fn(() => ({ project: admitted.project, setupRecipe }));
+      const knownRecipe = vi.fn(() => ({ setupRecipe }));
       const result = await prepareRepositoryWorkerProjectSource({ ...initial, knownRecipe });
       expect(result.project).toEqual(admitted.project);
       expect(result.setupRecipe).toBe(setupRecipe);
@@ -491,27 +488,6 @@ describe("repository project admission", () => {
     },
   );
 
-  it("rejects malformed or mutated known facts without silently rediscovering a recipe", async () => {
-    await expect(
-      prepareRepositoryWorkerProjectSource({
-        ...initial,
-        knownRecipe: (project) => ({ project, setupRecipe: "invalid-object-identity" }),
-      }),
-    ).rejects.toThrow("identity changed");
-    await expect(
-      prepareRepositoryWorkerProjectSource({
-        ...initial,
-        knownRecipe: (project) => {
-          project.baseCommit = "e".repeat(40);
-          return { project, setupRecipe: recipe };
-        },
-      }),
-    ).rejects.toThrow("identity changed");
-    expect(
-      fetchImpl.mock.calls.every(([input]) => !new Request(input).url.includes("/git/trees/")),
-    ).toBe(true);
-  });
-
   it("still rejects access loss after a known recipe hit", async () => {
     const admitted = await prepareRepositoryWorkerProjectSource(initial);
     fetchImpl.mockClear();
@@ -520,7 +496,7 @@ describe("repository project admission", () => {
         ...initial,
         knownRecipe: () => {
           unavailable = true;
-          return { project: admitted.project, setupRecipe: admitted.setupRecipe };
+          return { setupRecipe: admitted.setupRecipe };
         },
       }),
     ).rejects.toThrow("HTTP 404");

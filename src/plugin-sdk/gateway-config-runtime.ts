@@ -6,3 +6,4 @@ export {
   resolvePluginRoutePathContext,
 } from "../gateway/server/plugins-http/path-context.js";
 export { hasUnresolvedConfigValue } from "../config/unresolved-config-value.js";
+export { isNamedOperatorRoleEnforcementEnabled } from "../gateway/operator-role-enforcement.js";

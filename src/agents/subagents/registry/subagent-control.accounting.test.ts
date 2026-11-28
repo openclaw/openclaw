@@ -7,12 +7,15 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import * as sessions from "../../../config/sessions/session-accessor.js";
 import {
-  beginSessionWorkAdmission,
-  getActiveSessionLifecycleMutationCount,
-  getActiveSessionWorkAdmissionCount,
-} from "../../../sessions/session-lifecycle-admission.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
+  beginSessionEffect,
+  getSessionMutationCount,
+  getSessionControllerWorkCount,
+} from "../../../sessions/session-controller.lifecycle.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import {
+  attachActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+} from "./subagent-control-native.test-support.js";
 import * as killSession from "./subagent-control-session.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./subagent-control.types.js";
@@ -52,6 +55,7 @@ async function seed() {
       childAgentId: "main",
       sessionEntry: { sessionId: `${id}-session`, lifecycleRevision: `${id}-revision` },
       requesterSessionKey: id === "root" ? owner : key("root"),
+      requesterTurnRunId: id === "root" ? undefined : "root",
       requesterAgentId: "main",
       requesterDisplayKey: owner,
       task: "shared label",
@@ -72,11 +76,20 @@ it.each(
   async ({ boundary, phase }) => {
     const storePath = await seed();
     const entered = createDeferred();
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities: [key("child"), "child-session"],
+      run: {
+        runId: "child",
+        sessionKey: key("child"),
+        sessionId: "child-session",
+        agentId: "main",
+      },
       assertAllowed: () => {},
-      onInterrupt: () => entered.resolve(),
+      onInterrupt: () => {
+        entered.resolve();
+        return { runId: "child" };
+      },
     });
     const failure = "root identity unavailable after cancellation";
     let armed = false;
@@ -171,19 +184,23 @@ it.each(
       const stoppedRoot = subagentRuns.get(root.runId);
       expect(isSameSubagentRunOwner(stoppedRoot, root)).toBe(true);
       expect(stoppedRoot?.endedReason).toBe("subagent-killed");
-      const childKills = phase === "descendant drain" ? 2 : 0;
+      const childDrained = phase === "descendant drain";
+      // Already admitted siblings finish independently of a later root read failure.
+      // The held child's accepted cancellation remains pending until its drain releases.
+      const childKills = childDrained ? 2 : 1;
       expect(resolveSubagentSessionStatus(subagentRuns.get("child"))).toBe(
-        childKills ? "killed" : "running",
+        childDrained ? "killed" : "running",
       );
-      expect(resolveSubagentSessionStatus(subagentRuns.get("healthy"))).toBe(
-        childKills ? "killed" : "running",
-      );
+      expect(resolveSubagentSessionStatus(subagentRuns.get("healthy"))).toBe("killed");
+      if (!childDrained) {
+        expect(result).toHaveProperty("error", expect.stringContaining("cleanup is pending"));
+      }
       expect(result).toMatchObject(
         boundary === "bulk"
           ? {
               status: "error",
               killed: 1 + childKills,
-              failed: 1,
+              failed: childDrained ? 1 : 2,
               labels: Array(1 + childKills).fill("shared label"),
             }
           : {
@@ -206,8 +223,8 @@ it.each(
         ownerReader.mockRestore();
         writer.mockRestore();
       }
-      expect(getActiveSessionWorkAdmissionCount()).toBe(0);
-      expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+      expect(getSessionControllerWorkCount()).toBe(0);
+      expect(getSessionMutationCount()).toBe(0);
     }
   },
 );
@@ -217,7 +234,7 @@ it.each([false, true])(
   async (sameTextSibling) => {
     const storePath = await seed();
     const entered = createDeferred();
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities: [key("root"), "root-session"],
       assertAllowed: () => {},
@@ -225,9 +242,9 @@ it.each([false, true])(
     });
     const rootHandle = createEmbeddedRunHandle({ runId: "root", isAbortable: false });
     const healthyHandle = createEmbeddedRunHandle({ runId: "healthy", isAbortable: false });
-    setActiveEmbeddedRun("root-session", rootHandle, key("root"));
+    attachActiveEmbeddedRun("root-session", rootHandle, key("root"));
     if (sameTextSibling) {
-      setActiveEmbeddedRun("healthy-session", healthyHandle, key("healthy"));
+      attachActiveEmbeddedRun("healthy-session", healthyHandle, key("healthy"));
     }
     const read = registryRead.withSubagentRunReadSnapshot;
     let armed = false;
@@ -289,11 +306,11 @@ it.each([false, true])(
         await pending;
       } finally {
         reader.mockRestore();
-        clearActiveEmbeddedRun("root-session", rootHandle, key("root"));
-        clearActiveEmbeddedRun("healthy-session", healthyHandle, key("healthy"));
+        await detachActiveEmbeddedRun("root-session", rootHandle, key("root"));
+        await detachActiveEmbeddedRun("healthy-session", healthyHandle, key("healthy"));
       }
-      expect(getActiveSessionWorkAdmissionCount()).toBe(0);
-      expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+      expect(getSessionControllerWorkCount()).toBe(0);
+      expect(getSessionMutationCount()).toBe(0);
     }
   },
 );

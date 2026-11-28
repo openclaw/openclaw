@@ -1,11 +1,8 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { Command } from "commander";
-import type {
-  ProviderAuthMethodNonInteractiveContext,
-  ProviderPlugin,
-} from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { ProviderAuthMethodNonInteractiveContext } from "openclaw/plugin-sdk/plugin-entry";
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { DEFAULT_LLAMA_CPP_EMBEDDING_MODEL } from "./defaults.js";
@@ -15,6 +12,9 @@ const { default: plugin } = await import("../index.js");
 const localChoice =
   manifest.providerAuthChoices.find((choice) => choice.method === "local") ??
   assert.fail("managed llama.cpp must declare its local auth choice");
+const cliOption = localChoice.cliOption ?? assert.fail("managed setup CLI option is required");
+const cliFlag = localChoice.cliFlag ?? assert.fail("managed setup CLI flag is required");
+const optionKey = localChoice.optionKey ?? assert.fail("managed setup option key is required");
 
 function setupContext(): ProviderAuthMethodNonInteractiveContext {
   return {
@@ -23,8 +23,8 @@ function setupContext(): ProviderAuthMethodNonInteractiveContext {
     baseConfig: {},
     opts: new Command()
       .exitOverride()
-      .option(localChoice.cliOption)
-      .parse([localChoice.cliFlag], { from: "user" })
+      .option(cliOption)
+      .parse([cliFlag], { from: "user" })
       .opts<Record<string, unknown>>(),
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     resolveApiKey: vi.fn(),
@@ -33,10 +33,8 @@ function setupContext(): ProviderAuthMethodNonInteractiveContext {
 }
 
 async function setup(ctx: ProviderAuthMethodNonInteractiveContext) {
-  const providers: ProviderPlugin[] = [];
-  plugin.register(
-    createTestPluginApi({ registerProvider: (provider) => providers.push(provider) }),
-  );
+  const { api, providers } = createCapturedPluginRegistration({ id: "test-plugin" });
+  plugin.register(api);
   const method = providers
     .find((provider) => provider.id === "llama-cpp")
     ?.auth.find((entry) => entry.id === "local");
@@ -58,7 +56,7 @@ describe("managed llama.cpp non-interactive onboarding", () => {
 
   it("downloads only embeddings and preserves chat, unrelated providers and auth bindings", async () => {
     const ctx = setupContext();
-    expect(ctx.opts).toEqual({ [localChoice.optionKey]: true });
+    expect(ctx.opts).toEqual({ [optionKey]: true });
     ctx.config.agents = { defaults: { model: { primary: "openai/gpt-5.4" } } };
     ctx.config.models = {
       providers: { other: { baseUrl: "http://localhost:8080/v1", models: [] } },

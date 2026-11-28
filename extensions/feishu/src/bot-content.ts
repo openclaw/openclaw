@@ -1,21 +1,12 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import {
   buildFeishuConversationId,
   resolveConfiguredFeishuGroupSessionScope,
 } from "./conversation-id.js";
-import type { FeishuMessageEvent } from "./event-types.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
-import { parseInteractiveCardContent } from "./interactive-message-content.js";
 import { saveMessageResourceFeishu } from "./media.js";
-import { isFeishuBroadcastMention } from "./mention.js";
-import { formatFeishuMediaContent } from "./message-content.js";
 import { parsePostContent } from "./post.js";
 import type { FeishuChatType, FeishuConfig, FeishuMediaInfo } from "./types.js";
-
-type FeishuMessageLike = {
-  message: Pick<FeishuMessageEvent["message"], "content" | "message_type" | "mentions">;
-};
 
 type FeishuGroupSessionConfig = Pick<
   FeishuConfig,
@@ -68,76 +59,6 @@ export function resolveFeishuGroupSession(params: {
     replyInThread,
     threadReply,
   };
-}
-
-export function parseMessageContent(content: string, messageType: string): string {
-  if (messageType === "post") {
-    return parsePostContent(content, {
-      renderMediaPlaceholders: false,
-      emptyTextFallback: "",
-    }).textContent;
-  }
-
-  try {
-    const parsed = JSON.parse(content);
-    if (messageType === "text") {
-      return parsed.text || "";
-    }
-    if (FEISHU_MEDIA_MESSAGE_TYPES.has(messageType)) {
-      return formatFeishuMediaContent(parsed, messageType);
-    }
-    if (messageType === "share_chat") {
-      if (parsed && typeof parsed === "object") {
-        const share = parsed as { body?: unknown; summary?: unknown; share_chat_id?: unknown };
-        const text = normalizeOptionalString(share.body) ?? normalizeOptionalString(share.summary);
-        if (text) {
-          return text;
-        }
-        const sharedChatId = normalizeOptionalString(share.share_chat_id);
-        if (sharedChatId) {
-          return `[Forwarded message: ${sharedChatId}]`;
-        }
-      }
-      return "[Forwarded message]";
-    }
-    if (messageType === "merge_forward") {
-      return "[Merged and Forwarded Message - loading...]";
-    }
-    if (messageType === "interactive") {
-      return parseInteractiveCardContent(parsed);
-    }
-    return content;
-  } catch {
-    return FEISHU_MEDIA_MESSAGE_TYPES.has(messageType) ? "" : content;
-  }
-}
-
-const FEISHU_MEDIA_MESSAGE_TYPES = new Set(["image", "file", "audio", "video", "media", "sticker"]);
-
-export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string): boolean {
-  if (!botOpenId) {
-    return false;
-  }
-  const mentions = event.message.mentions ?? [];
-  if (mentions.length > 0) {
-    return mentions.some(
-      (mention) => !isFeishuBroadcastMention(mention) && mention.id.open_id === botOpenId,
-    );
-  }
-  if (event.message.message_type === "post") {
-    return parsePostContent(event.message.content).mentionedOpenIds.some(
-      (id) => id.trim().toLowerCase() !== "all" && id === botOpenId,
-    );
-  }
-  return false;
-}
-
-export function normalizeFeishuCommandProbeBody(text: string): string {
-  return text
-    .replace(/<at\b[^>]*>[^<]*<\/at>/giu, " ")
-    .replace(/(^|\s)@[^/\s]+(?=\s|$|\/)/gu, "$1")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 function parseMediaResource(
@@ -242,7 +163,7 @@ export async function resolveFeishuMediaList(params: {
   const out: FeishuMediaInfo[] = [];
   for (const resource of resources) {
     try {
-      const { saved } = await saveMessageResourceFeishu({
+      const saved = await saveMessageResourceFeishu({
         cfg,
         messageId,
         fileKey: resource.key,

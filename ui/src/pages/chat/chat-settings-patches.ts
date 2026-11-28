@@ -1,12 +1,12 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { registerListener } from "../../../../src/shared/listeners.js";
-import {
-  resolveSessionKey,
-  type SessionCapability,
-  type SessionPatch,
-  type SessionPatchResult,
-  type SessionScopeHost,
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
+import type {
+  SessionCapability,
+  SessionPatch,
+  SessionPatchResult,
+  SessionScopeHost,
 } from "../../lib/sessions/index.ts";
+import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
@@ -38,23 +38,18 @@ function createChatPickerPatchReceipt(sessions: SessionCapability) {
   const scope = sessions.captureConnectionScope();
   const isCurrent = () => Boolean(scope && sessions.isConnectionScopeCurrent(scope));
   let confirmed: SessionPatchResult | null = null;
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners({ snapshot: true });
   return {
     isCurrent,
     read: () => (isCurrent() ? confirmed : null),
-    subscribe(onConfirmed: () => void) {
-      return registerListener(listeners, onConfirmed);
-    },
+    subscribe: listeners.subscribe,
     confirm: (receipt: SessionPatchResult) => {
       if (!isCurrent()) {
         return;
       }
       confirmed = receipt;
       // Decoration can change subscriptions while this receipt is being published.
-      const currentListeners = [...listeners];
-      for (const listener of currentListeners) {
-        listener();
-      }
+      listeners.publish();
     },
   };
 }
@@ -114,7 +109,6 @@ export function patchChatSessionSettings(
     ownsModelOverride?: () => boolean;
     canDispatch?: (receipt: SessionPatchResult | null) => boolean;
     onRejected?: (error: unknown, receipt: SessionPatchResult | null) => void;
-    reconcile?: (result: SessionPatchResult) => Promise<void> | void;
   } = {},
 ): Promise<SessionPatchResult | null> {
   const sessions = host.sessions;
@@ -130,25 +124,19 @@ export function patchChatSessionSettings(
     ? previous.receipt
     : createChatPickerPatchReceipt(sessions);
   const canDispatch = options.canDispatch;
-  const operation: Promise<SessionPatchResult | null> = (async () => {
-    // Run-affecting settings and sends share this canonical per-session tail.
-    // The capability captures this route before waiting, so a reconnect cannot
-    // redirect queued intent to a replacement Gateway.
-    const result = await sessions.patch(sessionKey, patch, {
-      agentId: options.agentId,
-      expectedSessionId: options.expectedSessionId,
-      ownsModelOverride: options.ownsModelOverride,
-      canDispatch: canDispatch ? () => canDispatch(receipt.read()) : undefined,
-      onConfirmed: receipt.confirm,
-      onRejected: (error) => options.onRejected?.(error, receipt.read()),
-      waitFor,
-      ...(waitFor ? { predecessorReceipt: receipt } : {}),
-    });
-    if (result) {
-      await options.reconcile?.(result);
-    }
-    return result;
-  })();
+  // Run-affecting settings and sends share this canonical per-session tail.
+  // The capability captures this route before waiting, so a reconnect cannot
+  // redirect queued intent to a replacement Gateway.
+  const operation = sessions.patch(sessionKey, patch, {
+    agentId: options.agentId,
+    expectedSessionId: options.expectedSessionId,
+    ownsModelOverride: options.ownsModelOverride,
+    canDispatch: canDispatch ? () => canDispatch(receipt.read()) : undefined,
+    onConfirmed: receipt.confirm,
+    onRejected: (error) => options.onRejected?.(error, receipt.read()),
+    waitFor,
+    ...(waitFor ? { predecessorReceipt: receipt } : {}),
+  });
   const pending: PendingChatPickerPatch = {
     ready: operation.then(
       (result) => result !== null,
@@ -162,7 +150,7 @@ export function patchChatSessionSettings(
       pendingBySession.delete(patchKey);
     }
   });
-  return operation;
+  return operation.then((result) => (result && "queued" in result ? null : result));
 }
 
 export function selectedGlobalScope(
@@ -187,7 +175,6 @@ export async function patchChatCommandSessionSettings(
   patch: SessionPatch,
   options: {
     ownsModelOverride?: () => boolean;
-    reconcile?: (result: SessionPatchResult) => Promise<void> | void;
   } = {},
 ): Promise<NonNullable<Awaited<ReturnType<SessionCapability["patch"]>>>> {
   const result = await patchChatSessionSettings(

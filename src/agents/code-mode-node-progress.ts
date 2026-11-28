@@ -33,7 +33,7 @@ export class CodeModeNodeProgress {
     Atomics.store(this.state, 1, 1);
   }
 
-  append(json: string): void {
+  append(json: string): number {
     const active = Atomics.load(this.state, 0);
     const [count, originalBytes, length] = this.header(active);
     const part = (count === 0 ? "[" : ",") + json;
@@ -44,6 +44,7 @@ export class CodeModeNodeProgress {
     this.headers.setFloat64(next + 8, total);
     this.headers.setFloat64(next + 16, length + written);
     Atomics.store(this.state, 0, 1 - active);
+    return count + 1;
   }
 
   resetOutput(): void {

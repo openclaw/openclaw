@@ -20,7 +20,7 @@ export function registerConfigureCommand(program: Command): void {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { configureCommandFromSectionsArg } =
           await import("../../commands/configure.commands.js");
-        await configureCommandFromSectionsArg(opts.section, defaultRuntime);
+        await configureCommandFromSectionsArg(opts.section);
       });
     });
 }

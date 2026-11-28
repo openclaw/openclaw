@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import type { ChannelStatusIssue } from "../../channels/plugins/types.core.js";
 import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
 import type { buildChannelsTable } from "./channels.js";
@@ -25,10 +26,10 @@ export function buildStatusChannelsTableRows(params: {
     // A disabled channel stays disabled even if the gateway still reports stale issues for it.
     const effectiveState = row.state === "off" ? "off" : issue ? "warn" : row.state;
     const issueSuffix = issue
-      ? ` · ${params.warn(`gateway: ${formatIssueMessage(issue.message ?? "issue")}`)}`
+      ? ` · ${params.warn(`gateway: ${formatIssueMessage(sanitizeTerminalText(issue.message ?? "issue"))}`)}`
       : "";
     return {
-      Channel: row.label,
+      Channel: sanitizeTerminalText(row.label),
       Enabled: row.enabled ? params.ok("ON") : params.muted("OFF"),
       State:
         effectiveState === "ok"
@@ -38,7 +39,7 @@ export function buildStatusChannelsTableRows(params: {
             : effectiveState === "off"
               ? params.muted("OFF")
               : params.accentDim("SETUP"),
-      Detail: `${row.detail}${issueSuffix}`,
+      Detail: `${sanitizeTerminalText(row.detail)}${issueSuffix}`,
     };
   });
 }

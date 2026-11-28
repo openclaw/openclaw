@@ -1,4 +1,5 @@
 import { sql, type RawBuilder } from "kysely";
+import { engineIndexHint } from "../../infra/database-engine/index-hint.js";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -12,6 +13,10 @@ import {
   isVisibleHistoryNonMessageEventSql,
   historyNavigationValidSql,
 } from "./session-accessor.sqlite-history-interval.js";
+import type {
+  VisibleHistoryBoundary,
+  VisibleHistoryProjection,
+} from "./session-accessor.sqlite-history-projection.types.js";
 import {
   getActiveTranscriptKysely,
   type CurrentTranscriptProjection,
@@ -24,22 +29,8 @@ import {
 } from "./session-accessor.sqlite-reset-window.js";
 import { isVisibleHistoryNonMessageEvent } from "./session-history-visibility.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { transcriptPredicateSql } from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
-
-export type VisibleHistoryBoundary = {
-  displayPosition: number;
-  eventId: string;
-  eventSeq: number;
-  messagePosition: number;
-  serializedBytes: number;
-};
-
-export type VisibleHistoryProjection = {
-  boundaries: VisibleHistoryBoundary[];
-  displaySource?: string;
-  latestResetRawSeq: number | null;
-  total: number;
-};
 
 type HistoryBoundaryQueryShape = "markers" | "branch" | "reset";
 
@@ -63,10 +54,7 @@ function resolveHistoryBoundaryQueryShape(
         db
           .selectFrom("transcript_event_identities")
           .select(["session_id", "event_type", "seq"])
-          .modifyEnd(
-            /* kysely-allow-raw: count candidates without reading identity or transcript payloads. */
-            sql`INDEXED BY idx_agent_transcript_event_sequence`,
-          )
+          .modifyEnd(engineIndexHint(projection.database.db, "idx_agent_transcript_event_sequence"))
           .as("identity"),
       )
       .select("seq")
@@ -90,10 +78,12 @@ function selectVisibleHistoryBoundaries(
     .select(["session_id", "event_id", "seq", "event_type"])
     .modifyEnd(
       // Whole-session reads select marker types; branches and resets join exact active rows.
-      /* kysely-allow-raw: preserve selective canonical index access after ANALYZE. */
-      shape === "markers"
-        ? sql`INDEXED BY idx_agent_transcript_event_sequence`
-        : sql`INDEXED BY idx_agent_transcript_event_identity_sequence`,
+      engineIndexHint(
+        database.db,
+        shape === "markers"
+          ? "idx_agent_transcript_event_sequence"
+          : "idx_agent_transcript_event_identity_sequence",
+      ),
     )
     .as("identity");
   // Pin the selected driving set even without ANALYZE: branches must not scan
@@ -113,9 +103,9 @@ function selectVisibleHistoryBoundaries(
       const type = eb.ref("identity.event_type");
       const visible = isVisibleHistoryNonMessageEventSql(
         type,
-        eb.ref("event.navigation_display"),
-        eb.ref("event.navigation_custom_type"),
-        eb.ref("event.navigation_valid"),
+        transcriptPredicateSql(database.db, "navigation_display", "event"),
+        transcriptPredicateSql(database.db, "navigation_custom_type", "event"),
+        transcriptPredicateSql(database.db, "navigation_valid", "event"),
       );
       if (boundaryActivePosition === undefined) {
         return visible;
@@ -156,7 +146,7 @@ function getHistoryCountReader(
         shape === "reset" ? parameter((params) => params.boundaryActivePosition) : undefined,
       ).select((eb) => [
         eb.fn.countAll<number>().as("event_count"),
-        eb.fn.min(historyNavigationValidSql).as("navigation_valid"),
+        eb.fn.min(historyNavigationValidSql(database.db)).as("navigation_valid"),
       ]),
     );
     readers.set(shape, read);
@@ -190,10 +180,21 @@ export function resolveVisibleHistoryEventCount(projection: CurrentTranscriptPro
 export function resolveVisibleHistoryProjection(
   projection: CurrentTranscriptProjection,
 ): VisibleHistoryProjection {
+  // The deprecated synchronous SDK title reader keeps the canonical uncached builder.
+  return (
+    projection.resolveVisibleHistory?.(projection) ?? buildVisibleHistoryProjection(projection)
+  );
+}
+
+export function buildVisibleHistoryProjection(
+  projection: CurrentTranscriptProjection,
+): VisibleHistoryProjection {
   const displaySource = readTranscriptDisplaySource(projection);
   if (projection.state.activeEventCount === projection.state.activeMessageCount) {
     return {
       boundaries: [],
+      boundariesById: new Map(),
+      boundariesBySeq: new Map(),
       displaySource,
       latestResetRawSeq: null,
       total: projection.state.activeMessageCount,
@@ -220,7 +221,7 @@ export function resolveVisibleHistoryProjection(
         "following.message_position as following_message_position",
         "identity.event_id",
         "identity.seq",
-        historyNavigationValidSql.as("navigation_valid"),
+        historyNavigationValidSql(projection.database.db).as("navigation_valid"),
         /* kysely-allow-raw: history byte caps include each event's JSONL newline. */
         sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
       ])
@@ -292,6 +293,8 @@ export function resolveVisibleHistoryProjection(
   });
   return {
     boundaries,
+    boundariesById: new Map(boundaries.map((boundary) => [boundary.eventId, boundary])),
+    boundariesBySeq: new Map(boundaries.map((boundary) => [boundary.eventSeq, boundary])),
     displaySource,
     latestResetRawSeq,
     total: visibleMessages.total + boundaries.length,
@@ -385,10 +388,7 @@ export function resolveHistoryReadWindowChange(
   }
   const row = readActiveTranscriptCoordinate(projection, { eventSeq: anchor.rawSeq });
   const position = row?.message_position;
-  const boundary =
-    position === null
-      ? history.boundaries.find((entry) => entry.eventSeq === anchor.rawSeq)
-      : undefined;
+  const boundary = position === null ? history.boundariesBySeq.get(anchor.rawSeq) : undefined;
   const seq =
     position === undefined
       ? undefined

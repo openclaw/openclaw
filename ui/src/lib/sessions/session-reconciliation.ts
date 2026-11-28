@@ -13,13 +13,6 @@ import {
   type SessionChangedResult,
   type SessionReconcileOptions,
 } from "./reconcile.ts";
-import type {
-  SessionCapability,
-  SessionConnectionOwner,
-  SessionGateway,
-  SessionRowTarget,
-  SessionState,
-} from "./session-capability.ts";
 import type { createSessionDeletions } from "./session-deletions.ts";
 import type { createSessionGitHubPublication } from "./session-github-publication.ts";
 import {
@@ -35,6 +28,16 @@ import type { createSessionPermissionProjection } from "./session-permission-pro
 import type { createSessionRosterRefresh } from "./session-roster-refresh.ts";
 import { sessionChangedSnapshots, type SessionChangedEventInfo } from "./session-row-reconcile.ts";
 import type { createSessionThinkingClaims } from "./session-thinking-claims.ts";
+import type {
+  SessionConnectionOwner,
+  SessionGateway,
+  SessionListScope,
+  SessionRowEventListener,
+  SessionRowListener,
+  SessionRowObservation,
+  SessionRowTarget,
+  SessionState,
+} from "./session-types.ts";
 
 type Host = {
   readState: () => SessionState;
@@ -205,9 +208,9 @@ export function createSessionReconciliation(host: Host) {
   const reconcile = (
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
-    options?: Parameters<SessionCapability["reconcile"]>[2],
+    options?: SessionReconcileOptions & { sourceListScope?: SessionListScope },
     observation?: ReturnType<Host["roster"]["captureReconciliation"]>,
-  ): ReturnType<SessionCapability["reconcile"]> => {
+  ): boolean | "defaults-only" => {
     const state = host.readState();
     const historyAgentId =
       row?.agentId ??
@@ -290,7 +293,11 @@ export function createSessionReconciliation(host: Host) {
     return true;
   };
 
-  const observeRow: SessionCapability["observeRow"] = (target, listener, options) => {
+  const observeRow = (
+    target: SessionRowTarget,
+    listener: SessionRowListener,
+    options?: { onInvalidate?: (reason?: string) => void; onEvent?: SessionRowEventListener },
+  ): SessionRowObservation => {
     const { roster, deletions } = host;
     if (!target.key.trim() || !target.agentId.trim()) {
       throw new Error("A session row observation requires a session key and explicit agent.");
@@ -396,7 +403,7 @@ export function createSessionReconciliation(host: Host) {
     eventInfo: ReturnType<typeof readSessionChangedEvent>;
     reconciled: SessionChangedResult;
     claimChanged?: boolean;
-    notifyManaged?: (primaryPublished?: boolean) => void;
+    notifyManaged?: () => void;
     notifyEvent?: (event: GatewayEventFrame) => void;
   } => {
     const {
@@ -586,7 +593,6 @@ export function createSessionReconciliation(host: Host) {
       eventObservation,
       invalidationReason,
     );
-    const notifyManaged = () => staged.notify();
     const claimChanged = thinkingClaims.observeEvent(
       eventInfo?.reason === "delete"
         ? reconciled
@@ -606,7 +612,7 @@ export function createSessionReconciliation(host: Host) {
       eventInfo,
       reconciled,
       claimChanged,
-      notifyManaged,
+      notifyManaged: staged.notify,
       notifyEvent,
     };
   };
@@ -616,9 +622,14 @@ export function createSessionReconciliation(host: Host) {
     reconcile,
     reconcileChangedEvent,
     observeRow,
-    captureReconcile(this: void): SessionCapability["reconcile"] {
+    /** Captures request ordering before a supplemental row read begins. */
+    captureReconcile(this: void) {
       const observation = host.roster.captureReconciliation();
-      return (row, defaults, options) => reconcile(row, defaults, options, observation);
+      return (
+        row: GatewaySessionRow | undefined,
+        defaults?: SessionsListResult["defaults"],
+        options?: SessionReconcileOptions & { sourceListScope?: SessionListScope },
+      ) => reconcile(row, defaults, options, observation);
     },
   };
 }

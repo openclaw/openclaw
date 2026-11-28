@@ -4,72 +4,6 @@ import Observation
 import struct OpenClawKit.GatewayResponseError
 import OpenClawProtocol
 
-public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
-    public struct Repository: Codable, Sendable {
-        public let owner: String
-        public let repo: String
-    }
-
-    public struct Checks: Codable, Sendable {
-        public let state: String
-        public let passed: Int
-        public let failed: Int
-        public let skipped: Int
-        public let running: Int
-    }
-
-    public struct PullRequest: Codable, Sendable {
-        public let number: Int
-        public let owner: String
-        public let repo: String
-        public let branch: String
-        public let title: String
-        public let url: String
-        public let state: String
-        public let additions: Int?
-        public let deletions: Int?
-        public let changedFiles: Int?
-        public let checks: Checks?
-    }
-
-    public struct Branch: Codable, Sendable {
-        public let owner: String
-        public let repo: String
-        public let branch: String
-        public let additions: Int?
-        public let deletions: Int?
-        public let changedFiles: Int?
-        public let createUrl: String?
-    }
-
-    public var pullRequests: [PullRequest]
-    public var repository: Repository?
-    public var branch: Branch?
-    public let rateLimited: Bool
-    public let status: String
-
-    private var repositoryID: String? {
-        let owner = self.repository?.owner ?? self.branch?.owner ?? self.pullRequests.first?.owner
-        let repo = self.repository?.repo ?? self.branch?.repo ?? self.pullRequests.first?.repo
-        return owner.flatMap { owner in repo.map { "\(owner)/\($0)" } }
-    }
-
-    func retaining(_ previous: Self?) -> Self {
-        var result = self
-        // ui/src/lib/session-pull-requests.ts:299: transient failures retain only the same checkout's facts.
-        if let previous, self.pullRequests.isEmpty, ["unavailable", "rate-limited"].contains(self.status),
-           self.repositoryID == nil || self.repositoryID == previous.repositoryID,
-           self.branch == nil || (previous.branch?.branch ?? previous.pullRequests.first?.branch) == nil ||
-           self.branch?.branch == (previous.branch?.branch ?? previous.pullRequests.first?.branch)
-        {
-            result.pullRequests = previous.pullRequests
-            result.branch = self.branch ?? previous.branch
-            result.repository = self.repository ?? previous.repository
-        }
-        return result
-    }
-}
-
 @MainActor public protocol OpenClawChatSidebarHoverTransport {
     var sidebarHoverFacts: OpenClawChatSidebarHoverFacts { get }
     func sidebarHoverChannelAvatar(session: OpenClawChatSessionEntry, sessionAgentID: String?) async -> Data?
@@ -172,9 +106,8 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
             self.avatars[target, default: [:]][resource] = Avatar(version: version, task: Task { await load() })
         }
         guard let avatar = self.avatars[target]?[resource] else { return nil }
-        let generation = self.generation
         let result = await avatar.task.value
-        guard generation == self.generation, !avatar.task.isCancelled, !Task.isCancelled else { return nil }
+        guard !avatar.task.isCancelled, !Task.isCancelled else { return nil }
         // ui/src/lib/authenticated-avatar-route.ts:128: share images/404s while watched; other misses remain retryable.
         switch result {
         case let .image(data): return data
@@ -300,17 +233,14 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
         guard let request = self.request, self.targets.contains(target) else { return }
         self.dirty.insert(target)
         guard self.reads[target] == nil else { return }
-        let generation = self.generation
         self.reads[target] = Task {
-            while self.generation == generation, !Task.isCancelled,
-                  self.dirty.remove(target) != nil
-            {
+            while !Task.isCancelled, self.dirty.remove(target) != nil {
                 let outcome: Result<Data, Error>
                 do {
                     outcome = try await .success(request(OpenClawChatGatewayRequests.progressCardGet(
                         sessionKey: target.sessionKey, agentID: target.agentID)))
                 } catch { outcome = .failure(error) }
-                guard self.generation == generation, !Task.isCancelled else { return }
+                guard !Task.isCancelled else { return }
                 self.progressNeedsReload.insert(target)
                 // session-progress-cards.ts:234: denial retires content; transient errors retain the last useful card.
                 if case let .failure(error) = outcome, let response = error as? GatewayResponseError,

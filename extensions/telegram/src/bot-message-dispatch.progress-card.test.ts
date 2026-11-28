@@ -30,6 +30,44 @@ import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js"
 import type * as TelegramEditModule from "./send-edit.js";
 
 describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
+  it.each(["status", "raw"] as const)(
+    "compacts consecutive tool rows only with %s command text",
+    async (commandText) => {
+      const { answerDraftStream } = setupDraftStreams();
+      // Dispatch catches and logs errors, so assert after dispatch.
+      let preview = "";
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+        for (const id of ["1", "2", "3"]) {
+          const event = { toolCallId: id, name: "bash", args: { command: `printf ${id}` } };
+          await emitToolStart(replyOptions, { ...event, phase: "start" });
+          await replyOptions?.onItemEvent?.({
+            ...event,
+            itemId: `tool:${id}`,
+            kind: "tool",
+            phase: "end",
+            status: "completed",
+          });
+          await answerDraftStream.flush();
+        }
+        preview = answerDraftStream.updatePreview.mock.lastCall?.[0].text ?? "";
+        return { queuedFinal: false };
+      });
+      await dispatchWithContext({
+        context: createContext({
+          ctxPayload: createDirectSessionPayload(),
+          threadSpec: { id: undefined, scope: "none" },
+          replyThreadId: undefined,
+        }),
+        streamMode: "progress",
+        telegramCfg: {
+          streaming: { mode: "progress", progress: { toolProgress: true, commandText } },
+        },
+      });
+      expect(preview.match(/Bash/g)).toHaveLength(commandText === "status" ? 1 : 3);
+      expect(preview.includes("Bash ×3")).toBe(commandText === "status");
+    },
+  );
+
   it("keeps a full plan and recent activity after failed named tool items", () => {
     const richMessages = true;
     const commandLines = Array.from({ length: 8 }, (_, index) =>
@@ -381,7 +419,8 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
       });
       deliverReplies.mockImplementation(actualDelivery.deliverReplies);
       editMessageTelegram.mockImplementation(actualEdit.editMessageTelegram);
-      loadSessionStore.mockReturnValue({ s1: {} });
+      const sessionKey = "agent:ops:telegram:group:-100123:topic:88";
+      loadSessionStore.mockReturnValue({ [sessionKey]: {} });
       const bot = createBot();
       const visible = new Map<number, string>();
       const sends: Array<{ chatId: string | number; threadId?: number }> = [];
@@ -470,7 +509,7 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
       await dispatchWithContext({
         bot,
         context: createContext({
-          ctxPayload: { SessionKey: "s1" } as TelegramMessageContext["ctxPayload"],
+          ctxPayload: { SessionKey: sessionKey } as TelegramMessageContext["ctxPayload"],
           route: { agentId: "ops", accountId: "default" } as TelegramMessageContext["route"],
           msg: {
             chat: { id: -100123, type: "supergroup", is_forum: true },
@@ -546,13 +585,14 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
   });
 
   it("routes prepared typed reasoning-only finals to durable delivery when reasoning is persistent", async () => {
+    const sessionKey = "agent:default:telegram:direct:123";
     loadSessionStore.mockReturnValue({
-      s1: { reasoningLevel: "on" },
+      [sessionKey]: { reasoningLevel: "on" },
     });
     mockTurn(createReasoningFinalDelivery());
     await dispatchWithContext({
       context: createContext({
-        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+        ctxPayload: { SessionKey: sessionKey } as unknown as TelegramMessageContext["ctxPayload"],
       }),
     });
     expectDeliveredReply(0, { text: "🧠 _hidden_" });

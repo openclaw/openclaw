@@ -15,11 +15,13 @@ import { resolveSubagentChildAgentId } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   observeSubagentExecution,
+  resolveYieldedLeafPausedForMs,
   type SubagentExecutionObservation,
 } from "./subagent-execution-observation.js";
 import type { SubagentRunReadIndex } from "./subagent-registry-queries.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { shouldKeepSubagentRunChildLink } from "./subagent-run-liveness.js";
 import { buildSubagentRunView } from "./subagent-run-view.js";
 import {
@@ -51,7 +53,7 @@ export function captureSubagentListReadContext(
     runs.map((entry) => [
       entry.childSessionKey,
       readIndex.countPendingDescendantRuns(entry.childSessionKey, {
-        excludeSuspendedDelivery: true,
+        excludeSettledDelivery: true,
       }),
     ]),
   );
@@ -64,16 +66,13 @@ export function captureSubagentListReadContext(
   const execution = new Map(
     [...view.active, ...view.recent].map((entry) => [
       entry.runId,
-      observeSubagentExecution(
-        entry,
-        entry.pauseReason === "sessions_yield" ? fullRuns.values() : [],
-      ),
+      observeSubagentExecution(entry, isSubagentPausedByYield(entry) ? fullRuns.values() : []),
     ]),
   );
   return {
     now,
     recentMinutes,
-    view: structuredClone(view),
+    view,
     childSessionsByController,
     pendingDescendants,
     execution,
@@ -201,7 +200,10 @@ export function buildSubagentList(params: {
     const task = truncateLine(entry.task.trim(), params.taskMaxChars ?? 72);
     const taskName = entry.taskName?.trim();
     const taskNamePrefix = taskName ? `${taskName}: ` : "";
-    const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplayName(modelSelection)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
+    const pausedForMs = resolveYieldedLeafPausedForMs(entry, execution, now);
+    const pausedAge =
+      pausedForMs === undefined ? undefined : formatDurationCompact(pausedForMs, { spaced: true });
+    const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplayName(modelSelection)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${pausedAge ? `, paused ${pausedAge}` : ""}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
     const view = {
       index,
       line,
@@ -221,6 +223,7 @@ export function buildSubagentList(params: {
       totalTokens,
       startedAt: getSubagentSessionStartedAt(entry),
       ...(entry.execution.endedAt ? { endedAt: entry.execution.endedAt } : {}),
+      ...(pausedForMs === undefined ? {} : { pausedForMs }),
     };
     index += 1;
     return view;

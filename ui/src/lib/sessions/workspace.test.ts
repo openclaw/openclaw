@@ -3,6 +3,20 @@ import { describe, expect, it } from "vitest";
 import { resolveSessionWorkspace } from "./workspace.ts";
 
 describe("repository session workspace", () => {
+  it.each(["/state/workspace-", "C:\\state\\workspace-"])(
+    "keeps a generated agent ID out of the workspace label under %s",
+    (prefix) => {
+      const agentId = "bot-11111111-2222-4333-8444-555555555555";
+      const workspace = `${prefix}${agentId}`;
+      expect(
+        resolveSessionWorkspace({
+          session: { key: `agent:${agentId}:main`, kind: "direct" },
+          agentWorkspace: workspace,
+        }),
+      ).toEqual({ root: workspace, label: "Workspace" });
+    },
+  );
+
   it("never substitutes the Gateway workspace for an unplaced repository", () => {
     expect(
       resolveSessionWorkspace({

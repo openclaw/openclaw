@@ -1,12 +1,15 @@
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { readChatRunProgressEvents } from "./server-chat-progress-snapshot.js";
 import type { ChatRunPlanSnapshot, ChatRunState } from "./server-chat-state.js";
 
 export type InFlightRunSnapshot = {
   runId: string;
   text: string;
+  /** Delivered rows own the pre-tool prefix, joined by blank lines; text is the remaining suffix. */
+  textFromMessage?: number | number[];
   startedAt?: number;
   /**
-   * True when the in-flight run is owned by the embedded-run registry and can
+   * True when the in-flight run is owned by a native controller attempt and can
    * only be cancelled through the session-owned abort path (sessions.abort),
    * never through run-specific chat.abort. Control UI uses this to keep Stop
    * routing session-scoped for recovered embedded runs.
@@ -25,7 +28,10 @@ export function projectInFlightRunSnapshot(params: {
   const run = params.chatRunState.runs.get(params.runId);
   const projected = params.chatRunState.resolveBuffer(params.runId);
   const plan = run?.planSnapshot;
-  const events = run?.progressSnapshot?.events;
+  const events = readChatRunProgressEvents(
+    run?.progressSnapshot,
+    run?.assistantScope && !projected.suppress ? run.display?.toolTextAfterSeq : undefined,
+  );
   return {
     runId: params.runId,
     text: projected.suppress ? "" : projected.text,

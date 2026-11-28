@@ -41,6 +41,8 @@ export type SessionVisibilityDecisionRow = {
   ownerSessionKey?: string;
   spawnedBy?: string;
   parentSessionKey?: string;
+  /** Canonical Gateway relationship projection; raw display lineage is not a fallback when present. */
+  childOwnerSessionKeys?: readonly string[];
 };
 export type SessionVisibilityDenialReason =
   | "agent_to_agent_disabled"
@@ -48,6 +50,7 @@ export type SessionVisibilityDenialReason =
   | "agent_to_agent_send_not_allowed"
   | "cross_agent_visibility_restricted"
   | "incognito_session"
+  | "invocation_agent_scope_restricted"
   | "session_ownership_lookup_failed_credentials"
   | "session_ownership_lookup_failed_transient"
   | "session_ownership_lookup_failed_unknown"
@@ -74,6 +77,7 @@ type SessionVisibilityDecisionParams = {
   requesterSessionKey: string;
   mainSessionKey?: string;
   explicitTargetAgentOwnership?: boolean;
+  sessionReadAgentOnly?: boolean;
   watch?: boolean;
   visibility: SessionVisibilityDecisionMode;
   a2aPolicy: SessionVisibilityDecisionPolicy;
@@ -107,6 +111,9 @@ function rowOwnedByRequester(
   row: SessionVisibilityDecisionRow,
   requesterSessionKey: string,
 ): boolean {
+  if (row.childOwnerSessionKeys !== undefined) {
+    return row.childOwnerSessionKeys.includes(requesterSessionKey);
+  }
   return (
     row.ownerSessionKey === requesterSessionKey ||
     row.spawnedBy === requesterSessionKey ||
@@ -150,12 +157,19 @@ export function createSessionVisibilityDecisionChecker(params: SessionVisibility
           );
         }
       }
+      const isCrossAgent = targetAgentId !== requesterAgentId;
+      if (params.sessionReadAgentOnly && isCrossAgent) {
+        return denied(
+          "invocation_agent_scope_restricted",
+          ["runtime.sessionReadAgentOnly"],
+          ["requesterAgentId", "targetAgentId"],
+        );
+      }
       const isRequesterOwned =
         rowOwnedByRequester(row, params.requesterSessionKey) ||
         (params.visibility === "tree" &&
           targetAgentId === requesterAgentId &&
           params.requesterSessionKey === params.mainSessionKey);
-      const isCrossAgent = targetAgentId !== requesterAgentId;
       // Native child lineage can authorize a cross-agent backend without
       // weakening ordinary cross-agent session policy.
       if (
@@ -256,6 +270,8 @@ export function renderSessionVisibilityDenial(
       return `Session not visible from session tools${params.targetSessionKey ? `: ${params.targetSessionKey}` : ""}`;
     case "target_agent_ownership_unavailable":
       return `${actionPrefix(params.action)} denied because target agent ownership is unavailable.`;
+    case "invocation_agent_scope_restricted":
+      return "This run can read only its own agent's sessions.";
     case "cross_agent_visibility_restricted":
       if (params.action === "send") {
         return "Session send visibility is restricted. Configure agents.entries.<id>.tools.agentToAgent.send for explicit send-only destinations, or tools.sessions.visibility=all for shared access. Global agent-to-agent and sandbox limits still apply.";

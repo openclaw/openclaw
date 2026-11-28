@@ -20,16 +20,22 @@ import {
   withReplyDispatcher,
 } from "../../auto-reply/dispatch-dispatcher.js";
 import { formatAgentEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
+import type {
+  GetReplyOptions,
+  TurnAdoptionLifecycle,
+} from "../../auto-reply/get-reply-options.types.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
+import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
+import { replyCallbackCustody } from "../../auto-reply/reply/reply-callback-custody.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import {
   createAckReactionHandle,
@@ -75,7 +81,7 @@ import { recordInboundSessionMeta } from "../../config/sessions/session-accessor
 import { readSessionUpdatedAtInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import { readRemoteMediaBuffer, saveRemoteMedia, saveResponseMedia } from "../../media/fetch.js";
-import { saveMediaBuffer } from "../../media/store.js";
+import { deleteMediaBuffer, saveMediaBuffer } from "../../media/store.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
@@ -87,6 +93,7 @@ import {
   publicChannelTurnParams,
   type PublicChannelTurnParams,
 } from "../../plugin-sdk/reply-options.js";
+import { copyMutableSessionEntry } from "../../plugin-sdk/session-store-runtime-internal.js";
 import {
   readSessionUpdatedAt,
   updateLastRoute,
@@ -94,7 +101,16 @@ import {
 } from "../../plugin-sdk/session-store-runtime.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { dispatchReplyWithBufferedBlockDispatcher } from "../legacy-sdk-reply-dispatch.js";
+import { pluginInstanceInvocation } from "../plugin-instance-invocation.js";
+import {
+  getPluginInstanceOwner,
+  getPluginOriginalValue,
+  getPluginValueInstance,
+} from "../plugin-instance-scope.js";
+import type { PluginInstanceConsumer } from "../plugin-instance.types.js";
 import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.js";
+import { getPluginRuntimeGenerationRegistry } from "./generation-state.js";
 import type { PluginRuntime } from "./types.js";
 
 // Text and registration helpers must not initialize the agent dispatch graph.
@@ -102,28 +118,145 @@ const dispatchLowLevelChannelReplyFromConfig = createLazyRuntimeMethod(
   createLazyRuntimeModule(() => import("../../auto-reply/reply/dispatch-from-config.js")),
   (runtime) => runtime.dispatchLowLevelChannelReplyFromConfig,
 );
-const dispatchReplyWithBufferedBlockDispatcherCore = createLazyRuntimeMethod(
-  createLazyRuntimeModule(() => import("../../auto-reply/reply/provider-dispatcher.js")),
-  (runtime) => runtime.dispatchReplyWithBufferedBlockDispatcherCore,
-);
 const loadChannelTurnLifecycle = createLazyRuntimeModule(
   () => import("../../channels/turn/lifecycle.js"),
 );
-const dispatchAssembledChannelTurn = createLazyRuntimeMethod(
+const dispatchAssembledChannelTurnCore = createLazyRuntimeMethod(
   loadChannelTurnLifecycle,
   (runtime) => runtime.dispatchAssembledChannelTurn,
 );
+function bindChannelCallbacks<T extends object>(callbacks: T, consumer: PluginInstanceConsumer): T {
+  const instance = getPluginValueInstance(consumer.wrap(() => undefined))!;
+  const original = getPluginOriginalValue(callbacks, instance);
+  // SAFETY: Only the creating instance can restore this callback object's original shape.
+  const owned = consumer.wrap((original ?? callbacks) as T);
+  return new Proxy(owned, {
+    get: (target, key) =>
+      consumer.run(() => {
+        const value: unknown = Reflect.get(target, key, target);
+        return value && typeof value === "object"
+          ? (getPluginOriginalValue(value, instance) ?? value)
+          : value;
+      }),
+  });
+}
+type ChannelDeliveryCustody = { retain: () => () => void };
+
+function bindChannelDelivery<
+  T extends {
+    delivery: object;
+    replyOptions?: GetReplyOptions;
+    turnAdoptionLifecycle?: TurnAdoptionLifecycle;
+  },
+>(params: T, consumer?: PluginInstanceConsumer, custody?: ChannelDeliveryCustody): T {
+  let replyOptions: InternalGetReplyOptions | undefined = params.replyOptions;
+  let adoption: TurnAdoptionLifecycle | undefined;
+  const source = params.turnAdoptionLifecycle ?? replyOptions?.turnAdoptionLifecycle;
+  if (consumer && custody) {
+    adoption = source && bindChannelCallbacks(source, consumer);
+    replyOptions = {
+      // Restore same-owner data before copying a prewrapped options object.
+      ...(replyOptions ? bindChannelCallbacks(replyOptions, consumer) : {}),
+      [replyCallbackCustody]: custody,
+      ...(adoption ? { turnAdoptionLifecycle: adoption } : {}),
+    };
+  }
+  return consumer
+    ? {
+        ...params,
+        delivery: consumer.wrap(params.delivery),
+        ...(adoption ? { turnAdoptionLifecycle: adoption } : {}),
+        ...(replyOptions ? { replyOptions: bindChannelCallbacks(replyOptions, consumer) } : {}),
+      }
+    : params;
+}
+async function withChannelDeliveryCustody<T, R>(
+  params: T,
+  dispatch: (
+    params: T,
+    consumer?: PluginInstanceConsumer,
+    custody?: ChannelDeliveryCustody,
+  ) => Promise<R>,
+): Promise<R> {
+  const invocation = pluginInstanceInvocation.getStore();
+  const owner = invocation && getPluginInstanceOwner(invocation.instance);
+  const generation = getPluginRuntimeGenerationRegistry();
+  const consumer = owner?.instance?.retainConsumer(
+    undefined,
+    generation?.plugins.includes(owner.record) ? generation : owner.registry,
+  );
+  let references = 1;
+  const release = () => {
+    if (--references === 0) {
+      consumer?.release();
+    }
+  };
+  const custody: ChannelDeliveryCustody | undefined = consumer && {
+    retain: () =>
+      consumer.run(() => {
+        references++;
+        return release;
+      }),
+  };
+  try {
+    return await dispatch(params, consumer, custody);
+  } finally {
+    release();
+  }
+}
+const dispatchAssembledChannelTurn: PluginRuntime["channel"]["inbound"]["dispatchReply"] = (
+  params,
+) =>
+  withChannelDeliveryCustody(params, (turn, consumer, custody) =>
+    dispatchAssembledChannelTurnCore(
+      publicChannelTurn(bindChannelDelivery(turn, consumer, custody)),
+    ),
+  );
 const loadPreparedChannelTurn = createLazyRuntimeModule(
   () => import("../../channels/turn/execution.js"),
 );
 const runPreparedChannelTurn: PluginRuntime["channel"]["inbound"]["runPreparedReply"] = async (
   params,
 ) => (await loadPreparedChannelTurn()).runPreparedChannelTurn(params);
-const runChannelTurn = createLazyRuntimeMethod(
+const runChannelTurnCore = createLazyRuntimeMethod(
   createLazyRuntimeModule(() => import("../../channels/turn/run-channel-turn.js")),
   (runtime) => runtime.runChannelTurn,
   // SAFETY: Forwarding async overloads unchanged preserves the raw-event and dispatch-result generics.
 ) as typeof import("../../channels/turn/run-channel-turn.js").runChannelTurn;
+const runChannelTurn = ((params: Parameters<typeof runChannelTurnCore>[0]) =>
+  withChannelDeliveryCustody(params, (turn, consumer, custody) => {
+    if (!consumer || !custody) {
+      return runChannelTurnCore(publicChannelTurnParams(turn));
+    }
+    const adapter = bindChannelCallbacks(turn.adapter, consumer);
+    const resolveTurn: typeof adapter.resolveTurn = async (...args) => {
+      const resolved = await adapter.resolveTurn(...args);
+      const instance = getPluginValueInstance(consumer.wrap(() => undefined))!;
+      // SAFETY: Exact-owner restoration preserves the adapter's resolved turn contract.
+      const original = (getPluginOriginalValue(resolved, instance) ?? resolved) as typeof resolved;
+      if (!("delivery" in original)) {
+        return original;
+      }
+      if (turn.turnAdoptionLifecycle) {
+        // Core assembly selects this top-level lifecycle, not the resolved turn's.
+        // Prepared dispatch closures keep their original exact lifecycle identity.
+        preparedTurn.turnAdoptionLifecycle = bindChannelCallbacks(
+          turn.turnAdoptionLifecycle,
+          consumer,
+        );
+      }
+      return bindChannelDelivery(original, consumer, custody);
+    };
+    const preparedTurn = publicChannelTurnParams({
+      ...turn,
+      adapter: new Proxy(adapter, {
+        get: (target, key) =>
+          key === "resolveTurn" ? resolveTurn : Reflect.get(target, key, target),
+      }),
+    });
+    return runChannelTurnCore(preparedTurn);
+    // SAFETY: Forwarding async overloads unchanged preserves raw-event and dispatch-result generics.
+  })) as typeof import("../../channels/turn/run-channel-turn.js").runChannelTurn;
 
 export function createRuntimeChannel(options?: {
   dispatchReplyFromConfig?: typeof dispatchLowLevelChannelReplyFromConfig;
@@ -135,15 +268,17 @@ export function createRuntimeChannel(options?: {
     const run = runChannelTurn as (
       value: RunChannelTurnParams<TRaw, TResult, ChannelTurnDeliveryAdapter>,
     ) => Promise<ChannelTurnResult<TResult>>;
-    return run(publicChannelTurnParams(params));
+    return run(params);
   };
-  const dispatchInbound: PluginRuntime["channel"]["inbound"]["dispatch"] = async (params) =>
-    (await loadChannelTurnLifecycle()).dispatchRoutedChannelTurn({
-      ...publicChannelTurn(params),
-      ...(options?.dispatchReplyFromConfig
-        ? { dispatchReplyFromConfig: options.dispatchReplyFromConfig }
-        : {}),
-    });
+  const dispatchInbound: PluginRuntime["channel"]["inbound"]["dispatch"] = (params) =>
+    withChannelDeliveryCustody(params, async (turn, consumer, custody) =>
+      (await loadChannelTurnLifecycle()).dispatchRoutedChannelTurn({
+        ...publicChannelTurn(bindChannelDelivery(turn, consumer, custody)),
+        ...(options?.dispatchReplyFromConfig
+          ? { dispatchReplyFromConfig: options.dispatchReplyFromConfig }
+          : {}),
+      }),
+    );
   const inboundRuntime = {
     ingress: {
       createResolver: createChannelIngressPolicyResolver,
@@ -154,7 +289,7 @@ export function createRuntimeChannel(options?: {
     run: runInbound,
     runPreparedReply: runPreparedChannelTurn,
     dispatch: dispatchInbound,
-    dispatchReply: (params) => dispatchAssembledChannelTurn(publicChannelTurn(params)),
+    dispatchReply: dispatchAssembledChannelTurn,
   } satisfies PluginRuntime["channel"]["inbound"];
   const sessionRuntime = {
     resolveStorePath: resolveSessionStorePathCore,
@@ -162,7 +297,8 @@ export function createRuntimeChannel(options?: {
     readSessionUpdatedAtAsync: readSessionUpdatedAtInWorker,
     // Plugin runtime property names are a shipped contract; the implementations
     // route through the session accessor boundary.
-    recordSessionMetaFromInbound: recordInboundSessionMeta,
+    recordSessionMetaFromInbound: (params: Parameters<typeof recordInboundSessionMeta>[0]) =>
+      recordInboundSessionMeta(params).then(copyMutableSessionEntry),
     recordInboundSession,
     updateLastRoute,
     updateLastRouteWithAuthority,
@@ -183,8 +319,7 @@ export function createRuntimeChannel(options?: {
       convertMarkdownTables,
     },
     reply: {
-      dispatchReplyWithBufferedBlockDispatcher: (params) =>
-        dispatchReplyWithBufferedBlockDispatcherCore(publicChannelTurn(params)),
+      dispatchReplyWithBufferedBlockDispatcher,
       createReplyDispatcherWithTyping,
       resolveEffectiveMessagesConfig,
       resolveHumanDelayConfig,
@@ -222,6 +357,7 @@ export function createRuntimeChannel(options?: {
       saveRemoteMedia,
       saveResponseMedia,
       saveMediaBuffer,
+      deleteMediaBuffer,
     },
     activity: {
       record: recordChannelActivity,

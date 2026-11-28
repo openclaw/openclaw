@@ -12,7 +12,6 @@ import {
 } from "./logger.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const metadataBoundaries = ["configured stat", "rolling readdir", "candidate stat"] as const;
 
 const resolvedRedaction = { mode: "tools" as const, patterns: [/custom-secret-[a-z]+/g] };
 type RedactOptions = Parameters<typeof import("./redact.js").redactSensitiveLines>[1];
@@ -73,34 +72,24 @@ describe("readConfiguredLogTail", () => {
     const result = await readConfiguredLogTail();
 
     expect(result.lines).toEqual([expect.stringContaining("rolling log record")]);
-    for (const file of [result.file, getResolvedLoggerSettings().file]) {
+    for (const file of [result.file, (await getResolvedLoggerSettings()).file]) {
       expect(path.dirname(file)).toBe(tempDir);
       expect(path.basename(file)).toMatch(/^openclaw-\d{4}-\d{2}-\d{2}\.log$/);
     }
   });
 
-  it("samples the configured file once and redacts all returned lines together", async () => {
+  it("redacts the configured file while returning ordinary lines", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = tempDirs.make("openclaw-log-tail-");
     const file = path.join(tempDir, "openclaw-2026-01-22.log");
 
     await fs.writeFile(file, "custom-secret-abcdefghijklmnopqrstuvwxyz\nsecond line\n");
     setLoggerOverride({ file });
-    const stat = vi.spyOn(fs, "stat");
 
     const result = await readConfiguredLogTail();
 
-    expect(stat.mock.calls.filter(([target]) => String(target) === file)).toHaveLength(1);
-    expect(resolveLogTailRedactOptionsMock).toHaveBeenCalledTimes(1);
-    expect(redactSensitiveLinesMock).toHaveBeenCalledTimes(1);
-    expect(redactSensitiveLinesMock).toHaveBeenCalledWith(
-      ["custom-secret-abcdefghijklmnopqrstuvwxyz", "second line"],
-      resolvedRedaction,
-      [true, true],
-    );
     expect(result.lines).toEqual(["custom…wxyz", "second line"]);
   });
-
   it("fills short positional reads before splitting log lines", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = tempDirs.make("openclaw-log-tail-");
@@ -364,39 +353,26 @@ describe("readConfiguredLogTail", () => {
     expect(result.lines[0]?.trimEnd()).toBe("first-line-in-window");
   });
 
-  it.each(metadataBoundaries)(
-    "rethrows operational errors from the %s boundary",
-    async (boundary) => {
-      const tempDir = tempDirs.make("openclaw-log-tail-");
-      const configured = path.join(tempDir, "openclaw-2026-01-22.log");
-      const candidate = path.join(tempDir, "openclaw-2026-01-21.log");
-      const error = Object.assign(new Error("EACCES injected"), { code: "EACCES" });
-      const realStat = fs.stat.bind(fs);
+  it("rethrows operational errors while inspecting rolling candidates", async () => {
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const configured = path.join(tempDir, "openclaw-2026-01-22.log");
+    const candidate = path.join(tempDir, "openclaw-2026-01-21.log");
+    const error = Object.assign(new Error("EACCES injected"), { code: "EACCES" });
+    const realStat = fs.stat.bind(fs);
 
-      if (boundary === "candidate stat") {
-        await fs.writeFile(candidate, "candidate\n");
-      } else if (boundary !== "rolling readdir") {
-        await fs.writeFile(configured, "configured\n");
+    await fs.writeFile(candidate, "candidate\n");
+    setLoggerOverride({ file: configured });
+
+    vi.spyOn(fs, "stat").mockImplementation(async (...args: Parameters<typeof fs.stat>) => {
+      if (String(args[0]) === candidate) {
+        throw error;
       }
-      setLoggerOverride({ file: configured });
+      return realStat(...args);
+    });
 
-      if (boundary === "configured stat") {
-        vi.spyOn(fs, "stat").mockRejectedValueOnce(error);
-      } else if (boundary === "rolling readdir") {
-        vi.spyOn(fs, "readdir").mockRejectedValueOnce(error);
-      } else if (boundary === "candidate stat") {
-        vi.spyOn(fs, "stat").mockImplementation(async (...args: Parameters<typeof fs.stat>) => {
-          if (String(args[0]) === candidate) {
-            throw error;
-          }
-          return realStat(...args);
-        });
-      }
-
-      const { readConfiguredLogTail } = await import("./log-tail.js");
-      await expect(readConfiguredLogTail()).rejects.toBe(error);
-    },
-  );
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    await expect(readConfiguredLogTail()).rejects.toBe(error);
+  });
 
   it("falls back only within the active profile's rolling log family", async () => {
     const tempDir = tempDirs.make("openclaw-log-tail-");

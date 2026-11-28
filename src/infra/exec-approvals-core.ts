@@ -1,7 +1,11 @@
-// Shared exec approval types and mode normalization.
+// Shared exec approval types and passive policy helpers.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
-import type { ApprovalScope } from "../../packages/gateway-protocol/src/schema/approvals.js";
+import type {
+  ApprovalScope,
+  StreamApprovalProposal,
+} from "../../packages/gateway-protocol/src/schema/approvals.js";
 import type { ExecApprovalRequestParams } from "../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
@@ -13,6 +17,7 @@ export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
 export type ExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
+export const EXEC_APPROVAL_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
 export type ExecApprovalUnavailableDecision = "allow-always";
 
 const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
@@ -177,6 +182,8 @@ export type ExecApprovalRequestPayload = {
   security?: string | null;
   ask?: string | null;
   warningText?: string | null;
+  /** Display metadata attached by the native stream mutation owner. */
+  streamProposal?: StreamApprovalProposal;
   /** Owner-declared blast-radius facts; display-only, never authorization. */
   scope?: ApprovalScope | null;
   commandAnalysis?: CommandExplanationSummary | null;
@@ -258,3 +265,36 @@ export type ExecApprovalsResolved = {
 
 // Keep CLI + gateway defaults in sync.
 export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 1_800_000;
+
+/** Socket credentials are local; shared policy retains only unrelated socket metadata. */
+export function stripExecApprovalsSocketCredentials(file: ExecApprovalsFile): ExecApprovalsFile {
+  const { path: _path, token: _token, ...metadata } = file.socket ?? {};
+  return {
+    ...file,
+    socket: Object.keys(metadata).length ? metadata : undefined,
+  };
+}
+
+/** Raw repair preserves invalid policy fields while retiring embedded credentials. */
+export function stripExecApprovalsRawSocketCredentials(raw: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
+  }
+  if (
+    !isRecord(parsed) ||
+    !isRecord(parsed.socket) ||
+    (!Object.hasOwn(parsed.socket, "path") && !Object.hasOwn(parsed.socket, "token"))
+  ) {
+    return raw;
+  }
+  const { path: _path, token: _token, ...metadata } = parsed.socket;
+  if (Object.keys(metadata).length) {
+    parsed.socket = metadata;
+  } else {
+    delete parsed.socket;
+  }
+  return `${JSON.stringify(parsed, null, 2)}\n`;
+}

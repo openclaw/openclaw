@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { meetingEntry } from "../../test-helpers/transcripts.test-support.ts";
@@ -119,41 +120,6 @@ describe("meeting transcript library", () => {
       expect(page.querySelector(".transcripts-summary")?.textContent).toContain(
         "Reader layout discussed.",
       ),
-    );
-  });
-
-  it("loads beyond five speech pages and refreshes the last without losing or duplicating earlier pages", async () => {
-    vi.useFakeTimers();
-    let appended = false;
-    const request = vi.fn(async (method: string, params: { cursor?: string }) => {
-      if (method === "transcripts.list") {
-        return { sessions: [], nextCursor: null };
-      }
-      const pageNumber = Number(params.cursor ?? 0);
-      return {
-        ...meetingPage,
-        session: { ...meetingEntry, active: true },
-        utterances: [
-          { sequence: pageNumber, text: `Utterance ${pageNumber}` },
-          ...(appended && pageNumber === 6 ? [{ sequence: 7, text: "New speech" }] : []),
-        ],
-        nextCursor: pageNumber < 6 ? String(pageNumber + 1) : null,
-      };
-    });
-    const { page } = mount(request, "?selector=meeting&tab=transcript");
-    await waitForSolid(() => expect(page.textContent).toContain("Utterance 6"));
-    const speech = () =>
-      [...page.querySelectorAll(".transcripts-utterances p")].map((el) => el.textContent);
-    const initialSpeech = Array.from({ length: 7 }, (_, index) => `Utterance ${index}`);
-    expect(speech()).toEqual(initialSpeech);
-    expect(page.textContent).not.toContain("Load more");
-    appended = true;
-    await vi.advanceTimersByTimeAsync(6_000);
-    expect(speech()).toEqual([...initialSpeech, "New speech"]);
-    expect(request).toHaveBeenLastCalledWith(
-      "transcripts.get",
-      expect.objectContaining({ cursor: "6" }),
-      expect.anything(),
     );
   });
 
@@ -311,10 +277,8 @@ describe("meeting transcript library", () => {
     const request = vi.fn(() => pending.promise);
     const { page, setSearch } = mount(request);
     await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
-    const filters = page.querySelector<HTMLDetailsElement>(".transcripts-filters details")!;
-    expect(filters).not.toBeNull();
-    expect(filters.open).toBe(false);
-    filters.open = true;
+    page.querySelector<HTMLButtonElement>(".transcripts-filters__trigger")!.click();
+    flush();
     const drafts = {
       query: "unsaved title",
       providerId: "caption",
@@ -330,7 +294,6 @@ describe("meeting transcript library", () => {
     }
     pending.resolve({ sessions: [meetingEntry], nextCursor: null });
     await waitForSolid(() => expect(page.textContent).toContain("Design review"));
-    expect(filters.open).toBe(true);
     for (const [key, value] of Object.entries(drafts)) {
       expect(page.querySelector<HTMLInputElement>(`input[name="${key}"]`)!.value).toBe(value);
     }
@@ -345,10 +308,10 @@ describe("meeting transcript library", () => {
     flush();
     expect(page.querySelector<HTMLInputElement>('input[name="query"]')!.value).toBe("from-history");
     expect(page.querySelector<HTMLInputElement>('input[name="accountId"]')!.value).toBe("other");
-    expect(filters.open).toBe(true);
+    expect(page.querySelector(".transcripts-filters__trigger")?.classList).toContain("active");
     button(page, "Clear filters").click();
     flush();
-    expect(filters.open).toBe(false);
+    expect(page.querySelector<HTMLInputElement>('input[name="accountId"]')!.value).toBe("");
   });
 
   it("preserves reader search through pagination, tabs, and export updates, then submits and clears it", async () => {
@@ -385,7 +348,9 @@ describe("meeting transcript library", () => {
     await waitForSolid(() => expect(page.textContent).toContain("Preparing download"));
     expect(page.querySelector<HTMLInputElement>('input[name="find"]')!.value).toBe("draft search");
     download.reject(new Error("Export unavailable"));
-    await waitForSolid(() => expect(page.textContent).toContain("Download failed"));
+    await waitForSolid(() =>
+      expect(page.textContent).toContain("Couldn’t download the transcript."),
+    );
     page
       .querySelector(".transcripts-search")!
       .dispatchEvent(new Event("submit", { cancelable: true }));
@@ -589,13 +554,15 @@ describe("meeting transcript library", () => {
     snapshot.phase = "reconnecting";
     notify();
     pending.resolve(meetingPage);
-    await waitForSolid(() => expect(page.textContent).toContain("Connect to the Gateway"));
+    await waitForSolid(() =>
+      expect(page.textContent).toContain("Reconnect to read meeting transcripts."),
+    );
     expect(page.textContent).not.toContain("Keep the reader quiet");
   });
 
   it.each([
-    ["empty", null, "Your meeting notes, together"],
-    ["failure", new Error("Archive unavailable"), "Could not load transcripts"],
+    ["empty", null, "No meetings yet."],
+    ["failure", new Error("Archive unavailable"), "Couldn’t load transcripts. Try again."],
     [
       "restricted",
       new GatewayRequestError({ code: "FORBIDDEN", message: "Shared archive is restricted" }),

@@ -74,3 +74,9 @@ export interface VoiceCallProvider {
    */
   getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult>;
 }
+
+export function assertVoiceCallProviderSetting(value: unknown, message: string): asserts value {
+  if (!value) {
+    throw new Error(message);
+  }
+}

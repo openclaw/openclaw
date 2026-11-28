@@ -1,4 +1,5 @@
 import path from "node:path";
+import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   runChannelInboundEvent,
   type ChannelInboundEventRunnerParams,
@@ -12,6 +13,7 @@ import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { MatrixMonitorHandlerParams } from "./handler-types.js";
 import {
   createMatrixHandlerTestHarness,
+  createMatrixIngressLifecycle,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
 import type { MatrixRawEvent } from "./types.js";
@@ -21,37 +23,38 @@ type MatrixInboundRunParams = Parameters<MatrixInboundRun>[0];
 type TurnAdoptionLifecycle = NonNullable<GetReplyOptions["turnAdoptionLifecycle"]>;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sendDraftMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "$draft1", roomId: "!r" })));
+const sendMock = vi.hoisted(() => vi.fn());
 
-function createClaimSpies() {
-  return {
-    commit: vi.fn(async () => true),
-    release: vi.fn(),
-  };
-}
+// mock-isolation: Keep Matrix network sends inert while core dispatch decides progress delivery.
+vi.mock("../send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../send.js")>()),
+  sendMessageMatrix: sendMock,
+  sendSingleTextMessageMatrix: sendDraftMock,
+  sendTypingMatrix: vi.fn(async () => {}),
+}));
 
-function releaseSyntheticResolverAdmissionTicket(options: GetReplyOptions | undefined): void {
-  if (!options) {
-    throw new Error("expected reply options with an admission ticket");
-  }
-  const symbolOptions = options as GetReplyOptions & Record<symbol, unknown>;
-  const tickets = Object.getOwnPropertySymbols(options)
-    .map((key) => symbolOptions[key])
-    .filter(
-      (value): value is { wait: (signal?: AbortSignal) => Promise<boolean>; release: () => void } =>
-        typeof value === "object" &&
-        value !== null &&
-        "wait" in value &&
-        typeof value.wait === "function" &&
-        "release" in value &&
-        typeof value.release === "function",
-    );
-  const ticket = tickets.at(0);
-  if (tickets.length !== 1 || !ticket) {
-    throw new Error(`expected one reply admission ticket, received ${tickets.length}`);
-  }
-  // A real getReplyFromConfig run releases this ticket when runReplyAgent publishes
-  // queue/run ownership. The synthetic resolver must model the same handoff.
-  ticket.release();
+function runWithReplyResolver(
+  replyResolver: unknown,
+  onRun?: (params: MatrixInboundRunParams) => void,
+) {
+  return (async (params: MatrixInboundRunParams) => {
+    onRun?.(params);
+    const adapter = params.adapter;
+    return await runChannelInboundEvent({
+      ...params,
+      adapter: {
+        ...adapter,
+        resolveTurn: async (...args: Parameters<typeof adapter.resolveTurn>) => {
+          const turn = await adapter.resolveTurn(...args);
+          if (!("route" in turn) || "runDispatch" in turn) {
+            throw new Error("expected Matrix to resolve a routed channel turn");
+          }
+          return { ...turn, replyResolver: replyResolver as never };
+        },
+      },
+    } as ChannelInboundEventRunnerParams<MatrixRawEvent>);
+  }) as MatrixInboundRun;
 }
 
 describe("Matrix active-turn steering admission", () => {
@@ -67,7 +70,8 @@ describe("Matrix active-turn steering admission", () => {
     const activeResolverStarted = createDeferred<void>();
     const releaseActiveResolver = createDeferred<void>();
     const followupResolverAdopted = createDeferred<void>();
-    const claimsByEvent = new Map<string, ReturnType<typeof createClaimSpies>>();
+    const activeLifecycle = createMatrixIngressLifecycle();
+    const followupLifecycle = createMatrixIngressLifecycle();
     const inboundLifecycles = new Map<string, TurnAdoptionLifecycle | undefined>();
     let followupResolverLifecycle: TurnAdoptionLifecycle | undefined;
     let followupResolverContext: FinalizedMsgContext | undefined;
@@ -77,23 +81,8 @@ describe("Matrix active-turn steering admission", () => {
       messages: { queue: { mode: "steer" } },
       channels: { matrix: { dm: { allowFrom: ["*"] } } },
     } satisfies OpenClawConfig;
-    const inboundDeduper: NonNullable<MatrixMonitorHandlerParams["inboundDeduper"]> = {
-      claim: vi.fn(async ({ eventId }) => {
-        const claim = createClaimSpies();
-        claimsByEvent.set(eventId, claim);
-        return {
-          kind: "claimed" as const,
-          handle: {
-            keys: [eventId] as const,
-            commit: claim.commit,
-            release: claim.release,
-          },
-        };
-      }),
-    };
     const queuePolicyResolver = vi.fn(
       async (ctx: FinalizedMsgContext, options?: GetReplyOptions) => {
-        releaseSyntheticResolverAdmissionTicket(options);
         const eventId = ctx.MessageSid;
         if (eventId === activeEventId) {
           await options?.turnAdoptionLifecycle?.onAdopted();
@@ -114,30 +103,15 @@ describe("Matrix active-turn steering admission", () => {
         return undefined;
       },
     );
-    const runWithQueuePolicyResolver = (async (params: MatrixInboundRunParams) => {
+    const runWithQueuePolicyResolver = runWithReplyResolver(queuePolicyResolver, (params) => {
       const eventId = (params.raw as MatrixRawEvent).event_id;
       if (eventId) {
         inboundLifecycles.set(eventId, params.turnAdoptionLifecycle);
       }
-      const adapter = params.adapter;
-      return await runChannelInboundEvent({
-        ...params,
-        adapter: {
-          ...adapter,
-          resolveTurn: async (...args: Parameters<typeof adapter.resolveTurn>) => {
-            const turn = await adapter.resolveTurn(...args);
-            if (!("route" in turn) || "runDispatch" in turn) {
-              throw new Error("expected Matrix to resolve a routed channel turn");
-            }
-            return { ...turn, replyResolver: queuePolicyResolver as never };
-          },
-        },
-      } as ChannelInboundEventRunnerParams<MatrixRawEvent>);
-    }) as MatrixInboundRun;
+    });
     const runtime = { error: vi.fn() };
     const { handler } = createMatrixHandlerTestHarness({
       cfg,
-      inboundDeduper,
       runtime: runtime as never,
       shouldHandleTextCommands: () => true,
       hasControlCommand: (text?: string) => text?.startsWith("/steer") === true,
@@ -155,6 +129,7 @@ describe("Matrix active-turn steering admission", () => {
           eventId: activeEventId,
           body: "keep this run active",
         }),
+        activeLifecycle,
       );
       // The first turn in a worker also pays the cold reply-dispatch path (module
       // graph, session store, plugin discovery); on a starved 2-vCPU runner that
@@ -174,6 +149,7 @@ describe("Matrix active-turn steering admission", () => {
           eventId: followupEventId,
           body: followupBody,
         }),
+        followupLifecycle,
       );
       // Adoption can finish beside an active turn; handler cleanup still waits
       // for that turn's foreground delivery lease.
@@ -186,12 +162,12 @@ describe("Matrix active-turn steering admission", () => {
       expect(queuePolicyResolver).toHaveBeenCalledTimes(2);
 
       expect(followupResolverContext?.CommandBody).toBe(followupBody);
-      expect(inboundLifecycles.get(followupEventId)).toMatchObject({ admission: "exclusive" });
-      // Core wraps the lifecycle to record adoption state; invoking that wrapper must still
-      // settle the exact replay claim captured by the Matrix handler above.
+      expect(inboundLifecycles.get(followupEventId)).toBe(followupLifecycle);
+      // Core wraps the lifecycle to record adoption state while preserving ingress ownership.
       expect(followupResolverLifecycle).toMatchObject({ admission: "exclusive" });
-      expect(claimsByEvent.get(followupEventId)?.commit).toHaveBeenCalledOnce();
-      expect(claimsByEvent.get(followupEventId)?.release).not.toHaveBeenCalled();
+      expect(followupLifecycle.onDeferred).toHaveBeenCalledOnce();
+      expect(followupLifecycle.onAdopted).toHaveBeenCalledOnce();
+      expect(followupLifecycle.onAbandoned).not.toHaveBeenCalled();
       expect(runtime.error).not.toHaveBeenCalled();
     } finally {
       signal.removeEventListener("abort", releaseActiveTurn);
@@ -203,21 +179,11 @@ describe("Matrix active-turn steering admission", () => {
     }
   });
 
-  it("keeps a deferred replay claim past handler return until abandonment releases it", async () => {
+  it("preserves deferred ingress ownership after handler return until abandonment", async () => {
     const eventId = "$abandoned-followup";
     installMatrixMonitorTestRuntime();
-    const claim = createClaimSpies();
+    const lifecycle = createMatrixIngressLifecycle();
     let deferredLifecycle: TurnAdoptionLifecycle | undefined;
-    const inboundDeduper: NonNullable<MatrixMonitorHandlerParams["inboundDeduper"]> = {
-      claim: vi.fn(async () => ({
-        kind: "claimed" as const,
-        handle: {
-          keys: [eventId] as const,
-          commit: claim.commit,
-          release: claim.release,
-        },
-      })),
-    };
     const runWithDeferredOwnership = (async (params: MatrixInboundRunParams) => {
       deferredLifecycle = params.turnAdoptionLifecycle;
       expect(deferredLifecycle?.onDeferred?.()).not.toBe(false);
@@ -233,22 +199,59 @@ describe("Matrix active-turn steering admission", () => {
       };
     }) as MatrixInboundRun;
     const { handler } = createMatrixHandlerTestHarness({
-      inboundDeduper,
       runChannelInboundEvent: runWithDeferredOwnership,
     });
 
     await handler(
       "!room:example.org",
       createMatrixTextMessageEvent({ eventId, body: "wait for the active turn" }),
+      lifecycle,
     );
 
-    expect(deferredLifecycle).toMatchObject({ admission: "exclusive" });
-    expect(claim.commit).not.toHaveBeenCalled();
-    expect(claim.release).not.toHaveBeenCalled();
+    expect(deferredLifecycle).toBe(lifecycle);
+    expect(lifecycle.onDeferred).toHaveBeenCalledOnce();
+    expect(lifecycle.onAdopted).not.toHaveBeenCalled();
+    expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
 
-    deferredLifecycle?.onAbandoned?.();
+    await deferredLifecycle?.onAbandoned?.();
 
-    expect(claim.commit).not.toHaveBeenCalled();
-    expect(claim.release).toHaveBeenCalledOnce();
+    expect(lifecycle.onAdopted).not.toHaveBeenCalled();
+    expect(lifecycle.onAbandoned).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Matrix progress when the message tool sends the final reply", () => {
+  it("shows the progress draft through core dispatch", async () => {
+    installMatrixMonitorTestRuntime();
+    sendMock.mockClear();
+    const progressResolver = async (_ctx: FinalizedMsgContext, options?: GetReplyOptions) => {
+      await options?.onItemEvent?.(
+        projectAgentToolActivity({ toolCallId: "read-1", name: "read_file", phase: "start" }),
+      );
+      await vi.waitFor(() => expect(sendDraftMock).toHaveBeenCalledOnce(), { timeout: 10_000 });
+      return undefined;
+    };
+    const runtime = { error: vi.fn() };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg: {
+        session: { store: path.join(tempDirs.make("openclaw-matrix-progress-"), "sessions.json") },
+        messages: { visibleReplies: "message_tool" },
+        channels: { matrix: { dm: { allowFrom: ["*"] } } },
+      } satisfies OpenClawConfig,
+      runtime: runtime as never,
+      streaming: "progress",
+      previewToolProgressEnabled: true,
+      runChannelInboundEvent: runWithReplyResolver(progressResolver),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$progress", body: "check the file" }),
+      createMatrixIngressLifecycle(),
+    );
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(sendDraftMock).toHaveBeenCalledOnce();
+    expect(sendMock).not.toHaveBeenCalled();
   });
 });

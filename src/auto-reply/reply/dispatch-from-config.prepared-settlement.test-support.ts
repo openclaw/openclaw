@@ -13,20 +13,15 @@ import { dispatchReplyFromConfig, setNoAbort } from "./dispatch-from-config.test
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-// The delivery entrypoint owns the shared harness and per-case runtime snapshot cleanup.
 export function registerPreparedSettlementTests() {
   it.each(["prepared", "legacy"] as const)(
-    "settles a prepared block through a %s dispatcher without sending a duplicate final",
+    "settles prepared blocks through %s dispatch without duplicate finals",
     async (mode) => {
       setNoAbort();
-      const rawDeliver = vi.fn(async (_payload: ReplyPayload) => ({ visibleReplySent: true }));
-      const preparedDeliver = vi.fn(async (_plan: OutboundPayloadPlan) => ({
-        visibleReplySent: true,
-      }));
-      const owner = createReplyDispatcher({
-        deliver: rawDeliver,
-        deliverPrepared: preparedDeliver,
-      });
+      const receipt = { visibleReplySent: true };
+      const deliver = vi.fn(async (_payload: ReplyPayload) => receipt);
+      const deliverPrepared = vi.fn(async (_plan: OutboundPayloadPlan) => receipt);
+      const owner = createReplyDispatcher({ deliver, deliverPrepared });
       const dispatcher = mode === "legacy" ? { ...owner, sendPreparedReply: undefined } : owner;
       const onBlockReplyQueued = vi.fn();
       const payload = setReplyPayloadMetadata(
@@ -39,11 +34,8 @@ export function registerPreparedSettlementTests() {
         dispatcher,
         replyOptions: { onBlockReplyQueued },
         replyResolver: async (_ctx, opts) => {
-          const plan = expectDefined(
-            createStructuredOutboundPayloadPlan([payload])[0],
-            "prepared block",
-          );
-          await opts?.onPreparedBlockReply?.(plan);
+          const [plan] = createStructuredOutboundPayloadPlan([payload]);
+          await opts?.onPreparedBlockReply?.(expectDefined(plan, "prepared block"));
           return payload;
         },
       });
@@ -53,16 +45,16 @@ export function registerPreparedSettlementTests() {
       expect(result.counts).toEqual({ tool: 0, block: 1, final: 0 });
       expect(onBlockReplyQueued).toHaveBeenCalledOnce();
       expect(onBlockReplyQueued.mock.calls[0]?.[1]).toMatchObject({ assistantMessageIndex: 7 });
-      const deliveredPayload = expectDefined(
+      const delivered = expectDefined(
         mode === "prepared"
-          ? preparedDeliver.mock.calls[0]?.[0].payload
-          : rawDeliver.mock.calls[0]?.[0],
+          ? deliverPrepared.mock.calls[0]?.[0].payload
+          : deliver.mock.calls[0]?.[0],
         "delivered block",
       );
-      expect(deliveredPayload).toMatchObject({ text: payload.text });
-      expect(getReplyPayloadMetadata(deliveredPayload)).toMatchObject({ assistantMessageIndex: 7 });
-      expect(preparedDeliver).toHaveBeenCalledTimes(mode === "prepared" ? 1 : 0);
-      expect(rawDeliver).toHaveBeenCalledTimes(mode === "legacy" ? 1 : 0);
+      expect(delivered).toMatchObject({ text: payload.text });
+      expect(getReplyPayloadMetadata(delivered)).toMatchObject({ assistantMessageIndex: 7 });
+      expect(deliverPrepared).toHaveBeenCalledTimes(mode === "prepared" ? 1 : 0);
+      expect(deliver).toHaveBeenCalledTimes(mode === "legacy" ? 1 : 0);
     },
   );
 
@@ -71,28 +63,23 @@ export function registerPreparedSettlementTests() {
     const transport = vi.fn(async () => {});
     const transformReplyPayload = vi.fn(() => null);
     const dispatcher = createReplyDispatcher({ deliver: transport, transformReplyPayload });
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "telegram",
-      SessionKey: "agent:main:telegram:direct:123",
-    });
-
     const result = await dispatchReplyFromConfig({
-      ctx,
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:main:telegram:direct:123",
+      }),
       cfg: emptyConfig,
       dispatcher,
-      replyResolver: vi.fn(async (_ctx, opts) => {
+      replyResolver: async (_ctx, opts) => {
         await opts?.onBlockReply?.({ text: "private block" });
         return { text: "private reply" };
-      }),
+      },
     });
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
 
-    expect(result).toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
+    expect(result).toMatchObject({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
     expect(result).not.toHaveProperty("noVisibleReplyFallbackEligible");
     expect(result).not.toHaveProperty("noVisibleReplyFallbackDelivered");
     expect(transformReplyPayload).toHaveBeenCalledTimes(2);

@@ -74,7 +74,7 @@ import Testing
         try makeExecutableForTests(at: distEntrypoint)
         try makeExecutableForTests(at: projectExecutable)
         try makeExecutableForTests(at: node)
-        try "#!/bin/sh\necho v24.16.0\n".write(to: node, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho v24.22.1\n".write(to: node, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
 
         let launch = try await CommandResolver.nodeHostWorkerLaunch(
@@ -95,7 +95,7 @@ import Testing
         let nodePath = tmp.appendingPathComponent("node_modules/.bin/node")
         let scriptPath = tmp.appendingPathComponent("bin/openclaw.js")
         try makeExecutableForTests(at: nodePath)
-        try "#!/bin/sh\necho v24.16.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho v24.22.1\n".write(to: nodePath, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
         try makeExecutableForTests(at: scriptPath)
 
@@ -180,7 +180,7 @@ import Testing
         let binDir = tmp.appendingPathComponent("bin")
         let nodePath = binDir.appendingPathComponent("node")
         try makeExecutableForTests(at: nodePath)
-        try "#!/bin/sh\necho v24.16.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho v24.22.1\n".write(to: nodePath, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
 
         let cmd = await CommandResolver.localOpenclawCommand(
@@ -296,7 +296,7 @@ import Testing
     @Test func `node manager runtimes precede system runtimes`() throws {
         let home = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: home) }
-        let nodeManagerBin = home.appendingPathComponent(".nvm/versions/node/v24.16.0/bin")
+        let nodeManagerBin = home.appendingPathComponent(".nvm/versions/node/v24.22.1/bin")
         try makeExecutableForTests(at: nodeManagerBin.appendingPathComponent("node"))
 
         let paths = CommandResolver.preferredPaths(
@@ -536,6 +536,25 @@ import Testing
 }
 
 struct CommandResolverLocalRoutingTests {
+    @Test func `unavailable CLI diagnostics remain literal shell data`() async throws {
+        let message = "first line\n__OPENCLAW_ERR__\nprintf marker-executed >&2\n#"
+        let command = await CommandResolver.localOpenclawCommand(
+            subcommand: "gateway",
+            profile: AppProfile(environment: [:]),
+            resolveCLI: { _, _ in .unavailable(message) })
+        let process = Process()
+        let stderr = Pipe()
+        process.executableURL = URL(fileURLWithPath: command[0])
+        process.arguments = Array(command.dropFirst())
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+        let output = stderr.fileHandleForReading.readDataToEndOfFile()
+
+        #expect(process.terminationStatus == 1)
+        #expect(output == Data((message + "\n").utf8))
+    }
+
     @Test(arguments: [
         ["/fixture/managed/openclaw"],
         ["/fixture/node", "/fixture/project/openclaw.mjs"],

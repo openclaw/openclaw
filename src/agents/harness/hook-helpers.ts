@@ -1,10 +1,9 @@
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { cloneHookIsolationValue } from "../../plugins/hook-isolation.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { applyTranscriptSenderIdentityToWrite } from "../../sessions/user-turn-transcript.metadata.js";
 import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-content.js";
-import { consumeAdjustedParamsForToolCall } from "../agent-tools.before-tool-call.js";
+import { consumeAdjustedParamsForToolCall } from "../agent-tools.before-tool-call.state.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -34,15 +33,13 @@ export async function runAgentHarnessAfterToolCallHook(params: {
     return;
   }
   try {
-    const eventArgs = structuredClone(resolvedArgs);
-    const eventResult = cloneHookIsolationValue("after_tool_call", params.result);
     await hookRunner.runAfterToolCall(
       {
         toolName: params.toolName,
-        params: eventArgs,
+        params: structuredClone(resolvedArgs),
         ...(params.runId ? { runId: params.runId } : {}),
         toolCallId: params.toolCallId,
-        ...(eventResult ? { result: eventResult } : {}),
+        ...(params.result ? { result: params.result } : {}),
         ...(params.error ? { error: params.error } : {}),
         ...(params.startedAt != null ? { durationMs: Date.now() - params.startedAt } : {}),
       },

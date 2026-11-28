@@ -27,6 +27,8 @@ import {
 } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
+const SESSION_RECEIPT_DELETE_BATCH_SIZE = 64;
+
 /** Capture historical receipts while the session still owns its logical keys. */
 export async function preparePersonalGitHubSessionReceiptDeletion(params: {
   agentId: string;
@@ -54,7 +56,8 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
     { assertCurrent: params.assertCurrent, existingOnly: true },
   )) ?? { personal: [], repository: [] };
   params.assertCurrent?.();
-  return async ({ assertCurrent, sessionEntryCurrent, retainedSessionKeys } = {}) => {
+  return async (options = {}) => {
+    const { assertCurrent, sessionEntryCurrent, retainedSessionKeys } = options;
     const selectedKeys = new Set(input.sessionKeys.filter((key) => !retainedSessionKeys?.has(key)));
     if (selectedKeys.size === 0) {
       return;
@@ -220,13 +223,17 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
         }
         // Materialize before deleting sidecars: late personal receipts are selected through them.
         if (table === "github_personal_publication_requests" && hasLifecycles) {
-          for (const requestId of selected) {
+          for (let start = 0; start < selected.length; start += SESSION_RECEIPT_DELETE_BATCH_SIZE) {
             const deleted = executeSqliteQuerySync(
               db,
               query
                 .deleteFrom("github_publication_session_lifecycles")
                 .where("publication_kind", "=", "personal")
-                .where("request_id", "=", requestId)
+                .where(
+                  "request_id",
+                  "in",
+                  sqliteStringSet(selected.slice(start, start + SESSION_RECEIPT_DELETE_BATCH_SIZE)),
+                )
                 .returning("request_id"),
             ).rows;
             for (const row of deleted) {
@@ -236,10 +243,17 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
             }
           }
         }
-        for (const requestId of selected) {
+        for (let start = 0; start < selected.length; start += SESSION_RECEIPT_DELETE_BATCH_SIZE) {
           const deleted = executeSqliteQuerySync(
             db,
-            query.deleteFrom(table).where("request_id", "=", requestId).returning("request_id"),
+            query
+              .deleteFrom(table)
+              .where(
+                "request_id",
+                "in",
+                sqliteStringSet(selected.slice(start, start + SESSION_RECEIPT_DELETE_BATCH_SIZE)),
+              )
+              .returning("request_id"),
           ).rows;
           for (const row of deleted) {
             tombstones.set(

@@ -20,7 +20,7 @@ import {
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
-import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import { isShellEnvAppliedKey } from "../infra/shell-env.js";
 import { canResolveEnvSecretRefInReadOnlyPath } from "../plugin-sdk/secret-ref-readonly.internal.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
@@ -148,19 +148,25 @@ export function getCustomProviderApiKey(
   return (ref.source === "env" && ref.id.trim()) || NON_ENV_SECRETREF_MARKER;
 }
 
-type ResolvedCustomProviderApiKey = {
-  apiKey: string;
-  source: string;
-};
-
 /** Resolves custom provider API keys that are usable without mutating secret stores. */
 export function resolveUsableCustomProviderApiKey(params: {
   cfg: OpenClawConfig | undefined;
+  sourceConfig?: OpenClawConfig;
   provider: string;
   env?: NodeJS.ProcessEnv;
   secretSentinels?: boolean;
-}): ResolvedCustomProviderApiKey | null {
-  const input = resolveProviderConfigSecretInput(params.cfg, params.provider);
+  authStore?: AuthProfileStore;
+}): {
+  apiKey: string;
+  source: string;
+} | null {
+  if (
+    params.authStore &&
+    (resolveInlineProviderApiKeyCooldownUntil(params.authStore, params.provider) ?? 0) > Date.now()
+  ) {
+    return null;
+  }
+  const input = resolveProviderConfigSecretInput(params.cfg, params.provider, params.sourceConfig);
   const { providerConfig: customProviderConfig, ref: apiKeyRef } = input;
   if (apiKeyRef) {
     const envVarName = apiKeyRef.source === "env" ? apiKeyRef.id.trim() : "";
@@ -230,7 +236,8 @@ export const hasUsableCustomProviderApiKey = (
   cfg: OpenClawConfig | undefined,
   provider: string,
   env?: NodeJS.ProcessEnv,
-) => Boolean(resolveUsableCustomProviderApiKey({ cfg, provider, env }));
+  sourceConfig?: OpenClawConfig,
+) => Boolean(resolveUsableCustomProviderApiKey({ cfg, provider, env, sourceConfig }));
 
 /** True when explicit provider config should outrank profile/environment auth. */
 export function shouldPreferExplicitConfigApiKeyAuth(
@@ -245,14 +252,23 @@ export function shouldPreferExplicitConfigApiKeyAuth(
   );
 }
 
-/** True when configured or prepared route facts prove a local no-auth provider. */
+/** True when configured or prepared route facts prove a no-auth provider. */
 export function hasSyntheticLocalProviderAuthConfig(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  modelApi?: string;
   route?: { api?: string | null; baseUrl?: unknown };
 }): boolean {
   const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
   const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
+  const route = params.route ?? {
+    api: params.modelApi ?? providerConfig?.api,
+    baseUrl: providerConfig?.baseUrl,
+  };
+  // Only this adapter clears the SDK-generated bearer header for the marker.
+  if (authOverride === "none") {
+    return route.api === "openai-completions" && typeof route.baseUrl === "string";
+  }
   if (authOverride && authOverride !== "api-key") {
     return false;
   }
@@ -262,9 +278,8 @@ export function hasSyntheticLocalProviderAuthConfig(params: {
   ) {
     return false;
   }
-  const route = params.route ?? providerConfig;
   return (
-    typeof route?.api === "string" &&
+    typeof route.api === "string" &&
     route.api.trim().length > 0 &&
     typeof route.baseUrl === "string" &&
     isLocalAuthProviderBaseUrl(route.baseUrl)
@@ -277,7 +292,13 @@ export function resolveProviderAuthOverride(
 ): ModelProviderAuthMode | undefined {
   const entry = resolveMergedModelProviderConfig(cfg, provider);
   const auth = entry?.auth;
-  if (auth === "api-key" || auth === "aws-sdk" || auth === "oauth" || auth === "token") {
+  if (
+    auth === "api-key" ||
+    auth === "aws-sdk" ||
+    auth === "oauth" ||
+    auth === "token" ||
+    auth === "none"
+  ) {
     return auth;
   }
   return undefined;
@@ -581,13 +602,8 @@ export function assertInlineProviderApiKeyUsable(params: {
 }
 
 function isCustomLocalProviderConfig(providerConfig: ModelProviderConfig): boolean {
-  return (
-    typeof providerConfig.baseUrl === "string" &&
-    providerConfig.baseUrl.trim().length > 0 &&
-    typeof providerConfig.api === "string" &&
-    providerConfig.api.trim().length > 0 &&
-    Array.isArray(providerConfig.models) &&
-    providerConfig.models.length > 0
+  return Boolean(
+    providerConfig.baseUrl?.trim() && providerConfig.api?.trim() && providerConfig.models?.length,
   );
 }
 
@@ -697,8 +713,7 @@ export function resolveRuntimeProviderConfigApiKeyAuth(params: {
 }
 
 function resolveEnvSourceLabel(envVars: string[], label = envVars.join(" + ")): string {
-  const applied = new Set(getShellEnvAppliedKeys());
-  const shellApplied = envVars.some((envVar) => applied.has(envVar));
+  const shellApplied = envVars.some(isShellEnvAppliedKey);
   const prefix = shellApplied ? "shell env: " : "env: ";
   return `${prefix}${label}`;
 }

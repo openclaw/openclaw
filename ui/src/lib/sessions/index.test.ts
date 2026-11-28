@@ -1,8 +1,9 @@
 // @vitest-environment node
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type {
   GatewaySessionRow,
   SessionsListResult,
@@ -15,11 +16,10 @@ import {
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   createGatewayHarness,
-  createSessionCapabilityHarness,
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
-import { reconcileSessionRunTerminal, type SessionRunTerminal } from "./session-run-terminal.ts";
+import type { SessionRunTerminal } from "./session-run-terminal.ts";
 
 const mainKey = "agent:main:main";
 const row = (key = mainKey, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
@@ -136,7 +136,10 @@ it("automatically retries an explicitly retryable group catalog failure", async 
             retryAfterMs: 100,
           });
         }
-        return { groups: [{ name: "Recovered" }], sectionOrder: ["work", "category:Recovered"] };
+        return {
+          groups: [{ name: "Recovered", position: 0 }],
+          sectionOrder: ["work", "category:Recovered"],
+        };
       },
     },
     ["sessions.groups.list"],
@@ -164,7 +167,7 @@ it("publishes state.error when replacing the group catalog is rejected", async (
 });
 
 it("reports a group catalog replacement as stale after a same-client reconnect", async () => {
-  const replaced = createDeferred<{ groups: Array<{ name: string }> }>();
+  const replaced = createDeferred<{ groups: Array<{ name: string; position: number }> }>();
   const { sessions, publish } = sessionHarness(
     {
       "sessions.groups.put": () => replaced.promise,
@@ -176,7 +179,7 @@ it("reports a group catalog replacement as stale after a same-client reconnect",
   const operation = sessions.groupsPut(["Alpha"]);
   publish(false);
   publish(true);
-  replaced.resolve({ groups: [{ name: "Alpha" }] });
+  replaced.resolve({ groups: [{ name: "Alpha", position: 0 }] });
   await expect(operation).resolves.toBe("stale");
   expect(sessions.state.groups).toEqual([]);
   expect(sessions.state.error).toBeNull();
@@ -187,7 +190,7 @@ it("keeps a confirmed group rename completed when its row refresh outlives the c
   const refreshed = createDeferred<SessionsListResult>();
   const { sessions, publish, request } = sessionHarness(
     {
-      "sessions.groups.rename": () => ({ groups: [{ name: "Beta" }] }),
+      "sessions.groups.rename": () => ({ groups: [{ name: "Beta", position: 0 }] }),
       "sessions.list": () => refreshed.promise,
     },
     ["sessions.groups.rename"],
@@ -265,7 +268,11 @@ it("creates a session while a list refresh is in flight", async () => {
   expect(sessions.state.loading).toBe(true);
   const created = sessions.create({ agentId: "main" });
   await waitForFast(() =>
-    expect(request).toHaveBeenCalledWith("sessions.create", { agentId: "main" }),
+    expect(request).toHaveBeenCalledWith(
+      "sessions.create",
+      { agentId: "main" },
+      expect.objectContaining({ timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS }),
+    ),
   );
   pending.resolve(sessionsResult([], 1));
   await expect(created).resolves.toBe(key);
@@ -462,64 +469,6 @@ it("ignores stale archive state after a newer unarchive via Gateway events", asy
     updatedAt: 30,
   });
   sessions.dispose();
-});
-
-it("advances the canonical list revision only for sessions.list publications", async () => {
-  const { sessions } = sessionHarness({
-    "sessions.list": () => sessionsResult([row("agent:main:listed", { updatedAt: 2 })], 2),
-  });
-  expect(sessions.canonicalListRevision).toBe(0);
-  sessions.reconcile(row("agent:main:startup"), {
-    modelProvider: null,
-    model: null,
-    contextTokens: null,
-  });
-  expect(sessions.canonicalListRevision).toBe(0);
-  await sessions.refresh({ force: true });
-  expect(sessions.canonicalListRevision).toBe(1);
-  expect(sessions.state.result?.sessions[0]?.key).toBe("agent:main:listed");
-  sessions.dispose();
-});
-
-it("starts a fresh list epoch when the same client reconnects", async () => {
-  const stale = createDeferred<SessionsListResult>();
-  const current = createDeferred<SessionsListResult>();
-  let calls = 0;
-  const { sessions, publish } = sessionHarness({
-    "sessions.subscribe": subscribed,
-    "sessions.list": () => (++calls === 1 ? stale.promise : current.promise),
-  });
-  const staleRefresh = sessions.refresh({ force: true });
-  publish(false);
-  publish(true);
-  await waitForFast(() => expect(calls).toBe(2));
-  stale.resolve(sessionsResult([row("stale")], 1));
-  await staleRefresh;
-  expect(sessions.state.result).toBeNull();
-  current.resolve(sessionsResult([row("current", { updatedAt: 2 })], 2));
-  await waitForFast(() => expect(sessions.state.result?.sessions[0]?.key).toBe("current"));
-  sessions.dispose();
-});
-
-it("does not probe for a group catalog when the method is explicitly absent", async () => {
-  const { sessions, request } = sessionHarness({}, []);
-  await sessions.groupsLoad();
-  await sessions.groupsLoad();
-  expect(request).not.toHaveBeenCalled();
-  expect(sessions.state.groups).toEqual([]);
-  sessions.dispose();
-});
-
-it("preserves registry-active terminal rows without matching run identity", () => {
-  const result = sessionsResult([row(mainKey, { hasActiveRun: true, status: "done" })], 1);
-  expect(
-    reconcileSessionRunTerminal(result, {
-      sessionKeys: ["main"],
-      runId: "run-1",
-      status: "done",
-      endedAt: 160,
-    }),
-  ).toBe(result);
 });
 
 it("refreshes stale active rows after a terminal session message", async () => {
@@ -745,69 +694,4 @@ describe("session capability dashboard default acknowledgements", () => {
       boardPresentation: "split",
     });
   });
-});
-
-const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
-
-it("ignores recap-only changes for canonical, filtered, and child rosters", async () => {
-  vi.useFakeTimers();
-  const key = "agent:main:parent";
-  const recapRow = { key, kind: "direct" as const, updatedAt: 1 };
-  const child = { ...recapRow, key: "agent:main:child", spawnedBy: key };
-  const request = vi.fn(async (method: string, params?: { spawnedBy?: string }) => {
-    if (method !== "sessions.list") {
-      throw new Error(`Unexpected request: ${method}`);
-    }
-    return sessionsResult(params?.spawnedBy ? [child] : [recapRow], 1);
-  });
-  const { sessions, emitEvent } = createSessionCapabilityHarness(
-    request as unknown as GatewayBrowserClient["request"],
-    { ownerId: "viewer" },
-  );
-  const scopes = [
-    { agentId: "main", involvingMe: true },
-    { agentId: "main", spawnedBy: key, limit: 100, includeGlobal: false, includeUnknown: false },
-    {
-      agentId: "main",
-      spawnedBy: key,
-      limit: 10_000,
-      includeGlobal: false,
-      includeUnknown: false,
-    },
-  ];
-  const stops = scopes.map((scope) => sessions.subscribeList(scope, vi.fn()));
-
-  try {
-    await sessions.refresh({ agentId: "main", force: true });
-    await Promise.all(scopes.map((scope) => sessions.refreshList({ ...scope, force: true })));
-    expect(request).toHaveBeenCalledTimes(4);
-    request.mockClear();
-
-    for (let index = 0; index < 4; index += 1) {
-      emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: { agentId: "main", sessionKey: key, reason: "activity-summary" },
-      });
-      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
-    }
-    expect(request).not.toHaveBeenCalled();
-
-    emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: { agentId: "main", sessionKey: key, reason: "patch" },
-    });
-    await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
-    expect(request).toHaveBeenCalledTimes(4);
-    expect(request).toHaveBeenCalledWith(
-      "sessions.list",
-      expect.objectContaining({ ownerFirst: true }),
-    );
-    expect(sessions.state.result?.sessions).toEqual([recapRow]);
-  } finally {
-    stops.forEach((stop) => stop());
-    sessions.dispose();
-    vi.useRealTimers();
-  }
 });

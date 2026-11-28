@@ -35,6 +35,7 @@ CREATE TABLE "github_publication_requests" (
   "created_at_ms" bigint NOT NULL,
   "updated_at_ms" bigint NOT NULL,
   "reported_at_ms" bigint,
+  "draft" bigint,
   PRIMARY KEY ("request_id"),
   CHECK ("owner_epoch" IS NULL OR ("owner_epoch" >= 1)),
   CHECK ("placement_generation" IS NULL OR ("placement_generation" >= 0)),
@@ -48,4 +49,4 @@ CREATE TABLE "github_publication_requests" (
   UNIQUE ("session_id", "idempotency_key")
 );
 
-CREATE INDEX "idx_github_publication_requests_pending" ON "github_publication_requests" (("status") ASC NULLS FIRST, ("updated_at_ms") ASC NULLS FIRST, ("request_id") ASC NULLS FIRST);
+CREATE INDEX "idx_github_publication_requests_pending" ON "github_publication_requests" (("status") ASC, ("updated_at_ms") ASC, ("request_id") ASC);

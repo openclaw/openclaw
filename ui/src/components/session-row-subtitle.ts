@@ -11,6 +11,17 @@ type SidebarSessionSubtitle = {
 };
 
 export function resolveSidebarSessionRowSubtitle(
+  host: Parameters<typeof sidebarSessionRowSubtitleParams>[0],
+  session: SidebarRecentSession,
+  display?: CatalogBackingSessionDisplay,
+) {
+  const params = sidebarSessionRowSubtitleParams(host, session, display);
+  return params
+    ? host.sessionProjection.resolveSubtitle(params)
+    : { subtitle: undefined, narration: undefined };
+}
+
+export function sidebarSessionRowSubtitleParams(
   host: {
     readonly sidebarAgentsMode?: "chip" | "roster";
     readonly sessionsShowPreview: boolean;
@@ -23,6 +34,12 @@ export function resolveSidebarSessionRowSubtitle(
   session: SidebarRecentSession,
   display?: CatalogBackingSessionDisplay,
 ) {
+  // The default sidebar stays one line per session until the operator turns
+  // previews on. Only the agent-first roster keeps preview-independent status
+  // lines; attention details stay on the leading icon tooltip and hovercard.
+  if (host.sidebarAgentsMode !== "roster" && !host.sessionsShowPreview) {
+    return null;
+  }
   const toolActivity =
     host.sidebarAgentsMode !== "roster" &&
     host.sessionsShowPreview &&
@@ -30,7 +47,7 @@ export function resolveSidebarSessionRowSubtitle(
     host.sidebarLiveActivity
       ? host.sidebarTools.get(session.key)
       : undefined;
-  return host.sessionProjection.resolveSubtitle({
+  return {
     session,
     hasDisplay: display !== undefined,
     sidebarLiveActivity: host.sidebarLiveActivity,
@@ -38,7 +55,7 @@ export function resolveSidebarSessionRowSubtitle(
     narrationLine: host.sidebarNarrationLines.get(session.key),
     toolActivity,
     observerDigest: host.sidebarObserverDigests.get(session.key) ?? null,
-  });
+  };
 }
 
 /** Resolves the single subtitle slot without displacing visible status. */
@@ -55,9 +72,14 @@ export function resolveSidebarSessionSubtitle(params: {
   > | null;
 }): SidebarSessionSubtitle {
   const { session } = params;
-  // Questions use the leading hand tooltip; failures use the session hovercard.
-  // Neither should grow a second line or fall back to lower-priority activity.
-  if (session.attention.kind === "question" || session.attention.kind === "error") {
+  // Questions and approvals use the leading attention icon tooltip; failures use
+  // the session hovercard. None should grow a second line or fall back to
+  // lower-priority activity.
+  if (
+    session.attention.kind === "question" ||
+    session.attention.kind === "approval" ||
+    session.attention.kind === "error"
+  ) {
     return { subtitle: undefined, narration: undefined };
   }
   const attention = sessionAttentionSubtitle(session.attention);
@@ -83,7 +105,7 @@ export function resolveSidebarSessionSubtitle(params: {
   );
   const observer = running || finalDigestUnread ? projectedDigest?.headline : undefined;
   // Preview off hides ambient text only. Subtitle-owned attention and a critical
-  // observer headline survive the toggle: pending approvals and the
+  // observer headline survive the toggle: agent-declared attention and the
   // stuck / waiting-on-user health states still belong beside their session, even
   // when the operator hides routine activity previews.
   if (!params.showPreview) {

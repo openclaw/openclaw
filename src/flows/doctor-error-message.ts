@@ -1,6 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
-// Shared sanitization for doctor/lint/repair errors shown in terminal output.
 const ERR_MESSAGE_MAX_LEN = 256;
 
 /** Removes control characters and caps error messages before doctor prints them. */

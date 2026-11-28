@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { resolveServerUiPrefWriteStatus } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
@@ -106,13 +107,12 @@ it("ignores legacy pending, last-seen, and retained navigation without replaying
   flushServerUiPrefs(a.writer, { profileId: "a", canWrite: true });
   await a.refresh();
   await vi.dynamicImportSettled();
-  expect(loadSettings().sidebarEntries).toEqual([]);
+  expect(loadSettings().sidebarEntries).toEqual(DEFAULT_SIDEBAR_ENTRIES);
   expect(a.request.mock.calls.map(([method]) => method)).toEqual(["users.prefs.get"]);
   expect(backend.profiles.a).toEqual({});
   expect(JSON.parse(localStorage.getItem(pendingKey)!)).toMatchObject(legacyPending);
   const lastSeen = JSON.parse(localStorage.getItem(lastSeenKey)!);
   expect(lastSeen).not.toHaveProperty("sidebarEntries");
-  expect(lastSeen.navigationConfirmation).not.toHaveProperty("sidebarEntries");
   expect(JSON.parse(localStorage.getItem(retainedKey)!)).toMatchObject({ sidebarEntries: true });
 });
 

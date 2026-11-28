@@ -1,4 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import {
   decodeWindowsOutputBuffer,
@@ -10,6 +12,8 @@ import {
   finalizeCapturedOutput,
   type CapturedOutputBuffers,
 } from "../process/exec-output.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
@@ -20,7 +24,10 @@ import {
   type NodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
 } from "../worker/node-workspace-protocol.js";
-import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
+import {
+  prepareNodeWorkerFilesystemCommand,
+  type NodeWorkerCommandIsolation,
+} from "./node-worker-command-filesystem.js";
 
 const MAX_PROCESSES_PER_WORKSPACE = 32;
 const MAX_OUTPUT_CHARS = 4_096;
@@ -60,7 +67,7 @@ async function joinWorkspaceCleanup(operations: Promise<void>[]): Promise<void> 
   const failures = (await Promise.allSettled(operations)).flatMap((outcome) =>
     outcome.status === "rejected" ? [outcome.reason] : [],
   );
-  throwNodeHostCleanupErrors(failures, "Workspace process cleanup failed");
+  throwCollectedErrors(failures, "Workspace process cleanup failed");
 }
 
 /** A workspace owns preview processes across tool calls and joins their trees before retirement. */
@@ -108,6 +115,9 @@ export class NodeWorkerWorkspaceProcesses {
     assertCurrent: () => void;
     workspaceDir: string;
     env: NodeJS.ProcessEnv;
+    homeDir?: string;
+    isolation?: NodeWorkerCommandIsolation;
+    temporaryHome?: true;
     signal?: AbortSignal;
     timeoutMs: number;
     retainWorkspace: () => () => void;
@@ -115,21 +125,41 @@ export class NodeWorkerWorkspaceProcesses {
     const { input, workspaceDir, signal } = params;
     // Legacy callers retain their shipped executor, including detached lease helpers.
     if (!input.process && !input.nativeProcessOwner) {
-      const result = await runCommandWithTimeout(input.argv, {
-        cwd: workspaceDir,
-        baseEnv: params.env,
-        ...(input.input === undefined ? {} : { input: input.input }),
-        timeoutMs: params.timeoutMs,
-        ...(signal ? { signal } : {}),
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
-        maxOutputBytes: {
-          stdout: NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
-          stderr: NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
-        },
-        terminateOnOutputLimit: true,
+      const filesystem = await prepareNodeWorkerFilesystemCommand({
+        ...params,
+        homeDir: params.homeDir ?? params.env.HOME ?? workspaceDir,
+        argv: input.argv,
       });
-      return { ...result, workspaceDir };
+      let cleanupUncertain = false;
+      try {
+        const run = () =>
+          runCommandWithTimeout(
+            filesystem ? [filesystem.command, ...filesystem.args] : input.argv,
+            {
+              cwd: workspaceDir,
+              baseEnv: params.env,
+              ...(input.input === undefined ? {} : { input: input.input }),
+              timeoutMs: params.timeoutMs,
+              ...(signal ? { signal } : {}),
+              killProcessTree: true,
+              requireProcessTreeExtinction: true,
+              maxOutputBytes: {
+                stdout: NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
+                stderr: NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
+              },
+              terminateOnOutputLimit: true,
+            },
+          );
+        const result = filesystem ? await withCommandProcessScope(run, signal) : await run();
+        return { ...result, workspaceDir };
+      } catch (error) {
+        cleanupUncertain = hasCommandProcessCleanupError(error);
+        throw error;
+      } finally {
+        if (!cleanupUncertain) {
+          await filesystem?.cleanup();
+        }
+      }
     }
     const operation: NonNullable<NodeWorkerWorkspaceExecInput["process"]> = input.process ?? {
       action: "start",
@@ -153,9 +183,7 @@ export class NodeWorkerWorkspaceProcesses {
     }
     let process = owner?.processes.get(operation.processId);
     if (operation.action === "start") {
-      const fingerprint = createHash("sha256")
-        .update(JSON.stringify([input.argv, input.input ?? null]))
-        .digest("hex");
+      const fingerprint = sha256Hex(JSON.stringify([input.argv, input.input ?? null]));
       if (process && process.fingerprint !== fingerprint) {
         throw new Error("INVALID_REQUEST: processId already belongs to a different command");
       }
@@ -199,9 +227,16 @@ export class NodeWorkerWorkspaceProcesses {
           key,
           operation.processId,
         ]);
+        let filesystem: Awaited<ReturnType<typeof prepareNodeWorkerFilesystemCommand>>;
+        const cleanupScope = this.supervisor.acquireScopeCleanup(scopeKey, {
+          processTree: "required-all",
+        });
         const created: WorkspaceProcess = {
           fingerprint,
-          cleanup: this.supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" }),
+          cleanup: async () => {
+            await cleanupScope();
+            await filesystem?.cleanup();
+          },
           stdout: "",
           stderr: "",
           settled: false,
@@ -242,10 +277,17 @@ export class NodeWorkerWorkspaceProcesses {
           };
           signal?.addEventListener("abort", abortStartup, { once: true });
           try {
+            filesystem = await prepareNodeWorkerFilesystemCommand({
+              ...params,
+              homeDir: params.homeDir ?? params.env.HOME ?? workspaceDir,
+              argv: [executable, ...input.argv.slice(1)],
+            });
             const run = await this.supervisor.spawn({
               mode: "child",
               runId,
-              argv: [executable, ...input.argv.slice(1)],
+              argv: filesystem
+                ? [filesystem.command, ...filesystem.args]
+                : [executable, ...input.argv.slice(1)],
               scopeKey,
               cwd: workspaceDir,
               env: params.env,
@@ -276,6 +318,7 @@ export class NodeWorkerWorkspaceProcesses {
               .then(async (result) => {
                 created.completion = result;
                 await this.joinExtinction(created);
+                await filesystem?.cleanup();
               })
               .catch((error: unknown) => {
                 created.cleanupError =

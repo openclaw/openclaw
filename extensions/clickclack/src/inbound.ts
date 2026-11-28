@@ -40,63 +40,6 @@ function resolveClickClackAgentRunId(messageId: string): string | undefined {
   return CLICKCLACK_MESSAGE_ID_PATTERN.test(messageId) ? `${CHANNEL_ID}:${messageId}` : undefined;
 }
 
-async function dispatchModelReply(params: {
-  account: ResolvedClickClackAccount;
-  cfg: OpenClawConfig;
-  message: ClickClackMessage;
-  route: { agentId: string };
-  target: string;
-  correlationId?: string;
-}) {
-  const runtime = getClickClackRuntime();
-  const result = await runtime.llm.complete({
-    agentId: params.route.agentId,
-    model: params.account.model,
-    purpose: "clickclack bot reply",
-    systemPrompt: params.account.systemPrompt,
-    messages: [
-      {
-        role: "user",
-        content: params.message.body,
-      },
-    ],
-  });
-  const completion = result.text.trim();
-  if (!completion) {
-    runtime.logging
-      .getChildLogger({ plugin: "clickclack", feature: "model-reply" })
-      .warn(`[${params.account.accountId}] ClickClack model reply produced no sendable text`);
-    return;
-  }
-  // Direct completions bypass agent dispatch; use its prefix/model-context owner.
-  const replyPipeline = createChannelMessageReplyPipeline({
-    cfg: params.cfg,
-    agentId: params.route.agentId,
-    channel: CHANNEL_ID,
-    accountId: params.account.accountId,
-  });
-  replyPipeline.onModelSelected?.({
-    provider: result.provider,
-    model: result.model,
-    thinkLevel: undefined,
-  });
-  const responsePrefix = replyPipeline.resolveResponsePrefix?.();
-  // An operator-owned system prompt may already ask the model to emit this prefix.
-  const text =
-    responsePrefix && !completion.startsWith(responsePrefix)
-      ? `${responsePrefix} ${completion}`
-      : completion;
-  await sendClickClackText({
-    cfg: params.cfg as CoreConfig,
-    accountId: params.account.accountId,
-    to: params.target,
-    text,
-    threadId: params.message.parent_message_id ? params.message.thread_root_id : undefined,
-    replyToId: params.message.id,
-    correlationId: params.correlationId,
-  });
-}
-
 export async function handleClickClackInbound(params: {
   account: ResolvedClickClackAccount;
   config: CoreConfig;
@@ -134,9 +77,9 @@ export async function handleClickClackInbound(params: {
           : { workspaceId: message.workspace_id, conversationId },
         turnId: message.id,
         agentLabel:
-          params.account.name?.trim() ||
+          params.account.name ||
           params.account.botHandle?.trim() ||
-          params.account.agentId?.trim() ||
+          params.account.agentId ||
           params.account.accountId,
         onError: (error) => {
           runtime.logging
@@ -162,13 +105,55 @@ export async function handleClickClackInbound(params: {
     }
     progress?.start();
     try {
-      await dispatchModelReply({
-        account: params.account,
-        cfg: params.config as OpenClawConfig,
-        message,
-        route,
-        target,
-        correlationId: params.correlationId,
+      const modelAccount = params.account;
+      const modelConfig = params.config as OpenClawConfig;
+      const correlationId = params.correlationId;
+      const modelRuntime = getClickClackRuntime();
+      const result = await modelRuntime.llm.complete({
+        agentId: route.agentId,
+        model: modelAccount.model,
+        purpose: "clickclack bot reply",
+        systemPrompt: modelAccount.systemPrompt,
+        messages: [
+          {
+            role: "user",
+            content: message.body,
+          },
+        ],
+      });
+      const completion = result.text.trim();
+      if (!completion) {
+        modelRuntime.logging
+          .getChildLogger({ plugin: "clickclack", feature: "model-reply" })
+          .warn(`[${modelAccount.accountId}] ClickClack model reply produced no sendable text`);
+        return;
+      }
+      // Direct completions bypass agent dispatch; use its prefix/model-context owner.
+      const replyPipeline = createChannelMessageReplyPipeline({
+        cfg: modelConfig,
+        agentId: route.agentId,
+        channel: CHANNEL_ID,
+        accountId: modelAccount.accountId,
+      });
+      replyPipeline.onModelSelected?.({
+        provider: result.provider,
+        model: result.model,
+        thinkLevel: undefined,
+      });
+      const responsePrefix = replyPipeline.resolveResponsePrefix?.();
+      // An operator-owned system prompt may already ask the model to emit this prefix.
+      const text =
+        responsePrefix && !completion.startsWith(responsePrefix)
+          ? `${responsePrefix} ${completion}`
+          : completion;
+      await sendClickClackText({
+        cfg: modelConfig as CoreConfig,
+        accountId: modelAccount.accountId,
+        to: target,
+        text,
+        threadId: message.parent_message_id ? message.thread_root_id : undefined,
+        replyToId: message.id,
+        correlationId,
       });
     } finally {
       await progress?.finalize();

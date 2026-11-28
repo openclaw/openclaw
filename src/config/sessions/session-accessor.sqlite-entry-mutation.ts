@@ -10,9 +10,8 @@ import {
   readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { withSessionParticipantWriteSnapshot } from "./session-accessor.sqlite-participant-projection.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
-import { assertSessionEntryPatchCliHistory } from "./session-entry-patch-guard.js";
+import type { SessionEntryPatchWriteIntent } from "./session-entry-patch-operation.js";
 import type { SessionEntryPatchGuard } from "./session-entry-patch.types.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
@@ -38,15 +37,18 @@ export function replaceSessionEntryInDatabase(
 ): SessionEntryIdentityChange {
   const identityKeys = collectSessionEntryLookupKeys(sessionKey);
   const previous = readSessionIdentitySnapshot(database, identityKeys);
-  writeSessionEntry(database, sessionKey, entry);
-  const current = readSessionIdentitySnapshot(database, identityKeys);
+  const written = writeSessionEntry(database, sessionKey, entry, {
+    archiveUndo: { kind: "invalidate" },
+  });
+  const current = new Map(previous);
+  current.set(sessionKey, written);
   return { previous, current };
 }
 
 /** Revalidate prepared rows and apply the patch on the already-admitted connection. */
 export function applySessionEntryPatchInDatabase(
   database: OpenClawAgentDatabase,
-  params: {
+  params: SessionEntryPatchWriteIntent & {
     operationLabel: "session-entry.patch" | "session-entry-target.patch";
     validateCanonicalKeys: boolean;
     readSnapshot: (database: OpenClawAgentDatabase) => SqliteLifecycleTargetSnapshot;
@@ -57,16 +59,14 @@ export function applySessionEntryPatchInDatabase(
     options: Pick<
       SessionEntryPatchOptions,
       "consumePendingReset" | "assertCommitAllowed" | "providerReviewMutation"
-    > & { workerGuard?: Pick<SessionEntryPatchGuard, "cliHistory" | "conversation"> };
+    > & { workerGuard?: Pick<SessionEntryPatchGuard, "conversation"> };
   },
 ): SessionEntryPatchMutation {
   // Canonical validation belongs to the current connection, not the captured rows.
   if (params.validateCanonicalKeys) {
     assertCanonicalSqliteSessionKeysCurrent(database);
   }
-  const fresh = withSessionParticipantWriteSnapshot(database.db, () =>
-    params.readSnapshot(database),
-  );
+  const fresh = params.readSnapshot(database);
   assertLifecycleTargetSnapshotUnchanged(params.prepared, fresh, params.operationLabel);
   return writeSessionEntryPatchInDatabase(database, { ...params, fresh });
 }
@@ -76,7 +76,7 @@ export function writeSessionEntryPatchInDatabase(
   database: OpenClawAgentDatabase,
   params: Pick<
     Parameters<typeof applySessionEntryPatchInDatabase>[1],
-    "sessionKey" | "writeBase" | "next" | "options"
+    "sessionKey" | "writeBase" | "next" | "options" | "invalidateArchiveUndo" | "shellCallMutation"
   > & { fresh: SqliteLifecycleTargetSnapshot },
 ): SessionEntryPatchMutation {
   const { fresh } = params;
@@ -88,11 +88,6 @@ export function writeSessionEntryPatchInDatabase(
       conversation,
     );
   }
-  assertSessionEntryPatchCliHistory(
-    database,
-    params.sessionKey,
-    params.options.workerGuard?.cliHistory,
-  );
   if (!params.next) {
     return { applied: false, entry: structuredClone(params.writeBase) };
   }
@@ -101,6 +96,8 @@ export function writeSessionEntryPatchInDatabase(
   const selectedPreviousEntry = fresh[0]?.entry ?? params.writeBase;
   const postimages: SessionEntryWritePostimages = new Map();
   const persisted = writeSessionEntry(database, params.sessionKey, params.next, {
+    shellCallMutation: params.shellCallMutation,
+    archiveUndo: params.invalidateArchiveUndo ? { kind: "invalidate" } : undefined,
     ...(params.options.consumePendingReset ? { consumePendingReset: true } : {}),
     ...(params.options.providerReviewMutation ? { providerReviewMutation: true } : {}),
     previousEntry: selectedPreviousEntry,

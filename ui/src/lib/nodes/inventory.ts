@@ -1,52 +1,19 @@
+/// <reference lib="es2024.collection" />
+
 import { asFiniteNumber as optionalNumber } from "@openclaw/normalization-core/number-coercion";
 // Builds the unified node/device inventory shown on the Devices page.
 // The gateway exposes two overlapping views of the same machines: paired device
 // records (roles + tokens) and the node catalog (caps + live links). This module
 // joins them by id and groups duplicate pairings of the same client so the page
 // renders one row per machine instead of one row per historical keypair.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeTrimmedStringList,
   normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
-import { z } from "zod";
-import { parseWorkerCapacity } from "../../../../packages/gateway-protocol/src/worker-capacity.js";
-import type {
-  NodeListNode,
-  NodeWorkerBundleStatus,
-} from "../../../../src/shared/node-list-types.js";
+import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import type { PairedDevice } from "./index.ts";
-
-type NodeApprovalState = NonNullable<NodeListNode["approvalState"]>;
-
-const hostStatsSchema = z
-  .object({
-    cpuCount: z.number().int().positive(),
-    loadAverage: z
-      .tuple([z.number().nonnegative(), z.number().nonnegative(), z.number().nonnegative()])
-      .optional(),
-    memoryTotalBytes: z.number().positive(),
-    memoryFreeBytes: z.number().nonnegative(),
-    diskTotalBytes: z.number().positive().optional(),
-    diskAvailableBytes: z.number().nonnegative().optional(),
-    updatedAtMs: z.number().nonnegative(),
-  })
-  .refine(
-    (stats) =>
-      stats.memoryFreeBytes <= stats.memoryTotalBytes &&
-      (stats.diskAvailableBytes === undefined ||
-        stats.diskTotalBytes === undefined ||
-        stats.diskAvailableBytes <= stats.diskTotalBytes),
-  );
-
-type NodeListEntry = NodeListNode & {
-  caps: string[];
-  commands: string[];
-  connected: boolean;
-  paired: boolean;
-};
 
 export type DeviceInventoryEntry = {
   id: string;
@@ -67,7 +34,7 @@ export type DeviceInventoryEntry = {
   approvedAtMs?: number;
   presence?: PresenceEntry;
   device?: PairedDevice;
-  node?: NodeListEntry;
+  node?: NodeListNode;
 };
 
 /** One machine cluster: the freshest pairing plus superseded duplicates. */
@@ -77,62 +44,6 @@ export type DeviceInventoryGroup = {
   primary: DeviceInventoryEntry;
   duplicates: DeviceInventoryEntry[];
 };
-
-const NODE_APPROVAL_STATES: ReadonlySet<string> = new Set([
-  "approved",
-  "pending-approval",
-  "pending-reapproval",
-  "unapproved",
-]);
-
-function parseWorkerBundleStatus(value: unknown): NodeWorkerBundleStatus | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  if (value.status === "missing" && Object.keys(value).length === 1) {
-    return { status: "missing" };
-  }
-  const version = normalizeOptionalString(value.version);
-  return value.status === "installed" && version && Object.keys(value).length === 2
-    ? { status: "installed", version }
-    : undefined;
-}
-
-function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null {
-  const nodeId = normalizeOptionalString(raw.nodeId);
-  if (!nodeId) {
-    return null;
-  }
-  const approvalState = normalizeOptionalString(raw.approvalState);
-  return {
-    nodeId,
-    displayName: normalizeOptionalString(raw.displayName),
-    platform: normalizeOptionalString(raw.platform),
-    deviceFamily: normalizeOptionalString(raw.deviceFamily),
-    version: normalizeOptionalString(raw.version),
-    coreVersion: normalizeOptionalString(raw.coreVersion),
-    uiVersion: normalizeOptionalString(raw.uiVersion),
-    modelIdentifier: normalizeOptionalString(raw.modelIdentifier),
-    clientId: normalizeOptionalString(raw.clientId),
-    clientMode: normalizeOptionalString(raw.clientMode),
-    remoteIp: normalizeOptionalString(raw.remoteIp),
-    caps: normalizeTrimmedStringList(raw.caps),
-    commands: normalizeTrimmedStringList(raw.commands),
-    approvalState:
-      approvalState && NODE_APPROVAL_STATES.has(approvalState)
-        ? (approvalState as NodeApprovalState)
-        : undefined,
-    pendingRequestId: normalizeOptionalString(raw.pendingRequestId),
-    workerSlots: parseWorkerCapacity(raw.workerSlots) ?? undefined,
-    workerBundle: parseWorkerBundleStatus(raw.workerBundle),
-    hostStats: hostStatsSchema.safeParse(raw.hostStats).data,
-    connected: raw.connected === true,
-    paired: raw.paired === true,
-    connectedAtMs: optionalNumber(raw.connectedAtMs),
-    lastSeenAtMs: optionalNumber(raw.lastSeenAtMs),
-    approvedAtMs: optionalNumber(raw.approvedAtMs),
-  };
-}
 
 function maxDefined(...values: Array<number | undefined>): number | undefined {
   let max: number | undefined;
@@ -147,7 +58,7 @@ function maxDefined(...values: Array<number | undefined>): number | undefined {
 function buildEntry(
   id: string,
   device?: PairedDevice,
-  node?: NodeListEntry,
+  node?: NodeListNode,
   presence?: PresenceEntry,
 ): DeviceInventoryEntry {
   const roles = device
@@ -225,16 +136,10 @@ function compareEntries(left: DeviceInventoryEntry, right: DeviceInventoryEntry)
 
 export function buildDeviceInventory(params: {
   paired: PairedDevice[];
-  nodes: Array<Record<string, unknown>>;
+  nodes: NodeListNode[];
   presence?: PresenceEntry[];
 }): DeviceInventoryGroup[] {
-  const nodesById = new Map<string, NodeListEntry>();
-  for (const raw of params.nodes) {
-    const node = parseNodeListEntry(raw);
-    if (node) {
-      nodesById.set(node.nodeId, node);
-    }
-  }
+  const nodesById = new Map(params.nodes.map((node) => [node.nodeId, node]));
   const presenceById = new Map<string, PresenceEntry>();
   for (const presence of params.presence ?? []) {
     for (const rawId of [presence.deviceId, presence.instanceId]) {
@@ -258,16 +163,7 @@ export function buildDeviceInventory(params: {
     }
   }
 
-  const groupsByKey = new Map<string, [DeviceInventoryEntry, ...DeviceInventoryEntry[]]>();
-  for (const entry of entries.values()) {
-    const key = groupKey(entry);
-    const bucket = groupsByKey.get(key);
-    if (bucket) {
-      bucket.push(entry);
-    } else {
-      groupsByKey.set(key, [entry]);
-    }
-  }
+  const groupsByKey = Map.groupBy(entries.values(), groupKey);
 
   const groups = [...groupsByKey].flatMap(([key, bucket]) => {
     const [primary, ...duplicates] = bucket.toSorted(compareEntries);

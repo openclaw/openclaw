@@ -1,151 +1,139 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js";
+// Codex reports plan limits per signed-in account, so each OpenAI account row
+// reads its own; the page's forced refresh advances the revision.
+import { createMemo, Loading, onCleanup, Show } from "solid-js";
+import type {
+  ProviderUsageSnapshot,
+  UsageSummary,
+} from "../../../../src/infra/provider-usage.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { Icon } from "../../components/solid/icon.tsx";
-import { renderProviderUsageDetails } from "../../components/solid/provider-usage.tsx";
-import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import {
+  hasProviderUsageDetails,
+  ProviderUsagePanel,
+} from "../../components/solid/provider-usage.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
-import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 
-registerEnglishCatalog(registerSettingsEnglish);
-
-type ModelAccountUsageProps = {
-  client: GatewayBrowserClient | null;
-  agentId: string;
-  profileId: string;
-};
-type ModelAccountUsageMethods = { refreshUsage: () => void };
-export type ModelAccountUsageElement = SolidBridgeElement<
-  ModelAccountUsageProps,
-  ModelAccountUsageMethods
->;
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-model-account-usage": ModelAccountUsageElement;
-  }
+// The Codex account-details contract reports a numeric balance independently of quota windows.
+export function accountCreditBalance(snapshot?: ProviderUsageSnapshot) {
+  const balance = snapshot?.billing?.find(
+    (entry) => entry.type === "balance" && entry.unit === "credits" && !entry.label,
+  );
+  return balance?.type === "balance" ? balance : undefined;
 }
 
-type UsageState =
-  | { phase: "idle" | "pending" }
-  | { phase: "complete"; summary: UsageSummary }
-  | { phase: "error"; error: unknown };
+export type AccountUsageScope = { client: GatewayBrowserClient; agentId: string; revision: number };
 
-function AccountUsage(props: ModelAccountUsageProps, host: ModelAccountUsageElement) {
-  const [state, setState] = createSignal<UsageState>({ phase: "idle" });
-  let request: AbortController | undefined;
-
-  async function load(scope: ModelAccountUsageProps): Promise<void> {
-    request?.abort();
-    request = undefined;
-    if (!scope.client || !scope.agentId || !scope.profileId) {
-      setState({ phase: "idle" });
-      return;
-    }
-    const current = new AbortController();
-    request = current;
-    const isCurrent = () =>
-      request === current &&
-      props.client === scope.client &&
-      props.agentId === scope.agentId &&
-      props.profileId === scope.profileId;
-    setState({ phase: "pending" });
-    try {
-      const summary = await scope.client.request<UsageSummary>(
-        "codex.accountUsage",
-        { agentId: scope.agentId, profileId: scope.profileId },
-        { signal: current.signal, timeoutMs: 30_000 },
-      );
-      if (isCurrent()) {
-        setState({ phase: "complete", summary });
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        setState({ phase: "error", error });
-      }
-    }
-  }
-
-  const scope = () => ({
-    client: props.client,
-    agentId: props.agentId,
-    profileId: props.profileId,
-  });
-  const refresh = () => void load(scope());
-  createEffect(scope, (current) => void load(current));
-  host.addEventListener("model-account-usage-refresh", refresh);
-  onCleanup(() => {
-    host.removeEventListener("model-account-usage-refresh", refresh);
-    request?.abort();
-    request = undefined;
-  });
-  const summary = createMemo(() => {
-    const current = state();
-    return current.phase === "complete" ? current.summary : undefined;
-  });
-  const error = createMemo(() => {
-    const current = state();
-    return current.phase === "error" ? formatUiError(current.error) : undefined;
-  });
+function AccountReading(props: { snapshot: ProviderUsageSnapshot; grouped?: boolean }) {
+  const balance = createMemo(() =>
+    props.grouped ? accountCreditBalance(props.snapshot) : undefined,
+  );
+  const details = createMemo(() => ({
+    windows: props.snapshot.windows.filter((window) => window.groupLabel),
+    billing: props.snapshot.billing?.filter((entry) => entry !== balance()),
+    costHistory: props.snapshot.costHistory,
+  }));
+  const primary = createMemo(() => ({
+    windows: props.grouped ? [] : props.snapshot.windows.filter((window) => !window.groupLabel),
+    // The comparison already reports failed and partial readings beside the affected account.
+    error: props.grouped ? undefined : props.snapshot.error,
+    summary: props.snapshot.summary,
+  }));
   return (
-    <Show when={props.client}>
-      <div class="model-providers__account-usage">
-        <button
-          class="model-providers__account-refresh"
-          type="button"
-          aria-label={t("common.refresh")}
-          title={t("common.refresh")}
-          disabled={state().phase === "pending"}
-          onClick={refresh}
+    <>
+      <Show when={hasProviderUsageDetails(primary())}>
+        <ProviderUsagePanel compact usage={primary()} />
+      </Show>
+      <Show when={props.snapshot.plan && (props.grouped || !hasProviderUsageDetails(details()))}>
+        <span class="model-providers__account-plan">{props.snapshot.plan}</span>
+      </Show>
+      <Show when={hasProviderUsageDetails(details())}>
+        <Show
+          when={props.grouped}
+          fallback={
+            <details class="model-providers__account-details">
+              <summary>
+                {t("modelProviders.limits.accountDetails")}
+                {props.snapshot.plan ? ` · ${props.snapshot.plan}` : ""}
+              </summary>
+              <ProviderUsagePanel compact usage={details()} />
+            </details>
+          }
         >
-          <Icon name="refresh" />
-        </button>
-        <Show when={state().phase === "pending"}>
-          <span>{t("common.loading")}</span>
+          <ProviderUsagePanel compact usage={details()} />
         </Show>
-        <Show when={summary()}>
-          {(value) => (
-            <For each={value().providers} fallback={<span>{t("modelProviders.noStats")}</span>}>
-              {(snapshot) => (
-                <>
-                  <Show when={snapshot.plan}>
-                    <strong>{snapshot.plan}</strong>
-                  </Show>
-                  <div>
-                    <Show
-                      when={snapshot.windows.length || snapshot.billing?.length}
-                      fallback={t("modelProviders.noStats")}
-                    >
-                      {renderProviderUsageDetails(snapshot, { groupWindows: true })}
-                    </Show>
-                  </div>
-                </>
-              )}
-            </For>
-          )}
-        </Show>
-        <Show when={error()}>
-          <span class="provider-usage-error">{error()}</span>
-        </Show>
-      </div>
-    </Show>
+      </Show>
+      <Show when={!props.snapshot.plan && !hasProviderUsageDetails(props.snapshot)}>
+        <span>{t("modelProviders.noStats")}</span>
+      </Show>
+    </>
   );
 }
 
-defineSolidBridge<ModelAccountUsageProps, ModelAccountUsageMethods>(
-  "openclaw-model-account-usage",
-  (props, host) => AccountUsage(props, host),
-  {
-    properties: {
-      client: { default: null, attribute: false },
-      agentId: { default: "" },
-      profileId: { default: "" },
+type AccountKey = Pick<AccountUsageScope, "client" | "agentId"> & { profileId: string };
+type Reading = {
+  account: AccountKey;
+  loading?: true;
+  snapshot?: ProviderUsageSnapshot;
+  error?: string;
+};
+
+// A keyed profile owns one read, regardless of how many quota windows it appears in.
+export function createAccountUsage(scope: () => AccountUsageScope, profileId: () => string) {
+  const account = createMemo(
+    () => ({ client: scope().client, agentId: scope().agentId, profileId: profileId() }),
+    {
+      equals: (a, b) =>
+        a.client === b.client && a.agentId === b.agentId && a.profileId === b.profileId,
     },
-    methods: {
-      refreshUsage: (host) => {
-        host.dispatchEvent(new Event("model-account-usage-refresh"));
-      },
-    },
-  },
-);
+  );
+  const revision = createMemo(() => scope().revision);
+  const result = createMemo<Reading>((previous) => {
+    const key = account();
+    revision();
+    const controller = new AbortController();
+    onCleanup(() => controller.abort());
+    // A slow login must not hold the other segments. A refresh retains only this login's reading.
+    const response = key.client
+      .request<UsageSummary>(
+        "codex.accountUsage",
+        { agentId: key.agentId, profileId: key.profileId },
+        { signal: controller.signal, timeoutMs: 30_000 },
+      )
+      .then(
+        (summary): Reading => ({ account: key, snapshot: summary.providers[0] }),
+        (error: unknown): Reading => ({ account: key, error: formatUiError(error) }),
+      );
+    return (async function* () {
+      yield previous?.account === key ? previous : { account: key, loading: true as const };
+      yield await response;
+    })();
+  });
+  return { account, result };
+}
+export type AccountUsageRead = ReturnType<typeof createAccountUsage>;
+
+export function AccountLimits(props: { read: AccountUsageRead; grouped?: boolean }) {
+  const result = () => props.read.result();
+  return (
+    <div class="model-providers__account-limits">
+      <Loading
+        on={props.read.account()}
+        fallback={props.grouped ? undefined : <span>{t("common.loading")}</span>}
+      >
+        <Show
+          when={result().snapshot}
+          fallback={
+            <Show when={!props.grouped || (!result().loading && result().error === undefined)}>
+              <span class={result().error ? "provider-usage__error" : undefined}>
+                {result().error ||
+                  t(result().loading ? "common.loading" : "modelProviders.noStats")}
+              </span>
+            </Show>
+          }
+        >
+          {(snapshot) => <AccountReading snapshot={snapshot()} grouped={props.grouped} />}
+        </Show>
+      </Loading>
+    </div>
+  );
+}

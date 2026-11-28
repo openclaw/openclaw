@@ -15,14 +15,15 @@ import {
 } from "../../config/sessions/session-entry-read-runtime.js";
 import { sessionEntryCommitGuardOptions } from "../../config/sessions/session-source-authority.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
+import { copyMutableSessionEntry } from "../../plugin-sdk/session-store-runtime-internal.js";
+import {
+  isSessionControllerWorkActive,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import {
   captureSessionInitializationOwner,
   createSessionInitialization,
 } from "../../sessions/session-initialization.js";
-import {
-  isSessionWorkAdmissionActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import type { PluginRuntime } from "./types.js";
 
@@ -122,13 +123,14 @@ export async function createRuntimeSessionEntry(
   };
   const identities = new Set([target.canonicalKey, ...target.storeKeys]);
   const create = () =>
-    runExclusiveSessionLifecycleMutation("plugin-create", {
+    runSessionMutation({
+      diagnosticLabel: "plugin-create",
       scope: target.storePath,
       identities,
       prepare: async () => {
         // Activate the mutation fence before checking admission state. New work
         // then queues, while pre-existing work makes creation fail without interruption.
-        if (isSessionWorkAdmissionActive(target.storePath, identities)) {
+        if (isSessionControllerWorkActive(target.storePath, identities)) {
           throw new Error(
             `Session "${target.canonicalKey}" is still active; retry creation later.`,
           );
@@ -438,7 +440,7 @@ export async function createRuntimeSessionEntry(
             key: created.key,
             agentId: created.agentId,
             sessionId: finalEntry.sessionId,
-            entry: finalEntry,
+            entry: copyMutableSessionEntry(finalEntry),
           };
         } catch (error) {
           if (!callbackContext) {

@@ -14,7 +14,10 @@ import {
 import { deletePersistentSessionStoreRows } from "../../test/persistent-session-store.test-support.js";
 import { drainRelayTestSessions } from "./index.test-support.js";
 
-export function usePersistentRelayTestState(activeRelaySessions: Map<string, string>) {
+export function usePersistentRelayTestState(
+  activeRelaySessions: Map<string, string>,
+  settleTestRuns?: () => Promise<void>,
+) {
   let testState: OpenClawTestState;
 
   beforeAll(async () => {
@@ -39,6 +42,7 @@ export function usePersistentRelayTestState(activeRelaySessions: Map<string, str
     try {
       await drainRelayTestSessions(activeRelaySessions);
     } finally {
+      await settleTestRuns?.();
       activeRelaySessions.clear();
     }
   }

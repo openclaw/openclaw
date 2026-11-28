@@ -42,6 +42,32 @@ function catalogWithActiveVoicePolicy(activeVoiceSelectionPolicy: unknown) {
 }
 
 describe("TalkCatalogResultSchema", () => {
+  it("accepts optional family Settings facts with only declared Talk transports", () => {
+    const catalog = catalogWithActiveVoicePolicy("allowlist-default");
+    const modelFamilySettings = {
+      family: "example-live",
+      unlistedModelVoices: "active",
+      unsupportedTransports: ["provider-websocket"],
+      gatewayRelayHandlesAgentConsult: true,
+      hint: {
+        titleKey: "example.title",
+        descriptionKey: "example.hint",
+        readyKey: "example.ready",
+      },
+    };
+    const withSettings = {
+      ...catalog,
+      realtime: {
+        providers: [{ ...catalog.realtime.providers[0], modelFamilySettings }],
+      },
+    };
+
+    expect(Value.Check(TalkCatalogResultSchema, catalog)).toBe(true);
+    expect(Value.Check(TalkCatalogResultSchema, withSettings)).toBe(true);
+    modelFamilySettings.unsupportedTransports = ["unknown-transport"];
+    expect(Value.Check(TalkCatalogResultSchema, withSettings)).toBe(false);
+  });
+
   it("accepts only the authoritative voice allowlist policy", () => {
     expect(
       Value.Check(TalkCatalogResultSchema, catalogWithActiveVoicePolicy("allowlist-default")),

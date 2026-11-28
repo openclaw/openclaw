@@ -3,7 +3,7 @@
 // Guards gateway -> mobile-client event coverage drift.
 //
 // Source of truth for server->client event names is GATEWAY_EVENTS in
-// src/gateway/server-methods-list.ts (the catalog advertised to clients in
+// src/gateway/events.ts (the catalog advertised to clients in
 // hello-ok `features.events`). packages/gateway-protocol only types the event
 // frame envelope (`event: NonEmptyString`), so the gateway catalog is the most
 // canonical single list of wire event names.
@@ -13,20 +13,19 @@
 // `.event == "..."` comparisons, and Kotlin `when (event) { "..." -> }` blocks
 // plus `event == "..."` comparisons scoped to `fun handle*Event(...)` bodies.
 // Swift case labels may use qualified static string constants; those are
-// resolved across the scanned source tree. Kotlin labels and comparisons may
+// resolved across the scanned source tree. Local String enums bound from .event
+// and dispatched in the same block are also recognized. Kotlin labels and comparisons may
 // likewise use generated enum `rawValue` constants. Events a client
 // intentionally does not consume live in scripts/protocol-event-coverage.allowlist.json.
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { upperCamel } from "./lib/protocol-codegen-names.mts";
 // Dependency-light seam by design: security-fast runs this script without
 // installed dependencies on current targets, so the
 // canonical @openclaw/normalization-core import cannot resolve here.
 import { isRecord } from "./lib/record-shared.mjs";
 
-const GATEWAY_EVENTS_FILE = "src/gateway/server-methods-list.ts";
-const GATEWAY_EVENT_CONSTANTS_FILE = "src/gateway/events.ts";
+const GATEWAY_EVENTS_FILE = "src/gateway/events.ts";
 const ALLOWLIST_FILE = "scripts/protocol-event-coverage.allowlist.json";
 
 // Scan roots per client. The sentinel files are the primary event dispatch
@@ -49,6 +48,13 @@ const MIN_EXPECTED_GATEWAY_EVENTS = 10;
 const GATEWAY_EVENTS_BLOCK_RE = /export const GATEWAY_EVENTS = \[([\s\S]*?)\];/u;
 const SWIFT_EVENT_SWITCH_RE = /\bswitch\s+\w+(?:\.\w+)*\.event\s*\{/u;
 const SWIFT_CASE_LABEL_RE = /^\s*case\s+(.+?):/u;
+const SWIFT_STRING_ENUM_RE =
+  /^\s*(?:(?:private|fileprivate|internal|public)\s+)?enum\s+([A-Za-z_]\w*)\s*:\s*String\b[^\n{]*\{/gmu;
+const SWIFT_ENUM_MEMBER_RE = /^\s*case\s+([A-Za-z_]\w*)(?:\s*=\s*"([^"]+)")?\s*,?\s*(?:\/\/.*)?$/u;
+const SWIFT_EVENT_ENUM_BINDING_RE =
+  /^\s*guard\s+let\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\(\s*rawValue:\s*\w+(?:\.\w+)*\.event\s*\)\s+else\b/u;
+const SWIFT_BOUND_SWITCH_RE = /^\s*switch\s+([A-Za-z_]\w*)\s*\{/u;
+
 const SWIFT_TYPE_DECLARATION_RE =
   /^\s*(?:(?:private|fileprivate|internal|public)\s+)?(?:enum|struct|class|actor|extension)\s+([A-Za-z_]\w*)[^{]*\x7b/u;
 const SWIFT_STATIC_STRING_CONSTANT_RE = /^\s*static\s+let\s+([A-Za-z_]\w*)\s*=\s*"([^"]+)"/u;
@@ -99,17 +105,13 @@ function requiredCapture(match: RegExpMatchArray, index: number): string {
   return value;
 }
 
-function isMainModule(): boolean {
-  return process.argv[1] ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) : false;
-}
-
 /**
- * Extracts the gateway event name list from server-methods-list.ts source.
+ * Extracts the gateway event name list from events.ts source.
  * Bare identifiers in the array (e.g. GATEWAY_EVENT_UPDATE_AVAILABLE) are
- * resolved against constantsSource (src/gateway/events.ts).
+ * resolved against constants in the same source.
  */
-export function extractGatewayEventNames(listSource: string, constantsSource: string): string[] {
-  const block = GATEWAY_EVENTS_BLOCK_RE.exec(listSource);
+export function extractGatewayEventNames(source: string): string[] {
+  const block = GATEWAY_EVENTS_BLOCK_RE.exec(source);
   if (!block) {
     throw new Error(
       `Could not find the GATEWAY_EVENTS array in ${GATEWAY_EVENTS_FILE}. ` +
@@ -126,12 +128,10 @@ export function extractGatewayEventNames(listSource: string, constantsSource: st
       continue;
     }
     const identifier = requiredCapture(token, 2);
-    const constant = new RegExp(`export const ${identifier} = "([^"]+)"`, "u").exec(
-      constantsSource,
-    );
+    const constant = new RegExp(`export const ${identifier} = "([^"]+)"`, "u").exec(source);
     if (!constant) {
       throw new Error(
-        `Could not resolve GATEWAY_EVENTS identifier "${identifier}" from ${GATEWAY_EVENT_CONSTANTS_FILE}.`,
+        `Could not resolve GATEWAY_EVENTS identifier "${identifier}" from ${GATEWAY_EVENTS_FILE}.`,
       );
     }
     names.push(requiredCapture(constant, 1));
@@ -421,6 +421,78 @@ export function extractKotlinEnumStringConstants(source: string): Map<string, st
   return constants;
 }
 
+function extractSwiftStringEnums(source: string): Map<string, StringConstants | undefined> {
+  const enums = new Map<string, StringConstants | undefined>();
+  for (const declaration of source.matchAll(SWIFT_STRING_ENUM_RE)) {
+    const name = requiredCapture(declaration, 1);
+    // Short names that denote multiple local types cannot establish a binding.
+    if (enums.has(name)) {
+      enums.set(name, undefined);
+      continue;
+    }
+    const members = new Map<string, string>();
+    const header = new RegExp(
+      "^\\s*(?:(?:private|fileprivate|internal|public)\\s+)?enum\\s+" +
+        name +
+        "\\s*:\\s*String\\b[^\\n{]*\\{",
+      "u",
+    );
+    collectBlockCaseLabels(source, header, (line) => {
+      const member = SWIFT_ENUM_MEMBER_RE.exec(line);
+      if (member) {
+        members.set(requiredCapture(member, 1), member[2] ?? requiredCapture(member, 1));
+      }
+    });
+    enums.set(name, members);
+  }
+  return enums;
+}
+
+// A raw-value declaration is not evidence of handling. Bind the event conversion
+// to a switch in the same lexical block, and count only its explicit cases.
+function extractSwiftEnumHandledEvents(source: string): string[] {
+  const enums = extractSwiftStringEnums(source);
+  const names: string[] = [];
+  const scopes: Array<{
+    bindings: Map<string, StringConstants>;
+    cases?: StringConstants;
+  }> = [{ bindings: new Map() }];
+  for (const line of source.split("\n")) {
+    const scope = scopes.at(-1);
+    if (!scope) {
+      break;
+    }
+    const binding = SWIFT_EVENT_ENUM_BINDING_RE.exec(line);
+    if (binding) {
+      const members = enums.get(requiredCapture(binding, 2));
+      if (members) {
+        scope.bindings.set(requiredCapture(binding, 1), members);
+      }
+    }
+    const dispatch = SWIFT_BOUND_SWITCH_RE.exec(line);
+    let cases = dispatch ? scope.bindings.get(requiredCapture(dispatch, 1)) : undefined;
+    const label = scope.cases ? SWIFT_CASE_LABEL_RE.exec(line) : null;
+    if (label) {
+      for (const expression of requiredCapture(label, 1).split(",")) {
+        const member = /^\s*\.([A-Za-z_]\w*)\s*$/u.exec(expression);
+        const value = member ? scope.cases?.get(requiredCapture(member, 1)) : undefined;
+        if (value) {
+          names.push(value);
+        }
+      }
+    }
+    for (const char of sanitizeLineForBraces(line)) {
+      if (char === "{") {
+        scopes.push({ bindings: new Map(), cases });
+        cases = undefined;
+      } else if (char === "}") {
+        scopes.pop();
+      }
+    }
+  }
+  return names;
+}
+
 /** Extracts Swift gateway-event case labels, including qualified constants. */
 export function extractSwiftHandledEvents(
   source: string,
@@ -440,6 +512,7 @@ export function extractSwiftHandledEvents(
       }
     }
   });
+  names.push(...extractSwiftEnumHandledEvents(source));
   for (const comparison of source.matchAll(SWIFT_EVENT_COMPARISON_RE)) {
     names.push(requiredCapture(comparison, 1));
   }
@@ -698,10 +771,7 @@ function collectStringConstants(sources: Iterable<string>, language: "Swift" | "
 function collectProtocolEventCoverageErrors() {
   const rootDir = process.cwd();
 
-  const serverEvents = extractGatewayEventNames(
-    readRequiredFile(rootDir, GATEWAY_EVENTS_FILE),
-    readRequiredFile(rootDir, GATEWAY_EVENT_CONSTANTS_FILE),
-  );
+  const serverEvents = extractGatewayEventNames(readRequiredFile(rootDir, GATEWAY_EVENTS_FILE));
   const allowlist = loadAllowlist(rootDir);
   const clients = [
     {
@@ -759,7 +829,8 @@ function collectProtocolEventCoverageErrors() {
   };
 }
 
-if (isMainModule()) {
+// Node owns entrypoint identity; comparing argv paths silently skips symlinked invocations.
+if (import.meta.main) {
   let result;
   try {
     result = collectProtocolEventCoverageErrors();

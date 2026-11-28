@@ -1,32 +1,55 @@
+import type { BigIntStats } from "node:fs";
 import type { BackupProgressInfo, DatabaseSync } from "node:sqlite";
 import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
+import type { SqliteIntegrityCheckOptions } from "./sqlite-integrity.js";
+import type { PreparedSqliteSnapshotSource } from "./sqlite-readonly-location.types.js";
 import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
 
 export type SqliteSnapshotValidator = (database: DatabaseSync, databaseLabel: string) => void;
 
+type SqliteSnapshotStage =
+  | "source-acquisition"
+  | "source-integrity"
+  | "online-copy"
+  | "vacuum"
+  | "hash"
+  | "published-integrity";
+
 export type CreateVerifiedSqliteSnapshotOptions = {
   sourcePath: string;
   targetPath: string;
-  /** Only in an isolated child: acquire and consume a fresh private image, including crash recovery. */
+  /** Only in an isolated child: acquire or take custody of the same operation's private image. */
   sourceAcquisition?: {
     mode: "isolated-process";
     stagingRoot: string;
     preserveSourceArtifacts?: boolean;
+    preparedSource?: PreparedSqliteSnapshotSource;
+    /** Candidate updates keep cleanup warnings separate from backup validation failures. */
+    cleanupFailure?: "warn";
   };
   onProgress?: (progress: BackupProgressInfo) => void;
+  onStage?: (stage: SqliteSnapshotStage, phase: "start" | "done", bytes: number) => void;
   /** Final caller checks around publication; failures remove only this helper's target. */
   afterPublish?: (guard: PublishedSqliteFileGuard) => void;
   beforePublish?: () => void | Promise<void>;
   requireNonEmptySource?: boolean;
   /** Skip compaction/ID rewriting; transforms may still change IDs and free-page data remains. */
   preserveRowIds?: boolean;
+  /** Migration checkpoints may check only the declared rewrite scope; backups default to full. */
+  integrity?: SqliteIntegrityCheckOptions;
   transform?: (database: DatabaseSync) => void | Promise<void>;
   validate?: SqliteSnapshotValidator;
+  /** Backup archives only: caller must compare the consumed bytes after hard-link-only publication. */
+  deferPublishedContentCheck?: boolean;
 };
 
 export type PublishedSqliteFileGuard = {
   assertTargetMatchesExpectedContent: (finalCheck?: () => void) => void;
-  assertTargetUnchanged: (finalCheck?: () => void) => void;
+  /** Ephemeral hash binding; consumers must still match the complete fingerprint and link count. */
+  assertTargetUnchanged: (finalCheck?: () => void) => {
+    stat: BigIntStats;
+    content: SqliteFileContent;
+  };
 };
 
 export type PublishVerifiedSqliteFileOptions = {
@@ -52,4 +75,6 @@ export type PublishVerifiedSqliteFileOptions = {
 export type VerifiedSqliteSnapshot = SqliteFileContent & {
   path: string;
   userVersion: number;
+  /** Caller still owes the full published-byte comparison against this receipt. */
+  deferredContentCheck?: { identity: BigIntStats };
 };

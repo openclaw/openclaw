@@ -34,7 +34,7 @@ flow:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - sendInbound:
             conversation: { id: telegram-reply-chain-dm, kind: direct }
-            senderId: qa-command-operator
+            senderId: telegram-reply-chain-dm
             senderName: QA Command Operator
             text:
               expr: "`Telegram reply-chain marker QA. Reply exactly: ${config.marker}`"

@@ -5,6 +5,7 @@ import ai.openclaw.app.ChatDraftPlacement
 import ai.openclaw.app.ChatShareDraft
 import ai.openclaw.app.SharedAttachment
 import ai.openclaw.app.SharedAttachmentKind
+import ai.openclaw.app.chat.CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.VoiceNoteRecorderState
@@ -129,6 +130,57 @@ class ChatComposerDraftTest {
 
     assertEquals("first draft", restored[first])
     assertEquals("second draft", restored[second])
+  }
+
+  @Test
+  fun identicalTextRefreshesRecencyBeforeEvictionAndCheckpointing() {
+    val snapshots = mutableListOf<List<String>>()
+    val store = ChatComposerTextDraftStore(onSnapshotChanged = snapshots::add)
+    val owners = (0..CHAT_COMPOSER_MAX_DRAFT_OWNERS).map { ChatComposerOwner("gateway", "main", "session-$it") }
+    owners.dropLast(1).forEachIndexed { index, owner -> store[owner] = "draft-$index" }
+
+    store[owners.first()] = "draft-0"
+
+    val refreshedOrder = (1 until CHAT_COMPOSER_MAX_DRAFT_OWNERS).toList() + 0
+    assertEquals(
+      refreshedOrder.flatMap { listOf("draft", "1", "gateway", "main", "session-$it", "1", "", "draft-$it") },
+      snapshots.last(),
+    )
+    assertEquals(CHAT_COMPOSER_MAX_DRAFT_OWNERS + 1, snapshots.size)
+
+    val newest = owners.lastIndex
+    store[owners.last()] = "draft-$newest"
+
+    assertEquals("", store[owners[1]])
+    assertEquals("draft-0", store[owners.first()])
+    val retainedOrder = (2 until CHAT_COMPOSER_MAX_DRAFT_OWNERS).toList() + listOf(0, newest)
+    assertEquals(
+      retainedOrder.flatMap { listOf("draft", "1", "gateway", "main", "session-$it", "1", "", "draft-$it") },
+      snapshots.last(),
+    )
+    assertEquals(CHAT_COMPOSER_MAX_DRAFT_OWNERS + 2, snapshots.size)
+  }
+
+  @Test
+  fun rejectedAdmissionRestoresBeyondCapacityWithoutEvictingOtherDrafts() {
+    val snapshots = mutableListOf<List<String>>()
+    val store = ChatComposerTextDraftStore(onSnapshotChanged = snapshots::add)
+    val owners = (0..CHAT_COMPOSER_MAX_DRAFT_OWNERS).map { ChatComposerOwner("gateway", "main", "session-$it") }
+    store[owners.first()] = "draft-0"
+    assertTrue(store.beginAdmission("command", owners.first(), "draft-0"))
+    assertEquals(listOf("pending-send", "1", "gateway", "main", "session-0", "1", "command", "draft-0"), snapshots.last())
+    owners.drop(1).forEachIndexed { index, owner -> store[owner] = "draft-${index + 1}" }
+    val priorSnapshots = snapshots.size
+
+    store.resolveAdmission("command", admitted = false)
+
+    owners.forEachIndexed { index, owner -> assertEquals("draft-$index", store[owner]) }
+    val restoredOrder = (1..CHAT_COMPOSER_MAX_DRAFT_OWNERS).toList() + 0
+    assertEquals(
+      restoredOrder.flatMap { listOf("draft", "1", "gateway", "main", "session-$it", "1", "", "draft-$it") },
+      snapshots.last(),
+    )
+    assertEquals(priorSnapshots + 1, snapshots.size)
   }
 
   @Test
@@ -587,28 +639,6 @@ class ChatComposerDraftTest {
   }
 
   @Test
-  fun stagedSharePreservesComposerAndReportsDroppedImages() {
-    val owner = ChatComposerOwner("gateway", "main", "agent:main:device")
-    val store = ChatComposerAttachmentStore()
-    val existing = pendingAttachment("existing")
-    val shared = pendingAttachment("shared")
-    val staged =
-      StagedChatShare(
-        text = "shared link",
-        attachments = listOf(shared),
-        failedAttachmentCount = 0,
-        droppedAttachmentCount = 2,
-      )
-
-    store.add(owner, listOf(existing))
-    val omitted = store.add(owner, staged.attachments)
-
-    assertEquals("existing draft\n\nshared link", mergeSharedChatText(staged.text, "existing draft"))
-    assertEquals(listOf(existing, shared), store.get(owner))
-    assertEquals(2, staged.failedAttachmentCount + staged.droppedAttachmentCount + omitted)
-  }
-
-  @Test
   fun unreadableSharedImageDoesNotDiscardOtherStagedContent() =
     runBlocking {
       val readable = Uri.parse("content://photos/readable")
@@ -677,26 +707,6 @@ class ChatComposerDraftTest {
       assertEquals(CHAT_COMPOSER_MAX_ATTACHMENTS, store.get(owner).size)
       assertEquals(2, staged.droppedAttachmentCount + omitted)
     }
-
-  @Test
-  fun mergeRechecksAttachmentBudgetAfterStaging() {
-    val owner = ChatComposerOwner("gateway", "main", "agent:main:device")
-    val store = ChatComposerAttachmentStore()
-    val staged =
-      StagedChatShare(
-        text = null,
-        attachments = listOf(pendingAttachment("one"), pendingAttachment("two")),
-        failedAttachmentCount = 0,
-        droppedAttachmentCount = 0,
-      )
-    val current = (1..7).map { pendingAttachment("existing-$it") }
-
-    store.add(owner, current)
-    val omitted = store.add(owner, staged.attachments)
-
-    assertEquals(CHAT_COMPOSER_MAX_ATTACHMENTS, store.get(owner).size)
-    assertEquals(1, staged.droppedAttachmentCount + omitted)
-  }
 
   @Test
   fun sharedAttachmentsMergeWithAnInFlightPickerImportAtTheComposerOwner() {

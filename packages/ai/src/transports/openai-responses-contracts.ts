@@ -32,6 +32,8 @@ export const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoni
 export const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
 // Projection-only provenance: symbols survive option/object spreads but never enter provider JSON.
 export const RESPONSES_RETAINED_USER = Symbol("responsesRetainedUser");
+/** Marks the input item that carries the system prompt when `instructions` is not used. */
+export const RESPONSES_SYSTEM_PROMPT = Symbol("responsesSystemPrompt");
 export const OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE = "openai-responses-compaction";
 export const OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE =
   "openai-responses-retained-compaction";
@@ -43,6 +45,18 @@ export const OPENAI_RESPONSES_APIS: ReadonlySet<Api> = new Set([
   "openclaw-openai-chatgpt-responses-transport",
   "openclaw-azure-openai-responses-transport",
 ]);
+export const OPENAI_RESPONSES_TOOL_CALL_PROVIDERS: ReadonlySet<string> = new Set([
+  "openai",
+  "opencode",
+  "azure-openai-responses",
+  "github-copilot",
+]);
+
+export function isResponsesTerminalEventType(value: unknown): boolean {
+  return (
+    value === "response.completed" || value === "response.incomplete" || value === "response.failed"
+  );
+}
 
 export class OpenAIResponsesWebSocketPreDispatchError extends Error {
   constructor(cause: unknown) {
@@ -129,6 +143,7 @@ export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
     isResponsesServiceTierRejection(details) ||
     details.code === "websocket_connection_limit_reached" ||
     details.code === "invalid_encrypted_content" ||
+    details.code === "item_conflict" ||
     details.code === "thinking_signature_invalid"
       ? OpenAIResponsesWebSocketSafeRetryError
       : OpenAIResponsesWebSocketServerError;
@@ -178,6 +193,7 @@ export type ResponsesPromptObservation = {
     | "initial"
     | "reasoning-stripped"
     | "compaction-stripped"
+    | "items-reanchored"
     | "continuation-rejected";
   promptSource: "instructions" | "input.developer" | "input.system" | "missing";
   expectedChars: number;
@@ -268,7 +284,7 @@ export type OpenAIResponsesRequestParams = {
   instructions?: string;
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
-  prompt_cache_options?: { ttl: "30m" };
+  prompt_cache_options?: { ttl?: "30m" | "12h"; prewarm?: boolean };
   metadata?: Record<string, string>;
   previous_response_id?: string;
   store?: boolean;

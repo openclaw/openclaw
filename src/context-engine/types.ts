@@ -1,9 +1,6 @@
-// Context-engine public types define the pluggable context-management lifecycle.
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
-
-// Result types
 
 export type AssembleResult = {
   /** Ordered messages to use as model context */
@@ -47,7 +44,7 @@ export type ContextEngineProjection = {
 
 export type ContextEngineOperation = "agent-run" | "manual-compact" | "subagent-spawn";
 
-export type ContextEngineRuntimeMode = "normal" | "fallback" | "degraded";
+type ContextEngineRuntimeMode = "normal" | "fallback" | "degraded";
 
 export type ContextEngineSelectionSource = "configured" | "default" | "unknown";
 
@@ -309,6 +306,16 @@ export type ContextEngineSessionTarget = {
   threadId?: string | number;
 };
 
+/**
+ * Why the host requested a compaction:
+ * - `manual`: an operator asked for it (`/compact`).
+ * - `preflight`: the next prompt cannot be submitted until context shrinks.
+ * - `overflow`: the provider rejected a request for exceeding its context window.
+ * - `budget`: context crossed the host's compaction budget.
+ * - `timeout`: recovery after a model call timed out under large context.
+ */
+type ContextEngineCompactionReason = "manual" | "preflight" | "overflow" | "budget" | "timeout";
+
 export type ContextEngineRuntimeContext = Record<string, unknown> & {
   /** Runtime task working directory; workspaceDir remains the agent bootstrap workspace. */
   cwd?: string;
@@ -341,8 +348,8 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
   /** LLM completion capability for engines that need model inference. */
   llm?: {
     complete: (
-      params: import("../plugins/runtime/types-core.js").LlmCompleteParams,
-    ) => Promise<import("../plugins/runtime/types-core.js").LlmCompleteResult>;
+      params: import("../plugins/runtime/runtime-llm.types.js").LlmCompleteParams,
+    ) => Promise<import("../plugins/runtime/runtime-llm.types.js").LlmCompleteResult>;
   };
 };
 
@@ -397,8 +404,6 @@ export interface ContextEngine {
     sessionId: string;
     sessionKey?: string;
     message: AgentMessage;
-    /** True when the message belongs to a heartbeat run. */
-    isHeartbeat?: boolean;
   }): Promise<IngestResult>;
 
   /**
@@ -408,8 +413,6 @@ export interface ContextEngine {
     sessionId: string;
     sessionKey?: string;
     messages: AgentMessage[];
-    /** True when the batch belongs to a heartbeat run. */
-    isHeartbeat?: boolean;
   }): Promise<IngestBatchResult>;
 
   /**
@@ -428,8 +431,6 @@ export interface ContextEngine {
     prePromptMessageCount: number;
     /** Optional auto-compaction summary emitted by the runtime. */
     autoCompactionSummary?: string;
-    /** True when this turn belongs to a heartbeat run. */
-    isHeartbeat?: boolean;
     /** Optional model context token budget for proactive compaction. */
     tokenBudget?: number;
     /** Optional runtime-owned context for engines that need caller state. */
@@ -452,7 +453,6 @@ export interface ContextEngine {
     sessionTarget?: ContextEngineSessionTarget;
     runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
-    isHeartbeat?: boolean;
   }): Promise<{ status: "committed" | "duplicate" }>;
 
   /**
@@ -497,6 +497,8 @@ export interface ContextEngine {
     tokenBudget?: number;
     /** Force compaction even below the default trigger threshold. */
     force?: boolean;
+    /** Why the host requested this compaction, when the caller knows it. */
+    reason?: ContextEngineCompactionReason;
     /** Optional live token estimate from the caller's active context. */
     currentTokenCount?: number;
     /** Controls convergence target; defaults to budget. */
@@ -511,6 +513,12 @@ export interface ContextEngine {
      * fires; engines should stop work and reject promptly when it aborts.
      */
     abortSignal?: AbortSignal;
+    /**
+     * Report meaningful compaction progress to refresh the host's idle window.
+     * Requires "onProgress" in info.acceptedHostParams. The same ten-window
+     * overall ceiling applies; reports after completion or abort have no effect.
+     */
+    onProgress?: () => void;
   }): Promise<CompactResult>;
 
   /**

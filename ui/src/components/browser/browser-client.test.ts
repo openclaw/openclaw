@@ -13,7 +13,7 @@ import {
   createBrowserClient,
   TestBrowserPanelHost,
 } from "./browser-panel-controller-test-support.ts";
-import { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
+import { createBrowserPanelOperations } from "./browser-panel-operation-ownership.ts";
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -47,7 +47,7 @@ describe("session browser requests", () => {
       if (surface === "dashboard" || surface === "session-dashboard") {
         host.dashboardTarget = { ...dashboard, sessionScoped: surface === "session-dashboard" };
       }
-      const ownership = new BrowserPanelOperationOwnership(host);
+      const ownership = createBrowserPanelOperations(host);
       const client = ownership.captureClient();
       if (!client) {
         throw new Error("Expected a live panel client");
@@ -194,7 +194,7 @@ describe("downloadBrowserDocument", () => {
           "https://assets.example.test/report",
           new AbortController().signal,
         ),
-      ).rejects.toThrow("No file returned.");
+      ).rejects.toThrow("Couldn’t download this file. No file was returned. Try again.");
     },
   );
 });
@@ -217,7 +217,7 @@ describe("fetchBrowserScreenshotDataUrl", () => {
         authToken: null,
         path: "/tmp/missing.png",
       }),
-    ).rejects.toThrow("Screenshot fetch failed (404).");
+    ).rejects.toThrow("Couldn’t load the screenshot (404). Try again.");
     expect(cancel).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });

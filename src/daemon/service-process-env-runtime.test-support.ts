@@ -1,22 +1,10 @@
+import { createTestEntrypoint } from "../infra/runtime-entrypoint.test-support.ts";
+
+const entrypoint = createTestEntrypoint(import.meta.url, "daemon");
+
 export const serviceProcessEnvEntrypoints = {
-  systemdExec: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "systemd-exec",
-    distWorkerPath: "daemon/systemd-exec.js",
-  },
-  systemdLinger: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "systemd-linger",
-    distWorkerPath: "daemon/systemd-linger.js",
-  },
-  systemdServiceFiles: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "systemd-service-files",
-    distWorkerPath: "daemon/systemd-service-files.js",
-  },
-  serviceEnvMerge: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "service-env-merge",
-    distWorkerPath: "daemon/service-env-merge.js",
-  },
+  systemdExec: entrypoint("systemd-exec"),
+  systemdLinger: entrypoint("systemd-linger"),
+  systemdServiceFiles: entrypoint("systemd-service-files"),
+  serviceEnvMerge: entrypoint("service-env-merge"),
 } as const;

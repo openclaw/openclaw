@@ -25,8 +25,8 @@ const loadRequester = vi.hoisted(() =>
       ...args: Parameters<
         typeof import("./subagent-announce-delivery.runtime.js").loadRequesterSessionEntry
       >
-    ) => Awaited<
-      ReturnType<typeof import("./subagent-announce-delivery.runtime.js").loadRequesterSessionEntry>
+    ) => ReturnType<
+      typeof import("./subagent-announce-delivery.runtime.js").loadRequesterSessionEntry
     >
   >(),
 );
@@ -64,8 +64,9 @@ vi.mock("../../../gateway/agent-turn/agent-request-preflight.js", () => ({
   prepareAgentRequestPreflight: ({ request }: { request: unknown }) => ({ request }),
 }));
 
+// mock-isolation: Observe requester dispatch without starting an actual agent turn.
 vi.mock("../../../gateway/agent-turn/agent-turn-service.js", () => ({
-  createAgentTurnService: () => ({ startTurn, waitForTurn: vi.fn() }),
+  createAgentTurnService: () => ({ startTurn }),
 }));
 
 vi.mock("../registry/subagent-registry-read.js", () => registryRead);

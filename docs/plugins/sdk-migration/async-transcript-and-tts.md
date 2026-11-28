@@ -39,13 +39,17 @@ awaited replacement.
 
 ## TTS prompts
 
-For one prompt, await `buildTtsSystemPromptHintAsync` from
-`openclaw/plugin-sdk/tts-runtime`:
+For one prompt, await the public `api.runtime.tts.buildSystemPromptHintAsync`
+method. Older hosts may lack this additive capability; report an upgrade
+requirement rather than falling back to a synchronous database read:
 
 ```ts
-import { buildTtsSystemPromptHintAsync } from "openclaw/plugin-sdk/tts-runtime";
+const prepareHint = api.runtime.tts.buildSystemPromptHintAsync;
+if (!prepareHint) {
+  throw new Error("Update OpenClaw to use async TTS prompt preparation.");
+}
 
-const hint = await buildTtsSystemPromptHintAsync(config, agentId, {
+const hint = await prepareHint(config, agentId, {
   messageToolOnly: true,
 });
 ```
@@ -54,9 +58,10 @@ The result remains `string | undefined`: disabled TTS produces no hint. The
 helper prepares the machine-owned preference path through the state owner and
 preserves explicit configuration and `OPENCLAW_TTS_PREFS` precedence.
 
-When a turn needs several TTS helpers, prepare once and pass the result to each
-call. The synchronous overloads with required `preparedTtsPreferences` remain
-supported:
+The `openclaw/plugin-sdk/tts-runtime` subpath is private to bundled plugins.
+Bundled code that needs several TTS helpers in one turn can prepare once and
+pass the result to each call. Its synchronous overloads with required
+`preparedTtsPreferences` remain supported:
 
 ```ts
 import {
@@ -74,7 +79,7 @@ const hint = buildTtsSystemPromptHint(config, agentId, {
 });
 ```
 
-`PreparedTtsPreferences` is a public readonly type. Treat the returned value as a
+`PreparedTtsPreferences` is a private readonly type. Treat the returned value as a
 turn-scoped preparation and obtain a new one for the next turn. It retains the
 selected machine path, while preference-file contents are read when each helper
 runs. A committed in-process path change is visible to the next preparation.
@@ -86,8 +91,8 @@ to avoid synchronous state-database reads and deprecation warnings.
 
 ## Removal timing
 
-These adapters remain supported. Their removal date and target ordinary stable
-release are **TBD**; this migration does not schedule a removal. Removal requires
-the announced stable deprecation window, migration evidence, and explicit
-maintainer approval described in the [compatibility policy](/plugins/compatibility)
+These deprecated adapters remain supported through **2026-12-31**, the final
+compatibility day. Removal ships in the **first January 2027 stable release**,
+without a Plugin SDK major version. The prepared SQL-free TTS overloads remain
+supported. See the [complete SQLite migration guide](/plugins/sdk-migration/sqlite-async)
 and [removal timeline](/plugins/sdk-migration/removal-timeline).

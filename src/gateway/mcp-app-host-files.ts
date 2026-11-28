@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
-import { type Stats, stat, unwatchFile, watch, watchFile } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { stat, watch } from "node:fs";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getMcpAppViewLease,
@@ -13,10 +14,13 @@ import { readRetainedSessionEntryFacts } from "../config/sessions/session-entry-
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug } from "../logger.js";
-import { retainGatewayDeviceRevocation } from "./device-revocation.js";
 import { requireMcpAppInteraction, resolveMcpAppRequesterId } from "./mcp-app-operations.js";
+import {
+  assertSessionFileReadPolicy,
+  sessionFileWorkspaceMatches,
+} from "./server-methods/session-file-read-authority.js";
+import { prepareLocalSessionWorkspaceRoot } from "./server-methods/session-files-root.js";
 import { retainSessionScopedRead } from "./server-methods/session-scoped-read.js";
-import { resolveLocalSessionWorkspaceRoot } from "./server-methods/sessions-files.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
   updateWorkspaceFile,
@@ -36,7 +40,6 @@ const fileSources = new WeakMap<
 
 const writeAdmissions = new WeakSet<McpAppViewLease>();
 const subscriptions = new WeakMap<McpAppViewLease, Map<string, () => void>>();
-const etag = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 async function captureHostFileSession(
   target: { sessionKey: string; agentId: string },
@@ -53,7 +56,7 @@ async function captureHostFileSession(
         target.sessionKey,
         {
           agentId: target.agentId,
-          projection: "list",
+          projection: ["skillsSnapshot"],
         },
         config,
       );
@@ -66,26 +69,42 @@ async function captureHostFileSession(
             agentId: loaded.readSource?.agentId ?? loaded.agentId,
             path: loaded.readSource?.path ?? loaded.storePath,
           },
-          { sessionKeys: [loaded.canonicalKey], projection: "exact", snapshotFields: [] },
+          {
+            sessionKeys: [loaded.canonicalKey],
+            projection: "exact",
+            snapshotFields: ["skillsSnapshot"],
+          },
         )?.entries.find((row) => row.sessionKey === loaded.canonicalKey)?.entry;
   const initial = readEntry();
+  const workspace = await prepareLocalSessionWorkspaceRoot({
+    ...target,
+    source: { entry: initial, cfg: config },
+  });
   return {
     assertCurrent() {
       assertRoutingCurrent(getConfig());
       const current = readEntry();
-      if (
-        current?.sessionId !== initial?.sessionId ||
-        current?.lifecycleRevision !== initial?.lifecycleRevision
-      ) {
-        throw new Error("App file session generation changed");
+      if (!sessionFileWorkspaceMatches(initial, current)) {
+        throw new Error("App file session workspace changed");
       }
     },
     readEntry,
-    readRoot: () =>
-      resolveLocalSessionWorkspaceRoot({
-        ...target,
-        source: { entry: readEntry(), cfg: getConfig() },
-      }),
+    readRoot: (options?: GatewayRequestHandlerOptions) => {
+      const current = readEntry();
+      if (!current) {
+        return undefined;
+      }
+      workspace?.assertCurrent(getConfig(), current);
+      if (options) {
+        assertSessionFileReadPolicy(options, {
+          agentId: target.agentId,
+          canonicalKey: target.sessionKey,
+          entry: current,
+          unscopedHostRoot: workspace?.unscopedHostRoot,
+        });
+      }
+      return workspace?.root;
+    },
   };
 }
 
@@ -99,7 +118,7 @@ export async function prepareMcpAppHostFile(
     requireMaterialized: true,
   });
   try {
-    const rootDir = session.readRoot();
+    const rootDir = session.readRoot(options);
     const entry = session.readEntry();
     if (!rootDir || !entry?.sessionId) {
       throw new Error("Local workspace file access is unavailable");
@@ -110,12 +129,11 @@ export async function prepareMcpAppHostFile(
       session.assertCurrent();
       read?.assertCurrent();
       if (
-        options.hasCurrentClientAuthority?.() === false ||
         resolveMcpAppRequesterId(options.client) !== requesterId ||
         session.readEntry()?.sessionId !== sessionId ||
         session.readRoot() !== rootDir
       ) {
-        throw new Error("App file workspace authority changed");
+        throw new Error("App file workspace changed. Open the file again.");
       }
     };
     const resolved = resolveWorkspacePath(rootDir, target.path);
@@ -150,7 +168,6 @@ async function withHostFile<T>(
   view: McpAppViewLease,
   uri: string,
   operation: (file: McpAppHostFile, assertCurrent: () => void) => Promise<T>,
-  mutation = false,
 ): Promise<T> {
   const file = view.hostFile;
   const sessionKey = view.runtime.sessionKey;
@@ -173,36 +190,23 @@ async function withHostFile<T>(
     if (
       options.signal?.aborted ||
       options.client?.connectionSignal?.aborted ||
-      options.hasCurrentClientAuthority?.() === false ||
       getMcpAppViewLease(view.viewId, view.runtime) !== view ||
-      view.readOnly ||
-      view.allowedAppToolNames === undefined ||
       resolveMcpAppRequesterId(options.client) !== file.requesterId ||
       session.readEntry()?.sessionId !== file.sessionId ||
       session.readRoot() !== file.rootDir
     ) {
       throw new Error("MCP App file authority expired");
     }
-    // File commits require a synchronous live grant. An asynchronous widget grant
-    // can authorize reads but cannot establish authority at the filesystem commit.
-    if (mutation && view.authorizeAppInteraction) {
-      const grant = view.authorizeAppInteraction();
-      if (grant !== true) {
-        if (grant instanceof Promise) {
-          void grant.catch(() => undefined);
-        }
-        throw new Error("MCP App file requires current synchronous interaction authority");
-      }
-    }
   };
   try {
     await requireMcpAppInteraction(view);
+    // Admission for this request: the session file policy is read once, not at each commit.
+    if (session.readRoot(options) !== file.rootDir) {
+      throw new Error("MCP App file authority expired");
+    }
     assertCurrent();
     const result = await operation(file, assertCurrent);
-    if (!mutation) {
-      await requireMcpAppInteraction(view);
-      assertCurrent();
-    }
+    assertCurrent();
     return result;
   } finally {
     read?.release();
@@ -237,7 +241,7 @@ export async function readMcpAppHostFile(
         {
           uri: file.resourceUri,
           ...content,
-          _meta: { "openai/resource": { writable, etag: etag(result.buffer) } },
+          _meta: { "openai/resource": { writable, etag: sha256Hex(result.buffer) } },
         },
       ],
     };
@@ -286,27 +290,21 @@ export async function writeMcpAppHostFile(
   if (bytes.length > WORKSPACE_PREVIEW_MAX_BYTES) {
     return { outcome: "too-large", maxBytes: WORKSPACE_PREVIEW_MAX_BYTES };
   }
-  return withHostFile(
-    options,
-    view,
-    params.uri,
-    async (file, assertCurrent) => {
-      const result = await updateWorkspaceFile(
-        file.rootDir,
-        file.path,
-        bytes,
-        typeof params.ifMatch === "string" ? params.ifMatch : undefined,
-        assertCurrent,
-      );
-      if (result.status === "unsafe") {
-        throw new Error("File could not be written safely");
-      }
-      return result.status === "conflict"
-        ? { outcome: "conflict", etag: result.currentHash }
-        : { outcome: "saved", etag: result.hash };
-    },
-    true,
-  );
+  return withHostFile(options, view, params.uri, async (file, assertCurrent) => {
+    const result = await updateWorkspaceFile(
+      file.rootDir,
+      file.path,
+      bytes,
+      typeof params.ifMatch === "string" ? params.ifMatch : undefined,
+      assertCurrent,
+    );
+    if (result.status === "unsafe") {
+      throw new Error("File could not be written safely");
+    }
+    return result.status === "conflict"
+      ? { outcome: "conflict", etag: result.currentHash }
+      : { outcome: "saved", etag: result.hash };
+  });
 }
 
 export async function subscribeMcpAppHostFile(
@@ -359,12 +357,8 @@ export async function subscribeMcpAppHostFile(
       return (
         !closed &&
         !client.connectionSignal?.aborted &&
-        options.hasCurrentClientAuthority?.() !== false &&
         getMcpAppViewLease(view.viewId, view.runtime) === view &&
-        !view.readOnly &&
-        view.allowedAppToolNames !== undefined &&
         resolveMcpAppRequesterId(client) === file.requesterId &&
-        options.context.getRuntimeConfig().mcp?.apps?.enabled === true &&
         session.readEntry()?.sessionId === file.sessionId &&
         session.readRoot() === file.rootDir
       );
@@ -376,12 +370,7 @@ export async function subscribeMcpAppHostFile(
       notifying = true;
       try {
         if (!isCurrent()) {
-          close("view, session, requester, or connection authority changed");
-          return;
-        }
-        await requireMcpAppInteraction(view);
-        if (!isCurrent()) {
-          close("authority changed while checking App interaction");
+          close("File subscription view, session, requester, or connection ended");
           return;
         }
         options.context.broadcastToConnIds(
@@ -399,6 +388,26 @@ export async function subscribeMcpAppHostFile(
     // Bridge rename gaps with stat polling bounded to absence and subscription lifetime.
     const filePath = path.join(file.rootDir, file.path);
     let polling = false;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    // A change-based poller's initial stat can miss the entire absence window.
+    const poll = () => {
+      stat(filePath, (error, current) => {
+        if (closed || !polling) {
+          return;
+        }
+        if (!error && current.isFile()) {
+          rearm(true);
+        } else if (error && !hasErrnoCode(error, "ENOENT")) {
+          close(error);
+        } else {
+          pollTimer = setTimeout(() => {
+            pollTimer = undefined;
+            poll();
+          }, 250);
+          pollTimer.unref();
+        }
+      });
+    };
     const arm = () =>
       watch(filePath, { persistent: false }, (event) => {
         if (event === "rename") {
@@ -407,28 +416,22 @@ export async function subscribeMcpAppHostFile(
         }
         void notify();
       }).on("error", close);
-    const rearm = (curr?: Stats) => {
-      if (closed || (curr && (!polling || !curr.isFile()))) {
+    const rearm = (recovered = false) => {
+      if (closed || (polling && !recovered)) {
         return;
       }
       polling = false;
-      unwatchFile(filePath, rearm);
+      clearTimeout(pollTimer);
+      pollTimer = undefined;
       try {
         watcher = arm();
-        if (curr) {
+        if (recovered) {
           void notify();
         }
       } catch (error) {
         if (hasErrnoCode(error, "ENOENT")) {
           polling = true;
-          watchFile(filePath, { persistent: false, interval: 250 }, rearm);
-          stat(filePath, (statError, currentStats) => {
-            if (!statError) {
-              rearm(currentStats);
-            } else if (!hasErrnoCode(statError, "ENOENT")) {
-              close(statError);
-            }
-          });
+          poll();
         } else {
           close(error);
         }
@@ -442,9 +445,9 @@ export async function subscribeMcpAppHostFile(
       logDebug(
         `mcp-app: file subscription closed view=${view.viewId}: ${formatErrorMessage(reason)}`,
       );
-      releaseAuthority?.();
       watcher.close();
-      unwatchFile(filePath, rearm);
+      clearTimeout(pollTimer);
+      pollTimer = undefined;
       client.connectionSignal?.removeEventListener("abort", onDisconnect);
       if (watchers.get(connId) === close) {
         watchers.delete(connId);
@@ -452,22 +455,14 @@ export async function subscribeMcpAppHostFile(
       view.disposeCallbacks?.delete(close);
     };
     const onDisconnect = () => close("connection closed");
-    // The subscription outlives its RPC; keep that request's revocation capture live.
-    const releaseAuthority = retainGatewayDeviceRevocation(options.hasCurrentClientAuthority);
-    let watcher: ReturnType<typeof watch>;
-    try {
-      watcher = arm();
-    } catch (error) {
-      releaseAuthority?.();
-      throw error;
-    }
+    let watcher = arm();
     client.connectionSignal?.addEventListener("abort", onDisconnect, { once: true });
     watchers.set(connId, close);
     subscriptions.set(view, watchers);
     view.disposeCallbacks ??= new Set();
     view.disposeCallbacks.add(close);
     if (!isCurrent()) {
-      close("authority changed while installing the subscription");
+      close("File subscription target or connection changed during setup");
     }
     return {};
   });
@@ -499,6 +494,5 @@ export async function openMcpAppFile(
     agentId: view.agentId,
     path: filePath,
   });
-  await requireMcpAppInteraction(view);
   return { path: file.path, name: file.name };
 }

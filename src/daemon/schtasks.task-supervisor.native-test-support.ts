@@ -168,8 +168,9 @@ export async function writeGatewayTaskSupervisorProbe(params: {
       "appendEvent('bounded-environment', { keys: Object.keys(process.env).map((key) => key.toUpperCase()).sort() });",
       "if (process.argv.includes('--task-supervisor')) {",
       "  fs.writeFileSync(supervisorPidPath, String(process.pid));",
-      `  const { runWindowsGatewayTaskSupervisor } = await import(${JSON.stringify(params.moduleUrls.taskSupervisor.href)});`,
-      "  await runWindowsGatewayTaskSupervisor();",
+      `  const { tryRunWindowsGatewayTaskSupervisor } = await import(${JSON.stringify(params.moduleUrls.taskSupervisor.href)});`,
+      "  const gatewayArgs = [...process.argv.slice(0, 5), '--task-supervisor'];",
+      "  if (!(await tryRunWindowsGatewayTaskSupervisor(gatewayArgs))) throw new Error('Gateway task supervisor did not start');",
       "  appendEvent('supervisor-joined', { code: process.exitCode ?? 0 });",
       "} else if (!fs.existsSync(failedAttemptPidPath)) {",
       // Preserve this run's supervisor before a recovery launch overwrites its live PID file.

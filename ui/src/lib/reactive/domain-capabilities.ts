@@ -1,6 +1,4 @@
-import type { AgentIdentityCapability } from "../agents/identity.ts";
 import type { AgentCapability } from "../agents/index.ts";
-import type { rosterActivityStore } from "../agents/roster-activity-store.ts";
 import type { ChannelCapability } from "../channels/index.ts";
 import type { RuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 import type { SessionCapability, SessionListScope } from "../sessions/session-capability.ts";
@@ -11,71 +9,34 @@ export function projectAgents(source: Pick<AgentCapability, "state" | "subscribe
   return projectOwner(source, (agents) => agents.state);
 }
 
-export type AgentIdentityProjectionSource = {
-  identities: Pick<AgentIdentityCapability, "get" | "subscribe">;
-  agentId: string | null | undefined;
-};
-
-export function projectAgentIdentity(source: AgentIdentityProjectionSource) {
-  return projectSource(source, {
-    read: ({ identities, agentId }) => identities.get(agentId),
-    subscribe: ({ identities }, notify) => identities.subscribe(notify),
-    equality: "revision",
-  });
-}
-
-export function projectSessions(
-  source: Pick<
-    SessionCapability,
-    | "state"
-    | "presentation"
-    | "revision"
-    | "canonicalListRevision"
-    | "eventSubscriptionError"
-    | "subscribe"
-  >,
-) {
-  return projectOwner(source, (sessions) => ({
-    state: sessions.state,
-    presentation: sessions.presentation,
-    revision: sessions.revision,
-    canonicalListRevision: sessions.canonicalListRevision,
-    eventSubscriptionError: sessions.eventSubscriptionError,
-  }));
-}
-
-export function projectRosterActivity(
-  source: Pick<ReturnType<typeof rosterActivityStore>, "snapshot" | "subscribe">,
-) {
-  return projectOwner(source, (roster) => roster.snapshot);
-}
-
 export function projectChannels(source: Pick<ChannelCapability, "state" | "subscribe">) {
   return projectOwner(source, (channels) => channels.state);
 }
 
-export function projectRuntimeConfig(
-  source: Pick<
+export function readRuntimeConfig(
+  config: Pick<
     RuntimeConfigCapability,
     "state" | "subscribe" | "canSet" | "canApply" | "canPatch" | "canOpenFile"
   >,
 ) {
-  return projectOwner(source, (config) => ({
+  return {
     state: config.state,
     canSet: config.canSet,
     canApply: config.canApply,
     canPatch: config.canPatch,
     canOpenFile: config.canOpenFile,
-  }));
+  };
 }
 
-export type SessionListProjectionSource = {
-  sessions: Pick<SessionCapability, "listSnapshot" | "subscribeList">;
-  scope: SessionListScope;
-};
+export function projectRuntimeConfig(source: Parameters<typeof readRuntimeConfig>[0]) {
+  return projectOwner(source, readRuntimeConfig);
+}
 
 /** Query membership and admission remain with the session capability. */
-export function projectSessionList(source: SessionListProjectionSource) {
+export function projectSessionList(source: {
+  sessions: Pick<SessionCapability, "listSnapshot" | "subscribeList">;
+  scope: SessionListScope;
+}) {
   return projectSource(source, {
     read: ({ sessions, scope }) => sessions.listSnapshot(scope),
     subscribe: ({ sessions, scope }, notify) => sessions.subscribeList(scope, notify),

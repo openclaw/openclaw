@@ -1,0 +1,23 @@
+{
+  "name": "openclaw-inline-incident-example",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "controlUi": "./control-ui.ts"
+  },
+  "scripts": {
+    "build": "openclaw plugins build --root .",
+    "validate": "openclaw plugins validate --root ."
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*",
+    "esbuild": "0.28.2"
+  }
+}

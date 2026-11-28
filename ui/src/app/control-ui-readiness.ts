@@ -3,6 +3,7 @@ import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import type { RouteElements } from "./route-elements.ts";
 
 type ReadinessNavigationOptions = Partial<Pick<RouteLocation, "pathname" | "search" | "hash">>;
 
@@ -51,6 +52,8 @@ export type ControlUiCommittedPresentation = {
 export interface ControlUiReadinessOutlet extends HTMLElement {
   readonly presentationSettled: boolean;
   settlePresentation(): Promise<boolean>;
+  renderedElement?: RouteElements["renderedElement"];
+  renderedElements?: RouteElements["renderedElements"];
 }
 
 /**
@@ -78,7 +81,25 @@ export class ControlUiReadiness {
 
   readonly hook = {
     snapshot: () => this.snapshot,
-    diagnostics: () => this.diagnostics(),
+    diagnostics: () => {
+      const context = this.runtime?.context;
+      const agents = context?.agents.state;
+      return {
+        agentSelection: context?.agentSelection.state ?? null,
+        gateway: {
+          assistantAgentId: context?.gateway.snapshot.assistantAgentId ?? null,
+          phase: context?.gateway.snapshot.phase ?? null,
+        },
+        roster: {
+          agentsError: agents?.agentsError ?? null,
+          agentsList: agents?.agentsList ?? null,
+          agentsLoading: agents?.agentsLoading ?? null,
+          connected: agents?.connected ?? null,
+        },
+        router: this.snapshot.route,
+        settlementError: this.settlementError,
+      };
+    },
     navigate: (routeId: RouteId, options?: ReadinessNavigationOptions) => {
       if (!this.runtime) {
         throw new Error("Control UI is disconnected");
@@ -253,26 +274,6 @@ export class ControlUiReadiness {
       terminalActivationReady:
         this.committedGeneration === this.generation &&
         this.presentation?.terminalActivationReady === true,
-    };
-  }
-
-  private diagnostics() {
-    const context = this.runtime?.context;
-    const agents = context?.agents.state;
-    return {
-      agentSelection: context?.agentSelection.state ?? null,
-      gateway: {
-        assistantAgentId: context?.gateway.snapshot.assistantAgentId ?? null,
-        phase: context?.gateway.snapshot.phase ?? null,
-      },
-      roster: {
-        agentsError: agents?.agentsError ?? null,
-        agentsList: agents?.agentsList ?? null,
-        agentsLoading: agents?.agentsLoading ?? null,
-        connected: agents?.connected ?? null,
-      },
-      router: this.snapshot.route,
-      settlementError: this.settlementError,
     };
   }
 }

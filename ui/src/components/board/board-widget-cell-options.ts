@@ -3,7 +3,7 @@ import type { BoardGridDirection, BoardGridRect } from "../../lib/board/grid.ts"
 import type { BoardWidgetAppViewState } from "../../lib/board/provider.ts";
 import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardGrantDecision, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
-import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 
 export const BOARD_SIZE_PRESETS = {
   sm: { w: 3, h: 3 },
@@ -20,12 +20,13 @@ export type BoardWidgetPageMenu = {
 };
 
 export type BoardWidgetCellCallbacks = {
+  presentationReady?: () => void;
   appViewGeneration: () => number;
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
   movePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
   resizePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
   moveToTab: (widget: BoardWidget, tabId: string) => Promise<void>;
-  resizeTo: (widget: BoardWidget, w: number, h: number) => Promise<void>;
+  resizeTo: (widget: BoardWidget, w: number, h: number, source?: "preset") => Promise<void>;
   setHeightMode: (widget: BoardWidget, mode: "auto" | "fixed") => Promise<void>;
   reportContentHeight: (name: string, height: number) => void;
   remove: (widget: BoardWidget) => Promise<void>;
@@ -39,6 +40,7 @@ export type BoardWidgetCellCallbacks = {
 
 export type BoardWidgetCellProps = {
   widget?: BoardWidget;
+  layoutPreview?: BoardWidget;
   boardRevision?: number;
   rect?: BoardGridRect;
   contentHeightPx?: number;
@@ -62,6 +64,7 @@ export type BoardWidgetCellProps = {
 };
 export type BoardWidgetCellHandle = {
   readonly presentationReady: boolean;
+  focusWidget(): void;
   selectMenuItem(value: string | undefined): void;
   teardown(): Promise<void>;
   restartAfterTeardown(): void;

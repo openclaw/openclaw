@@ -1,10 +1,11 @@
-import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { resolveRecordedRequester } from "../registry/subagent-child-owner-match.js";
+import { getCurrentSubagentRunOwner, subagentRuns } from "../registry/subagent-registry-memory.js";
 import { buildScopedSubagentRunReadIndexFromRuns } from "../registry/subagent-registry-queries.js";
-import { listSubagentRunsForRequester } from "../registry/subagent-registry-read.js";
-import { withSubagentRunReadSnapshot } from "../registry/subagent-registry-state.js";
+import {
+  getSubagentSessionListRunsSnapshotForSessions,
+  prepareSubagentSessionListReadCache,
+} from "../registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
-import { collectSubagentSessionReadKeys } from "../registry/subagent-session-read-scope.js";
 
 export function createRequesterDescendantReader(params: {
   requesterSessionKey: string;
@@ -21,12 +22,12 @@ export function createRequesterDescendantReader(params: {
     if (params.signal?.aborted || !params.isSourceCurrent()) {
       return false;
     }
-    const current = listSubagentRunsForRequester(params.requesterSessionKey, {
-      requesterAgentId: params.requesterAgentId,
-      requesterStorePath: params.requesterStorePath,
-    }).find((entry) => isSameSubagentRunOwner(entry, params.settledEntry));
+    const current = getCurrentSubagentRunOwner(subagentRuns, params.settledEntry);
     return (
       current?.requesterSettleWake !== undefined &&
+      current.requesterSessionKey === params.requesterSessionKey.trim() &&
+      (!params.requesterAgentId || resolveRecordedRequester(current) === params.requesterAgentId) &&
+      (current.requesterStorePath ?? null) === params.requesterStorePath &&
       current.requesterSettleWake.rearmGeneration === rearmGeneration
     );
   };
@@ -34,45 +35,45 @@ export function createRequesterDescendantReader(params: {
     if (!isCurrent()) {
       return undefined;
     }
-    const result = await withSubagentRunReadSnapshot(
-      subagentRuns,
-      (snapshot) => {
-        if (!isCurrent()) {
-          return { runIds: [], sessionKeys: [] };
-        }
-        const sessionKeys = collectSubagentSessionReadKeys(
-          [params.requesterSessionKey],
-          snapshot.values(),
-        );
-        return {
-          runIds: [...snapshot.values()]
-            .filter((entry) => sessionKeys.has(entry.childSessionKey.trim()))
-            .map((entry) => entry.runId),
-          sessionKeys: [],
-        };
-      },
-      (_selection, runs) => {
-        if (!isCurrent()) {
-          return undefined;
-        }
-        const index = buildScopedSubagentRunReadIndexFromRuns(
-          new Map(runs),
-          params.requesterSessionKey,
-          params.requesterAgentId,
-          params.requesterStorePath,
-          params.rootRunIds,
-        );
-        return {
-          unsettled: index.hasDescendantRunAwaitingSettle(
-            params.requesterSessionKey,
-            params.settledEntry.runId,
-            params.settledBefore,
-          ),
-          active: index.countActiveDescendantRuns(params.requesterSessionKey),
-        };
-      },
-      { sessionKeys: [params.requesterSessionKey], descendants: true },
+    await prepareSubagentSessionListReadCache();
+    if (!isCurrent()) {
+      return undefined;
+    }
+    // Settlement needs topology and delivery facts, never retained task/result text.
+    const runs = getSubagentSessionListRunsSnapshotForSessions(subagentRuns, [
+      params.requesterSessionKey,
+    ]);
+    for (const runId of runs.keys()) {
+      const live = subagentRuns.get(runId);
+      if (live) {
+        runs.set(runId, live);
+      }
+    }
+    const index = buildScopedSubagentRunReadIndexFromRuns(
+      runs,
+      params.requesterSessionKey,
+      params.requesterAgentId,
+      params.requesterStorePath,
+      params.rootRunIds,
     );
-    return isCurrent() ? result : undefined;
+    const unsettled = index.hasDescendantRunAwaitingSettle(
+      params.requesterSessionKey,
+      params.settledEntry.runId,
+      params.settledBefore,
+    );
+    const active = index.countActiveDescendantRuns(params.requesterSessionKey);
+    // Terminal delivery gets one bounded grace period, derived from durable end
+    // times so neither sweeps nor a Gateway restart recharge the wait.
+    const deliveryWaitUntil =
+      unsettled && active === 0
+        ? index
+            .listDescendantRunsForRequester(params.requesterSessionKey)
+            .reduce(
+              (latest, run) => Math.max(latest, run.execution.endedAt ?? 0),
+              params.settledEntry.execution.endedAt ?? 0,
+            ) +
+          5 * 60_000
+        : undefined;
+    return { unsettled, active, ...(deliveryWaitUntil !== undefined ? { deliveryWaitUntil } : {}) };
   };
 }

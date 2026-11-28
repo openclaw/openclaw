@@ -1,11 +1,11 @@
-// Matrix storage-owned inspection and explicit recovery of failed crypto publication.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE } from "openclaw/plugin-sdk/file-lock";
-import { getMatrixRuntime } from "../runtime.js";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
   readMatrixIdbSnapshotJson,
+  type MatrixSnapshotStateAccess,
   type MatrixSnapshotStateReader,
 } from "./crypto-state-store.js";
 import {
@@ -19,7 +19,7 @@ const MARKER_NAME = `${MATRIX_IDB_SNAPSHOT_FILENAME}.owner.poisoned`;
 
 export async function listMatrixCryptoUnsafeState(
   stateDir: string,
-  stateRuntime?: MatrixSnapshotStateReader,
+  stateRuntime: MatrixSnapshotStateReader,
 ): Promise<string[]> {
   const { entries, failedDirs } = await walkMatrixStateFiles(
     stateDir,
@@ -45,19 +45,14 @@ export async function listMatrixCryptoUnsafeState(
       // Retained guards can be clean; missing guards can be unsafe. Inspect the
       // guard and canonical snapshot together under the exclusive recovery lock.
       const unsafe = await withMatrixCryptoStoreRecoveryLock(snapshotPath, () =>
-        isMatrixCryptoStoreUnsafe(snapshotPath, stateRuntime ?? getMatrixRuntime().state),
+        isMatrixCryptoStoreUnsafe(snapshotPath, stateRuntime),
       );
       if (unsafe) {
         abandoned.push(root);
       }
     } catch (error) {
       // Lock contention means an owner is live, not that its armed marker is abandoned.
-      if (
-        error !== null &&
-        typeof error === "object" &&
-        "code" in error &&
-        error.code === FILE_LOCK_TIMEOUT_ERROR_CODE
-      ) {
+      if (extractErrorCode(error) === FILE_LOCK_TIMEOUT_ERROR_CODE) {
         continue;
       }
       throw error;
@@ -70,6 +65,7 @@ export async function listMatrixCryptoUnsafeState(
 export async function recoverMatrixCryptoUnsafeState(params: {
   storageRootDir: string;
   acceptSnapshotRollback: boolean;
+  stateRuntime: MatrixSnapshotStateAccess;
 }): Promise<void> {
   if (!params.acceptSnapshotRollback) {
     throw new Error("Matrix crypto recovery requires explicit --accept-snapshot-rollback.");
@@ -79,22 +75,14 @@ export async function recoverMatrixCryptoUnsafeState(params: {
     try {
       await fs.access(path.join(params.storageRootDir, "state", "openclaw.sqlite"));
     } catch (error) {
-      if (
-        error !== null &&
-        typeof error === "object" &&
-        "code" in error &&
-        error.code === "ENOENT"
-      ) {
+      if (extractErrorCode(error) === "ENOENT") {
         throw new Error("Matrix crypto SQLite snapshot is absent; refusal remains in place.", {
           cause: error,
         });
       }
       throw error;
     }
-    const snapshot = await readMatrixIdbSnapshotJson(
-      params.storageRootDir,
-      getMatrixRuntime().state,
-    );
+    const snapshot = await readMatrixIdbSnapshotJson(params.storageRootDir, params.stateRuntime);
     if (!snapshot) {
       throw new Error(
         "Matrix crypto SQLite snapshot is absent or invalid; refusal remains in place.",
@@ -113,6 +101,6 @@ export async function recoverMatrixCryptoUnsafeState(params: {
     }
     // Publish recovery under the owner lock after validation and explicit operator acceptance.
     // No crypto keys are read into a Matrix client during this operation.
-    await sealMatrixCryptoStoreRecovery(snapshotPath, getMatrixRuntime().state);
+    await sealMatrixCryptoStoreRecovery(snapshotPath, params.stateRuntime);
   });
 }

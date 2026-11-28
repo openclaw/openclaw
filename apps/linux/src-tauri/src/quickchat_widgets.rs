@@ -178,6 +178,10 @@ async fn prepare_widget_surface(webview: &Webview) -> Result<(), String> {
         let overlay = gtk::Overlay::new();
         let fixed = gtk::Fixed::new();
         let content: QuickChatContent = gtk::glib::Object::new();
+        // Reparenting clears GTK focus even when the WebView's DOM remains focused.
+        let focused = window
+            .focused_widget()
+            .filter(|focus| focus == &primary || focus.is_ancestor(&primary));
         vbox.remove(&primary);
         // The app owns preferred size; WebKit's natural size must not raise compact-window hints.
         content.set_orientation(gtk::Orientation::Vertical);
@@ -192,6 +196,9 @@ async fn prepare_widget_surface(webview: &Webview) -> Result<(), String> {
         content.show();
         fixed.show();
         overlay.show();
+        if let Some(focused) = focused {
+            focused.grab_focus();
+        }
         let fixed = fixed.downgrade();
         // Give WebKit's IME and widget handlers first refusal; an unhandled key is replayed by WebKit.
         // Primary-view popovers keep their own Escape handling.
@@ -748,7 +755,6 @@ fn same_widget_document(candidate: &Url, allowed: &Url) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     fn test_widget(key: &str, url: &str, sandbox: &str) -> QuickChatWidgetLayout {
         QuickChatWidgetLayout {
@@ -846,26 +852,14 @@ mod tests {
     }
 
     #[test]
-    fn labels_preserve_existing_instances_when_siblings_append() {
+    fn document_revision_changes_widget_identity() {
         let first = test_widget(
             "first",
             "https://gateway.example/__openclaw__/cap/fixture-capability/__openclaw__/canvas/documents/first/index.html",
             "scripts",
         );
-        let second = test_widget(
-            "second",
-            "https://gateway.example/__openclaw__/cap/fixture-capability/__openclaw__/canvas/documents/second/index.html",
-            "scripts",
-        );
         let generation = GatewayClient::new().generation();
         let first_label = widget_view_label(&first, generation);
-        let desired_before = HashMap::from([(first.key.clone(), first_label.clone())]);
-        let desired_after = HashMap::from([
-            (first.key.clone(), widget_view_label(&first, generation)),
-            (second.key.clone(), widget_view_label(&second, generation)),
-        ]);
-
-        assert_eq!(desired_after.get("first"), desired_before.get("first"));
         let mut navigated = first.clone();
         navigated.url.push_str("?revision=2");
         assert_ne!(widget_view_label(&navigated, generation), first_label);

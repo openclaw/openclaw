@@ -6,9 +6,11 @@ import {
   isDashboardSessionTitleCandidate,
   maybeGenerateDashboardSessionTitle,
 } from "../dashboard-session-title.js";
+import type { CreatedGatewaySession } from "../session-create-service.types.js";
+import { sessionTitleRequests, hasExplicitSessionName } from "../session-title-state.js";
 import { formatForLog } from "../ws-log.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
-import { emitSessionsChanged } from "./session-change-event.js";
+import { emitSessionTitleChanged } from "./session-change-event.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type DashboardSessionTitleRequest = {
@@ -20,6 +22,25 @@ type DashboardSessionTitleRequest = {
   sessionKey: string;
   storePath: string;
 };
+
+export function holdCreatedDashboardSessionTitle(
+  holds: DisposableStack,
+  created: CreatedGatewaySession,
+  source: string,
+) {
+  if (
+    !hasExplicitSessionName(created.entry) &&
+    isDashboardSessionTitleCandidate({ sessionKey: created.key, userMessage: source })
+  ) {
+    holds.defer(
+      sessionTitleRequests.holdCreation({
+        storePath: created.storePath,
+        sessionKey: created.key,
+        sessionId: created.entry.sessionId,
+      }),
+    );
+  }
+}
 
 export function scheduleCreatedDashboardSessionTitle(
   created: {
@@ -63,7 +84,7 @@ export function scheduleChatDashboardSessionTitle(
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     // Naming only patches metadata under the title writer's session identity check.
     // It must not hold a turn admission while waiting on a model.
-    const updated = await maybeGenerateDashboardSessionTitle({
+    await maybeGenerateDashboardSessionTitle({
       cfg: params.cfg,
       agentId: params.agentId,
       sessionId: params.admittedSessionId,
@@ -74,16 +95,15 @@ export function scheduleChatDashboardSessionTitle(
       ...(retryAfter ? { retryAfter } : {}),
       onFallback: () =>
         params.context.logGateway.warn(
-          "dashboard session title generation exhausted; using a crustacean fallback name",
+          "session title generation exhausted; no model title generated",
         ),
+      onTitleStateChanged: () =>
+        emitSessionTitleChanged(params.context, {
+          sessionKey: params.sessionKey,
+          sessionId: params.admittedSessionId,
+          agentId: params.agentId,
+        }),
     });
-    if (updated) {
-      emitSessionsChanged(params.context, {
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-        reason: "chat.title",
-      });
-    }
   }, "chat-send:background").catch((err: unknown) => {
     params.context.logGateway.warn(
       `dashboard session title generation failed: ${formatForLog(err)}`,

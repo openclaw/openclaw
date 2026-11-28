@@ -1,14 +1,12 @@
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveStateDir } from "../state-dir.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import type { SessionMembersSnapshot } from "./session-sharing-store.kernel.js";
-import { projectionLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 
 /** Current management metadata and evidence share the projection worker's read snapshot. */
 export async function readSessionMembersInWorker(
@@ -43,11 +41,12 @@ export async function readSessionMembersInWorker(
     { agentId: options.agentId, storePath: databasePath, env },
     ({ reader, continuation }) =>
       reader.readMembers({ sessionKey: resolved.sessionKey, env, continuation }),
-    { backing: true, dataOnly: true, lane: projectionLane },
+    { backing: true, dataOnly: true, lane: sessionStoreLane },
   );
 }
 
 export {
   addSessionMemberInWorker as addSessionMember,
   removeSessionMemberInWorker as removeSessionMember,
+  setSessionMemberAccessInWorker as setSessionMemberAccess,
 } from "./session-sharing-store.async.js";

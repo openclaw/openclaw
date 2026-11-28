@@ -1,6 +1,6 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString as toOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { sanitizeTerminalText, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
@@ -16,7 +16,9 @@ import { isGatewayRpcUnavailableError } from "../gateway/transport-error.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
+import { TRAJECTORY_SNAPSHOT_FRAGMENT } from "../trajectory/runtime-snapshot.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
@@ -44,7 +46,7 @@ type SqliteFollowState = {
   selection: TailSelection;
 };
 
-type FollowOutcome = "ERROR" | "SIGINT" | "SIGTERM";
+type FollowOutcome = "ERROR" | "SIGINT" | "SIGTERM" | "ABORTED";
 
 const DEFAULT_TAIL_COUNT = 80;
 const SESSION_KEY_PAD = 30;
@@ -137,6 +139,9 @@ function formatProgressLine(event: TrajectoryEvent): string {
 
 function renderEvents(events: TrajectoryEvent[], runtime: RuntimeEnv): void {
   for (const event of events) {
+    if (event.type === TRAJECTORY_SNAPSHOT_FRAGMENT) {
+      continue;
+    }
     runtime.log(formatProgressLine(event));
   }
 }
@@ -145,7 +150,7 @@ async function selectSessionsToTail(
   selections: TailSelection[],
   opts: SessionsTailOptions,
   runtime: RuntimeEnv,
-): Promise<TailSelection[]> {
+): Promise<TailSelection[] | undefined> {
   if (opts.sessionKey || selections.length === 0) {
     return selections.filter((selection) => selection.key === opts.sessionKey);
   }
@@ -155,6 +160,7 @@ async function selectSessionsToTail(
   if (opts.store !== undefined) {
     runtime.log("explicit store: ordered by activity");
   } else {
+    const signal = getAsyncWorkSignal();
     try {
       const cfg = await captureRuntimeConfigAsyncReader()();
       const { sessions } = await callGatewayFromCliWithTransport<{
@@ -169,8 +175,11 @@ async function selectSessionsToTail(
           includeGlobal: true,
           includeUnknown: true,
         },
-        { progress: false },
+        { progress: false, signal },
       );
+      if (signal?.aborted) {
+        return undefined;
+      }
       const running = new Map(
         sessions
           .filter((row) => row.hasActiveRun && row.status !== "queued")
@@ -190,6 +199,9 @@ async function selectSessionsToTail(
         return active;
       }
     } catch (error) {
+      if (signal?.aborted) {
+        return undefined;
+      }
       if (!isGatewayRpcUnavailableError(error)) {
         throw error;
       }
@@ -216,6 +228,7 @@ function readNewSqliteFollowEvents(state: SqliteFollowState): TrajectoryEvent[] 
 function followSelections(
   states: SqliteFollowState[],
   runtime: RuntimeEnv,
+  signal?: AbortSignal,
 ): Promise<FollowOutcome> {
   return new Promise((resolve) => {
     let finished = false;
@@ -225,7 +238,7 @@ function followSelections(
           renderEvents(readNewSqliteFollowEvents(state), runtime);
         } catch (error) {
           runtime.error(
-            `Failed to read trajectory progress for ${state.selection.key}: ${formatErrorMessage(
+            terminalText`Failed to read trajectory progress for ${state.selection.key}: ${formatErrorMessage(
               error,
             )}`,
           );
@@ -240,13 +253,19 @@ function followSelections(
         clearInterval(interval);
         process.off("SIGINT", stopSigint);
         process.off("SIGTERM", stopSigterm);
+        signal?.removeEventListener("abort", stopAbort);
         resolve(outcome);
       }
     };
     const stopSigint = () => finish("SIGINT");
     const stopSigterm = () => finish("SIGTERM");
+    const stopAbort = () => finish("ABORTED");
     process.once("SIGINT", stopSigint);
     process.once("SIGTERM", stopSigterm);
+    signal?.addEventListener("abort", stopAbort, { once: true });
+    if (signal?.aborted) {
+      stopAbort();
+    }
   });
 }
 
@@ -308,10 +327,13 @@ export async function sessionsTailCommand(
     { ...opts, sessionKey: requestedKey },
     runtime,
   );
+  if (!selected) {
+    return;
+  }
   if (selected.length === 0) {
     if (requestedKey) {
       runtime.error(
-        `Session not found: ${requestedKey}. Run ${formatCliCommand("openclaw sessions list --all-agents --json")} to choose a valid key.`,
+        `Session not found: ${terminalText`${requestedKey}`}. Run ${formatCliCommand("openclaw sessions list --all-agents --json")} to choose a valid key.`,
       );
       runtime.exit(1);
     } else {
@@ -322,18 +344,33 @@ export async function sessionsTailCommand(
 
   const followStates: SqliteFollowState[] = [];
   for (const selection of selected) {
-    const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
-      agentId: selection.agentId,
-      sessionId: selection.sessionId,
-      storePath: selection.storePath,
-      tailEvents: Math.max(tailCount, opts.follow ? 1 : 0),
-    });
+    let window = Math.max(tailCount, opts.follow ? 1 : 0);
+    const readWindow = () =>
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        agentId: selection.agentId,
+        sessionId: selection.sessionId,
+        storePath: selection.storePath,
+        tailEvents: window,
+      });
+    let rows = readWindow();
+    while (
+      rows.length === window &&
+      window > 0 &&
+      window < Number.MAX_SAFE_INTEGER &&
+      rows.filter((row) => row.event.type !== TRAJECTORY_SNAPSHOT_FRAGMENT).length < tailCount
+    ) {
+      window = Math.min(Number.MAX_SAFE_INTEGER, window * 2);
+      rows = readWindow();
+    }
     followStates.push({ selection, lastStorageSeq: rows.at(-1)?.seq ?? -1 });
-    renderEvents(tailCount > 0 ? rows.slice(-tailCount).map((row) => row.event) : [], runtime);
+    const visible = rows.filter((row) => row.event.type !== TRAJECTORY_SNAPSHOT_FRAGMENT);
+    renderEvents(tailCount > 0 ? visible.slice(-tailCount).map((row) => row.event) : [], runtime);
   }
 
   if (opts.follow) {
-    const outcome = await followSelections(followStates, runtime);
-    runtime.exit(outcome === "ERROR" ? 1 : outcome === "SIGINT" ? 130 : 143);
+    const outcome = await followSelections(followStates, runtime, getAsyncWorkSignal());
+    if (outcome !== "ABORTED") {
+      runtime.exit(outcome === "ERROR" ? 1 : outcome === "SIGINT" ? 130 : 143);
+    }
   }
 }

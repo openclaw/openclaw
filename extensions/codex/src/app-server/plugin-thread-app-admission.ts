@@ -1,6 +1,7 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { codexAppIdentityKey } from "./app-identity.js";
 import {
+  resolveCodexPluginThreadAppCacheKey,
   serializeCodexAppInventoryError,
   type CodexAppInventoryCache,
   type CodexAppInventorySnapshot,
@@ -34,19 +35,15 @@ export type CodexPluginThreadAppAdmissionConfig = {
   layers: readonly JsonObject[];
 };
 
-export function resolveCodexPluginThreadAppCacheKey(params: {
-  appCacheKey: string;
-  threadId?: string;
-}): string {
-  return params.threadId
-    ? `${params.appCacheKey}:thread:${encodeURIComponent(params.threadId)}`
-    : params.appCacheKey;
-}
-
 export async function refreshCodexPluginAppInventory(
   params: CodexPluginThreadAppAdmissionParams,
   appCache: CodexAppInventoryCache,
-  options: { forceRefetch?: boolean; reason?: string; targetAppIds?: readonly string[] } = {},
+  options: {
+    forceRefetch?: boolean;
+    reuseRecentForcedRefresh?: boolean;
+    reason?: string;
+    targetAppIds?: readonly string[];
+  } = {},
 ): Promise<CodexAppInventorySnapshot | undefined> {
   if (!params.appCacheKey) {
     return undefined;
@@ -58,6 +55,7 @@ export async function refreshCodexPluginAppInventory(
       request,
       nowMs: params.nowMs,
       forceRefetch: options.forceRefetch,
+      reuseRecentForcedRefresh: options.reuseRecentForcedRefresh,
       targetAppIds: options.targetAppIds,
     });
   } catch (error) {
@@ -137,7 +135,8 @@ export async function readCodexThreadAdmissibleAccountApps(
     cachedInventory.state === "fresh" && !cachedInventory.snapshot?.targetAppIds?.length
       ? cachedInventory.snapshot
       : await refreshCodexPluginAppInventory(params, appCache, {
-          forceRefetch: false,
+          // Account-only admission has no plugin readiness repair. Keep the
+          // default cold refresh so an empty native snapshot can be populated.
           reason: "account_apps_all",
           targetAppIds: [],
         });
@@ -226,7 +225,6 @@ export async function readCodexConfigForAppAdmission(
     };
   } catch (error) {
     const details = serializeCodexAppInventoryError(error);
-    embeddedAgentLog.warn("codex plugin app admission config read failed", { error: details });
     throw new Error(
       `Could not verify the Codex app allowlist: ${String(details.message)}. No native thread was started; resolve the native configuration error and retry.`,
       { cause: error },

@@ -15,8 +15,8 @@ import {
 } from "./trust-store-format.js";
 
 export type ReefTrustOperationState = {
-  peers: PluginStateKeyedStore<ReefPeerStateSnapshot>;
-  deliveries: PluginStateKeyedStore<ReefOutboundDelivery>;
+  peers: PluginStateKeyedStore<ReefPeerStateSnapshot, 2>;
+  deliveries: PluginStateKeyedStore<ReefOutboundDelivery, 2>;
   identityScope: string;
   assertCurrent(): void;
 };

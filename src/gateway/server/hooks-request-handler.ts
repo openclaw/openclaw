@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { sendHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
@@ -42,7 +42,6 @@ import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js
 import { resolveRequestClientIpFromHeaders } from "../net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import {
-  HOOK_FAN_OUT_RESPONSE_DEADLINE_MS,
   HookWakeUnavailableError,
   sendAgentResult,
   sendFanOutResult,
@@ -57,8 +56,6 @@ const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 // no idempotency key; item identity lives in the dispatch-scope fingerprint.
 const HOOK_FAN_OUT_DERIVED_IDEMPOTENCY = "hook-fanout-item";
 const HOOK_CONFIG_CHANGED_ERROR = "hook configuration changed; retry request";
-
-const hashReplay = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
 
 export type HookClientIpConfig = Readonly<{
   trustedProxies?: string[];
@@ -99,12 +96,9 @@ export function createHooksRequestHandler(
     port: number;
     logHooks: ReturnType<typeof createSubsystemLogger>;
     getClientIpConfig?: () => HookClientIpConfig;
-    fanoutResponseDeadlineMs?: number;
   } & HookDispatchers,
 ): HooksRequestHandler {
   const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook, getClientIpConfig } = opts;
-  const fanoutResponseDeadlineMs =
-    opts.fanoutResponseDeadlineMs ?? HOOK_FAN_OUT_RESPONSE_DEADLINE_MS;
   const hookReplayCache = new Map<string, HookReplayEntry>();
   const hookAuthLimiter = createGatewayAuthRateLimiter(
     {
@@ -154,7 +148,7 @@ export function createHooksRequestHandler(
       pathKey: params.pathKey,
       dispatchScope: params.dispatchScope,
     });
-    return `${hashReplay(params.token ?? "")}:${hashReplay(scope)}:${hashReplay(idem)}`;
+    return `${sha256Hex(params.token ?? "")}:${sha256Hex(scope)}:${sha256Hex(idem)}`;
   };
 
   const resolveHookReplay = (key: string | undefined) => {
@@ -187,32 +181,23 @@ export function createHooksRequestHandler(
     const pending = Promise.resolve()
       .then(dispatch)
       .then((result) => {
-        const current = hookReplayCache.get(key);
-        if (current?.state === "pending" && current.dispatch === pending) {
-          if (result.ok) {
-            const active = { state: "active", dispatch: result } as const;
-            hookReplayCache.set(key, active);
-            const settle = () => {
-              if (hookReplayCache.get(key) !== active) {
-                return;
-              }
-              const terminal = { state: "terminal", ts: Date.now(), dispatch: result } as const;
-              hookReplayCache.delete(key);
-              hookReplayCache.set(key, terminal);
-              pruneHookReplayCache(terminal.ts);
-            };
-            void result.completion.then(settle, settle);
-          } else {
+        // Pending/active entries cannot be pruned or replaced by another request.
+        if (result.ok) {
+          hookReplayCache.set(key, { state: "active", dispatch: result });
+          const settle = () => {
+            const terminal = { state: "terminal", ts: Date.now(), dispatch: result } as const;
             hookReplayCache.delete(key);
-          }
+            hookReplayCache.set(key, terminal);
+            pruneHookReplayCache(terminal.ts);
+          };
+          void result.completion.then(settle, settle);
+        } else {
+          hookReplayCache.delete(key);
         }
         return result;
       })
       .catch((err: unknown) => {
-        const current = hookReplayCache.get(key);
-        if (current?.state === "pending" && current.dispatch === pending) {
-          hookReplayCache.delete(key);
-        }
+        hookReplayCache.delete(key);
         throw err;
       });
     hookReplayCache.set(key, { state: "pending", dispatch: pending });
@@ -297,19 +282,31 @@ export function createHooksRequestHandler(
 
     // gmail-path mappings carry a producer-derived bound (gog batch contract);
     // every other path keeps the shared default cap.
-    const body = await readJsonBody(req, resolveHookPathBodyLimit(hooksConfig, subPath));
+    const bodyLimit = resolveHookPathBodyLimit(hooksConfig, subPath);
+    const body = await readJsonBody(req, bodyLimit);
     if (!body.ok) {
       const error = { ok: false, error: body.error };
-      if (body.error === "payload too large" || body.error === "request body timeout") {
+      const status =
+        body.error === "payload too large"
+          ? 413
+          : body.error === "request body timeout"
+            ? 408
+            : 400;
+      // An authenticated sender's delivery is lost here; name the path and bound so
+      // the operator can see it. Parse errors may quote the body, so log only the status.
+      logHooks.warn(
+        `hook request rejected for ${basePath}/${subPath}: status=${status} bodyLimitBytes=${bodyLimit}`,
+      );
+      if (status === 400) {
+        sendJson(res, 400, error);
+      } else {
         await sendHttpRequestRejection(
           req,
           res,
-          body.error === "payload too large" ? 413 : 408,
+          status,
           JSON.stringify(error),
           "application/json; charset=utf-8",
         );
-      } else {
-        sendJson(res, 400, error);
       }
       return true;
     }
@@ -708,7 +705,6 @@ export function createHooksRequestHandler(
           }
           const settled = await settleFanOutDispatches(
             dispatches.map((dispatch) => Promise.resolve(dispatch())),
-            fanoutResponseDeadlineMs,
           );
           sendFanOutResult(res, settled, wakeResult);
           return true;

@@ -1,5 +1,7 @@
 import { isMainThread } from "node:worker_threads";
+import JSON5 from "json5";
 import { loadDotEnvAsync } from "../infra/dotenv.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
@@ -20,6 +22,7 @@ import {
   coerceConfig,
   containsConfigIncludeDirective,
   hashConfigRaw,
+  readConfigFileIfPresent,
   resolveConfigForRead,
   resolveConfigIncludesForRead,
   restoreEnvChangesIfUnchanged,
@@ -34,10 +37,14 @@ import { createConfigFileSnapshot } from "./io.snapshot-shared.js";
 import { loggedConfigWarningFingerprints, loggedInvalidConfigs } from "./io.state.js";
 import { logConfigWarningsOnce, warnIfConfigFromFuture } from "./io.warnings.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import type { OpenClawConfig } from "./types.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
-type ConfigLoadOptions = { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void };
+type ConfigLoadOptions = {
+  skipSuspiciousRecovery?: boolean;
+  assertCurrent?: () => void;
+  projectInvalidConfig?: (snapshot: ConfigFileSnapshot) => OpenClawConfig | undefined;
+};
 
 export function loadConfigFromContext(
   context: ConfigIoContext,
@@ -68,20 +75,16 @@ function* loadConfigWithEffects(
       sync: () => maybeLoadDotEnvForConfig(deps.env),
       async: async () => {
         if (deps.env === process.env) {
-          await loadDotEnvAsync({ env: deps.env, quiet: true });
+          await loadDotEnvAsync({ env: deps.env });
         }
       },
     });
     envBeforeRead = snapshotEnv(deps.env);
-    const exists = yield* resolveConfigIoEffect({
-      sync: () => deps.fs.existsSync(configPath),
-      async: () =>
-        deps.fs.promises.access(configPath).then(
-          () => true,
-          () => false,
-        ),
+    const raw = yield* resolveConfigIoEffect({
+      sync: () => readConfigFileIfPresent(deps, configPath),
+      async: () => deps.fs.promises.readFile(configPath, "utf-8").catch(ignoreMissingPath),
     });
-    if (!exists) {
+    if (raw === undefined) {
       loggedConfigWarningFingerprints.delete(configPath);
       // A missing config is the fresh-install default path: materialize the
       // same runtime defaults an empty {} config gets, or out-of-box behavior
@@ -107,11 +110,7 @@ function* loadConfigWithEffects(
           context.finalizeLoadedRuntimeConfigAsync(materialized, metadata, options.assertCurrent),
       });
     }
-    const raw = yield* resolveConfigIoEffect({
-      sync: () => deps.fs.readFileSync(configPath, "utf-8"),
-      async: () => deps.fs.promises.readFile(configPath, "utf-8"),
-    });
-    const parsed = deps.json5.parse(raw);
+    const parsed = JSON5.parse(raw);
     const readResolution = resolveConfigForRead(
       resolveConfigIncludesForRead(parsed, configPath, deps),
       deps.env,
@@ -160,7 +159,6 @@ function* loadConfigWithEffects(
         }),
       async: () =>
         prepareConfigSnapshotValidation({
-          kind: "validate",
           context,
           metadata: pluginMetadata,
           raw: effectiveConfigRaw,
@@ -183,6 +181,12 @@ function* loadConfigWithEffects(
         resolutionFacts: readResolution.resolutionFacts,
         legacyIssues: [],
       });
+      // An offline policy reader may supply an already-validated repair projection.
+      // Never observe that projection as disk config or write it from the reader.
+      const projected = !deps.observe ? options.projectInvalidConfig?.(invalidSnapshot) : undefined;
+      if (projected) {
+        return materializeRuntimeConfig(projected, pathResolution);
+      }
       yield* resolveConfigIoEffect({
         sync: () => context.observeLoadConfigSnapshot(invalidSnapshot),
         async: () => context.observeLoadConfigSnapshotAsync(invalidSnapshot, options.assertCurrent),

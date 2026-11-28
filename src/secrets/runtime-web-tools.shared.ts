@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { ensureRecord as ensureConfigObject } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
 import type {
@@ -19,7 +20,7 @@ import {
   type SecretResolutionResult,
 } from "./runtime-web-tools-selection.types.js";
 import type { RuntimeWebDiagnostic, RuntimeWebSearchMetadata } from "./runtime-web-tools.types.js";
-import { isRecord, parseDotPath } from "./shared.js";
+import { parseDotPath } from "./shared.js";
 
 type RuntimeWebProvider = PluginWebSearchProviderEntry | PluginWebFetchProviderEntry;
 
@@ -54,16 +55,6 @@ type RuntimeWebProviderSelectionParams = {
     params: RuntimeWebResolveSecretInputParams,
   ) => Promise<SecretResolutionResult<WebSearchCredentialResolutionSource>>;
 };
-
-function ensureConfigObject(target: Record<string, unknown>, key: string): Record<string, unknown> {
-  const current = target[key];
-  if (isRecord(current)) {
-    return current;
-  }
-  const next: Record<string, unknown> = {};
-  target[key] = next;
-  return next;
-}
 
 function inactivePathsForProvider(
   provider: RuntimeWebProvider,

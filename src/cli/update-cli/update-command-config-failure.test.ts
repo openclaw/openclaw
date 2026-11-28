@@ -1,8 +1,53 @@
 import { describe, expect, it } from "vitest";
 import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
+import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 
 describe("update config failure guidance", () => {
+  it.each([
+    {
+      code: "EACCES",
+      contention: false,
+      expectedCode: "EACCES",
+      guidance: "Check configuration file access",
+    },
+    {
+      code: null,
+      contention: true,
+      expectedCode: "gateway-maintenance-busy",
+      guidance: "Wait for the active Gateway or maintenance operation",
+    },
+  ])(
+    "preserves config access and live maintenance guidance ($expectedCode)",
+    ({ code, contention, expectedCode, guidance }) => {
+      const snapshot = createConfigFileSnapshot({
+        path: "/fixture/openclaw.json",
+        exists: true,
+        raw: null,
+        parsed: null,
+        sourceConfig: {},
+        runtimeConfig: {},
+        valid: false,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+        readError: { code },
+      });
+      const cause = contention
+        ? new DoctorMaintenanceRefusalError("synthetic-private-owner", {
+            kind: "deferred",
+            reason: "coordinator-contention",
+          })
+        : undefined;
+      const failure = createUpdateConfigFailure(snapshot, cause);
+      expect(failure.reason).toBe("config-read-failed");
+      expect(failure.failureFacts?.[0]?.code).toBe(expectedCode);
+      expect(failure.nextAction).toContain(guidance);
+      expect(failure.nextAction).not.toContain("recover-lock");
+      expect(JSON.stringify(failure)).not.toContain("synthetic-private-owner");
+    },
+  );
+
   it.each([
     { path: "agents.list", included: true, manual: true, retired: false },
     { path: "agents.entries", included: true, manual: true, retired: false },

@@ -1,4 +1,5 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { t } from "../../i18n/index.ts";
 import { setWorkboardCards } from "./card-state.ts";
 import { normalizeWorkboardChange } from "./change-payload.ts";
 import { formatError } from "./normalization-utils.ts";
@@ -6,6 +7,7 @@ import { normalizeCardsPayload } from "./normalization.ts";
 import {
   getWorkboardRuntime,
   getWorkboardState,
+  notifyWorkboard,
   workboardHasActiveWrites,
   type WorkboardClientContext,
 } from "./runtime.ts";
@@ -13,8 +15,10 @@ import type { WorkboardRefreshSource, WorkboardUiState } from "./types.ts";
 
 type LoadWorkboardParams = WorkboardClientContext & {
   force?: boolean;
+  more?: boolean;
   refreshDiagnostics?: boolean;
   preserveError?: boolean;
+  publishRefreshStatus?: (refreshed: boolean) => void;
 };
 
 export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolean> {
@@ -24,7 +28,8 @@ export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolea
     !params.client ||
     state.dispatching ||
     workboardHasActiveWrites(state) ||
-    (!params.force && (state.loaded || state.loadAttempted))
+    (params.more && !state.nextCursor) ||
+    (!params.force && !params.more && (state.loaded || state.loadAttempted))
   ) {
     return false;
   }
@@ -49,7 +54,7 @@ export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolea
     state.error = null;
   }
   state.lastRefreshError = null;
-  params.requestUpdate?.();
+  notifyWorkboard(params.host);
   const loadPromise: Promise<boolean> = Promise.resolve().then(async () => {
     try {
       if (params.refreshDiagnostics) {
@@ -63,18 +68,50 @@ export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolea
       }
       const payload = await client.request(
         "workboard.cards.list",
-        runtime.cardsRevision ? { sinceRevision: runtime.cardsRevision } : {},
+        params.more
+          ? { after: state.nextCursor }
+          : runtime.cardsRevision
+            ? { sinceRevision: runtime.cardsRevision }
+            : {},
       );
       if (runtime.loadPromise !== loadPromise) {
         return false;
       }
       const unchanged = isRecord(payload) && payload.unchanged === true;
       const normalized = unchanged ? state : normalizeCardsPayload(payload);
+      if (!unchanged && !params.more) {
+        // Refresh the held window through bounded pages; do not collapse a reader
+        // back to the first page after every live write.
+        while (normalized.nextCursor && normalized.cards.length < state.cards.length) {
+          const page = normalizeCardsPayload(
+            await client.request("workboard.cards.list", { after: normalized.nextCursor }),
+          );
+          if (runtime.loadPromise !== loadPromise) {
+            return false;
+          }
+          normalized.cards.push(...page.cards);
+          normalized.nextCursor = page.nextCursor;
+        }
+      }
       if (params.preserveError && shouldDeferWorkboardLiveRefresh(state)) {
         return false;
       }
-      runtime.cardsRevision = normalizeWorkboardChange(isRecord(payload) ? payload.revision : null);
-      setWorkboardCards(state, normalized.cards);
+      if (!params.more) {
+        runtime.cardsRevision = normalizeWorkboardChange(
+          isRecord(payload) ? payload.revision : null,
+        );
+      }
+      setWorkboardCards(
+        state,
+        params.more
+          ? [
+              ...new Map(
+                [...state.cards, ...normalized.cards].map((card) => [card.id, card]),
+              ).values(),
+            ]
+          : normalized.cards,
+      );
+      state.nextCursor = normalized.nextCursor;
       state.boards = normalized.boards;
       state.statuses = normalized.statuses;
       const recoveredLoadError = runtime.loadError;
@@ -86,6 +123,7 @@ export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolea
       // save payload after canonical state may have changed.
       state.mutationReadiness = state.editingCardId ? "stale_edit_draft" : "ready";
       state.loaded = true;
+      params.publishRefreshStatus?.(true);
       return true;
     } catch (error) {
       if (runtime.loadPromise === loadPromise) {
@@ -96,6 +134,7 @@ export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolea
           runtime.loadError = formattedError;
           state.error = formattedError;
         }
+        params.publishRefreshStatus?.(false);
       }
       return false;
     } finally {
@@ -105,7 +144,7 @@ export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolea
         }
         delete runtime.loadPromise;
       }
-      params.requestUpdate?.();
+      notifyWorkboard(params.host);
     }
   });
   runtime.loadPromise = loadPromise;
@@ -124,27 +163,26 @@ export async function refreshWorkboard(
     return false;
   }
   state.lastRefreshError = null;
-  params.requestUpdate?.();
+  notifyWorkboard(params.host);
   if (!params.client) {
-    state.lastRefreshError = "Gateway client unavailable";
-    params.requestUpdate?.();
+    state.lastRefreshError = t("workboard.gatewayUnavailable");
+    notifyWorkboard(params.host);
     return false;
   }
-  const refreshed = await loadWorkboard({
+  return await loadWorkboard({
     host: params.host,
     client: params.client,
-    requestUpdate: params.requestUpdate,
     force: true,
     refreshDiagnostics: params.refreshDiagnostics,
     preserveError: passive,
+    publishRefreshStatus(refreshed) {
+      if (!passive && state.error) {
+        state.lastRefreshError = state.error;
+      } else if (refreshed) {
+        state.lastRefreshAt = Date.now();
+      }
+    },
   });
-  if (!passive && state.error) {
-    state.lastRefreshError = state.error;
-  } else if (refreshed) {
-    state.lastRefreshAt = Date.now();
-  }
-  params.requestUpdate?.();
-  return refreshed;
 }
 
 export function shouldDeferWorkboardLiveRefresh(state: WorkboardUiState): boolean {

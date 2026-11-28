@@ -2,7 +2,7 @@ import { captureGitHubPublicationLifecycle } from "./github-publication-receipts
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { captureOpenClawStateReadContext } from "./openclaw-state-worker-context.js";
 
-type PublicationIdentity = { publicationKind: "shared" | "personal"; requestId: string };
+type PublicationIdentity = Parameters<typeof captureGitHubPublicationLifecycle>[1];
 
 /** Retain the immutable binding separately from request status and other authority owners. */
 export async function prepareGitHubPublicationSessionLifecycle(input: PublicationIdentity) {

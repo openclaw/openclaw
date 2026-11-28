@@ -1,4 +1,7 @@
+import { lstatSync, statSync } from "node:fs";
+import path from "node:path";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -6,12 +9,14 @@ import {
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import {
   getAdmittedSqliteSchemaFacts,
   type SqliteSchemaFacts,
 } from "../infra/sqlite-schema-facts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { OpenClawRegisteredAgentDatabase } from "./openclaw-agent-db-contract.js";
+import { getStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   assertCanonicalAgentDatabasesPrimaryKey,
@@ -27,6 +32,44 @@ type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_da
 
 // Admission owns schema revisions; current writers cannot reintroduce legacy migration rows.
 const readableSchemas = new WeakSet<SqliteSchemaFacts>();
+
+/** Missing registry files are unavailable when companions or an unreadable ancestor remain. */
+export function hasUnavailableMissingSqlitePath(pathname: string): boolean {
+  for (const candidate of resolveSqliteDatabaseFilePaths(pathname)) {
+    try {
+      lstatSync(candidate);
+      return true;
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        return true;
+      }
+    }
+  }
+
+  let ancestor = path.dirname(pathname);
+  while (true) {
+    try {
+      const stat = lstatSync(ancestor);
+      if (!stat.isSymbolicLink()) {
+        return !stat.isDirectory();
+      }
+      try {
+        return !statSync(ancestor).isDirectory();
+      } catch {
+        return true;
+      }
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        return true;
+      }
+    }
+    const parent = path.dirname(ancestor);
+    if (parent === ancestor) {
+      return false;
+    }
+    ancestor = parent;
+  }
+}
 
 /** Read durable registrations from an already opened live or captured database. */
 export function readOpenClawAgentDatabaseRegistryRows(
@@ -88,22 +131,24 @@ export function readRegisteredAgentDatabaseRows(
     if (artifactPreserving) {
       requireNativeDatabaseFile("postgres", "file-snapshot");
     }
-  } else if (artifactPreserving) {
-    assertCanonicalAgentDatabasesPrimaryKey(database, pathname);
-  } else {
-    const schema = getAdmittedSqliteSchemaFacts(database);
-    if (!schema || !readableSchemas.has(schema)) {
-      if (
-        detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).some(
-          ({ kind }) => STATE_SCHEMA_MIGRATION_READ_TABLES[kind].includes("agent_databases"),
-        )
-      ) {
-        throw new Error(
-          `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
-        );
-      }
-      if (schema) {
-        readableSchemas.add(schema);
+  } else if (!getStateRuntimeSchemaAdmission(database)) {
+    if (artifactPreserving) {
+      assertCanonicalAgentDatabasesPrimaryKey(database, pathname);
+    } else {
+      const schema = getAdmittedSqliteSchemaFacts(database);
+      if (!schema || !readableSchemas.has(schema)) {
+        if (
+          detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).some(
+            ({ kind }) => STATE_SCHEMA_MIGRATION_READ_TABLES[kind].includes("agent_databases"),
+          )
+        ) {
+          throw new Error(
+            `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
+          );
+        }
+        if (schema) {
+          readableSchemas.add(schema);
+        }
       }
     }
   }

@@ -1,6 +1,8 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES
 import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
+import ai.openclaw.app.ui.image.imageSampleSize
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.content.pm.ProviderInfo
@@ -68,9 +70,9 @@ class ChatImageCodecTest {
   }
 
   @Test
-  fun computeInSampleSizeCapsLongestEdge() {
-    assertEquals(4, computeInSampleSize(width = 4032, height = 3024, maxDimension = 1600))
-    assertEquals(1, computeInSampleSize(width = 800, height = 600, maxDimension = 1600))
+  fun imageSampleSizeCapsLongestEdge() {
+    assertEquals(4, imageSampleSize(width = 4032, height = 3024, maxDimension = 1600, maxSample = 64))
+    assertEquals(1, imageSampleSize(width = 800, height = 600, maxDimension = 1600, maxSample = 64))
   }
 
   @Test
@@ -204,6 +206,15 @@ class ChatImageCodecTest {
     val attachment = loadProviderImage(displayName = "旅-été.png")
 
     assertEquals("旅-été.jpg", attachment.fileName)
+  }
+
+  @Test
+  fun pickedImageShortensTheProviderNameWithoutSplittingASurrogatePair() {
+    val prefix = "A".repeat(127)
+    assertEquals("$prefix.jpg", loadProviderImage(displayName = "$prefix📷.png").fileName)
+
+    val fittingStem = "A".repeat(126) + "📷"
+    assertEquals("$fittingStem.jpg", loadProviderImage(displayName = "$fittingStem.png").fileName)
   }
 
   @Test

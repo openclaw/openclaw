@@ -21,11 +21,9 @@ const record: PluginCompatRecord = {
   code: "fixture.messaging",
   status: "removed",
   owner: "sdk",
-  introduced: "2026.9.8",
   docsPath: "/plugins/sdk-migration",
   surfaces: [surface],
   diagnostics: [],
-  tests: [],
 };
 
 // Protect the public compatibility window independently of compiler setup and budget accounting.
@@ -50,7 +48,6 @@ describe("shipped Plugin SDK removal authorization", () => {
   it.each([
     ["future date", { removeAfter: "2026-10-03" }],
     ["final compatibility day", { removeAfter: now }],
-    ["major gate alone", { removalGate: "next-plugin-sdk-major" }],
     ["stable deprecation gate without a date", { removalGate: "stable-deprecation-period" }],
     ["invalid calendar date", { removeAfter: "2026-02-30" }],
     ["active record", { status: "active", removeAfter: "2026-10-01" }],

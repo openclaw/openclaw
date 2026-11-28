@@ -9,7 +9,7 @@ import type {
 } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
-import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-state.js";
 
 type TrustedPolicyHookRunnerRegistry = GlobalHookRunnerRegistry & {
   trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
@@ -132,30 +132,26 @@ function resolveHookRegistry(state: HookRunnerGlobalState): TrustedPolicyHookRun
   );
 }
 
-export function createLiveHookRegistryFacade(
-  state: HookRunnerGlobalState,
-): TrustedPolicyHookRunnerRegistry {
+export function createLiveHookRegistryFacade(): TrustedPolicyHookRunnerRegistry {
   // The runner object stays stable while these getters select the current request
   // handle or process root on every dispatch.
   return {
     get hooks() {
-      return resolveHookRegistry(state)?.hooks ?? [];
+      return resolveHookRegistry(hookRunnerGlobalState)?.hooks ?? [];
     },
     get typedHooks() {
-      return resolveHookRegistry(state)?.typedHooks ?? [];
+      return resolveHookRegistry(hookRunnerGlobalState)?.typedHooks ?? [];
     },
     get plugins() {
-      return resolveHookRegistry(state)?.plugins ?? [];
+      return resolveHookRegistry(hookRunnerGlobalState)?.plugins ?? [];
     },
     get trustedToolPolicies() {
-      return resolveHookRegistry(state)?.trustedToolPolicies ?? [];
+      return resolveHookRegistry(hookRunnerGlobalState)?.trustedToolPolicies ?? [];
     },
   };
 }
 
 /** Get the registry view that backs global hook dispatch. */
 export function getGlobalHookRunnerRegistry(): TrustedPolicyHookRunnerRegistry | null {
-  return resolveHookRegistry(hookRunnerGlobalState)
-    ? createLiveHookRegistryFacade(hookRunnerGlobalState)
-    : null;
+  return resolveHookRegistry(hookRunnerGlobalState) ? createLiveHookRegistryFacade() : null;
 }

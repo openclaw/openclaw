@@ -23,5 +23,9 @@
         "type": "string"
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Check whether computer use is ready on the machine I choose.",
+    "Inspect an app on my chosen desktop and suggest a next step without controlling it."
+  ]
 }

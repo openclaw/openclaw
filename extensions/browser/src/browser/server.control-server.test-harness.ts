@@ -422,7 +422,6 @@ const chromeMcpMocks = vi.hoisted(() => ({
   clickChromeMcpElement: vi.fn(async () => {}),
   closeChromeMcpSession: vi.fn(async () => true),
   closeChromeMcpTab: vi.fn(async () => {}),
-  countChromeMcpTabs: vi.fn(async () => 1),
   dragChromeMcpElement: vi.fn(async () => {}),
   ensureChromeMcpAvailable: vi.fn(async () => {}),
   evaluateChromeMcpScript: vi.fn(async () => true),
@@ -570,7 +569,9 @@ vi.mock("./chrome.js", () => ({
   }),
 }));
 
+// mock-isolation: The control server uses synthetic page sockets for its CDP operations.
 vi.mock("./cdp.js", () => ({
+  readCdpTargetCrashState: async () => false,
   createTargetViaCdp: cdpMocks.createTargetViaCdp,
   getDocumentIdentitiesViaCdp: cdpMocks.getDocumentIdentitiesViaCdp,
   normalizeCdpWsUrl: vi.fn((wsUrl: string) => wsUrl),

@@ -1,9 +1,6 @@
 /** Tests completion delivery policy for source replies and private finals. */
 import { describe, expect, it } from "vitest";
-import {
-  completionRequiresMessageToolDelivery,
-  resolveDurableCompletionDeliveryMode,
-} from "./completion-delivery-policy.js";
+import { completionRequiresMessageToolDelivery } from "./completion-delivery-policy.js";
 
 const chatTypeProbeConfig = {
   messages: {
@@ -64,10 +61,5 @@ describe("completion delivery policy", () => {
         requesterSessionKey: "agent:main:discord:dm:U123",
       }),
     ).toBe(true);
-  });
-
-  it("uses host-owned explicit delivery for durable completions under message-tool policy", () => {
-    expect(resolveDurableCompletionDeliveryMode("message_tool_only")).toBe("host_owned");
-    expect(resolveDurableCompletionDeliveryMode("automatic")).toBe("automatic");
   });
 });

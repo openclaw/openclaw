@@ -1,23 +1,45 @@
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { vi } from "vitest";
+import { repositoryGitHubPublicationDigest } from "../gateway/github-repository-publication.kernel.js";
 import type { SqliteWorkerReply, SqliteWorkerRequest } from "../infra/sqlite-worker-contract.js";
-import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { publicationRowDefaults } from "./github-publication-fixtures.test-support.js";
+import type { RepositoryGitHubPublicationRow } from "./github-publication-read.types.js";
+
+export function repositoryRow(requestId: string): RepositoryGitHubPublicationRow {
+  const row: RepositoryGitHubPublicationRow = {
+    ...publicationRowDefaults(requestId),
+    requester_authority_json: null,
+    session_id: "publication-worker-session",
+    session_lifecycle_revision: null,
+    session_key: "agent:main:publication-worker",
+    workspace_id: "publication-worker-workspace",
+    owner_profile_id: null,
+    connection_generation: null,
+    identity_source: "system-configured",
+    identity_profile_id: "fixture-profile",
+    previous_head_commit: null,
+    claim_id: null,
+    run_id: null,
+    environment_id: null,
+    owner_epoch: null,
+    placement_generation: null,
+    checkpoint_ref: "refs/openclaw/worker-results/fixture",
+    checkpoint_digest: `sha256:${"a".repeat(64)}`,
+    pushed_head_commit: null,
+  };
+  row.request_digest = repositoryGitHubPublicationDigest(row);
+  return row;
+}
 
 const heldReplies = new Set<() => void>();
-
-export function releaseHeldGitHubPublicationMessages() {
-  for (const release of heldReplies) {
-    release();
-  }
-}
 
 export function holdNextReply(
   commandType = "githubPublications.repository",
   beforeDispatch?: () => void,
 ) {
-  const ready = createDeferredCore();
+  const ready = createDeferredCore<Extract<SqliteWorkerReply, { ok: true }>>();
   let deliver: ((error?: Error) => void) | undefined;
   let target: { worker: Worker; id: number } | undefined;
   // Restored spies retain native call-through; Reflect.apply supplies each live Worker.
@@ -63,7 +85,7 @@ export function holdNextReply(
           : reply;
         Reflect.apply(emit, this, [event, outcome, ...args]);
       };
-      ready.resolve();
+      ready.resolve(reply);
       return true;
     }
     return Reflect.apply(emit, this, [event, reply, ...args]);
@@ -78,28 +100,6 @@ export function holdNextReply(
       postMessage.mockClear();
       emit.mockClear();
     }
-  };
-  heldReplies.add(release);
-  return { ready: ready.promise, release };
-}
-
-export function holdNextReceipt() {
-  const ready = createDeferredCore();
-  let deliver: (() => void) | undefined;
-  const observe = workerAdmission.observeSqliteWorkerCommittedFacts;
-  vi.spyOn(workerAdmission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(
-    (admission, observer) => {
-      observe(admission, (receipt) => {
-        deliver = () => observer(receipt);
-        ready.resolve();
-      });
-    },
-  );
-  const release = () => {
-    const send = deliver;
-    deliver = undefined;
-    heldReplies.delete(release);
-    send?.();
   };
   heldReplies.add(release);
   return { ready: ready.promise, release };

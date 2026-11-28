@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { sha256Hex as digestText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { asSafeIntegerInRange } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
@@ -11,6 +12,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../runtime.js";
 import {
   chunkMatrixStateJson,
+  pruneMatrixStateChunks,
   readMatrixStateChunks,
   writeMatrixStateChunks,
 } from "./chunked-state.js";
@@ -63,6 +65,13 @@ export type MatrixSnapshotStateRuntime = Pick<PluginRuntime["state"], "openKeyed
 
 export type MatrixSnapshotStateReader = {
   openKeyedStoreV2: <T>(options: OpenKeyedStoreOptions) => Pick<PluginStateKeyedStore<T>, "lookup">;
+};
+
+/** Snapshot reads and sealing use bounded stores, including Doctor's narrow state adapter. */
+export type MatrixSnapshotStateAccess = {
+  openKeyedStoreV2: <T>(
+    options: OpenKeyedStoreOptions,
+  ) => Pick<PluginStateKeyedStore<T>, "lookup" | "lookupMany" | "entries" | "register">;
 };
 
 export function openMatrixRecoveryKeyStoreOptions(storageRootDir: string) {
@@ -129,7 +138,7 @@ export async function writeMatrixRecoveryKeyStateForPathAsync(params: {
 
 export async function readMatrixIdbSnapshotJson(
   storageRootDir: string,
-  stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
+  stateRuntime: MatrixSnapshotStateAccess = getMatrixRuntime().state,
 ): Promise<string | null> {
   const store = stateRuntime.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
     openMatrixIdbSnapshotStoreOptions(storageRootDir),
@@ -181,7 +190,7 @@ export async function readMatrixIdbSnapshotOwnerGeneration(
 export async function sealMatrixIdbSnapshotOwnerGeneration(
   storageRootDir: string,
   generation: string,
-  stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
+  stateRuntime: MatrixSnapshotStateAccess = getMatrixRuntime().state,
 ): Promise<void> {
   const store = stateRuntime.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
     openMatrixIdbSnapshotStoreOptions(storageRootDir),
@@ -216,6 +225,25 @@ export async function writeMatrixIdbSnapshotJson(params: {
   );
   const rows = buildIdbSnapshotRows(params.snapshotJson, params.databaseCount);
   await writeMatrixStateChunks(store, rows, idbChunkKeyPrefix());
+}
+
+/** An unchanged snapshot still retries cleanup interrupted after metadata publication. */
+export async function pruneMatrixIdbSnapshotChunks(
+  storageRootDir: string,
+  stateRuntime: MatrixSnapshotStateRuntime,
+): Promise<void> {
+  const store = stateRuntime.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
+    openMatrixIdbSnapshotStoreOptions(storageRootDir),
+  );
+  const meta = await store.lookup(idbMetaKey());
+  if (!isIdbSnapshotMeta(meta)) {
+    throw new MatrixIdbSnapshotInvalidError("metadata is missing or malformed");
+  }
+  await pruneMatrixStateChunks(
+    store,
+    Array.from({ length: meta.chunkCount }, (_, index) => idbChunkKey(meta.generation, index)),
+    idbChunkKeyPrefix(),
+  );
 }
 
 export async function scoreMatrixCryptoStateInStore(storageRootDir: string): Promise<number> {
@@ -271,7 +299,7 @@ function resolveRecoveryKeyStateKeyForPath(recoveryKeyPath: string): string {
   if (basename === MATRIX_RECOVERY_KEY_FILENAME) {
     return STATE_KEY;
   }
-  return `file:${createHash("sha256").update(basename, "utf8").digest("hex").slice(0, 32)}`;
+  return `file:${digestText(basename).slice(0, 32)}`;
 }
 
 function normalizeMatrixStoredRecoveryKey(value: unknown): MatrixStoredRecoveryKey | null {
@@ -353,10 +381,6 @@ function idbChunkKeyPrefix(): string {
 
 function idbChunkKey(generation: string, index: number): string {
   return `${idbChunkKeyPrefix()}${generation}:${index}`;
-}
-
-function digestText(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function isIdbSnapshotMeta(value: unknown): value is MatrixIdbSnapshotMeta {

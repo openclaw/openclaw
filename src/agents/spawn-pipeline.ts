@@ -9,6 +9,11 @@ export type SpawnBackendAdapter<TState> = {
   initialize(): Promise<TState>;
   retainRegistrationScope?(scope: SubagentRegistrationScope): void;
   dispatchTurn(state: TState): Promise<{ runId: string }>;
+  /**
+   * Dispatch may fail after acceptance; registration may leave a live child.
+   * Confirm termination or retain the exact child and its cleanup obligation.
+   * The phase alone never grants session-deletion authority.
+   */
   cleanupOnFailure(params: {
     phase: SpawnPipelinePhase;
     state?: TState;
@@ -34,7 +39,6 @@ type SpawnPipelineResult<TState> =
       ok: false;
       phase: SpawnPipelinePhase;
       error: unknown;
-      state?: TState;
       runId?: string;
     };
 
@@ -97,7 +101,7 @@ export async function runSpawnPipeline<TState>(
         error,
         ...(registrationScope ? { registrationScope } : {}),
       });
-      return { ok: false, phase, state, runId, error };
+      return { ok: false, phase, runId, error };
     }
 
     if (params.hookRunner?.hasHooks("subagent_progress")) {

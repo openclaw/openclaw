@@ -1,9 +1,4 @@
 import type { SessionsListResult } from "../../api/types.ts";
-import type {
-  SessionConnectionOwner,
-  SessionListScope,
-  SessionListSnapshot,
-} from "./session-capability.ts";
 import { normalizeAgentId } from "./session-key.ts";
 import {
   isPrimarySessionListQuery,
@@ -12,14 +7,47 @@ import {
 } from "./session-list-query.ts";
 import { publishManagedList } from "./session-managed-list-refresh.ts";
 import { sessionListQueryKey } from "./session-requests.ts";
+import type {
+  SessionConnectionOwner,
+  SessionListScope,
+  SessionListSnapshot,
+} from "./session-types.ts";
+
+// Keep the admitted rows and pagination intact for rollback. Only a personal
+// query excludes a projected Hide; Show cannot admit an unobserved row.
+function presentedSnapshot(
+  entry: ManagedSessionList,
+  snapshot = entry.snapshot,
+): SessionListSnapshot {
+  const result = snapshot.result;
+  if (!entry.query.involvingMe || !result?.sessions.some((row) => row.hiddenFromInvolvingMe)) {
+    return snapshot;
+  }
+  const sessions = result.sessions.filter((row) => !row.hiddenFromInvolvingMe);
+  return { ...snapshot, result: { ...result, sessions, count: sessions.length } };
+}
 
 /** Manage presentation leases on the roster owner's existing managed-list entries. */
 export function createSessionPrimaryWindows(
   managedLists: Map<string, ManagedSessionList>,
   open: (scope: SessionListScope) => ManagedSessionList,
   onRetired: (agentIds: ReadonlySet<string>) => void,
+  readPrimary: () => SessionListSnapshot,
 ) {
   let invalidationRevision = 0;
+  const release = (entry: ManagedSessionList) => {
+    if (
+      !entry.retainSnapshot &&
+      !entry.warmPrimary &&
+      entry.listeners.size === 0 &&
+      !entry.pending &&
+      entry.reads.size === 0 &&
+      managedLists.get(entry.key) === entry
+    ) {
+      entry.coordinator.dispose();
+      managedLists.delete(entry.key);
+    }
+  };
   const retireWarmLists = (matches: (entry: ManagedSessionList) => boolean = () => true) => {
     const retiredAgents = new Set<string>();
     for (const entry of managedLists.values()) {
@@ -27,13 +55,11 @@ export function createSessionPrimaryWindows(
         continue;
       }
       entry.warmPrimary = false;
+      entry.retainSnapshot = false;
       if (entry.scope.agentId) {
         retiredAgents.add(normalizeAgentId(entry.scope.agentId));
       }
-      if (entry.listeners.size === 0 && !entry.pending) {
-        entry.coordinator.dispose();
-        managedLists.delete(entry.key);
-      }
+      release(entry);
     }
     // Consumers must withdraw a retired window even while its replacement RPC is pending.
     if (retiredAgents.size > 0) {
@@ -47,7 +73,8 @@ export function createSessionPrimaryWindows(
     listener: (snapshot: SessionListSnapshot) => void,
     pageActive: boolean,
   ) => {
-    const subscribed = (snapshot: SessionListSnapshot) => listener(snapshot);
+    const subscribed = (snapshot: SessionListSnapshot) =>
+      listener(presentedSnapshot(entry, snapshot));
     entry.listeners.add(subscribed);
     // Observed queries own independent membership rather than a primary warm lease.
     retireWarmLists((candidate) => candidate === entry);
@@ -59,32 +86,26 @@ export function createSessionPrimaryWindows(
       }
       // Keep invalidation dormant until observed again, without runnable queued work.
       entry.coordinator.setActive(false, entry.queued !== null);
-      if (entry.queued?.immediate) {
-        // Keep an unserved create invalidation urgent if this query is observed again.
-        entry.coordinator.schedule(true);
-      }
       entry.queued = null;
-      const release = () => {
-        if (
-          !entry.warmPrimary &&
-          entry.listeners.size === 0 &&
-          managedLists.get(entry.key) === entry
-        ) {
-          entry.coordinator.dispose();
-          managedLists.delete(entry.key);
-        }
-      };
-      // Route replacement may briefly remove every subscriber while this query still owns a request.
-      if (entry.pending) {
-        void entry.pending.finally(release);
-      } else {
-        release();
-      }
+      entry.retainSnapshot = false;
+      // Admitted requests release their entry through the same guarded owner on settlement.
+      release(entry);
     };
   };
 
   return {
     subscribe,
+    release,
+    snapshot(this: void, scope: SessionListScope): SessionListSnapshot {
+      if (isPrimarySessionListQuery(scope)) {
+        const { result, agentId, loading, error, startupPending } = readPrimary();
+        return { result, agentId, loading, error, startupPending };
+      }
+      const entry = managedLists.get(sessionListQueryKey(scope));
+      return entry
+        ? presentedSnapshot(entry)
+        : { result: null, agentId: null, loading: false, error: null };
+    },
     /** Own an observed query subscription and fence explicit refresh against disposal. */
     observe(
       entry: ManagedSessionList,
@@ -101,7 +122,7 @@ export function createSessionPrimaryWindows(
         }
       };
       try {
-        listener(entry.snapshot);
+        listener(presentedSnapshot(entry));
       } catch (error) {
         unsubscribe();
         throw error;
@@ -122,7 +143,7 @@ export function createSessionPrimaryWindows(
             throw new Error(entry.snapshot.error);
           }
         },
-        dispose() {
+        dispose(this: void) {
           if (!disposed) {
             disposed = true;
             unsubscribe();

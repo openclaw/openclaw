@@ -66,7 +66,8 @@ vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
   prepareLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelMock,
 }));
 
-vi.mock("./validation.js", () => ({
+vi.mock("./validation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./validation.js")>()),
   assertValidParams: () => true,
 }));
 

@@ -1,5 +1,9 @@
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import {
+  placementAuthorityOwnerFor,
+  withLocalPlacementTurns,
+} from "./placement-authority-owner.js";
 import { required, type WorkerSessionPlacementRecord } from "./placement-record.js";
 import { capturePlacementReplicaRead, readPlacementReplica } from "./placement-turn-authority.js";
 
@@ -10,18 +14,36 @@ export function createPlacementReadStore(params: {
   ) => WorkerSessionPlacementRecord | undefined;
 }) {
   const context = captureOpenClawStateWorkerContext({ path: params.path });
-  const decorate = (records: WorkerSessionPlacementRecord[]) => {
+  const owner = placementAuthorityOwnerFor(context.admission.identity);
+  const decorate = (
+    records: WorkerSessionPlacementRecord[],
+    sessionIds: readonly string[] | undefined,
+  ) => {
     context.admission.assertCurrent();
-    return records.map((record) => params.withWorkspaceResultConflict(record)!);
+    return [...withLocalPlacementTurns(owner, records, sessionIds).values()].map((record) =>
+      params.withWorkspaceResultConflict(record)!,
+    );
   };
   const read = async (sessionIds?: readonly string[]) => {
+    // A complete empty scan also proves there are no placements to preserve. A writer
+    // can reserve its sequence before the scan, then deliver its receipt afterward.
+    const inventorySequence =
+      sessionIds === undefined && owner.pending.size === 0 ? owner.sequence : undefined;
     const publish = capturePlacementReplicaRead(context.admission.identity);
     const records = await runOpenClawStateWorkerOperation(context, (scope) =>
       scope.execute({ type: "workerPlacements.read", input: { sessionIds } }),
     );
-    const decorated = decorate(records);
     publish(records, sessionIds);
-    return decorated;
+    const placements = decorate(records, sessionIds);
+    if (
+      records.length === 0 &&
+      owner.active &&
+      owner.sequence === inventorySequence &&
+      owner.pending.size === 0
+    ) {
+      owner.preservation ??= new Map();
+    }
+    return placements;
   };
   const getManyAsync = async (
     sessionIds: readonly string[],
@@ -33,16 +55,15 @@ export function createPlacementReadStore(params: {
       const records = cached.flatMap((entry) =>
         entry.placement ? [structuredClone(entry.placement)] : [],
       );
-      return new Map(decorate(records).map((record) => [record.sessionId, record]));
+      return new Map(decorate(records, ids).map((record) => [record.sessionId, record]));
     }
     const records = ids.length ? await read(ids) : [];
-    return new Map(records.map((record) => [record.sessionId, record]));
+    return new Map(records.map((record) => [record.sessionId, structuredClone(record)]));
   };
   return {
     getManyAsync,
     async getAsync(sessionId: string) {
-      const id = required(sessionId, "session id");
-      return (await getManyAsync([id])).get(id);
+      return (await getManyAsync([sessionId])).values().next().value;
     },
     async getWithMoveAsync(sessionId: string) {
       const id = required(sessionId, "session id");
@@ -51,10 +72,26 @@ export function createPlacementReadStore(params: {
         scope.execute({ type: "workerPlacements.readWithMove", input: { sessionId: id } }),
       );
       publish(result.placement ? [result.placement] : [], [id]);
-      const [placement] = decorate(result.placement ? [result.placement] : []);
+      const [placement] = decorate(result.placement ? [result.placement] : [], [id]);
       return { ...result, placement };
     },
     listAsync: () => read(),
+    async listSessionIdentitiesAsync() {
+      const identities = await runOpenClawStateWorkerOperation(context, (scope) =>
+        scope.execute({ type: "workerPlacements.readIdentities", input: {} }),
+      );
+      context.admission.assertCurrent();
+      const persistedIds = new Set(identities.map((identity) => identity.sessionId));
+      // Local placements can exist only in the replica, including released claims.
+      for (const id of owner.localClaimSessions) {
+        const placement = owner.placements.get(id)?.placement;
+        if (placement && !persistedIds.has(id)) {
+          const { sessionId, agentId, sessionKey } = placement;
+          identities.push({ sessionId, agentId, sessionKey });
+        }
+      }
+      return identities;
+    },
     async getPlacementMoveAsync(sessionId: string) {
       const id = required(sessionId, "move session id");
       const move = await runOpenClawStateWorkerOperation(context, (scope) =>
@@ -68,13 +105,14 @@ export function createPlacementReadStore(params: {
     },
     async listForReconcileAsync(sessionKey?: string) {
       const publish = capturePlacementReplicaRead(context.admission.identity);
-      const records = decorate(
-        await runOpenClawStateWorkerOperation(context, (scope) =>
-          scope.execute({ type: "workerPlacements.readReconcile", input: { sessionKey } }),
-        ),
+      const records = await runOpenClawStateWorkerOperation(context, (scope) =>
+        scope.execute({ type: "workerPlacements.readReconcile", input: { sessionKey } }),
       );
       publish(records);
-      return records;
+      return decorate(
+        records,
+        records.map((record) => record.sessionId),
+      );
     },
   };
 }

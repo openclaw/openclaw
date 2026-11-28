@@ -148,7 +148,7 @@ import { startFaceTimeTalkDriver } from "../src/talk-driver.js";
 
 export function startParams(overrides: Record<string, unknown> = {}) {
   return {
-    config: resolveFaceTimeConfig({ ownerHandles: ["caller@example.com"] }),
+    config: resolveFaceTimeConfig({ allowedCallers: ["caller@example.com"] }),
     fullConfig: {} as never,
     runtime: {
       agent: {
@@ -161,7 +161,6 @@ export function startParams(overrides: Record<string, unknown> = {}) {
     logger: console,
     callUUID: "call-1",
     senderId: "caller@example.com",
-    senderIsOwner: true as const,
     captureBinary: "/capture",
     onHangupRequested: mocks.hangupRequested,
     ...overrides,

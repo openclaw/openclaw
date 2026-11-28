@@ -1,0 +1,425 @@
+import type { ControlUiHost, ControlUiPanel } from "openclaw/plugin-sdk/control-ui";
+import { createFeatureClient } from "openclaw/plugin-sdk/feature-contract";
+import { browserContract } from "./browser-contract.js";
+import { coalesceChanges } from "./change-refresh.js";
+import type { FullOutputContract } from "./contract.js";
+import { t } from "./i18n/index.js";
+import { markdownView } from "./markdown-view.js";
+import type { ActivityOutput } from "./session-activity.js";
+import { viewingClient } from "./store-view-client.js";
+import { icon } from "./ui-icons.js";
+
+const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, cls?: string) => {
+  const n = document.createElement(tag);
+  if (text !== undefined) {
+    n.textContent = text;
+  }
+  if (cls) {
+    n.className = cls;
+  }
+  return n;
+};
+const button = (label: string, click: () => void) => {
+  const n = el("button", label, "knowledge-button");
+  n.type = "button";
+  n.addEventListener("click", click);
+  return n;
+};
+const OPERATIONS = new Set([
+  "search",
+  "lookup",
+  "records",
+  "record",
+  "connections",
+  "save",
+  "createClaim",
+  "createRelationship",
+  "batch",
+  "correct",
+  "withdraw",
+  "annotate",
+  "recall",
+]);
+const operationLabel = (op: string, action: string) =>
+  OPERATIONS.has(op)
+    ? t(`knowledge.sessionPanel.operations.${op}`)
+    : t(
+        action === "write"
+          ? "knowledge.sessionPanel.operations.changed"
+          : "knowledge.sessionPanel.operations.record",
+      );
+
+export function registerSessionPanel(host: ControlUiHost) {
+  const panel: ControlUiPanel = {
+    id: "session-activity",
+    label: t("knowledge.common.knowledge"),
+    icon: "knowledge",
+    mount(container, initialContext) {
+      let context = initialContext;
+      const root = el("section", undefined, "knowledge-page knowledge-session-panel");
+      root.setAttribute("aria-label", t("knowledge.sessionPanel.label"));
+      const header = el("header", undefined, "knowledge-session-header"),
+        heading = el("h2", t("knowledge.sessionPanel.title"));
+      const controls = el("div", undefined, "knowledge-session-controls"),
+        filters = el("div", undefined, "knowledge-session-filters");
+      filters.setAttribute("role", "group");
+      filters.setAttribute("aria-label", t("knowledge.sessionPanel.filter"));
+      let activityFilter: "" | "read" | "write" = "",
+        oldestFirst = false;
+      const filterButtons = new Map<string, HTMLButtonElement>();
+      for (const [value, label, glyph] of [
+        ["", t("knowledge.sessionPanel.all"), "activity"],
+        ["read", t("knowledge.sessionPanel.reads"), "eye"],
+        ["write", t("knowledge.sessionPanel.writes"), "pencil"],
+      ] as const) {
+        const control = button("", () => {
+          if (activityFilter === value) {
+            return;
+          }
+          activityFilter = value;
+          for (const [key, item] of filterButtons) {
+            item.setAttribute("aria-pressed", String(key === value));
+          }
+          ++generation;
+          ++previewGeneration;
+          busy = false;
+          rows = [];
+          next = null;
+          upper = undefined;
+          detail.hidden = true;
+          selected = undefined;
+          render();
+          void load();
+        });
+        control.className = "knowledge-session-control";
+        control.title = label;
+        control.setAttribute("aria-label", label);
+        control.setAttribute("aria-pressed", String(value === activityFilter));
+        control.append(icon(glyph, 15));
+        filterButtons.set(value, control);
+        filters.append(control);
+      }
+      const order = button("", () => {
+        oldestFirst = !oldestFirst;
+        renderOrder();
+        render();
+      });
+      order.className = "knowledge-session-control";
+      order.setAttribute("aria-label", t("knowledge.sessionPanel.oldestFirst"));
+      function renderOrder() {
+        order.setAttribute("aria-pressed", String(oldestFirst));
+        order.title = oldestFirst
+          ? t("knowledge.sessionPanel.oldestTitle")
+          : t("knowledge.sessionPanel.newestTitle");
+        order.replaceChildren(icon(oldestFirst ? "sortAscending" : "sortDescending", 16));
+      }
+      renderOrder();
+      controls.append(filters, order);
+      const status = el("p", t("knowledge.sessionPanel.loading"), "knowledge-session-muted");
+      status.setAttribute("role", "status");
+      const list = el("ol", undefined, "knowledge-session-list"),
+        older = button(t("knowledge.sessionPanel.older"), () => void load(true));
+      older.hidden = true;
+      const detail = el("section", undefined, "knowledge-session-preview");
+      detail.hidden = true;
+      const previewContent = el("div");
+      const activityCard = (sequence: number) =>
+        list.querySelector<HTMLButtonElement>(`[data-sequence="${sequence}"]`);
+      const back = button(t("knowledge.sessionPanel.back"), () => {
+        ++previewGeneration;
+        const origin = selected === undefined ? null : activityCard(selected);
+        selected = undefined;
+        detail.hidden = true;
+        root.scrollTop = activityScroll;
+        (origin ?? filterButtons.get(activityFilter))?.focus();
+      });
+      detail.append(back, previewContent);
+      header.append(heading, controls);
+      root.append(header, status, detail, list, older);
+      container.append(root);
+      let disposed = false,
+        generation = 0,
+        previewGeneration = 0,
+        identity = "",
+        agent = "",
+        sessionKey = "",
+        sessionId = "",
+        vault = "";
+      let rows: ActivityOutput["items"] = [],
+        upper: number | undefined,
+        next: number | null = null,
+        busy = false;
+      let selected: number | undefined,
+        activityScroll = 0;
+      const client = viewingClient(
+        createFeatureClient<FullOutputContract>(browserContract, host),
+        () => ({
+          agent,
+        }),
+      );
+      const valid = (g: number) => !disposed && !context.signal.aborted && g === generation;
+      function target() {
+        const key = host.sessions.normalizeKey(context.props.sessionKey);
+        const row = host.sessions.rows.find((r) => host.sessions.normalizeKey(r.key) === key);
+        return {
+          key,
+          id: row?.sessionId ?? "",
+          agent: context.props.agentId ?? row?.agentId ?? /^agent:([^:]+):/.exec(key)?.[1] ?? "",
+        };
+      }
+      function sync() {
+        const current = target(),
+          id = JSON.stringify([current.key, current.id, current.agent]);
+        if (id === identity) {
+          return false;
+        }
+        identity = id;
+        sessionKey = current.key;
+        sessionId = current.id;
+        agent = current.agent;
+        ++generation;
+        ++previewGeneration;
+        busy = false;
+        rows = [];
+        upper = undefined;
+        next = null;
+        vault = "";
+        selected = undefined;
+        detail.hidden = true;
+        previewContent.replaceChildren();
+        list.replaceChildren();
+        older.hidden = true;
+        return true;
+      }
+      const pageTarget = (id: string) => ({ id: "overview", params: { agent, vault, record: id } });
+      function render() {
+        const focused = document.activeElement;
+        const focusedEvent =
+          focused instanceof HTMLButtonElement && list.contains(focused)
+            ? focused.dataset.sequence
+            : undefined;
+        const display = oldestFirst ? rows.toReversed() : rows;
+        list.replaceChildren();
+        for (const row of display) {
+          const item = el(
+            "li",
+            undefined,
+            `knowledge-session-item knowledge-session-${row.action}`,
+          );
+          const card = button("", () => {
+            activityScroll = root.scrollTop;
+            void preview(row.id, row.sequence);
+          });
+          card.dataset.sequence = String(row.sequence);
+          card.className = "knowledge-session-card";
+          card.setAttribute("aria-label", row.title);
+          const glyph = el("span", undefined, "knowledge-session-glyph knowledge-tile");
+          glyph.append(
+            icon(
+              row.action === "write"
+                ? "pencil"
+                : ["search", "lookup", "records"].includes(row.operation)
+                  ? "search"
+                  : "eye",
+              16,
+            ),
+          );
+          const content = el("span", undefined, "knowledge-session-copy"),
+            title = el("span", row.title, "knowledge-session-title");
+          const meta = el("span", undefined, "knowledge-session-meta");
+          const date = new Date(row.at),
+            today = date.toDateString() === new Date().toDateString();
+          const at = el(
+            "time",
+            date.toLocaleString(undefined, {
+              ...(today ? {} : { month: "short" as const, day: "numeric" as const }),
+              hour: "numeric",
+              minute: "2-digit",
+            }),
+          );
+          at.dateTime = row.at;
+          at.title = date.toLocaleString();
+          meta.append(
+            el("span", operationLabel(row.operation, row.action), "knowledge-session-operation"),
+            at,
+          );
+          const arrow = el("span", undefined, "knowledge-session-arrow");
+          arrow.append(icon("chevronRight", 14));
+          content.append(meta, title);
+          card.append(glyph, content, arrow);
+          item.append(card);
+          list.append(item);
+        }
+        older.hidden = next === null;
+        older.disabled = busy;
+        if (focusedEvent !== undefined) {
+          (activityCard(Number(focusedEvent)) ?? filterButtons.get(activityFilter))?.focus();
+        }
+      }
+      async function preview(id: string, sequence: number) {
+        const p = ++previewGeneration,
+          g = generation;
+        selected = sequence;
+        detail.hidden = false;
+        previewContent.replaceChildren(el("p", t("knowledge.sessionPanel.loadingRecord")));
+        root.scrollTop = 0;
+        back.focus({ preventScroll: true });
+        try {
+          const result = await client.invoke("record_detail", {
+            id,
+            maxChars: 5000,
+            includeMetadata: false,
+            includeEvidence: false,
+          });
+          if (!valid(g) || p !== previewGeneration) {
+            return;
+          }
+          previewContent.replaceChildren();
+          if (!result.record) {
+            previewContent.append(el("p", t("knowledge.sessionPanel.recordGone")));
+            return;
+          }
+          previewContent.append(el("h3", result.record.title));
+          const full = el("a", t("knowledge.sessionPanel.openPage"), "knowledge-session-full");
+          full.href = host.navigation.pageHref(pageTarget(id));
+          full.addEventListener("click", (e) => {
+            if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
+              return;
+            }
+            e.preventDefault();
+            host.navigation.openPage(pageTarget(id));
+          });
+          previewContent.append(
+            full,
+            markdownView(
+              result.record.body ?? "",
+              (nextId) => void preview(nextId, sequence),
+              result.links,
+            ),
+          );
+          if (result.content.nextOffset !== null) {
+            previewContent.append(
+              el("p", t("knowledge.sessionPanel.shortened"), "knowledge-session-muted"),
+            );
+          }
+        } catch {
+          if (valid(g) && p === previewGeneration) {
+            previewContent.replaceChildren(
+              el("p", t("knowledge.sessionPanel.previewFailed"), "knowledge-error"),
+            );
+          }
+        }
+      }
+      async function load(olderRequested = false) {
+        let more = olderRequested;
+        sync();
+        if (disposed || !context.presented || busy) {
+          return;
+        }
+        if (!host.connection.connected) {
+          status.textContent = t("knowledge.sessionPanel.disconnected");
+          return;
+        }
+        if (!sessionId || !agent) {
+          status.textContent = t("knowledge.sessionPanel.noSession");
+          return;
+        }
+        const g = generation;
+        busy = true;
+        older.disabled = true;
+        try {
+          const scope = await client.invoke("status", {});
+          if (!valid(g)) {
+            return;
+          }
+          if (scope.store !== "ready") {
+            rows = [];
+            render();
+            status.textContent = scope.message ?? t("knowledge.sessionPanel.noStore");
+            return;
+          }
+          if (vault && vault !== scope.vault) {
+            rows = [];
+            upper = undefined;
+            next = null;
+            ++previewGeneration;
+            detail.hidden = true;
+            selected = undefined;
+            more = false;
+          }
+          vault = scope.vault;
+          const result = await client.invoke("session_activity", {
+            sessionKey,
+            sessionId,
+            limit: 40,
+            ...(activityFilter ? { filter: activityFilter } : {}),
+            ...(more && next !== null ? { upper, before: next } : {}),
+          });
+          if (!valid(g)) {
+            return;
+          }
+          rows = more ? [...rows, ...result.items] : result.items;
+          upper = result.upper;
+          next = result.nextBefore;
+          status.textContent = rows.length ? "" : t("knowledge.sessionPanel.empty");
+          render();
+        } catch {
+          if (valid(g)) {
+            status.textContent = t("knowledge.sessionPanel.refreshFailed");
+          }
+        } finally {
+          if (valid(g)) {
+            busy = false;
+            older.disabled = false;
+          }
+        }
+      }
+      let connected = host.connection.connected;
+      const unsubscribe = host.subscribe(() => {
+        const changed = sync(),
+          reconnected = !connected && host.connection.connected;
+        connected = host.connection.connected;
+        if (changed || reconnected || !connected) {
+          void load();
+        }
+      });
+      // Do not collapse loaded history on every poll. Reopening returns to the newest window.
+      const changes = coalesceChanges(
+        () => {
+          if (rows.length <= 40 && !selected) {
+            void load();
+          }
+        },
+        () => context.presented,
+      );
+      const poll = setInterval(() => {
+        if (changes.active() && rows.length <= 40 && !selected) {
+          void load();
+        }
+      }, 10000);
+      const unwatch = client.on("changed", changes.changed);
+      void load();
+      return {
+        update(nextContext) {
+          const opened = !context.presented && nextContext.presented;
+          context = nextContext;
+          // Host render updates are not data invalidations (e.g. streaming chat).
+          if (sync() || opened) {
+            void load();
+          }
+        },
+        dispose() {
+          disposed = true;
+          ++generation;
+          ++previewGeneration;
+          clearInterval(poll);
+          changes.dispose();
+          unsubscribe();
+          unwatch();
+          root.remove();
+        },
+      };
+    },
+  };
+  return host.ui.registerPanel(panel);
+}

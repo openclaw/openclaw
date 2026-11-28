@@ -2,12 +2,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { appendRegularFile } from "../infra/fs-safe.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const log = createSubsystemLogger("agents/diagnostic-writer");
 
 /** Append writer handle shared by callers that target the same path. */
 export type QueuedFileWriter = {
   filePath: string;
   write: (line: string) => unknown;
-  flush: () => Promise<void>;
 };
 
 /** Returns the cached writer for a path or creates a new ordered append queue. */
@@ -21,25 +23,29 @@ export function getQueuedFileWriter(
   }
 
   const dir = path.dirname(filePath);
-  const ready = fs.mkdir(dir, { recursive: true, mode: 0o700 }).catch(() => undefined);
-  let queue: Promise<unknown> = Promise.resolve();
+  let reportedFailure = false;
+  const reportFailure = (error: unknown) => {
+    if (!reportedFailure) {
+      reportedFailure = true;
+      log.warn("Diagnostic log write failed; check the configured log path", { filePath, error });
+    }
+  };
+  let queue: Promise<unknown> = fs
+    .mkdir(dir, { recursive: true, mode: 0o700 })
+    .catch(reportFailure);
   const writer: QueuedFileWriter = {
     filePath,
     write: (line: string) => {
       queue = queue
-        .then(async () => {
-          await ready;
-          await appendRegularFile({
+        .then(() =>
+          appendRegularFile({
             filePath,
             content: line,
             rejectSymlinkParents: true,
-          });
-        })
-        .catch(() => undefined);
-      return "queued";
-    },
-    flush: async () => {
-      await queue;
+          }),
+        )
+        .catch(reportFailure);
+      return queue;
     },
   };
 

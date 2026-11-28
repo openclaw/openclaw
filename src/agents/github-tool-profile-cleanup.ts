@@ -5,18 +5,16 @@ import { root as fsRoot, type Root } from "@openclaw/fs-safe/root";
 import { isManagedGitHubProfileId } from "../config/github-identity-profile-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { listAgentIds, resolveAgentConfig } from "./agent-scope.js";
-import { listGitHubOAuthRecords } from "./github-oauth-records.js";
 import {
   resolveManagedGitHubAgentKey,
   resolveManagedGitHubProfileRoot,
-} from "./github-tool-identity.js";
+} from "./github-tool-profile-path.js";
 
 const MAX_CLEANUP_WARNINGS = 20;
 const STAGING_PROFILE_PREFIX = ".github-profile.staging-";
 const MANAGED_AGENT_KEY_PATTERN = /^[a-f0-9]{64}$/u;
 
-type GitHubProfileCleanupResult = { removed: number; warnings: string[] };
+type GitHubProfileCleanupResult = { warnings: string[] };
 
 async function readCleanupDirectory(candidate: string, label: string, warnings: string[]) {
   let identity;
@@ -30,7 +28,8 @@ async function readCleanupDirectory(candidate: string, label: string, warnings: 
       warnings.push(`refused unsafe ${label}: ${candidate}`);
       return undefined;
     }
-    throw error;
+    warnings.push(`failed to read ${label}: ${candidate}: ${String(error)}`);
+    return undefined;
   }
   if (identity.realPath !== path.resolve(candidate)) {
     warnings.push(`refused escaped ${label}: ${candidate}`);
@@ -58,13 +57,13 @@ async function cleanupProfileRoot(params: {
   directory: string;
   preservedProfileIds: ReadonlySet<string> | undefined;
   warnings: string[];
-}): Promise<number> {
+}): Promise<void> {
   const orphanAgent = params.preservedProfileIds === undefined;
   const label = orphanAgent ? "managed GitHub agent profile" : "managed GitHub profile";
   const directory = path.join(params.root.rootReal, params.directory);
   const identity = await readCleanupDirectory(directory, `${label} root`, params.warnings);
   if (!identity) {
-    return 0;
+    return;
   }
   const candidates: string[] = [];
   for (const entry of await params.root.list(params.directory, { withFileTypes: true })) {
@@ -81,10 +80,9 @@ async function cleanupProfileRoot(params: {
     }
     // An orphan root is retired only after every direct child is admitted.
     if (orphanAgent) {
-      return 0;
+      return;
     }
   }
-  let removed = 0;
   for (const relativePath of orphanAgent ? [params.directory] : candidates) {
     const candidate = path.join(params.root.rootReal, relativePath);
     const candidateIdentity = orphanAgent
@@ -105,28 +103,18 @@ async function cleanupProfileRoot(params: {
         }
       },
     });
-    removed += 1;
   }
-  return removed;
 }
 
-/** Retires only generations unreferenced by the immutable startup config snapshot. */
-export async function cleanupRetiredManagedGitHubProfiles(params: {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): Promise<GitHubProfileCleanupResult> {
-  const warnings: string[] = [];
-  const systemRoot = resolveManagedGitHubProfileRoot({
-    agentId: "system",
-    scope: "system",
-    env: params.env,
-  });
+async function readPreservedProfiles(config: OpenClawConfig) {
+  const { listAgentIds, resolveAgentConfig } = await import("./agent-scope-config.js");
+  const { listGitHubOAuthRecords } = await import("./github-oauth-records.js");
   const systemProfiles = new Set(
-    params.config.tools?.github?.profileId ? [params.config.tools.github.profileId] : [],
+    config.tools?.github?.profileId ? [config.tools.github.profileId] : [],
   );
   const agentProfiles = new Map<string, Set<string>>(
-    listAgentIds(params.config).map((agentId) => {
-      const profileId = resolveAgentConfig(params.config, agentId)?.tools?.github?.profileId;
+    listAgentIds(config).map((agentId) => {
+      const profileId = resolveAgentConfig(config, agentId)?.tools?.github?.profileId;
       return [resolveManagedGitHubAgentKey(agentId), new Set(profileId ? [profileId] : [])];
     }),
   );
@@ -145,13 +133,29 @@ export async function cleanupRetiredManagedGitHubProfiles(params: {
     profiles.add(record.profileId);
     agentProfiles.set(agentKey, profiles);
   }
-  let removed = 0;
+  return { systemProfiles, agentProfiles };
+}
+
+/** Retires only generations unreferenced by the immutable startup config snapshot. */
+export async function cleanupRetiredManagedGitHubProfiles(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<GitHubProfileCleanupResult> {
+  const warnings: string[] = [];
+  const systemRoot = resolveManagedGitHubProfileRoot({
+    agentId: "system",
+    scope: "system",
+    env: params.env,
+  });
+  // Open each cleanup root in order. Only an admitted root needs the shared recovery snapshot.
+  let recovery: ReturnType<typeof readPreservedProfiles> | undefined;
+  const preserved = () => (recovery ??= readPreservedProfiles(params.config));
   const system = await openCleanupRoot(systemRoot, "managed GitHub profile root", warnings);
   if (system) {
-    removed += await cleanupProfileRoot({
+    await cleanupProfileRoot({
       root: system,
       directory: ".",
-      preservedProfileIds: systemProfiles,
+      preservedProfileIds: (await preserved()).systemProfiles,
       warnings,
     });
   }
@@ -161,6 +165,7 @@ export async function cleanupRetiredManagedGitHubProfiles(params: {
     warnings,
   );
   if (registry) {
+    const { agentProfiles } = await preserved();
     for (const entry of await registry.list(".", { withFileTypes: true })) {
       if (!MANAGED_AGENT_KEY_PATTERN.test(entry.name)) {
         warnings.push(
@@ -168,7 +173,7 @@ export async function cleanupRetiredManagedGitHubProfiles(params: {
         );
         continue;
       }
-      removed += await cleanupProfileRoot({
+      await cleanupProfileRoot({
         root: registry,
         directory: entry.name,
         preservedProfileIds: agentProfiles.get(entry.name),
@@ -177,11 +182,10 @@ export async function cleanupRetiredManagedGitHubProfiles(params: {
     }
   }
   if (warnings.length <= MAX_CLEANUP_WARNINGS) {
-    return { removed, warnings };
+    return { warnings };
   }
   const omitted = warnings.length - MAX_CLEANUP_WARNINGS;
   return {
-    removed,
     warnings: [
       ...warnings.slice(0, MAX_CLEANUP_WARNINGS),
       `omitted ${omitted} additional managed GitHub profile cleanup warnings`,

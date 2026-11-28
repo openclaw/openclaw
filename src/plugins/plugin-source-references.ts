@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { NodePath } from "@babel/traverse";
@@ -9,9 +10,23 @@ import type {
   Node,
   Program as BabelProgram,
 } from "@babel/types";
-import { parse, type AnyNode, type Program } from "acorn";
+import type { AnyNode, Program } from "acorn";
 import { moduleResolve } from "import-meta-resolve";
 import type { createJiti } from "jiti";
+import { markPluginSourceAcquisitionError } from "./plugin-instance-error.js";
+
+let parser: typeof import("acorn") | undefined;
+
+// Package captures and URL/package-map helpers do not parse source. Load the ESM
+// entry on demand so other host Acorn imports retain the same module identity.
+function parse(...args: Parameters<typeof import("acorn").parse>): Program {
+  if (!parser) {
+    const entry = moduleResolve("acorn", new URL(import.meta.url), new Set(["node", "import"]));
+    const loaded: typeof import("acorn") = createRequire(import.meta.url)(fileURLToPath(entry));
+    parser = loaded;
+  }
+  return parser.parse(...args);
+}
 
 export function capturedPluginModuleUrl(
   filename: string,
@@ -211,7 +226,7 @@ export function inspectPluginTypeScriptExecutionFacts(
   return {
     hasComputedImport,
     staticImports: [...staticImports].map(([specifier, sideEffect]) => ({
-      specifier,
+      specifier: copySourceReference(specifier),
       sideEffect,
     })),
   };
@@ -307,9 +322,35 @@ function parseNativePluginJavaScript(source: string, sourceText: string): Progra
     }
     throw error;
   }
-  const needsTransform = (node: AnyNode, exportedDeclaration = false): boolean => {
+  const needsTransform = (
+    node: AnyNode,
+    exportedDeclaration = false,
+    parent?: AnyNode,
+    grandparent?: AnyNode,
+  ): boolean => {
     if (node.type === "MetaProperty") {
-      return true;
+      if (
+        node.meta.name !== "import" ||
+        node.property.name !== "meta" ||
+        parent?.type !== "MemberExpression" ||
+        parent.object !== node ||
+        parent.computed ||
+        parent.property.type !== "Identifier" ||
+        parent.property.name !== "url"
+      ) {
+        return true;
+      }
+      // These value reads do not become new literal references when Jiti inlines
+      // the URL. Assignment targets and other metadata still need its prepass.
+      return !(
+        grandparent?.type === "ArrayExpression" ||
+        (grandparent?.type === "ReturnStatement" && grandparent.argument === parent) ||
+        (grandparent?.type === "NewExpression" &&
+          grandparent.callee.type === "Identifier" &&
+          grandparent.callee.name === "URL" &&
+          grandparent.arguments.length === 2 &&
+          grandparent.arguments[1] === parent)
+      );
     }
     // Jiti moves declarations around resource disposal blocks, changing reference order.
     if (
@@ -373,6 +414,8 @@ function parseNativePluginJavaScript(source: string, sourceText: string): Progra
           child,
           exportedDeclaration ||
             (node.type === "ExportNamedDeclaration" && child === node.declaration),
+          node,
+          parent,
         )
       ) {
         return true;
@@ -397,19 +440,29 @@ function parseTransformedPluginSource(source: string, code: string): Program {
       throw error;
     }
     // Name the blocking file; positions refer to the Jiti output, not the authored source.
-    throw new SyntaxError(`${source}: could not parse transformed source: ${error.message}`, {
-      cause: error,
-    });
+    throw markPluginSourceAcquisitionError(
+      new SyntaxError(`${source}: could not parse transformed source: ${error.message}`, {
+        cause: error,
+      }),
+    );
   }
+}
+
+// Parser literals may be slices of a whole module. Only the selected UTF-16 code
+// units belong to a generation's retained import, dependency and asset facts.
+function copySourceReference(value: string): string {
+  return Buffer.from(value, "utf16le").toString("utf16le");
 }
 
 /** Visit literal module and explicit asset inputs without evaluating plugin code. */
 export function visitPluginSourceReferences(
   source: string,
   sourceText: string,
-  resolver: ReturnType<typeof createJiti>,
-  visitReference: (reference: string, kind: "asset" | "import" | "require") => void,
+  getResolver: () => ReturnType<typeof createJiti>,
+  onReference: (reference: string, kind: "asset" | "import" | "require") => void,
 ): ReadonlySet<string> {
+  const visitReference: typeof onReference = (reference, kind) =>
+    onReference(copySourceReference(reference), kind);
   const authoredStaticImports = new Set<string>();
   const visitDirectoryAsset = (name: string, parts: readonly (string | undefined)[]) => {
     if (
@@ -426,7 +479,7 @@ export function visitPluginSourceReferences(
     parseNativePluginJavaScript(source, sourceText) ??
     parseTransformedPluginSource(
       source,
-      resolver.transform({
+      getResolver().transform({
         source: sourceText,
         filename: source,
         ts: /\.[cm]?tsx?$/.test(source),
@@ -453,7 +506,7 @@ export function visitPluginSourceReferences(
                           (specifier.type === "ExportSpecifier" && specifier.exportKind === "type"),
                       )
                     ) {
-                      authoredStaticImports.add(node.source.value);
+                      authoredStaticImports.add(copySourceReference(node.source.value));
                     }
                   },
                   MemberExpression(member) {
@@ -506,7 +559,7 @@ export function visitPluginSourceReferences(
                   >,
                 ) {
                   if (declaration.node.source) {
-                    authoredStaticImports.add(declaration.node.source.value);
+                    authoredStaticImports.add(copySourceReference(declaration.node.source.value));
                   }
                 },
               },
@@ -524,17 +577,18 @@ export function visitPluginSourceReferences(
       statement.source
     ) {
       const reference = staticString(statement.source);
-      if (reference !== undefined) {
-        staticImports.add(reference);
-        authoredStaticImports.add(reference);
+      if (reference !== undefined && !staticImports.has(reference)) {
+        const owned = copySourceReference(reference);
+        staticImports.add(owned);
+        authoredStaticImports.add(owned);
       }
     }
   }
   // Jiti hoists and deduplicates static module sources before the executable body.
   for (const reference of staticImports) {
-    visitReference(reference, "import");
+    onReference(reference, "import");
   }
-  const visit = (node: AnyNode) => {
+  const visit = (node: AnyNode, discardedResult = false) => {
     if (node.type === "ImportExpression") {
       const reference = staticString(node.source);
       if (reference !== undefined) {
@@ -555,7 +609,7 @@ export function visitPluginSourceReferences(
             callee.object.name === "require" &&
             name === "resolve";
       const asset =
-        (node.type === "NewExpression" && name === "URL") ||
+        (node.type === "NewExpression" && name === "URL" && !discardedResult) ||
         ["readFile", "readFileSync", "createReadStream"].includes(name);
       // Trace module references and explicit asset reads. Ordinary strings
       // (labels, descriptions, prompts) never confer ownership of sibling files.
@@ -575,7 +629,11 @@ export function visitPluginSourceReferences(
       }
     }
     for (const child of sourceChildren(node)) {
-      visit(child);
+      // An unused URL or its .href is not an asset read; its arguments still need inspection.
+      const discardedChild =
+        (node.type === "ExpressionStatement" && child === node.expression) ||
+        (discardedResult && node.type === "MemberExpression" && child === node.object);
+      visit(child, discardedChild);
     }
   };
   visit(tree);

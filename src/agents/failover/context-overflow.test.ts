@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyFailoverReason,
-  isContextOverflowError,
   isLikelyContextOverflowError,
   isProviderRequestSizeCeilingError,
 } from "./classify.js";
+import { isContextOverflowError } from "./context-overflow.js";
 
 // Groq states both numbers in the refusal, so the two shapes are separable by wording alone.
 const GROQ_OVERSIZED_REQUEST_413 =

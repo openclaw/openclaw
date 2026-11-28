@@ -1,7 +1,7 @@
 import { selectStoredSessionLineage } from "../../gateway/session-store-key.js";
 import type { GatewaySessionModelSource } from "../../gateway/session-utils-contracts.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import { readAgentDatabaseReadAdmissionRefusal } from "../../state/agent-database-admission.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { storeTargetKey } from "./combined-store-paths.js";
 import type { SessionStoreTarget } from "./targets.js";
@@ -28,6 +28,7 @@ export function createSessionModelSources(
   diagnostics: string[],
   preparedAgentIds: ReadonlySet<string> | undefined,
   readQualifiedParent: GatewaySessionLineageReader,
+  isExcludedOwner: (agentId: string, storePath: string) => boolean,
 ) {
   const physicalStores = new Map<
     string,
@@ -72,7 +73,10 @@ export function createSessionModelSources(
             // Stored qualified lineage retains its owner before a main alias collapses.
             const parsed = parseAgentSessionKey(parentKey);
             const agentId = normalizeAgentId(parsed?.agentId ?? logicalAgentId);
-            const refusal = readAgentDatabaseAdmissionRefusal(agentId);
+            if (isExcludedOwner(agentId, target.storePath)) {
+              return { key: parentKey, value: undefined };
+            }
+            const refusal = readAgentDatabaseReadAdmissionRefusal(agentId);
             if (refusal) {
               const message = `${refusal.reason}\n${refusal.repairHint}`;
               if (!diagnostics.includes(message)) {

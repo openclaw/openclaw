@@ -1,6 +1,5 @@
 import { sanitizeRunStatusText } from "../../agents/run-status-text.js";
 import type { ControlledSubagentRunsReadContext } from "../../agents/subagents/registry/subagent-control-scope.js";
-// Formats subagent status rows for the status command response.
 import type { SubagentExecutionObservation } from "../../agents/subagents/registry/subagent-execution-observation.js";
 import { hasSubagentRunEnded } from "../../agents/subagents/registry/subagent-run-liveness.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
@@ -13,7 +12,7 @@ const WAIT_LABELS = new Map([
   ["children", "child tasks"],
 ]);
 
-function formatExecutionObservation(observation: SubagentExecutionObservation): string {
+export function formatExecutionObservation(observation: SubagentExecutionObservation): string {
   switch (observation.state) {
     case "running": {
       const tool = sanitizeRunStatusText(observation.currentTool?.name, { maxChars: 60 });
@@ -34,13 +33,12 @@ function formatExecutionObservation(observation: SubagentExecutionObservation): 
 export function buildSubagentsStatusLine(params: {
   context: ControlledSubagentRunsReadContext;
   verboseEnabled: boolean;
-  now?: number;
 }): string | undefined {
   const { context, verboseEnabled } = params;
   if (context.runs.length === 0) {
     return undefined;
   }
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   const activeRuns = new Set(context.list.view.active);
   const active = activeRuns.size;
   const done = context.runs.filter(

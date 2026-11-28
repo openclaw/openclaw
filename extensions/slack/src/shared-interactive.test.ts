@@ -1,6 +1,7 @@
 // Slack tests cover shared interactive plugin behavior.
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { describe, expect, it } from "vitest";
+import { buildSlackNativeDataAccessibilityText } from "./blocks-fallback.js";
 import {
   buildSlackInteractiveBlocks,
   buildSlackPresentationBlocks,
@@ -8,7 +9,6 @@ import {
   resolveSlackBlockOffsets,
   type SlackBlock,
 } from "./blocks-render.js";
-import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 
 describe("buildSlackInteractiveBlocks", () => {
   it("preserves long legacy text, whitespace, protected entities, and surrogate pairs", () => {
@@ -53,7 +53,7 @@ describe("buildSlackInteractiveBlocks", () => {
 
     expect(sections.join("")).toBe("y".repeat(3_100));
     expect(sections.every((section) => section.length <= 3_000)).toBe(true);
-    expect((selectBlock.elements?.[0]?.placeholder?.text ?? "").length).toBeLessThanOrEqual(75);
+    expect(selectBlock.elements?.[0]?.placeholder?.text?.length).toBeLessThanOrEqual(75);
     expect(buttonBlock.elements?.[0]?.value).toBe(long);
   });
 
@@ -135,6 +135,7 @@ describe("buildSlackInteractiveBlocks", () => {
 
     expect(selectBlock.elements?.[0]?.options).toHaveLength(100);
     expect(selectBlock.elements?.[0]?.options?.at(-1)?.value).toBe("v100");
+    expect(buildSlackNativeDataAccessibilityText("", blocks)).toContain("Option 100");
   });
 
   it("drops value-only Slack buttons with values beyond Block Kit limits", () => {
@@ -709,51 +710,5 @@ describe("buildSlackPresentationBlocks", () => {
     expect(buildSlackPresentationBlocks(presentation, options).map((block) => block.type)).toEqual(
       native ? ["data_table", "data_table"] : [],
     );
-  });
-});
-
-describe("resolveSlackReplyBlocks", () => {
-  it("offsets legacy interactive blocks after channel and presentation controls", () => {
-    const blocks = resolveSlackReplyBlocks({
-      channelData: {
-        slack: {
-          blocks: [
-            {
-              type: "actions",
-              block_id: "openclaw_reply_buttons_1",
-              elements: [],
-            },
-          ],
-        },
-      },
-      presentation: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Stage", value: "stage" }],
-          },
-        ],
-      },
-      interactive: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Approve", value: "approve" }],
-          },
-        ],
-      },
-    });
-
-    const presentationButtonBlock = blocks?.[1] as
-      | { elements?: Array<{ action_id?: string }> }
-      | undefined;
-    const legacyButtonBlock = blocks?.[2] as
-      | { elements?: Array<{ action_id?: string }> }
-      | undefined;
-    expect(blocks?.[0]?.block_id).toBe("openclaw_reply_buttons_1");
-    expect(blocks?.[1]?.block_id).toBe("openclaw_reply_buttons_2");
-    expect(presentationButtonBlock?.elements?.[0]?.action_id).toBe("openclaw:reply_button:2:1");
-    expect(blocks?.[2]?.block_id).toBe("openclaw_reply_buttons_3");
-    expect(legacyButtonBlock?.elements?.[0]?.action_id).toBe("openclaw:reply_button:3:1");
   });
 });

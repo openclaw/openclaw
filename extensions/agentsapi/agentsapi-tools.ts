@@ -24,6 +24,7 @@ import {
   normalizeAgentRuntimeTools,
   projectRuntimeToolInputSchema,
   resolveAgentDir,
+  resolveMessageToolSourceReplyFinal,
   resolveToolExecutionErrorKind,
   runAgentHarnessAfterToolCallHook,
   sanitizeToolResult,
@@ -64,7 +65,6 @@ type ToolDelivery = AgentHarnessMessagingDeliveryFacts &
   >;
 
 export type AgentsApiToolExecutionResult = AgentsApiFunctionResult & {
-  sourceReplyDelivered?: true;
   terminate?: true;
 };
 
@@ -76,6 +76,24 @@ export type AgentsApiToolSurface = {
   toolMetas: AgentHarnessAttemptResult["toolMetas"];
   readonly lastToolError: AgentHarnessAttemptResult["lastToolError"];
 };
+
+/**
+ * The function output: each text block, and a placeholder for each other block, one per line.
+ * Without `withText` it is only what serialization adds, which the result bound reserves. The
+ * bound never adds a block (its notice goes into a text block it keeps, and it only removes
+ * others), so the reserve computed before the cut covers the output after it.
+ */
+function serializeFunctionOutput(content: readonly unknown[], withText = true): string {
+  return content
+    .map((block) =>
+      isRecord(block) && block.type === "text" && typeof block.text === "string"
+        ? withText
+          ? block.text
+          : ""
+        : "[Image result omitted from Agents API function output]",
+    )
+    .join("\n");
+}
 
 /** Gateway functions retain host authority; shell and file tools stay in the hosted VM. */
 export async function buildAgentsApiToolSurface(
@@ -245,10 +263,11 @@ export async function buildAgentsApiToolSurface(
   let lastToolError: AgentsApiToolSurface["lastToolError"];
   const executionBoundaries = createAgentHarnessToolExecutionBoundaryRegistry();
   const contextTokens = params.contextTokenBudget ?? params.model.contextWindow;
-  const maxChars =
-    typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0
-      ? resolveLiveToolResultMaxChars({ contextWindowTokens: contextTokens })
-      : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
+  // Cap for strings this adapter builds after the result bound (errors, serialized output).
+  const maxOutputChars =
+    contextTokens === undefined
+      ? DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS
+      : resolveLiveToolResultMaxChars({ contextWindowTokens: contextTokens });
 
   return {
     declarations,
@@ -263,7 +282,7 @@ export async function buildAgentsApiToolSurface(
       signal.throwIfAborted();
       const entry = toolMap.get(call.name);
       let startedAt: number;
-      let executedArgs = isRecord(call.arguments) ? call.arguments : {};
+      let executedArgs: Record<string, unknown> = {};
       let executionBoundary: ReturnType<
         ReturnType<typeof createAgentHarnessToolExecutionBoundaryRegistry>["begin"]
       >;
@@ -399,6 +418,13 @@ export async function buildAgentsApiToolSurface(
         runId: params.runId,
         signal,
         boundaries: executionBoundaries,
+        // File tools run in the hosted VM, which cannot open a Gateway file: size-only notice.
+        // The bound reserves the separators and placeholders this adapter adds when it serializes.
+        resultBound: {
+          contextWindowTokens: contextTokens,
+          spill: false,
+          reservedChars: (content) => serializeFunctionOutput(content, false).length,
+        },
         prepareArguments: (args) => {
           if (!isRecord(args)) {
             throw new Error(`Arguments for OpenClaw tool ${call.name} must be an object`);
@@ -462,25 +488,87 @@ export async function buildAgentsApiToolSurface(
                 result: raw,
                 isError: rawIsError,
               });
+              // An omitted final takes the run's default; cron sends do not end the turn.
+              const messageFinal = resolveMessageToolSourceReplyFinal(
+                executedArgs,
+                params.messageToolFinalByDefault,
+              );
               terminate =
-                sourceReplyDelivered ||
-                (raw.terminate === true && !(sourceRouteDelivered && executedArgs.final === false));
+                (sourceReplyDelivered && messageFinal) ||
+                (raw.terminate === true && !(sourceRouteDelivered && !messageFinal));
               if (sourceReplyDelivered) {
                 delivery.sourceReplyDelivered = true;
               }
               if (sourceRouteDelivered || sourceReplyDelivered) {
                 delivery.didDeliverSourceReplyViaMessageTool = true;
               }
-              recordDelivery(
-                tool,
-                executedArgs,
-                raw,
-                params,
-                messagingContext,
-                delivery,
-                signal,
-                sourceRouteDelivered ? executedArgs.final !== false : undefined,
-              );
+              function recordDelivery(sourceReplyFinal?: boolean): void {
+                const args = executedArgs;
+                if (
+                  isMessagingTool(tool.name) &&
+                  isDeliveredMessagingToolResult({ toolName: tool.name, args, result: raw })
+                ) {
+                  const payload = extractMessagingToolSourceReplyPayload(raw);
+                  if (payload) {
+                    recordAgentHarnessMessagingDelivery({
+                      facts: delivery,
+                      sourceReplyPayload: payload,
+                      sourceReplyFinal: messageFinal,
+                    });
+                  } else {
+                    const routedArgs = {
+                      provider: params.messageChannel ?? params.messageProvider,
+                      ...args,
+                    };
+                    const pending = extractMessagingToolSend(
+                      tool.name,
+                      routedArgs,
+                      messagingContext,
+                    );
+                    const text = ["message", "text", "content", "body"]
+                      .map((key) => args[key])
+                      .find(
+                        (value): value is string =>
+                          typeof value === "string" && value.trim().length > 0,
+                      );
+                    const mediaUrls = collectMessagingMediaUrlsFromRecord(args);
+                    recordAgentHarnessMessagingDelivery({
+                      facts: delivery,
+                      target: pending ? extractMessagingToolSendResult(pending, raw) : undefined,
+                      text,
+                      mediaUrls,
+                      sourceReplyFinal,
+                    });
+                  }
+                }
+                if (signal.aborted || isToolResultError(raw)) {
+                  return;
+                }
+                const pluginMeta = getPluginToolMeta(tool);
+                const trustedTools = pluginMeta
+                  ? new Set(pluginMeta.trustedLocalMedia === true ? [tool.name] : [])
+                  : undefined;
+                // A plugin named after a core tool cannot inherit that core owner's media trust.
+                const mediaToolName =
+                  pluginMeta && pluginMeta.trustedLocalMedia !== true ? undefined : tool.name;
+                const media = recordAgentHarnessToolResultMedia({
+                  facts: delivery,
+                  toolName: mediaToolName,
+                  result: raw,
+                  trustedLocalMediaToolNames: trustedTools,
+                });
+                if (!media) {
+                  return;
+                }
+                if (
+                  media.trustedLocalMedia &&
+                  (!pluginMeta || pluginMeta.trustedLocalMedia === true) &&
+                  media.mediaUrls.length
+                ) {
+                  delivery.toolTrustedLocalMedia = true;
+                }
+              }
+              recordDelivery(sourceRouteDelivered ? messageFinal : undefined);
               // Presentation failures cannot downgrade a completed host mutation's receipt.
               observeTerminal(
                 raw,
@@ -495,7 +583,12 @@ export async function buildAgentsApiToolSurface(
           assertCurrent();
           signal.throwIfAborted();
           dispatchAfterHook(presented);
-          const text = serializeToolText(presented.content, maxChars);
+          // The bound reserved this serialization's separators and placeholders; the cap here
+          // never cuts a bounded result.
+          const text = sliceToolResultTextToBudget(
+            serializeFunctionOutput(presented.content) || "Tool completed with no text output.",
+            maxOutputChars,
+          );
           return {
             transcriptResult: observed,
             ...(isError
@@ -513,9 +606,7 @@ export async function buildAgentsApiToolSurface(
           executionBoundary = boundary;
           executedArgs = executedArguments;
           startedAt = invocationStartedAt;
-          const message = sanitizeToolResult(
-            formatToolExecutionErrorMessage(error, "OpenClaw tool failed"),
-          );
+          const message = formatToolExecutionErrorMessage(error, "OpenClaw tool failed");
           const disposition =
             getBeforeToolCallFailureDisposition(error) ??
             (signal.aborted ? "cancelled" : resolveToolExecutionErrorKind(error));
@@ -528,7 +619,7 @@ export async function buildAgentsApiToolSurface(
           return {
             transcriptResult: failed,
             success: false,
-            error: sliceToolResultTextToBudget(message, maxChars),
+            error: sliceToolResultTextToBudget(message, maxOutputChars),
           };
         },
       });
@@ -541,94 +632,8 @@ export async function buildAgentsApiToolSurface(
       );
       return {
         ...nativeResult,
-        ...(sourceReplyDelivered ? { sourceReplyDelivered: true as const } : {}),
         ...(terminate ? { terminate: true as const } : {}),
       };
     },
   };
-}
-
-function recordDelivery(
-  tool: AnyAgentTool,
-  args: Record<string, unknown>,
-  raw: Awaited<ReturnType<AnyAgentTool["execute"]>>,
-  params: AgentHarnessAttemptParamsV2,
-  messagingContext: Parameters<typeof extractMessagingToolSend>[2],
-  delivery: ToolDelivery,
-  signal: AbortSignal,
-  sourceReplyFinal?: boolean,
-): void {
-  if (
-    isMessagingTool(tool.name) &&
-    isDeliveredMessagingToolResult({ toolName: tool.name, args, result: raw })
-  ) {
-    const payload = extractMessagingToolSourceReplyPayload(raw);
-    if (payload) {
-      recordAgentHarnessMessagingDelivery({
-        facts: delivery,
-        sourceReplyPayload: payload,
-        sourceReplyFinal: args.final !== false,
-      });
-    } else {
-      const routedArgs = {
-        provider: params.messageChannel ?? params.messageProvider,
-        ...args,
-      };
-      const pending = extractMessagingToolSend(tool.name, routedArgs, messagingContext);
-      const text = ["message", "text", "content", "body"]
-        .map((key) => args[key])
-        .find((value): value is string => typeof value === "string" && value.trim().length > 0);
-      const mediaUrls = collectMessagingMediaUrlsFromRecord(args);
-      recordAgentHarnessMessagingDelivery({
-        facts: delivery,
-        target: pending ? extractMessagingToolSendResult(pending, raw) : undefined,
-        text,
-        mediaUrls,
-        sourceReplyFinal,
-      });
-    }
-  }
-  if (signal.aborted || isToolResultError(raw)) {
-    return;
-  }
-  const pluginMeta = getPluginToolMeta(tool);
-  const trustedTools = pluginMeta
-    ? new Set(pluginMeta.trustedLocalMedia === true ? [tool.name] : [])
-    : undefined;
-  // A plugin named after a core tool cannot inherit that core owner's media trust.
-  const mediaToolName = pluginMeta && pluginMeta.trustedLocalMedia !== true ? undefined : tool.name;
-  const media = recordAgentHarnessToolResultMedia({
-    facts: delivery,
-    toolName: mediaToolName,
-    result: raw,
-    trustedLocalMediaToolNames: trustedTools,
-  });
-  if (!media) {
-    return;
-  }
-  if (
-    media.trustedLocalMedia &&
-    (!pluginMeta || pluginMeta.trustedLocalMedia === true) &&
-    media.mediaUrls.length
-  ) {
-    delivery.toolTrustedLocalMedia = true;
-  }
-}
-
-function serializeToolText(
-  content: Awaited<ReturnType<AnyAgentTool["execute"]>>["content"],
-  maxChars: number,
-): string {
-  let text = "";
-  for (const block of content) {
-    if (text.length >= maxChars) {
-      break;
-    }
-    const next =
-      block.type === "text"
-        ? sanitizeToolResult(block.text)
-        : "[Image result omitted from Agents API function output]";
-    text += `${text ? "\n" : ""}${sliceToolResultTextToBudget(next, maxChars - text.length)}`;
-  }
-  return sliceToolResultTextToBudget(text || "Tool completed with no text output.", maxChars);
 }

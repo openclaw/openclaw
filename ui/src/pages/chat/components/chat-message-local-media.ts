@@ -1,3 +1,7 @@
+import {
+  CHAT_IMAGE_RENDITION_VERSION,
+  type ChatImageRenditionWidth,
+} from "../../../../../src/shared/chat-image-renditions.js";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import {
   buildAssistantMediaUrl,
@@ -41,11 +45,16 @@ export function buildAssistantAttachmentUrl(
   mediaTicket?: string | null,
   context?: AssistantMediaContext,
   filename?: string,
+  variant?: "thumbnail",
+  previewWidth: ChatImageRenditionWidth = 960,
 ): string {
   if (!isLocalAssistantAttachmentSource(source)) {
     return source;
   }
-  return buildAssistantMediaUrl(source, resourceBasePath, mediaTicket, context, filename);
+  const url = buildAssistantMediaUrl(source, resourceBasePath, mediaTicket, context, filename);
+  return variant === "thumbnail" && isCanonicalInboundMediaSource(source)
+    ? `${url}&variant=thumbnail&width=${previewWidth}&v=${CHAT_IMAGE_RENDITION_VERSION}`
+    : url;
 }
 
 export function applyResourceBasePath(

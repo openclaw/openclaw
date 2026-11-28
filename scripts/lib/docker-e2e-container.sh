@@ -26,6 +26,12 @@ docker_e2e_timeout_cmd() {
   local timeout_value="$1"
   shift
   local timeout_bin
+  local owner_args=()
+  # A retained CID belongs to the scheduler's bounded group. Keep the launcher
+  # there too, so group settlement cannot precede a delayed CID write/start.
+  if [ -n "${DOCKER_E2E_CONTAINER_CIDFILE:-}" ]; then
+    owner_args=(--foreground)
+  fi
   if ! timeout_bin="$(docker_e2e_timeout_bin)"; then
     if command -v node >/dev/null 2>&1; then
       echo "timeout command not found; using Node watchdog for Docker command timeout ${timeout_value}" >&2
@@ -47,9 +53,9 @@ await runWatchdog('docker', timeoutValue, args);
     return 127
   fi
   if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
-    "$timeout_bin" --kill-after=30s "$timeout_value" "$@"
+    "$timeout_bin" ${owner_args[@]+"${owner_args[@]}"} --kill-after=30s "$timeout_value" "$@"
   else
-    "$timeout_bin" "$timeout_value" "$@"
+    "$timeout_bin" ${owner_args[@]+"${owner_args[@]}"} "$timeout_value" "$@"
   fi
 }
 
@@ -79,6 +85,36 @@ docker_e2e_cleanup_container_run() {
   rm -f "$2"
 }
 
+docker_e2e_settle_container_cidfile() {
+  # Call only inside a bounded process owner (scheduler finalizer or lane).
+  # Direct Docker children stay in that group; a nested watchdog could escape it.
+  local cidfile="$1" container_id remaining
+  if [ -L "$cidfile" ] || { [ -e "$cidfile" ] && [ ! -f "$cidfile" ]; }; then
+    echo "Docker producer CID must be a host-owned regular file" >&2
+    return 1
+  fi
+  # Docker writes the CID before ContainerStart. After its host group joins,
+  # a retained missing/empty CID means this invocation never started a writer.
+  [ -s "$cidfile" ] || return 0
+  if [ "$(wc -c < "$cidfile")" -ne 64 ]; then
+    echo "Docker producer CID is incomplete" >&2
+    return 1
+  fi
+  container_id="$(cat "$cidfile")" || return 1
+  if ! [[ "$container_id" =~ ^[a-f0-9]{64}$ ]]; then
+    echo "Docker producer CID is invalid" >&2
+    return 1
+  fi
+  docker rm -f "$container_id" >/dev/null 2>&1 || true
+  # A failed inspect is not absence. Require a successful daemon query after
+  # removal, including when another cleanup already removed this exact ID.
+  remaining="$(docker ps -a --no-trunc --filter "id=$container_id" --format '{{.ID}}')" || return 1
+  if [ -n "$remaining" ]; then
+    echo "Docker producer remains after cleanup; evidence publication refused" >&2
+    return 1
+  fi
+}
+
 docker_e2e_resource_limits_disabled() {
   case "${OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS:-}" in
     1 | true | TRUE | yes | YES | on | ON)
@@ -103,22 +139,14 @@ docker_e2e_detect_available_cpus() {
     printf '%s\n' "$available"
     return 0
   fi
-  if command -v nproc >/dev/null 2>&1; then
-    nproc
-    return 0
-  fi
-  if command -v getconf >/dev/null 2>&1; then
-    getconf _NPROCESSORS_ONLN
-    return 0
-  fi
-  return 1
+  docker_e2e_timeout_cmd 5s docker info --format '{{.NCPU}}' </dev/null
 }
 
 docker_e2e_resolve_cpus() {
   local requested="$1"
   local available=""
-  available="$(docker_e2e_detect_available_cpus "${2:-}" 2>/dev/null || true)"
-  if [[ "$requested" =~ ^[0-9]+$ ]] && [[ "$available" =~ ^[0-9]+$ ]] && [ "$requested" -gt "$available" ]; then
+  available="$(docker_e2e_detect_available_cpus "${2:-}" 2>/dev/null)" || available=""
+  if [[ "$requested" =~ ^[0-9]+$ ]] && [[ "$available" =~ ^[1-9][0-9]*$ ]] && [ "$requested" -gt "$available" ]; then
     printf '%s\n' "$available"
     return 0
   fi
@@ -162,12 +190,12 @@ docker_e2e_docker_run_resource_args() {
   local memory="${OPENCLAW_DOCKER_E2E_MEMORY:-8g}"
   local cpus="${OPENCLAW_DOCKER_E2E_CPUS:-16}"
   local pids_limit="${OPENCLAW_DOCKER_E2E_PIDS_LIMIT:-2048}"
-  cpus="$(docker_e2e_resolve_cpus "$cpus")"
 
   if ! docker_e2e_resource_value_disabled "$memory" && ! docker_e2e_run_arg_present --memory "$@"; then
     DOCKER_E2E_RUN_RESOURCE_ARGS+=(--memory "$memory")
   fi
   if ! docker_e2e_resource_value_disabled "$cpus" && ! docker_e2e_run_arg_present --cpus "$@"; then
+    cpus="$(docker_e2e_resolve_cpus "$cpus")"
     DOCKER_E2E_RUN_RESOURCE_ARGS+=(--cpus "$cpus")
   fi
   if ! docker_e2e_resource_value_disabled "$pids_limit" && ! docker_e2e_run_arg_present --pids-limit "$@"; then

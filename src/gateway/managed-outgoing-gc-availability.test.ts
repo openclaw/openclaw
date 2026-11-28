@@ -20,57 +20,63 @@ import {
 import { withEnvAsync } from "../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { cleanupManagedOutgoingMediaRecords } from "./managed-image-attachments.js";
+import { createFixture } from "./managed-image-attachments.test-support.js";
 import {
   claimManagedImageRecordCleanupIfCurrent,
-  insertManagedImageRecord,
-  MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
 
-// End-to-end, real-SQLite regression for the global media GC fail-safe:
-// when the session store cannot be read (here: session_nodes dropped), the
-// sweep must keep every managed record and its bytes instead of concluding
-// the owning messages are gone.
-
 let stateDir: string;
+const attachmentId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const agentDatabase = () =>
+  openOpenClawAgentDatabase({ agentId: "main", env: { OPENCLAW_STATE_DIR: stateDir } });
+const stateDatabase = () =>
+  openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
+const records = (columns = "*", suffix = "") =>
+  stateDatabase()
+    .db.prepare(`SELECT ${columns} FROM managed_outgoing_image_records ${suffix}`)
+    .all();
+
+function oldOrphan(originalPath: string, name = "old-orphan.png", body = "orphan-image") {
+  const orphan = path.join(path.dirname(originalPath), name);
+  fs.writeFileSync(orphan, body);
+  fs.utimesSync(orphan, 0, 0);
+  return orphan;
+}
+
+function expectBytes(original: string, orphan: string, orphanBody = "orphan-image") {
+  expect(fs.readFileSync(original, "utf8")).toBe("original-image");
+  expect(fs.readFileSync(orphan, "utf8")).toBe(orphanBody);
+}
 
 async function seedManagedRecord(
-  attachmentId: string,
-  overrides: Partial<Omit<ManagedImageRecord, "attachmentId" | "original">> = {},
+  id = attachmentId,
+  overrides: Partial<
+    Pick<ManagedImageRecord, "agentId" | "sessionKey" | "messageId" | "alt" | "createdAt">
+  > = {},
 ) {
-  const filename = `${attachmentId}-cat-full.png`;
-  const originalPath = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR, filename);
-  fs.mkdirSync(path.dirname(originalPath), { recursive: true });
-  fs.writeFileSync(originalPath, "original-image");
-  await insertManagedImageRecord(
-    {
-      attachmentId,
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      messageId: "msg-1",
-      createdAt: new Date().toISOString(),
-      alt: "Cat",
-      ...overrides,
-      original: {
-        mediaRoot: path.join(stateDir, "media"),
-        mediaId: filename,
-        mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-        contentType: "image/png",
-        width: 1024,
-        height: 768,
-        sizeBytes: "original-image".length,
-        filename: "cat.png",
-      },
-    },
-    stateDir,
-  );
+  const { originalPath } = await createFixture(stateDir, {
+    attachmentId: id,
+    agentId: "main",
+    ...overrides,
+  });
   return originalPath;
 }
 
+function cleanup(
+  options: Omit<
+    NonNullable<Parameters<typeof cleanupManagedOutgoingMediaRecords>[0]>,
+    "stateDir"
+  > = {},
+) {
+  return withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+    cleanupManagedOutgoingMediaRecords({ stateDir, ...options }),
+  );
+}
+
 function dropSessionNodes() {
-  const options = { agentId: "main", env: { OPENCLAW_STATE_DIR: stateDir } };
-  const databasePath = openOpenClawAgentDatabase(options).path;
+  const databasePath = agentDatabase().path;
   closeOpenClawAgentDatabasesForTest();
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(databasePath);
@@ -92,65 +98,40 @@ afterEach(async () => {
 });
 
 describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
-  it("keeps records and bytes when session_nodes is missing", async () => {
-    const options = { agentId: "main", env: { OPENCLAW_STATE_DIR: stateDir } };
-    openOpenClawAgentDatabase(options);
-    const originalPath = await seedManagedRecord("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
-    dropSessionNodes();
-
-    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
-      cleanupManagedOutgoingMediaRecords({ stateDir }),
-    );
-
-    expect(result.deletedRecordCount).toBe(0);
-    expect(
-      await readManagedImageRecord("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", stateDir),
-    ).not.toBeNull();
-    expect(fs.existsSync(originalPath)).toBe(true);
-  });
-
-  it("still deletes dereferenced records when the store is healthy", async () => {
-    const options = { agentId: "main", env: { OPENCLAW_STATE_DIR: stateDir } };
-    openOpenClawAgentDatabase(options);
-    const originalPath = await seedManagedRecord("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
-
-    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
-      cleanupManagedOutgoingMediaRecords({ stateDir }),
-    );
-
-    expect(result.deletedRecordCount).toBe(1);
-    expect(
-      await readManagedImageRecord("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", stateDir),
-    ).toBeNull();
-    expect(fs.existsSync(originalPath)).toBe(false);
-  });
+  it.each(["missing", "healthy"] as const)(
+    "deletes dereferenced records only when the session store is healthy (%s)",
+    async (store) => {
+      agentDatabase();
+      const originalPath = await seedManagedRecord();
+      if (store === "missing") {
+        dropSessionNodes();
+      }
+      await cleanup();
+      const record = await readManagedImageRecord(attachmentId, stateDir);
+      if (store === "missing") {
+        expect(record).not.toBeNull();
+      } else {
+        expect(record).toBeNull();
+      }
+      expect(fs.existsSync(originalPath)).toBe(store === "missing");
+    },
+  );
   it.each(["original_width", "original_height", "original_size_bytes"])(
     "keeps records and orphan files when %s cannot be decoded safely",
     async (column) => {
-      const originalPath = await seedManagedRecord("cccccccc-cccc-4ccc-8ccc-cccccccccccc");
-      const orphanPath = path.join(path.dirname(originalPath), "old-orphan.png");
-      fs.writeFileSync(orphanPath, "orphan-image");
-      fs.utimesSync(orphanPath, 0, 0);
-      const database = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
+      const originalPath = await seedManagedRecord();
+      const orphanPath = oldOrphan(originalPath);
+      const database = stateDatabase();
       database.db.exec(`UPDATE managed_outgoing_image_records SET ${column} = 9007199254740992`);
 
-      await expect(
-        withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
-          cleanupManagedOutgoingMediaRecords({ stateDir }),
-        ),
-      ).rejects.toBeInstanceOf(RangeError);
-      expect(fs.readFileSync(originalPath, "utf8")).toBe("original-image");
-      expect(fs.readFileSync(orphanPath, "utf8")).toBe("orphan-image");
-      expect(
-        database.db.prepare("SELECT cleanup_pending FROM managed_outgoing_image_records").all(),
-      ).toEqual([{ cleanup_pending: 0 }]);
+      await expect(cleanup()).rejects.toBeInstanceOf(RangeError);
+      expectBytes(originalPath, orphanPath);
+      expect(records("cleanup_pending")).toEqual([{ cleanup_pending: 0 }]);
     },
   );
 
   it("keeps other agents' claimed and unclaimed bytes without rereading full metadata", async () => {
-    openOpenClawAgentDatabase({ agentId: "main", env: { OPENCLAW_STATE_DIR: stateDir } });
+    agentDatabase();
     const metadata = "synthetic-alt ".repeat(1024);
     const survivorIds = [
       "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
@@ -158,8 +139,8 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
       "ffffffff-ffff-4fff-8fff-ffffffffffff",
     ] as const;
     const survivors = await Promise.all(
-      survivorIds.map((attachmentId, index) =>
-        seedManagedRecord(attachmentId, {
+      survivorIds.map((id, index) =>
+        seedManagedRecord(id, {
           agentId: index === 0 ? "main" : "other",
           sessionKey: index === 0 ? "agent:main:main" : "agent:other:main",
           messageId: null,
@@ -174,18 +155,12 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
     expect(await claimManagedImageRecordCleanupIfCurrent(claimed, stateDir)).toBe(true);
     const deletedId = "11111111-1111-4111-8111-111111111111";
     const deleted = await seedManagedRecord(deletedId);
-    const orphan = path.join(path.dirname(deleted), "old-orphan.png");
-    fs.writeFileSync(orphan, "orphan-image");
+    const orphan = oldOrphan(deleted);
     for (const file of [...survivors, orphan]) {
       fs.utimesSync(file, 0, 0);
     }
-    const database = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
-    const readPersistedRecords = () =>
-      database.db
-        .prepare("SELECT * FROM managed_outgoing_image_records ORDER BY attachment_id")
-        .all();
+    const database = stateDatabase();
+    const readPersistedRecords = () => records("*", "ORDER BY attachment_id");
     const persistedBefore = readPersistedRecords();
     const counter = trackSqliteStatementExecutions(
       requireNativeSqliteDatabase(database.db),
@@ -196,14 +171,12 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
           : null,
     );
     try {
-      await expect(
-        withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
-          cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: "agent:main:main" }),
-        ),
-      ).resolves.toEqual({ deletedRecordCount: 1, deletedFileCount: 2, retainedCount: 3 });
-      expect(counter.counts.records).toBe(0);
-      expect(counter.rowCounts.records).toBe(0);
-      expect(counter.textBytes.records).toBe(0);
+      await cleanup({ sessionKey: "agent:main:main" });
+      expect([
+        counter.counts.records,
+        counter.rowCounts.records,
+        counter.textBytes.records,
+      ]).toEqual([0, 0, 0]);
     } finally {
       counter.restore();
     }
@@ -220,17 +193,12 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
   it.each(["original_width", "original_height", "original_size_bytes", "cleanup_pending"])(
     "stops orphan deletion when %s becomes unsafe after the first record scan",
     async (column) => {
-      const attachmentId = "22222222-2222-4222-8222-222222222222";
       const originalPath = await seedManagedRecord(attachmentId, {
         messageId: null,
         createdAt: new Date(0).toISOString(),
       });
-      const orphanPath = path.join(path.dirname(originalPath), "late-orphan.png");
-      fs.writeFileSync(orphanPath, "late-orphan-image");
-      fs.utimesSync(orphanPath, 0, 0);
-      const database = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
+      const orphanPath = oldOrphan(originalPath, "late-orphan.png", "late-orphan-image");
+      const database = stateDatabase();
       const events: string[] = [];
       const readdir = vi.spyOn(fsAsync, "readdir").mockImplementationOnce(async (directory) => {
         expect(directory).toBe(path.join(stateDir, "media", "outgoing", "records"));
@@ -253,24 +221,18 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
       });
       try {
         await expect(
-          withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
-            cleanupManagedOutgoingMediaRecords({
-              stateDir,
-              hasActiveSessionRun: (sessionKey, agentId) => {
-                expect(sessionKey).toBe("agent:main:main");
-                expect(agentId).toBe("main");
-                events.push("active-run");
-                return true;
-              },
-            }),
-          ),
+          cleanup({
+            hasActiveSessionRun: (sessionKey, agentId) => {
+              expect(sessionKey).toBe("agent:main:main");
+              expect(agentId).toBe("main");
+              events.push("active-run");
+              return true;
+            },
+          }),
         ).rejects.toBeInstanceOf(RangeError);
         expect(events).toEqual(["active-run", "legacy-directory"]);
-        expect(fs.readFileSync(originalPath, "utf8")).toBe("original-image");
-        expect(fs.readFileSync(orphanPath, "utf8")).toBe("late-orphan-image");
-        expect(
-          database.db.prepare("SELECT attachment_id FROM managed_outgoing_image_records").all(),
-        ).toEqual([{ attachment_id: attachmentId }]);
+        expectBytes(originalPath, orphanPath, "late-orphan-image");
+        expect(records("attachment_id")).toEqual([{ attachment_id: attachmentId }]);
       } finally {
         readdir.mockRestore();
       }

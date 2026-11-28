@@ -1,120 +1,97 @@
-// Outbound attachment tests cover media loading rules for outgoing messages.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { aroundEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import {
+  resolveOutboundAttachmentFromBuffer,
+  resolveOutboundAttachmentFromUrl,
+} from "./outbound-attachment.js";
+import * as webMedia from "./web-media.js";
 
-const loadWebMedia = vi.hoisted(() => vi.fn());
-const markTrustedGeneratedHtmlPath = vi.hoisted(() => vi.fn());
-const saveMediaBuffer = vi.hoisted(() => vi.fn());
-const rm = vi.hoisted(() => vi.fn(async () => {}));
+let state: OpenClawTestState;
+aroundEach((runTest) =>
+  withOpenClawTestState({ layout: "state-only", label: "outbound-staging" }, async (current) => {
+    state = current;
+    await fs.mkdir(state.statePath("media", "outbound"), { recursive: true });
+    await runTest();
+  }),
+);
 
-vi.mock("node:fs/promises", () => ({ rm }));
+it.each(["url", "buffer"])(
+  "stages %s bytes with their filename, MIME type, and limit",
+  async (kind) => {
+    const buffer = Buffer.from("%PDF-1.4\n%%EOF\n");
+    const source = await state.writeText("report.pdf", buffer.toString());
+    using marker = vi.spyOn(webMedia, "markTrustedGeneratedHtmlPath");
+    const stage = (maxBytes: number) =>
+      kind === "url"
+        ? resolveOutboundAttachmentFromUrl(source, maxBytes, { localRoots: [state.stateDir] })
+        : resolveOutboundAttachmentFromBuffer(buffer, maxBytes, {
+            contentType: "application/pdf",
+            filename: "report.pdf",
+          });
 
-vi.mock("./web-media.js", () => ({
-  loadWebMedia,
-  markTrustedGeneratedHtmlPath,
-}));
+    const saved = await stage(1024);
+    expect(path.dirname(saved.path)).toBe(state.statePath("media", "outbound"));
+    expect(path.basename(saved.path)).toMatch(/^report---[a-f0-9-]{36}\.pdf$/);
+    expect(saved.contentType).toBe("application/pdf");
+    expect(await fs.readFile(saved.path)).toEqual(buffer);
+    await expect(stage(buffer.length - 1)).rejects.toThrow(/exceeds .* limit/);
+    expect(marker).not.toHaveBeenCalled();
+  },
+);
 
-vi.mock("./store.js", () => ({
-  saveMediaBuffer,
-}));
-
-const { resolveOutboundAttachmentFromBuffer, resolveOutboundAttachmentFromUrl } =
-  await import("./outbound-attachment.js");
-
-afterEach(() => vi.clearAllMocks());
-
-describe("resolveOutboundAttachmentFromUrl", () => {
-  it("preserves the loaded file name when staging outbound media", async () => {
-    const buffer = Buffer.from("pdf");
-    loadWebMedia.mockResolvedValueOnce({
-      buffer,
-      contentType: "application/pdf",
-      fileName: "report.pdf",
+it("removes staged HTML and preserves its source when provenance fails", async ({
+  onTestFinished,
+}) => {
+  const workspace = useAutoCleanupTempDirTracker(onTestFinished).make(
+    "outbound-html-",
+    resolvePreferredOpenClawTmpDir(),
+  );
+  const source = path.join(workspace, "report.html");
+  const html = Buffer.from("<!doctype html><title>report</title>");
+  await fs.writeFile(source, html);
+  const failure = new Error("marker write failed");
+  using marker = vi
+    .spyOn(webMedia, "markTrustedGeneratedHtmlPath")
+    .mockImplementationOnce(async (file) => {
+      expect(await fs.readFile(file)).toEqual(html);
+      throw failure;
     });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/media/outbound/report---uuid.pdf",
-      contentType: "application/pdf",
-    });
 
-    await resolveOutboundAttachmentFromUrl("./report.pdf", 1024);
-
-    expect(saveMediaBuffer).toHaveBeenCalledWith(
-      buffer,
-      "application/pdf",
-      "outbound",
-      1024,
-      "report.pdf",
-    );
-    expect(markTrustedGeneratedHtmlPath).not.toHaveBeenCalled();
-  });
-
-  it("marks staged trusted HTML with its exact bytes", async () => {
-    const buffer = Buffer.from("<!doctype html><title>report</title>");
-    loadWebMedia.mockResolvedValueOnce({
-      buffer,
-      contentType: "text/html",
-      fileName: "report.html",
-      trustedGeneratedHtmlSource: true,
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/media/outbound/report---uuid.html",
-      contentType: "text/html",
-    });
-
-    await resolveOutboundAttachmentFromUrl("/tmp/openclaw/report.html", 1024);
-
-    expect(markTrustedGeneratedHtmlPath).toHaveBeenCalledWith(
-      "/tmp/media/outbound/report---uuid.html",
-      buffer,
-    );
-  });
-
-  it("removes the staged file and propagates marker write failures", async () => {
-    const buffer = Buffer.from("<!doctype html><title>report</title>");
-    const stagedPath = "/tmp/media/outbound/report---uuid.html";
-    loadWebMedia.mockResolvedValueOnce({
-      buffer,
-      contentType: "text/html",
-      trustedGeneratedHtmlSource: true,
-    });
-    saveMediaBuffer.mockResolvedValueOnce({ path: stagedPath, contentType: "text/html" });
-    markTrustedGeneratedHtmlPath.mockRejectedValueOnce(new Error("marker write failed"));
-
-    await expect(
-      resolveOutboundAttachmentFromUrl("/tmp/openclaw/report.html", 1024),
-    ).rejects.toThrow("marker write failed");
-    expect(rm).toHaveBeenCalledWith(stagedPath, { force: true });
-  });
+  await expect(
+    resolveOutboundAttachmentFromUrl(source, 1024, {
+      mediaAccess: { localRoots: [workspace], readFile: (file) => fs.readFile(file) },
+    }),
+  ).rejects.toBe(failure);
+  expect(marker).toHaveBeenCalledOnce();
+  expect(await fs.readdir(state.statePath("media", "outbound"))).toEqual([]);
+  expect(await fs.readFile(source)).toEqual(html);
 });
 
-describe("resolveOutboundAttachmentFromBuffer", () => {
-  it.each([undefined, () => {}])(
-    "stages outbound buffers with metadata and an optional publication guard (%s)",
-    async (assertCommitAllowed) => {
-      const buffer = Buffer.from("hello");
-      saveMediaBuffer.mockResolvedValueOnce({
-        path: "/tmp/media/outbound/note---uuid.txt",
-        contentType: "text/plain",
-      });
-
-      const result = await resolveOutboundAttachmentFromBuffer(buffer, 1024, {
-        contentType: "text/plain",
-        filename: "note.txt",
-        assertCommitAllowed,
-      });
-
-      expect(saveMediaBuffer).toHaveBeenCalledWith(
-        buffer,
-        "text/plain",
-        "outbound",
-        1024,
-        "note.txt",
-        undefined,
-        assertCommitAllowed ? { assertCommitAllowed } : undefined,
-      );
-      expect(result).toEqual({
-        path: "/tmp/media/outbound/note---uuid.txt",
-        contentType: "text/plain",
-      });
-    },
-  );
+it("rejects revoked buffer publication without removing earlier output", async () => {
+  let allowed = true;
+  const failure = new Error("publication revoked");
+  const stage = () =>
+    resolveOutboundAttachmentFromBuffer(Buffer.from("hello"), 1024, {
+      contentType: "text/plain",
+      filename: "note.txt",
+      assertCommitAllowed: () => {
+        if (!allowed) {
+          throw failure;
+        }
+      },
+    });
+  const saved = await stage();
+  allowed = false;
+  await expect(stage()).rejects.toBe(failure);
+  expect(await fs.readdir(state.statePath("media", "outbound"))).toEqual([
+    path.basename(saved.path),
+  ]);
+  expect(await fs.readFile(saved.path, "utf8")).toBe("hello");
 });

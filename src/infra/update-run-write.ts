@@ -7,7 +7,9 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { completeUpdateFailureSummary } from "./update-failure-result.js";
-import { encodeRun, isRetainedStep, type UpdateRunLedgerOptions } from "./update-run-codec.js";
+import { claimUpdateResultInTransaction } from "./update-result-claim.js";
+import type { UpdateResultPayload } from "./update-result-payload.js";
+import { encodeRun, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import type { UpdateRunPhasePatch } from "./update-run-mutation.types.js";
 import { decodeRun, readUpdateRunRecord } from "./update-run-read.kernel.js";
 import {
@@ -19,6 +21,7 @@ import {
   type UpdateRunStep,
 } from "./update-run-record.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
+import { upsertStep } from "./update-run-step-upsert.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 
@@ -26,23 +29,6 @@ export const updateRunLedgerSchema = getOpenClawStateFeatureSchemaSql("update_ru
   endMarker: "ON update_runs(status, created_at_ms DESC, run_id);",
   errorMessage: "Update run schema markers are missing",
 });
-
-export function upsertStep(record: UpdateRunRecord, input: UpdateRunStep): void {
-  const step = { ...input, step: updateRunStepKey(input.step) };
-  const index = record.steps.findIndex((existing) => existing.step === step.step);
-  if (index >= 0) {
-    record.steps[index] = { ...record.steps[index], ...step };
-  } else {
-    record.steps.push(step);
-  }
-  while (record.steps.length > 128) {
-    const disposable = record.steps.findIndex((entry) => !isRetainedStep(entry));
-    if (disposable < 0) {
-      throw new Error("Update run retained steps exceed the step limit");
-    }
-    record.steps.splice(disposable, 1);
-  }
-}
 
 export function applyUpdateRunPhase(
   record: UpdateRunRecord,
@@ -96,6 +82,30 @@ export function applyUpdateRunStep(
   record: UpdateRunRecord,
   { reason, ...step }: UpdateRunStep & { reason?: string },
 ): void {
+  // Post-completion advice may add diagnostics, never change the terminal outcome.
+  if (
+    record.finishedAtMs !== null &&
+    (record.status === "succeeded" ||
+      (record.status === "skipped" && record.reason === "already-current") ||
+      record.status === "failed" ||
+      record.status === "rolled-back") &&
+    (step.status === "completed" ||
+      (step.step === "plugins" && step.status === "failed") ||
+      (step.status === "skipped" && step.step === "warning:recovery-artifact-cleanup")) &&
+    [
+      "recovery-artifact-cleanup",
+      "warning:recovery-artifact-cleanup",
+      "diagnostic:recovery-artifact-cleanup",
+      "plugins",
+      "post-activation doctor inspections",
+      "warning:post-activation doctor inspections",
+      "diagnostic:post-activation doctor inspections",
+      "finalize:doctor-lint:post-activation doctor inspections",
+    ].some((name) => step.step === name || step.step.startsWith(`${name}:`))
+  ) {
+    upsertStep(record, step);
+    return;
+  }
   if (record.status === "running") {
     upsertStep(record, step);
     if (reason !== undefined) {
@@ -110,6 +120,15 @@ export function persistRun(
   options: UpdateRunLedgerOptions,
 ): UpdateRunRecord {
   record.updatedAtMs = Math.max(Date.now(), record.updatedAtMs + 1);
+  const recovery = record.verification.recovery;
+  record.steps = record.steps.filter((step) => step.step !== "finalize:data-at-risk");
+  if (recovery?.serviceRestartSafe === false && recovery.dataAtRisk) {
+    upsertStep(record, {
+      step: "finalize:data-at-risk",
+      status: "completed",
+      failureFacts: [{ check: "update-recovery", code: recovery.dataAtRisk }],
+    });
+  }
   const row = encodeRun(record, options);
   executeSqliteQuerySync(
     db,
@@ -151,6 +170,7 @@ export function mutateRun(
     options,
     {
       schemaSql: updateRunLedgerSchema,
+      attributeUpdateWrite: options.attributeUpdateWrite,
       operationLabel: "update.run",
       busyTimeoutMs: options.busyTimeoutMs,
     },
@@ -240,7 +260,13 @@ export function applyUpdateRunDiagnostics(
   }
   const constraint = record.verification.recovery;
   const recovery =
-    verification && constraint?.serviceRestartSafe === false ? constraint : observedRecovery;
+    verification && constraint?.serviceRestartSafe === false
+      ? !constraint.dataAtRisk &&
+        observedRecovery?.serviceRestartSafe === false &&
+        observedRecovery.dataAtRisk
+        ? observedRecovery
+        : constraint
+      : observedRecovery;
   if (recovery || observedRollback || verification) {
     recordUpdateRunVerificationRecord(record, {
       ...verification,
@@ -259,15 +285,7 @@ export function recordUpdateRunDiagnostics(
   options: UpdateRunLedgerOptions = {},
 ): UpdateRunRecord | undefined {
   try {
-    if (
-      typeof diagnostics !== "function" &&
-      !(
-        diagnostics.failure ||
-        diagnostics.recovery ||
-        diagnostics.rollbackOutcome ||
-        diagnostics.verification
-      )
-    ) {
+    if (typeof diagnostics !== "function" && !hasUpdateRunDiagnostics(diagnostics)) {
       return undefined;
     }
     return mutateRun(runId, (record) => applyUpdateRunDiagnostics(record, diagnostics), options);
@@ -283,12 +301,38 @@ export function recordUpdateRunDiagnostics(
   }
 }
 
+/** A host reporter claims the settled outcome in this transaction and receives it after commit. */
 export function finishUpdateRun(
   runId: string,
   result: FinishUpdateRunInput,
   options: UpdateRunLedgerOptions = {},
+  reportUpdateResult?: (payload: UpdateResultPayload) => void,
 ): UpdateRunRecord {
-  return mutateRun(runId, (record) => applyFinishUpdateRun(record, result), options);
+  let updateResult: UpdateResultPayload | undefined;
+  const finished = runExistingOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const record = mutateRunInTransaction(
+        db,
+        runId,
+        (current) => applyFinishUpdateRun(current, result),
+        options,
+      );
+      if (reportUpdateResult) {
+        updateResult = claimUpdateResultInTransaction(db, record);
+      }
+      return record;
+    },
+    options,
+    {
+      schemaSql: updateRunLedgerSchema,
+      operationLabel: "update.run",
+      busyTimeoutMs: options.busyTimeoutMs,
+    },
+  );
+  if (updateResult) {
+    reportUpdateResult?.(updateResult);
+  }
+  return finished;
 }
 
 export function applyFinishUpdateRun(record: UpdateRunRecord, result: FinishUpdateRunInput): void {
@@ -323,4 +367,13 @@ export function applyFinishUpdateRun(record: UpdateRunRecord, result: FinishUpda
       }
     }
   }
+}
+
+export function hasUpdateRunDiagnostics(diagnostics: UpdateRunDiagnostics): boolean {
+  return Boolean(
+    diagnostics.failure ||
+    diagnostics.recovery ||
+    diagnostics.rollbackOutcome ||
+    diagnostics.verification,
+  );
 }

@@ -7,6 +7,7 @@ import {
   matchesAgentLifecycleBinding,
   matchesAgentLifecycleBindingAsync,
 } from "../../agents/agent-lifecycle-registry.js";
+import type { GitHubCredentialReader } from "../../agents/github-credential-reader.js";
 import {
   GitHubIdentityError,
   prepareGitHubReadIdentity,
@@ -16,8 +17,8 @@ import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.run
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
 import { gitHubPublicApi } from "../github-public-api.js";
+import { assertRepositoryDispatchAdmission } from "../repository-dispatch.js";
 import {
-  EnvironmentRecipeSchema,
   resolveEnvironmentRecipe,
   type EnvironmentRecipe,
   type EnvironmentRecipeEntry,
@@ -49,11 +50,11 @@ type AdmissionRequest = {
   getConfig: () => OpenClawConfig;
   assertCurrent: () => void;
   signal?: AbortSignal;
+  readNativeCredential?: GitHubCredentialReader;
+  retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
   knownRecipe?: (
     project: RepositoryWorkerProjectSnapshot,
-  ) =>
-    | { project: RepositoryWorkerProjectSnapshot; setupRecipe?: string; recipe?: EnvironmentRecipe }
-    | undefined;
+  ) => { setupRecipe?: string; recipe?: EnvironmentRecipe } | undefined;
 } & (
   | {
       repository: { agentId: string; url: string; ref?: string; baseCommit?: string };
@@ -101,7 +102,9 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
   }
   const getConfig = params.getConfig;
   const assertAgent = () => {
-    if (!matchesAgentLifecycleBinding(getConfig(), agent)) {
+    const currentConfig = getConfig();
+    assertRepositoryDispatchAdmission(params.readNativeCredential, currentConfig);
+    if (!matchesAgentLifecycleBinding(currentConfig, agent)) {
       sourceChanged();
     }
   };
@@ -118,6 +121,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     assertCaller();
     assertAgent();
   };
+  const repositoryPath = new URL(url).pathname.replace(/\.git$/u, "");
   const prepareIdentity = async (assertPreparationCurrent: () => void) => {
     await assertAgentPrepared();
     assertPreparationCurrent();
@@ -127,7 +131,13 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
       sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
       agentId: agent.agentId,
       getCurrentConfig: getConfig,
-      assertActive: assertAgent,
+      assertActive:
+        params.readNativeCredential || params.retainCredentialCleanup
+          ? assertAdmission
+          : assertAgent,
+      readNativeCredential: params.readNativeCredential,
+      allowAppInstallation: params.retainCredentialCleanup !== undefined,
+      requestedRepository: repositoryPath.slice(1),
       refresh: () => requestCurrentGitHubOAuthRefresh(agent.agentId),
       allowAnonymous: true,
     }).catch(async (error: unknown) => {
@@ -135,6 +145,10 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
       // Native credential subprocess diagnostics must never enter provider errors.
       throw error instanceof GitHubIdentityError ? error : new GitHubIdentityError("unverified");
     });
+    if (identity.revoke) {
+      params.retainCredentialCleanup?.(identity.revoke);
+    }
+    assertPreparationCurrent();
     assertAgent();
     return identity;
   };
@@ -150,7 +164,6 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     assertAgent();
     identity.assertSelected();
   };
-  const repositoryPath = new URL(url).pathname.replace(/\.git$/u, "");
   const endpoint = `${gitHubPublicApi.GITHUB_API_BASE_URL}/repos${repositoryPath}`;
   const read = async (
     suffix: string,
@@ -354,33 +367,14 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     }
     return entries[0];
   };
-  const knownRecipe = params.knownRecipe?.(structuredClone(project));
+  const knownRecipe = params.knownRecipe?.(project);
   assertAdmission();
-  let setupRecipe: string | undefined;
-  let recipe: EnvironmentRecipe | undefined;
-  if (knownRecipe !== undefined) {
-    if (!isRecord(knownRecipe)) {
-      sourceChanged();
-    }
-    const parsedRecipe =
-      knownRecipe.recipe === undefined
-        ? undefined
-        : EnvironmentRecipeSchema.safeParse(knownRecipe.recipe);
-    if (
-      !isDeepStrictEqual(knownRecipe.project, project) ||
-      (knownRecipe.setupRecipe !== undefined &&
-        (typeof knownRecipe.setupRecipe !== "string" ||
-          !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(knownRecipe.setupRecipe))) ||
-      (parsedRecipe !== undefined &&
-        (!parsedRecipe.success || parsedRecipe.data.identity !== knownRecipe.setupRecipe))
-    ) {
-      sourceChanged();
-    }
-    // Recipe identity, including absence, is immutable for this exact admitted
-    // project. Its reuse never substitutes for the surrounding access checks.
-    setupRecipe = knownRecipe.setupRecipe;
-    recipe = parsedRecipe?.success ? parsedRecipe.data : undefined;
+  if (knownRecipe?.recipe && knownRecipe.recipe.identity !== knownRecipe.setupRecipe) {
+    sourceChanged();
   }
+  // Reusing admitted recipe facts never substitutes for current source access.
+  let setupRecipe = knownRecipe?.setupRecipe;
+  let recipe = knownRecipe?.recipe;
   // Older devcontainer parsing did not record secret requests, including an empty selection.
   if (
     knownRecipe === undefined ||
@@ -494,7 +488,11 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     revalidate,
     ...(requiresGitPack
       ? {
-          prepareGitPack: async (input: { temporaryRoot: string; signal: AbortSignal }) => {
+          prepareGitPack: async (input: {
+            temporaryRoot: string;
+            signal: AbortSignal;
+            retainedCommit?: string;
+          }) => {
             assertAdmission();
             await revalidate(input.signal);
             const readIdentity = identity;

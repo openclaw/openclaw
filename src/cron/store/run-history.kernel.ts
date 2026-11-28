@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sql } from "kysely";
+import { jsonPickObject, jsonValid } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -35,7 +37,7 @@ function validateRetainedEnum(value: string, allowed: readonly string[], label: 
   }
 }
 
-function normalizeCronRunTimestamps(record: CronRunRecord): CronRunRecord {
+export function normalizeCronRunTimestamps(record: CronRunRecord): CronRunRecord {
   const originalCreatedAt = record.createdAt;
   let createdAt = originalCreatedAt;
   let startedAt = record.startedAt;
@@ -62,15 +64,28 @@ function normalizeCronRunTimestamps(record: CronRunRecord): CronRunRecord {
   return { ...record, createdAt, startedAt, endedAt, lastEventAt };
 }
 
+/** Detail members the maintenance planner reads: `storeKey` groups rows, `kind` partitions retention. */
+const CRON_RUN_PLANNING_DETAIL_KEYS = ["storeKey", "kind"];
+
 /** Reads only Cron facts from the admitted released table, without restoring Tasks. */
 export function readCronRunRecordsInDatabase(
   db: EngineConnection,
   jobId?: string,
   runId?: string,
+  options?: {
+    /**
+     * Read only the facts maintenance plans on: identities, lifecycle, and the `storeKey`/`kind`
+     * detail members that group and partition retention. Payloads stay in SQLite.
+     */
+    planningOnly?: boolean;
+    /** Restrict the read to these task ids. */
+    taskIds?: readonly string[];
+  },
 ): CronRunRecord[] {
+  const planningOnly = options?.planningOnly === true;
   let select = query(db)
     .selectFrom("task_runs")
-    .select([
+    .select((eb) => [
       "task_id",
       "source_id",
       "run_id",
@@ -87,8 +102,19 @@ export function readCronRunRecordsInDatabase(
       "notify_policy",
       "terminal_outcome",
       "error",
-      "terminal_summary",
-      "detail_json",
+      planningOnly
+        ? /* kysely-allow-raw: Planning never reads the summary; keep the decoded row shape. */ sql<
+            string | null
+          >`NULL`.as("terminal_summary")
+        : "terminal_summary",
+      planningOnly
+        ? /* kysely-allow-raw: Portable CASE bounds large JSON before it crosses the driver. */ sql<
+            string | null
+          >`CASE WHEN ${jsonValid(db, eb.ref("detail_json"))}
+            THEN ${jsonPickObject(db, eb.ref("detail_json"), CRON_RUN_PLANNING_DETAIL_KEYS)} END`.as(
+            "detail_json",
+          )
+        : "detail_json",
     ])
     .where("runtime", "=", "cron")
     .orderBy("created_at", "asc")
@@ -98,6 +124,9 @@ export function readCronRunRecordsInDatabase(
   }
   if (runId !== undefined) {
     select = select.where("run_id", "=", runId);
+  }
+  if (options?.taskIds !== undefined) {
+    select = select.where("task_id", "in", [...options.taskIds]);
   }
   return executeSqliteQuerySync(db, select).rows.map((row) => {
     // These released columns remain part of row admission even when Cron does not expose them.
@@ -305,11 +334,9 @@ function collectExpiredCronRunIds(records: readonly CronRunRecord[], now: number
 
 function pruneCronRunHistoryInDatabase(
   db: EngineConnection,
-  now: number,
+  ids: readonly string[],
   schema: CronRunReceiptWriteSchema,
-  records = readCronRunRecordsInDatabase(db),
 ): number {
-  const ids = [...collectExpiredCronRunIds(records, now)];
   for (let offset = 0; offset < ids.length; offset += 500) {
     const batch = ids.slice(offset, offset + 500);
     executeSqliteQuerySync(
@@ -341,8 +368,11 @@ export function planCronRunHistoryMaintenance(
     JSON.stringify([cronRunRecordStoreKey(row), row.jobId, row.runId]);
   const firstByRun = new Map<string, CronRunRecord>();
   for (const row of records) {
-    if (row.jobId?.trim() && row.runId?.trim() && !firstByRun.has(key(row))) {
-      firstByRun.set(key(row), row);
+    if (row.jobId?.trim() && row.runId?.trim()) {
+      const runKey = key(row);
+      if (!firstByRun.has(runKey)) {
+        firstByRun.set(runKey, row);
+      }
     }
   }
   const reconciliations: CronRunRecord[] = [];
@@ -408,8 +438,7 @@ export function planCronRunHistoryMaintenance(
   }
   return {
     reconciliations,
-    pruneCandidates,
-    prune: expired.size > 0,
+    pruneIds: [...expired],
     nextSweepAtMs: Number.isFinite(nextSweepAtMs) ? nextSweepAtMs : null,
   };
 }
@@ -417,7 +446,6 @@ export function planCronRunHistoryMaintenance(
 export function applyCronRunHistoryMaintenanceInDatabase(
   db: EngineConnection,
   plan: ReturnType<typeof planCronRunHistoryMaintenance>,
-  now: number,
   schema: CronRunReceiptWriteSchema,
 ): { reconciled: number; pruned: number } {
   for (const next of plan.reconciliations) {
@@ -442,6 +470,6 @@ export function applyCronRunHistoryMaintenanceInDatabase(
   }
   return {
     reconciled: plan.reconciliations.length,
-    pruned: plan.prune ? pruneCronRunHistoryInDatabase(db, now, schema, plan.pruneCandidates) : 0,
+    pruned: pruneCronRunHistoryInDatabase(db, plan.pruneIds, schema),
   };
 }

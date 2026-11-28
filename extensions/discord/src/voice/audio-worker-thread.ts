@@ -1,6 +1,7 @@
 import type { Worker } from "node:worker_threads";
 import {
   createCpuTrackedWorker,
+  createPluginRuntimeProcessEntrypoint,
   resolveRuntimeWorkerUrl,
   resolveRuntimeWorkerArgv,
 } from "openclaw/plugin-sdk/process-runtime";
@@ -16,12 +17,9 @@ export type DiscordAudioWorkerThread = Pick<Worker, "postMessage" | "terminate">
 export function createDiscordAudioWorkerThread(
   options: DiscordAudioWorkerOptions,
 ): DiscordAudioWorkerThread {
-  const url = resolveRuntimeWorkerUrl({
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "audio-worker.runtime",
-    distWorkerPath: "extensions/discord/src/voice/audio-worker.runtime.js",
-    package: { name: "@openclaw/discord", distWorkerPath: "src/voice/audio-worker.runtime.js" },
-  });
+  const url = resolveRuntimeWorkerUrl(
+    createPluginRuntimeProcessEntrypoint("discordAudio", import.meta.url),
+  );
   const workerOptions = {
     workerData: options,
     execArgv: resolveRuntimeWorkerArgv(url).slice(0, -1),

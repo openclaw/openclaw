@@ -1,7 +1,7 @@
-import crypto from "node:crypto";
 import path from "node:path";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { getMSTeamsRuntime } from "./runtime.js";
 
 export function resolveMSTeamsAccountStateNamespace(
@@ -13,7 +13,7 @@ export function resolveMSTeamsAccountStateNamespace(
   if (normalizedAccountId === DEFAULT_ACCOUNT_ID) {
     return namespace;
   }
-  const digest = crypto.createHash("sha256").update(normalizedAccountId).digest("hex");
+  const digest = sha256Hex(normalizedAccountId);
   return `${namespace}-${digest}`;
 }
 

@@ -1,98 +1,340 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
+import type {
+  AgentHarnessAttemptParamsV2,
+  AnyAgentTool,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, assert, expect, it, vi } from "vitest";
-import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
-import { createModel } from "./agentsapi.test-support.js";
+import { Type } from "typebox";
+import { afterEach, assert, describe, expect, it, vi, type Mock } from "vitest";
+import { createAttemptParams } from "./agentsapi-attempt.test-helpers.js";
+import { buildAgentsApiToolSurface, type AgentsApiToolSurface } from "./agentsapi-tools.js";
 
 // mock-isolation: Transcript persistence is independent of Gateway file authorization.
 vi.mock("./agentsapi-transcript.js", () => ({ recordAgentsApiToolTranscript: vi.fn() }));
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["guarded", "read-only"] as const)(
-  "keeps %s Gateway PDF reads inside the recorded root, not the nested cwd",
-  async (permissionMode) => {
-    await withToolSurface(
-      { permissionMode, recordedRoot: true },
-      async ({ execute, inside, outside }) => {
-        // Plain text intentionally stops after the real file read, before PDF parsing or inference.
-        expect(await execute("inside", inside)).toMatchObject({
-          success: false,
-          error: expect.stringContaining("Expected PDF but got"),
-        });
-        expect(await execute("outside", outside)).toMatchObject({
-          success: false,
-          error: expect.stringContaining("not under an allowed directory"),
-        });
+it("records source payloads separately from outbound message targets", async () => {
+  const tool: AnyAgentTool = {
+    name: "message",
+    label: "Fixture message",
+    description: "Returns a synthetic messaging transport result",
+    parameters: Type.Object(
+      {
+        action: Type.Literal("send"),
+        message: Type.String(),
+        final: Type.Boolean(),
+        channel: Type.Optional(Type.String()),
+        target: Type.Optional(Type.String()),
       },
-    );
-  },
-);
+      { additionalProperties: false },
+    ),
+    execute: async (id) => ({
+      content: [{ type: "text", text: "Sent" }],
+      details:
+        id === "outbound"
+          ? { messageId: "fixture-outbound" }
+          : {
+              sourceReplySink: "internal-ui",
+              deliveryStatus: "sent",
+              sourceReply: { text: "Delivered source reply" },
+            },
+    }),
+  };
+  await withFixtureTool(tool, async (surface) => {
+    await execute(surface, "message", "source", {
+      action: "send",
+      message: "Requested source reply",
+      final: false,
+    });
+    await execute(surface, "message", "outbound", {
+      action: "send",
+      message: "Outbound text",
+      final: true,
+      channel: "slack",
+      target: "C123",
+    });
+    expect(surface.delivery).toMatchObject({
+      didSendViaMessagingTool: true,
+      messagingToolSourceReplyPayloads: [
+        { text: "Delivered source reply", sourceReplyFinal: false },
+      ],
+      messagingToolSentTexts: ["Outbound text"],
+      messagingToolSentMediaUrls: [],
+      messagingToolSentTargets: [
+        { tool: "message", provider: "slack", to: "C123", text: "Outbound text" },
+      ],
+    });
+  });
+});
 
-it("uses the prepared workspace when a restricted session has no recorded root", async () => {
-  await withToolSurface(
-    { permissionMode: "guarded", recordedRoot: false },
-    async ({ execute, inside, outside }) => {
-      expect(await execute("inside", inside)).toMatchObject({
-        success: false,
-        error: expect.stringContaining("Expected PDF but got"),
+it("serializes mixed tool output and supplies the empty-output fallback", async () => {
+  const tool: AnyAgentTool = {
+    name: "fixture_output",
+    label: "Fixture output",
+    description: "Returns synthetic external tool content",
+    parameters: Type.Object({ empty: Type.Boolean() }, { additionalProperties: false }),
+    execute: async (id) => ({
+      content:
+        id === "output-true"
+          ? []
+          : [
+              { type: "text", text: "First" },
+              { type: "image", data: "AA==", mimeType: "image/png" },
+              { type: "text", text: "Last" },
+            ],
+      details: {},
+    }),
+  };
+  await withFixtureTool(tool, async (surface) => {
+    for (const [empty, output] of [
+      [false, "First\n[Image result omitted from Agents API function output]\nLast"],
+      [true, "Tool completed with no text output."],
+    ] as const) {
+      expect(await execute(surface, tool.name, `output-${empty}`, { empty })).toEqual({
+        success: true,
+        output,
       });
-      expect(await execute("outside", outside)).toMatchObject({
-        success: false,
-        error: expect.stringContaining("not under an allowed directory"),
-      });
+    }
+  });
+});
+
+// The prefix-only cut dropped the end of the output without a notice. File tools run in the
+// hosted VM, so the bound names no Gateway path.
+it("bounds oversized output with head, tail and a size-only notice", async () => {
+  const full = [...Array.from({ length: 6_000 }, (_, i) => `row ${i}`), "LAST-ROW"].join("\n");
+  const tool: AnyAgentTool = {
+    name: "fixture_large",
+    label: "Fixture large",
+    description: "Returns synthetic oversized content",
+    parameters: Type.Object({}, { additionalProperties: false }),
+    execute: async () => ({ content: [{ type: "text", text: full }], details: {} }),
+  };
+  await withFixtureTool(tool, async (surface) => {
+    const result = await execute(surface, tool.name, "large", {});
+    assert(result.success);
+    expect(result.output.length).toBeLessThan(full.length);
+    expect(result.output).toContain("row 0\n");
+    expect(result.output).toMatch(/LAST-ROW$/u);
+    expect(result.output).toMatch(/\[\.\.\. \d+ chars omitted\]/u);
+    expect(result.output).not.toContain("Full output:");
+  });
+});
+
+// The adapter's own cap on the joined output cut the end of a bounded result: an image block
+// before one untrusted envelope pushed the end marker past the cap.
+it("keeps both untrusted-content markers when an image precedes the envelope", async () => {
+  const wrapped = wrapExternalContent(
+    Array.from({ length: 40_000 }, (_, i) => `line ${i}`).join("\n"),
+    { source: "web_fetch" },
+  );
+  const id = /<<<EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})">>>/u.exec(wrapped)?.[1];
+  assert(id);
+  const tool: AnyAgentTool = {
+    name: "fixture_envelope",
+    label: "Fixture envelope",
+    description: "Returns a synthetic wrapped page after an image",
+    parameters: Type.Object({}, { additionalProperties: false }),
+    execute: async () => ({
+      content: [
+        { type: "image", data: "AA==", mimeType: "image/png" },
+        { type: "text", text: wrapped },
+      ],
+      details: {},
+    }),
+  };
+  await withFixtureTool(tool, async (surface) => {
+    const result = await execute(surface, tool.name, "envelope", {});
+    assert(result.success);
+    const placeholder = "[Image result omitted from Agents API function output]\n";
+    expect(result.output.startsWith(placeholder)).toBe(true);
+    expect(result.output).toContain(`<<<EXTERNAL_UNTRUSTED_CONTENT id="${id}">>>`);
+    // The closed frame, then the trusted notice outside it, last.
+    const end = `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${id}">>>\n\n`;
+    const notice = /\[\.\.\. (\d+) chars omitted\]$/u.exec(result.output);
+    assert(notice);
+    expect(result.output.slice(0, notice.index).endsWith(end)).toBe(true);
+    // The notice reports what this one cut removed (a second pass once reported a few chars):
+    // every other char sent is the page's, except the placeholder, the blank line and the
+    // `\n…\n` between the body's kept head and tail.
+    const kept = notice.index - placeholder.length - 2 - "\n…\n".length;
+    expect(Number(notice[1])).toBe(wrapped.length - kept);
+  });
+});
+
+// The blocks fit the 32,000-char budget (128k window) by one char; the two joining newlines
+// push the string over, and the adapter's final cut landed on page A's end marker.
+it("keeps every wrapped page's frame when several blocks are joined", async () => {
+  const header = "Fetched 2 pages.";
+  const frame = wrapExternalContent("", { source: "api" }).length;
+  const pageA = wrapExternalContent("a".repeat(22_400 - header.length - 1 - frame), {
+    source: "api",
+  });
+  const pageB = wrapExternalContent("b".repeat(31_999 - header.length - pageA.length - frame), {
+    source: "api",
+  });
+  const tool: AnyAgentTool = {
+    name: "fixture_pages",
+    label: "Fixture pages",
+    description: "Returns a header and two wrapped pages",
+    parameters: Type.Object({}, { additionalProperties: false }),
+    execute: async () => ({
+      content: [
+        { type: "text", text: header },
+        { type: "text", text: pageA },
+        { type: "text", text: pageB },
+      ],
+      details: {},
+    }),
+  };
+  await withFixtureTool(
+    tool,
+    async (surface) => {
+      const result = await execute(surface, tool.name, "pages", {});
+      assert(result.success);
+      const markers = [
+        ...result.output.matchAll(/<<<(END_)?EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})">>>/gu),
+      ].map((match) => `${match[1] ? "end" : "start"}:${match[2]}`);
+      // The 128k window's per-result budget; the adapter's own cap never had to cut.
+      expect(result.output.length).toBeLessThanOrEqual(32_000);
+      expect(markers).toHaveLength(4);
+      expect(markers[1]).toBe(markers[0]!.replace("start:", "end:"));
+      expect(markers[3]).toBe(markers[2]!.replace("start:", "end:"));
+    },
+    undefined,
+    128_000,
+  );
+});
+
+describe("a delivered send to a configured delivery target", () => {
+  // Shape of a cron send: the delivery target is the current source and the
+  // message tool confirms the source reply.
+  const tool: AnyAgentTool = {
+    name: "message",
+    label: "Fixture message",
+    description: "Fixture message tool",
+    parameters: Type.Object({}, { additionalProperties: true }),
+    execute: async () => ({
+      content: [{ type: "text", text: '{"ok":true}' }],
+      details: {
+        ok: true,
+        messageDelivery: {
+          status: "settled",
+          partialDelivery: false,
+          createdThreadIds: [],
+          sourceReplyDelivered: true,
+        },
+      },
+    }),
+  };
+  it.each([
+    { finalByDefault: false, final: undefined, ends: false },
+    { finalByDefault: false, final: true, ends: true },
+    // Chat turns keep the default: an omitted final ends the turn.
+    { finalByDefault: undefined, final: undefined, ends: true },
+  ])(
+    "ends the native turn only when final resolves true (default $finalByDefault, final $final)",
+    async ({ finalByDefault, final, ends }) => {
+      await withFixtureTool(
+        tool,
+        async (surface) => {
+          const result = await execute(surface, "message", "send-call", {
+            action: "send",
+            message: "daily drop",
+            ...(final === undefined ? {} : { final }),
+          });
+
+          expect(result.terminate).toBe(ends ? true : undefined);
+          // Delivery facts do not depend on whether the turn ends.
+          expect(surface.delivery.sourceReplyDelivered).toBe(true);
+        },
+        finalByDefault,
+      );
     },
   );
 });
 
-it("retains default media access in full mode and forwards turn exec restrictions", async () => {
-  await withToolSurface(
-    {
-      permissionMode: "full",
-      recordedRoot: true,
-      execOverrides: { security: "deny", ask: "always" },
-    },
-    async ({ execute, outside, construction }) => {
-      expect(await execute("outside", outside)).toMatchObject({
-        success: false,
-        error: expect.stringContaining("Expected PDF but got"),
-      });
-      expect(construction.mock.calls[0]?.[0]).toMatchObject({
-        exec: { security: "deny", ask: "always" },
-      });
-    },
-  );
-});
-
-type ToolFixture = {
-  execute: (
-    id: string,
-    file: string,
-  ) => ReturnType<Awaited<ReturnType<typeof buildAgentsApiToolSurface>>["execute"]>;
-  inside: string;
-  outside: string;
-  construction: ReturnType<
-    typeof vi.fn<
-      NonNullable<AgentHarnessAttemptParamsV2["hostCapabilities"]["createToolSurfaceAsync"]>
-    >
-  >;
-};
-
-async function withToolSurface(
-  options: {
-    permissionMode: NonNullable<AgentHarnessAttemptParamsV2["permissionMode"]>;
-    recordedRoot: boolean;
-    execOverrides?: AgentHarnessAttemptParamsV2["execOverrides"];
-  },
-  run: (fixture: ToolFixture) => Promise<void>,
+async function withFixtureTool(
+  tool: AnyAgentTool,
+  run: (surface: Awaited<ReturnType<typeof buildAgentsApiToolSurface>>) => Promise<void>,
+  messageToolFinalByDefault?: boolean,
+  contextTokenBudget?: number,
 ) {
+  await withOpenClawTestState({ label: "agentsapi-tool-results" }, async (state) => {
+    const attempt = createAttemptParams({
+      workspaceDir: state.workspaceDir,
+      agentDir: state.agentDir(),
+      sessionFile: state.statePath("fixture-session.jsonl"),
+      config: { plugins: { allow: [] } },
+      ...(messageToolFinalByDefault === undefined ? {} : { messageToolFinalByDefault }),
+      ...(contextTokenBudget === undefined ? {} : { contextTokenBudget }),
+    });
+    await withSurface(attempt, new AbortController(), run, tool);
+  });
+}
+
+function execute(surface: AgentsApiToolSurface, name: string, call_id: string, args: object) {
+  return surface.execute({
+    type: "function_call",
+    turn_id: "fixture-turn",
+    call_id,
+    name,
+    arguments: args,
+  });
+}
+
+async function withSurface(
+  attempt: AgentHarnessAttemptParamsV2,
+  controller: AbortController,
+  run: (
+    surface: AgentsApiToolSurface,
+    construction: Mock<
+      NonNullable<AgentHarnessAttemptParamsV2["hostCapabilities"]["createToolSurfaceAsync"]>
+    >,
+  ) => Promise<void>,
+  tool?: AnyAgentTool,
+) {
+  const host = await createAgentHarnessHostCapabilitiesForTest({ attempt, pluginId: "agentsapi" });
+  const create = host.capabilities.createToolSurfaceAsync;
+  assert(create);
+  const construction = vi.fn(tool ? async () => host.capabilities.bindToolSurface([tool]) : create);
+  const cleanups: Array<(reason: string) => Promise<void>> = [];
+  try {
+    await run(
+      await buildAgentsApiToolSurface(
+        {
+          ...attempt,
+          hostCapabilities: { ...host.capabilities, createToolSurfaceAsync: construction },
+        },
+        controller.signal,
+        host.capabilities.assertActive,
+        (cleanup) => cleanups.push(cleanup),
+      ),
+      construction,
+    );
+  } finally {
+    if (!tool) {
+      controller.abort();
+    }
+    for (const cleanup of cleanups.toReversed()) {
+      await cleanup(tool ? "Tool result test complete" : "Permission test complete");
+    }
+    host.close();
+  }
+}
+
+it.each([
+  ["guarded", true],
+  ["read-only", true],
+  ["guarded", false],
+  ["full", true],
+] as const)("applies %s PDF access with recordedRoot=%s", async (permissionMode, recordedRoot) => {
   await withOpenClawTestState({ label: "agentsapi-gateway-permissions" }, async (state) => {
-    const sessionRoot = options.recordedRoot
+    const sessionRoot = recordedRoot
       ? path.join(state.workspaceDir, "project")
       : state.workspaceDir;
     const cwd = path.join(sessionRoot, "src");
@@ -103,19 +345,17 @@ async function withToolSurface(
     await fs.mkdir(path.dirname(outside), { recursive: true });
     await fs.writeFile(inside, "synthetic inside document");
     await fs.writeFile(outside, "synthetic outside document");
-    const authStorage = AuthStorage.inMemory();
     const controller = new AbortController();
-    const attempt = {
-      agentId: "main",
+    const attempt = createAttemptParams({
       sessionId: "permission-session",
       sessionKey: "agent:main:permission-session",
       sessionFile: state.statePath("permission-session.jsonl"),
       workspaceDir: state.workspaceDir,
       cwd,
-      ...(options.recordedRoot ? { sessionRoot } : {}),
+      ...(recordedRoot ? { sessionRoot } : {}),
       agentDir: state.agentDir(),
-      permissionMode: options.permissionMode,
-      execOverrides: options.execOverrides,
+      permissionMode,
+      execOverrides: permissionMode === "full" ? { security: "deny", ask: "always" } : undefined,
       config: {
         plugins: { allow: [] },
         agents: {
@@ -127,57 +367,32 @@ async function withToolSurface(
         tools: { allow: ["pdf"], fs: { workspaceOnly: false } },
         skills: { load: { watch: false } },
       },
-      runId: `permission-${options.permissionMode}`,
+      runId: `permission-${permissionMode}`,
       prompt: "Inspect the synthetic document.",
       timeoutMs: 5_000,
       abortSignal: controller.signal,
-      provider: "openai",
-      modelId: "fixture-model",
-      model: createModel(),
-      authStorage,
-      modelRegistry: ModelRegistry.inMemory(authStorage),
-      authProfileStore: { version: 1 as const, profiles: {} },
-      thinkLevel: "off" as const,
-    };
-    const host = await createAgentHarnessHostCapabilitiesForTest({
-      attempt,
-      pluginId: "agentsapi",
     });
-    const create = host.capabilities.createToolSurfaceAsync;
-    assert(create);
-    const construction = vi.fn(create);
-    const params: AgentHarnessAttemptParamsV2 = {
-      ...attempt,
-      hostCapabilities: { ...host.capabilities, createToolSurfaceAsync: construction },
-    };
-    const cleanups: Array<(reason: string) => Promise<void>> = [];
-    try {
-      const surface = await buildAgentsApiToolSurface(
-        params,
-        controller.signal,
-        host.capabilities.assertActive,
-        (cleanup) => cleanups.push(cleanup),
-      );
+    await withSurface(attempt, controller, async (surface, construction) => {
       expect(surface.declarations.map((tool) => tool.name)).toContain("pdf");
-      await run({
-        inside,
-        outside,
-        construction,
-        execute: (id, file) =>
-          surface.execute({
-            type: "function_call",
-            turn_id: "permission-turn",
-            call_id: id,
-            name: "pdf",
-            arguments: { pdf: file },
-          }),
-      });
-    } finally {
-      controller.abort();
-      for (const cleanup of cleanups.toReversed()) {
-        await cleanup("Permission test complete");
+      const read = (id: string, file: string) => execute(surface, "pdf", id, { pdf: file });
+      // Plain text reaches the real file read but stops before parsing or inference.
+      if (permissionMode !== "full") {
+        expect(await read("inside", inside)).toMatchObject({
+          success: false,
+          error: expect.stringContaining("Expected PDF but got"),
+        });
       }
-      host.close();
-    }
+      expect(await read("outside", outside)).toMatchObject({
+        success: false,
+        error: expect.stringContaining(
+          permissionMode === "full" ? "Expected PDF but got" : "not under an allowed directory",
+        ),
+      });
+      if (permissionMode === "full") {
+        expect(construction.mock.calls[0]?.[0]).toMatchObject({
+          exec: { security: "deny", ask: "always" },
+        });
+      }
+    });
   });
-}
+});

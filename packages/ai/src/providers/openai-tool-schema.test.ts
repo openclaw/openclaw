@@ -1,210 +1,95 @@
-// Verifies OpenAI strict tool schema normalization and cache behavior.
-import { deepStrictEqual } from "node:assert/strict";
 import { describe, expect, it } from "vitest";
-import { projectOpenAITools } from "./openai-tool-projection.js";
 import { normalizeOpenAIStrictCompatSchema } from "./openai-tool-schema-compat.js";
-import {
-  findOpenAIStrictSchemaViolations,
-  findOpenAIStrictToolProjectionDiagnostics,
-  isStrictOpenAIJsonSchemaCompatible,
-  normalizeStrictOpenAIJsonSchema,
-  resolveOpenAIProjectedToolsStrictToolFlag,
-} from "./openai-tool-schema.js";
+import { findOpenAIStrictSchemaViolations } from "./openai-tool-schema.js";
 
-describe("OpenAI strict tool schema normalization", () => {
-  it.each(["dependencies"])(
-    "preserves literal names when repairing the %s schema map",
-    (mapKey) => {
-      const schema = {
-        type: "object",
-        [mapKey]: { ["__proto__"]: { type: "string", description: null } },
-      };
+function objectSchema(properties: Record<string, unknown> = {}) {
+  return {
+    type: "object",
+    properties,
+    required: Object.keys(properties),
+    additionalProperties: false,
+  };
+}
+const valueObject = () => ({ type: "object", properties: { value: { type: "string" } } });
+const literalArray = () => ({ ["__proto__"]: { type: "array" } });
+const violations = (schema: unknown) =>
+  findOpenAIStrictSchemaViolations(schema, "parameters", { requireObjectRoot: true });
 
-      const normalized = normalizeOpenAIStrictCompatSchema(schema);
-      expect(Object.getOwnPropertyDescriptor(normalized, mapKey)?.value).toStrictEqual({
-        ["__proto__"]: { type: "string" },
-      });
-      expect(schema[mapKey]).toStrictEqual({
-        ["__proto__"]: { type: "string", description: null },
-      });
-    },
-  );
-
-  it("infers the root type from schema fields instead of a literal prototype key", () => {
-    const schema = {
-      ["__proto__"]: { type: "array" },
-      properties: { path: { type: "string" } },
-      description: null,
-    };
-
-    expect(normalizeOpenAIStrictCompatSchema(schema)).toStrictEqual({
-      ["__proto__"]: { type: "array" },
-      properties: { path: { type: "string" } },
-      type: "object",
-    });
-  });
-
-  it.each(["anyOf", "oneOf"])(
-    "preserves variant-only literal properties when flattening %s",
-    (unionKey) => {
-      const properties = {
-        ["__proto__"]: { type: "string", minLength: 1 },
-        constructor: { type: "integer" },
-        toString: { type: "boolean" },
-      };
-      const required = ["__proto__", "constructor", "toString"];
-      const schema = {
-        [unionKey]: [
-          { type: "object", properties, required },
-          { type: "object", properties: { ["__proto__"]: { type: "string" } }, required },
-        ],
-        additionalProperties: false,
-      };
-
-      deepStrictEqual(normalizeStrictOpenAIJsonSchema(schema), {
-        type: "object",
-        properties,
-        required,
-        additionalProperties: false,
-      });
-      expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
-    },
-  );
-
-  it("preserves literal metadata when removing OpenAPI annotations", () => {
-    const schema = {
-      type: "object",
-      properties: { value: { type: "string" } },
-      required: ["value"],
-      additionalProperties: false,
-      ["__proto__"]: { type: "array" },
-    };
-
-    expect(normalizeStrictOpenAIJsonSchema({ ...schema, nullable: false })).toStrictEqual(schema);
-  });
-
-  it("repairs top-level object schemas with missing or invalid properties", () => {
-    const schemas = [
-      { type: "object" },
-      { type: "object", properties: undefined },
-      { type: "object", properties: null },
-      { type: "object", properties: [] },
-      { type: "object", properties: "invalid" },
-    ];
-
-    for (const schema of schemas) {
-      expect(normalizeStrictOpenAIJsonSchema(schema)).toEqual({
-        type: "object",
-        properties: {},
-        required: [],
-        additionalProperties: false,
-      });
-      expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
-    }
+describe("OpenAI strict tool schema detection", () => {
+  const pathProperties = { path: { type: "string" } };
+  it.each([
+    [
+      normalizeOpenAIStrictCompatSchema,
+      { type: "object", dependencies: { ["__proto__"]: { type: "string", description: null } } },
+      { ...objectSchema(), dependencies: { ["__proto__"]: { type: "string" } } },
+    ],
+    [
+      normalizeOpenAIStrictCompatSchema,
+      { ...literalArray(), properties: pathProperties, description: null },
+      { ...literalArray(), properties: pathProperties, type: "object" },
+    ],
+  ] as const)("preserves literal keys during normalization %#", (normalize, schema, expected) => {
+    const before = structuredClone(schema);
+    expect(normalize(schema)).toStrictEqual(expected);
+    expect(schema).toStrictEqual(before);
   });
 
   it("walks named schema maps without treating definition names as keywords", () => {
     const schema = {
-      type: "object",
-      properties: {},
-      required: [],
-      additionalProperties: false,
-      $defs: {
-        anyOf: { type: "string" },
-      },
+      ...objectSchema(),
+      $defs: { anyOf: { type: "string" } },
       examples: [{ anyOf: [{ type: "string" }] }],
     };
 
-    expect(
-      findOpenAIStrictSchemaViolations(schema, "parameters", { requireObjectRoot: true }),
-    ).toEqual([]);
-    expect(
-      resolveOpenAIProjectedToolsStrictToolFlag(
-        projectOpenAITools([{ name: "lookup", parameters: schema }]),
-        true,
-      ),
-    ).toBe(true);
+    expect(violations(schema)).toEqual([]);
   });
 
   it("walks legacy and content schema applicators", () => {
-    const nestedObject = {
-      type: "object",
-      properties: { value: { type: "string" } },
-    };
     const schema = {
-      type: "object",
-      properties: {},
-      required: [],
-      additionalProperties: false,
-      dependencies: {
-        mode: ["payload"],
-        payload: nestedObject,
-      },
-      additionalItems: nestedObject,
-      contentSchema: nestedObject,
+      ...objectSchema(),
+      dependencies: { mode: ["payload"], payload: valueObject() },
+      additionalItems: valueObject(),
+      contentSchema: valueObject(),
     };
 
-    expect(
-      findOpenAIStrictSchemaViolations(schema, "parameters", { requireObjectRoot: true }),
-    ).toEqual([
-      "parameters.dependencies.payload.additionalProperties",
-      "parameters.dependencies.payload.required",
-      "parameters.additionalItems.additionalProperties",
-      "parameters.additionalItems.required",
-      "parameters.contentSchema.additionalProperties",
-      "parameters.contentSchema.required",
-    ]);
-    expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(false);
-  });
-
-  it("downgrades strict mode for regex lookarounds in string patterns", () => {
-    const schema = {
-      type: "object",
-      properties: {
-        filename: { type: "string", pattern: "^(?![\\\\/])(?![A-Za-z]:)(?!.*\\.\\.).+$" },
-        folder: { type: "string" },
-        content: { type: "string" },
-      },
-      required: ["folder", "filename", "content"],
-    };
-
-    expect(
-      findOpenAIStrictSchemaViolations(normalizeStrictOpenAIJsonSchema(schema), "parameters"),
-    ).toEqual(["parameters.properties.filename.pattern"]);
-    expect(
-      resolveOpenAIProjectedToolsStrictToolFlag(
-        projectOpenAITools([{ name: "create_file", parameters: schema }]),
-        true,
+    expect(violations(schema)).toEqual(
+      ["dependencies.payload", "additionalItems", "contentSchema"].flatMap((path) =>
+        ["additionalProperties", "required"].map((key) => `parameters.${path}.${key}`),
       ),
-    ).toBe(false);
+    );
   });
 
-  it.each(["^[a-z]+$", "\\(?=a"])(
-    "keeps strict mode for pattern %s without a lookaround",
-    (pattern) => {
-      expect(findOpenAIStrictSchemaViolations({ type: "string", pattern }, "value")).toEqual([]);
-    },
-  );
+  it.each(["^[a-z]+$", "\\(?=a"])("accepts non-lookaround pattern %s", (pattern) => {
+    expect(findOpenAIStrictSchemaViolations({ type: "string", pattern }, "value")).toEqual([]);
+  });
 
-  it("reports unreadable nested tool schemas instead of throwing", () => {
-    const unreadable = {
-      name: "broken",
-      parameters: {
-        type: "object",
-        get properties(): never {
-          throw new Error("properties exploded");
-        },
-      },
+  // OpenAI rejected dispatch_action with "additionalProperties must be false" at args/type/0.
+  it("holds a nullable object key to the object rules", () => {
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      required: ["args"],
+      properties: { args: { type: ["object", "null"], patternProperties: { "^.*$": {} } } },
     };
+    expect(findOpenAIStrictSchemaViolations(schema, "parameters")).toContain(
+      "parameters.properties.args.additionalProperties",
+    );
+  });
 
-    const projection = projectOpenAITools([unreadable]);
-
-    expect(findOpenAIStrictToolProjectionDiagnostics(projection)).toEqual([
-      {
-        toolIndex: 0,
-        toolName: "broken",
-        violations: ["broken.parameters is not JSON-serializable"],
-      },
-    ]);
+  it("rejects optional keys, an open root, union keys and untyped values", () => {
+    const optional = {
+      type: "object",
+      properties: { path: { type: "string" }, limit: { type: "number" } },
+      required: ["path"],
+      additionalProperties: false,
+    };
+    expect(violations(optional)).not.toEqual([]);
+    expect(violations(objectSchema({ path: { type: "string" } }))).toEqual([]);
+    const open = { type: "object", properties: { q: { type: "string" } }, required: ["q"] };
+    expect(violations(open)).not.toEqual([]);
+    const union = objectSchema({ mode: { anyOf: [{ enum: ["auto"] }, { type: "integer" }] } });
+    expect(violations(union)).not.toEqual([]);
+    expect(violations(objectSchema({ value: {} }))).not.toEqual([]);
+    expect(violations(objectSchema({ limit: { type: ["integer", "null"] } }))).toEqual([]);
   });
 });

@@ -278,7 +278,7 @@ struct ChatSessionSidebarQueryTests {
         vm.updateSidebarQuery(search: " needle ")
         #expect(owner.query.search == "needle")
         #expect(owner.rows.map(\.sessionId) == ["thread"])
-        #expect(owner.queryTask == nil)
+        #expect(owner.refreshCoordinator.task == nil)
         #expect(await transport.requests.isEmpty)
         vm.updateSidebarQuery(showAutomation: true, showSystem: true)
         #expect(!owner.query.excludeCron && !owner.query.excludeSystem)
@@ -292,7 +292,7 @@ struct ChatSessionSidebarQueryTests {
             (OpenClawChatSidebarAgentScope.selected, Optional("main"), 100), (.all, nil, 100),
         ] {
             vm.updateSidebarQuery(agentScope: scope)
-            let task = try #require(owner.queryTask)
+            let task = try #require(owner.refreshCoordinator.task)
             await task.value
             let request = try #require(await transport.requests.last)
             #expect(request.params["agentId"]?.value as? String == agentID)
@@ -323,7 +323,7 @@ struct ChatSessionSidebarQueryTests {
         }
         vm.healthOK = true
         vm.refreshSidebarData()
-        let firstTask = try #require(owner.queryTask)
+        let firstTask = try #require(owner.refreshCoordinator.task)
         let firstRequest = await transport.next()
         await transport.replyAutomatically(with: self.page([self.row("second")]))
         for _ in 0..<10 {
@@ -332,7 +332,7 @@ struct ChatSessionSidebarQueryTests {
         }
         firstRequest.reply.resume(returning: self.page([self.row("first")]))
         await firstTask.value
-        await owner.queryTask?.value
+        await owner.refreshCoordinator.task?.value
         #expect(published.contains(["first"]))
         #expect(owner.rows.map(\.sessionId) == ["second"])
         #expect(await transport.requests.count == 2)

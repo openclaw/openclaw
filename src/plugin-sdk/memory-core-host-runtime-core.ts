@@ -11,12 +11,8 @@ export {
 } from "../agents/tools/common.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export { resolveCronStyleNow } from "../agents/current-time.js";
-export {
-  listAgentIds,
-  resolveConfiguredAgentId,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
-export { resolveSessionAgentIds } from "./agent-scope-runtime.js";
+export { resolveConfiguredAgentId, resolveDefaultAgentId } from "../agents/agent-scope.js";
+export { listAgentIds, resolveSessionAgentIds } from "./agent-scope-runtime.js";
 export {
   resolveMemorySearchConfig,
   resolveMemorySearchIndexConfig,
@@ -43,6 +39,7 @@ export type {
 export {
   listMemoryArtifactProvenance,
   readMemoryArtifactProvenance,
+  recordCuratedMemoryArtifactRewrite,
 } from "../memory/memory-artifact-provenance.js";
 export type {
   MemoryArtifactOriginClass,

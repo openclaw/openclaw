@@ -2,6 +2,7 @@ import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
   type PreparedAgentRunAdmission,
@@ -22,6 +23,7 @@ import {
   readGatewayLocalUserIngressFacts,
   type GatewayLocalUserIngress,
 } from "../../gateway/local-user-ingress.js";
+import { admitUnlinkedChannelRequester } from "../requester-profile.js";
 
 /** Adapt reply ingress to admission; authenticated Gateway attach has no plugin-channel decision. */
 function consumeChannelRunAdmission(
@@ -29,22 +31,22 @@ function consumeChannelRunAdmission(
   gatewayLocalUserIngress?: GatewayLocalUserIngress,
 ): {
   ingressState: ExecutionIdentityAdmissionFacts["ingress"]["state"];
-  facts: Pick<ExecutionIdentityAdmissionFacts, "invoker" | "assurance"> &
+  facts: Pick<ExecutionIdentityAdmissionFacts, "invoker" | "assurance" | "representedSubject"> &
     Partial<Pick<ExecutionIdentityAdmissionFacts, "ingress">>;
   onAdmitted: (context: AdmittedRunContext) => void;
 } {
   const gatewayFacts = readGatewayLocalUserIngressFacts(gatewayLocalUserIngress);
   if (gatewayFacts) {
-    return Object.freeze({
+    return {
       ingressState: gatewayFacts.ingress.state,
       facts: gatewayFacts,
       onAdmitted: () => undefined,
-    });
+    };
   }
   const admission = consumeChannelAdmissionEvidence(evidence);
-  return Object.freeze({
+  return {
     ingressState: admission.ingressState,
-    facts: Object.freeze({
+    facts: {
       invoker: admission.invoker,
       ...(admission.assuranceRef
         ? {
@@ -59,7 +61,7 @@ function consumeChannelRunAdmission(
             ],
           }
         : {}),
-    }),
+    },
     onAdmitted: (context) => {
       const token = context.executionIdentityToken;
       if (token && admission.decisionCoverage && admission.identifierAuthentication) {
@@ -73,7 +75,7 @@ function consumeChannelRunAdmission(
         });
       }
     },
-  });
+  };
 }
 
 /** Defer evidence consumption until the selected runtime actually admits the run. */
@@ -99,14 +101,19 @@ export function prepareChannelRunAdmission(params: {
       return;
     }
     params.assertSourceCurrent?.();
-    params.operatorAuthority?.assertCurrent();
   };
   return Object.freeze({
     operationalRunInstance,
     assertSourceCurrent,
+    assertCurrent: () => {
+      if (closed) {
+        throw new Error("prepared execution context is already closed");
+      }
+      prepared?.assertCurrent();
+    },
     readOperatorAuthority: () => {
       if (closed && params.operatorAuthority) {
-        throw new Error("prepared operator authority is no longer active");
+        throw new Error("prepared execution context is already closed");
       }
       assertSourceCurrent();
       return params.operatorAuthority;
@@ -153,6 +160,20 @@ export function prepareChannelRunAdmission(params: {
                 );
               } catch (error) {
                 throw new ChannelRunAuthorizationError(error);
+              }
+            }
+            if (
+              params.sourceContext &&
+              params.ingressKind === "channel" &&
+              !params.operatorAuthority
+            ) {
+              const assertRunCurrent = resolveAdmittedRunActiveAssertion(context);
+              if (assertRunCurrent) {
+                admitUnlinkedChannelRequester(
+                  params.sourceContext,
+                  context.operationalRunInstance,
+                  assertRunCurrent,
+                );
               }
             }
             params.onAdmitted?.(context);

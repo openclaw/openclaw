@@ -1,3 +1,4 @@
+import type { StableChannelIngressIdentityParams } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   createChannelIngressError,
@@ -12,7 +13,10 @@ import {
   formatErrorMessage,
 } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeNullableString as nonEmptyString,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getZalouserRuntime } from "./runtime.js";
 import type { ZaloInboundMessage } from "./types.js";
 import { normalizeZaloInboundMessage } from "./zalo-js.js";
@@ -23,13 +27,26 @@ const ZALOUSER_INGRESS_PAYLOAD_VERSION = 1;
 const ZALOUSER_INGRESS_POLL_INTERVAL_MS = 1_000;
 const ZALOUSER_INGRESS_APPEND_RETRY_DELAYS_MS = [0, 100, 300] as const;
 
+export function normalizeZalouserAllowEntry(entry: string): string {
+  return entry.replace(/^(zalouser|zlu):/i, "").trim();
+}
+
+export const zalouserIngressIdentity = {
+  // uidFrom arrives on the authenticated Zalo session, not from message content.
+  authentication: "verified",
+  normalize: (value: string) =>
+    normalizeOptionalLowercaseString(normalizeZalouserAllowEntry(value)) || null,
+  sensitivity: "pii",
+  entryIdPrefix: "zalouser-entry",
+} satisfies StableChannelIngressIdentityParams;
+
 type ZalouserIngressPayload = {
   version: 1;
   receivedAt: number;
   rawMessage: string;
 };
 
-export type ZalouserIngressLifecycle = ReturnType<
+type ZalouserIngressLifecycle = ReturnType<
   typeof bindIngressLifecycleToReplyOptions
 >["turnAdoptionLifecycle"];
 
@@ -118,7 +135,6 @@ export function createZalouserIngressMonitor(options: {
   runtime: Pick<RuntimeEnv, "error" | "log">;
   dispatch: ZalouserIngressDispatch;
   queue?: ChannelIngressQueue<ZalouserIngressPayload>;
-  pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
 }) {
   const monitor = createChannelIngressMonitor<
@@ -170,7 +186,7 @@ export function createZalouserIngressMonitor(options: {
         bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
       );
     },
-    pollIntervalMs: options.pollIntervalMs ?? ZALOUSER_INGRESS_POLL_INTERVAL_MS,
+    pollIntervalMs: ZALOUSER_INGRESS_POLL_INTERVAL_MS,
     retention: {
       completedMaxEntries: 1_000,
       failedMaxEntries: 1_000,

@@ -6,7 +6,7 @@ import type {
   OpenKeyedStoreOptions,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -39,8 +39,8 @@ afterEach(async () => {
 
 function runtime(env: NodeJS.ProcessEnv) {
   const value = createPluginRuntimeMock();
-  value.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests<T>("reef", { ...options, env });
+  value.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) =>
+    createPluginStateKeyedStoreV2ForTests<T>("reef", { ...options, env }, { assertCurrent() {} });
   value.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
     createPluginStateSyncKeyedStoreForTests<T>("reef", { ...options, env });
   return value;

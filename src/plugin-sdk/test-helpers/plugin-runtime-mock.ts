@@ -29,6 +29,7 @@ import {
 import { createPluginModelRuntimeMock } from "./plugin-runtime-model-mock.js";
 import { createPluginSessionRuntimeMock } from "./plugin-runtime-session-mock.js";
 import { createPluginStateRuntimeMock } from "./plugin-runtime-state-mock.js";
+import { createPluginSystemRuntimeMock } from "./plugin-runtime-system-mock.js";
 import { createPluginThreadBindingsRuntimeMock } from "./plugin-runtime-thread-bindings-mock.js";
 
 type InboundDebounceFlush = ReturnType<InboundDebounceCreateParams<unknown>["onFlush"]>;
@@ -92,6 +93,7 @@ export function createPluginRuntimeMediaMock(
     saveMediaBuffer: vi
       .fn<PluginRuntimeMediaMock["saveMediaBuffer"]>()
       .mockResolvedValue(TEST_SAVED_MEDIA),
+    deleteMediaBuffer: vi.fn<PluginRuntimeMediaMock["deleteMediaBuffer"]>().mockResolvedValue(),
     ...overrides,
   };
 }
@@ -175,6 +177,13 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       ensureAgentWorkspace: vi
         .fn<PluginRuntime["agent"]["ensureAgentWorkspace"]>()
         .mockResolvedValue({ dir: "/tmp/workspace" }),
+      explainToolAvailability: vi.fn<PluginRuntime["agent"]["explainToolAvailability"]>(
+        async ({ agentId, toolNames }) => ({
+          agentId: agentId ?? "main",
+          sandbox: { mode: "off", source: "agents.defaults.sandbox.mode" },
+          tools: toolNames.map((name) => ({ name, available: true })),
+        }),
+      ),
       session: {
         resolveStorePath: vi.fn<PluginRuntime["agent"]["session"]["resolveStorePath"]>(
           () => "/tmp/agent-sessions.json",
@@ -256,6 +265,9 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
         listSessionEntriesAsync: vi
           .fn<PluginRuntime["agent"]["session"]["listSessionEntriesAsync"]>()
           .mockResolvedValue([]),
+        withSessionEntriesAsync: vi.fn(async (_params, consume) =>
+          consume([]),
+        ) as PluginRuntime["agent"]["session"]["withSessionEntriesAsync"],
         createSessionEntryListReader: vi
           .fn<PluginRuntime["agent"]["session"]["createSessionEntryListReader"]>()
           .mockResolvedValue(async () => ({ entries: [], assertCurrent: () => {} })),
@@ -276,19 +288,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
           .mockResolvedValue(null),
       },
     },
-    system: {
-      enqueueSystemEvent: vi.fn<PluginRuntime["system"]["enqueueSystemEvent"]>(),
-      requestHeartbeat: vi.fn<PluginRuntime["system"]["requestHeartbeat"]>(),
-      requestHeartbeatNow: vi.fn<PluginRuntime["system"]["requestHeartbeatNow"]>(),
-      runHeartbeatOnce: vi.fn<PluginRuntime["system"]["runHeartbeatOnce"]>(async () => ({
-        status: "ran" as const,
-        durationMs: 0,
-      })),
-      runCommandWithTimeout: vi.fn<PluginRuntime["system"]["runCommandWithTimeout"]>(),
-      formatNativeDependencyHint: vi.fn<PluginRuntime["system"]["formatNativeDependencyHint"]>(
-        () => "",
-      ),
-    },
+    system: createPluginSystemRuntimeMock(),
     media: {
       loadWebMedia: vi.fn<PluginRuntime["media"]["loadWebMedia"]>(),
       detectMime: vi.fn<PluginRuntime["media"]["detectMime"]>(),
@@ -553,6 +553,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     subagent: {
       complete: vi.fn(),
       forkSession: vi.fn(),
+      runForkedTurn: vi.fn(),
       run: vi.fn(),
       waitForRun: vi.fn(),
       getSessionMessages: vi.fn(),
@@ -571,6 +572,10 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       create: vi.fn(),
       release: vi.fn(),
       removeIfLossless: vi.fn(),
+    },
+    skills: {
+      readUsage: vi.fn(async () => ({ tracked: false, usage: new Map() })),
+      recordUsed: vi.fn(() => false),
     },
     nodes: {
       list: vi.fn(async () => ({ nodes: [] })),

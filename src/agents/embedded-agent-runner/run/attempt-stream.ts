@@ -1,3 +1,4 @@
+import { measuredRequestPressure } from "@openclaw/ai/internal/openai";
 import type { FirstStreamEventInternalOptions } from "@openclaw/ai/internal/runtime";
 import type { CompactionReplayRejection } from "@openclaw/ai/transports";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
@@ -12,10 +13,11 @@ import {
 } from "../../admitted-run-context.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../embedded-agent-helpers/turns.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
+import type { FixedRequestTokenPressure } from "../../sessions/context-token-pressure.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
-import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
@@ -37,7 +39,6 @@ import {
 } from "./attempt-sessions-yield.js";
 import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
 import {
-  sanitizeOpenAIResponsesReplayForStream,
   sanitizeReplayToolCallIdsForStream,
   shouldApplyReplayToolCallIdSanitizer,
   wrapStreamFnSanitizeMalformedToolCalls,
@@ -96,7 +97,7 @@ function wrapStreamFnWithCompactionReplayRepair(
       await joinRepairs();
       throw error;
     }
-    return wrapStreamObjectSettlement(response, joinRepairs);
+    return wrapStreamObjectSettlement(response, joinRepairs, () => repairs.length > 0);
   };
 }
 
@@ -106,6 +107,8 @@ export function installEmbeddedAttemptStreamGuards(
     onRejectedProviderReplayRepaired: () => void;
     onIdleTimeout: (error: Error) => void;
     diagnosticOwner: DiagnosticEmbeddedRunOwner;
+    /** Whether stopping at this request boundary leaves the tool batch continuable. */
+    isToolBoundarySafe: () => boolean;
   },
 ) {
   const { attempt } = input;
@@ -194,25 +197,37 @@ export function installEmbeddedAttemptStreamGuards(
     }
   };
   const providerPromptState = getProviderPromptState(attempt.runId);
+  // Turn facts attribute a prefix change to the kind of turn that caused it.
+  const turnFacts =
+    `trigger=${attempt.trigger ?? "unknown"} ` +
+    `provenance=${attempt.inputProvenance?.kind ?? "none"}${attempt.inputProvenance?.sourceTool ? `:${attempt.inputProvenance.sourceTool}` : ""} ` +
+    `replyMode=${attempt.sourceReplyDeliveryMode ?? "unset"} ` +
+    `senderIsOwner=${attempt.senderIsOwner ?? "unset"}`;
   const cacheObserver = createPromptCacheRequestObserver(
     {
+      turn: turnFacts,
       sessionId: attempt.sessionId,
       sessionKey: attempt.sessionKey,
       promptCacheKey: attempt.promptCacheKey,
       cacheRetention: effectivePromptCacheRetention,
       streamStrategy,
       transport: effectiveAgentTransport,
+      getSystemPromptSeries: () => input.prepared.sessionRuntime.state.systemPromptSeries,
     },
     (observation, snapshot) => {
       if (observation.broke) {
         const changes =
           observation.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
           observation.dropCause;
-        log.warn(
+        log[observation.dropCause?.startsWith("unattributed:") ? "debug" : "warn"](
           `[prompt-cache] cache read dropped ${observation.previousCacheRead} -> ${observation.cacheRead} ` +
             `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}; ` +
             `requestGapMs=${observation.requestGapMs ?? "unknown"} promptTokens=${observation.promptTokens ?? "unknown"} ` +
             `responseId=${observation.responseId ?? "unknown"} sessionId=${attempt.sessionId} ` +
+            `${turnFacts} ` +
+            (observation.systemPromptSeries
+              ? `systemPromptSeries=${observation.systemPromptSeries} `
+              : "") +
             `providerPrefix=${observation.providerPrefix ?? "unavailable"} ` +
             `requests=${JSON.stringify(observation.requests)}`,
         );
@@ -266,9 +281,10 @@ export function installEmbeddedAttemptStreamGuards(
     toolCallIdMode: transcriptPolicy.toolCallIdMode,
     isOpenAIResponsesApi,
   };
+  let normalizeToolCallIds: Parameters<typeof wrapStreamFnWithMessageTransform>[1] | undefined;
   if (shouldApplyReplayToolCallIdSanitizer(replayToolCallIdSanitizerDecision)) {
     const mode = replayToolCallIdSanitizerDecision.toolCallIdMode;
-    installStreamWrapper(wrapStreamFnWithMessageTransform, (messages, model) =>
+    normalizeToolCallIds = (messages, model) =>
       sanitizeReplayToolCallIdsForStream({
         messages,
         mode,
@@ -281,8 +297,7 @@ export function installEmbeddedAttemptStreamGuards(
           policy: transcriptPolicy,
         }),
         repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
-      }),
-    );
+      });
   }
 
   // Responses and eligible Anthropic routes replay provider checkpoints; a rejected one must be
@@ -291,9 +306,6 @@ export function installEmbeddedAttemptStreamGuards(
     installStreamWrapper(wrapStreamFnWithCompactionReplayRepair, (checkpoint) =>
       repairRejectedReplay("compaction", checkpoint),
     );
-  }
-  if (isOpenAIResponsesApi) {
-    installStreamWrapper(wrapStreamFnWithMessageTransform, sanitizeOpenAIResponsesReplayForStream);
   }
 
   const innerStreamFn = session.agent.streamFn;
@@ -317,7 +329,7 @@ export function installEmbeddedAttemptStreamGuards(
   installStreamWrapper(wrapStreamFnPromoteStandaloneTextToolCalls, liveAllowedToolNames);
   installStreamWrapper(wrapStreamFnTrimToolCallNames, liveAllowedToolNames, {
     // Unknown-tool recovery stays active even when configurable loop detection is disabled.
-    unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
+    unknownToolThreshold: 10,
   });
 
   if (
@@ -361,7 +373,7 @@ export function installEmbeddedAttemptStreamGuards(
   const timeoutOptions = {
     cfg: attempt.config,
     runTimeoutMs: resolvedRunTimeoutMs,
-    modelRequestTimeoutMs: (attempt.model as { requestTimeoutMs?: number }).requestTimeoutMs,
+    modelRequestTimeoutMs: attempt.model.requestTimeoutMs,
     model: { baseUrl: attempt.model.baseUrl, id: attempt.modelId, provider: attempt.provider },
   };
   const idleTimeoutMs = resolveLlmIdleTimeoutMs({ ...timeoutOptions, trigger: attempt.trigger });
@@ -373,9 +385,11 @@ export function installEmbeddedAttemptStreamGuards(
       streamWithIdleTimeout,
       idleTimeoutMs > 0 ? idleTimeoutMs : firstEventTimeoutMs,
       (error) => callbacks.onIdleTimeout(error),
-      idleTimeoutMs > 0
-        ? { runId: attempt.runId }
-        : { runId: attempt.runId, scope: "creation-only" },
+      {
+        runId: attempt.runId,
+        watchdogAttempt: callbacks.diagnosticOwner.watchdogAttempt,
+        scope: idleTimeoutMs > 0 ? "creation-and-gaps" : "creation-only",
+      },
     );
   }
   if (firstEventTimeoutMs > 0) {
@@ -397,6 +411,7 @@ export function installEmbeddedAttemptStreamGuards(
     config: attempt.config,
     runId: attempt.runId,
     agentId: sessionAgentId,
+    priority: resolveModelCallUrgency(attempt) === "foreground" ? "interactive" : "background",
     ...(attempt.sessionKey && { sessionKey: attempt.sessionKey }),
     ...(attempt.sessionId && { sessionId: attempt.sessionId }),
     provider: attempt.provider,
@@ -419,7 +434,10 @@ export function installEmbeddedAttemptStreamGuards(
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
     nextCallId: () => `${attempt.runId}:model:${(modelCallSequence.value += 1)}`,
     ownerGeneration: callbacks.diagnosticOwner.generation,
+    diagnosticOwner: callbacks.diagnosticOwner,
+    onAgentEvent: attempt.onAgentEvent,
     onSucceeded: contextGuards.recordCacheTouch,
+    onOutputDelta: attempt.onMemoryFlushModelProgress,
     onTerminal: () => {
       modelResponseTerminal = true;
     },
@@ -445,10 +463,16 @@ export function installEmbeddedAttemptStreamGuards(
     suppressPluginHooks: attempt.operation === "settled-tool-finalization",
   });
   return {
+    normalizeToolCallIds,
     /** Returns the measured predecessor that may anchor this exact request's pressure. */
-    onModelRequest: (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
+    onModelRequest: async (
+      ...args: [
+        ...Parameters<typeof cacheObserver.onModelRequest>,
+        fixedTokenPressure?: FixedRequestTokenPressure,
+      ]
+    ) => {
       const previous = cacheObserver.getContextUsage();
-      const request = cacheObserver.onModelRequest(...args);
+      const request = await cacheObserver.onModelRequest(args[0], args[1], args[2]);
       const previousRequest =
         previous?.requestIndex === request.requestIndex - 1 &&
         request.prefixUnchanged &&
@@ -457,8 +481,20 @@ export function installEmbeddedAttemptStreamGuards(
         )
           ? previous
           : undefined;
-      if (input.activeContextEngine?.info.ownsCompaction || request.requestIndex > 1) {
-        contextGuards.checkMidTurnPrecheck({ context: args[1], previousRequest });
+      const pressure = await contextGuards.checkMidTurnPrecheck({
+        context: args[1],
+        fixedTokenPressure: args[3],
+        previousRequest,
+        measuredContextTokens:
+          previous?.requestIndex === request.requestIndex - 1 ? previous.contextTokens : undefined,
+        boundarySafe: callbacks.isToolBoundarySafe,
+      });
+      if (args[0].api === "openai-completions") {
+        measuredRequestPressure.set(
+          args[0],
+          args[1],
+          previousRequest && previousRequest.contextTokens > 0 ? pressure : undefined,
+        );
       }
       return previousRequest;
     },

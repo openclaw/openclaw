@@ -5,7 +5,6 @@ import {
   hasRuntimeCredentialAvailable,
   markConfiguredUnavailableCredentialStatusesAvailable,
   normalizeRuntimeChannelAccountSnapshots,
-  resolveChannelAccountStatusRows,
 } from "./read-model.js";
 
 describe("channel status read model", () => {
@@ -24,45 +23,17 @@ describe("channel status read model", () => {
     expect(accounts.has("slack")).toBe(false);
   });
 
-  it("merges runtime-only accounts and prefers gateway snapshots", async () => {
-    const rows = await resolveChannelAccountStatusRows({
-      localAccountIds: ["default"],
-      runtimeAccounts: [
-        { accountId: "default", configured: true, tokenSource: "env" },
-        { accountId: "ops", configured: true, tokenSource: "env" },
-      ],
-      resolveLocalSnapshot: async (accountId) => ({
-        accountId,
-        configured: false,
-        tokenSource: "none",
-      }),
-    });
-
-    expect(rows).toStrictEqual([
-      {
-        accountId: "default",
-        source: "gateway",
-        snapshot: { accountId: "default", configured: true, tokenSource: "env" },
-      },
-      {
-        accountId: "ops",
-        source: "gateway",
-        snapshot: { accountId: "ops", configured: true, tokenSource: "env" },
-      },
-    ]);
-  });
-
-  it("finds legacy live accounts by id/name fallback for status summaries", () => {
+  it("finds legacy live accounts by name fallback for status summaries", () => {
     const liveAccounts = getRuntimeChannelAccounts({
       payload: {
         channelAccounts: {
-          discord: [{ name: "default", running: true }],
+          discord: [{ name: "legacy-account", running: true }],
         },
       },
       channelId: "discord",
     });
 
-    expect(hasRuntimeCredentialAvailable({ liveAccounts, accountId: "default" })).toBe(true);
+    expect(hasRuntimeCredentialAvailable({ liveAccounts, accountId: "legacy-account" })).toBe(true);
   });
 
   it("does not treat unavailable runtime credentials as available", () => {

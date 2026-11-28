@@ -1,3 +1,6 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { recordBackupOutcomeBestEffort } from "./backup-shared.js";
 
@@ -15,21 +18,18 @@ export async function backupRecordCommand(
   opts: BackupRecordOptions,
 ): Promise<void> {
   if (opts.status !== "ok" && opts.status !== "failed") {
-    throw new Error("--status must be ok or failed.");
+    throwExpectedCliError("--status must be ok or failed.");
   }
   const target = opts.target?.trim();
   if (!target) {
-    throw new Error("Missing required --target label.");
+    throwExpectedCliError("Missing required --target label.");
   }
-  const bytes = opts.bytes === undefined ? undefined : Number(opts.bytes);
-  if (
-    bytes !== undefined &&
-    (!Number.isSafeInteger(bytes) || bytes < 0 || String(opts.bytes).trim() === "")
-  ) {
-    throw new Error("--bytes must be a nonnegative integer.");
+  const bytes = opts.bytes === undefined ? undefined : parseStrictNonNegativeInteger(opts.bytes);
+  if (bytes === undefined && opts.bytes !== undefined) {
+    throwExpectedCliError("--bytes must be a nonnegative integer.");
   }
-  const outcome = {
-    kind: "external" as const,
+  const outcome: Parameters<typeof recordBackupOutcomeBestEffort>[1] = {
+    kind: "external",
     archivePath: target,
     target,
     status: opts.status,
@@ -40,6 +40,6 @@ export async function backupRecordCommand(
   if (opts.json) {
     writeRuntimeJson(runtime, outcome);
   } else {
-    runtime.log(`External backup: ${target} (${opts.status})`);
+    runtime.log(terminalText`External backup: ${target} (${opts.status})`);
   }
 }

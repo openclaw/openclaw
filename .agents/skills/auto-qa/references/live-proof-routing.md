@@ -68,3 +68,13 @@ local session neither proves success nor permits a competing run on the lease.
 For untrusted contributor source, follow the root trust-isolation rules;
 never expose a hydrated Testbox, user credentials, or local repository tooling
 to unreviewed code.
+
+## Required product evidence
+
+- For an OpenAI claim, first verify the gateway's real configured `agents.list`, selected existing agent, canonical `openai/<model>`, and a real model response. Prove both the delivered model-final path and the separately persisted transcript or session; one passing route does not establish the other. An unavailable provider, unknown agent, mock, skipped test, fallback response, or an earlier head is not live proof.
+- Inspect the actual rendered Control UI and screenshot contents. Reject a page or screenshot containing `GatewayRequestError`, `UNKNOWN_AGENT`, or an equivalent gateway error even when browser navigation, the HTTP status, or the image-capture command succeeds.
+- Derive QA scenario IDs from current `qa/scenarios/index.yaml` and scenario YAML. Inspect the actual harness and generated summary. Count a scenario only when the requested run reports a nonzero total, zero failures, and the exact model, provider mode, and relevant behavior.
+- Cap an individual live subagent-fanout scenario at 780 seconds after startup. Separately verify setup, timeout recovery, the original parent, child completion, and the final nonzero scenario result.
+- For installed-package or plugin bugs, run the real current packaging and user install/update path. Unit tests alone do not prove a built distribution, npm package, Docker image, or Git plugin.
+- Test iOS, Android, and macOS only where the current host, device, simulator, signing identity, emulator, or hosted proof actually supports the operation. Record unavailable prerequisites rather than manufacturing mobile or UI coverage.
+- Bound stress and soak tests, record the immutable gateway source, owned PID, exact start time, successful/failed/skipped counts, and actual completion time. Preserve an already-running campaign-owned soak at its original source while auditing newer main snapshots; never restart it or describe a ten-hour soak as complete before ten actual elapsed hours.

@@ -22,10 +22,7 @@ import {
   type UserProfileAvatarInspection,
 } from "./user-profiles-avatar.types.js";
 import { UserProfileNotFoundError } from "./user-profiles-schema.js";
-import {
-  fetchTailscaleAvatar,
-  type TailscaleAvatarFetchOptions,
-} from "./user-profiles-tailscale-avatar.js";
+import { fetchTailscaleAvatar } from "./user-profiles-tailscale-avatar.js";
 import type { ProfileDisplayRow, UserProfile } from "./user-profiles.types.js";
 
 type PreparedProfileAvatar = UserProfileAvatarInspection & {
@@ -37,10 +34,18 @@ type ProfileAvatarReader = { inspect(): Promise<PreparedProfileAvatar> };
 const pendingReaders = new Map<string, ProfileAvatarReader>();
 const avatarReads = pLimit(4);
 const avatarCache = new Map<ProfileDisplayRow, PreparedProfileAvatar>();
+const avatarBytes = new WeakMap<
+  PreparedProfileAvatar,
+  { promise: Promise<UserProfileAvatar | undefined>; settled: boolean }
+>();
 let avatarCacheBytes = 0;
 
 function evictAvatar(revision: ProfileDisplayRow, avatar: PreparedProfileAvatar) {
   avatarCache.delete(revision);
+  // Retained currency checks/readers must not pin payloads beyond cache eviction.
+  if (avatarBytes.get(avatar)?.settled) {
+    avatarBytes.delete(avatar);
+  }
   avatarCacheBytes -= avatar.avatar?.byteLength ?? 0;
 }
 
@@ -188,7 +193,6 @@ export function createProfileAvatarReader(
         captured.admission.assertCurrent();
         return row ? row === residentRevision() : revision === readUserProfileVersion();
       };
-      let bytes: Promise<UserProfileAvatar | undefined> | undefined;
       const readBytes = async () => {
         const { profile, avatar } = snapshot;
         if (!profile || !avatar || !isCurrent()) {
@@ -215,32 +219,42 @@ export function createProfileAvatarReader(
         ...snapshot,
         isCurrent,
         loadBytes() {
-          if (!isCurrent()) {
+          if (!isCurrent() || !snapshot.avatar) {
             return Promise.resolve(undefined);
           }
-          return (bytes ??= readBytes().then(
-            (avatar) => {
-              if (!avatar && row && avatarCache.get(row) === prepared) {
-                evictAvatar(row, prepared);
-              }
-              if (!avatar || !row || avatarCache.get(row) !== prepared) {
-                bytes = undefined;
-              }
-              return avatar;
-            },
-            (error: unknown) => {
-              bytes = undefined;
-              throw error;
-            },
-          ));
+          const cached = avatarBytes.get(prepared);
+          if (cached) {
+            return cached.promise;
+          }
+          const bytes = {
+            promise: readBytes().then(
+              (avatar) => {
+                bytes.settled = true;
+                if (!avatar && row && avatarCache.get(row) === prepared) {
+                  evictAvatar(row, prepared);
+                }
+                if (!avatar || !row || avatarCache.get(row) !== prepared) {
+                  avatarBytes.delete(prepared);
+                }
+                return avatar;
+              },
+              (error: unknown) => {
+                avatarBytes.delete(prepared);
+                throw error;
+              },
+            ),
+            settled: false,
+          };
+          avatarBytes.set(prepared, bytes);
+          return bytes.promise;
         },
       };
       if (
         row &&
-        snapshot.avatar &&
         snapshot.profile?.id === row.id &&
-        snapshot.avatar.sha256 === row.avatar_sha256 &&
-        snapshot.avatar.mime === row.avatar_mime
+        (snapshot.avatar
+          ? snapshot.avatar.sha256 === row.avatar_sha256 && snapshot.avatar.mime === row.avatar_mime
+          : row.has_avatar === 0)
       ) {
         cacheAvatar(row, prepared);
       }
@@ -262,7 +276,6 @@ export async function adoptTailscaleProfileAvatar(
   profileId: string,
   profilePic: string | undefined,
   options: OpenClawStateDatabaseOptions = {},
-  fetchOptions: TailscaleAvatarFetchOptions = {},
 ) {
   const first = captureOpenClawStateWorkerContext({
     ...options,
@@ -278,7 +291,7 @@ export async function adoptTailscaleProfileAvatar(
   if (before.hasAvatar || !profilePic) {
     return initial;
   }
-  const avatar = await fetchTailscaleAvatar(profilePic, fetchOptions);
+  const avatar = await fetchTailscaleAvatar(profilePic);
   // Fetching does not retain database admission; close/reopen preserves the selected path.
   const context = captureOpenClawStateWorkerContext({
     ...options,

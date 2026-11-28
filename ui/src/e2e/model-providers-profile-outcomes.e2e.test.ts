@@ -1,14 +1,115 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildAuthHealthSummary } from "../../../src/agents/auth-health.js";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { layoutBox, polledAttribute } from "./chat-presentation.test-support.ts";
+import { configSnapshot, pageRunner } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expandProvider } from "./model-providers.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI model provider profile outcomes" });
 const NOW = Date.now();
+const withPage = pageRunner(suite, {
+  locale: "en-US",
+  serviceWorkers: "block",
+  viewport: { height: 1000, width: 1280 },
+});
+const text = (root: Locator, selector: string) => root.locator(selector).textContent();
+const statusText = async (card: Locator) =>
+  (await text(card, ".model-providers__head .settings-status"))?.trim();
+const config = { ...configSnapshot({}, "accounts"), sourceConfig: {} };
+
+const usage = (usedPercent: number, amount?: number, plan?: string) => ({
+  updatedAt: NOW,
+  providers: [
+    {
+      provider: "openai",
+      displayName: "OpenAI",
+      plan,
+      windows: [
+        {
+          label: "5h",
+          usedPercent: Math.max(0, usedPercent - 20),
+          resetAt: NOW + 3 * 3_600_000,
+        },
+        { label: "Week", usedPercent, resetAt: NOW + 5 * 86_400_000 },
+      ],
+      billing:
+        amount === undefined
+          ? [{ type: "balance", amount: 9, unit: "USD" }]
+          : [{ type: "balance", amount, unit: "credits" }],
+    },
+  ],
+});
+
+const subscriptions = [
+  { name: "personal", used: 100, credits: 0 },
+  { name: "work+team", used: 0, credits: 0, plan: "Plus" },
+  { name: "studio", used: 35, credits: 12.75, plan: "Business" },
+  { name: "backup", used: 72, plan: "Pro" },
+];
+
+async function openAccounts(page: Page, withUsage: boolean, deferUsage = false) {
+  const accounts = (withUsage ? subscriptions : subscriptions.slice(0, 2)).map(({ name }) => ({
+    profileId: `openai:${name}`,
+    email: `${name}@example.com`,
+    type: "oauth",
+    status: "ok",
+  }));
+  const ids = accounts.map((account) => account.profileId);
+  const provider = {
+    provider: "openai",
+    displayName: "OpenAI",
+    status: "ok",
+    profiles: accounts,
+    profileOrder: ids,
+  };
+  const gateway = await installMockGateway(page, {
+    deferredRequests: deferUsage
+      ? ids.map((profileId) => ({ method: "codex.accountUsage", match: { profileId } }))
+      : [],
+    featureMethods: [
+      ...defaultControlUiFeatureMethods,
+      "models.authOrderSet",
+      ...(withUsage ? ["codex.accountUsage"] : []),
+    ],
+    models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }],
+    methodResponses: {
+      "config.get": config,
+      "models.authStatus": { ts: NOW, providers: [provider] },
+      "usage.status": withUsage ? usage(100) : { updatedAt: NOW, providers: [] },
+      "codex.accountUsage": {
+        cases: subscriptions.map(({ name, used, credits, plan }) => ({
+          match: { profileId: `openai:${name}` },
+          response: usage(used, credits, plan),
+        })),
+      },
+    },
+  });
+  if (deferUsage) {
+    await page.addInitScript(() => {
+      const firstFrame = () => {
+        const grid = document.querySelector(".model-providers__usage-bars");
+        if (!grid?.getBoundingClientRect().height) {
+          requestAnimationFrame(firstFrame);
+          return;
+        }
+        performance.mark("first-account-grid", {
+          detail: grid.querySelectorAll(".model-providers__usage-track").length,
+        });
+      };
+      requestAnimationFrame(firstFrame);
+    });
+  }
+  await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+  return { gateway, card: await expandProvider(page, "openai"), ids, provider, accounts };
+}
 
 suite.define(() => {
   it("explains saved account health separately from catalog availability", async () => {
@@ -27,348 +128,351 @@ suite.define(() => {
       },
     });
     const xai = health.providers[0]!;
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { height: 1000, width: 1280 } },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          methodResponses: {
-            "config.get": {
-              config: {},
-              sourceConfig: {},
-              hash: "accounts",
-              raw: "{}",
-              valid: true,
-              issues: [],
-            },
-            "models.authStatus": {
-              ts: NOW,
-              providers: [
-                {
-                  ...xai,
-                  displayName: "xAI",
-                  profiles: xai.profiles.map((profile) =>
-                    Object.assign({}, profile, { source: "saved" }),
-                  ),
-                },
-                {
-                  provider: "minimax",
-                  displayName: "MiniMax",
-                  status: "ok",
-                  profiles: [
-                    {
-                      profileId: "minimax:opaque-account",
-                      type: "oauth",
-                      status: "ok",
-                      source: "saved",
-                      displayName: "Work account",
-                    },
-                  ],
-                },
-              ],
-            },
-            "models.list": {
-              models: [{ id: "test-model", name: "Test model", provider: "xai", available: true }],
-              providerOutcomes: [
-                { provider: "xai", status: "ready" },
-                { provider: "minimax", status: "unavailable" },
-              ],
-            },
-            "usage.status": { updatedAt: NOW, providers: [] },
-            "sessions.usage": { aggregates: { byProvider: [] } },
+    await withPage(async ({ page }) => {
+      await installMockGateway(page, {
+        methodResponses: {
+          "config.get": config,
+          "models.authStatus": {
+            ts: NOW,
+            providers: [
+              {
+                ...xai,
+                displayName: "xAI",
+                profiles: xai.profiles.map((profile) =>
+                  Object.assign({}, profile, { source: "saved" }),
+                ),
+              },
+              {
+                provider: "minimax",
+                displayName: "MiniMax",
+                status: "ok",
+                profiles: [
+                  {
+                    profileId: "minimax:opaque-account",
+                    type: "oauth",
+                    status: "ok",
+                    source: "saved",
+                    displayName: "Work account",
+                  },
+                ],
+              },
+            ],
           },
-        });
-        await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-        const xaiCard = page.locator('[data-provider-id="xai"]');
-        const minimaxCard = page.locator('[data-provider-id="minimax"]');
-        await xaiCard.waitFor();
-        await minimaxCard.waitFor();
-        await xaiCard.screenshot({ path: path.join(suite.artifactDir, "account-status.png") });
-        await minimaxCard.screenshot({ path: path.join(suite.artifactDir, "catalog-status.png") });
+          "models.list": {
+            models: [{ id: "test-model", name: "Test model", provider: "xai", available: true }],
+            providerOutcomes: [
+              { provider: "xai", status: "ready" },
+              { provider: "minimax", status: "unavailable" },
+            ],
+          },
+          "usage.status": { updatedAt: NOW, providers: [] },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+      const xaiCard = await expandProvider(page, "xai");
+      const minimaxCard = await expandProvider(page, "minimax");
+      await expect.poll(() => statusText(xaiCard)).toBe("Ready");
+      expect(await text(xaiCard, ".model-providers__profile-copy strong")).toBe(
+        "Signed-in account",
+      );
+      // The row already reads Ready, so the healthy account does not repeat it.
+      expect((await text(xaiCard, ".model-providers__profile-status"))?.trim()).toBe("");
+      expect(await statusText(minimaxCard)).toContain("Models unavailable");
+      expect(await text(minimaxCard, ".model-providers__profile-copy strong")).toBe("Work account");
+      // The profile id stays reachable as the identity's title, not a separate disclosure.
+      expect(await xaiCard.locator("details").count()).toBe(0);
+      expect(
+        await xaiCard.locator(".model-providers__profile-copy strong").getAttribute("title"),
+      ).toBe("xai:opaque-account");
+    });
+  });
+
+  it.each([400, 820, 1280])(
+    "keeps account columns in place as independent readings arrive at %ipx",
+    async (width) => {
+      await withPage(async ({ page }) => {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        const { card, gateway, ids } = await openAccounts(page, true, true);
+        const method = "codex.accountUsage";
+        const grid = card.locator(".model-providers__usage-bars");
+        const names = grid.locator(".model-providers__segment-name");
+        const credits = grid.getByRole("group", { name: "Credits" });
+        const capture = async (stage: string) => {
+          if (width !== 1280) {
+            return;
+          }
+          await page.mouse.move(0, 0);
+          const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [grid], {
+            elements: [card],
+            animations: "disabled",
+            scrollTo: card,
+          });
+          await writeFile(path.join(suite.artifactDir, stage + ".png"), frame.elements[0]!.png);
+          await writeFile(path.join(suite.artifactDir, stage + "-context.png"), frame.png);
+        };
+        await expect.poll(() => names.count()).toBe(4);
+        // The first painted comparison includes names, two reserved quota tracks, and credits.
         await expect
-          .poll(async () =>
-            (
-              await xaiCard.locator(".model-providers__head .settings-status").textContent()
-            )?.trim(),
+          .poll(() =>
+            page.evaluate(
+              () =>
+                (
+                  performance.getEntriesByName("first-account-grid")[0] as
+                    | PerformanceMark
+                    | undefined
+                )?.detail,
+            ),
           )
-          .toBe("Ready");
-        expect(await xaiCard.locator(".model-providers__profile-copy strong").textContent()).toBe(
-          "Account 1",
-        );
-        expect(await xaiCard.locator(".model-providers__profile-status").textContent()).toContain(
-          "Signed in",
-        );
+          .toBe(4);
+        const positions = () =>
+          grid.locator(".model-providers__usage-track > *").evaluateAll((cells) => {
+            const origin = cells[0]!.getBoundingClientRect();
+            return cells.map((cell) => {
+              const box = cell.getBoundingClientRect();
+              return [box.x - origin.x, box.y - origin.y, box.width, box.height];
+            });
+          });
+        const cold = await positions();
+        const pending = grid.getByRole("status").filter({ hasText: "Loading" });
+        expect(await pending.count()).toBe(1);
         expect(
-          await minimaxCard.locator(".model-providers__head .settings-status").textContent(),
-        ).toContain("Models unavailable");
+          await grid.locator(".model-providers__usage-segment[aria-hidden=true]").count(),
+        ).toBe(8);
+        expect(await credits.locator(".model-providers__credit > :empty").count()).toBe(4);
+        expect(await credits.ariaSnapshot()).not.toContain("@example.com");
+        expect(await grid.locator("[data-account-segment]").count()).toBe(0);
+        await capture("cold");
+        const match = (index: number) => ({ match: { profileId: ids[index] } });
+        await gateway.resolveDeferred(method, undefined, match(2));
+        const weekly = grid.getByRole("group", { name: "Week", exact: true });
+        await expect.poll(() => weekly.locator("strong").allTextContents()).toEqual(["65%"]);
         expect(
-          await minimaxCard.locator(".model-providers__profile-copy strong").textContent(),
-        ).toBe("Work account");
-        const details = xaiCard.locator("details");
-        expect(await details.locator("summary").textContent()).toBe("Details");
-        expect(await details.getAttribute("open")).toBeNull();
-        await details.locator("summary").click();
-        expect(await details.textContent()).toContain("xai:opaque-account");
-      },
-    );
+          await weekly.locator(".model-providers__usage-segment[aria-hidden=true]").count(),
+        ).toBe(3);
+        expect(await weekly.getByRole("button").getAttribute("aria-label")).toContain("Resets");
+        expect(await positions()).toEqual(cold);
+        expect(await pending.count()).toBe(1);
+        await capture("partial");
+        await gateway.resolveDeferred(method, undefined, match(0));
+        await gateway.resolveDeferred(method, undefined, match(1));
+        await gateway.rejectDeferred(method, { message: "Account offline" }, match(3));
+        await grid
+          .getByRole("status")
+          .filter({ hasText: "backup@example.com: Account offline" })
+          .waitFor();
+        expect(await positions()).toEqual(cold);
+        for (const profileId of ids) {
+          await gateway.deferNext(method, { profileId });
+        }
+        await page.getByRole("button", { name: "Refresh", exact: true }).click();
+        await expect.poll(async () => (await gateway.getRequests(method)).length).toBe(8);
+        expect(await weekly.locator("strong").allTextContents()).toEqual([
+          "0%",
+          "100%",
+          "65%",
+          "—",
+        ]);
+        expect(await positions()).toEqual(cold);
+        expect(await credits.locator("[aria-hidden=true]").allTextContents()).toEqual([
+          "0",
+          "0",
+          "12.75",
+          "—",
+        ]);
+        await capture("refresh");
+        for (const [index, id] of ids.entries()) {
+          await gateway.rejectDeferred(method, { message: "Unavailable " + id }, match(index));
+        }
+        await expect
+          .poll(() => grid.getByRole("status").filter({ hasText: "Refresh to try again" }).count())
+          .toBe(4);
+        expect(await grid.locator("[data-account-segment]").count()).toBe(0);
+        expect(await pending.count()).toBe(0);
+        await page.getByRole("button", { name: "Refresh", exact: true }).click();
+        await expect
+          .poll(() => weekly.locator("strong").allTextContents())
+          .toEqual(["0%", "100%", "65%", "28%"]);
+        expect(await grid.getByRole("status").count()).toBe(0);
+      });
+    },
+  );
+
+  it("shows independent Codex allowances without reporting an exhausted provider", async () => {
+    await withPage(async ({ page }) => {
+      const { card, gateway, accounts, ids, provider } = await openAccounts(page, true);
+      const weekly = card.getByRole("group", { name: "Week", exact: true });
+      const segments = weekly.locator("[data-account-segment]");
+      const order = () =>
+        segments.evaluateAll((els) => els.map((el) => el.getAttribute("data-account-segment")));
+      await expect.poll(order).toEqual(ids);
+      const emailButton = (email: string) =>
+        card.getByRole("button", { name: `Account details: ${email}@example.com` });
+      const workName = emailButton("work+team");
+      await polledAttribute(workName, "title").toBe("work+team@example.com · Plus");
+      expect(await emailButton("personal").getAttribute("title")).toBe("personal@example.com");
+      for (const [index, account] of accounts.entries()) {
+        expect(await segments.nth(index).getAttribute("aria-label")).toContain(
+          account.email + " · Week · " + (100 - subscriptions[index]!.used) + "% left",
+        );
+      }
+      expect(await card.locator(".provider-row__summary").textContent()).not.toContain("0% left");
+      const shortWindow = card.getByRole("group", { name: "5h", exact: true });
+      expect(await shortWindow.getByRole("button").count()).toBe(4);
+      const work = weekly.getByRole("button", { name: /work\+team@example/ });
+      await work.click();
+      expect(
+        await card.getByRole("status").filter({ hasText: "work+team@example.com" }).textContent(),
+      ).toContain("100% left");
+      await work.click();
+      await gateway.deferNext("models.authOrderSet");
+      const src = await layoutBox(work);
+      const dest = await layoutBox(segments.first());
+      await page.mouse.move(src.x + src.width / 2, src.y + src.height / 2);
+      await page.mouse.down();
+      // Stop between slots: the grabbed header and both allowance cells follow the
+      // pointer, while the original first column moves into the vacated slot.
+      const distance = (src.x - dest.x) * 0.72;
+      const midX = src.x + src.width / 2 - distance;
+      const midY = src.y + src.height / 2;
+      const firstColumn = card.locator(".model-providers__usage-track > :first-child");
+      const secondColumn = card.locator(".model-providers__usage-track > :nth-child(2)");
+      const positions = (column: Locator) =>
+        column.evaluateAll((cells) => cells.map((cell) => cell.getBoundingClientRect().x));
+      await page.mouse.move(midX, midY, { steps: 8 });
+      const columnAt = (x: number) => Array.from({ length: 4 }, () => expect.closeTo(x, 0));
+      await expect.poll(() => positions(secondColumn)).toEqual(columnAt(src.x - distance));
+      await expect.poll(() => positions(firstColumn)).toEqual(columnAt(src.x));
+      expect(await order()).toEqual(ids);
+      const neighborTransition = () =>
+        firstColumn.last().evaluate((cell) => getComputedStyle(cell).transitionDuration);
+      expect(await neighborTransition()).not.toBe("0s");
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      expect(await neighborTransition()).toBe("0s");
+      await page.emulateMedia({ reducedMotion: "no-preference" });
+      await page.keyboard.press("Escape");
+      await page.mouse.up();
+      await expect.poll(() => positions(secondColumn)).toEqual(columnAt(src.x));
+      expect(await gateway.getRequests("models.authOrderSet")).toHaveLength(0);
+      // Move the emulated mouse away before switching to touch input.
+      await page.mouse.move(0, 0);
+      const touch = await page.context().newCDPSession(page);
+      await touch.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+      const finishX = dest.x + dest.width / 2;
+      const point = { x: src.x + src.width / 2, y: midY, id: 1 };
+      await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+      await touch.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ ...point, x: finishX }],
+      });
+      expect(await gateway.getRequests("models.authOrderSet")).toHaveLength(0);
+      await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await touch.detach();
+      const preferred = [ids[1], ids[0], ...ids.slice(2)];
+      expect((await gateway.waitForRequest("models.authOrderSet")).params).toEqual({
+        provider: "openai",
+        agentId: "main",
+        profileIds: preferred,
+      });
+      await expect.poll(order).toEqual(preferred);
+      expect(await workName.getAttribute("aria-description")).toBe("Plus");
+      expect(await card.locator('[data-account-segment][aria-pressed="true"]').count()).toBe(0);
+      // Reordering the display must not duplicate reads before the normal post-save refresh.
+      expect(await gateway.getRequests("codex.accountUsage")).toHaveLength(4);
+      const saved = { ...provider, profileOrder: preferred, profileOrderStored: true };
+      await gateway.setMethodResponse("models.authStatus", { ts: NOW, providers: [saved] });
+      await gateway.resolveDeferred("models.authOrderSet", {
+        provider: "openai",
+        profileIds: preferred,
+      });
+      await card.getByRole("button", { name: "Clear custom order" }).waitFor();
+      await work.focus();
+      await work.press("ArrowRight");
+      await expect
+        .poll(async () => (await gateway.getRequests("models.authOrderSet")).at(-1)?.params)
+        .toEqual({ provider: "openai", agentId: "main", profileIds: ids });
+      await page.setViewportSize({ width: 400, height: 840 });
+      // The shell changes its sidebar geometry on resize; assert the settled mobile layout.
+      await expect
+        .poll(() =>
+          segments.evaluateAll((nodes) => {
+            const boxes = nodes.map((node) => node.getBoundingClientRect());
+            return {
+              rows: new Set(boxes.map((box) => box.top)).size,
+              fits: boxes.every((box) => box.left >= 0 && box.right <= 400),
+            };
+          }),
+        )
+        .toEqual({ rows: 1, fits: true });
+      const credits = card.getByRole("group", { name: "Credits" });
+      expect(
+        await credits.locator(".model-providers__credit > span:nth-child(2)").allTextContents(),
+      ).toEqual(["0", "0", "12.75", "—"]);
+      expect(await card.locator("[data-profile-id]").count()).toBe(0);
+      await emailButton("backup").click();
+      const backup = card.locator('[data-profile-id="openai:backup"]');
+      expect(await backup.getByText("Pro", { exact: true }).isVisible()).toBe(true);
+      expect(await backup.getByText("$9.00", { exact: true }).isVisible()).toBe(true);
+      expect(await backup.getByRole("button", { name: /^Reorder / }).count()).toBe(0);
+    });
+  });
+
+  it("moves the focused allowance left in a right-to-left chart", async () => {
+    await withPage(async ({ page }) => {
+      const { card, gateway, ids } = await openAccounts(page, true);
+      await card.evaluate((el) => el.setAttribute("dir", "rtl"));
+      const weekly = card.getByRole("group", { name: "Week", exact: true });
+      const work = weekly.getByRole("button", { name: /work\+team@example/ });
+      const studio = weekly.getByRole("button", { name: /studio@example/ });
+      const slot = (await layoutBox(studio)).x;
+      expect(slot).toBeLessThan((await layoutBox(work)).x);
+      await gateway.deferNext("models.authOrderSet");
+      await work.focus();
+      await page.keyboard.press("ArrowLeft");
+      const profileIds = [ids[0], ids[2], ids[1], ids[3]];
+      expect((await gateway.waitForRequest("models.authOrderSet")).params).toEqual({
+        agentId: "main",
+        provider: "openai",
+        profileIds,
+      });
+      await expect.poll(async () => (await layoutBox(work)).x).toBeCloseTo(slot, 0);
+      expect(await work.evaluate((el) => el === document.activeElement)).toBe(true);
+      await gateway.resolveDeferred("models.authOrderSet", { provider: "openai", profileIds });
+    });
   });
 
   it("lifts an account, makes room during dragging, and saves its dropped priority", async () => {
-    const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 1000, width: 1280 },
-        ...(recordVisuals
-          ? { recordVideo: { dir: suite.artifactDir, size: { height: 1000, width: 1280 } } }
-          : {}),
-      },
-      async ({ page }) => {
-        const provider = {
-          provider: "openai",
-          displayName: "OpenAI",
-          status: "ok",
-          profiles: [
-            { profileId: "openai:alex", type: "oauth", status: "ok", email: "alex@example.com" },
-            { profileId: "openai:blair", type: "oauth", status: "ok", email: "blair@example.com" },
-          ],
-          profileOrder: ["openai:alex", "openai:blair"],
-        };
-        const gateway = await installMockGateway(page, {
-          featureMethods: [...defaultControlUiFeatureMethods, "models.authOrderSet"],
-          models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }],
-          methodResponses: {
-            "config.get": {
-              config: {},
-              sourceConfig: {},
-              hash: "roster",
-              raw: "{}",
-              valid: true,
-              issues: [],
-            },
-            "models.authStatus": { ts: NOW, providers: [provider] },
-            "usage.status": { updatedAt: NOW, providers: [] },
-            "sessions.usage": { aggregates: { byProvider: [] } },
-          },
-        });
-        await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-        const card = page.locator('[data-provider-id="openai"]');
-        const alex = card.locator('[data-profile-id="openai:alex"]');
-        const blair = card.locator('[data-profile-id="openai:blair"]');
-        const grip = alex.locator(".model-providers__profile-grip");
-        await expect.poll(() => grip.isEnabled()).toBe(true);
-        await grip.scrollIntoViewIfNeeded();
-        const start = await grip.boundingBox();
-        const first = await alex.boundingBox();
-        const second = await blair.boundingBox();
-        if (!start || !first || !second) {
-          throw new Error("Expected both account rows and the drag handle to be visible");
-        }
-        await gateway.deferNext("models.authOrderSet");
-        const x = start.x + start.width / 2;
-        const y = start.y + start.height / 2;
-        await page.mouse.move(x, y);
-        await page.mouse.down();
-        await page.mouse.move(x, y + first.height * 0.75, { steps: 6 });
-        await expect.poll(async () => (await alex.boundingBox())?.y).toBeGreaterThan(first.y);
-        await expect.poll(async () => (await blair.boundingBox())?.y).toBeLessThan(second.y);
-        expect(await gateway.getRequests("models.authOrderSet")).toHaveLength(0);
-        if (recordVisuals) {
-          await page.screenshot({ path: path.join(suite.artifactDir, "account-lifted.png") });
-        }
-        await page.mouse.up();
-        const request = await gateway.waitForRequest("models.authOrderSet");
-        const profileIds = ["openai:blair", "openai:alex"];
-        expect(request.params).toEqual({ agentId: "main", provider: "openai", profileIds });
-        const visibleOrder = () =>
-          card
-            .locator(".model-providers__profile")
-            .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-profile-id")));
-        await expect.poll(visibleOrder).toEqual(profileIds);
-        expect(await card.getByText("Saving", { exact: true }).count()).toBe(0);
-        await gateway.setMethodResponse("models.authStatus", {
-          ts: NOW,
-          providers: [{ ...provider, profileOrder: profileIds, profileOrderStored: true }],
-        });
-        await gateway.resolveDeferred("models.authOrderSet", { provider: "openai", profileIds });
-        await card.getByRole("button", { name: "Clear custom order", exact: true }).waitFor();
-        await expect.poll(visibleOrder).toEqual(profileIds);
-        if (recordVisuals) {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "account-priority-saved.png"),
-          });
-        }
-      },
-    );
-  });
-
-  it.each([
-    {
-      name: "keeps the selected agent ready when a sibling profile is rejected",
-      providerOutcomes: [
-        { provider: "openai", profileId: "openai:rejected", status: "auth-rejected" },
-        { provider: "openai", profileId: "openai:ready", status: "ready" },
-      ],
-      status: "Ready",
-      available: true,
-    },
-    {
-      name: "keeps the selected agent's provider-wide rejection visible",
-      providerOutcomes: [
-        { provider: "openai", status: "auth-rejected" },
-        { provider: "openai", profileId: "openai:ready", status: "ready" },
-      ],
-      status: "Credentials rejected",
-      available: false,
-    },
-  ])("$name", async ({ providerOutcomes, status, available }) => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 1000, width: 1440 },
-      },
-      async ({ page }) => {
-        const config = {
-          auth: {
-            profiles: {
-              "openai:rejected": { provider: "openai" },
-              "openai:ready": { provider: "openai" },
-            },
-          },
-        };
-        const readyModel = {
-          id: "gpt-ready",
-          name: "GPT Ready",
-          provider: "openai",
-          available,
-        };
-        const gateway = await installMockGateway(page, {
-          featureMethods: ["chat.metadata", "chat.startup", "models.probe"],
-          methodResponses: {
-            "agents.list": {
-              defaultId: "main",
-              mainKey: "main",
-              scope: "agent",
-              agents: [
-                { id: "main", identity: { name: "Main" }, name: "Main" },
-                { id: "writer", identity: { name: "Writer" }, name: "Writer" },
-              ],
-            },
-            "config.get": {
-              config,
-              sourceConfig: config,
-              hash: "multi-profile-model-provider",
-              issues: [],
-              raw: JSON.stringify(config),
-              valid: true,
-            },
-            "models.list": {
-              cases: [
-                {
-                  match: { view: "configured", agentId: "writer", refresh: true },
-                  response: {
-                    models: [readyModel],
-                    refreshFailed: providerOutcomes.some((outcome) => outcome.status !== "ready"),
-                    providerOutcomes,
-                  },
-                },
-                {
-                  match: { view: "configured", agentId: "writer" },
-                  response: { models: [readyModel] },
-                },
-                { match: { view: "configured" }, response: { models: [] } },
-              ],
-            },
-            "models.authStatus": {
-              cases: [
-                {
-                  match: { agentId: "writer" },
-                  response: {
-                    ts: NOW,
-                    providers: [
-                      {
-                        provider: "openai",
-                        displayName: "OpenAI",
-                        status: "ok",
-                        apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
-                        profiles: [
-                          { profileId: "openai:rejected", type: "oauth", status: "ok" },
-                          { profileId: "openai:ready", type: "oauth", status: "ok" },
-                        ],
-                      },
-                    ],
-                  },
-                },
-                { response: { ts: NOW, providers: [] } },
-              ],
-            },
-            "usage.status": { updatedAt: NOW, providers: [] },
-            "sessions.usage": { aggregates: { byProvider: [] } },
-          },
-        });
-
-        const response = await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-        expect(response?.status()).toBe(200);
-        await gateway.waitForRequest("agents.list");
-        const pageScope = page.locator(".settings-sidebar__agent openclaw-agent-select");
-        await pageScope.locator(".agent-select__trigger").click();
-        await pageScope
-          .locator(".agent-select__option[data-agent-option]")
-          .filter({ hasText: "Writer" })
-          .click();
-        await expect
-          .poll(async () =>
-            (await gateway.getRequests("models.list")).some((request) => {
-              const params = request.params as Record<string, unknown> | undefined;
-              return (
-                params?.view === "configured" &&
-                params.agentId === "writer" &&
-                params.refresh !== true
-              );
-            }),
-          )
-          .toBe(true);
-
-        const openaiCard = page.locator('[data-provider-id="openai"]');
-        await openaiCard.waitFor();
-        await page.getByRole("button", { name: "Refresh", exact: true }).click();
-        await expect
-          .poll(async () => {
-            const request = (await gateway.getRequests("models.list")).find((candidate) => {
-              const params = candidate.params as Record<string, unknown> | undefined;
-              return (
-                params?.view === "configured" &&
-                params.agentId === "writer" &&
-                params.refresh === true
-              );
-            });
-            return request?.params;
-          })
-          .toEqual({
-            view: "configured",
-            agentId: "writer",
-            refresh: true,
-          });
-        await expect
-          .poll(async () =>
-            (
-              await openaiCard.locator(".model-providers__head .settings-status").textContent()
-            )?.trim(),
-          )
-          .toBe(status);
-        if (!available) {
-          await openaiCard.screenshot({
-            path: path.join(suite.artifactDir, "provider-auth-rejected.png"),
-          });
-        }
-        expect(
-          await openaiCard
-            .locator('[data-profile-id="openai:ready"] .model-providers__profile-status')
-            .textContent(),
-        ).toContain(available ? "Signed in" : "Credentials configured");
-      },
-    );
+    await withPage(async ({ page }) => {
+      const { card, gateway, ids } = await openAccounts(page, false);
+      const firstRow = card.locator(`[data-profile-id="${ids[0]}"]`);
+      const secondRow = card.locator(`[data-profile-id="${ids[1]}"]`);
+      const grip = firstRow.locator(".model-providers__profile-grip");
+      await expect.poll(() => grip.isEnabled()).toBe(true);
+      // The drag ends over the lower account, so keep both rows inside the viewport.
+      await secondRow.scrollIntoViewIfNeeded();
+      const start = await layoutBox(grip);
+      const first = await layoutBox(firstRow);
+      const second = await layoutBox(secondRow);
+      await gateway.deferNext("models.authOrderSet");
+      const x = start.x + start.width / 2;
+      const y = start.y + start.height / 2;
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x, y + first.height * 0.75, { steps: 6 });
+      await expect.poll(async () => (await firstRow.boundingBox())?.y).toBeGreaterThan(first.y);
+      await expect.poll(async () => (await secondRow.boundingBox())?.y).toBeLessThan(second.y);
+      expect(await gateway.getRequests("models.authOrderSet")).toHaveLength(0);
+      await page.mouse.up();
+      const request = await gateway.waitForRequest("models.authOrderSet");
+      const profileIds = [ids[1], ids[0]];
+      expect(request.params).toEqual({ agentId: "main", provider: "openai", profileIds });
+      const visibleOrder = () =>
+        card
+          .locator(".model-providers__profile")
+          .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-profile-id")));
+      await expect.poll(visibleOrder).toEqual(profileIds);
+      expect(await card.getByText("Saving", { exact: true }).count()).toBe(0);
+      await gateway.resolveDeferred("models.authOrderSet", { provider: "openai", profileIds });
+    });
   });
 });

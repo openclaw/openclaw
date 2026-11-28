@@ -1,5 +1,5 @@
 // Verifies provider auth environment trust decisions.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApiKeyCredential } from "./provider-auth-helpers.js";
 
 const getProviderEnvVarsCore = vi.hoisted(() => vi.fn(() => ["WHISPERX_API_KEY"]));
@@ -14,6 +14,10 @@ vi.mock("../secrets/provider-env-vars.js", () => ({
 }));
 
 describe("provider auth env trust", () => {
+  beforeEach(() => {
+    getProviderEnvVarsCore.mockClear();
+  });
+
   it("buildApiKeyCredential excludes untrusted workspace plugin env vars for ref mode", () => {
     const config = { plugins: {} };
 
@@ -22,7 +26,7 @@ describe("provider auth env trust", () => {
       config,
     });
 
-    expect(getProviderEnvVarsCore).toHaveBeenCalledWith("whisperx", {
+    expect(getProviderEnvVarsCore).toHaveBeenCalledExactlyOnceWith("whisperx", {
       config,
       includeUntrustedWorkspacePlugins: false,
     });
@@ -87,7 +91,7 @@ describe("provider auth env trust", () => {
       env: { WHISPERX_API_KEY: "test-secret" },
     });
 
-    expect(getProviderEnvVarsCore).toHaveBeenCalledWith("whisperx", {
+    expect(getProviderEnvVarsCore).toHaveBeenCalledExactlyOnceWith("whisperx", {
       config,
       includeUntrustedWorkspacePlugins: false,
     });

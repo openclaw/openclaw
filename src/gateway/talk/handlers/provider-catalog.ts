@@ -1,13 +1,23 @@
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { canonicalizeRealtimeTranscriptionProviderId } from "../../../realtime-transcription/provider-registry.js";
 import { getVoiceProviderConfig } from "../../../tts/voice-models.js";
+import { resolveTalkFileTranscriptionConfig } from "../file-transcription.js";
 import {
   buildTalkTranscriptionConfig,
-  configuredOrFalseAsync,
   listTalkTranscriptionProviders,
   resolveConfiguredRealtimeTranscriptionProvider,
 } from "../session-config.js";
+
+/** A failed row must not release single-flight custody of its still-running siblings. */
+export async function settleTalkCatalogTasks<const T extends readonly Promise<unknown>[]>(
+  tasks: T,
+): Promise<{ -readonly [P in keyof T]: Awaited<T[P]> }> {
+  try {
+    return await Promise.all(tasks);
+  } finally {
+    await Promise.allSettled(tasks);
+  }
+}
 
 export async function resolveCatalogProviderSelection<T extends { provider: { id: string } }>(
   configuredProvider: string | undefined,
@@ -30,13 +40,16 @@ export async function resolveCatalogProviderSelection<T extends { provider: { id
   }
 }
 
-export async function buildTalkTranscriptionCatalog(config: OpenClawConfig, agentId: string) {
-  const transcriptionConfig = await buildTalkTranscriptionConfig(
-    config,
-    undefined,
-    undefined,
-    agentId,
-  );
+export async function buildTalkTranscriptionCatalog(
+  config: OpenClawConfig,
+  agentId: string,
+  onReadinessError: (error: unknown) => false,
+) {
+  const fileTranscription = resolveTalkFileTranscriptionConfig(config, agentId);
+  const [transcriptionConfig, mediaConfig] = await settleTalkCatalogTasks([
+    buildTalkTranscriptionConfig(config, undefined, undefined, agentId, fileTranscription),
+    fileTranscription,
+  ]);
   const transcriptionSelection = transcriptionConfig.file
     ? { ready: transcriptionConfig.file.ready, activeProvider: transcriptionConfig.file.provider }
     : await resolveCatalogProviderSelection(
@@ -50,7 +63,23 @@ export async function buildTalkTranscriptionCatalog(config: OpenClawConfig, agen
           }),
       );
   const activeTranscriptionProvider = transcriptionSelection.activeProvider;
+  // Voice notes keep using the media-understanding models when Talk does not,
+  // so report their readiness for the picked model's warning.
   return {
+    source: transcriptionConfig.source,
+    ...(!transcriptionConfig.file && mediaConfig
+      ? {
+          mediaProviders: mediaConfig.providers.map(({ id, models, configured }) => ({
+            id,
+            label: id,
+            configured,
+            models,
+            modes: ["transcription"],
+            transports: ["gateway-relay"],
+            brains: ["none"],
+          })),
+        }
+      : {}),
     ready: transcriptionSelection.ready,
     ...(activeTranscriptionProvider ? { activeProvider: activeTranscriptionProvider } : {}),
     providers: transcriptionConfig.file
@@ -61,37 +90,41 @@ export async function buildTalkTranscriptionCatalog(config: OpenClawConfig, agen
           transports: ["gateway-relay"],
           brains: ["none"],
         }))
-      : await Promise.all(
+      : await settleTalkCatalogTasks(
           listTalkTranscriptionProviders(config, [
             transcriptionConfig.provider,
             ...Object.keys(transcriptionConfig.providers),
           ]).map(async (provider) => {
-            const rawConfig = getVoiceProviderConfig({
-              providerConfigs: transcriptionConfig.providers,
-              provider,
-              configuredProviderId:
-                activeTranscriptionProvider &&
-                normalizeOptionalLowercaseString(provider.id) ===
-                  normalizeOptionalLowercaseString(activeTranscriptionProvider)
-                  ? transcriptionConfig.provider
-                  : undefined,
-            });
-            const rawConfigWithModel =
-              transcriptionConfig.model && rawConfig.model === undefined
-                ? { ...rawConfig, model: transcriptionConfig.model }
-                : rawConfig;
-            const providerConfig =
-              provider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
-              rawConfigWithModel;
+            let configured =
+              transcriptionSelection.ready && provider.id === activeTranscriptionProvider;
+            if (!configured) {
+              const rawConfig = getVoiceProviderConfig({
+                providerConfigs: transcriptionConfig.providers,
+                provider,
+                configuredProviderId:
+                  provider.id === activeTranscriptionProvider
+                    ? transcriptionConfig.provider
+                    : undefined,
+              });
+              const rawConfigWithModel =
+                transcriptionConfig.model && rawConfig.model === undefined
+                  ? { ...rawConfig, model: transcriptionConfig.model }
+                  : rawConfig;
+              const providerConfig =
+                provider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
+                rawConfigWithModel;
+              try {
+                configured = await (provider.isConfiguredAsync?.({ cfg: config, providerConfig }) ??
+                  provider.isConfigured?.({ cfg: config, providerConfig }) ??
+                  false);
+              } catch (error) {
+                configured = onReadinessError(error);
+              }
+            }
             const entry: Record<string, unknown> = {
               id: provider.id,
               label: provider.label,
-              configured: await configuredOrFalseAsync(
-                () =>
-                  provider.isConfiguredAsync?.({ cfg: config, providerConfig }) ??
-                  provider.isConfigured?.({ cfg: config, providerConfig }) ??
-                  false,
-              ),
+              configured,
               modes: ["transcription"],
               transports: ["gateway-relay"],
               brains: ["none"],

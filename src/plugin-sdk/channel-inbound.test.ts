@@ -1,6 +1,3 @@
-/**
- * Tests channel inbound context and dispatch helper behavior.
- */
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -25,9 +22,21 @@ import {
   buildChannelTurnContext,
   dispatchChannelInboundReply,
   runChannelInboundEvent,
+  type AssembledInboundReply,
   type BuildChannelInboundEventContextParams,
+  type ChannelInboundEventRunnerParams,
 } from "./channel-inbound.js";
 import * as channelIngressRuntime from "./channel-ingress-runtime.js";
+
+function runInbound(
+  resolveTurn: ChannelInboundEventRunnerParams<string>["adapter"]["resolveTurn"],
+) {
+  return runChannelInboundEvent({
+    channel: "test",
+    raw: "hello",
+    adapter: { ingest: () => ({ id: "msg-1", rawText: "hello" }), resolveTurn },
+  });
+}
 
 function createInboundParams(
   overrides: Partial<BuildChannelInboundEventContextParams> = {},
@@ -37,23 +46,42 @@ function createInboundParams(
     messageId: "msg-1",
     from: "test:user:u1",
     sender: { id: "u1" },
-    conversation: {
-      kind: "group",
-      id: "room-1",
-    },
-    route: {
-      agentId: "main",
-      routeSessionKey: "agent:main:test:group:room-1",
-    },
-    reply: {
-      to: "test:room:room-1",
-    },
-    message: {
-      rawBody: "side chatter",
-      inboundEventKind: "room_event",
-    },
+    conversation: { kind: "group", id: "room-1" },
+    route: { agentId: "main", routeSessionKey: "agent:main:test:group:room-1" },
+    reply: { to: "test:room:room-1" },
+    message: { rawBody: "side chatter", inboundEventKind: "room_event" },
     ...overrides,
   };
+}
+
+function replyFixture() {
+  const callback = vi.fn();
+  const replyOptions = {
+    disableTools: true,
+    internalEventExecution: { onStarted: callback },
+    onReplyOperationOwned: callback,
+  };
+  const dispatch = vi.fn<AssembledInboundReply["dispatchReplyWithBufferedBlockDispatcher"]>(
+    async ({ replyOptions: options }) => {
+      expect(options).not.toHaveProperty("internalEventExecution");
+      expect(options).not.toHaveProperty("onReplyOperationOwned");
+      expect(options?.disableTools).toBe(true);
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    },
+  );
+  const turn = {
+    cfg: {},
+    channel: "test",
+    agentId: "main",
+    routeSessionKey: "agent:main:test:peer",
+    storePath: "unused",
+    ctxPayload: { Body: "hello", CommandAuthorized: false },
+    recordInboundSession: async () => {},
+    delivery: { deliver: async () => {} },
+    replyOptions,
+    dispatchReplyWithBufferedBlockDispatcher: dispatch,
+  } satisfies AssembledInboundReply;
+  return { turn, callback, dispatch, replyOptions };
 }
 
 describe("channel-inbound public helpers", () => {
@@ -69,56 +97,61 @@ describe("channel-inbound public helpers", () => {
     }),
   );
 
-  it.each(["assembled", "adapter"] as const)(
-    "keeps event custody out of %s inbound reply dispatch",
-    async (surface) => {
-      const callback = vi.fn();
-      const replyOptions = {
-        isHeartbeat: true,
-        internalEventExecution: { onStarted: callback },
-        onReplyOperationOwned: callback,
-      };
-      let dispatched = false;
-      const turn = {
-        cfg: {},
-        channel: "test",
-        agentId: "main",
-        routeSessionKey: "agent:main:test:peer",
-        storePath: "unused",
-        ctxPayload: { Body: "hello", CommandAuthorized: false },
-        recordInboundSession: async () => {},
-        delivery: { deliver: async () => {} },
-        replyOptions,
-        dispatchReplyWithBufferedBlockDispatcher: async (
-          params: Parameters<
-            Parameters<
-              typeof dispatchChannelInboundReply
-            >[0]["dispatchReplyWithBufferedBlockDispatcher"]
-          >[0],
-        ) => {
-          dispatched = true;
-          expect(params.replyOptions).not.toHaveProperty("internalEventExecution");
-          expect(params.replyOptions).not.toHaveProperty("onReplyOperationOwned");
-          expect(params.replyOptions?.isHeartbeat).toBe(true);
-          return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-        },
-      };
-      const result =
-        surface === "assembled"
-          ? await dispatchChannelInboundReply(turn)
-          : await runChannelInboundEvent({
-              channel: "test",
-              raw: "hello",
-              adapter: {
-                ingest: () => ({ id: "event-1", rawText: "hello" }),
-                resolveTurn: async () => turn,
-              },
-            });
-      expect(result.dispatched).toBe(true);
-      expect(dispatched).toBe(true);
-      expect(replyOptions.onReplyOperationOwned).toBe(callback);
-    },
-  );
+  it("keeps event custody out of assembled inbound reply dispatch", async () => {
+    const { turn, callback, dispatch, replyOptions } = replyFixture();
+    const result = await dispatchChannelInboundReply(turn);
+    expect(result.dispatched).toBe(true);
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(replyOptions.onReplyOperationOwned).toBe(callback);
+  });
+
+  it("preserves frozen class adapter receivers while stripping event custody", async () => {
+    const calls: string[] = [];
+    const { turn, callback, dispatch, replyOptions } = replyFixture();
+    const dispatchReply = turn.dispatchReplyWithBufferedBlockDispatcher;
+    turn.dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
+      calls.push("dispatch");
+      return dispatchReply(params);
+    });
+    class Adapter {
+      #turn = turn;
+      ingest(raw: string) {
+        expect(this.#turn).toBe(turn);
+        calls.push("ingest");
+        return { id: "event-1", rawText: raw };
+      }
+      classify() {
+        expect(this.#turn).toBe(turn);
+        calls.push("classify");
+        return { kind: "message" as const, canStartAgentTurn: true };
+      }
+      preflight() {
+        expect(this.#turn).toBe(turn);
+        calls.push("preflight");
+        return { kind: "dispatch" as const };
+      }
+      resolveTurn() {
+        calls.push("resolve");
+        return this.#turn;
+      }
+      onFinalize(result: { dispatched: boolean }) {
+        expect(this.#turn).toBe(turn);
+        expect(result.dispatched).toBe(true);
+        calls.push("finalize");
+      }
+    }
+    const result = await runChannelInboundEvent({
+      channel: "test",
+      raw: "hello",
+      adapter: Object.freeze(new Adapter()),
+    });
+    expect(result.dispatched).toBe(true);
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(calls).toEqual(["ingest", "classify", "preflight", "resolve", "dispatch", "finalize"]);
+    expect(replyOptions.internalEventExecution.onStarted).toBe(callback);
+    expect(replyOptions.onReplyOperationOwned).toBe(callback);
+    expect(callback).not.toHaveBeenCalled();
+  });
 
   it("dispatches a published inbound event without waiting for automatic session maintenance", async ({
     signal,
@@ -159,50 +192,43 @@ describe("channel-inbound public helpers", () => {
 
     try {
       const result = await withinTest(
-        runChannelInboundEvent({
+        runInbound(() => ({
           channel: "test",
-          raw: { id: "msg-1", text: "hello" },
-          adapter: {
-            ingest: () => ({ id: "msg-1", rawText: "hello" }),
-            resolveTurn: () => ({
-              channel: "test",
-              routeSessionKey: activeSessionKey,
-              storePath,
-              ctxPayload: {
-                Body: "hello",
-                CommandAuthorized: false,
-                RawBody: "hello",
-                CommandBody: "hello",
-                From: "test:user:peer",
-                To: "test:bot",
-                SessionKey: activeSessionKey,
-                Provider: "test",
-                Surface: "test",
-              },
-              recordInboundSession,
-              afterRecord: () => withinTest(maintenancePrepared.promise, signal),
-              record: {
-                updateLastRoute: {
-                  accountId: "default",
-                  channel: "test",
-                  sessionKey: activeSessionKey,
-                  to: "user:peer",
-                },
-                onRecordError: (error: unknown) => {
-                  throw error;
-                },
-              },
-              runDispatch: async () => {
-                staleEntryAtDispatch = loadSessionEntry({ storePath, sessionKey: staleSessionKey });
-                return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-              },
-              runDispatchLifecycle: {
-                turnAdoptionLifecycle: undefined,
-                onDispatchSkipped: vi.fn(),
-              },
-            }),
+          routeSessionKey: activeSessionKey,
+          storePath,
+          ctxPayload: {
+            Body: "hello",
+            CommandAuthorized: false,
+            RawBody: "hello",
+            CommandBody: "hello",
+            From: "test:user:peer",
+            To: "test:bot",
+            SessionKey: activeSessionKey,
+            Provider: "test",
+            Surface: "test",
           },
-        }),
+          recordInboundSession,
+          afterRecord: () => withinTest(maintenancePrepared.promise, signal),
+          record: {
+            updateLastRoute: {
+              accountId: "default",
+              channel: "test",
+              sessionKey: activeSessionKey,
+              to: "user:peer",
+            },
+            onRecordError: (error: unknown) => {
+              throw error;
+            },
+          },
+          runDispatch: async () => {
+            staleEntryAtDispatch = loadSessionEntry({ storePath, sessionKey: staleSessionKey });
+            return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+          },
+          runDispatchLifecycle: {
+            turnAdoptionLifecycle: undefined,
+            onDispatchSkipped: vi.fn(),
+          },
+        })),
         signal,
       );
 
@@ -242,10 +268,7 @@ describe("channel-inbound public helpers", () => {
     });
     const ctx = buildChannelTurnContext({
       ...createInboundParams({ channelIngress }),
-      message: {
-        rawBody: "hello",
-        inboundTurnKind: "user_request",
-      },
+      message: { rawBody: "hello", inboundTurnKind: "user_request" },
     });
 
     expect(ctx.InboundTurnKind).toBe("user_request");

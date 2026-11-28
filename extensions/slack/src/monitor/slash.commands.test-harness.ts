@@ -16,13 +16,13 @@ import {
   resetSlackSlashMocks,
 } from "./slash.test-harness.js";
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-runtime")>(
-    "openclaw/plugin-sdk/agent-runtime",
-  );
+vi.mock("openclaw/plugin-sdk/native-command-registry", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/native-command-registry")
+  >("openclaw/plugin-sdk/native-command-registry");
   return {
     ...actual,
-    loadPreparedModelCatalog: vi.fn(async () => []),
+    loadCommandArgMenuModelCatalog: vi.fn(async () => []),
   };
 });
 
@@ -466,18 +466,6 @@ export async function runCommandAndResolveActionsBlock(
   const payload = firstCallPayload(respond, "response") as ActionsBlockPayload;
   const blockId = payload.blocks?.find((block) => block.type === "actions")?.block_id;
   return { respond, payload, blockId };
-}
-
-export async function getFirstActionElementFromCommand(handler: (args: unknown) => Promise<void>) {
-  const { respond } = await runCommandHandler(handler);
-  expect(respond).toHaveBeenCalledTimes(1);
-  const payload = firstCallPayload(respond, "response") as { blocks?: Array<{ type: string }> };
-  const actions = findFirstActionsBlock(payload);
-  const element = actions?.elements?.[0];
-  if (!element) {
-    throw new Error("first action element missing");
-  }
-  return element;
 }
 
 export async function getCommandArgMenuValues(handler: (args: unknown) => Promise<void>) {

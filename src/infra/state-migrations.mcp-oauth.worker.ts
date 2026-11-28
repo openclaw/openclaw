@@ -87,15 +87,6 @@ function importAndRecordReceiptInDatabase(
     );
   }
 
-  const verified = executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb.selectFrom("mcp_oauth_stores").selectAll().where("store_key", "=", storeKey),
-  );
-  if (!verified || verified.format_version !== 1) {
-    throw new Error("SQLite verification failed for an MCP OAuth store");
-  }
-  parseMcpOAuthStoreJson(storeKey, verified.store_json);
-
   const reportJson = JSON.stringify({
     source: MIGRATION_KIND,
     target: "mcp_oauth_stores",

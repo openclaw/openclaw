@@ -1,8 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { measureCliCommandStartup } from "../cli/command-startup-timing.js";
-import { createGatewayDispatchStartupTrace } from "../cli/startup-trace.js";
-import { measureDoctorConfigPreflightStep } from "../commands/doctor-config-preflight-measure.js";
+import { captureWorkerStartObserver } from "../infra/worker-request-diagnostics.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const eventLoopDelay = vi.hoisted(() => ({
   instances: [] as Array<{
@@ -44,6 +43,73 @@ describe("gateway startup trace", () => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
+
+  it("reports plugin worker starts for a completed startup step", () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", "0");
+    const info = vi.fn();
+    const trace = createGatewayStartupTrace({ info } as never);
+    const name = "plugins.gateway-load.plugin.first";
+    try {
+      trace.run(name, () => {
+        captureWorkerStartObserver(
+          new URL("plugin-generation-preparation.worker.js", import.meta.url),
+        )?.();
+      });
+      trace.detail(name, [["loadAndRegisterMs", 2]]);
+      expect(info.mock.calls.map(([message]) => message)).toEqual([
+        `startup trace: ${name} loadAndRegisterMs=2.0 workersStarted=1 workerScripts=plugin-generation-preparation.worker.js:1`,
+      ]);
+    } finally {
+      trace.close();
+    }
+  });
+
+  it.each([
+    { trace: "0", duration: 249, fail: false, nested: false, visible: false },
+    { trace: undefined, duration: 250, fail: false, nested: false, visible: true },
+    { trace: "0", duration: 500, fail: true, nested: false, visible: true },
+    { trace: "1", duration: 500, fail: false, nested: false, visible: true },
+    { trace: "0", duration: 500, fail: false, nested: true, visible: false },
+  ])(
+    "reports slow service startup once without payloads ($trace, $duration ms, failure=$fail, nested=$nested)",
+    async ({ trace: enabled, duration, fail, nested, visible }) => {
+      vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", enabled);
+      let now = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const log = createSubsystemLogger("gateway-startup-test");
+      const info = vi.spyOn(log, "info").mockImplementation(() => {});
+      const trace = createGatewayStartupTrace(log, 0);
+      const name = `sidecars.plugin-services.plugin-a.service-a${nested ? ".remote-request" : ""}`;
+      const failure = new Error("synthetic sensitive service payload");
+      try {
+        const measured = trace.measure(name, () => {
+          now += duration;
+          if (fail) {
+            throw failure;
+          }
+        });
+        if (fail) {
+          await expect(measured).rejects.toBe(failure);
+        } else {
+          await measured;
+        }
+        expect(info.mock.calls.map(([message]) => message).join("\n")).not.toContain(
+          failure.message,
+        );
+        expect(info.mock.calls.map(([message]) => message)).toEqual(
+          visible
+            ? [
+                expect.stringContaining(
+                  `startup trace: ${name} ${duration.toFixed(1)}ms total=${duration.toFixed(1)}ms eventLoopMax=0.0ms outcome=${fail ? "failure" : "success"}`,
+                ),
+              ]
+            : [],
+        );
+      } finally {
+        trace.close();
+      }
+    },
+  );
 
   it.each([
     { updateCanary: false, markers: 2 },
@@ -90,61 +156,6 @@ describe("gateway startup trace", () => {
       );
     },
   );
-
-  it("carries bootstrap step counts to ready without reusing them on restart", async () => {
-    vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", "1");
-    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    const dispatch = createGatewayDispatchStartupTrace(["node", "openclaw", "gateway"], "entry");
-    dispatch.setLineFormatter((message) => message);
-    dispatch.mark("bootstrap");
-    for (let admission = 0; admission < 2; admission += 1) {
-      await measureDoctorConfigPreflightStep(
-        "database-admission",
-        () => Promise.resolve(),
-        (name, run) => measureCliCommandStartup(name, run),
-        () => ({ agents: 200 }),
-      );
-    }
-    const info = vi.fn();
-    const trace = createGatewayStartupTrace(
-      { info } as unknown as Parameters<typeof createGatewayStartupTrace>[0],
-      performance.now() - 10,
-    );
-
-    trace.mark("process.bootstrap");
-    await trace.measure("state.ownership", async () => {});
-    await measureDoctorConfigPreflightStep("after-bootstrap", () => Promise.resolve());
-    trace.mark("ready");
-
-    const messages = info.mock.calls.map(([message]) => String(message));
-    const preBootstrap = messages.find((message) =>
-      message.startsWith("startup trace: process.bootstrap "),
-    );
-    const ownership = messages.find((message) => message.includes("state.ownership"));
-    expect(preBootstrap).toContain("total=");
-    expect(ownership).toContain("total=");
-    expect(messages.indexOf(preBootstrap ?? "")).toBeLessThan(messages.indexOf(ownership ?? ""));
-    const admissionStep = messages.find((message) =>
-      message.startsWith("startup trace: process.bootstrap.cli.bootstrap.database-admission "),
-    );
-    expect(admissionStep).toMatch(/start=\d+\.\dms calls=2\.0 agents=400\.0$/);
-    expect(messages.find((message) => message.startsWith("startup trace: ready "))).toContain(
-      "cli.bootstrap.database-admission:",
-    );
-    expect(messages.join("\n")).not.toContain("after-bootstrap");
-    expect(messages.join("\n")).not.toContain("cli.command.doctor.config-preflight");
-    expect(stderr.mock.calls.map(([line]) => String(line)).join("")).toMatch(
-      /cli.bootstrap.database-admission .* start=\d+\.\dms agents=200/,
-    );
-
-    info.mockClear();
-    const restartTrace = createGatewayStartupTrace({ info } as never);
-    restartTrace.mark("process.bootstrap");
-    restartTrace.mark("ready");
-    expect(info.mock.calls.map(([message]) => String(message)).join("\n")).not.toContain(
-      "bootstrapSteps=",
-    );
-  });
 
   it("closes the event-loop monitor once without allowing it to reopen", () => {
     vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", "1");

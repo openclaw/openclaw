@@ -5,7 +5,7 @@ import { AUTH_STORE_VERSION } from "./constants.js";
 import { mergeAuthProfileStores, mergePersistedAuthProfileState } from "./persisted.js";
 import { pruneAuthProfileStoreReferences } from "./runtime-snapshot-owner.js";
 import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
-import { readAuthProfileJsonCellText } from "./sqlite-json.js";
+import { readAuthProfileJsonCellTexts } from "./sqlite-json.js";
 import { prepareAuthProfileStateMutation } from "./store-mutation.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 import {
@@ -30,9 +30,12 @@ export function recordAuthProfileUsageInDatabase(
       throw new AuthProfileStoreUnreadableError(databasePath);
     }
   };
-  const credentialText = readAuthProfileJsonCellText(database, "store", databaseKind);
+  const { store: credentialText, state: stateText } = readAuthProfileJsonCellTexts(
+    database,
+    databaseKind,
+  );
   const credentials = parseCell(credentialText);
-  const existingState = parseCell(readAuthProfileJsonCellText(database, "state", databaseKind));
+  const existingState = parseCell(stateText);
   const loaded = mergePersistedAuthProfileState(credentials, () => existingState);
   if (!loaded && credentialText !== undefined) {
     throw new AuthProfileStoreUnreadableError(databasePath);
@@ -59,10 +62,14 @@ export function recordAuthProfileUsageInDatabase(
   const next =
     reduction.kind === "success"
       ? !profile.setup?.replacement && canonicalProvider(profile.provider) === input.providerKey
-        ? resetAuthProfileFailureState(previous ?? {}, {
-            lastProbeAt: now,
-            ...(input.inherited ? {} : { lastUsed: reduction.lastUsed }),
-          })
+        ? resetAuthProfileFailureState(
+            previous ?? {},
+            {
+              lastProbeAt: now,
+              ...(input.inherited ? {} : { lastUsed: reduction.lastUsed }),
+            },
+            reduction.modelId,
+          )
         : undefined
       : reduceAuthProfileFailure(profile, previous, reduction, now);
   if (!next) {
@@ -93,7 +100,7 @@ export function recordAuthProfileUsageInDatabase(
   if (stateChanged) {
     writeAuthProfileJsonCell(database, "state", databaseKind, statePayload);
   }
-  receipt.result = { previous, next, now };
+  receipt.result = next;
   receipt.publication.stateChanged = stateChanged;
   receipt.publication.selectionChanged = selectionChanged;
   return receipt;

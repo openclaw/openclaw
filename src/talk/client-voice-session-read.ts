@@ -4,9 +4,13 @@ import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-tra
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import type { ClientVoiceSessionSource } from "./client-voice-session-source.js";
+import { withClientVoiceSessionResources } from "./client-voice-session-lifecycle.js";
 import {
-  readOwnedVoiceSessionFacts,
+  type ClientVoiceSessionSource,
+  captureClientVoiceSessionWriter,
+} from "./client-voice-session-source.js";
+import {
+  assertVoiceSessionOwnership,
   type ClientVoiceRunBinding,
   type VoiceSessionLookup,
   type VoiceSessionMatch,
@@ -50,15 +54,25 @@ export async function resolveOpenClientVoiceSessionId(
 }
 
 /** Validate ownership and open state before starting a voice-bound consult. */
-export function assertClientVoiceSessionOpen(
+export async function assertClientVoiceSessionOpen(
   params: ClientVoiceRunBinding,
   source?: ClientVoiceSessionSource,
-): "client" | "relay" {
+): Promise<"client" | "relay"> {
   source?.assertCurrent();
-  const record = readOwnedVoiceSessionFacts(params, source?.options);
+  const writer = captureClientVoiceSessionWriter({
+    agentId: params.agentId,
+    physicalSource: source,
+  });
+  const read = await withClientVoiceSessionResources([writer], () =>
+    writer.read(params.voiceSessionId),
+  );
   source?.assertCurrent();
-  if (record.status !== "open") {
+  if (!read?.record) {
+    throw new Error("voice session not found");
+  }
+  assertVoiceSessionOwnership(read.record, params);
+  if (read.record.status !== "open") {
     throw new Error("voice session is closed");
   }
-  return record.origin;
+  return read.record.origin;
 }

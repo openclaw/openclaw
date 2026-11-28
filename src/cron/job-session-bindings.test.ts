@@ -1,151 +1,196 @@
-import { describe, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   disableCronJobsBoundToSessions,
-  resolveCronJobBoundSessionKeys,
+  resolveCronJobSessionBindings,
 } from "./job-session-bindings.js";
 import type { CronJob, CronStoredJob } from "./types.js";
 
-const cfg = {} as OpenClawConfig;
-
-function bindingKeys(
-  job: Parameters<typeof resolveCronJobBoundSessionKeys>[0],
-  defaultAgentId = "main",
-) {
-  return resolveCronJobBoundSessionKeys(job, { cfg, defaultAgentId });
-}
-
-async function disableCronJobsBoundToSession(
-  params: Omit<Parameters<typeof disableCronJobsBoundToSessions>[0], "sessionKeys"> & {
-    sessionKey: string;
+test.each([
+  [
+    "wake/delivery lanes",
+    "main",
+    "discord:channel:123",
+    "main",
+    ["agent:main:main", "agent:main:discord:channel:123"],
+  ],
+  [
+    "scoped ownership over default",
+    "isolated",
+    "agent:ops:main",
+    "research",
+    ["agent:ops:cron:job1", "agent:ops:main"],
+  ],
+  ["malformed target", "session: ", undefined, "main", []],
+] as const)(
+  "resolves job session bindings: %s",
+  (_name, sessionTarget, sessionKey, defaultAgentId, expected) => {
+    expect([
+      ...resolveCronJobSessionBindings(
+        { id: "job1", sessionTarget, sessionKey },
+        { cfg: {}, defaultAgentId },
+      ).keys(),
+    ]).toEqual(expected);
   },
-): Promise<string[]> {
-  const disabled = await disableCronJobsBoundToSessions({
-    cron: params.cron,
-    cfg: params.cfg,
-    sessionKeys: [params.sessionKey],
-  });
-  return disabled.get(params.sessionKey.trim()) ?? [];
-}
+);
 
-describe("resolveCronJobBoundSessionKeys", () => {
-  test("wake/delivery sessionKey lanes bind in addition to the run target", () => {
-    expect(
-      bindingKeys({
-        id: "job1",
-        sessionTarget: "main",
-        sessionKey: "discord:channel:123",
-      }),
-    ).toEqual(new Set(["agent:main:main", "agent:main:discord:channel:123"]));
+test("shares binding facts across interleaved session-routing contexts", () => {
+  const definition = { id: "shared", sessionTarget: "main" as const };
+  const contexts = [
+    { cfg: {}, defaultAgentId: "ops" },
+    { cfg: {}, defaultAgentId: "research" },
+    { cfg: { session: { scope: "global" as const } }, defaultAgentId: "ops" },
+  ];
+  const expected = ["agent:ops:main", "agent:research:main", "global"];
+  const first = contexts.map((opts, index) => {
+    const keys = resolveCronJobSessionBindings(definition, opts);
+    expect([...keys]).toEqual([[expected[index], ["ops", "research", "ops"][index]]]);
+    return keys;
   });
-
-  test("scoped session ownership takes precedence over the configured default", () => {
-    expect(
-      bindingKeys(
-        { id: "job1", sessionTarget: "isolated", sessionKey: "agent:ops:main" },
-        "research",
-      ),
-    ).toEqual(new Set(["agent:ops:cron:job1", "agent:ops:main"]));
-  });
-
-  test("malformed session targets bind nothing instead of throwing", () => {
-    expect(bindingKeys({ id: "job1", sessionTarget: "session: " })).toEqual(new Set());
-  });
+  for (let round = 0; round < 3; round++) {
+    contexts.forEach((opts, index) => {
+      expect(resolveCronJobSessionBindings(definition, opts)).toBe(first[index]);
+    });
+  }
 });
 
-describe("disableCronJobsBoundToSession", () => {
-  function job(partial: Partial<CronStoredJob> & Pick<CronJob, "id">): CronStoredJob {
-    return { enabled: true, sessionTarget: "isolated", ...partial } as CronJob;
-  }
+test("refreshes binding facts after job edits and agent/session routing changes", () => {
+  const definition = job({
+    id: "changing",
+    sessionKey: "delivery",
+    sourceConversation: { sessionKey: "source", sessionId: "creator" },
+  });
+  const cfg: OpenClawConfig = { session: { mainKey: "home" } };
+  const opts = { cfg, defaultAgentId: "ops" as string | undefined };
+  const check = (expected: string[]) => {
+    const keys = resolveCronJobSessionBindings(definition, opts);
+    expect([...keys.keys()]).toEqual(expected);
+    expect(resolveCronJobSessionBindings(definition, opts)).toBe(keys);
+  };
+  check(["agent:ops:cron:changing", "agent:ops:delivery", "agent:ops:source"]);
+  definition.sessionTarget = "session:other";
+  check(["agent:ops:other", "agent:ops:delivery", "agent:ops:source"]);
+  definition.sessionKey = "agent:research:delivery";
+  check(["agent:research:other", "agent:research:delivery", "agent:research:source"]);
+  definition.agentId = "writer";
+  definition.sourceConversation!.sessionKey = "new-source";
+  check(["agent:writer:other", "agent:research:delivery", "agent:writer:new-source"]);
+  definition.agentId = undefined;
+  definition.sessionKey = undefined;
+  definition.sourceConversation = undefined;
+  opts.defaultAgentId = "rebound";
+  check(["agent:rebound:other"]);
+  definition.sessionTarget = "main";
+  check(["agent:rebound:home"]);
+  cfg.session!.mainKey = "inbox";
+  check(["agent:rebound:inbox"]);
+  cfg.session!.scope = "global";
+  check(["global"]);
+  opts.defaultAgentId = undefined;
+  check([]);
+  opts.defaultAgentId = "ops";
+  definition.sessionTarget = "isolated";
+  definition.id = "replaced";
+  check(["agent:ops:cron:replaced"]);
+  definition.sessionTarget = "session: ";
+  check([]);
+});
 
-  type Precondition = (job: CronJob, nowMs: number) => void | Promise<void>;
+function job(partial: Partial<CronStoredJob> & Pick<CronJob, "id">): CronStoredJob {
+  return { enabled: true, sessionTarget: "isolated", ...partial } as CronJob;
+}
 
-  function fakeUpdateWithPrecondition(currentJobs: () => CronJob[]) {
-    return vi.fn(async (id: string, _patch: unknown, precondition: Precondition) => {
+function fakeUpdateWithPrecondition(currentJobs: () => CronJob[]) {
+  return vi.fn(
+    async (
+      id: string,
+      _patch: unknown,
+      precondition: (job: CronJob, nowMs: number) => void | Promise<void>,
+    ) => {
       const current = currentJobs().find((candidate) => candidate.id === id);
       if (!current) {
         throw new Error(`cron job not found: ${id}`);
       }
       await precondition(current, 0);
       return current;
-    });
-  }
+    },
+  );
+}
 
-  test("disables only enabled jobs bound to the archived session", async () => {
-    const jobs = [
-      job({ id: "bound" }),
-      job({
-        id: "created-here",
-        sourceConversation: { sessionKey: "agent:main:cron:bound", sessionId: "creator" },
-      }),
-      job({ id: "other", sessionTarget: "session:agent:main:other" }),
-      // Bound to the same session but already disabled; must not be re-patched.
-      job({ id: "already-off", enabled: false, sessionKey: "cron:bound" }),
-    ];
-    const update = fakeUpdateWithPrecondition(() => jobs);
-    const disabled = await disableCronJobsBoundToSession({
-      cron: {
-        list: async () => jobs,
-        updateWithPrecondition: update,
-        getDefaultAgentId: () => "main",
-      },
-      cfg,
-      sessionKey: "agent:main:cron:bound",
-    });
-    expect(disabled).toEqual(["bound", "created-here"]);
-    expect(update).toHaveBeenCalledTimes(2);
-    expect(update.mock.calls[0]?.slice(0, 2)).toEqual(["bound", { enabled: false }]);
+async function disable(
+  jobs: CronStoredJob[],
+  updateWithPrecondition: ReturnType<typeof fakeUpdateWithPrecondition>,
+  defaultAgentId: string | null = "main",
+) {
+  const sessionKey = "agent:main:cron:bound";
+  const disabled = await disableCronJobsBoundToSessions({
+    cron: {
+      list: async () => jobs,
+      updateWithPrecondition,
+      getDefaultAgentId: () => defaultAgentId ?? undefined,
+    },
+    cfg: {},
+    sessionKeys: [sessionKey],
   });
+  return disabled.get(sessionKey) ?? [];
+}
 
-  test("leaves ownerless jobs unchanged when no canonical default is configured", async () => {
-    const update = fakeUpdateWithPrecondition(() => [job({ id: "elsewhere" })]);
-    const disabled = await disableCronJobsBoundToSession({
-      cron: {
-        list: async () => [job({ id: "elsewhere" })],
-        updateWithPrecondition: update,
-        getDefaultAgentId: () => undefined,
-      },
-      cfg,
-      sessionKey: "agent:main:cron:elsewhere",
-    });
-    expect(disabled).toEqual([]);
-    expect(update).not.toHaveBeenCalled();
-  });
+test("disables only enabled jobs bound to the archived session", async () => {
+  const jobs = [
+    job({ id: "bound" }),
+    job({
+      id: "created-here",
+      sourceConversation: { sessionKey: "agent:main:cron:bound", sessionId: "creator" },
+    }),
+    job({ id: "other", sessionTarget: "session:agent:main:other" }),
+    job({ id: "already-off", enabled: false, sessionKey: "cron:bound" }),
+  ];
+  const update = fakeUpdateWithPrecondition(() => jobs);
+  expect(await disable(jobs, update)).toEqual(["bound", "created-here"]);
+  expect(update.mock.calls[0]?.slice(0, 2)).toEqual(["bound", { enabled: false }]);
+});
 
-  test("skips jobs retargeted between the list snapshot and the locked update", async () => {
-    const listed = [job({ id: "bound" })];
-    // The locked current job now targets a different session.
-    const retargeted = [job({ id: "bound", sessionTarget: "session:agent:main:elsewhere" })];
-    const update = fakeUpdateWithPrecondition(() => retargeted);
-    const disabled = await disableCronJobsBoundToSession({
-      cron: {
-        list: async () => listed,
-        updateWithPrecondition: update,
-        getDefaultAgentId: () => "main",
-      },
-      cfg,
-      sessionKey: "agent:main:cron:bound",
-    });
-    expect(disabled).toEqual([]);
-    expect(update).toHaveBeenCalledTimes(1);
-  });
+test("leaves ownerless jobs unchanged when no canonical default is configured", async () => {
+  const jobs = [job({ id: "bound" })];
+  const update = fakeUpdateWithPrecondition(() => jobs);
+  expect(await disable(jobs, update, null)).toEqual([]);
+  expect(update).not.toHaveBeenCalled();
+});
 
-  test("a failing job does not abort the remaining bound jobs", async () => {
-    const listed = [job({ id: "vanished", sessionKey: "cron:bound" }), job({ id: "bound" })];
-    // "vanished" was removed concurrently; the fake only knows "bound".
-    const update = fakeUpdateWithPrecondition(() => [job({ id: "bound" })]);
-    await expect(
-      disableCronJobsBoundToSession({
-        cron: {
-          list: async () => listed,
-          updateWithPrecondition: update,
-          getDefaultAgentId: () => "main",
-        },
-        cfg,
-        sessionKey: "agent:main:cron:bound",
-      }),
-    ).rejects.toThrow(AggregateError);
-    expect(update).toHaveBeenCalledTimes(2);
-    expect(update.mock.calls.map((call) => call[0])).toEqual(["vanished", "bound"]);
-  });
+test("skips jobs retargeted between the list snapshot and the locked update", async () => {
+  const listed = [job({ id: "bound" })];
+  const update = fakeUpdateWithPrecondition(() => [
+    job({ id: "bound", sessionTarget: "session:agent:main:elsewhere" }),
+  ]);
+  expect(await disable(listed, update)).toEqual([]);
+  expect(update).toHaveBeenCalledTimes(1);
+});
+
+test("a failing job does not abort the remaining bound jobs", async () => {
+  const listed = [job({ id: "vanished", sessionKey: "cron:bound" }), job({ id: "bound" })];
+  const update = fakeUpdateWithPrecondition(() => [job({ id: "bound" })]);
+  await expect(disable(listed, update)).rejects.toThrow(AggregateError);
+  expect(update.mock.calls.map((call) => call[0])).toEqual(["vanished", "bound"]);
+});
+
+test.each([
+  ["global", "global"],
+  ["per-sender", "agent:ops:global"],
+] as const)("retains physical ownership and qualified targets in %s scope", (scope, key) => {
+  const bindings = resolveCronJobSessionBindings(
+    {
+      id: "selected",
+      agentId: "ops",
+      sessionTarget: "session:global",
+      sessionKey: "agent:research:global",
+      sourceConversation: { sessionKey: "global", sessionId: "creator" },
+    },
+    { cfg: { session: { scope } }, defaultAgentId: "main" },
+  );
+  expect(bindings).toEqual(
+    new Map([
+      [key, "ops"],
+      ["agent:research:global", "research"],
+    ]),
+  );
 });

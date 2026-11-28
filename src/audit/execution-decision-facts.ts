@@ -187,19 +187,22 @@ function pruneDecisionFactsAfterInsert(
   if (remaining === 0) {
     return;
   }
-  const retainedIds = kysely
-    .selectFrom("execution_decision_facts")
-    .select("receipt_id")
-    .orderBy("occurred_at", "desc")
-    .orderBy("receipt_id", "desc")
-    .limit(limits.maxRows);
+  // Count the compact index instead of stepping over every retained tuple.
+  const rowCount =
+    normalizeSqliteNumber(
+      executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("execution_decision_facts")
+          .select((eb) => eb.fn.countAll<number>().as("count")),
+      )?.count ?? null,
+    ) ?? 0;
   const overflowIds = kysely
     .selectFrom("execution_decision_facts")
     .select("receipt_id")
-    .where("receipt_id", "not in", retainedIds)
     .orderBy("occurred_at", "asc")
     .orderBy("receipt_id", "asc")
-    .limit(remaining);
+    .limit(Math.min(remaining, Math.max(0, rowCount - limits.maxRows)));
   executeSqliteQuerySync(
     db,
     kysely.deleteFrom("execution_decision_facts").where("receipt_id", "in", overflowIds),
@@ -230,10 +233,6 @@ export function recordExecutionDecisionFactInDatabase(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = decisionDb(db);
-      // The context is the authoritative tuple owner; reread it inside the commit section.
-      if (!hasExactExecutionContext(db, receipt)) {
-        throw new Error("execution decision fact requires an exact retained execution context");
-      }
       const existing = executeSqliteQueryTakeFirstSync(
         db,
         kysely
