@@ -19,7 +19,11 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
 import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-import { shouldAutoApproveDoctorFix, type DoctorRepairMode } from "./doctor-repair-mode.js";
+import {
+  resolveDoctorRepairMode,
+  shouldAutoApproveDoctorFix,
+  type DoctorRepairMode,
+} from "./doctor-repair-mode.js";
 
 type UiProtocolFreshnessIssue = {
   readonly root: string;
@@ -146,16 +150,40 @@ function formatUiProtocolFreshnessIssue(issue: UiProtocolFreshnessIssue): string
   ].join("\n");
 }
 
+async function controlUiRepairDisabled(): Promise<boolean> {
+  // Outside an update this is a source read: no database admission or plugin
+  // validation. Shipped updaters replace io.runtime.js with a bridge that
+  // rejects readSourceConfigBestEffort and would abort Doctor while assets are
+  // still repairable. readConfigFileSnapshot is on that bridge and still
+  // exposes the authored enabled flag.
+  if (resolveDoctorRepairMode({}).updateInProgress) {
+    const { readConfigFileSnapshot } = await import("../config/io.runtime.js");
+    const snapshot = await readConfigFileSnapshot({
+      observe: false,
+      skipPluginValidation: true,
+    });
+    return snapshot.sourceConfig.gateway?.controlUi?.enabled === false;
+  }
+  const { readSourceConfigBestEffort } = await import("../config/io.runtime.js");
+  const config = await readSourceConfigBestEffort();
+  return config.gateway?.controlUi?.enabled === false;
+}
+
 /**
  * Read-only: whether {@link maybeRepairUiProtocolFreshness} would build Control UI assets.
  * Missing assets build under `--fix`; stale ones also need `--force`. An answer that waits
- * on an interactive prompt is undecidable.
+ * on an interactive prompt is undecidable. A disabled Control UI is not work.
  */
 export async function checkUiProtocolFreshnessPending(
   repairMode: DoctorRepairMode,
 ): Promise<DoctorMaintenancePending> {
+  const issues = await detectUiProtocolFreshnessIssues();
+  const canRepair = issues.some((issue) => issue.canBuild && !issue.installOwner);
+  if (!canRepair || (await controlUiRepairDisabled())) {
+    return "none";
+  }
   let pending: DoctorMaintenancePending = "none";
-  for (const issue of await detectUiProtocolFreshnessIssues()) {
+  for (const issue of issues) {
     if (issue.installOwner || !issue.canBuild) {
       continue;
     }
@@ -174,7 +202,16 @@ export async function maybeRepairUiProtocolFreshness(
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ) {
-  for (const issue of await detectUiProtocolFreshnessIssues()) {
+  const issues = await detectUiProtocolFreshnessIssues();
+  const canRepair = issues.some((issue) => issue.canBuild && !issue.installOwner);
+  if (canRepair && (await controlUiRepairDisabled())) {
+    note(
+      "Control UI is disabled (gateway.controlUi.enabled: false), so asset repair was skipped.",
+      "UI",
+    );
+    return;
+  }
+  for (const issue of issues) {
     const stale = issue.kind === "stale-assets";
     note(formatUiProtocolFreshnessIssue(issue), stale ? "UI Freshness" : "UI");
     if (issue.installOwner) {

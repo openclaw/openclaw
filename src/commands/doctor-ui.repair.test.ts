@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as configRuntime from "../config/io.runtime.js";
 import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../gateway/control-ui-root-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -31,10 +32,13 @@ vi.mock("../infra/control-ui-assets.js", async (importOriginal) => ({
   ensureControlUiAssetsBuilt: mocks.ensureControlUiAssetsBuilt,
 }));
 
-import { maybeRepairUiProtocolFreshness } from "./doctor-ui.js";
+import { resolveDoctorRepairMode } from "./doctor-repair-mode.js";
+import { checkUiProtocolFreshnessPending, maybeRepairUiProtocolFreshness } from "./doctor-ui.js";
 
 const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 let prompter: DoctorPrompter;
+let configPath = "";
+const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
 
 async function writeIndex(html: string) {
   const index = path.join(mocks.root, "dist/control-ui/index.html");
@@ -52,6 +56,9 @@ beforeEach(async () => {
   mocks.root = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-ui-repair-")),
   );
+  configPath = path.join(mocks.root, "openclaw.json");
+  await fs.writeFile(configPath, "{}\n");
+  process.env.OPENCLAW_CONFIG_PATH = configPath;
   await fs.mkdir(path.join(mocks.root, "ui"), { recursive: true });
   await fs.writeFile(path.join(mocks.root, "ui", "package.json"), "{}");
   mocks.ensureControlUiAssetsBuilt.mockImplementation(async (_runtime, opts) => {
@@ -64,7 +71,93 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  if (originalConfigPath === undefined) {
+    delete process.env.OPENCLAW_CONFIG_PATH;
+  } else {
+    process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+  }
   await fs.rm(mocks.root, { recursive: true, force: true });
+});
+
+const updaterBridgeRefusal =
+  "Run config operation readSourceConfigBestEffort in the updated CLI after this update finishes.";
+
+async function withUpdateInProgress(run: () => Promise<void>) {
+  const previous = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+  // The published updater replaces io.runtime.js with a bridge that rejects this
+  // source read. Vitest loads the real module, so the spy is that refusal.
+  const sourceRead = vi
+    .spyOn(configRuntime, "readSourceConfigBestEffort")
+    .mockRejectedValue(new Error(updaterBridgeRefusal));
+  try {
+    await run();
+    expect(sourceRead).not.toHaveBeenCalled();
+  } finally {
+    sourceRead.mockRestore();
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    } else {
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS = previous;
+    }
+  }
+}
+
+it("repairs missing source assets during an update without the restricted source reader", async () => {
+  await withUpdateInProgress(async () => {
+    await maybeRepairUiProtocolFreshness(runtime, prompter);
+  });
+
+  expect(mocks.ensureControlUiAssetsBuilt).toHaveBeenCalledOnce();
+});
+
+it("skips a disabled Control UI during an update without the restricted source reader", async () => {
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify({ gateway: { controlUi: { enabled: false } } })}\n`,
+  );
+
+  await withUpdateInProgress(async () => {
+    await maybeRepairUiProtocolFreshness(runtime, prompter);
+  });
+
+  expect(mocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
+  expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
+  expect(mocks.note).toHaveBeenCalledWith(
+    "Control UI is disabled (gateway.controlUi.enabled: false), so asset repair was skipped.",
+    "UI",
+  );
+});
+
+it("does not count a disabled Control UI as pending build work during an update", async () => {
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify({ gateway: { controlUi: { enabled: false } } })}\n`,
+  );
+
+  await withUpdateInProgress(async () => {
+    const pending = await checkUiProtocolFreshnessPending(
+      resolveDoctorRepairMode({ repair: true, nonInteractive: true }),
+    );
+    expect(pending).toBe("none");
+  });
+});
+
+it("skips Control UI asset repair when the web app is disabled", async () => {
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify({ gateway: { controlUi: { enabled: false } } })}\n`,
+  );
+
+  await maybeRepairUiProtocolFreshness(runtime, prompter);
+
+  expect(mocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
+  expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
+  expect(prompter.confirmAggressiveAutoFix).not.toHaveBeenCalled();
+  expect(mocks.note).toHaveBeenCalledWith(
+    "Control UI is disabled (gateway.controlUi.enabled: false), so asset repair was skipped.",
+    "UI",
+  );
 });
 
 it("routes missing app-owned assets to the host without package or git commands", async () => {
