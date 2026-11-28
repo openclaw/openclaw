@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { readCodexNativeSubagentNotification } from "./native-subagent-notification.js";
+import { projectCodexHookEventData } from "./event-projector-events.js";
+import {
+  NATIVE_SUBAGENT_NOTIFICATION_METHODS,
+  readCodexNativeSubagentNotification,
+} from "./native-subagent-notification.js";
 import type { JsonObject } from "./protocol.js";
 
 function read(item: JsonObject, method = "rawResponseItem/completed") {
@@ -52,6 +56,36 @@ function contextualNotificationItem(
 }
 
 describe("Codex native subagent notifications", () => {
+  it("routes owned-child hook notifications through the shared hook projection", () => {
+    expect(NATIVE_SUBAGENT_NOTIFICATION_METHODS.has("hook/started")).toBe(true);
+    expect(NATIVE_SUBAGENT_NOTIFICATION_METHODS.has("hook/completed")).toBe(true);
+    expect(
+      projectCodexHookEventData(
+        "hook/completed",
+        {
+          threadId: "child-thread",
+          turnId: "child-turn",
+          run: {
+            id: "hook-run",
+            eventName: "SubagentStop",
+            handlerType: "command",
+            executionMode: "sync",
+            status: "completed",
+            entries: [{ kind: "stdout", text: "hook output" }],
+          },
+        },
+        "child-thread",
+      ),
+    ).toMatchObject({
+      phase: "completed",
+      threadId: "child-thread",
+      turnId: "child-turn",
+      hookRunId: "hook-run",
+      eventName: "SubagentStop",
+      entries: [{ kind: "stdout", text: "hook output" }],
+    });
+  });
+
   it("recognizes only classified content in a mixed native contextual push", () => {
     const item = contextualNotificationItem();
     item.content = [
