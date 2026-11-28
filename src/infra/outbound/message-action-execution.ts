@@ -176,8 +176,14 @@ export async function executeGatewayAction(
     return null;
   }
   const channelPlugin = ctx.channelPlugin;
+  // The message.action RPC carries the source turn to the Gateway transcript writer.
+  const sourceSend =
+    params.action === "send" &&
+    ctx.input.actionOrigin === "message-tool" &&
+    ctx.input.messageActionAuthorization?.toolContext?.currentChannelProvider === ctx.channel;
   const supportsCanonicalGatewayDelivery =
-    Boolean(ctx.input.messageActionAuthorization?.scheduled && ctx.gateway.request) &&
+    (sourceSend ||
+      Boolean(ctx.input.messageActionAuthorization?.scheduled && ctx.gateway.request)) &&
     channelPlugin.outbound?.deliveryMode === "gateway" &&
     ((params.action === "send" &&
       Boolean(channelPlugin.message?.send?.text || channelPlugin.outbound.sendText)) ||
