@@ -654,9 +654,20 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
           trustedContext,
           !sessionOnly,
         );
+        const { policyBlockedServerNames } = resolveCachedSessionMcpConfigSummary({
+          context: trustedContext,
+          workspaceDir: trustedContext.workspaceDir,
+        });
         authority.assertCurrent();
         assertSourceCurrent();
-        respond(true, sessionOnly ? projectSessionToolPreview(inventory) : inventory, undefined);
+        const result = sessionOnly ? projectSessionToolPreview(inventory) : inventory;
+        respond(
+          true,
+          !sessionOnly && policyBlockedServerNames.length > 0
+            ? { ...result, policyBlockedMcpServers: policyBlockedServerNames }
+            : result,
+          undefined,
+        );
       };
       let scopedRead: Awaited<ReturnType<typeof retainSessionScopedRead>>;
       try {

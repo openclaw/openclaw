@@ -56,6 +56,7 @@ vi.mock("../../agents/agent-bundle-mcp-tools.js", async (importOriginal) => ({
     fingerprint: "mcp:0",
     pluginIdsByServer: new Map<string, string>(),
     serverNames: new Array<string>(),
+    policyBlockedServerNames: new Array<string>(),
   })),
 }));
 vi.mock("../../plugins/runtime.js", async (importOriginal) => ({

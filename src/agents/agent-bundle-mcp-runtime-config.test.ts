@@ -40,6 +40,9 @@ describe("session MCP config projection", () => {
     const params = { workspaceDir: "/policy-workspace", toolDenylist: ["alpha-__*"] };
     const filtered = loadSessionMcpConfig({ ...params, cfg });
     expect(Object.keys(filtered.loaded.mcpServers)).toEqual(["alpha!"]);
+    expect(filtered.policyBlockedServerNames).toEqual(["alpha?"]);
+    const unrestricted = loadSessionMcpConfig({ workspaceDir: params.workspaceDir, cfg });
+    expect(unrestricted.policyBlockedServerNames).toEqual([]);
     expect([...filtered.safeServerNamesByServer]).toEqual([
       ["alpha?", "alpha-"],
       ["alpha!", "alpha--2"],

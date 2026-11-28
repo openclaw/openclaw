@@ -127,6 +127,7 @@ export const ToolsEffectiveResultSchema = closedObject({
   agentId: NonEmptyString,
   profile: NonEmptyString,
   groups: Type.Array(ToolsEffectiveGroupSchema),
+  policyBlockedMcpServers: Type.Optional(Type.Array(NonEmptyString)),
   notices: Type.Optional(Type.Array(ToolsEffectiveNoticeSchema)),
   toolAccess: Type.Optional(ToolAccessDiagnosticsSchema),
 });
