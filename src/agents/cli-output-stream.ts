@@ -371,22 +371,30 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         refinedParentId = undefined;
       }
       const delta = evt?.type === "message_delta" && parentStreamId !== undefined;
-      const measured = delta
-        ? readCliUsage({ usage: evt.usage })
+      // Claude deltas refine the current call; null counters mean unchanged, not zero.
+      const previous = delta && parentStreamId === measuredParentId ? usage : undefined;
+      const patch = delta && isRecord(evt.usage) ? evt.usage : undefined;
+      const measured = patch
+        ? readCliUsage({
+            usage: {
+              input_tokens: patch.input_tokens ?? previous?.input,
+              output_tokens: patch.output_tokens ?? previous?.output,
+              cache_read_input_tokens: patch.cache_read_input_tokens ?? previous?.cacheRead,
+              cache_creation_input_tokens:
+                patch.cache_creation_input_tokens ?? previous?.cacheWrite,
+              cache_creation:
+                patch.cache_creation ??
+                (patch.cache_creation_input_tokens == null ||
+                patch.cache_creation_input_tokens === previous?.cacheWrite
+                  ? { ephemeral_1h_input_tokens: previous?.cacheWrite1h }
+                  : undefined),
+            },
+          })
         : isRecord(message) && message.model !== "<synthetic>" && (!id || id !== refinedParentId)
           ? readCliUsage({ usage: message.usage })
           : undefined;
       const tokens = deriveSessionTotalTokens({ lastCallUsage: measured });
       if (measured && tokens !== undefined) {
-        // A completed-call delta may omit the cache TTL split from this call's snapshot.
-        if (
-          delta &&
-          parentStreamId === measuredParentId &&
-          measured.cacheWrite1h === undefined &&
-          usage?.cacheWrite === measured.cacheWrite
-        ) {
-          measured.cacheWrite1h = usage?.cacheWrite1h;
-        }
         usage = measured;
         measuredParentId = delta ? parentStreamId : id;
         if (delta) refinedParentId = parentStreamId;

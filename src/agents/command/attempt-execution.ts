@@ -348,7 +348,13 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         onCompactionAccounting: params.onCompactionAccounting,
       },
       async (turn) => {
-        const { sessionEntry, cliSessionBinding, assertSettlementCurrent, settleResult, publishContext } = turn;
+        const {
+          sessionEntry,
+          cliSessionBinding,
+          assertSettlementCurrent,
+          settleResult,
+          publishContext,
+        } = turn;
         const accessProgram = resolveTurnCyberAccessProgram({
           program: params.cyberAccessProgram ?? sessionEntry?.cyberAccessProgram,
           provider: params.providerOverride,
