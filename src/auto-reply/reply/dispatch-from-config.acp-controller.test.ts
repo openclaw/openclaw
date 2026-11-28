@@ -129,6 +129,11 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
     for (const mock of [...Object.values(hooks), ...Object.values(acpMocks)]) {
       mock.mockReset();
     }
+    // The real manager requires the writer to return the stored entry.
+    acpMocks.upsertAcpSessionMeta.mockImplementation(async (params) => {
+      const acp = params.mutate(undefined, {});
+      return acp ? { acp } : null;
+    });
     manager = new AcpSessionManager({
       ...acpManagerDeps,
       prepareSessionControlRead: async (params) => {

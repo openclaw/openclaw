@@ -1,10 +1,13 @@
 import { createIdentityFromEnsure } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
-import { logVerbose } from "../../globals.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
+import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
-import { closeSupersededRuntimeHandle } from "./manager.runtime-handle-ensure.js";
+import {
+  closeSupersededRuntimeHandle,
+  closeUnpublishedRuntimeHandle,
+  requirePersistedAcpMeta,
+} from "./manager.runtime-handle-ensure.js";
 import {
   assertAcpRuntimeOwnerSupport,
   persistedAcpRuntimeHandle,
@@ -143,17 +146,13 @@ export async function runManagerInitializeSession(params: {
       failOnError: true,
       assertCommitAllowed: input.assertActive,
     });
-    if (!persisted?.acp) {
-      throw new AcpRuntimeError(
-        "ACP_SESSION_INIT_FAILED",
-        `Could not persist ACP metadata for ${sessionKey}.`,
-      );
-    }
+    requirePersistedAcpMeta(persisted, sessionKey);
   } catch (error) {
-    await runtime.close({ handle, reason: "init-meta-failed" }).catch((closeError: unknown) => {
-      logVerbose(
-        `acp-manager: cleanup close failed after metadata write error for ${sessionKey}: ${String(closeError)}`,
-      );
+    await closeUnpublishedRuntimeHandle({
+      runtime,
+      handle,
+      sessionKey,
+      reason: "init-meta-failed",
     });
     throw error;
   }
