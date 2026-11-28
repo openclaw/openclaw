@@ -1,6 +1,6 @@
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { Command } from "commander";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { upsertAuthProfile } from "../../agents/auth-profiles.js";
 import type { AgentCommandGatewayIngressOpts } from "../../agents/command/types.js";
@@ -109,7 +109,7 @@ describe("models.authLogout with a concurrent registered config set", () => {
         allowInTests: true,
         timeoutMs: 0,
       });
-      await using _custody = { [Symbol.asyncDispose]: async () => await custody?.release() };
+      onTestFinished(async () => await custody?.release());
       await using gateway = await startModelsGateway(state, cfg, token, { hotReloadRecovery });
       const { client } = gateway;
       const logoutProvider = (selection: Record<string, unknown> = {}) =>
