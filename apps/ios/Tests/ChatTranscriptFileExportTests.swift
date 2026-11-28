@@ -27,7 +27,7 @@ struct ChatTranscriptFileExportTests {
             ([unrelated], "main.md", "# main"),
         ] {
             model.sessions = rows
-            let url = try ChatProTab.writeTranscript(for: model, in: directory)
+            let url = try ChatInfoPage.writeTranscript(for: model, in: directory)
             #expect(url.lastPathComponent == filename)
             #expect(try Data(contentsOf: url) == Data((heading + body).utf8))
         }

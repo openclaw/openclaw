@@ -20,8 +20,8 @@ enum ChatComposerPrimaryRole: Equatable {
         if hasOwnReply {
             // Decision point (F38, pending Victor): a draft that can be sent now wins over Stop, and
             // Stop returns once the field is empty. The alternative keeps Stop until the reply ends:
-            // `return .stop`. A draft that cannot go out during a reply (attachments, a local
-            // session command, a transport without an outbox) keeps Stop.
+            // `return .stop`. A draft that cannot go out during a reply (a local session command,
+            // a transport without an outbox) keeps Stop.
             // Sent just now: the same rule from the tap on, so Send goes straight to Stop.
             return hasDraftToSend && canSendDraft ? .send : .stop
         }

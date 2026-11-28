@@ -6,12 +6,6 @@ import AppKit
 import UIKit
 #endif
 
-private struct ChatTurnRecapObservation: Equatable {
-    let sessionKey: String
-    let indicatorVisible: Bool
-    let row: ChatTurnRecapSessionRow?
-}
-
 @MainActor
 public struct OpenClawChatView: View {
     // The caller owns model lifetime; transport replacement can preserve presentation identity.
@@ -51,10 +45,11 @@ public struct OpenClawChatView: View {
     #if os(iOS)
     @State private var selectTextMessage: OpenClawChatMessage?
     @State private var selectedWork: ChatToolSheetSelection?
-    #endif
+    #else
     @State private var turnRecapResolver = ChatTurnRecapResolver()
     @State private var turnRecap: ChatTurnRecap?
     @State private var turnRecapSessionKey: String?
+    #endif
     private let showsSessionSwitcher: Bool
     private let drawsBackground: Bool
     private let style: Style
@@ -172,9 +167,11 @@ public struct OpenClawChatView: View {
         }
         .modifier(ChatPresentationActivity(viewModel: self.viewModel, isOnScreen: self.isOnScreen))
         .modifier(ChatTranscriptRoom.Provider())
+        #if !os(iOS)
         .onChange(of: self.showsTurnRecap ? self.turnRecapObservation : nil, initial: true) { _, observation in
             if let observation { self.updateTurnRecap(observation) }
         }
+        #endif
         .sheet(item: self.$reactionPickerMessage) {
             ChatMessageReactionPicker(viewModel: self.viewModel, message: $0)
         }
@@ -273,21 +270,22 @@ extension OpenClawChatView {
 
     private func composerDock(column: ChatColumnLayout, bottom: CGFloat) -> some View {
         VStack(spacing: 0) {
-            if !self.usesInlineProgressCard {
+            // On the phone the activity pills above the composer take the card's place.
+            if !self.usesInlineProgressCard, !ChatActivityDock.replacesProgressCard(showsComposer: self.showsComposer) {
                 // The composer draws its surface on the column, so the card shares its edges.
                 self.progressCard
                     .chatColumn(column)
                     .padding(.top, Layout.stackSpacing)
             }
-            if self.showsComposer {
-                self.turnRecapRow
-                    .chatColumn(column)
-            }
+            #if !os(iOS)
+            if self.showsComposer { self.turnRecapRow.chatColumn(column) }
+            #endif
             self.swarmProgress
                 .chatColumn(column)
                 .padding(.vertical, Layout.swarmPaddingVertical)
                 .padding(.top, Layout.stackSpacing)
             if self.showsComposer {
+                ChatActivityDock(self.viewModel, self.composerAccessory, column, self.$dismissedProgressCards)
                 let inset = OpenClawChatComposer.surfaceInset(style: self.style, chrome: self.composerChrome)
                 self.composer
                     .chatBehaviorProbe(.composer)
@@ -341,10 +339,9 @@ extension OpenClawChatView {
             showsSessionSwitcher: self.showsSessionSwitcher,
             userAccent: self.userAccent,
             composerChrome: self.composerChrome,
-            isComposerEnabled: self.isComposerEnabled
-                && !self.viewModel.isSendingAttachmentDraft,
-            isAttachmentInputEnabled: self.isAttachmentInputEnabled
-                && !self.viewModel.isSendingAttachmentDraft,
+            // The attachments a send took left the composer at the tap; it stays open for the next message.
+            isComposerEnabled: self.isComposerEnabled,
+            isAttachmentInputEnabled: self.isAttachmentInputEnabled,
             messagePlaceholder: self.messagePlaceholder,
             compactMessagePlaceholder: self.compactMessagePlaceholder,
             talkControl: self.talkControl,
@@ -381,17 +378,19 @@ extension OpenClawChatView {
         }
     }
 
+    #if !os(iOS)
     @ViewBuilder
     private var turnRecapRow: some View {
-        if !self.showsWorkingIndicator,
-           self.turnRecapSessionKey == self.viewModel.sessionKey,
-           let turnRecap
+        if self.showsTurnRecap, !self.showsWorkingIndicator,
+           self.turnRecapSessionKey == self.viewModel.sessionKey, let turnRecap
         {
             ChatTurnRecapRow(recap: turnRecap)
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
+
+    #endif
 
     private func handleTranscriptDistanceChange(_ distanceFromBottom: CGFloat) {
         let isAtLiveEdge = distanceFromBottom <= Layout.liveEdgeThreshold
@@ -425,7 +424,6 @@ extension OpenClawChatView {
                 Group {
                     self.transcriptGroups(transcript: transcript, hasVisibleContent: hasVisibleContent)
                     if self.usesInlineProgressCard { self.progressCard }
-                    if !self.showsComposer, !self.viewModel.hasBlockingRunActivity { self.turnRecapRow }
                     self.subagentWaitRow
                 }
                 .chatColumn(self.columnLayout)
@@ -443,6 +441,7 @@ extension OpenClawChatView {
             .modifier(ChatDraftIdentityPlacement())
             .environment(\.defaultMinListRowHeight, 0)
             .environment(\.openClawReadingPosition, self.scroll.readingPosition)
+            .modifier(ChatWorkingLineExit(self.showsWorkingIndicator, answer: self.hasVisibleStreamingAssistantText))
             .chatOlderHistoryTrigger(
                 self.olderHistory,
                 viewModel: self.viewModel,
@@ -712,6 +711,8 @@ extension OpenClawChatView {
 
         #if os(iOS)
         ForEach(ChatAssistantListCell.cells(shownGroups)) { cell in
+            let bottom = cell.joinsBelow ? 0 : Layout.messageSpacing / 2
+            let working = cell.id == .live && self.showsWorkingIndicator
             Group {
                 if cell.group.runID != nil {
                     ChatAssistantRunFrame(
@@ -726,7 +727,8 @@ extension OpenClawChatView {
                 }
             }
             .padding(.top, cell.joinsAbove ? 0 : Layout.messageSpacing / 2)
-            .padding(.bottom, cell.joinsBelow ? 0 : Layout.messageSpacing / 2)
+            // A List clips hit testing at the cell edge. Give the live control the existing bottom margin.
+            .padding(.bottom, bottom - (working ? ChatTypingIndicatorBubble.inspectionPadding : 0))
             .background(ChatReadingRowMarker(key: ChatReadingRowKey(cell), owner: self.scroll.readingPosition))
             .environment(\.openClawReadingAnswerRun, ChatReadingRowKey(cell).answerRun)
         }
@@ -753,11 +755,11 @@ extension OpenClawChatView {
             if group.runID != nil {
                 ChatAssistantRunFrame(showsAssistantAvatar: self.showsAssistantAvatars) {
                     parts
-                    if group.includesLive { self.liveAssistantContent }
+                    if group.includesLive { self.liveAssistantContent(transcript) }
                 }
             } else {
                 parts
-                if group.includesLive { self.liveAssistantContent }
+                if group.includesLive { self.liveAssistantContent(transcript) }
             }
         }
     }
@@ -777,7 +779,7 @@ extension OpenClawChatView {
                 isGrouped: cell.group.runID != nil,
                 answerID: cell.group.answerID)
         } else {
-            self.liveAssistantContent.chatBehaviorProbe(.runTail)
+            self.liveAssistantContent(transcript).chatBehaviorProbe(.runTail)
         }
     }
     #endif
@@ -852,7 +854,7 @@ extension OpenClawChatView {
     }
 
     @ViewBuilder
-    private var liveAssistantContent: some View {
+    private func liveAssistantContent(_ transcript: TranscriptPresentation) -> some View {
         // The transcript decides whether the bubble shows (from live-content shape), in the same
         // pass that adds the durable row replacing it. Deciding inside the bubble's own observation
         // scope removed it a layout pass early and collapsed the transcript for a frame.
@@ -876,12 +878,28 @@ extension OpenClawChatView {
         // shifted the whole reply up as the final row replaced the live bubble.
         ChatRunStatusContent {
             if self.showsWorkingIndicator {
+                #if os(iOS)
+                let run = self.viewModel.liveUsageRunID
+                let items = self.displayOptions.contains(.toolActivity) ? run.map {
+                    transcript.toolItems(for: $0, live: self.viewModel.toolActivities)
+                } ?? [] : []
+                let pending = items.last(where: \.isPending)
+                let name = pending?.addressedSessionKey.flatMap(transcript.tools.names.name(for:))
+                ChatTypingIndicatorBubble(
+                    showsAssistantAvatar: self.showsAssistantAvatars,
+                    runIdentity: self.viewModel.workingIndicatorIdentity,
+                    status: self.viewModel.runWorkingLabel,
+                    toolLabel: pending?.stepTitle(chatName: name),
+                    openTools: run.flatMap { id in items.isEmpty ? nil : { self.selectedWork = .run(id, items) } })
+                    .id(self.viewModel.workingIndicatorIdentity)
+                #else
                 ChatTypingIndicatorBubble(
                     showsAssistantAvatar: self.showsAssistantAvatars,
                     runIdentity: self.viewModel.workingIndicatorIdentity,
                     outputTokens: self.viewModel.liveRunOutputTokens,
                     status: self.viewModel.runStartupStatus)
-                    .equatable()
+                    .id(self.viewModel.workingIndicatorIdentity)
+                #endif
             }
         }
     }
@@ -994,7 +1012,7 @@ extension OpenClawChatView {
                 ChatMessageReactions(viewModel: self.viewModel, message: msg)
             }
             #endif
-            if let outboxState = self.viewModel.outboxState(for: msg.id) {
+            if ChatOutboxStatusLabel.isShownUnderMessages, let outboxState = self.viewModel.outboxState(for: msg.id) {
                 ChatOutboxStatusLabel(state: outboxState, queueMode: self.viewModel.outboxQueueMode(for: msg.id))
                     .padding(.trailing, 8)
             }
@@ -1072,7 +1090,7 @@ extension OpenClawChatView {
                         }
                     }
                 })
-            })
+            }, send: ChatUserSendPresentation(message: msg, viewModel: self.viewModel))
         return bubble
         #else
         return bubble
@@ -1171,7 +1189,7 @@ extension OpenClawChatView {
             searchActive: self.isSearchPresented,
             collapsesWork: self.collapsesCompletedWork,
             streamingTextRunID: self.hasVisibleStreamingAssistantText ? self.viewModel.streamingAssistantRunID : nil,
-            isMessageVisible: { message, _ in self.shouldDisplayMessage(message) })
+            isMessageVisible: self.shouldDisplayMessage)
     }
 
     private var latestVisibleTurnStartID: UUID? {
@@ -1251,10 +1269,9 @@ extension OpenClawChatView {
     }
 
     private var hasVisibleStreamingAssistantText: Bool {
-        guard let text = self.viewModel.liveAssistantTextShape else { return false }
-        return AssistantTextParser.hasVisibleContent(
-            in: text,
-            includeThinking: self.displayOptions.contains(.reasoning))
+        self.viewModel.liveAssistantTextShape.map {
+            AssistantTextParser.hasVisibleContent(in: $0, includeThinking: self.displayOptions.contains(.reasoning))
+        } ?? false
     }
 
     private var showsWorkingIndicator: Bool {
@@ -1262,6 +1279,7 @@ extension OpenClawChatView {
             (!self.hasVisibleStreamingAssistantText || self.viewModel.liveUsageRunID != nil)
     }
 
+    #if !os(iOS)
     private var turnRecapObservation: ChatTurnRecapObservation {
         let row = self.viewModel.currentSessionEntry().map(ChatTurnRecapSessionRow.init)
         return ChatTurnRecapObservation(
@@ -1280,6 +1298,7 @@ extension OpenClawChatView {
         self.turnRecap = recap
         self.turnRecapSessionKey = recap == nil ? nil : observation.sessionKey
     }
+    #endif
 
     private var hasVisibleTransientContent: Bool {
         self.viewModel.hasBlockingRunActivity ||
@@ -1473,17 +1492,8 @@ extension OpenClawChatView {
     }
     #endif
 
-    private func dismissKeyboardIfNeeded() {
-        #if canImport(UIKit)
-        UIApplication.shared.sendAction(
-            #selector(UIResponder.resignFirstResponder),
-            to: nil,
-            from: nil,
-            for: nil)
-        #endif
-    }
-
-    private func shouldDisplayMessage(_ message: OpenClawChatMessage) -> Bool {
+    private func shouldDisplayMessage(_ message: OpenClawChatMessage, activeRunIDs: Set<String>) -> Bool {
+        if let shown = self.displayOptions.presetVisibility(of: message, activeRunIDs: activeRunIDs) { return shown }
         let primaryText = ChatMessageVisibleText.displayText(
             in: message,
             includeThinking: self.displayOptions.contains(.reasoning))

@@ -96,7 +96,8 @@ export async function completeComposerPrediction(params: {
         runtimeOverride,
         explicitRuntimeOverride: candidate.agentHarnessRuntimeOverride,
       });
-      params.assertCurrent();
+      // The candidate's guard reports a self-cancel to the utility fallback chain.
+      candidate.assertCurrent?.();
       const runtime = route.cliOwner ?? route.selection.selectedHarnessId;
       // This runtime retains service helpers; predictions require a literal zero-tool surface.
       if (runtime === "agentsapi") {

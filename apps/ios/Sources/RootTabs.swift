@@ -69,9 +69,19 @@ struct RootTabs: View {
         Self.initialSidebarDestination.settingsRoute
     @State private var selectedSettingsRouteRequestID: Int = 0
     @State private var sidebarModel = RootSidebarModel()
+    @State private var isSearchPresented = false
+    /// What a search result opens once the cover is gone, so a Settings sheet never races its dismissal.
+    @State private var pendingSearchTarget: RootSearchTarget?
     // Embedded Settings rows push onto the sidebar stack; clear it before
     // changing sidebar roots so stale settings detail screens cannot survive.
     @State private var sidebarNavigationPath: [SettingsRoute] = []
+    private struct SubagentChatRoute: Hashable {
+        let parent: String
+        let key: String
+        let name: String
+    }
+
+    @State private var subagentChat: SubagentChatRoute?
     @State private var isSidebarDetailRootVisible: Bool = true
     @State private var sidebarPresentation: RootSidebarPresentation
     @State private var initialSidebarVisibilityOverride: Bool?
@@ -275,6 +285,14 @@ struct RootTabs: View {
                         // Observation-only content must not cover native accessibility hit targets.
                             .frame(width: 0, height: 0)
                 }
+                .fullScreenCover(isPresented: self.$isSearchPresented, onDismiss: self.openPendingSearchTarget) {
+                    // Search replaces the sidebar while it is open, bottom bar included. A cover owns its
+                    // keyboard inset, which the drawer layers do not pass down.
+                    RootSearchScreen(
+                        sidebarModel: self.sidebarModel,
+                        open: self.openSearchResult,
+                        close: { self.setSearchPresented(false) })
+                }
         }
     }
 
@@ -333,6 +351,7 @@ struct RootTabs: View {
                 selectDestination: self.selectSidebarDestination,
                 selectSession: self.selectSidebarSession,
                 openPagesEditor: self.openSidebarPagesEditor,
+                openSearch: { self.setSearchPresented(true) },
                 drawerFooterBottomInset: drawerSafeAreaInsets.map { $0.bottom + 8 } ?? 0)
         }
         .padding(.top, drawerSafeAreaInsets?.top ?? 0)
@@ -356,6 +375,29 @@ struct RootTabs: View {
                 // Sidebar open/close rebuilds this branch with fresh closures; the gate keeps
                 // that from re-running the chat tab and its transcript (see `ChatProTab ==`).
                     .equatable()
+                    .environment(\.openClawOpenChildChat) { key, name in
+                        guard let chat = self.appModel.chatPresentation.viewModel else { return }
+                        let parent = chat.sessionKey
+                        chat.switchSession(to: key)
+                        guard chat.sessionKey == key else { return }
+                        self.subagentChat = SubagentChatRoute(parent: parent, key: key, name: name)
+                    }
+                    .navigationDestination(item: self.$subagentChat) { child in
+                        ChatProTab(
+                            childKey: child.key,
+                            childName: child.name,
+                            headerSidebarAction: nil,
+                            startFirstGatewaySetup: nil)
+                            .tint(.primary)
+                    }
+                    .onChange(of: self.appModel.chatPresentation.viewModel?.sessionKey) { _, key in
+                        if let child = self.subagentChat, key != child.key { self.subagentChat = nil }
+                    }
+                    .onChange(of: self.subagentChat) { previous, current in
+                        guard current == nil, let previous, let chat = self.appModel.chatPresentation.viewModel,
+                              chat.sessionKey == previous.key else { return }
+                        chat.switchSession(to: previous.parent)
+                    }
         case let .dashboard(path):
             DashboardPageScreen(
                 path: path,
@@ -368,7 +410,8 @@ struct RootTabs: View {
             CommandSessionsScreen(
                 sidebarModel: self.sidebarModel,
                 headerSidebarAction: self.sidebarHeaderAction,
-                openChat: { self.selectSidebarDestination(.chat) })
+                openChat: { self.selectSidebarDestination(.chat) },
+                openSearch: { self.setSearchPresented(true) })
         case .files:
             AgentWorkspaceFilesTab(headerSidebarAction: self.sidebarHeaderAction)
                 .id(self.selectedSidebarDestination.id)
@@ -751,6 +794,8 @@ struct RootTabs: View {
                             self.presentedSheet = nil
                             self.selectSidebarDestination(destination)
                         },
+                        onTrySkill: self.trySkillAction,
+                        toolQuery: self.settingsToolQuery,
                         gatewaySetupRequest: self.gatewaySetupRequest,
                         onGatewaySetupRequestHandled: self.handleGatewaySetupRequest)
                         .presentationDragIndicator(.visible)
@@ -818,6 +863,36 @@ extension RootTabs {
         }
     }
 
+    /// The cover appears in place, without the sheet slide: search takes the sidebar's spot, it is not a new layer.
+    private func setSearchPresented(_ isPresented: Bool) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            self.isSearchPresented = isPresented
+        }
+    }
+
+    private func openSearchResult(_ target: RootSearchTarget) {
+        self.pendingSearchTarget = target
+        self.setSearchPresented(false)
+    }
+
+    private func openPendingSearchTarget() {
+        guard let target = self.pendingSearchTarget else { return }
+        self.pendingSearchTarget = nil
+        switch target {
+        case let .destination(destination):
+            self.selectSidebarDestination(destination)
+        case let .settings(route, query):
+            self.showSettings(path: [route], toolQuery: query)
+        case .newChat:
+            self.appModel.requestNewChat()
+            self.selectSidebarDestination(.chat)
+        case let .session(session):
+            self.selectSidebarSession(session)
+        }
+    }
+
     private func openSidebarPagesEditor() {
         self.presentedSheet = .sidebarPages
     }
@@ -857,6 +932,16 @@ extension RootTabs {
             isSceneActive: true,
             isOnboardingPresented: self.showOnboarding,
             hasGatewayConfiguration: self.hasExistingGatewayConfig() || self.appModel.gatewayServerName != nil)
+    }
+
+    private var trySkillAction: ((String) -> Void)? {
+        guard let viewModel = self.appModel.chatPresentation.viewModel else { return nil }
+        return { draft in
+            guard self.appModel.chatPresentation.viewModel === viewModel else { return }
+            viewModel.input = viewModel.input.isEmpty ? draft : viewModel.input + "\n\n" + draft
+            self.presentedSheet = nil
+            self.selectSidebarDestination(.chat)
+        }
     }
 
     private func showSettings(path: [SettingsRoute] = [], toolQuery: String = "") {
