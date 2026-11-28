@@ -71,8 +71,7 @@ export async function terminateCodexAppServerOrphan(
   }
   const result = await terminateCodexAppServerDescendants(
     { pid: expected.pid, kill: (signal) => signalProcess(expected.pid, signal ?? "SIGTERM") },
-    expected,
-    deadline,
+    { expected, deadline },
   );
   const contained = result === "exited" ? undefined : result;
   let gone = false;
@@ -120,7 +119,7 @@ export async function terminateCodexAppServerOrphan(
   }
 }
 
-type TreeInspectionBudget = { deadline: number; retryOnDeadline: boolean };
+type TreeInspectionBudget = { deadline: number; startExitWait?: () => number };
 
 async function readContainmentTree(
   roots: number[],
@@ -131,24 +130,34 @@ async function readContainmentTree(
     return await read();
   } catch (error) {
     if (
-      !budget.retryOnDeadline ||
+      !budget.startExitWait ||
       !(error instanceof ProcessInspectionError) ||
       error.reason !== "deadline"
     ) {
       return undefined;
     }
-    // Keep custody and the identities already observed while retrying a stalled census.
-    // Killing only the root group here would orphan children in separate groups.
-    budget.retryOnDeadline = false;
-    budget.deadline = performance.now() + MAX_PROCESS_CONTAINMENT_MS;
+    // A root-only kill would orphan separate groups. Retry while ancestry is
+    // still held, within the transport's existing exit-wait deadline.
+    budget.deadline = Math.min(
+      budget.startExitWait(),
+      performance.now() + MAX_PROCESS_CONTAINMENT_MS,
+    );
+    budget.startExitWait = undefined;
     return await read().catch(() => undefined);
   }
 }
 
 export async function terminateCodexAppServerDescendants(
   child: ContainableTransport,
-  expected?: CodexAppServerProcessIdentity,
-  initialDeadline = performance.now() + MAX_PROCESS_CONTAINMENT_MS,
+  {
+    expected,
+    deadline,
+    startExitWait,
+  }: {
+    expected?: CodexAppServerProcessIdentity;
+    deadline?: number;
+    startExitWait?: () => number;
+  } = {},
 ): Promise<{ root: PosixProcess; resume: () => void } | "exited" | undefined> {
   const rootPid = child.pid;
   if (child.exitCode != null || child.signalCode != null) {
@@ -159,8 +168,8 @@ export async function terminateCodexAppServerDescendants(
   }
   // Inspection failures never grant containment or signal authority.
   const budget = {
-    deadline: initialDeadline,
-    retryOnDeadline: process.platform === "linux" && !expected,
+    deadline: deadline ?? performance.now() + MAX_PROCESS_CONTAINMENT_MS,
+    startExitWait: process.platform === "linux" && !expected ? startExitWait : undefined,
   };
   const snapshot = await readContainmentTree([rootPid], budget);
   if (!snapshot || performance.now() >= budget.deadline) {
@@ -306,32 +315,23 @@ async function quiesceDescendants(
     if (performance.now() >= budget.deadline) {
       return undefined;
     }
-    const roots = [root.pid, ...provenByPid.keys()];
-    let knownRunning: PosixProcess[] | undefined;
     if (process.platform === "linux") {
-      const known = await readCodexAppServerProcessSnapshot(budget.deadline, roots).catch(
+      // A running root makes the topology unusable for this pass. Inspect only
+      // its PID until it quiesces, then discover any newly forked descendants.
+      const current = await readCodexAppServerProcess(root.pid, budget.deadline).catch(
         () => undefined,
       );
-      // A selected PID can lose its process group while exiting. The full
-      // census below can omit that row and still find its surviving siblings.
-      if (known) {
-        const current = known.find((row) => row.pid === root.pid);
-        if (!current || !isSameLiveRoot(current, root)) {
+      if (!current || !isSameLiveRoot(current, root)) {
+        return undefined;
+      }
+      if (!isQuiescedState(current.state)) {
+        if (!signalProcess(current.pid, "SIGSTOP")) {
           return undefined;
         }
-        if (!isQuiescedState(current.state)) {
-          if (!signalProcess(current.pid, "SIGSTOP")) {
-            return undefined;
-          }
-          continue;
-        }
-        // Stop known children first. Only a full census can prove quiescence.
-        if (known.some((row) => provenByPid.has(row.pid) && !isQuiescedState(row.state))) {
-          knownRunning = known;
-        }
+        continue;
       }
     }
-    const snapshot = knownRunning ?? (await readContainmentTree(roots, budget));
+    const snapshot = await readContainmentTree([root.pid, ...provenByPid.keys()], budget);
     const { deadline } = budget;
     if (!snapshot || performance.now() >= deadline) {
       return undefined;
@@ -404,7 +404,7 @@ async function quiesceDescendants(
         allStopped = false;
       }
     }
-    if (allStopped && !knownRunning) {
+    if (allStopped) {
       return [...provenByPid.values()];
     }
   }

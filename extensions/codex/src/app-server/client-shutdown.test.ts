@@ -21,18 +21,27 @@ afterEach(() => {
 });
 
 describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
-  it.each(["confirmed", "unconfirmed"])("preserves %s force-kill containment", async (cleanup) => {
+  const outcomes = ["confirmed", "unconfirmed", "deadline"];
+  it.each(outcomes)("preserves %s force-kill containment", async (cleanup) => {
     vi.useFakeTimers();
     const harness = createClientHarness({ autoEmitExit: false });
     const root = { pid: 12345, ppid: process.pid, pgid: 12345, state: "S", startedAt: "fake" };
     Object.assign(harness.process, { pid: root.pid });
     // Model OS reads/signals; the real containment owner must produce the receipt.
-    vi.spyOn(processSnapshot, "readCodexAppServerProcessSnapshot").mockImplementation(async () => {
-      if (cleanup === "unconfirmed") {
-        throw new processSnapshot.ProcessInspectionError("unavailable");
-      }
-      return [{ ...root }];
-    });
+    vi.spyOn(processSnapshot, "readCodexAppServerProcessSnapshot").mockImplementation(
+      async (deadline) => {
+        if (cleanup === "deadline") {
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.ceil(deadline! - performance.now())),
+          );
+          throw new processSnapshot.ProcessInspectionError("deadline");
+        }
+        if (cleanup === "unconfirmed") {
+          throw new processSnapshot.ProcessInspectionError("unavailable");
+        }
+        return [{ ...root }];
+      },
+    );
     vi.spyOn(processSnapshot, "readCodexAppServerProcess").mockImplementation(async () => ({
       ...root,
     }));
@@ -49,12 +58,13 @@ describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
     vi.mocked(harness.process.kill).mockImplementation((value) => signal(root.pid, value));
     const warning = vi.spyOn(embeddedAgentLog, "warn");
     const closing = harness.client.closeAndWait({ forceKillDelayMs: 10, exitTimeoutMs: 100 });
-    await vi.advanceTimersByTimeAsync(20);
+    // A stalled census shares the existing 100 ms exit wait after the 2 s inspection.
+    await vi.advanceTimersByTimeAsync(cleanup === "deadline" ? 2_111 : 20);
+    expect(kill).toHaveBeenCalledWith(-root.pid, "SIGKILL");
     await expect(closing).resolves.toEqual({
       exited: true,
       cleanup: cleanup === "confirmed" ? "terminated" : "uncertain",
     });
-    expect(kill).toHaveBeenCalledWith(-root.pid, "SIGKILL");
     expect(warning).toHaveBeenCalledTimes(cleanup === "confirmed" ? 1 : 0);
     expect(vi.getTimerCount()).toBe(0);
   });

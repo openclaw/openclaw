@@ -26,7 +26,7 @@ export function isDeadProcessState(state: string): boolean {
 const PROCESS_COLUMNS = "pid=,ppid=,pgid=,stat=,lstart=";
 const MAX_PROCESS_CONTAINMENT_MS = 2_000;
 const PROCESS_INSPECTION_MAX_BYTES = 8 * 1024 * 1024;
-const PROC_STAT_BATCH_SIZE = 32;
+const PROC_STAT_BATCH_SIZE = 128;
 
 export class ProcessInspectionError extends Error {
   constructor(readonly reason: "deadline" | "permission" | "unavailable") {

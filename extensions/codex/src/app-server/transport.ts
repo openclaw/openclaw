@@ -10,10 +10,12 @@ type TransportClose = {
   closing: Promise<"natural" | "graceful" | "contained" | "uncertain">;
   naturalExit: boolean;
   wasForced: () => boolean;
+  exitWaitStartedAt: () => number | undefined;
 };
 const CODEX_APP_SERVER_TRANSPORT_CLOSES = new WeakMap<object, TransportClose>();
 
 type TransportCloseOptions = {
+  exitTimeoutMs?: number;
   forceKillDelayMs?: number;
   drainStdio?: boolean;
   /** Safe only when native commands cannot have left untracked descendants. */
@@ -76,6 +78,7 @@ function beginCodexAppServerTransportClose(
     return current;
   }
   let forced = false;
+  let exitWaitStartedAt: number | undefined;
   const forceKill = () => {
     forced = true;
     signalCodexAppServerTransport(child, "SIGKILL");
@@ -99,12 +102,25 @@ function beginCodexAppServerTransportClose(
       finishCodexAppServerTransportClose(child, options, forceKill);
       return "uncertain";
     }
-    const contained = await terminateCodexAppServerDescendants(child).catch(() => undefined);
+    const contained = await terminateCodexAppServerDescendants(child, {
+      startExitWait: () => {
+        // A failed census would start the force-kill timer and exit wait here.
+        // Charge the retry to that same window, including for short usage reads.
+        exitWaitStartedAt = performance.now();
+        return exitWaitStartedAt + (options.exitTimeoutMs ?? 2_000);
+      },
+    }).catch(() => undefined);
     if (contained === "exited") {
       return options.gracefulExit ? "graceful" : "natural";
     }
     try {
-      finishCodexAppServerTransportClose(child, options, forceKill, contained?.resume);
+      finishCodexAppServerTransportClose(
+        child,
+        options,
+        forceKill,
+        contained?.resume,
+        exitWaitStartedAt,
+      );
     } catch {
       forceKill();
     }
@@ -112,7 +128,12 @@ function beginCodexAppServerTransportClose(
     // Failed containment cannot certify cleanup from the root's exit alone.
     return contained ? "contained" : "uncertain";
   })();
-  const closure = { closing, naturalExit: false, wasForced: () => forced };
+  const closure = {
+    closing,
+    naturalExit: false,
+    wasForced: () => forced,
+    exitWaitStartedAt: () => exitWaitStartedAt,
+  };
   CODEX_APP_SERVER_TRANSPORT_CLOSES.set(child, closure);
   return closure;
 }
@@ -122,8 +143,10 @@ function finishCodexAppServerTransportClose(
   options: TransportCloseOptions,
   killTransport: () => void,
   resumeRoot?: () => void,
+  exitWaitStartedAt?: number,
 ): void {
-  const forceKillDelayMs = options.forceKillDelayMs ?? 1_000;
+  const elapsed = exitWaitStartedAt === undefined ? 0 : performance.now() - exitWaitStartedAt;
+  const forceKillDelayMs = (options.forceKillDelayMs ?? 1_000) - elapsed;
   const forceKill = setTimeout(
     () => {
       if (hasCodexAppServerTransportExited(child)) {
@@ -156,7 +179,7 @@ function finishCodexAppServerTransportClose(
 /** Reports physical settlement separately from confirmed process cleanup. */
 export async function closeCodexAppServerTransportAndWait(
   child: CodexAppServerTransport,
-  options: TransportCloseOptions & { exitTimeoutMs?: number } = {},
+  options: TransportCloseOptions = {},
 ): Promise<CodexAppServerCloseResult> {
   const drained = options.drainStdio
     ? Promise.all(
@@ -166,11 +189,15 @@ export async function closeCodexAppServerTransportAndWait(
         () => false,
       )
     : undefined;
+  const joinedAt = performance.now();
   const closure = beginCodexAppServerTransportClose(child, options);
   const containment = await closure.closing;
+  const exitWaitStartedAt = closure.exitWaitStartedAt();
+  const elapsed =
+    exitWaitStartedAt === undefined ? 0 : performance.now() - Math.max(joinedAt, exitWaitStartedAt);
   const settled = await waitForCodexAppServerTransportExit(
     child,
-    options.exitTimeoutMs ?? 2_000,
+    (options.exitTimeoutMs ?? 2_000) - elapsed,
     drained,
   );
   if (settled) {
