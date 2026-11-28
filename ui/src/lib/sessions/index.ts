@@ -562,10 +562,7 @@ export function createSessionCapability(
     const canApplySnapshot = roster.canApplyPrimarySnapshot(event.payload);
     const eventObservation = roster.captureEvent(event.payload);
     const { eventInfo, reconciled, claimChanged, notifyManaged, notifyEvent } =
-      reconcileChangedEvent(event.payload, eventObservation, {
-        resultAgentId: state.agentId,
-        archivedFilter: roster.lastOptions().archivedFilter,
-      });
+      reconcileChangedEvent(event.payload, eventObservation, roster.lastOptions().archivedFilter);
     if (eventObservation.scope && !connection.isCurrent(eventObservation.scope)) {
       return;
     }
