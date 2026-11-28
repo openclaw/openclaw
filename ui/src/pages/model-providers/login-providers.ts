@@ -87,8 +87,13 @@ export function buildLoginProviders({
   for (const group of groups.values()) {
     group.label ||= providerDisplayLabel(group.id);
   }
+  // Browser sign-in needs no key to paste, so those providers lead.
   return [...groups.values()].toSorted(
-    (a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id),
+    (a, b) =>
+      Number(b.choices.some((choice) => choice.kind !== "secret")) -
+        Number(a.choices.some((choice) => choice.kind !== "secret")) ||
+      a.label.localeCompare(b.label) ||
+      a.id.localeCompare(b.id),
   );
 }
 
