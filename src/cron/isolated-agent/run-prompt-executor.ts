@@ -265,7 +265,7 @@ export function createCronPromptExecutor(
         cyberAccessProgram: params.job.cyberAccessProgram,
         agentDir: params.agentDir,
         userLockedAuthProfileId:
-          !inference && params.liveSelection.authProfileIdSource === "user"
+          params.liveSelection.authProfileIdSource === "user"
             ? params.liveSelection.authProfileId
             : undefined,
         fallbacksOverride: cronFallbacksOverride,

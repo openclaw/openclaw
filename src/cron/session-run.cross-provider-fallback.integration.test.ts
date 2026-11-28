@@ -24,6 +24,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   apiKeyProfile,
   completedSse,
+  connectPersonalAccountWithDisabledSharedAccount,
   listenLoopbackProvider,
   loopbackModelRuntime,
   loopbackProviderConfig,
@@ -154,11 +155,15 @@ async function runSessionFallback(
             sessionStartedAt: Date.now(),
           },
         );
-        const model = "openai/gpt-4.1@openai:primary";
+        const profileId =
+          params.primary === "live"
+            ? await connectPersonalAccountWithDisabledSharedAccount(state.agentDir())
+            : "openai:primary";
+        const model = `openai/gpt-4.1@${profileId}`;
         const captured = await captureAuthProfileAuthorization({
           cfg,
           agentDir: state.agentDir(),
-          profileId: "openai:primary",
+          profileId,
           assertCurrent() {},
         });
         const modelAuthProfileAuthorizationId = captured.authorizationId;
@@ -220,7 +225,7 @@ it.each(["live", "removed"] as const)(
   async (primary) => {
     await runSessionFallback({ primary }, ({ hits, result }) => {
       // A removed recorded account refuses only its own candidate; it is never replaced.
-      expect(hits.primary).toEqual(primary === "live" ? ["Bearer key-primary"] : []);
+      expect(hits.primary).toEqual(primary === "live" ? ["Bearer key-personal"] : []);
       expect(result.status, result.error).toBe("ok");
       expect(result.errorClassification).toBeUndefined();
       expect(hits.backup).toEqual(["Bearer key-backup-other"]);

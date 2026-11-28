@@ -19,6 +19,7 @@ import {
 import {
   apiKeyProfile,
   completedSse,
+  connectPersonalAccountWithDisabledSharedAccount,
   listenLoopbackProvider,
   loopbackModelRuntime,
   loopbackProviderConfig,
@@ -175,12 +176,13 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it("fails over to another provider's live account when the primary is out of quota", async () => {
+it("tries the pinned personal account before failing over to the backup provider's live account", async () => {
   await withFallbackFixture(async ({ cfg, hits, reload, run, state }) => {
-    const job = await reload(await boundJob(cfg, "xprov"));
-    expect(job.payload).toMatchObject({ model: "openai/gpt-4.1@openai:primary" });
+    const personal = await connectPersonalAccountWithDisabledSharedAccount(state.agentDir());
+    const job = await reload(await boundJob(cfg, "xprov", { model: `openai/gpt-4.1@${personal}` }));
     const first = await run(job);
     expect(first.status, first.error).toBe("ok");
+    expect(hits.primary).toEqual(["Bearer key-personal"]);
     expect(first.summary).toContain("served by backup provider");
     // The fallback follows that provider's live account order, like an interactive run.
     await setAuthProfileOrder({
@@ -192,7 +194,7 @@ it("fails over to another provider's live account when the primary is out of quo
     expect(second.status, second.error).toBe("ok");
     // The quota failure puts the primary account in cooldown, so the second run may skip it;
     // it never sends another account's credential to the primary provider.
-    expect(hits.primary.every((auth) => auth === "Bearer key-primary")).toBe(true);
+    expect(hits.primary.every((auth) => auth === "Bearer key-personal")).toBe(true);
     expect(hits.backup).toEqual(["Bearer key-backup", "Bearer key-backup-other"]);
     // Nothing new is recorded; the binding is exactly what the job stored.
     expect((await reload(job)).payload).toEqual(job.payload);

@@ -99,10 +99,7 @@ export function buildRunEntrySelection(
     agentDir: selection.agentDir,
     fallbacksOverride: selection.fallbacksOverride,
     cyberAccessProgram: run.cyberAccessProgram,
-    userLockedAuthProfileId:
-      !run.scheduledAutomation && run.authProfileIdSource === "user"
-        ? run.authProfileId
-        : undefined,
+    userLockedAuthProfileId: run.authProfileIdSource === "user" ? run.authProfileId : undefined,
   };
 }
 
