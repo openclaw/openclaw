@@ -293,26 +293,65 @@ describe("ProjectsPage", () => {
     expect(page.switchFor("contractor").disabled).toBe(true);
   });
 
-  it("renames through projects.rename and refreshes both project lists", async () => {
-    const request = listRequest();
-    vi.mocked(showInputDialog).mockImplementation(async (options) => {
-      expect(options.defaultValue).toBe("site");
-      return (await options.submit?.("Website")) === null ? "Website" : null;
+  it("shows the submitted name before the write and its receipt before either list refresh", async () => {
+    const write = createDeferred<ProjectRecord>();
+    const refresh = createDeferred<{ projects: ProjectRecord[] }>();
+    let lists = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "projects.rename") {
+        return write.promise;
+      }
+      return ++lists === 1 ? { projects: [SITE, DOCS] } : refresh.promise;
     });
+    vi.mocked(showInputDialog).mockResolvedValueOnce("Website");
     const page = createProjectsPage(request);
     await page.ready();
     await openDetails(page, "site");
     page.button("Rename", page.dialog()!)!.click();
     await waitForSolid(() =>
-      expect(request).toHaveBeenCalledWith("projects.rename", {
-        projectId: "site",
-        name: "Website",
-      }),
+      expect(page.dialog()?.querySelector("h2")?.textContent).toBe("Website"),
     );
-    await waitForSolid(() =>
-      expect(request.mock.calls.filter(([method]) => method === "projects.list")).toHaveLength(2),
-    );
+    expect(request).toHaveBeenCalledWith("projects.rename", { projectId: "site", name: "Website" });
+    expect(page.rowText("Website")).toContain(SITE.repoRoot);
+    const accepted = { ...SITE, displayName: "Website (confirmed)" };
+    write.resolve(accepted);
+    await waitForSolid(() => expect(lists).toBe(2));
     expect(vi.mocked(projectsForGateway).mock.results[0]?.value.refresh).toHaveBeenCalledWith(true);
+    expect(page.rowText(accepted.displayName)).toContain(SITE.repoRoot);
+    vi.mocked(showInputDialog).mockResolvedValueOnce(null);
+    page.button("Rename", page.dialog()!)!.click();
+    expect(showInputDialog).toHaveBeenLastCalledWith(
+      expect.objectContaining({ defaultValue: accepted.displayName }),
+    );
+    refresh.resolve({ projects: [accepted, DOCS] });
+  });
+
+  it("rolls back a rejected rename without changing selection and keeps the attempted name for retry", async () => {
+    const write = createDeferred<ProjectRecord>();
+    const page = createProjectsPage(
+      vi.fn(async (method: string) =>
+        method === "projects.rename" ? write.promise : { projects: [SITE, DOCS] },
+      ),
+    );
+    vi.mocked(showInputDialog).mockResolvedValueOnce("Website").mockResolvedValueOnce(null);
+    await page.ready();
+    await openDetails(page, SITE.displayName);
+    page.button("Rename", page.dialog()!)!.click();
+    await waitForSolid(() => expect(page.rowText("Website")).toBeDefined());
+    page.dialog()!.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click();
+    await openDetails(page, DOCS.displayName);
+    write.reject(new Error("Project unavailable"));
+    await waitForSolid(() => expect(page.rowText(SITE.displayName)).toBeDefined());
+    expect(page.model.selectedId).toBe(DOCS.id);
+    expect(page.dialog()?.querySelector('[role="alert"]')?.textContent).toContain(
+      "site: Project unavailable",
+    );
+    page.dialog()!.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click();
+    await openDetails(page, SITE.displayName);
+    page.button("Rename", page.dialog()!)!.click();
+    expect(showInputDialog).toHaveBeenLastCalledWith(
+      expect.objectContaining({ defaultValue: SITE.displayName, draftValue: "Website" }),
+    );
   });
 
   it("rereads the list after a change even while an older read is still pending", async () => {
@@ -333,9 +372,7 @@ describe("ProjectsPage", () => {
       }
       return { projects: [renamed ? { ...SITE, displayName: "Website" } : SITE, DOCS] };
     });
-    vi.mocked(showInputDialog).mockImplementation(async (options) =>
-      (await options.submit?.("Website")) === null ? "Website" : null,
-    );
+    vi.mocked(showInputDialog).mockResolvedValueOnce("Website");
     const page = createProjectsPage(request);
     await page.ready();
     void page.model.load();

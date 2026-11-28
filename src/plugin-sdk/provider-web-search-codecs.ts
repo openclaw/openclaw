@@ -153,6 +153,7 @@ export const nativeWebSearchCodecs = {
           title: wrapWebContent(entry.title, "web_search"),
           url: entry.url,
           snippet: wrapped(string(entry.content)),
+          published: string(entry.publishedDate) || undefined,
           siteName: resolveSiteName(entry.url) || undefined,
           img_src: string(entry.img_src) || undefined,
         }));

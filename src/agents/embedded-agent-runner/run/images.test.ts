@@ -254,7 +254,7 @@ describe("detectImageReferences", () => {
 
 describe("detectAndLoadPromptImages", () => {
   it.each([
-    ["non-vision input", ["text"], "abc"],
+    ["non-vision input", ["text"], TINY_PNG_BASE64],
     ["invalid inline image", ["text", "image"], "not-valid-base64"],
   ] satisfies Array<[string, string[], string]>)("rejects %s", async (_name, input, data) => {
     const result = await loadImages({

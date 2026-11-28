@@ -18,7 +18,7 @@ export function navigateFromCustodianSetup(
   inferenceState: CustodianConfiguredInferenceState,
 ): void {
   if (destination === "chat" && inferenceState === "utility") {
-    context?.navigate("model-setup", { search: "?firstRun=1" });
+    context?.navigate("model-providers", { search: "?firstRun=1" });
   } else {
     context?.navigate(destination);
   }

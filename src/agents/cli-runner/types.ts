@@ -66,6 +66,7 @@ export type RunCliAgentParams = Pick<
   | "toolsAllow"
   | "skillLibraryAuthoring"
   | "disableTrajectory"
+  | "toolBindings"
 > & {
   preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
   /** Core lifecycle owner; never forwarded to the plugin execution context. */
@@ -90,6 +91,8 @@ export type RunCliAgentParams = Pick<
    * background answers and must not reuse or mutate normal agent sessions.
    */
   executionMode?: CliBackendExecutionMode;
+  /** Host-generated turn input; see `CliBackendExecuteContext.promptOrigin`. Never authority. */
+  promptOrigin?: "host";
   /** Internal one-shot inference path: suppress transcript, hook, context-engine, and delivery work. */
   isolatedCompletion?: true;
   /** Diagnostic attribution only; must not change execution policy or timeout selection. */

@@ -99,6 +99,15 @@ export function recordReplyFollowupAdmission(
   };
 }
 
+export function recordReplyPreparationFailure(
+  opts: { internalEventExecution?: SessionEventExecution } | undefined,
+  error: Error,
+  rejection?: ReplyPreRunRejectionCode,
+): void {
+  opts?.internalEventExecution?.onFailed?.(error);
+  recordReplyPreRunRejection(resolveReplyOperationRunState(opts), rejection);
+}
+
 export function recordReplyPreRunRejection(
   state: ReplyOperationRunState | undefined,
   rejection: ReplyPreRunRejectionCode | undefined,

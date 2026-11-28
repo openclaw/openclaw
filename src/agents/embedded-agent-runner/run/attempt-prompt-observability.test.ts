@@ -92,6 +92,7 @@ describe("observeEmbeddedAttemptPrompt", () => {
     });
     expect(event?.historyMessages).toEqual(input.hookMessagesForCurrentPrompt);
     expect(event?.historyMessages).not.toBe(input.hookMessagesForCurrentPrompt);
+    expect(event?.historyMessages[0]).not.toBe(input.hookMessagesForCurrentPrompt[0]);
     expect(context).toMatchObject({ agentId: "main", channel: "discord", senderId: "sender-1" });
     expect(hoisted.recordTrajectoryEvent).toHaveBeenNthCalledWith(
       1,

@@ -1,5 +1,7 @@
-// Tools that poll by design stay direct under Tool Search, so the repeat guard reads their
-// own `repeatable` declaration instead of dispatch_action's.
+// Tools that poll by design stay deferred under Tool Search: dispatch_action carries their
+// `repeatable` declarations, so the repeat guard exempts a poll through it as it would a
+// direct call. Their catalog family is deferred with them: a split family reads as the
+// whole capability and hides the deferred member.
 import { Type } from "typebox";
 import { afterEach, expect, it } from "vitest";
 import { captureAgent, makeCall } from "../../packages/agent-core/src/agent-loop.test-support.js";
@@ -18,6 +20,7 @@ import {
 } from "./tool-search.js";
 import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 
 const refs: ToolSearchCatalogRef[] = [];
@@ -31,16 +34,31 @@ const turns = (count: number, name: string, args: Record<string, unknown>) =>
     { ...makeCall(name, `${name}-${index}`), arguments: args },
   ]);
 
-function surface(mode: "tools" | "directory", executed: string[] = []) {
+// Real declarations and schemas; only the run lifecycle is replaced.
+const familyFactories: Record<string, () => AnyAgentTool> = {
+  agents_wait: () => createAgentsWaitTool({}),
+  sessions_spawn: () => createSessionsSpawnTool({ config: {} }),
+  subagents: () => createSubagentsTool(),
+};
+const delegationFamily = Object.keys(familyFactories);
+
+function surface(
+  mode: "tools" | "directory",
+  executed: string[] = [],
+  members: readonly string[] = Object.keys(familyFactories),
+  include?: Array<{ name: string }>,
+  directToolNames?: string[],
+) {
   const catalogRef = createToolSearchCatalogRef();
   refs.push(catalogRef);
-  const ctx = { config: { tools: { toolSearch: { mode } } }, catalogRef };
+  const ctx = {
+    config: { tools: { toolSearch: { mode, ...(include ? { include } : {}) } } },
+    catalogRef,
+  };
   const record = (name: string) => async () => {
     executed.push(name);
     return { content: [{ type: "text" as const, text: `${name} ok` }], details: {} };
   };
-  // The real declaration and schema; only the run lifecycle is replaced.
-  const agentsWait: AnyAgentTool = { ...createAgentsWaitTool({}), execute: record("agents_wait") };
   const lookup: AnyAgentTool = {
     name: "lookup",
     label: "Lookup",
@@ -50,11 +68,15 @@ function surface(mode: "tools" | "directory", executed: string[] = []) {
   };
   const { tools } = (mode === "tools" ? applyToolSearchCatalog : applyToolSchemaDirectoryCatalog)({
     ...ctx,
+    directToolNames,
     tools: [
       ...createToolSearchTools(ctx),
       createReadTool("/tmp/repeatable"),
-      agentsWait,
-      createSubagentsTool(),
+      // The family test asserts every member has a factory.
+      ...members.flatMap((name) => {
+        const create = familyFactories[name];
+        return create ? [{ ...create(), execute: record(name) }] : [];
+      }),
       lookup,
     ],
   });
@@ -62,26 +84,72 @@ function surface(mode: "tools" | "directory", executed: string[] = []) {
 }
 
 it.each(["tools", "directory"] as const)(
-  "%s: keeps polling tools in the provider tool list and defers the rest",
+  "%s: defers polling tools with their whole delegation family",
   (mode) => {
     const { sent } = surface(mode);
-    expect(sent).toEqual(expect.arrayContaining(["agents_wait", "subagents"]));
-    expect(sent).not.toContain("lookup");
+    for (const name of ["sessions_spawn", "subagents", "agents_wait", "lookup"]) {
+      expect(sent).not.toContain(name);
+    }
   },
 );
 
-it("lets 25 identical agents_wait polls run with no note and no stop", async () => {
+it.each(["tools", "directory"] as const)(
+  "%s: the delegation family always has one visibility",
+  (mode) => {
+    // Every non-empty subset a tool policy can leave enabled, with and without a selector
+    // that keeps the other members outside the catalog.
+    const subsets = Array.from({ length: 2 ** delegationFamily.length - 1 }, (_, index) =>
+      delegationFamily.filter((_name, bit) => ((index + 1) >> bit) & 1),
+    );
+    for (const include of [undefined, ...delegationFamily.map((name) => [{ name }])]) {
+      for (const members of subsets) {
+        const sent = surface(mode, [], members, include).sent.filter((name) =>
+          members.includes(name),
+        );
+        expect([0, members.length]).toContain(sent.length);
+      }
+    }
+  },
+);
+
+it.each([
+  ["agents_wait", "agents_wait", { ids: ["child-1"], timeoutSeconds: 30 }, undefined],
+  ["agents_wait", "openclaw:core:agents_wait", { ids: ["child-1"], timeoutSeconds: 30 }, undefined],
+  ["subagents", "subagents", { action: "list" }, undefined],
+  // A direct-visible catalog tool is still dispatchable, with the same exemption.
+  ["subagents", "subagents", { action: "list" }, ["subagents"]],
+] as const)(
+  "lets 25 identical %s polls through dispatch_action (id %s, direct %s) run with no note and no stop",
+  async (name, id, args, direct) => {
+    const executed: string[] = [];
+    const { tools } = surface("tools", executed, undefined, undefined, direct && [...direct]);
+    const { agent } = captureAgent(tools, {}, [
+      ...turns(25, "dispatch_action", { id, args }),
+      answer,
+    ]);
+
+    await agent.prompt("start");
+
+    expect(executed).toEqual(Array.from({ length: 25 }, () => name));
+    expect(JSON.stringify(agent.state.messages)).not.toContain("[System note:");
+    expect(agent.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
+  },
+);
+
+it("still stops a polling tool's non-polling action repeated through dispatch_action", async () => {
   const executed: string[] = [];
   const { agent } = captureAgent(surface("tools", executed).tools, {}, [
-    ...turns(25, "agents_wait", { ids: ["child-1"], timeoutSeconds: 30 }),
+    ...turns(TOOL_REPEAT_STOP_AT, "dispatch_action", {
+      id: "subagents",
+      args: { action: "cancel", runId: "child-1" },
+    }),
     answer,
   ]);
 
   await agent.prompt("start");
 
-  expect(executed).toEqual(Array.from({ length: 25 }, () => "agents_wait"));
-  expect(JSON.stringify(agent.state.messages)).not.toContain("[System note:");
-  expect(agent.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
+  expect(executed).toEqual(Array.from({ length: TOOL_REPEAT_STOP_AT - 1 }, () => "subagents"));
+  expect(agent.state.messages.at(-1)).toMatchObject({ errorCode: TOOL_REPEAT_LIMIT_CODE });
 });
 
 it("still stops a non-repeatable target repeated through dispatch_action at the twentieth call", async () => {

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import {
   filterStringEntries,
@@ -95,11 +96,13 @@ export async function probeClaudeCliAuthStatus(params?: {
         ? ["pro", "max", "team", "enterprise"].find((plan) => plan === parsed.subscriptionType)
         : undefined;
     const email = authMethod === "claude.ai" ? normalizeOptionalString(parsed.email) : undefined;
+    const configDirectory = normalizeOptionalString(parsed.configDirectory);
     return {
       status: "available" as const,
       ...(authMethod ? { authMethod } : {}),
       ...(subscriptionType ? { subscriptionType } : {}),
       ...(email && email.length <= 320 && !/[\r\n]/u.test(email) ? { email } : {}),
+      ...(configDirectory && path.isAbsolute(configDirectory) ? { configDirectory } : {}),
     };
   } catch (error) {
     params?.signal?.throwIfAborted();

@@ -1,3 +1,4 @@
+import { chmodSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
@@ -93,9 +94,10 @@ describe.runIf(process.platform !== "win32")("metadata-only drift during a packa
       await writeDriftPackage(root);
       const clean = await scan(root);
       const target = path.join(root, "dist", "entry.js");
-      interceptPackageFileHashes(async (file, _stat, next) => {
+      interceptPackageFileHashes((file, _stat, next) => {
+        // Synchronous, so the hash is queued before the walk flushes the hasher.
         if (file === target) {
-          await fs.chmod(file, (await fs.stat(file)).mode & 0o7777);
+          chmodSync(file, statSync(file).mode & 0o7777);
         }
         return next();
       });

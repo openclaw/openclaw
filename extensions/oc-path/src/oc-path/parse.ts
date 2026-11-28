@@ -99,13 +99,16 @@ function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
       if (!isScalar(key) || !key.range) {
         continue;
       }
-      const keyLine = lineCounter.linePos(key.range[0]).line;
+      const { line: keyLine, col } = lineCounter.linePos(key.range[0]);
       const source = expectDefined(frontmatter.at(keyLine - 1), "frontmatter key source line");
-      const match = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/.exec(source);
-      if (match !== null) {
-        const capture = expectDefined(match[2], "frontmatter value capture").trim();
+      // YAML decodes quoted keys, so `"title":` and `title:` name the same entry.
+      if (col === 1 && key.source !== undefined && /^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(key.source)) {
+        const capture = source
+          .slice(key.range[1] - key.range[0])
+          .replace(/^\s*:/, "")
+          .trim();
         entries.push({
-          key: expectDefined(match[1], "frontmatter key capture"),
+          key: key.source,
           value: isScalar(value)
             ? scalarText(value)
             : isCollection(value) && value.flow && value.range

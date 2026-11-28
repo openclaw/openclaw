@@ -11,7 +11,6 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.bindNodeRuntimeTestFixture
-import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.nativeString
@@ -63,7 +62,6 @@ import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import com.google.mlkit.common.sdkinternal.MlKitContext
-import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -76,9 +74,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import org.robolectric.util.ReflectionHelpers
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 
 /** Measures text laid out by real screens, not source-token spelling or replacement widgets. */
 @RunWith(RobolectricTestRunner::class)
@@ -88,6 +86,7 @@ class ScreenTypographyLayoutTest {
   @get:Rule val composeRule = createComposeRule()
   private val store = ViewModelStore()
   private val mounted = mutableStateOf(true)
+  private val sessionList = AtomicReference<String?>()
   private lateinit var app: NodeApp
   private lateinit var prefs: SecurePrefs
   private lateinit var runtime: NodeRuntime
@@ -103,7 +102,7 @@ class ScreenTypographyLayoutTest {
     prefs = SecurePrefs(app, app.getSharedPreferences("screen-type-" + UUID.randomUUID(), Context.MODE_PRIVATE))
     prefs.setOnboardingCompleted(true)
     AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
-    runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
+    runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture, screenshotSessionList = sessionList::get)
     bindNodeRuntimeTestFixture(app, runtime)
     model = MainViewModel(app, prefs, SavedStateHandle()).also { store.put("typography", it) }
     model.enterScreenshotFixtureMode(AndroidScreenshotScene.Home)
@@ -428,29 +427,29 @@ class ScreenTypographyLayoutTest {
   @Test
   @Config(sdk = [34], qualifiers = "w1000dp-h1000dp-mdpi")
   fun threadsAnnounceUnreadStateInBothLayoutsAndRetireItWhenRead() {
-    show { SessionsScreen(model, showSidebarButton = false, onOpenSidebar = {}, onOpenChat = {}) }
-    composeRule.waitUntil(timeoutMillis = 5_000) { model.chatSessions.value.isNotEmpty() }
+    val unreadKey = "agent:main:unread-proof"
 
-    // Feed the real screen through the same presented roster that MainViewModel exposes.
-    val sessions =
-      ReflectionHelpers.getField<MutableStateFlow<List<ChatSessionEntry>>>(
-        runtime.chat,
-        "presentedSessions",
+    fun publishUnread(unread: Boolean?) {
+      // Supply the screen's refresh with the same rows as the explicit transition.
+      val unreadField = unread?.let { """, "unread": $it""" }.orEmpty()
+      sessionList.set(
+        """
+        { "sessions": [
+          { "key": "$unreadKey", "displayName": "New reply thread", "updatedAt": 2$unreadField },
+          { "key": "agent:main:read-proof", "displayName": "Read control thread", "updatedAt": 1, "unread": false }
+        ], "totalCount": 2 }
+        """.trimIndent(),
       )
-    val unread =
-      ChatSessionEntry(
-        key = "agent:main:unread-proof",
-        updatedAtMs = 2L,
-        displayName = "New reply thread",
-        unread = true,
-      )
-    val read =
-      ChatSessionEntry(
-        key = "agent:main:read-proof",
-        updatedAtMs = 1L,
-        displayName = "Read control thread",
-        unread = false,
-      )
+      model.refreshChatSessions()
+      composeRule.waitUntil(timeoutMillis = 5_000) {
+        val sessions = runtime.chat.sessions.value
+        sessions.any { it.key == unreadKey && it.unread == unread }
+      }
+      composeRule.waitForIdle()
+    }
+
+    show { SessionsScreen(model, showSidebarButton = false, onOpenSidebar = {}, onOpenChat = {}) }
+    publishUnread(true)
     val unreadRow = composeRule.onNode(hasText("New reply thread") and hasClickAction())
     val readRow = composeRule.onNode(hasText("Read control thread") and hasClickAction())
     val unreadState = SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Unread")
@@ -464,7 +463,6 @@ class ScreenTypographyLayoutTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithText("Layout: Compact").assertIsDisplayed()
       }
-      composeRule.runOnIdle { sessions.value = listOf(unread, read) }
       unreadRow.performScrollTo()
       unreadRow.assertIsDisplayed()
       unreadRow.assert(unreadState)
@@ -472,12 +470,10 @@ class ScreenTypographyLayoutTest {
       readRow.assert(noUnreadState)
 
       for (readValue in listOf(false, null)) {
-        composeRule.runOnIdle {
-          sessions.value = listOf(unread.copy(unread = readValue), read)
-        }
+        publishUnread(readValue)
         unreadRow.assert(noUnreadState)
       }
-      composeRule.runOnIdle { sessions.value = listOf(unread, read) }
+      publishUnread(true)
       unreadRow.assert(unreadState)
     }
   }

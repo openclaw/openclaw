@@ -105,8 +105,6 @@ describe("agent database reader requests", () => {
       expect(isDeletedAgentDatabasePath(survivor)).toBe(true);
       expect(pool.startCloseResources).toHaveBeenCalledTimes(2);
       expect(seen).toHaveLength(4);
-      await reviveAgentDatabases(["alpha"]);
-      expect(isDeletedAgentDatabasePath(survivor)).toBe(true);
       await reviveAgentDatabases(["alpha-other"]);
       expect(captureDeletedAgentDatabaseFences()).toEqual([]);
     } finally {

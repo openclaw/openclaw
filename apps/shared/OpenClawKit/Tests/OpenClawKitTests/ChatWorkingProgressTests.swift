@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import OpenClawChatUI
 
@@ -7,27 +8,80 @@ struct ChatWorkingProgressTests {
     private let previousEndedAt = 900_000.0
     private let runEndedAt = 1_000_000.0
 
-    @Test func `stance selection is deterministic for a run and salt`() {
-        let salt: UInt32 = 0xA1B2_C3D4
-        let run = "run-4c71b7e8"
-        let first = ChatWorkingClawStance.seeded(run, salt: salt)
-        #expect(first == ChatWorkingClawStance.seeded(run, salt: salt))
-        #expect(first == .southpaw)
-        #expect(ChatWorkingClawStance.seeded("run-a", salt: salt) == .standard)
-        #expect(ChatWorkingClawStance.seeded("run-6", salt: salt) == .spin)
+    #if os(iOS)
+    @Test @MainActor func `working row shows the claw alone until something names the step`() {
+        func label(status: String?, tool: String? = nil) -> String? {
+            ChatTypingIndicatorBubble(showsAssistantAvatar: false, status: status, toolLabel: tool)
+                .label
+        }
+        #expect(label(status: nil) == nil)
+        #expect(label(status: "Waiting for a response…") == "Waiting for a response…")
+        #expect(label(status: "Thinking", tool: "Reading README.md") == "Reading README.md")
     }
 
-    @Test func `zen samples the breath and deliberate snip keyframes`() {
-        for (elapsed, scale) in [(0.0, 1.0), (1.8, 1.08), (3.3, 1.0), (6.0, 1.0)] {
-            let pose = ChatWorkingClawMotion.pose(stance: .zen, elapsed: elapsed)
-            self.expectClose(pose.bodyScale, scale)
-            #expect(pose.bodyRotation == 0)
-            #expect(pose.xOffset == 0)
-            #expect(pose.yOffset == 0)
+    /// Victor's recording: workspace for one frame, this turn for 0.2 s, then 0.67 s of waiting.
+    @Test func `a phase that passes faster than the hold is skipped, not flashed`() {
+        var hold = ChatWorkingLabelHold()
+        let start = ContinuousClock.now
+        func at(_ ms: Int) -> ContinuousClock.Instant {
+            start.advanced(by: .milliseconds(ms))
         }
-        for (elapsed, jaw) in [(3.6, -10.0), (4.2, -24.0), (4.56, 2.0), (5.16, -10.0)] {
-            let pose = ChatWorkingClawMotion.pose(stance: .zen, elapsed: elapsed)
-            self.expectClose(pose.jawRotation, jaw)
+        func offer(_ label: String?, at ms: Int, tool: Bool = false) -> Bool {
+            hold.show(label, isTool: tool, at: at(ms))
+        }
+        #expect(offer("Preparing workspace…", at: 0))
+        // The next phases arrive while workspace holds; the line waits and then takes the newest.
+        #expect(!offer("Preparing this turn…", at: 33))
+        #expect(!offer("Waiting for a response…", at: 230))
+        #expect(hold.shown == "Preparing workspace…")
+        #expect(hold.until == at(400))
+        #expect(offer("Waiting for a response…", at: 400))
+        // Answer text clears the label once the phase has held its time.
+        #expect(!offer(nil, at: 700))
+        #expect(offer(nil, at: 800))
+        #expect(hold.shown == nil)
+        // A tool's title holds longer, as before.
+        #expect(offer("Reading README.md", at: 900, tool: true))
+        #expect(hold.until == at(1500))
+    }
+    #endif
+
+    #if os(macOS)
+    @Test @MainActor func `working claws face the same way across runs`() throws {
+        func renderedClaw(run: Int) throws -> Data {
+            let row = ChatTypingIndicatorBubble(
+                showsAssistantAvatar: false, runIdentity: "run-\(run)", outputTokens: nil, status: nil)
+                .environment(\.scenePhase, .inactive)
+                .frame(width: 240, height: 40, alignment: .leading)
+                .frame(width: 28, height: 40, alignment: .leading)
+                .clipped()
+            let renderer = ImageRenderer(content: row)
+            renderer.scale = 2
+            return try #require(renderer.cgImage?.dataProvider?.data) as Data
+        }
+        let first = try renderedClaw(run: 0)
+        try #require(first.contains { $0 != 0 })
+        for run in 1...32 {
+            let next = try renderedClaw(run: run)
+            try #require(next == first, "The claw changed orientation in run \(run)")
+        }
+    }
+    #endif
+
+    @Test func `working claw pinches twice then rests on every loop`() {
+        for cycle in [0.0, 2.4, 4.8] {
+            for (progress, body, jaw) in [
+                (0.0, 0.0, -10.0),
+                (0.10, -4, -26),
+                (0.16, 3, 4),
+                (0.26, -4, -24),
+                (0.32, 3, 4),
+                (0.75, 0, -10),
+            ] {
+                let pose = ChatWorkingClawMotion.pose(elapsed: cycle + 2.4 * progress)
+                self.expectClose(pose.bodyRotation, body)
+                self.expectClose(pose.jawRotation, jaw)
+            }
         }
     }
 

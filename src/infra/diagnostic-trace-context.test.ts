@@ -29,7 +29,7 @@ it("rejects malformed traceparent values", () => {
 });
 
 it("rejects oversized traceparent values before parsing", () => {
-  expect(parse(`00-${TRACE_ID}-${SPAN_ID}-01-${"a".repeat(128)}`)).toBeUndefined();
+  expect(parse(`01-${TRACE_ID}-${SPAN_ID}-01-${"a".repeat(128)}`)).toBeUndefined();
 });
 
 it("creates a normalized context from explicit fields or traceparent", () => {

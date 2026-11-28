@@ -70,10 +70,7 @@ import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-conte
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
 import { createReplyProbeModelLevelResolver } from "./reply-model-levels.js";
-import {
-  recordReplyPreRunRejection,
-  resolveReplyOperationRunState,
-} from "./reply-operation-run-state.js";
+import { recordReplyPreparationFailure } from "./reply-operation-run-state.js";
 import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { prepareReplySourceInput, retireUnadoptedReplySource } from "./reply-source-binding.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
@@ -266,14 +263,15 @@ async function resolveReplyFromConfig(
     });
     const rejectSessionPreparation = (error: Error): ReplyPayload => {
       typing.cleanup();
-      if (error instanceof ModelSelectionLockedError || error instanceof SessionResetCleanupError) {
-        recordReplyPreRunRejection(
-          resolveReplyOperationRunState(opts),
-          error instanceof SessionResetCleanupError
-            ? "session-directive-rejected"
-            : "model-selection-locked",
-        );
-      }
+      recordReplyPreparationFailure(
+        opts,
+        error,
+        error instanceof SessionResetCleanupError
+          ? "session-directive-rejected"
+          : error instanceof ModelSelectionLockedError
+            ? "model-selection-locked"
+            : undefined,
+      );
       return { text: error.message };
     };
 

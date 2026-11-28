@@ -10,7 +10,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
   getPreparedSharedAuthStoreOwnership,
   prepareSharedAuthStoreOwnership,
@@ -26,6 +25,7 @@ import {
   type PreparedModelRuntimeBuildResult,
 } from "./prepared-model-runtime.build.js";
 import { stampPreparedModelRuntimeSnapshotConfig } from "./prepared-model-runtime.capture.js";
+import { findConfiguredOwnerCandidates } from "./prepared-model-runtime.configured-owner.js";
 import {
   assertPreparedModelRuntimeInputCurrent,
   capturePreparedModelRuntimeRefreshError,
@@ -113,30 +113,6 @@ export {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
 };
-
-function findConfiguredOwnerCandidates(
-  owners: Map<string, PreparedModelRuntimeOwner>,
-  input: PreparedModelRuntimeInput,
-): PreparedModelRuntimeOwner[] {
-  const configured = [...owners.values()].filter((owner) => owner.provenance === "configured");
-  const identityCandidates =
-    input.agentId === undefined
-      ? []
-      : configured.filter((owner) => owner.input.agentId === input.agentId);
-  const exactCandidates = identityCandidates.filter(
-    (owner) => owner.input.agentDir === input.agentDir,
-  );
-  const directoryCandidates = configured.filter((owner) => owner.input.agentDir === input.agentDir);
-  // Unbound inputs and reserved setup identities derive ownership from the configured directory.
-  // Ordinary agent runs stay bound to their explicit identity, even when handed a stale directory.
-  const canRebindByDirectory =
-    input.agentId === undefined || isReservedSystemAgentId(input.agentId);
-  return exactCandidates.length > 0
-    ? exactCandidates
-    : canRebindByDirectory && directoryCandidates.length > 0
-      ? directoryCandidates
-      : identityCandidates;
-}
 
 export function resolveConfiguredOwner(
   owners: Map<string, PreparedModelRuntimeOwner>,
@@ -494,6 +470,12 @@ function createPreparedModelRuntimePublicationCandidate(
     input,
     catalogOwner: owner.catalogOwner,
     inventoryOwner: owner,
+    // Account entitlement belongs to the agent and credential, not the workspace. The retention
+    // guards decide which of the configured owner's rows hold for this input.
+    seedInventory:
+      owner.provenance === "configured"
+        ? undefined
+        : resolveConfiguredOwner(owners, input)?.catalogInventory,
     pluginGeneration: owner.pendingPluginGeneration,
     prepareInboundPluginRegistry: owner.provenance === "configured",
     inspectRegistry:

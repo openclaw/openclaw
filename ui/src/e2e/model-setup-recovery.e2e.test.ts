@@ -1,7 +1,6 @@
 // Control UI tests cover local-provider recovery against a mocked Gateway.
 import { expect, it } from "vitest";
 import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { expandProvider } from "./model-providers.test-support.ts";
 import {
@@ -34,10 +33,17 @@ suite.define(() => {
     "preserves first-run recovery after a terminal %s activation outcome",
     async (outcome) => {
       await withPage(async ({ page }) => {
-        const gateway = await installMockGateway(page, {
+        const gateway = await installSetupGateway(page, {
           featureMethods: [rpc.detect, rpc.auth, rpc.next],
           methodResponses: {
             [rpc.detect]: makeDetection({ authOptions: [providerLogin] }),
+            "models.authStatus": {
+              ts: 1,
+              providers: [],
+              providerCapabilities: [
+                { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
+              ],
+            },
             [rpc.auth]: runningWizard(),
             [rpc.next]: activationFailure(
               "The model could not finish setup",
@@ -46,6 +52,7 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
+        await page.locator("[data-models-login-discover]").click();
         const signIn = page.locator('[data-auth-choice="provider-login"] button');
         await signIn.waitFor();
 
@@ -56,12 +63,16 @@ suite.define(() => {
         await waitText(alert, "The model could not finish setup");
         expect(await dialog.locator("details").count()).toBe(0);
         await button(dialog, "Close").click();
-        await expectCount(dialog, 0);
+        await expectCount(page.locator(".model-setup-discovery"), 1);
         await expect.poll(() => signIn.isDisabled()).toBe(outcome === "uncertain");
+        // Catalog sign-in cannot start a replacement attempt while the activation may commit.
+        const catalogConnect = page.locator("[data-models-catalog-provider] button").first();
+        await catalogConnect.waitFor({ state: "attached" });
+        expect(await catalogConnect.isDisabled()).toBe(outcome === "uncertain");
         const receiptKey = "openclaw.modelSetup.pendingActivation.v1";
         const receipt = await page.evaluate((key) => localStorage.getItem(key), receiptKey);
         expect(receipt === null).toBe(outcome === "rejected");
-        expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+        expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
         await expectRequestCounts(gateway, { [rpc.auth]: 1, [rpc.activate]: 0 });
         if (outcome === "uncertain") {
           const recovery = page.locator(".model-setup__recovery");
@@ -78,6 +89,32 @@ suite.define(() => {
       });
     },
   );
+
+  it("offers the first-run handoff after a model is configured elsewhere on Models", async () => {
+    await withPage(async ({ page }) => {
+      const gateway = await installSetupGateway(page, {
+        featureMethods: [rpc.detect, "openclaw.setup.verify"],
+        methodResponses: { [rpc.detect]: makeDetection() },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/model-providers?firstRun=1`);
+      await page.locator("[data-models-catalog]").waitFor();
+      await expect.poll(() => gateway.getRequests(rpc.detect).then((r) => r.length)).toBe(1);
+      expect(await page.getByRole("button", { name: "Check model" }).count()).toBe(0);
+
+      // A catalog sign-in on the same page selects the agent's model.
+      await gateway.setMethodResponse(
+        rpc.detect,
+        makeDetection({ configuredModel: "openai/gpt-5", setupComplete: true }),
+      );
+      await gateway.emitGatewayEvent("chat.metadata.changed", {
+        agentId: "main",
+        modelCatalogChanged: true,
+        authChanged: true,
+      });
+      await page.getByRole("button", { name: "Check model" }).waitFor();
+      expect(await gateway.getRequests(rpc.detect)).toHaveLength(2);
+    });
+  });
 
   it("shows a failed configured LM Studio connection without implicit preparation", async () => {
     await withPage(

@@ -4,8 +4,7 @@ enum ChatTranscriptRow: Hashable, Identifiable {
     enum SystemNoticeKind: Hashable {
         case restartRecovery
         case gatewayRestarted
-        case injectedContext
-        case backgroundTask
+        case disclosure(label: String)
         case generic
     }
 
@@ -21,10 +20,8 @@ enum ChatTranscriptRow: Hashable, Identifiable {
                 String(localized: "System · restart recovery")
             case .gatewayRestarted:
                 String(localized: "System · gateway restarted")
-            case .injectedContext:
-                String(localized: "System · injected context")
-            case .backgroundTask:
-                String(localized: "System · background task")
+            case let .disclosure(label):
+                label
             case .generic:
                 String(localized: "System")
             }
@@ -34,9 +31,9 @@ enum ChatTranscriptRow: Hashable, Identifiable {
             "cpu"
         }
 
-        /// Bulky harness payloads (continuation summaries, task output) open on demand, as in the Control UI.
         var collapsesBody: Bool {
-            self.kind == .injectedContext || self.kind == .backgroundTask
+            if case .disclosure = self.kind { return true }
+            return false
         }
     }
 
@@ -161,10 +158,14 @@ enum ChatTranscriptRow: Hashable, Identifiable {
                 kind = .gatewayRestarted
                 body = Self.strippingSystemPrefix(from: ChatMessageVisibleText.visibleText(in: message))
             case "cli_harness_context":
-                kind = .injectedContext
+                #if os(iOS)
+                return nil
+                #else
+                kind = .disclosure(label: String(localized: "System · injected context"))
                 body = Self.strippingSystemPrefix(from: ChatMessageVisibleText.visibleText(in: message))
+                #endif
             case "claude_cli_task_notification":
-                kind = .backgroundTask
+                kind = .disclosure(label: String(localized: "System · background task"))
                 body = Self.strippingSystemPrefix(from: ChatMessageVisibleText.visibleText(in: message))
             default:
                 kind = .generic
@@ -253,6 +254,39 @@ extension ChatTranscriptRow {
         }
 
         return result
+    }
+}
+
+extension ChatTranscriptRow {
+    /// Tool search records each call twice: the dispatcher's own call (with its result) and a nested
+    /// row whose call names it as `parentToolCallId`. Both are one invocation with one outcome, so the
+    /// nested row presents it and the envelope leaves the transcript (web chat-message.tools.test.tsx:532-534).
+    /// Other containers (a code-mode `exec`) keep their row: their own outcome can differ from a child's.
+    static func retiringDispatchEnvelopes(in messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
+        let parents = Set(messages.lazy.filter(\.isNestedToolActivity).flatMap(\.content)
+            .compactMap(\.parentToolCallId))
+        guard !parents.isEmpty else { return messages }
+        return messages.compactMap { message in
+            if message.isToolResult {
+                let retired = message.toolCallId.map(parents.contains) == true &&
+                    ChatToolActivity.isDispatcher(message.toolName)
+                return retired ? nil : message
+            }
+            guard message.role.lowercased() == "assistant" else { return message }
+            let retired = Set(message.content.compactMap { block -> String? in
+                guard block.isToolCall, ChatToolActivity.isDispatcher(block.name),
+                      let id = block.id, parents.contains(id) else { return nil }
+                return id
+            })
+            guard !retired.isEmpty else { return message }
+            var kept = message
+            kept.content = message.content.filter { block in
+                !(block.isToolCall || block.isToolResult) || block.id.map(retired.contains) != true
+            }
+            kept.activity = message.activity?.filter { $0.toolCallId.map(retired.contains) != true }
+            // A message that carried only envelopes would otherwise split the activity around it.
+            return kept.content.isEmpty ? nil : kept
+        }
     }
 }
 

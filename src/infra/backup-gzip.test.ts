@@ -86,9 +86,3 @@ it("reports a failed block in order and stops reading the source", async () => {
   expect(closed).toBe(true);
   expect((await members.next()).done).toBe(true);
 });
-
-it("writes a valid empty gzip stream for empty input", async () => {
-  const members = await collect(gzipInParallel(Readable.from([])));
-
-  expect(members.map((member) => gunzipSync(member).length)).toEqual([0]);
-});

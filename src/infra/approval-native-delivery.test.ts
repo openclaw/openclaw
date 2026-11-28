@@ -12,7 +12,7 @@ const execRequest = {
 
 function planDelivery(
   preferredSurface: "origin" | "approver-dm" | "both",
-  overrides: Partial<ChannelApprovalNativeAdapter> = {},
+  overrides: Partial<ChannelApprovalNativeAdapter>,
   params: Partial<Pick<PlanParams, "request" | "approvalKind">> = {},
 ) {
   return resolveChannelNativeApprovalDeliveryPlan({

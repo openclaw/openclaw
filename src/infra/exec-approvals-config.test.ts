@@ -109,13 +109,16 @@ describe("exec approvals config", () => {
     { name: "policy enum", value: { version: 1, defaults: { security: "none" } } },
     ...["lastUsedAt", "lastUsedCommand"].map((field) => ({
       name: `null ${field}`,
-      value: { version: 1, agents: { main: { allowlist: [{ pattern: "ls", [field]: null }] } } },
+      value: {
+        version: 1,
+        agents: { main: { allowlist: [{ id: "entry", pattern: "ls", [field]: null }] } },
+      },
     })),
     {
       name: "allowlist metadata",
       value: {
         version: 1,
-        agents: { main: { allowlist: [{ pattern: "ls", lastUsedAt: "now" }] } },
+        agents: { main: { allowlist: [{ id: "entry", pattern: "ls", lastUsedAt: "now" }] } },
       },
     },
   ])("rejects invalid persisted $name", ({ value }) => {

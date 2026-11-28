@@ -107,6 +107,7 @@ export {
   isSessionMutationActive,
   hasOnlySessionMutationKindActive,
   collectSessionMutationIdentities,
+  collectDeliveryFencingMutationKinds,
   observeSessionControllerProtectionReleases,
 } from "./session-controller.lifecycle-projections.js";
 export { SessionMutationPreemptTimeoutError } from "./session-controller.mutation-preemption.js";

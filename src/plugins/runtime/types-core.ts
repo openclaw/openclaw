@@ -154,9 +154,14 @@ export type PluginRuntimeCore = {
     resolveThinkingPolicy: (
       params: PluginRuntimeThinkingPolicyRequest,
     ) => PluginRuntimeThinkingPolicy;
-    /** Run a turn for this plugin's own channel; the host decides owner from `runContext.senderId`. */
+    /**
+     * Admit a turn for this plugin's own channel and authenticated sender. Named channels derive
+     * owner from `runContext.senderId`. Without `messageChannel`, a bundled or trusted official
+     * plugin may claim owner for its authenticated bridge sender. `toolBindings` may scope only
+     * tools the calling plugin declares.
+     */
     runCommandFromIngress: (
-      opts: import("../../agents/command/types.js").AgentCommandIngressOpts,
+      opts: import("../../agents/command/types.js").AgentCommandPluginIngressOpts,
       runtime: import("../../runtime.js").RuntimeEnv,
     ) => ReturnType<typeof import("../../agents/agent-command.js").agentCommandFromIngress>;
     runEmbeddedAgent: (

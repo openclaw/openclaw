@@ -83,6 +83,12 @@ export function createProfileController(
     const submitted = form;
     const isCurrent = () => !disposed && !context.signal.aborted && operation === current;
     const busy = action === "save" ? "saving" : "importing";
+    const failureMessage = () =>
+      t(
+        action === "save"
+          ? "channels.nostr.notices.updateFailed"
+          : "channels.nostr.notices.importFailed",
+      );
     editForm((value) => ({
       ...value,
       [busy]: true,
@@ -139,17 +145,19 @@ export function createProfileController(
       }
       const settled = { ...form, [busy]: false, error: null, success: null };
       if (!result.ok || result.data?.ok === false || !result.data) {
+        const fieldErrors =
+          result.action === "save"
+            ? parseValidationErrors(result.data?.details, context.formatExternalText)
+            : settled.fieldErrors;
         form = {
           ...settled,
-          error: result.errorMessage,
-          ...(result.action === "save"
-            ? {
-                fieldErrors: parseValidationErrors(
-                  result.data?.details,
-                  context.formatExternalText,
-                ),
-              }
-            : {}),
+          fieldErrors,
+          error:
+            result.status === 429
+              ? t("channels.nostr.notices.rateLimited")
+              : result.action === "save" && Object.keys(fieldErrors).length > 0
+                ? t("channels.nostr.notices.validationFailed")
+                : failureMessage(),
         };
       } else if (result.action === "save") {
         form = result.data.persisted
@@ -179,7 +187,7 @@ export function createProfileController(
         await context.refresh(true);
       }
     } catch (error) {
-      // Retired callbacks must not call even the host's lifetime-bound error formatter.
+      // A retired request cannot replace the current form's notice.
       if (!isCurrent()) {
         return;
       }
@@ -189,15 +197,12 @@ export function createProfileController(
         success: null,
         error:
           error instanceof DOMException && error.name === "TimeoutError"
-            ? t("channels.nostr.notices.timeout")
-            : t("channels.nostr.notices.operationFailed", {
-                prefix: t(
-                  action === "save"
-                    ? "channels.nostr.notices.updateFailed"
-                    : "channels.nostr.notices.importFailed",
-                ),
-                error: context.formatError(error),
-              }),
+            ? t(
+                action === "save"
+                  ? "channels.nostr.notices.saveTimedOut"
+                  : "channels.nostr.notices.importTimedOut",
+              )
+            : failureMessage(),
       }));
     }
   }
