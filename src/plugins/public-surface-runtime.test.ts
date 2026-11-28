@@ -370,3 +370,46 @@ describe("bundled plugin public surface runtime", () => {
     }
   });
 });
+
+describe("public surface artifacts inside node_modules", () => {
+  function seed(pluginRoot: string) {
+    const entrySource = writeArtifact(path.join(pluginRoot, "index.ts"));
+    const sourceSurface = writeArtifact(
+      path.join(pluginRoot, "api.ts"),
+      'export const family = "source";',
+    );
+    const builtSurface = writeArtifact(
+      path.join(pluginRoot, "dist/api.js"),
+      'export const family = "built";',
+    );
+    return { entrySource, sourceSurface, builtSurface };
+  }
+
+  it("loads the compiled artifact when the plugin root is under node_modules", () => {
+    const pluginRoot = path.join(
+      tempDirs.make("openclaw-public-surface-managed-"),
+      "node_modules/openclaw/extensions/demo",
+    );
+    const { entrySource, builtSurface } = seed(pluginRoot);
+    const resolved = resolvePluginRootPublicSurfaceLocation({
+      pluginRoot,
+      artifactBasename: "api.js",
+      entrySource,
+    });
+    expect(resolved?.modulePath).toBe(builtSurface);
+  });
+
+  it("keeps preferring the source artifact outside node_modules", () => {
+    const pluginRoot = path.join(
+      tempDirs.make("openclaw-public-surface-source-"),
+      "extensions/demo",
+    );
+    const { entrySource, sourceSurface } = seed(pluginRoot);
+    const resolved = resolvePluginRootPublicSurfaceLocation({
+      pluginRoot,
+      artifactBasename: "api.js",
+      entrySource,
+    });
+    expect(resolved?.modulePath).toBe(sourceSurface);
+  });
+});

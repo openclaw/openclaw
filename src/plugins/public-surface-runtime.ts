@@ -42,6 +42,11 @@ function normalizeBundledPluginArtifactSubpath(artifactBasename: string): string
 }
 
 /** Normalizes a bundled plugin directory name and rejects path-like values. */
+/** A managed release layout installs the package inside node_modules, where Node cannot strip types. */
+function isUnderNodeModules(target: string): boolean {
+  return path.resolve(target).split(path.sep).includes("node_modules");
+}
+
 function normalizeBundledPluginDirName(dirName: string): string {
   const normalized = dirName.trim();
   if (
@@ -133,10 +138,14 @@ export function resolvePluginRootPublicSurfaceLocation(params: {
     throw new Error(`Plugin public surface entry must stay inside its plugin root: ${entrySource}`);
   }
   const sourceArtifacts = PUBLIC_SURFACE_SOURCE_EXTENSIONS.map((ext) => `${sourceBaseName}${ext}`);
+  // Node refuses type stripping under node_modules, so a managed release layout must
+  // prefer the compiled artifact over its entry's source family. Captured build trees
+  // that only ship sources keep them as the last-resort fallback below.
+  const allowsTypeScriptSources = !isUnderNodeModules(pluginRoot);
   // Sidecars share the registered entry's source/build family and captured membership;
   // otherwise a stale build can split API state from the active source instance.
   const preferredArtifacts =
-    entrySource && isTypeScriptPackageEntry(entrySource)
+    allowsTypeScriptSources && entrySource && isTypeScriptPackageEntry(entrySource)
       ? sourceArtifacts.filter(isTypeScriptPackageEntry)
       : [];
   const entryArtifacts = [
