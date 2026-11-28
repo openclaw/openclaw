@@ -163,7 +163,7 @@ const steeringNotice = (display = false) =>
   });
 
 describe("broadcast serialization failures", () => {
-  it("isolates live plugin notices from equally authorized TUI and native recipients in either order", async () => {
+  it("shares live plugin notices with native UI but not equally authorized TUI recipients in either order", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg: OpenClawConfig = {};
       setRuntimeConfigSnapshot(cfg);
@@ -174,10 +174,13 @@ describe("broadcast serialization failures", () => {
         GATEWAY_CLIENT_IDS.CONTROL_UI,
         GATEWAY_CLIENT_IDS.TUI,
         GATEWAY_CLIENT_IDS.MACOS_APP,
+        GATEWAY_CLIENT_IDS.LINUX_APP,
+        GATEWAY_CLIENT_IDS.IOS_APP,
+        GATEWAY_CLIENT_IDS.ANDROID_APP,
       ].map((id) => {
         const peer = makeClient(id);
         peer.client.connect.scopes = ["operator.admin"];
-        peer.client.connect.client = { id, version: "test", platform: "test", mode: "webchat" };
+        peer.client.connect.client = { id, version: "test", platform: "test", mode: "ui" };
         return peer;
       });
       const { connection, projection } = await createProjectedConnection(() => cfg);
@@ -190,7 +193,7 @@ describe("broadcast serialization failures", () => {
           const frames = sentFrames(peer);
           const notices = frames.filter((frame) => frame.event === "session.message");
           expect(notices).toHaveLength(
-            peer.client.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI ? 1 : 0,
+            peer.client.connect.client.id === GATEWAY_CLIENT_IDS.TUI ? 0 : 1,
           );
           if (notices.length) {
             expect(notices[0]).toEqual(steeringNotice(true));

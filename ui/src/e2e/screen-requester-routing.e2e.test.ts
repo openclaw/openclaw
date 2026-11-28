@@ -24,6 +24,7 @@ import {
 } from "./chat-flow.test-support.ts";
 import { observe } from "./desktop-panel.test-support.ts";
 import { createRfbRawFrame, installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
+import { installNativeWebChrome } from "./native-nav.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const callGateway = vi.spyOn(gatewayTransport, "callInProcessGatewayTool");
@@ -94,13 +95,16 @@ suite.define(() => {
     expect(await composer.inputValue()).toBe("Unfinished thought");
   });
 
-  it("opens the selected session and its app views only in the browser that asked the agent", async () => {
+  it("opens the selected session and app views only in the native desktop UI that asked the agent", async () => {
     const source = "agent:main:session-a";
     const destination = "agent:main:session-b";
     const browsers = await Promise.all(
       ["requester", "other-user"].map(async (connId) => {
         const context = await suite.newBrowserContext({ viewport: { width: 1100, height: 800 } });
         const page = await context.newPage();
+        if (connId === "requester") {
+          await installNativeWebChrome(page);
+        }
         const gateway = await installMockGateway(page, {
           sessionKey: source,
           featureMethods: [
@@ -155,7 +159,10 @@ suite.define(() => {
           connId,
           connect: {
             client: {
-              id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+              id:
+                connId === "requester"
+                  ? GATEWAY_CLIENT_IDS.MACOS_APP
+                  : GATEWAY_CLIENT_IDS.CONTROL_UI,
               version: "test",
               platform: "web",
               mode: "ui",
