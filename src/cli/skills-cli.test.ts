@@ -3,10 +3,6 @@ import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/st
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 import { skill } from "./skills-cli.test-support.js";
 
-vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
-  loadSkillsFromDir: () => ({ skills: [] }),
-  formatSkillsForPrompt: () => "",
-}));
 function report(skills: SkillStatusEntry[]): SkillStatusReport {
   return { workspaceDir: "/workspace", managedSkillsDir: "/managed", skills };
 }
