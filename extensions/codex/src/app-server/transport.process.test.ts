@@ -187,6 +187,7 @@ if (role === "root") {
     ["unconfirmed-termination", false],
     ["snapshot-failure", true],
     ["inspection-timeout", true],
+    ...(process.platform === "linux" ? [["transient-scan-timeout", false] as const] : []),
     ["extended", false],
   ] as const)("revalidates identities while quiescing: %s", async (scenario, ctx) => {
     const [mode, sentinelSurvived] = scenario;
@@ -259,6 +260,7 @@ process.stdin.on("end", () => process.exit(0));
       "unconfirmed-termination": [...repeat(runningTree), ...repeat(blockedTree)],
       "snapshot-failure": [...quiescing, undefined],
       "inspection-timeout": [...repeat(runningTree), "deadline"],
+      "transient-scan-timeout": ["deadline", ...quiescing, stoppedTree],
       extended: [...repeat(runningTree), ...repeat(rootStoppedTree, 16), stoppedTree],
     };
     const snapshots = scenarios[mode];
