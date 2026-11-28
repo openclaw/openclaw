@@ -45,7 +45,10 @@ type PersistedSessionCapabilityEntry = Pick<
 >;
 export type SessionCapabilityEntry = {
   [Key in keyof PersistedSessionCapabilityEntry]?: unknown;
-} & { clientCapabilities?: string[] };
+} & {
+  clientCapabilities?: string[];
+  taskSuggestionDeliveryMode?: SessionEntry["taskSuggestionDeliveryMode"];
+};
 
 /** A complete store view; reads are memoized only for the current synchronous resolution. */
 export type SessionCapabilityLookup = {

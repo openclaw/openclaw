@@ -35,6 +35,7 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
   return {
     sessionId: entry.sessionId,
     clientCapabilities: entry.clientCapabilities,
+    taskSuggestionDeliveryMode: entry.taskSuggestionDeliveryMode,
     previousSessionId: entry.previousSessionId,
     updatedAt: entry.updatedAt,
     createdAt: entry.createdAt,

@@ -36,6 +36,8 @@ function decodeSessionEntryCurrentFacts(
       clientCapabilities: Array.isArray(value.clientCapabilities)
         ? value.clientCapabilities.filter((cap): cap is string => typeof cap === "string")
         : undefined,
+      taskSuggestionDeliveryMode:
+        value.taskSuggestionDeliveryMode === "gateway" ? "gateway" : undefined,
       spawnedBy: value.spawnedBy,
       spawnDepth: value.spawnDepth,
       completionOwnerSessionKey: value.completionOwnerSessionKey,

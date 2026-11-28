@@ -102,6 +102,10 @@ export function projectCanonicalSessionEntryShape(
         ].toSorted()
       : undefined,
   );
+  setOptionalField(
+    "taskSuggestionDeliveryMode",
+    canonicalValue.taskSuggestionDeliveryMode === "gateway" ? "gateway" : undefined,
+  );
   const icon =
     typeof canonicalValue.icon === "string" ? normalizeSessionIconValue(canonicalValue.icon) : null;
   setOptionalField("icon", icon);

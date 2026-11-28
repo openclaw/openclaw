@@ -28,6 +28,8 @@ type SessionMetaSource = Pick<
 export type PreparedSessionMetaPatch = {
   /** Undefined for internal turns; an empty declaration clears the previous client. */
   clientCapabilities?: string[];
+  /** Written with clientCapabilities, so a non-capable operator surface clears it. */
+  taskSuggestionDeliveryMode?: SessionEntry["taskSuggestionDeliveryMode"];
   group: {
     resolution: GroupKeyResolution;
     nextSubject: string | undefined;
@@ -173,8 +175,9 @@ export function projectSessionMetaPatch(params: {
     params.existing,
     params.sessionKey,
   );
-  const clientCapabilities = params.prepared.clientCapabilities;
-  const clientPatch = clientCapabilities !== undefined ? { clientCapabilities } : null;
+  const { clientCapabilities, taskSuggestionDeliveryMode } = params.prepared;
+  const clientPatch =
+    clientCapabilities !== undefined ? { clientCapabilities, taskSuggestionDeliveryMode } : null;
   if (!groupPatch && !origin) {
     return clientPatch;
   }

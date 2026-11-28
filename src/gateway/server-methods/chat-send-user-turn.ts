@@ -164,6 +164,7 @@ export function prepareChatSendUserTurn(params: {
     | "suppressCommandInterpretation"
     | "systemInputProvenance"
     | "systemProvenanceReceipt"
+    | "supportsTaskSuggestions"
     | "toolBindings"
   >;
   session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey"> &
@@ -288,6 +289,9 @@ export function prepareChatSendUserTurn(params: {
     MessageSid: session.clientRunId,
     SessionCreation: { ...creation, ...(sandbox ? { sandbox } : {}) },
     ...resolveChatSendCallerContext(client, request.clientInfo, originatingChannel),
+    ...(request.supportsTaskSuggestions
+      ? { GatewayTaskSuggestionDeliveryMode: "gateway" as const }
+      : {}),
     GatewayRunToolBindings: request.toolBindings,
     TurnGrant: admission.operatorAuthority?.grant,
     GatewayUiCommandTarget: gatewayUiCommandTarget,

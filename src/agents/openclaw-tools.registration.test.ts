@@ -36,6 +36,7 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
+import * as gatewayTool from "./tools/gateway.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 
 vi.mock("./openclaw-plugin-tools.js", () => ({
@@ -310,6 +311,29 @@ describe("openclaw-tools progress_card gating", () => {
     expect(withoutSink).not.toContain("suggest_task");
     expect(withoutSink).not.toContain("dismiss_task");
     expect(withSink).toEqual(expect.arrayContaining(["suggest_task", "dismiss_task"]));
+  });
+
+  it("refuses recorded task suggestions without a Control UI turn before any side effect", async () => {
+    const gatewayCall = vi.spyOn(gatewayTool, "callGatewayTool").mockImplementation(vi.fn());
+    const internal = createTestOpenClawTools({
+      agentSessionKey: "agent:main:main",
+      cwd: "/repo",
+      listingTaskSuggestionDeliveryMode: "gateway",
+      wrapBeforeToolCallHook: false,
+    });
+    const calls = {
+      suggest_task: { title: "Fix docs", prompt: "Fix the stale docs.", tldr: "Docs drifted." },
+      dismiss_task: { task_id: "task-1" },
+    };
+    for (const [name, args] of Object.entries(calls)) {
+      const result = await expectToolNamed(internal, name).execute(`call-${name}`, args);
+      expect(result.details).toMatchObject({ gated: true });
+      expect(JSON.stringify(result.content)).toContain(
+        `${name} needs a turn from the open Control UI`,
+      );
+    }
+    expect(gatewayCall).not.toHaveBeenCalled();
+    gatewayCall.mockRestore();
   });
 
   it("keeps explicitly allowed message tool in embedded completions", () => {

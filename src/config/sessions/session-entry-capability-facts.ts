@@ -5,6 +5,7 @@ export function projectSessionEntryCapabilityFacts(entry: SessionEntryCurrentFac
   return {
     sessionId: entry.sessionId,
     clientCapabilities: entry.clientCapabilities,
+    taskSuggestionDeliveryMode: entry.taskSuggestionDeliveryMode,
     createdVia: entry.createdVia,
     incognito: entry.incognito,
     lifecycleRevision: entry.lifecycleRevision,

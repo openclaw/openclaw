@@ -444,6 +444,7 @@ describe("prepareChatSendUserTurn", () => {
       request: {
         clientInfo: uiClientInfo(GATEWAY_CLIENT_MODES.UI),
         suppressCommandInterpretation: true,
+        supportsTaskSuggestions: true,
       },
       attachments: {
         mediaPathOffloads: [
@@ -461,7 +462,7 @@ describe("prepareChatSendUserTurn", () => {
           client: createClientInfo({ id: GATEWAY_CLIENT_IDS.CONTROL_UI }),
           device: { id: "device-1" },
           scopes: ["operator.admin"],
-          caps: ["tool-events"],
+          caps: ["task-suggestions"],
         },
       } as never,
     });
@@ -484,7 +485,8 @@ describe("prepareChatSendUserTurn", () => {
         },
       ],
       GatewayClientScopes: ["operator.admin"],
-      GatewayClientCaps: ["tool-events"],
+      GatewayClientCaps: ["task-suggestions"],
+      GatewayTaskSuggestionDeliveryMode: "gateway",
       GatewayUiCommandTarget: { connId: "conn-1", profileId: "profile-ada" },
       SessionCreation: {
         via: "operator",

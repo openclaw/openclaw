@@ -1,3 +1,4 @@
+import type { TaskSuggestionDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
@@ -35,6 +36,8 @@ export type OpenClawSharedToolsOptions = {
   isTurnTainted?: () => boolean;
   /** Session-owned declaration used only for tool listing, never invocation authority. */
   listingClientCaps?: string[];
+  /** Session-owned task-suggestion surface used only for tool listing, never invocation authority. */
+  listingTaskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Creator policy retained by the scheduled session owner. */
   scheduledToolPolicy?: import("./scheduled-tool-policy.js").ScheduledToolPolicyContext;
   /** Complete model-discoverable catalog, prepared by the current host. */

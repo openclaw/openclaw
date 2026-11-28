@@ -15,7 +15,10 @@ import {
   resolveSessionAgentIds,
 } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "./auth-profiles/store-runtime.js";
-import { resolveSessionToolListingClientCaps } from "./openclaw-tools.client-caps.js";
+import {
+  resolveSessionToolListingClientCaps,
+  resolveSessionToolListingTaskSuggestionDeliveryMode,
+} from "./openclaw-tools.client-caps.js";
 import { resolveCapturedOpenClawToolsFsPolicy } from "./openclaw-tools.fs-policy.js";
 import { resolveOptionalMediaToolFactoryPlan } from "./openclaw-tools.media-factory-plan.js";
 import { prepareProgressCardToolForOpenClawTools } from "./openclaw-tools.registration.js";
@@ -34,6 +37,9 @@ export async function prepareOpenClawTools(
   const captured = { ...options, config: shared.config };
   captured.listingClientCaps ??= await withPreparedSessionCapabilityRead(() =>
     resolveSessionToolListingClientCaps(captured),
+  );
+  captured.listingTaskSuggestionDeliveryMode ??= await withPreparedSessionCapabilityRead(() =>
+    resolveSessionToolListingTaskSuggestionDeliveryMode(captured),
   );
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: captured.runSessionKey ?? captured.agentSessionKey,
