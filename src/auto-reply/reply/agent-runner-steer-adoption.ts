@@ -449,8 +449,12 @@ export async function runActiveReplySteer(
     parked.consume("consumed");
     custodyFinished = true;
     if (finalization.status === "indeterminate") {
+      // The runtime's error describes its receipt transport; the sender needs only the outcome.
+      diagnosticLogger.warn("steering receipt unconfirmed; input kept without replay", {
+        error: finalization.outcome.errorMessage.slice(0, 512),
+      });
       return markReplyPayloadForSourceSuppressionDelivery({
-        text: finalization.outcome.errorMessage,
+        text: "OpenClaw could not confirm that input. It was not sent again; check the conversation before retrying.",
         isError: true,
       });
     }

@@ -1267,7 +1267,10 @@ describe("runReplyAgent active steering", () => {
       resolvedQueueMode: "steer",
     });
 
-    await expect(run()).resolves.toMatchObject({ isError: true, text: "receipt unavailable" });
+    await expect(run()).resolves.toMatchObject({
+      isError: true,
+      text: "OpenClaw could not confirm that input. It was not sent again; check the conversation before retrying.",
+    });
 
     expect(onAdopted).toHaveBeenCalledOnce();
     expect(state.activeBackendCancelMock).not.toHaveBeenCalled();
@@ -1313,7 +1316,10 @@ describe("runReplyAgent active steering", () => {
       shouldFollowup: true,
       resolvedQueueMode: "steer",
     });
-    await expect(run()).resolves.toMatchObject({ isError: true, text: "receipt unavailable" });
+    await expect(run()).resolves.toMatchObject({
+      isError: true,
+      text: "OpenClaw could not confirm that input. It was not sent again; check the conversation before retrying.",
+    });
     await followupRun.controllerInput?.settlement.promise;
     const successor = createReplyOperation({
       sessionKey: "main",
