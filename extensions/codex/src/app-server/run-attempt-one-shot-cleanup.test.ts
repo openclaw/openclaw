@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -19,6 +20,7 @@ import {
   isJsonObject,
   type CodexDynamicToolSpec,
 } from "./protocol.js";
+import * as resources from "./run-attempt-resources.js";
 import {
   createCodexRuntimePlanFixture,
   createNativeRunParams as createParams,
@@ -141,6 +143,92 @@ describe("Codex one-shot cleanup receipts", () => {
     resetSharedCodexAppServerClientForTests();
     clearRuntimeConfigSnapshot();
   });
+
+  it("preserves the one-shot grace before releasing its isolated client lease", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const results: Record<string, unknown> = responses();
+    results["thread/backgroundTerminals/list"] = { data: [], nextCursor: null };
+    const harness = createInferenceReadyClientHarness({
+      autoEmitExit: false,
+      onWrite: (line, send) => {
+        const request = JSON.parse(line) as { id?: number; method: string };
+        if (request.id !== undefined) {
+          send({ id: request.id, result: results[request.method] ?? {} });
+        }
+      },
+    });
+    Object.assign(harness.process, { pid: 12345 });
+    const snapshot = vi
+      .spyOn(processSnapshot, "readCodexAppServerProcessSnapshot")
+      .mockRejectedValue(new processSnapshot.ProcessInspectionError("unavailable"));
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const prepared = vi.spyOn(resources, "prepareCodexAttemptResources");
+    const close = vi.spyOn(harness.client, "closeAndWait");
+    const warning = vi.spyOn(embeddedAgentLog, "warn");
+    const run = runOneShot(harness.client);
+    try {
+      await run.waitForTurnAccepted();
+      const state = prepared.mock.results[0]?.value.state;
+      assert(state?.releaseSharedClientLease);
+      const release = vi.fn(state.releaseSharedClientLease);
+      state.releaseSharedClientLease = release;
+      const shutdownStarted = once(harness.process.stdin, "finish");
+      completeTurn(harness);
+      await awaitGateBeforeSettlement(shutdownStarted, run, "cleanup did not start shutdown");
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(snapshot).not.toHaveBeenCalled();
+      expect(kill).not.toHaveBeenCalled();
+      expect(harness.process.kill).not.toHaveBeenCalled();
+      expect(release).not.toHaveBeenCalled();
+      harness.emitExit();
+      expectSuccessfulRun(await run);
+      expect(close).toHaveBeenCalledOnce();
+      await expect(close.mock.results[0]?.value).resolves.toEqual({
+        exited: true,
+        cleanup: "closed",
+      });
+      expect(release).toHaveBeenCalledOnce();
+      expect(warning).not.toHaveBeenCalledWith(expect.stringMatching(/agent cleanup failed:/));
+    } finally {
+      harness.emitExit();
+      harness.client.close();
+      await run.catch(() => undefined);
+    }
+  });
+
+  it.each(["rejected", "uncertain"] as const)(
+    "releases its isolated client lease once when shutdown is %s",
+    async (failure) => {
+      const harness = respondingHarness();
+      const prepared = vi.spyOn(resources, "prepareCodexAttemptResources");
+      const close = vi.spyOn(harness.client, "closeAndWait");
+      if (failure === "rejected") {
+        close.mockRejectedValueOnce(new Error("shutdown failed"));
+      } else {
+        close.mockResolvedValueOnce({ exited: false, cleanup: "uncertain" });
+      }
+      const warning = vi.spyOn(embeddedAgentLog, "warn");
+      const run = runOneShot(harness.client);
+      try {
+        await run.waitForTurnAccepted();
+        const owners = prepared.mock.results[0]?.value;
+        assert(owners?.state.releaseSharedClientLease);
+        const release = vi.fn(owners.state.releaseSharedClientLease);
+        owners.state.releaseSharedClientLease = release;
+        completeTurn(harness);
+        expectSuccessfulRun(await run);
+        expectReleaseWarning(warning);
+        expect(release).toHaveBeenCalledOnce();
+        expect(owners.state.releaseSharedClientLease).toBeUndefined();
+        await owners.releaseSharedClientLeaseAndRetireOneShotClient();
+        expect(release).toHaveBeenCalledOnce();
+        expect(close).toHaveBeenCalledOnce();
+      } finally {
+        harness.client.close();
+        await run.catch(() => undefined);
+      }
+    },
+  );
 
   it("reuses the shared process across background turns that release their MCP resources", async () => {
     const harness = respondingHarness();
