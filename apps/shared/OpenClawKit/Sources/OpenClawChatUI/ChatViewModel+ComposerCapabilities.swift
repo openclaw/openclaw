@@ -418,7 +418,7 @@ extension OpenClawChatViewModel {
         String(localized: "Tool changes apply to the next reply.")
     }
 
-    private func patchComposerToolOverrides(_ overrides: OpenClawChatSessionToolOverrides) {
+    func patchComposerToolOverrides(_ overrides: OpenClawChatSessionToolOverrides) {
         let normalized = overrides.isEmpty ? nil : overrides
         self.performComposerCapabilityPatch(
             OpenClawChatSessionSettingsPatch(toolOverrides: .some(normalized)),
@@ -528,10 +528,12 @@ extension OpenClawChatViewModel {
                 }
                 guard isCurrentMutation() else { return }
                 self.composerCapabilityState.errorMessage = error.localizedDescription
-                self.reportFailure(
-                    String(localized: "Couldn’t update this chat’s settings."),
-                    error,
-                    while: "update chat capabilities")
+                self.postSettingChangeFailure(patch) {
+                    self.reportFailure(
+                        String(localized: "Couldn’t update this chat’s settings."),
+                        error,
+                        while: "update chat capabilities")
+                }
             }
         }
     }

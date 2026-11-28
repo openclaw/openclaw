@@ -38,6 +38,10 @@ struct ChatInfoPage: View {
 
     var body: some View {
         self.page
+            .onChange(of: self.visit.model.errorText) { _, error in
+                if self.isCurrent,
+                   let error { self.appModel.toasts.post(.failure(error)) }
+            }
             .sheet(item: self.$transcriptShareItem) { item in
                 OpenClawChatFileShareSheet(fileURL: item.fileURL)
             }
@@ -216,7 +220,9 @@ struct ChatInfoPage: View {
             let fileURL = try Self.writeTranscript(for: self.visit.model, in: directory)
             self.transcriptShareItem = TranscriptShareItem(fileURL: fileURL)
         } catch {
-            self.visit.model.errorText = String(localized: "Couldn’t export this chat.")
+            self.appModel.toasts.post(.failure(
+                String(localized: "Couldn’t export this chat."),
+                retry: { self.exportTranscript() }))
         }
     }
 

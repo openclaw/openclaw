@@ -1,3 +1,4 @@
+import OpenClawChatUI
 import OpenClawKit
 import UIKit
 
@@ -41,10 +42,15 @@ enum GatewayProblemPrimaryAction {
     }
 
     @MainActor
-    static func handleProtocolMismatchIfNeeded(_ problem: GatewayConnectionProblem) -> Bool {
+    static func handleProtocolMismatchIfNeeded(
+        _ problem: GatewayConnectionProblem,
+        toasts: OpenClawToastPresenter) -> Bool
+    {
         guard problem.kind == .protocolMismatch else { return false }
         if let command = problem.actionCommand {
             UIPasteboard.general.string = command
+            // The command stays in the problem's details, where Copy command is the other way.
+            toasts.post(.copied(String(localized: "Command copied")))
             return true
         }
         if let url = problem.docsURL {

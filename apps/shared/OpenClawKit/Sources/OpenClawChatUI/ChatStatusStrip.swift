@@ -118,6 +118,9 @@ public final class OpenClawChatStatusStrip {
 
     private(set) var entries: [String: Entry] = [:]
     private var openSurfaces: Set<String> = []
+    /// The app's toast, where the outcome of something the person just did goes: the strip holds only
+    /// the chat's standing state. The phone app sets it.
+    @ObservationIgnored public weak var toasts: OpenClawToastPresenter?
     private var nextOrder: UInt64 = 0
     /// Bumped when a delay or expiry falls due, so readers resolve again.
     private var tick = 0
