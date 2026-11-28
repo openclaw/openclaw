@@ -40,6 +40,7 @@ import {
 } from "./bot/helpers.js";
 import {
   applyTelegramTargetSession,
+  hasTelegramDmThreadSession,
   resolveTelegramConversationRoute,
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
@@ -317,6 +318,10 @@ export const buildTelegramMessageContext = async ({
     topicName = topic.topicName;
   }
 
+  const botHasTopicsEnabled =
+    (threadSpec.scope === "dm" &&
+      (msg.is_topic_message === true || isTelegramForumTopicTitleUpdate(msg))) ||
+    resolveTelegramBotHasTopicsEnabled(primaryCtx.me);
   route = applyTelegramTargetSession({
     cfg,
     route,
@@ -325,10 +330,7 @@ export const buildTelegramMessageContext = async ({
     isGroup,
     senderId,
     dmThreadId,
-    botHasTopicsEnabled:
-      (threadSpec.scope === "dm" &&
-        (msg.is_topic_message === true || isTelegramForumTopicTitleUpdate(msg))) ||
-      resolveTelegramBotHasTopicsEnabled(primaryCtx.me),
+    botHasTopicsEnabled,
   });
   const { sessionKey } = route;
   const activationOverride = await resolveGroupActivation({
@@ -435,6 +437,11 @@ export const buildTelegramMessageContext = async ({
     promptContext: senderMedia?.promptContext ?? promptContext,
     isForum,
     dmThreadId,
+    dmThreadHasOwnSession: hasTelegramDmThreadSession({
+      bindingMode,
+      dmThreadId,
+      botHasTopicsEnabled,
+    }),
     route,
     bodyResult,
     historyLimit,

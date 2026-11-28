@@ -169,6 +169,7 @@ export async function buildTelegramInboundContextPayload(
     senderUsername,
     resolvedThreadId,
     dmThreadId,
+    dmThreadHasOwnSession,
     threadSpec,
     route,
     historyLimit,
@@ -400,10 +401,12 @@ export async function buildTelegramInboundContextPayload(
   // Fresh sessions and explicit replies keep the full transcript window.
   const replaysPersistedSessionTurns =
     previousTimestamp !== undefined && visibleReplyChain.length === 0 && !visibleReplyTarget;
-  // Plain DMs also drop Telegram's native window: it holds only the same private
-  // turns. Group windows carry room messages that never became turns, so they stay.
+  // Plain DMs and DM threads with a session of their own also drop Telegram's native
+  // window: it holds only the same private turns. A DM thread whose session is bound or
+  // shared keeps it to tell its messages apart, and group windows carry room messages
+  // that never became turns, so they stay.
   const shouldSuppressPersistedDmChatWindowContext =
-    !isGroup && dmThreadId == null && replaysPersistedSessionTurns;
+    !isGroup && (dmThreadId == null || dmThreadHasOwnSession) && replaysPersistedSessionTurns;
   const sessionTranscriptDeliveryOnly =
     shouldSuppressPersistedDmChatWindowContext || (isGroup && replaysPersistedSessionTurns);
   const baseVisiblePromptContext = shouldSuppressPersistedDmChatWindowContext
