@@ -8,11 +8,10 @@ read_when:
 
 ## Agent tool
 
-The `tts` tool converts text to speech and returns an audio attachment for
-reply delivery. On Feishu, Matrix, Telegram, and WhatsApp, the audio is
-delivered as a voice message rather than a file attachment. Feishu and
-WhatsApp can transcode non-Opus TTS output on this path when `ffmpeg` is
-available.
+The `tts` tool converts text to speech and returns audio for reply delivery.
+Voice-message presentation depends on the channel and audio format. See
+[Channel delivery](/tools/tts/output#channel-delivery) for supported formats,
+conversion requirements, and channels that cannot deliver generated local audio.
 
 WhatsApp sends audio through Baileys as a PTT voice note (`audio` with
 `ptt: true`) and sends visible text **separately** from PTT audio because
