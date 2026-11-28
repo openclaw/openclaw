@@ -317,15 +317,12 @@ function formatBaseline(counts: ReadonlyMap<string, number>, header: string) {
 }
 
 function baselineWithVerifiedRenames(
-  root: string,
-  baseRef: string,
-  staged: boolean,
   baseline: ReadonlyMap<string, number>,
   baseBaseline: ReadonlyMap<string, number>,
-  sourceRoots: string[],
+  renames: readonly { from: string; to: string }[],
 ) {
   const allowed = new Map(baseBaseline);
-  for (const { from, to } of listRatchetRenames(root, baseRef, staged, sourceRoots)) {
+  for (const { from, to } of renames) {
     const oldCount = baseBaseline.get(from);
     const newCount = baseline.get(to);
     if (
@@ -399,24 +396,23 @@ export function runPerFileCountRatchet(
       return 0;
     }
     const baseline = loadRatchetSnapshot(root, baselinePath, args.staged, parseBaseline);
+    const renames =
+      baseRef && baseBaseline
+        ? listRatchetRenames(root, baseRef, args.staged, options.renameSourceRoots)
+        : [];
     const allowedBaseline =
       baseRef && baseBaseline
-        ? baselineWithVerifiedRenames(
-            root,
-            baseRef,
-            args.staged,
-            baseline,
-            baseBaseline,
-            options.renameSourceRoots,
-          )
+        ? baselineWithVerifiedRenames(baseline, baseBaseline, renames)
         : baseBaseline;
     if (options.approvedTransfers && baseRef && baseBaseline && allowedBaseline) {
-      const removed = [...baseBaseline]
-        .filter(([file, count]) => count > (baseline.get(file) ?? 0))
-        .reduce(
-          (sum, [file]) => sum + options.countAtRef(baseRef, file) - (current.get(file) ?? 0),
-          0,
-        );
+      const renamedPaths = new Map(renames.map(({ from, to }) => [from, to]));
+      const removed = [...baseBaseline].reduce((sum, [file, count]) => {
+        // A rename preserves the pins still present at its destination.
+        const currentPath = renamedPaths.get(file) ?? file;
+        return count > (baseline.get(currentPath) ?? 0)
+          ? sum + options.countAtRef(baseRef, file) - (current.get(currentPath) ?? 0)
+          : sum;
+      }, 0);
       for (const [filePath, count] of options.approvedTransfers ?? []) {
         const transferred = current.get(filePath) ?? 0;
         if (removed > transferred && totalCount(baseline) < totalCount(baseBaseline)) {

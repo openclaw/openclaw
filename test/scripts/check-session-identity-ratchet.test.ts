@@ -130,3 +130,45 @@ it.each([30, 10])("funds the capped custody transfer from %s actual base pins", 
   expect(main(root, ["--base", "HEAD"])).toBe(1);
   expect(errors).toHaveBeenCalledWith(expect.stringContaining(`${unrelated}: 2 > 0`));
 });
+
+it("funds transfers only from pins removed at verified rename destinations", () => {
+  const root = tempDirs.make("openclaw-session-transfer-rename-");
+  const { write } = fixtureFiles(root);
+  const caller = "src/feature/old-reader.ts";
+  const renamed = "src/feature/new-reader.ts";
+  const unchanged = "src/feature/other-reader.ts";
+  const owner = "src/agents/subagents/registry/subagent-requester-turn-custody.ts";
+  const baseline = "config/session-identity-allowlist.txt";
+  const comparison = "entry.requesterTurnRunId === runId;\n";
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
+      cwd: root,
+      env: createNestedGitEnv(),
+      stdio: "ignore",
+    });
+  write(caller, comparison.repeat(5));
+  write(unchanged, comparison.repeat(3));
+  write(owner, "export {};\n");
+  write(baseline, `${caller}\t10\n${unchanged}\t6\n`);
+  git("init");
+  git("add", ".");
+  git("commit", "-m", "fixture");
+  git("mv", caller, renamed);
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  write(baseline, `${renamed}\t10\n${unchanged}\t6\n`);
+  expect(main(root, ["--base", "HEAD"]), JSON.stringify(errors.mock.calls)).toBe(0);
+  expect(errors).not.toHaveBeenCalled();
+
+  write(owner, comparison);
+  write(baseline, `${renamed}\t10\n${unchanged}\t2\n${owner}\t2\n`);
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(errors).toHaveBeenCalledWith(expect.stringContaining(`${owner}: 2 > 0`));
+
+  errors.mockClear();
+  write(renamed, comparison.repeat(3));
+  write(baseline, `${renamed}\t6\n${unchanged}\t6\n${owner}\t2\n`);
+  expect(main(root, ["--base", "HEAD"]), JSON.stringify(errors.mock.calls)).toBe(0);
+  expect(errors).not.toHaveBeenCalled();
+});
