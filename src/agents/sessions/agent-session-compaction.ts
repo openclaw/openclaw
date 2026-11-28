@@ -367,6 +367,12 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       }
 
       if (extensionResult?.compaction) {
+        const hookSummary = extensionResult.compaction.summary;
+        // Ordinary hook summaries are the primary handoff. Blank text must not
+        // be persisted, including when a deterministic floor would be appended.
+        if (typeof hookSummary !== "string" || hookSummary.trim().length === 0) {
+          throw new Error("Compaction hook summary must contain non-whitespace text.");
+        }
         compactionResult = extensionResult.compaction;
         fromExtension = true;
       }
