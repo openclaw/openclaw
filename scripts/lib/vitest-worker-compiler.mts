@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entrypoints.ts";
+import { createDatabaseSchemaAssetsPlugin } from "./database-schema-assets.mts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
 import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
 import { vitestWorkerRuntimeAssets } from "./package-root-modules.mts";
@@ -16,7 +17,6 @@ import {
   shouldBundleRuntimeSqliteDependency,
   standaloneRuntimeProcessBuildGroups,
 } from "./runtime-process-core-build-entries.mts";
-import { createSqliteSchemaAssetsPlugin } from "./sqlite-schema-assets.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 import { isCiLikeEnv } from "./vitest-local-scheduling.mts";
 import {
@@ -165,7 +165,7 @@ async function compileVitestWorkerArtifacts(
     return [
       createPublicSessionCardAssetsPlugin(root, recordInput),
       createPublicSessionLocalesPlugin(root, recordInput),
-      createSqliteSchemaAssetsPlugin(root, recordInput),
+      createDatabaseSchemaAssetsPlugin(root, recordInput),
       {
         ...schemaPlugin,
         name: "openclaw:worker-build-inputs",
@@ -423,6 +423,8 @@ async function compileVitestWorkerArtifacts(
         // Keep the invocation's loader boundaries while recording the binary
         // input and output alongside its sealed JavaScript consumers.
         plugins: [
+          // The copied recovery runtime owns its payloads, unlike ordinary worker assets.
+          createDatabaseSchemaAssetsPlugin(root, recordInput, { inlinePostgres: true }),
           createFsSafeWindowsHelperAssetPlugin(root, undefined, recordInput),
           config.plugins,
         ],

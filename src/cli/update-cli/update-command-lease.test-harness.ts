@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { resolveDatabaseSchemaAssetInputs } from "../../../scripts/lib/database-schema-assets.mts";
 import { vitestWorkerRuntimeAssets } from "../../../scripts/lib/package-root-modules.mts";
-import { resolveSqliteSchemaAssetInputs } from "../../../scripts/lib/sqlite-schema-assets.mts";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -206,7 +206,7 @@ async function prepareCandidateDoctorRuntime(): Promise<void> {
   for (const asset of vitestWorkerRuntimeAssets) {
     await fs.copyFile(path.join(generation, asset), state.path(asset));
   }
-  for (const asset of resolveSqliteSchemaAssetInputs()) {
+  for (const asset of resolveDatabaseSchemaAssetInputs().filter((file) => file.endsWith(".json"))) {
     const relative = path.join("dist/assets/sqlite-schema", path.basename(asset));
     await fs.mkdir(path.dirname(state.path(relative)), { recursive: true });
     await fs.copyFile(path.join(generation, relative), state.path(relative));

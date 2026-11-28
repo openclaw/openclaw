@@ -822,7 +822,10 @@ const sinks = new Map<string, number>([
 // Generated v25 migration metadata is published only by the existing schema transaction.
 const subagentRecoveryMetadataSinks = new Set([
   key("scripts/generate-postgres-schema.mts", "generatePostgresSchemas"),
-  key("src/state/postgres-schema.generated/runtime.ts", "<module>"),
+  key(
+    "src/state/postgres-schema.generated/postgres-runtime-operatorRecoveryV25Sql.ts",
+    "createPostgresRuntimeValue",
+  ),
 ]);
 const rawMachineStateSinks = new Map([
   [key("src/state/openclaw-state-db-schema-v12-foldin.ts", "migrateSingletonStateFoldInV12"), 1],

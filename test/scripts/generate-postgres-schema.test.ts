@@ -73,7 +73,7 @@ describe("PostgreSQL schema generation", () => {
       );
       expect(index?.sql).toContain(`CREATE INDEX "${name}"`);
       expect(files["agent.postgres.sql"]).toContain(index?.sql);
-      expect(files["agent-runtime.ts"]).toContain(name);
+      expect(files["postgres-agent-runtime-sql.ts"]).toContain(name);
     }
   });
 

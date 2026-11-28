@@ -11,6 +11,7 @@ import {
   createBundledPluginBuildInventory,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { createCompactModuleLabelsPlugin } from "./scripts/lib/compact-module-labels.mts";
+import { createDatabaseSchemaAssetsPlugin } from "./scripts/lib/database-schema-assets.mts";
 import { createEmptyRuntimeChunksPlugin } from "./scripts/lib/empty-runtime-chunks.mts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./scripts/lib/fs-safe-windows-helper-asset.mts";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
@@ -39,7 +40,6 @@ import {
   standaloneRuntimeProcessBuildEntries,
   standaloneRuntimeProcessBuildGroups,
 } from "./scripts/lib/runtime-process-core-build-entries.mts";
-import { createSqliteSchemaAssetsPlugin } from "./scripts/lib/sqlite-schema-assets.mts";
 import { createStandaloneSourceModuleUrlPlugin } from "./scripts/lib/standalone-source-module-urls.mjs";
 import {
   createStateSchemaInlinePlugin,
@@ -328,7 +328,7 @@ function nodeBuildConfig(
         : createPublicSessionLocalesPlugin(),
       typeof declarations === "object" && declarations.emitDtsOnly
         ? undefined
-        : createSqliteSchemaAssetsPlugin(),
+        : createDatabaseSchemaAssetsPlugin(),
       config.plugins,
     ],
     env,
@@ -384,7 +384,7 @@ function workerDeployBuildConfig(
     plugins: [
       createStateSchemaInlinePlugin(),
       createPublicSessionLocalesPlugin(),
-      createSqliteSchemaAssetsPlugin(undefined, undefined, { workerChunks: true }),
+      createDatabaseSchemaAssetsPlugin(undefined, undefined, { workerChunks: true }),
       createWorkerDeployBuildPlugin(),
     ],
     shims: true,

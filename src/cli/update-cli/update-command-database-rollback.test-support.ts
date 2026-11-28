@@ -5,8 +5,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { expect } from "vitest";
+import { resolveDatabaseSchemaAssetInputs } from "../../../scripts/lib/database-schema-assets.mts";
 import { vitestWorkerRuntimeAssets } from "../../../scripts/lib/package-root-modules.mts";
-import { resolveSqliteSchemaAssetInputs } from "../../../scripts/lib/sqlite-schema-assets.mts";
 import { withPluginCohortConfigCapture } from "../../config/plugin-cohort-recovery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
@@ -194,7 +194,7 @@ export async function prepareRollbackRuntime(root: string): Promise<string> {
   for (const asset of vitestWorkerRuntimeAssets) {
     await fs.copyFile(path.join(generationRoot, asset), path.join(root, asset));
   }
-  for (const asset of resolveSqliteSchemaAssetInputs()) {
+  for (const asset of resolveDatabaseSchemaAssetInputs().filter((file) => file.endsWith(".json"))) {
     const relative = path.join("dist", "assets", "sqlite-schema", path.basename(asset));
     await fs.mkdir(path.dirname(path.join(root, relative)), { recursive: true });
     await fs.copyFile(path.join(generationRoot, relative), path.join(root, relative));

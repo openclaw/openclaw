@@ -724,5 +724,17 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     addNamedImport(names, targetFile);
   }
 
+  // These generated getters consume only the default factory they actually load.
+  // Derive edges from calls, so orphan payloads still fail the unused-export audit.
+  for (const name of ["runtime", "agent-runtime", "agent-search-runtime"]) {
+    const loaderPath = `src/state/postgres-schema.generated/${name}.ts`;
+    const loader = fs.readFileSync(loaderPath, "utf8");
+    for (const [, specifier] of loader.matchAll(
+      /createRequire\(\s*import\.meta\.url\s*\)\(\s*["'](\.\/postgres-[\w-]+\.ts)["']\s*,?\s*\);\s*const value[^;]*?\bfactory as typeof import\([^;]*?\)\s*\)\.default\(\s*\)/gu,
+    )) {
+      addNamedImport(["default"], path.resolve(path.dirname(loaderPath), specifier));
+    }
+  }
+
   return `${source}\n${imports.join("\n")}`;
 }
