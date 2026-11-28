@@ -325,8 +325,7 @@ export function activateCodexAttemptTurn(
       state.activeLocalProjections -= 1;
     }
   };
-  const isSteeringAvailable = () =>
-    !state.completed && !state.terminalTurnNotificationQueued && !runAbortController.signal.aborted;
+  const isSteeringAvailable = () => state.acceptsSteering && !runAbortController.signal.aborted;
   const assertSteeringActive = () => {
     connection.assertCurrent();
     runAbortController.signal.throwIfAborted();

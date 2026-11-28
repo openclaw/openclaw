@@ -8,6 +8,7 @@ import {
   resolveFastModeForElapsed,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readCodexNotificationItem, readRawResponseToolCallId } from "./attempt-notifications.js";
+import { FINAL_SOURCE_REPLY_COMPLETION_GRACE_MS } from "./attempt-timeouts.js";
 import { itemName } from "./event-projector-items.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
@@ -66,6 +67,28 @@ export function createCodexAttemptLifecycleController(
         ? independentTerminalRelease
         : results[0];
     return value && payloads.length > 0 ? { value, payloads } : undefined;
+  };
+  const releaseTurnAfterTerminalDynamicTool = (value: TerminalToolRelease) => {
+    trajectoryRecorder?.recordEvent("turn.dynamic_tool_terminal_release", {
+      threadId: value.call.threadId,
+      turnId: value.call.turnId,
+      toolCallId: value.call.callId,
+      name: value.call.tool,
+      durationMs: value.durationMs,
+    });
+    embeddedAgentLog.info("codex app-server turn released after terminal dynamic tool result", {
+      threadId: value.call.threadId,
+      turnId: value.call.turnId,
+      toolCallId: value.call.callId,
+      tool: value.call.tool,
+      durationMs: value.durationMs,
+    });
+    // Foreground yield may complete immediately, but subscription transfer must
+    // join the exact native turn's stop before another parent turn can start.
+    state.abortCleanup = turnRuntime
+      .interruptTurn(value.call.turnId, { locallyCompleted: true })
+      .then(() => {});
+    turnRuntime.completeTurn();
   };
   const scheduleTerminalDynamicToolReleaseCheck = () => {
     if (
@@ -158,26 +181,26 @@ export function createCodexAttemptLifecycleController(
           ...authored.payloads,
         );
       }
-      trajectoryRecorder?.recordEvent("turn.dynamic_tool_terminal_release", {
-        threadId: value.call.threadId,
-        turnId: value.call.turnId,
-        toolCallId: value.call.callId,
-        name: value.call.tool,
-        durationMs: value.durationMs,
-      });
-      embeddedAgentLog.info("codex app-server turn released after terminal dynamic tool result", {
-        threadId: value.call.threadId,
-        turnId: value.call.turnId,
-        toolCallId: value.call.callId,
-        tool: value.call.tool,
-        durationMs: value.durationMs,
-      });
-      // Foreground yield may complete immediately, but subscription transfer must
-      // join the exact native turn's stop before another parent turn can start.
-      state.abortCleanup = turnRuntime
-        .interruptTurn(value.call.turnId, { locallyCompleted: true })
-        .then(() => {});
-      turnRuntime.completeTurn();
+      if (deliveredFinal) {
+        // Interrupting the enclosing native call writes a false cancellation marker.
+        // Use one absolute deadline so later output cannot extend the grace period.
+        if (!state.finalSourceReplyCompletionTimer) {
+          state.finalSourceReplyCompletionTimer = setTimeout(() => {
+            state.finalSourceReplyCompletionTimer = undefined;
+            if (
+              state.completed ||
+              state.terminalTurnNotificationQueued ||
+              runAbortController.signal.aborted
+            ) {
+              return;
+            }
+            releaseTurnAfterTerminalDynamicTool(value);
+          }, FINAL_SOURCE_REPLY_COMPLETION_GRACE_MS);
+          state.finalSourceReplyCompletionTimer.unref?.();
+        }
+        return;
+      }
+      releaseTurnAfterTerminalDynamicTool(value);
     });
     immediate.unref?.();
   };
@@ -190,6 +213,9 @@ export function createCodexAttemptLifecycleController(
     ) {
       // Nested Code Mode calls are absent from the outer raw-call inventory.
       independentTerminalRelease = value;
+    }
+    if (value.response.finalSourceReplyDelivered === true) {
+      state.finalSourceReplyDelivered = true;
     }
     const modelCall = modelResponse?.calls.get(value.call.callId);
     if (modelCall) {
