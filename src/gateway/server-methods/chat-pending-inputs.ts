@@ -5,6 +5,7 @@ import {
   listSessionPendingInputs,
   type SessionPendingInput,
 } from "../../config/sessions/session-accessor.js";
+import type { PendingInputHistoryRunState } from "../../config/sessions/session-pending-input-history.types.js";
 import {
   getRpcSourceForGateway,
   getRpcSourceIdentity,
@@ -95,17 +96,26 @@ export async function readChatPendingInputs(
     limit: number;
     maxChars: number;
     queuedRunIds?: ReadonlySet<string>;
+    includeQueueObservation?: boolean;
+    observeRunState?: (runState: PendingInputHistoryRunState | undefined) => void;
     cronStorePath?: string;
     resolveGatewayContext?: GatewayContextResolver;
     physicalPaths?: SessionRuntimeScope["physicalPaths"];
     audience?: import("../../config/sessions/session-pending-input-audience.js").PendingInputAudience;
   },
 ): Promise<ChatPendingInputsPage> {
+  let hasQueuedInput: boolean | undefined;
   const page = await listSessionPendingInputs(scope, {
     before: options.before,
     limit: Math.min(options.limit, 20),
     audience: options.audience,
-    includeQueueObservation: options.queuedRunIds !== undefined,
+    observeQueue:
+      options.includeQueueObservation || options.observeRunState
+        ? (queued, runState) => {
+            hasQueuedInput = queued;
+            options.observeRunState?.(runState);
+          }
+        : undefined,
   });
   const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
     page.items.map((input) => input.message),
@@ -143,6 +153,7 @@ export async function readChatPendingInputs(
   }).messages;
   return {
     ...page,
+    ...(options.includeQueueObservation && hasQueuedInput !== undefined ? { hasQueuedInput } : {}),
     ...(options.queuedRunIds
       ? { queuedCount: Math.max(0, options.queuedRunIds.size - hiddenQueuedRunIds.size) }
       : {}),

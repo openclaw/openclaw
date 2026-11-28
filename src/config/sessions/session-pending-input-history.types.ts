@@ -1,4 +1,7 @@
 import type { SessionPendingInputRow } from "./session-pending-input.types.js";
+import type { InternalSessionEntry } from "./types.js";
+
+export type PendingInputHistoryRunState = Pick<InternalSessionEntry, "lastRunId" | "status">;
 
 export type PendingInputHistoryQuery = {
   sessionKey: string;
@@ -7,6 +10,7 @@ export type PendingInputHistoryQuery = {
   before?: number;
   id?: string;
   includeTotal?: false;
+  includeQueueObservation?: true;
   /** Replay only durable queued inputs that have no current process scheduler. */
   queuedOnly?: true;
   liveInputIds?: readonly string[];
@@ -16,6 +20,7 @@ export type PendingInputHistorySnapshot = {
   rows: SessionPendingInputRow[];
   total: number | undefined;
   hasQueuedInput?: boolean;
+  runState?: PendingInputHistoryRunState;
   nextBefore?: number;
   currentSessionId?: string;
 };

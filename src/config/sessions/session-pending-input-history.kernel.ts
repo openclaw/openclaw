@@ -13,6 +13,8 @@ import {
   hasPendingInputConsumptionColumn,
   hasSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import { getExactSessionEntryQueries } from "./session-accessor.sqlite-entry-query.js";
+import { parseReadableSessionEntryData } from "./session-accessor.sqlite-entry-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { pendingInputAudienceEligibility } from "./session-pending-input-audience.js";
 import type {
@@ -48,6 +50,15 @@ export function readPendingInputHistoryInDatabase(
     return readPendingInputPageInDatabase(database, query, hasConsumption);
   }
   return runSqliteReadSnapshotSync(database.db, () => {
+    // Read the persisted run and queue in one native snapshot, including an empty queue.
+    const row = query.includeQueueObservation
+      ? getExactSessionEntryQueries(database.db).canonical(query.sessionKey, "list", false)
+      : undefined;
+    const entry = row && parseReadableSessionEntryData(database, row, "list");
+    const runState =
+      entry?.sessionId === query.sessionId
+        ? { status: entry.status, lastRunId: entry.lastRunId }
+        : undefined;
     const db = getSessionKysely(database.db);
     let base = db
       .selectFrom("session_pending_inputs")
@@ -62,18 +73,21 @@ export function readPendingInputHistoryInDatabase(
     }
     const counts = executeSqliteQueryTakeFirstSync(
       database.db,
-      base.select((eb) => [
-        eb.fn.countAll<number>().as("total"),
-        eb.fn.countAll<number>().filterWhere("state", "=", "queued").as("queued"),
-      ]),
+      base
+        .select((eb) => eb.fn.countAll<number>().as("total"))
+        .$if(query.includeQueueObservation === true, (selection) =>
+          selection.select((eb) =>
+            eb.fn.countAll<number>().filterWhere("state", "=", "queued").as("queued"),
+          ),
+        ),
     );
     if (!counts?.total) {
-      return { rows: [], total: 0 };
+      return { rows: [], total: 0, ...(runState && { runState }) };
     }
     return {
       ...readPendingInputPageInDatabase(database, query, hasConsumption),
       total: counts.total,
-      hasQueuedInput: counts.queued > 0,
+      ...(counts.queued !== undefined && { hasQueuedInput: counts.queued > 0, runState }),
     };
   });
 }

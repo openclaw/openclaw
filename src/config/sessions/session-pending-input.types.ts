@@ -20,7 +20,6 @@ export type SessionPendingInput = {
 export type SessionPendingInputPage = {
   items: SessionPendingInput[];
   total: number;
-  hasQueuedInput?: boolean;
   nextBefore?: number;
 };
 export type SessionPendingInputRow = Selectable<SessionPendingInputs>;
