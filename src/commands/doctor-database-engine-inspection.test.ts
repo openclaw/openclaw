@@ -107,26 +107,26 @@ describe("Doctor physical engine inspection", () => {
 }];
 `,
         );
-        const config = {
+        const pluginConfig = {
           plugins: { entries: { [pluginId]: { enabled: true } }, slots: { memory: "memory-core" } },
         };
-        await state.writeConfig(config);
+        await state.writeConfig(pluginConfig);
         await seedInstalledPluginIndex(
           { [pluginId]: { source: "npm", installPath: packageDir } },
-          { config, env: state.env },
+          { config: pluginConfig, env: state.env },
         );
         // The fallback prefix hashes this fresh state dir, so no other run shares it.
         const prefix = resolvePluginSourceCaptureFallbackPrefix(state.stateDir);
 
-        const inspection = await inspectDoctorDatabaseEngines({
-          config,
+        const inspected = await inspectDoctorDatabaseEngines({
+          config: pluginConfig,
           stateDir: state.stateDir,
           env: state.env,
         });
 
         // "none" (not "unknown") proves Doctor loaded the contract it inspected.
-        expect(inspection.stores.map((store) => store.legacyMigrations?.state)).not.toContain(
-          "unknown",
+        expect(new Set(inspected.stores?.map((store) => store.legacyMigrations?.state))).toEqual(
+          new Set(["none"]),
         );
         expect(fs.readdirSync(tmpdir()).filter((name) => name.startsWith(prefix))).toEqual([]);
       },
