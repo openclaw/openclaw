@@ -313,6 +313,43 @@ it("moves a quick retry to a reset just past its backoff instead of the next dai
   expect(job.state.nextRunAtMs).toBe(resetAt);
 });
 
+// Each execution adapter rebuilds the outcome; the reset must survive it into the store.
+it.each(["isolated", "session-target"] as const)(
+  "persists a %s job's next run at its first slot after the provider's reset",
+  async (path) => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-08-03T06:00:00.000Z");
+    const resetAt = now + 6 * 24 * 60 * 60 * 1000 + 30 * 60_000;
+    const job = {
+      ...createIsolatedRegressionJob({
+        id: `rate-limited-${path}`,
+        name: "rate limited",
+        scheduledAt: now,
+        schedule: { kind: "cron", expr: "0 6,10,14,18 * * 1-5", tz: "UTC" },
+        payload: { kind: "agentTurn", message: "report" },
+        state: { nextRunAtMs: now },
+      }),
+      ...(path === "session-target" ? { sessionTarget: "session:agent:main:target" } : {}),
+    };
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const run = vi.fn(async () => ({
+      status: "error" as const,
+      error: "429 rate limited",
+      provider: "openai",
+      rateLimitResetAt: resetAt,
+    }));
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      nowMs: () => now,
+      ...(path === "isolated" ? { runIsolatedAgentJob: run } : { runSessionEvent: run }),
+    });
+    await onTimer(state);
+    expect(run).toHaveBeenCalledOnce();
+    const [persisted] = (await loadCronStore(store.storePath)).jobs;
+    expect(persisted?.state.nextRunAtMs).toBe(computeJobNextRunAtMs(persisted!, resetAt - 1));
+  },
+);
+
 it.each(["timer maintenance", "startup catch-up"] as const)(
   "persists schedule auto-disable before notifying during %s",
   async (path) => {
