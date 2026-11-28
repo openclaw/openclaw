@@ -340,10 +340,15 @@ describe("Computer Use provider registration", () => {
     });
 
     await expect(act(firstId, "start_recording")).resolves.toBe("act");
+    await retire(nextId);
+    expect(closes).toEqual([]);
     await expect(act(nextId, "stop_recording")).rejects.toThrow("COMPUTER_HOST_BUSY");
 
     await retire(firstId, "completion");
     await expect(act(nextId, "start_recording")).resolves.toBe("act");
+    await retire(firstId);
+    expect(closes).toEqual(["completion"]);
+    await expect(act(nextId, "stop_recording")).resolves.toBe("act");
     await snapshot.onDisconnect?.();
     expect(closes).toEqual(["completion", "gateway-disconnect"]);
   });
