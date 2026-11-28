@@ -95,7 +95,7 @@ function installedFixture(id: string) {
     OPENCLAW_BUNDLED_PLUGINS_DIR: file("bundled"),
     OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
   };
-  return { file, root, write, env };
+  return { root, write, env };
 }
 
 it("keeps registry metadata and index fingerprints on the captured generation", () => {
