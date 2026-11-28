@@ -20,6 +20,146 @@ const root = "/workspace/investigating-why-a-pr-was-not-merged";
 afterEach(() => document.body.replaceChildren());
 
 describe.runIf(browserMode)("Review layout", () => {
+  it.each([true, false])(
+    "shows a long filename in the diff heading with mobile=%s",
+    async (mobile) => {
+      const { userEvent } = await import("vitest/browser");
+      const name =
+        "coastal-observation-register.compatibilityverificationforportablemonitoringstationsacrossallregionaldeployments";
+      const mounted = mountSolid(() =>
+        createComponent(SessionDiffPanel, {
+          mobile,
+          desktop: !mobile,
+          owner: null,
+          execNode: null,
+          loadFileText: null,
+          openFile: null,
+          revealFile: null,
+          loader: async () => ({
+            sessionKey: "main",
+            additions: 1,
+            deletions: 0,
+            files: [
+              { path: "src/" + name, status: "added", additions: 1, deletions: 0 },
+              { path: "src/chat.ts", status: "modified", additions: 1, deletions: 0 },
+              { path: "src/map.png", status: "added", additions: 1, deletions: 0 },
+            ],
+          }),
+        }),
+      );
+      const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
+      panel.style.cssText = "display:flex;position:fixed;top:0;left:0;width:390px;height:500px";
+      await waitForSolid(() =>
+        expect(panel.querySelector(".session-diff__filename")?.textContent).toBe(name),
+      );
+      const label = panel.querySelector<HTMLElement>(".session-diff__filename")!;
+      expect(label.title).toBe(name);
+      const stem = label.querySelector(".session-diff__basename bdi")!.firstChild!;
+      const range = document.createRange();
+      range.selectNodeContents(stem);
+      expect(new Set(Array.from(range.getClientRects(), (rect) => rect.top)).size).toBe(1);
+      range.setStart(stem, stem.textContent!.lastIndexOf("-") + 1);
+      const suffix = range.getBoundingClientRect();
+      const bounds = label.getBoundingClientRect();
+      expect(suffix.width).toBeGreaterThan(0);
+      expect(suffix.left).toBeGreaterThanOrEqual(bounds.left - 1);
+      expect(suffix.right).toBeLessThanOrEqual(bounds.right + 1);
+      for (const short of ["chat.ts", "map.png"]) {
+        const extension = panel.querySelector<HTMLElement>(
+          `.session-diff__filename[title="${short}"] .session-diff__extension`,
+        )!;
+        range.selectNodeContents(extension);
+        expect(range.getBoundingClientRect().right).toBeLessThanOrEqual(
+          extension.getBoundingClientRect().right + 1,
+        );
+      }
+      const toggle = panel.querySelector<HTMLButtonElement>(".session-diff__file-toggle")!;
+      const initial = toggle.getAttribute("aria-expanded");
+      await userEvent.click(toggle);
+      await waitForSolid(() => expect(toggle.getAttribute("aria-expanded")).not.toBe(initial));
+      await userEvent.keyboard("{Enter}");
+      await waitForSolid(() => expect(toggle.getAttribute("aria-expanded")).toBe(initial));
+    },
+  );
+
+  it("identifies a selected file in the compact tree and in the reading pane", async () => {
+    const { page, userEvent } = await import("vitest/browser");
+    await page.viewport(1180, 820);
+    const name =
+      "coastal-observation-register.compatibilityverificationforportablemonitoringstationsacrossallregionaldeployments";
+    const mounted = mountSolid(() =>
+      createComponent(SessionDiffPanel, {
+        desktop: true,
+        mobile: false,
+        owner: null,
+        execNode: null,
+        loadFileText: null,
+        openFile: null,
+        revealFile: null,
+        loader: async () => ({
+          sessionKey: "main",
+          additions: 1,
+          deletions: 0,
+          files: [
+            {
+              path: "src/" + name,
+              oldPath: "archive/previous-observation-register.csv",
+              status: "renamed",
+              additions: 3,
+              deletions: 2,
+              patch: "@@ -1 +1 @@\n-old\n+new",
+            },
+            { path: "src/chat.ts", status: "modified", additions: 1, deletions: 1 },
+            { path: "src/map.png", status: "added", additions: 1, deletions: 0 },
+          ],
+        }),
+      }),
+    );
+    const host = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
+    host.style.cssText = "display:flex;position:fixed;top:0;left:0;width:480px;height:600px";
+    await waitForSolid(() => expect(host.querySelector(".session-diff__filename")).not.toBeNull());
+    await userEvent.click(
+      host.querySelector<HTMLButtonElement>('[aria-label="Changed files tree"]')!,
+    );
+    const leaf = host.querySelector<HTMLButtonElement>(
+      '.session-diff__tree-row[title="src/' + name + '"]',
+    )!;
+    await userEvent.click(leaf);
+
+    await waitForSolid(() =>
+      expect(host.querySelector(".session-diff__file-toggle")).toBe(document.activeElement),
+    );
+    expect(host.querySelector<HTMLElement>(".session-diff__filename")!.offsetWidth).toBeGreaterThan(
+      0,
+    );
+    const selected = host.querySelector<HTMLElement>(".session-diff__filename")!;
+    expect(selected.title).toBe(name);
+    const stem = selected.querySelector("bdi")!.firstChild!;
+    const range = document.createRange();
+    range.selectNodeContents(stem);
+    expect(new Set(Array.from(range.getClientRects(), (r) => r.top)).size).toBe(1);
+    expect(host.querySelector('[title="src/chat.ts"]')?.textContent).toContain("chat.ts");
+    expect(host.querySelector('[title="src/map.png"]')?.textContent).toContain("map.png");
+    for (const shortName of ["chat.ts", "map.png"]) {
+      const ext = host.querySelector<HTMLElement>(
+        `.session-diff__filename[title="${shortName}"] .session-diff__extension`,
+      )!;
+      range.selectNodeContents(ext);
+      expect(range.getBoundingClientRect().right).toBeLessThanOrEqual(
+        ext.getBoundingClientRect().right + 1,
+      );
+    }
+    const selectedToggle = host.querySelector<HTMLButtonElement>(".session-diff__file-toggle")!;
+    const expanded = selectedToggle.getAttribute("aria-expanded");
+    await userEvent.keyboard("{Enter}");
+    await waitForSolid(() =>
+      expect(selectedToggle.getAttribute("aria-expanded")).not.toBe(expanded),
+    );
+    expect(leaf.querySelector<HTMLElement>(".session-diff__basename")!.offsetWidth).toBeGreaterThan(
+      16,
+    );
+  });
+
   it.each([false, true])("contains complete split lines with mobile=%s", async (mobile) => {
     const { page, userEvent } = await import("vitest/browser");
     await page.viewport(1200, 800);
