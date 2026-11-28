@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasPendingAutomationContinuation } from "../../cron/automation-result.js";
 import { resolveCronConfigurationRefusal } from "../../cron/configuration-refusal.js";
+import { resolveCronRateLimitResetAt } from "../../cron/rate-limit-reset.js";
 import {
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
   mergeCronRunDiagnostics,
 } from "../../cron/run-diagnostics.js";
-import { resolveCronRateLimitResetAt } from "../../cron/run-error-reason.js";
 import { projectCronRunUsage } from "../../cron/run-telemetry.js";
 import { consumeCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
