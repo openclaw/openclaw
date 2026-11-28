@@ -455,7 +455,10 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     };
   }
 
-  const result = await callMessageGateway<{ messageId: string }>({
+  const result = await callMessageGateway<
+    | { messageId: string; deliveryStatus?: never }
+    | { deliveryStatus: "suppressed"; suppressionReason: MessageSendResult["suppressionReason"] }
+  >({
     gateway: params.gateway,
     method: "send",
     onPlatformSendDispatch: params.onPlatformSendDispatch,
@@ -483,6 +486,13 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     },
   });
 
+  if (result?.deliveryStatus === "suppressed") {
+    return {
+      ...baseResult,
+      deliveryStatus: result.deliveryStatus,
+      suppressionReason: result.suppressionReason,
+    };
+  }
   return { ...baseResult, result };
 }
 

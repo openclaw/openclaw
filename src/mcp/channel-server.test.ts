@@ -333,6 +333,28 @@ describe("openclaw channel mcp server", () => {
     },
   );
 
+  test("reports a suppressed reply without claiming it was sent", async () => {
+    const { client, bridge } = await connectMcpWithoutGateway();
+    const sessionKey = "agent:main:main";
+    const result = {
+      deliveryStatus: "suppressed",
+      suppressionReason: "cancelled_by_message_sending_hook",
+    };
+    attachReadyGateway(
+      bridge,
+      gatewayResponses({
+        "sessions.describe": { session: { key: sessionKey, deliveryContext: route } },
+        send: result,
+      }),
+    );
+    expect(
+      await call(client, "messages_send", { session_key: sessionKey, text: "reply" }),
+    ).toMatchObject({
+      content: [{ type: "text", text: "suppressed" }],
+      structuredContent: { result },
+    });
+  });
+
   test("rejects oversized limits and timeouts at the MCP input boundary", async () => {
     const mcp = await connectMcpWithoutGateway();
     attachReadyGateway(

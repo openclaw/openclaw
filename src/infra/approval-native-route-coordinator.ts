@@ -475,8 +475,12 @@ async function maybeFinalizeApprovalRouteNotice(
     return;
   }
 
+  let undeliveredReason: string;
   try {
-    await notice.requestGateway("send", {
+    const result = await notice.requestGateway<{
+      deliveryStatus?: string;
+      suppressionReason?: string;
+    }>("send", {
       channel: notice.target.channel,
       to: notice.target.to,
       accountId: notice.target.accountId ?? undefined,
@@ -484,13 +488,18 @@ async function maybeFinalizeApprovalRouteNotice(
       message: notice.text,
       idempotencyKey: `approval-route-notice:${approvalId}`,
     });
+    if (result?.deliveryStatus !== "suppressed") {
+      return;
+    }
+    undeliveredReason = result.suppressionReason ?? "Gateway send suppressed";
   } catch (error) {
-    // Best effort, but recorded: when native delivery reached no one, this notice
-    // carried the only /approve instructions.
-    log.warn(
-      `Approval route notice not delivered (approval ${approvalId}, channel ${notice.target.channel}): ${formatErrorMessage(error)}`,
-    );
+    undeliveredReason = formatErrorMessage(error);
   }
+  // Best effort, but recorded: when native delivery reached no one, this notice
+  // carried the only /approve instructions.
+  log.warn(
+    `Approval route notice not delivered (approval ${approvalId}, channel ${notice.target.channel}): ${undeliveredReason}`,
+  );
 }
 
 /** Tracks native approval deliveries and sends origin-chat notices after all observed runtimes report. */

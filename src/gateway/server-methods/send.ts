@@ -10,7 +10,10 @@ import {
   validateMessageActionParams,
   validateSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
+import {
+  durableMessageBatchMayHaveReachedRecipient,
+  sendDurableMessageBatchCore,
+} from "../../channels/message/runtime.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
@@ -666,6 +669,23 @@ export const sendHandlers: GatewayRequestHandlers = {
               messageIds: send.results.map((result) => result.messageId),
               receipt: send.receipt,
               visibleReplySent: true,
+            });
+          }
+          if (
+            send.status === "suppressed" &&
+            send.reason === "cancelled_by_message_sending_hook" &&
+            !durableMessageBatchMayHaveReachedRecipient(send)
+          ) {
+            return createGatewayInflightSuccess({
+              context,
+              dedupeKey,
+              channel,
+              payload: {
+                runId: idem,
+                channel,
+                deliveryStatus: "suppressed",
+                suppressionReason: send.reason,
+              },
             });
           }
           const results = send.status === "sent" ? send.results : [];
