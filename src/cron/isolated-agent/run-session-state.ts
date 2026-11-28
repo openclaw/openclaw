@@ -18,6 +18,7 @@ import { readSessionTranscriptWatermarkAsync } from "../../config/sessions/sessi
 import type { SessionScheduledMemoryParent } from "../../config/sessions/types.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/work-start-error.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { AmbiguousSessionControllerError } from "../../sessions/session-controller.contracts.js";
 import {
   beginSessionEffect,
   captureSessionTarget,
@@ -165,6 +166,21 @@ export async function beginCronPreparationEffect(params: {
         throw new CronSessionLifecycleClaimError(agentSessionKey, archivedSessionError);
       }
     },
+  }).catch((cause: unknown) => {
+    if (!(cause instanceof AmbiguousSessionControllerError)) {
+      throw cause;
+    }
+    const previousId = initialSessionEntry?.sessionId;
+    const previousRunKey = previousId && `${agentSessionKey}:run:${previousId}`;
+    const previousRunHasWork =
+      params.usesDetachedRunSession &&
+      previousRunKey &&
+      previousRunKey !== runSessionKey &&
+      cause.hasWorkFor(previousRunKey);
+    cause.message = previousRunHasWork
+      ? "The agent didn’t start because work from the previous run was still active. Wait a moment, then try running it again."
+      : "The agent didn’t start because OpenClaw found conflicting session records for this run. Wait a moment, then try running it again.";
+    throw cause;
   });
 }
 

@@ -1,3 +1,9 @@
+import {
+  getRuntimeContextDataRanges,
+  getRuntimeContextDataText,
+  setRuntimeContextDataRanges,
+  type RuntimeContextDataRange,
+} from "@openclaw/llm-core/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * Plugin-defined text replacement transforms for stream boundaries.
@@ -8,11 +14,6 @@ import type { AssistantMessage, AssistantMessageEvent } from "../llm/types.js";
 import { mapAssistantMessageStream } from "../llm/utils/stream-wrapper.js";
 import type { PluginTextReplacement, PluginTextTransforms } from "../plugins/cli-backend.types.js";
 import { mapNestedStrings } from "../shared/map-nested-strings.js";
-import {
-  getRuntimeContextDataRanges,
-  setRuntimeContextDataRanges,
-  type RuntimeContextDataRange,
-} from "./runtime-context-data-ranges.js";
 import type { StreamFn } from "./runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "./stream-compat.js";
 import { createStreamIteratorWrapper } from "./stream-iterator-wrapper.js";
@@ -195,11 +196,16 @@ export function wrapStreamFnTextTransforms(params: {
               ? applyPluginTextReplacements(context.systemPrompt, params.input)
               : context.systemPrompt,
           messages: context.messages.map((message) => {
-            if (message.role === "user" && typeof message.content === "string") {
+            if (message.role === "user") {
+              const text = getRuntimeContextDataText(message);
               const ranges = getRuntimeContextDataRanges(message);
-              if (ranges?.length) {
+              if (text !== undefined && ranges?.length) {
                 const mapped = ranges.map(({ start, end }) => ({ start, end }));
-                const content = applyPluginTextReplacements(message.content, params.input, mapped);
+                const replacement = applyPluginTextReplacements(text, params.input, mapped);
+                const content =
+                  typeof message.content === "string"
+                    ? replacement
+                    : [{ type: "text" as const, text: replacement }];
                 const rewritten = { ...message, content };
                 setRuntimeContextDataRanges(rewritten, mapped);
                 return rewritten;

@@ -701,6 +701,8 @@ export type SessionScheduledMemoryParent = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** A failed naming attempt released the transcript fallback; retries must not hide it. */
+  titleFallbackReady?: true;
   /**
    * Written only by cron run preparation on a child-placement `:run:` row, so a
    * session the run spawns can resolve its memory audience through that parent.

@@ -28,6 +28,7 @@ function fixture(scrollHeight = 1600) {
   bubble.getBoundingClientRect = () => rect(90, 180);
   const virtualizer = {
     scrollElement: scroller,
+    cancelScroll: vi.fn(),
     scrollToOffset: vi.fn((offset: number) => {
       scroller.scrollTop = Math.max(0, Math.min(offset, scrollHeight - scroller.clientHeight));
     }),
@@ -68,6 +69,36 @@ it("retains the reader without admitting a pending history prepend", () => {
   anchor.update(instance, unmeasuredRows);
   expect(scroller.scrollTop).toBe(240);
   expect(bubble.getBoundingClientRect().top).toBe(90);
+});
+
+it("keeps a newer scroll when a fractional prepend correction has already landed", async () => {
+  const { scroller, bubble, anchor } = fixture();
+  const instance = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: 1,
+    estimateSize: () => scroller.scrollHeight,
+    getScrollElement: () => scroller,
+    observeElementRect: vi.fn(),
+    observeElementOffset: vi.fn(),
+    scrollToFn: (offset) => {
+      scroller.scrollTop = Math.round(offset);
+    },
+  });
+  instance.scrollElement = scroller;
+  instance.targetWindow = window;
+  scroller.scrollTop = 200;
+  anchor.messageKeys = messages("visible");
+  anchor.capture(scroller, false);
+  anchor.messageKeys = messages("older", "visible");
+  anchor.capture(scroller, false);
+  bubble.getBoundingClientRect = () => rect(130.375, 180);
+  anchor.update(instance, measuredRows);
+  expect(scroller.scrollTop).toBe(240);
+
+  // The virtualizer has observed the rounded position, but not the reader's next scroll event.
+  instance.scrollOffset = scroller.scrollTop;
+  scroller.scrollTop -= 24;
+  await new Promise(requestAnimationFrame);
+  expect(scroller.scrollTop).toBe(216);
 });
 
 it("restores a committed reader while measurements settle without requesting idle commits", () => {

@@ -43,7 +43,7 @@ struct RootSidebarShellInvalidationTests {
                 sidebarWidth: 316,
                 isDrawerLayout: true,
                 presentation: self.presentation,
-                canOpenFromEdge: true,
+                openingRegion: .edge,
                 reduceMotion: false,
                 animation: nil,
                 onShow: {},

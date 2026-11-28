@@ -89,6 +89,14 @@ export function Detail(props: {
       versions().some((version) => version.id === selected.versionId)
     );
   };
+  const moving = () => {
+    const move = props.view().membership;
+    return move?.name === target().name ? move : null;
+  };
+  const archiving = () => {
+    const move = moving();
+    return move ? move.destination === "archived" : Boolean(skill());
+  };
   const history = createMemo(() =>
     snapshot().changes.filter((change) => change.skillName === target().name),
   );
@@ -151,17 +159,18 @@ export function Detail(props: {
       summary={description()}
       byline={byline()}
       actions={
-        <Show when={skill() || canRestore()}>
+        <Show when={Boolean(moving() || skill() || canRestore())}>
           <MutationButton
             view={props.view}
-            label={t(skill() ? "skillWorkshop.viewer.archive" : "skillWorkshop.viewer.restore")}
-            title={skill() ? t("skillWorkshop.viewer.archiveTitle") : undefined}
+            label={t(archiving() ? "skillWorkshop.viewer.archive" : "skillWorkshop.viewer.restore")}
+            title={archiving() ? t("skillWorkshop.viewer.archiveTitle") : undefined}
             mutation={{
-              method: skill() ? "skills.workshop.archive" : "skills.workshop.restore",
+              method: archiving() ? "skills.workshop.archive" : "skills.workshop.restore",
               name: target().name,
             }}
-            actionKey={`${skill() ? "archive" : "restore"}:${target().name}`}
-            icon={skill() ? "archive" : "archiveRestore"}
+            actionKey={`${archiving() ? "archive" : "restore"}:${target().name}`}
+            destination={archiving() ? "archived" : "active"}
+            icon={archiving() ? "archive" : "archiveRestore"}
           />
         </Show>
       }
