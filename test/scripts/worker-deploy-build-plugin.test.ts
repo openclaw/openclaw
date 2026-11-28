@@ -60,6 +60,14 @@ describe("worker deploy build plugin", () => {
       expect.arrayContaining([
         fs.realpathSync(path.resolve("node_modules/@openclaw/fs-safe/package.json")),
         path.resolve("pnpm-lock.yaml"),
+        fs.realpathSync(
+          path.resolve("extensions/code-mode-quickjs/node_modules/quickjs-wasi/quickjs.wasm"),
+        ),
+        fs.realpathSync(
+          path.resolve(
+            "extensions/code-mode-quickjs/node_modules/quickjs-wasi/extensions/encoding/encoding.so",
+          ),
+        ),
       ]),
     );
   });
@@ -197,7 +205,10 @@ export function readOwnerAndDaclBatch(paths: readonly string[]) {
   return readBatch(paths);
 }
 export { inspectDarwinAcl } from "@openclaw/fs-safe/permissions";
-export { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";`;
+export { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+export { applyCodeModeCatalog, createCodeModeTools } from "../agents/code-mode.js";
+export { disposeAllCodeModeRuns } from "../agents/code-mode-state.js";
+export { clearToolSearchCatalog, createToolSearchCatalogRef } from "../agents/tool-search-catalog.js";`;
               }
               if (id === highlightSource) {
                 return `globalThis[Symbol.for("worker-highlight-initializations")] = (globalThis[Symbol.for("worker-highlight-initializations")] ?? 0) + 1;\n${code}`;
@@ -927,6 +938,112 @@ console.log("relocated worker WebSocket and transcription passed");
         });
       }
     });
+
+    it("executes QuickJS cells, host tool calls, explicit refusal, and Node control in a relocated archive", async () => {
+      const root = tempDirs.make("openclaw-worker-code-mode-quickjs-");
+      const relocated = path.join(root, "bundle");
+      fs.mkdirSync(relocated);
+      await tar.extract({ file: preparedArchive, cwd: relocated });
+      const probe = `
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const [entry] = process.argv.slice(1);
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
+const {
+  applyCodeModeCatalog,
+  clearToolSearchCatalog,
+  createCodeModeTools,
+  createToolSearchCatalogRef,
+  disposeAllCodeModeRuns,
+} = await import(pathToFileURL(entry).href);
+let hostToolCalls = 0;
+async function runExec(runtimeConfig, code) {
+  const ctx = {
+    config: runtimeConfig,
+    runtimeConfig,
+    catalogRef: createToolSearchCatalogRef(),
+    sessionKey: "agent:main:main",
+    sessionId: "session-worker-quickjs",
+    runId: "run-worker-quickjs",
+  };
+  const tools = [
+    ...createCodeModeTools(ctx),
+    {
+      name: "echo_host",
+      label: "Echo",
+      description: "Echo host payload",
+      parameters: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
+      execute: async (_id, params) => {
+        hostToolCalls += 1;
+        return { content: [{ type: "text", text: JSON.stringify({ echoed: params.value }) }], details: { echoed: params.value } };
+      },
+    },
+  ];
+  const visible = applyCodeModeCatalog({ ...ctx, tools });
+  const execTool = visible.tools.find((tool) => tool.name === "exec");
+  const result = await execTool.execute("call-1", { code });
+  clearToolSearchCatalog(ctx);
+  return JSON.parse(result.content[0].text);
+}
+try {
+  const quickjsConfig = { tools: { codeMode: { enabled: true, executor: "quickjs" } } };
+  const cell = await runExec(
+    quickjsConfig,
+    'return new TextDecoder().decode(new TextEncoder().encode("quickjs-cell-ok"));',
+  );
+  assert.equal(cell.status, "completed");
+  assert.equal(cell.value, "quickjs-cell-ok");
+
+  const hostCall = await runExec(
+    quickjsConfig,
+    'return await echo_host({ value: "from-quickjs" });',
+  );
+  assert.equal(hostCall.status, "completed");
+  assert.deepEqual(hostCall.value, { echoed: "from-quickjs" });
+  assert.equal(hostToolCalls, 1);
+
+  for (const plugins of [
+    { deny: ["code-mode-quickjs"] },
+    { entries: { "code-mode-quickjs": { enabled: false } } },
+  ]) {
+    const refused = await runExec(
+      { tools: { codeMode: { enabled: true, executor: "quickjs" } }, plugins },
+      'await echo_host({ value: "must-not-run" }); return "fallback-bug";',
+    );
+    assert.equal(refused.status, "failed");
+    assert.equal(refused.code, "runtime_unavailable");
+    assert.match(refused.error, /Code Mode executor "quickjs" is unavailable or disabled/u);
+  }
+  assert.equal(hostToolCalls, 1);
+
+  const nodeControl = await runExec(
+    { tools: { codeMode: { enabled: true, executor: "node" } } },
+    'return 20 + 22;',
+  );
+  assert.equal(nodeControl.status, "completed");
+  assert.equal(nodeControl.value, 42);
+  console.log("relocated worker quickjs code mode passed");
+} finally {
+  await disposeAllCodeModeRuns();
+}
+`;
+      const result = await runNodeScript(
+        ["--input-type=module", "--eval", probe, path.join(relocated, "worker.mjs")],
+        { ...workerEnv(root), NODE_DEBUG: "worker" },
+        30_000,
+        { cwd: relocated },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe("relocated worker quickjs code mode passed");
+      expect(
+        Array.from(
+          result.stderr.matchAll(
+            /instantiating Worker\. url: [^\n]*[/\\](code-mode-(?:quickjs|node)\.worker\.mjs)\b/gu,
+          ),
+          (match) => match[1],
+        ),
+      ).toEqual(["code-mode-quickjs.worker.mjs", "code-mode-node.worker.mjs"]);
+    });
   });
 
   it("replaces optional host-native modules with a failing virtual module", () => {
@@ -1036,6 +1153,18 @@ export async function createAttachedBrowserToolRuntime(params) {
       modulePath: "node_modules/playwright-core/lib/coreBundle.js",
       mutate: () => "changed upstream source",
       error: "playwright-core package bootstrap changed",
+    },
+    {
+      name: "Code Mode executor placeholder",
+      modulePath: "src/plugins/worker-deploy-code-mode-executors.ts",
+      mutate: () => "export const workerDeployCodeModeExecutors = [];",
+      error: "Code Mode executor placeholder changed",
+    },
+    {
+      name: "QuickJS executor",
+      modulePath: "extensions/code-mode-quickjs/src/executor.ts",
+      mutate: (source: string) => source.replace("quickjs-wasi/quickjs.wasm", "changed.wasm"),
+      error: "QuickJS executor bootstrap changed",
     },
   ])("fails closed when the $name bootstrap shape changes", ({ modulePath, mutate, error }) => {
     const resolvedId = path.resolve(modulePath);

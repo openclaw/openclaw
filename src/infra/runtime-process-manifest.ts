@@ -487,6 +487,10 @@ export function createPluginRuntimeProcessEntrypoint<
 export const runtimeProcessDeployManifest = {
   worker: { source: "src/worker/worker-deploy-entry.ts", split: true },
   "code-mode-node.worker": { source: "src/agents/code-mode-node.worker.ts", split: false },
+  "code-mode-quickjs.worker": {
+    source: "extensions/code-mode-quickjs/src/code-mode.worker.ts",
+    split: false,
+  },
   "client-credential.worker": {
     source: "src/worker/worker-deploy-client-credentials.ts",
     split: false,

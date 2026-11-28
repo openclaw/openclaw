@@ -36,6 +36,29 @@ const WORKER_BROWSER_RUNTIME_COMPOSITION = `export default {
     return createAttachedBrowserToolRuntime(params);
   }
 };`;
+const WORKER_CODE_MODE_EXECUTORS_PLACEHOLDER =
+  "export const workerDeployCodeModeExecutors: readonly WorkerDeployCodeModeExecutorOwner[] = [];";
+const QUICKJS_EXECUTOR_UNUSED_IMPORTS = [
+  'import { readFile } from "node:fs/promises";\n',
+  'import { createRequire } from "node:module";\n',
+  "  createPluginRuntimeProcessEntrypoint,\n  resolveRuntimeWorkerUrl,\n",
+] as const;
+const QUICKJS_WASM_LOADER = `  const resolve = createRequire(import.meta.url).resolve;
+  const sourceExecution = /\\.[cm]?ts$/u.test(new URL(import.meta.url).pathname);
+  const compile = async (asset: string, sourceSpecifier: string) => {
+    // Packaged JavaScript includes the engine; its WASM assets belong to the plugin.
+    const binary = sourceExecution
+      ? resolve(sourceSpecifier)
+      : new URL(\`../assets/\${asset}\`, codeModeWorkerUrl());
+    return WebAssembly.compile(await readFile(binary));
+  };
+  const [wasmModule, encoding] = await Promise.all([
+    compile("quickjs.wasm", "quickjs-wasi/quickjs.wasm"),
+    compile("encoding.so", "quickjs-wasi/encoding.so"),
+  ])`;
+const QUICKJS_WORKER_URL = `  return resolveRuntimeWorkerUrl(
+    createPluginRuntimeProcessEntrypoint("quickJsCodeMode", import.meta.url),
+  );`;
 const WORKER_PLAYWRIGHT_RUNTIME = `import * as playwrightCore from "playwright-core";
 import { getUserAgent } from "playwright-core/lib/coreBundle";
 export function getPlaywrightCore() { return playwrightCore; }
@@ -69,6 +92,34 @@ const FS_SAFE_NATIVE_BATCH = `    if (options.native) {
         };
     }`;
 
+function resolveQuickJsWasiAsset(rootDir: string, specifier: string): string {
+  const pluginPackageJson = path.resolve(rootDir, "extensions/code-mode-quickjs/package.json");
+  const anchor = fs.existsSync(pluginPackageJson)
+    ? pluginPackageJson
+    : path.resolve(rootDir, "package.json");
+  return fs.realpathSync(createRequire(anchor).resolve(specifier));
+}
+
+function readQuickJsCodeModeManifest(
+  manifestPath: string,
+  fail: (message: string) => never,
+): { id: string; contracts: { codeModeExecutors: string[] } } {
+  const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+    id?: unknown;
+    contracts?: { codeModeExecutors?: unknown };
+  };
+  const executors = parsed.contracts?.codeModeExecutors;
+  if (
+    parsed.id !== "code-mode-quickjs" ||
+    !Array.isArray(executors) ||
+    !executors.every((entry): entry is string => typeof entry === "string") ||
+    !executors.includes("quickjs")
+  ) {
+    fail("QuickJS Code Mode plugin manifest changed; update the worker deploy transform");
+  }
+  return { id: parsed.id, contracts: { codeModeExecutors: executors } };
+}
+
 export function resolveWorkerDeployGeneratorInputs(rootDir = process.cwd()) {
   const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
   return [
@@ -82,6 +133,8 @@ export function resolveWorkerDeployGeneratorInputs(rootDir = process.cwd()) {
     ),
     resolveFsSafePackageManifest(rootDir),
     path.join(rootDir, "pnpm-lock.yaml"),
+    resolveQuickJsWasiAsset(rootDir, "quickjs-wasi/quickjs.wasm"),
+    resolveQuickJsWasiAsset(rootDir, "quickjs-wasi/encoding.so"),
   ] as const;
 }
 
@@ -125,6 +178,16 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   const browserRuntimeBridgePath = fs.realpathSync(
     path.resolve("src/worker/worker-deploy-browser-runtime.ts"),
   );
+  const codeModeExecutorsBridgePath = fs.realpathSync(
+    path.resolve(rootDir, "src/plugins/worker-deploy-code-mode-executors.ts"),
+  );
+  const quickJsExecutorPath = fs.realpathSync(
+    path.resolve(rootDir, "extensions/code-mode-quickjs/src/executor.ts"),
+  );
+  const quickJsManifestPath = path.resolve(
+    rootDir,
+    "extensions/code-mode-quickjs/openclaw.plugin.json",
+  );
   const facadeRuntimePath = fs.realpathSync(path.resolve("src/plugin-sdk/facade-runtime.ts"));
   const playwrightRuntimePath = fs.realpathSync(
     path.resolve("extensions/browser/src/browser/playwright-core.runtime.ts"),
@@ -153,8 +216,14 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   const fsSafeWatchWorkerPath = fs.realpathSync(
     path.join(path.dirname(fsSafeWatchIoPath), "watch-io-worker.js"),
   );
-  const [packageJsonPath, browsersJsonPath, , treeSitterWasmPath, bashWasmPath, photonWasmPath] =
-    resolveWorkerDeployGeneratorInputs(rootDir);
+  const generatorInputs = resolveWorkerDeployGeneratorInputs(rootDir);
+  const packageJsonPath = generatorInputs[0];
+  const browsersJsonPath = generatorInputs[1];
+  const treeSitterWasmPath = generatorInputs[3];
+  const bashWasmPath = generatorInputs[4];
+  const photonWasmPath = generatorInputs[5];
+  const quickJsWasmPath = generatorInputs[8];
+  const quickJsEncodingWasmPath = generatorInputs[9];
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
     name: string;
     version: string;
@@ -179,6 +248,9 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
       fsSafeAssets.buildStart.call(this);
       const manifest = resolveFsSafePackageManifest(rootDir);
       this.addWatchFile(path.join(rootDir, "pnpm-lock.yaml"));
+      if (fs.existsSync(quickJsManifestPath)) {
+        this.addWatchFile(quickJsManifestPath);
+      }
       nativeAssets = await prepareWorkerDarwinNativeAssets(rootDir, manifest);
       for (const asset of nativeAssets) {
         this.emitFile({
@@ -222,6 +294,8 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
         fsSafeWatchWorkerPath,
         sealedBootstrapPath,
         browserRuntimeBridgePath,
+        codeModeExecutorsBridgePath,
+        quickJsExecutorPath,
         fsSafeWatchIoPath,
         fsSafeWindowsSecurityPath,
         facadeRuntimePath,
@@ -287,6 +361,61 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
             );
           }
           return WORKER_BROWSER_RUNTIME_COMPOSITION;
+        }
+        if (resolvedId === codeModeExecutorsBridgePath) {
+          if (code.split(WORKER_CODE_MODE_EXECUTORS_PLACEHOLDER).length !== 2) {
+            this.error(
+              "Code Mode executor placeholder changed; update the worker deploy transform",
+            );
+          }
+          const manifest = readQuickJsCodeModeManifest(quickJsManifestPath, (message) =>
+            this.error(message),
+          );
+          return code.replace(
+            WORKER_CODE_MODE_EXECUTORS_PLACEHOLDER,
+            `export const workerDeployCodeModeExecutors: readonly WorkerDeployCodeModeExecutorOwner[] = [
+  {
+    manifest: {
+      id: ${JSON.stringify(manifest.id)},
+      origin: "bundled",
+      contracts: ${JSON.stringify(manifest.contracts)},
+    },
+    executor: {
+      id: "quickjs",
+      async execute(input, options) {
+        const { codeModeExecutor } = await import("../../extensions/code-mode-quickjs/code-mode-executor-api.js");
+        return codeModeExecutor.execute(input, options);
+      },
+    },
+  },
+];`,
+          );
+        }
+        if (resolvedId === quickJsExecutorPath) {
+          if (
+            QUICKJS_EXECUTOR_UNUSED_IMPORTS.some((fragment) => code.split(fragment).length !== 2) ||
+            code.split(QUICKJS_WASM_LOADER).length !== 2 ||
+            code.split(QUICKJS_WORKER_URL).length !== 2
+          ) {
+            this.error("QuickJS executor bootstrap changed; update the worker deploy transform");
+          }
+          let transformed = code;
+          for (const fragment of QUICKJS_EXECUTOR_UNUSED_IMPORTS) {
+            transformed = transformed.replace(fragment, "");
+          }
+          // Sealed workers cannot read plugin assets or resolve host plugin worker URLs.
+          return transformed
+            .replace(
+              QUICKJS_WASM_LOADER,
+              `  const [wasmModule, encoding] = await Promise.all([
+    WebAssembly.compile(Buffer.from(${JSON.stringify(fs.readFileSync(quickJsWasmPath).toString("base64"))}, "base64")),
+    WebAssembly.compile(Buffer.from(${JSON.stringify(fs.readFileSync(quickJsEncodingWasmPath).toString("base64"))}, "base64")),
+  ])`,
+            )
+            .replace(
+              QUICKJS_WORKER_URL,
+              '  return new URL("./code-mode-quickjs.worker.mjs", import.meta.url);',
+            );
         }
         if (resolvedId === fsSafeWatchIoPath) {
           if (code.split(FS_SAFE_WATCH_WORKER).length !== 2) {

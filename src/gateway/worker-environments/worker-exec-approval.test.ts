@@ -124,6 +124,7 @@ describe.skipIf(process.platform === "win32")("worker exec approval boundary", (
       ? (
           await resolveWorkerToolAuthority({
             modelRef: { provider: reviewerModel.provider, model: reviewerModel.id },
+            presentation: createToolSurfacePresentationForTest(),
             placement,
             turn: {
               ...placement,

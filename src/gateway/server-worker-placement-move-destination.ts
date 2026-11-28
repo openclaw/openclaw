@@ -11,6 +11,7 @@ import type {
   WorkerPlacementMoveRequest,
 } from "./worker-environments/service-contract.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
+import { assertWorkerCodeModeExecutorSupported } from "./worker-environments/worker-code-mode-authority.js";
 
 export function createGatewayWorkerPlacementMoveDestinationResolver(params: {
   environments: WorkerEnvironmentService;
@@ -19,7 +20,7 @@ export function createGatewayWorkerPlacementMoveDestinationResolver(params: {
     WorkerPlacementSessionRuntime &
       Pick<
         typeof placementSessionRuntime,
-        "resolveWorkerPlacementCapabilities" | "resolveWorkerPlacementSessionRuntimeAsync"
+        "resolveWorkerPlacementCapabilities" | "resolveWorkerPlacementSessionSelectionAsync"
       >
   >;
 }) {
@@ -52,17 +53,26 @@ export function createGatewayWorkerPlacementMoveDestinationResolver(params: {
     if (!destination.ok || !destination.value) {
       throw new Error(destination.ok ? "worker move target is missing" : destination.error);
     }
-    const runtime = await sessionRuntime.resolveWorkerPlacementSessionRuntimeAsync({
-      cfg: config,
-      entry,
-      agentId: target.agentId,
-      sessionKey: target.canonicalKey,
-      assertCurrent: () => assertCurrent(params.getConfig()),
-    });
+    const { runtime, modelRef, metadataSnapshot } =
+      await sessionRuntime.resolveWorkerPlacementSessionSelectionAsync({
+        cfg: config,
+        entry,
+        agentId: target.agentId,
+        sessionKey: target.canonicalKey,
+        assertCurrent: () => assertCurrent(params.getConfig()),
+      });
     const { executionMode, devicePlacement } =
       sessionRuntime.resolveWorkerPlacementCapabilities(runtime);
     if (!executionMode) {
       throw new Error(`Runtime ${runtime} lacks cloud placement support`);
+    }
+    if (executionMode === "worker-turn") {
+      assertWorkerCodeModeExecutorSupported({
+        config,
+        agentId: target.agentId,
+        modelRef,
+        metadataSnapshot,
+      });
     }
     if (moveTarget.kind === "profile") {
       if (!params.environments.supportsExecutionMode(moveTarget.profileId, executionMode)) {

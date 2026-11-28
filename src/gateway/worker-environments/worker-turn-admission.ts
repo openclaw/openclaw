@@ -360,6 +360,30 @@ export async function waitForTurnOperation<T>(params: {
   return await racePromiseWithAbortSignal(params.start, signal, abortError);
 }
 
+export async function acquireWorkerTurnTransport(params: {
+  environments: Pick<WorkerEnvironmentService, "acquireTurnCredential" | "startTunnel">;
+  placement: Pick<ActiveWorkerPlacement, "environmentId" | "activeOwnerEpoch">;
+  turnClaim: WorkerSessionTurnClaim;
+  turn: Pick<SessionPlacementTurnParams, "abortSignal" | "timeoutMs">;
+}) {
+  const { environments, placement, turnClaim, turn } = params;
+  const credential = await waitForTurnOperation({
+    start: () => environments.acquireTurnCredential(turnClaim),
+    ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
+    timeoutMs: turn.timeoutMs,
+  });
+  const tunnel = await waitForTurnOperation({
+    start: () =>
+      environments.startTunnel({
+        environmentId: placement.environmentId,
+        ownerEpoch: placement.activeOwnerEpoch,
+      }),
+    ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
+    timeoutMs: turn.timeoutMs,
+  });
+  return { credential, tunnel };
+}
+
 function resolvePlacementIdentityField(
   supplied: string | undefined,
   persisted: string | undefined,

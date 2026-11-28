@@ -20,6 +20,7 @@ export const WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS = {
 export const WORKER_BUNDLE_ARTIFACT_PATHS = [
   WORKER_BUNDLE_CLIENT_CREDENTIAL_PATH,
   "code-mode-node.worker.mjs",
+  "code-mode-quickjs.worker.mjs",
   "file-log.worker.mjs",
   "openclaw-state-read.worker.mjs",
   "worker-native-lifecycle.worker.mjs",

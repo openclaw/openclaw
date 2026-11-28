@@ -4,6 +4,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayWorkerPlacementMoveDestinationResolver } from "./server-worker-placement-move-destination.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
@@ -81,7 +82,11 @@ it.each<[WorkerPlacementMoveTarget, boolean, string]>([
               },
               resolveGatewaySessionStoreTargetInWorker,
               resolveCanonicalSessionEntryFromStoreKeys: () => entry,
-              resolveWorkerPlacementSessionRuntimeAsync: async () => "codex",
+              resolveWorkerPlacementSessionSelectionAsync: async () => ({
+                runtime: "codex",
+                modelRef: { provider: "openai", model: "test" },
+                metadataSnapshot: createPluginMetadataSnapshotFixture(),
+              }),
               resolveWorkerPlacementCapabilities: () => ({
                 executionMode: "remote-exec",
                 ...(supported ? { devicePlacement: DEVICE_REQUIREMENT } : {}),

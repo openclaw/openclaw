@@ -3,14 +3,25 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { WorkerDeployCodeModeExecutorOwner } from "./worker-deploy-code-mode-executors.js";
 
-const loadManifestMetadataSnapshot = vi.hoisted(() => vi.fn());
+const { loadManifestMetadataSnapshot, workerDeployCodeModeExecutors } = vi.hoisted(() => ({
+  loadManifestMetadataSnapshot: vi.fn(),
+  workerDeployCodeModeExecutors: [] as WorkerDeployCodeModeExecutorOwner[],
+}));
 vi.mock("./manifest-contract-eligibility.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./manifest-contract-eligibility.js")>()),
   loadManifestMetadataSnapshot,
 }));
+vi.mock("./worker-deploy-code-mode-executors.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./worker-deploy-code-mode-executors.js")>()),
+  workerDeployCodeModeExecutors,
+}));
 
-import { resolvePluginCodeModeExecutor } from "./code-mode-executor.js";
+import {
+  assertWorkerPluginCodeModeExecutorAllowed,
+  resolvePluginCodeModeExecutor,
+} from "./code-mode-executor.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -29,6 +40,8 @@ function setOrigin(origin: "bundled" | "global") {
 }
 
 beforeEach(() => {
+  workerDeployCodeModeExecutors.length = 0;
+  loadManifestMetadataSnapshot.mockClear();
   root = tempDirs.make("openclaw-code-mode-executor-");
   writeArtifact("package.json", JSON.stringify({ type: "module" }));
   writeArtifact("index.js", "export default {};\n");
@@ -83,4 +96,53 @@ it.each([
     snapshot.plugins.push({ ...snapshot.plugins[0], id: "second-executor" });
   }
   expect(() => resolvePluginCodeModeExecutor("quickjs", {})).toThrow(error);
+});
+
+it("resolves composed worker-deploy executors without manifest discovery while enforcing plugin policy", () => {
+  const composedExecutor = {
+    id: "quickjs" as const,
+    execute: vi.fn(),
+  };
+  workerDeployCodeModeExecutors.push({
+    manifest: {
+      id: pluginId,
+      origin: "bundled",
+      contracts: { codeModeExecutors: ["quickjs"] },
+    },
+    executor: composedExecutor,
+  });
+  // The ambient plugin advertises the same executor but has no usable artifact.
+  fs.unlinkSync(path.join(root, "code-mode-executor-api.js"));
+  for (const plugins of [undefined, { enabled: false }, { allow: ["openai"] }]) {
+    expect(() => assertWorkerPluginCodeModeExecutorAllowed("quickjs", { plugins })).not.toThrow();
+    expect(resolvePluginCodeModeExecutor("quickjs", { plugins })).toBe(composedExecutor);
+  }
+  for (const plugins of [{ deny: [pluginId] }, { entries: { [pluginId]: { enabled: false } } }]) {
+    expect(() => assertWorkerPluginCodeModeExecutorAllowed("quickjs", { plugins })).toThrow(
+      unavailable,
+    );
+    expect(() => resolvePluginCodeModeExecutor("quickjs", { plugins })).toThrow(unavailable);
+  }
+
+  expect(loadManifestMetadataSnapshot).not.toHaveBeenCalled();
+});
+
+it("refuses an admitted external replacement for a denied bundled owner on portable workers", () => {
+  const externalId = "external-quickjs";
+  const config = {
+    plugins: {
+      allow: [externalId],
+      deny: [pluginId],
+      entries: { [externalId]: { enabled: true } },
+    },
+  };
+  const snapshot = createPluginMetadataSnapshotFixture({
+    plugins: [
+      { id: pluginId, origin: "bundled", contracts: { codeModeExecutors: ["quickjs"] } },
+      { id: externalId, origin: "global", contracts: { codeModeExecutors: ["quickjs"] } },
+    ],
+  });
+  expect(() => assertWorkerPluginCodeModeExecutorAllowed("quickjs", config, snapshot)).toThrow(
+    `plugin "${externalId}", which is unavailable in portable workers`,
+  );
 });
