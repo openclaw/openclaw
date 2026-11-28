@@ -659,6 +659,20 @@ describe("buildGuardedModelFetch SSE readability", () => {
     },
   );
 
+  it("filters empty events when mixed line endings arrive one byte at a time", async () => {
+    const bytes = new TextEncoder().encode(
+      'data: {\r\ndata: "ok": true}\n\r\nevent: ping\n\ndata: {"next": true}\r\n\r',
+    );
+    mockStream(
+      Array.from(bytes, (_, index) => bytes.subarray(index, index + 1)),
+      "text/event-stream",
+    );
+    await expect(parseSse(await request(streaming, completionModel))).resolves.toEqual([
+      { ok: true },
+      { next: true },
+    ]);
+  });
+
   it.each([
     {
       name: "mixed chunked framing and multiline data, excluding blank keepalives",

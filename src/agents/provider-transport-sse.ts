@@ -19,7 +19,9 @@ export function findSseEventBoundary(
   buffer: string,
   startIndex = 0,
 ): { index: number; length: number } | undefined {
-  const delimiter = /\r\n\r\n|\n\n|\r\r/g;
+  // Mixed endings also delimit events. Wait for a possible LF after a trailing
+  // mixed CR so a CRLF pair split across chunks keeps its original bytes.
+  const delimiter = /\r\n\r\n|\n\n|\r\r|\n\r\n|\n\r(?!$)|\r\n\r(?!$)/g;
   delimiter.lastIndex = startIndex;
   const match = delimiter.exec(buffer);
   return match ? { index: match.index, length: match[0].length } : undefined;
