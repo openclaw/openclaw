@@ -328,6 +328,9 @@ runtime must not also write it there. If the runtime records its own transcript,
 `queueMessage` can return `{ cliSessionId, externalId }` to identify the
 acknowledged input in that transcript. OpenClaw uses those IDs to match a message
 with attachments to its native row without comparing text.
+
+If the transport reports input disposition, call `options.onInputDisposition?.("written")` after the write submitted through `withCurrent` succeeds. A nonblocking sender can then return a receipt without claiming consumption. Call `options.onInputDisposition?.("withdrawn")` before rejecting `queueMessage` only when the native runtime explicitly rejects, discards, or cancels the input before it starts. Losing the connection is not a withdrawal.
+
 `options.promptOrigin` and
 `options.promptContext` belong to that queued input, with the same contracts as the
 initial prompt: deliver its context through the native private context mechanism,

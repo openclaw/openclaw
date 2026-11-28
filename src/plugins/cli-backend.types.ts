@@ -224,6 +224,8 @@ export type CliBackendMessageInjection = {
     withCurrent: (submit: () => void) => Promise<void>,
     /** Per-input attribution and private context; never inherit the initial turn's. */
     options?: Pick<CliBackendExecuteContext, "promptOrigin" | "promptContext"> & {
+      /** A successful transport write is not consumption. Report withdrawal only on an explicit native refusal. */
+      onInputDisposition?: (disposition: "written" | "withdrawn") => void;
       /** Prepared base64 images, in order; passed only when `acceptsImages` is true. */
       images?: readonly CliBackendInputImage[];
     },
