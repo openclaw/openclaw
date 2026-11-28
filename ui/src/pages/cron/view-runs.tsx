@@ -247,10 +247,6 @@ export function RunsSection(
   },
 ) {
   const formatTimestamp = createMemo(() => createCompactMsFormatter(undefined, t("common.na")));
-  const runs = createMemo(() => {
-    const ascending = props.runsSortDir === "asc";
-    return props.runs.toSorted((a, b) => (ascending ? a.ts - b.ts : b.ts - a.ts));
-  });
   const hasRunFilters = () =>
     Boolean(props.highlightedRunId) ||
     props.runsQuery.trim().length > 0 ||
@@ -370,7 +366,7 @@ export function RunsSection(
           />
         </div>
       </div>
-      {runs().length === 0 ? (
+      {props.runs.length === 0 ? (
         props.runsState === "pending" ? (
           <div
             class="cron-empty-state"
@@ -398,7 +394,10 @@ export function RunsSection(
         )
       ) : (
         <div class="cron-runs__list">
-          <For each={runs()} keyed={(entry) => `${entry.jobId}:${entry.ts}:${entry.runId ?? ""}`}>
+          <For
+            each={props.runs}
+            keyed={(entry) => `${entry.jobId}:${entry.ts}:${entry.runId ?? ""}`}
+          >
             {(entry) => (
               <Run
                 entry={entry()}

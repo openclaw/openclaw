@@ -175,11 +175,12 @@ it("requires a successful replacement page before appending after a failed refre
   );
   harness.response(3).resolve(harness.payload(3));
   await nextPage;
-  expect(harness.state.cronRuns.map((entry) => entry.ts)).toEqual([2, 3]);
+  // A new completion moved the offset boundary; keep the displayed history newest first.
+  expect(harness.state.cronRuns.map((entry) => entry.ts)).toEqual([3, 2]);
   const failedRefresh = harness.load(false);
   harness.response(4).reject(new Error("Previous history failed"));
   await failedRefresh;
-  expect(harness.revision()).toBe(2);
+  expect(harness.revision()).toBe(3);
   expect(harness.error()).toBe("Previous history failed");
   harness.state.cronRunsQuery = "another filter";
   const changed = harness.load(false);

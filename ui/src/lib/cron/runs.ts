@@ -4,6 +4,7 @@ import { createDeferredCore, type Deferred } from "../../../../src/shared/deferr
 import { resolveGatewayErrorDetailCode, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   CronDeliveryStatus,
+  CronRunLogEntry,
   CronRunScope,
   CronRunsResult,
   CronRunsStatusValue,
@@ -46,6 +47,19 @@ type CronRunsRequestIdentity = {
 const activeCronRunsRequests = new WeakMap<CronState, CronRunsRequestIdentity>();
 // Rows and failures belong to the query even after its request settles.
 const cronRunsViews = new WeakMap<CronState, CronRunsRequestIdentity>();
+
+function byRunTimestamp(direction: CronSortDir) {
+  return (a: CronRunLogEntry, b: CronRunLogEntry) =>
+    direction === "asc" ? a.ts - b.ts : b.ts - a.ts;
+}
+
+export function getCronRunsForDisplay(state: CronState): CronRunLogEntry[] {
+  const view = cronRunsViews.get(state);
+  // If the new read can't start, keep the retained rows in the reader's chosen order.
+  return view && view.sortDir !== state.cronRunsSortDir
+    ? state.cronRuns.toSorted(byRunTimestamp(state.cronRunsSortDir))
+    : state.cronRuns;
+}
 
 function matchesCronRunsView(state: CronState, request: CronRunsRequestIdentity): boolean {
   return (
@@ -178,7 +192,17 @@ export async function loadCronRuns(
     }
     cronRunsViews.set(state, request);
     state.cronRunsError = null;
-    state.cronRuns = append ? [...state.cronRuns, ...res.entries] : res.entries;
+    if (append) {
+      const last = state.cronRuns.at(-1);
+      const first = res.entries[0];
+      const combined = state.cronRuns.concat(res.entries);
+      const compare = byRunTimestamp(request.sortDir);
+      // Gateway pages are ordered, but a completion between offset reads can move the boundary.
+      state.cronRuns =
+        last && first && compare(last, first) > 0 ? combined.toSorted(compare) : combined;
+    } else {
+      state.cronRuns = res.entries;
+    }
     state.cronRunsHasMore = res.hasMore;
     state.cronRunsNextOffset = res.nextOffset;
     return "ok";

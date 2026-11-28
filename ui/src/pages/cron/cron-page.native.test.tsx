@@ -160,6 +160,32 @@ it("loads history and delivery accounts only for their visible automation surfac
   }
 });
 
+it("keeps tied runs in their accepted order when sorting retained history offline", async () => {
+  const runs = [
+    createCronViewRun({ ts: 2, runId: "b", summary: "B" }),
+    createCronViewRun({ ts: 2, runId: "a", summary: "A" }),
+    createCronViewRun({ ts: 1, runId: "c", summary: "C" }),
+  ];
+  const request = cronRpc({ "cron.runs": () => cronRunsResponse(runs) });
+  const { page, gateway } = mountCronPage(request);
+  const summaries = () =>
+    [...page.querySelectorAll(".cron-run-entry__summary")].map((row) => row.textContent);
+  try {
+    page.routeSearch = "?activity";
+    await waitForSolid(() => expect(summaries()).toEqual(["B", "A", "C"]));
+    gateway.emitSnapshot({ phase: "stopped" });
+    await page.settle();
+    const requests = callsFor(request, "cron.runs").length;
+    page.querySelector<HTMLButtonElement>(".cron-run-sort")!.click();
+    await waitForSolid(() => expect(page.querySelector('[data-value="asc"]')).not.toBeNull());
+    page.querySelector<HTMLElement>('[data-value="asc"]')!.click();
+    await waitForSolid(() => expect(summaries()).toEqual(["C", "B", "A"]));
+    expect(callsFor(request, "cron.runs")).toHaveLength(requests);
+  } finally {
+    page.remove();
+  }
+});
+
 it("retries an initial list failure through the owner", async () => {
   const warn = vi.spyOn(console, "warn");
   const job = createCronViewJob("retried");
