@@ -316,7 +316,7 @@ describe("buildHeadlessExecApprovalDeniedMessage", () => {
 
 describe("buildExecApprovalPendingToolResult", () => {
   const buildResult = (
-    overrides: Partial<Parameters<typeof buildExecApprovalPendingToolResult>[0]> = {},
+    overrides: Partial<Parameters<typeof buildExecApprovalPendingToolResult>[0]>,
   ) =>
     buildExecApprovalPendingToolResult({
       host: "gateway",
