@@ -75,6 +75,17 @@ export async function runReplyQuestionInput(
     queuedAbort?.throwIfAborted();
   };
   const state = resolveReplyOperationRunState(opts);
+  // Publish custody before adoption can fail or cancel this incoming dispatch.
+  // Abandonment would reopen ingress and replay input that already has an outcome.
+  const settleConsumedInput = async () => {
+    try {
+      await admitFollowupRunLifecycle(followupRun);
+    } catch (error) {
+      logVerbose(`question input adoption failed after custody transferred: ${String(error)}`);
+    } finally {
+      completeFollowupRunLifecycle(followupRun, "consumed");
+    }
+  };
   const injection =
     followupRun.controllerInput && !followupRun.controllerInput.claim
       ? beginSessionControllerSourceInjection(followupRun.controllerInput, {
@@ -139,6 +150,7 @@ export async function runReplyQuestionInput(
         if (state) {
           state.admission = { status: "skipped", reason: "question-response-rejected" };
         }
+        await settleConsumedInput();
         return {
           handled: true,
           payload: markReplyPayloadForSourceSuppressionDelivery({
@@ -158,7 +170,6 @@ export async function runReplyQuestionInput(
     }
     consumed = true;
 
-    // Publish custody before adoption can fail or cancel this incoming dispatch.
     // Neither outcome permits replay or aborting the independent question creator.
     if (state) {
       state.admission =
@@ -166,13 +177,7 @@ export async function runReplyQuestionInput(
           ? { status: "skipped", reason: "question-response-indeterminate" }
           : { status: "accepted", mode: "steer" };
     }
-    try {
-      await admitFollowupRunLifecycle(followupRun);
-    } catch (error) {
-      logVerbose(`question input adoption failed after custody transferred: ${String(error)}`);
-    } finally {
-      completeFollowupRunLifecycle(followupRun, "consumed");
-    }
+    await settleConsumedInput();
     return {
       handled: true,
       payload:
