@@ -5,7 +5,7 @@
 import { resolveGlobalSet } from "../../shared/global-singleton.js";
 
 type TrackedDispatcher = {
-  readonly pending: () => number;
+  pending: number;
 };
 
 const activeDispatchers = resolveGlobalSet<TrackedDispatcher>(
@@ -16,9 +16,8 @@ const activeDispatchers = resolveGlobalSet<TrackedDispatcher>(
 /**
  * Returns an unregister function to call when the dispatcher is no longer needed.
  */
-export function registerDispatcher(pending: () => number): () => void {
-  // Separate registrations must remain distinct even when they share a callback.
-  const tracked: TrackedDispatcher = { pending };
+export function registerDispatcher(tracked: TrackedDispatcher): () => void {
+  // Keep only the mutable count, never a closure over the turn's reply context.
   activeDispatchers.add(tracked);
 
   return () => {
@@ -29,7 +28,7 @@ export function registerDispatcher(pending: () => number): () => void {
 export function getTotalPendingReplies(): number {
   let total = 0;
   for (const dispatcher of activeDispatchers) {
-    total += dispatcher.pending();
+    total += dispatcher.pending;
   }
   return total;
 }
