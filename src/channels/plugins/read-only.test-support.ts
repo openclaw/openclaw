@@ -5,7 +5,6 @@ import {
   makePluginLoaderTempDir,
   useNoBundledPlugins,
 } from "../../plugins/loader.test-fixtures.js";
-import type { PluginPackageChannel } from "../../plugins/package-manifest.types.js";
 
 export function writeExternalSetupChannelPlugin(
   options: {
@@ -17,10 +16,6 @@ export function writeExternalSetupChannelPlugin(
     manifestChannelConfig?: boolean;
     manifestChannelDescription?: string;
     manifestChannelLabel?: string;
-    packagePresentation?: Pick<
-      PluginPackageChannel,
-      "label" | "blurb" | "selectionLabel" | "detailLabel" | "systemImage"
-    >;
     setupRequiresRuntime?: boolean;
     setupChannelId?: string;
     bundled?: { persistedAuthPath?: string };
@@ -67,7 +62,6 @@ export function writeExternalSetupChannelPlugin(
       ...(setupEntry ? { setupEntry: "./setup-entry.cjs" } : {}),
       channel: {
         ...(options.bundled ? meta : { id: channelId }),
-        ...options.packagePresentation,
         configuredState: { env: { anyOf: [envVar] } },
         ...(persistedAuthPath
           ? { persistedAuthState: { specifier: "./auth-state.cjs", exportName: "hasAuth" } }
@@ -180,10 +174,9 @@ module.exports = {
     );
   }
 
-  return { pluginDir, fullMarker, setupMarker, bundledRoot, pluginId, channelId, envVar };
+  return { pluginDir, fullMarker, setupMarker, pluginId, channelId, envVar };
 }
 
 export function writeBundledSetupChannelPlugin(options: { persistedAuthPath?: string } = {}) {
-  const fixture = writeExternalSetupChannelPlugin({ bundled: options });
-  return { ...fixture, bundledRoot: path.dirname(fixture.pluginDir) };
+  return writeExternalSetupChannelPlugin({ bundled: options });
 }

@@ -334,7 +334,6 @@ describe("channel ingress drain", () => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("old", { text: "old" }, { laneKey: "shared" });
 
-      const lifecycles: ChannelIngressDispatchLifecycle[] = [];
       const { promise: oldHold, resolve: releaseOld } = createDeferred();
       let lateAdoptError: unknown;
 
@@ -343,7 +342,6 @@ describe("channel ingress drain", () => {
         shouldSupersedePending: () => true,
         dispatchClaimedEvent: async (event, lifecycle) => {
           if (event.id === "old") {
-            lifecycles.push(lifecycle);
             await oldHold;
             try {
               await lifecycle.onAdopted();

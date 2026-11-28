@@ -3,18 +3,11 @@ import { describe, expect, it } from "vitest";
 import { resolveChannelConfigWrites } from "../../../plugin-sdk/channel-config-helpers.js";
 
 const demoOriginChannelId = "demo-origin";
-const demoTargetChannelId = "demo-target";
 
 function makeDemoConfigWritesCfg(accountIdKey: string) {
   return {
     channels: {
       [demoOriginChannelId]: {
-        configWrites: true,
-        accounts: {
-          [accountIdKey]: { configWrites: false },
-        },
-      },
-      [demoTargetChannelId]: {
         configWrites: true,
         accounts: {
           [accountIdKey]: { configWrites: false },
