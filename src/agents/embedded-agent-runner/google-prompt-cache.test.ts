@@ -631,28 +631,8 @@ describe("google prompt cache", () => {
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-4");
   });
 
-  it("does not bypass failed-cache backoff when the process clock is invalid", async () => {
-    const systemPromptDigest = crypto.createHash("sha256").update("Follow policy.").digest("hex");
-    const sessionManager = makeSessionManager([
-      {
-        id: "entry-1",
-        parentId: null,
-        timestamp: new Date(1_000).toISOString(),
-        type: "custom",
-        customType: "openclaw.google-prompt-cache",
-        data: {
-          status: "failed",
-          timestamp: 1_000,
-          provider: "google",
-          modelId: "gemini-3.1-pro-preview",
-          modelApi: "google-generative-ai",
-          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-          systemPromptDigest,
-          cacheRetention: "long",
-          retryAfter: Date.parse("2030-01-01T00:00:00.000Z"),
-        },
-      },
-    ]);
+  it("skips cache requests when the process clock is invalid", async () => {
+    const sessionManager = makeSessionManager();
     const fetchMock = createCacheFetchMock({
       name: "cachedContents/system-cache-invalid-clock",
       expireTime: "2030-01-01T00:00:00.000Z",

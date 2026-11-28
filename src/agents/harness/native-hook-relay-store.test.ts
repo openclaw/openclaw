@@ -69,9 +69,9 @@ function renew(record: NativeHookRelayBridgeRecord, updatedAtMs?: number) {
 function remove(record: NativeHookRelayBridgeRecord) {
   return deleteNativeHookRelayBridgeRecordIfOwned({ ...record, stateDbPath: primaryStateDbPath });
 }
-function prune(isPidDead: (pid: number) => boolean | Promise<boolean>, currentPid = 100) {
+function prune(isPidDead: (pid: number) => boolean | Promise<boolean>) {
   return pruneNativeHookRelayBridgeRecords({
-    currentPid,
+    currentPid: 100,
     isPidDead,
     stateDbPath: primaryStateDbPath,
   });
