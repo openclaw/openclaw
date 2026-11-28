@@ -634,8 +634,10 @@ export async function migrateHistoricalTranscriptDirectives(
       }
     }
     if (targets.length > 0) {
-      // Any admitted work passes the lease inspection first, as before this read became lazy.
-      await hasActiveWriter();
+      // Admitted SQLite work passes the lease inspection first, as before this read became lazy.
+      if (agentEngineInput() === undefined) {
+        await hasActiveWriter();
+      }
       await withAgentDatabaseMaintenanceLease({ env }, async (maintenance) => {
         for (const target of targets.toSorted(
           (a, b) => a.agentId.localeCompare(b.agentId) || a.path.localeCompare(b.path),
