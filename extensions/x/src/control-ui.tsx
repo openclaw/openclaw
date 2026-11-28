@@ -409,7 +409,7 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                                   )}
                                 </td>
                                 <td>{entry.addedBy ?? "—"}</td>
-                                <td>
+                                <td class="x-replies__row-action">
                                   {entry.editable ? (
                                     <button
                                       class="btn"
