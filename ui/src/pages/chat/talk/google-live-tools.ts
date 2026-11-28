@@ -149,7 +149,6 @@ export class GoogleLiveToolOwner {
         await submitRealtimeTalkConsult({
           ...params,
           detachSignal: this.detachController.signal,
-          submitAbortResult: false,
         });
       }
     } finally {

@@ -486,6 +486,32 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(ws.readyState).toBe(3);
   });
 
+  it("returns a no-retry result when the acknowledged consult run is aborted", async () => {
+    const { listeners, client } = consultClient((method) => {
+      expect(method).toBe("talk.client.toolCall");
+      return consultRunResult();
+    });
+    const transport = await sessionTransport(createSession(
+      "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+    ), client);
+    const ws = await startTransport(transport);
+    ws.emitCalls(consultCall("call-aborted", { question: "check the session" }));
+    await waitForFast(() => expect(listeners.size).toBe(1));
+    for (const listener of listeners) {
+      listener({ event: "chat", payload: { runId: "run-1", state: "aborted" } });
+    }
+    await waitForFast(() => expectToolResponse(
+      ws,
+      "call-aborted",
+      REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      {
+        status: "cancelled_by_user",
+        message: "The user stopped this task. Do not retry unless the user asks again.",
+      },
+    ));
+    transport.stop();
+  });
+
   it("aborts only the browser consult cancelled by Google", async () => {
     const { listeners, client } = consultClient((method, params) => {
       if (method === "chat.abort") {
