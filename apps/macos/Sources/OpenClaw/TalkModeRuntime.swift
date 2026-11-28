@@ -926,9 +926,16 @@ extension TalkModeRuntime {
                     "talk directive ignored unknown keys count=\(parse.unknownKeys.count, privacy: .public)")
         }
 
-        let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedVoice = TalkVoiceAliases.resolve(requestedVoice, aliases: self.config?.snapshot.voiceAliases ?? [:])
-        if let requestedVoice, !requestedVoice.isEmpty, resolvedVoice == nil {
+        let provider = self.config?.snapshot.activeProvider ?? Self.defaultTalkProvider
+        let requestedVoice = directive?.voiceId
+        let resolvedVoice: String? = switch provider {
+        case Self.defaultTalkProvider, Self.mlxTalkProvider, Self.systemTalkProvider:
+            TalkVoiceAliases.resolve(requestedVoice, aliases: self.config?.snapshot.voiceAliases ?? [:])
+        default:
+            // The Gateway resolves aliases and provider-specific names for talk.speak.
+            requestedVoice
+        }
+        if requestedVoice != nil, resolvedVoice == nil {
             self.logger.warning("talk unknown voice alias")
         }
         if let voice = resolvedVoice, directive?.once != true {
@@ -943,7 +950,6 @@ extension TalkModeRuntime {
         let apiKey = self.config?.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
         let preferredVoice = resolvedVoice ?? self.currentVoiceId
         let voicePreset = preferredVoice
-        let provider = self.config?.snapshot.activeProvider ?? Self.defaultTalkProvider
 
         let language = ElevenLabsTTSClient.validatedLanguage(directive?.language)
 
