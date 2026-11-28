@@ -72,6 +72,15 @@ public struct AnyCodable: Codable, @unchecked Sendable, Hashable {
     }
 
     private static func normalize(_ value: Any) -> Any {
+        // Widen other native fixed-width scalars to the kinds encoding understands.
+        if !(value is Int || value is Int64 || value is UInt64), let integer = value as? any BinaryInteger {
+            if let int = Int(exactly: integer) { return int }
+            if let int64 = Int64(exactly: integer) { return int64 }
+            if let uint64 = UInt64(exactly: integer) { return uint64 }
+        }
+        if !(value is Double), let float = value as? any BinaryFloatingPoint {
+            return Double(float)
+        }
         // Preserve native scalar types; NSNumber bridging can erase their original numeric kind.
         guard type(of: value) is NSNumber.Type, let number = value as? NSNumber else { return value }
         // Numeric 0/1 also cast to Bool; only CFBoolean represents a JSON boolean.
