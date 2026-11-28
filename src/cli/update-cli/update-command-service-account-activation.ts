@@ -399,7 +399,9 @@ async function activateSystemServiceAsAccount(
         await fs.writeFile(path.join(handoff.directory, "uncertain"), "", { mode: 0o600 });
       }
     };
-    const asAccount = async (args: string[], timeoutMs: number) => {
+    // Only steps that write the state set the fence; a lingering `gateway health` client
+    // only reads, and its uncertain run simply does not count as ready.
+    const asAccount = async (args: string[], timeoutMs: number, writesState = true) => {
       try {
         const result = await runReleaseAsServiceAccount(execution, handoff, {
           root: options.root,
@@ -407,10 +409,15 @@ async function activateSystemServiceAsAccount(
           timeoutMs,
           maxStdoutBytes: ACCOUNT_RESULT_MAX_BYTES,
         });
-        await markUncertain(hasCommandProcessCleanupError(result.error));
-        return result;
+        const uncertain = hasCommandProcessCleanupError(result.error);
+        if (writesState) {
+          await markUncertain(uncertain);
+        }
+        return uncertain && !writesState ? null : result;
       } catch (error) {
-        await markUncertain(hasCommandProcessCleanupError(error));
+        if (writesState) {
+          await markUncertain(hasCommandProcessCleanupError(error));
+        }
         return null;
       }
     };
@@ -556,7 +563,7 @@ async function activateSystemServiceAsAccount(
       async (unit) =>
         unit.active === "active" &&
         (await servesCandidate(unit.pid, options.root, options.candidateVersion, execution)) &&
-        (await asAccount(healthArgs(execution), 20_000).then(
+        (await asAccount(healthArgs(execution), 20_000, false).then(
           (health) => health?.termination === "exit" && health.code === 0,
         )),
       Math.min(DEFAULT_READY_TIMEOUT_MS, budget(DEFAULT_READY_TIMEOUT_MS)),

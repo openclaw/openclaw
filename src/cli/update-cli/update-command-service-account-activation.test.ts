@@ -379,6 +379,23 @@ describe("system service update as the unit's account", () => {
     },
   );
 
+  it.runIf(process.platform === "linux")(
+    "does not count a health check whose client may still run as ready",
+    async () => {
+      native.uncertainCleanup = "health";
+      installAccount({ migrate: ok("migrated"), health: [0, "{}"], restore: ok("restored") });
+
+      const result = await activate(1_500);
+
+      // The migration's own state writes are settled; only readiness was never proven.
+      expect(result).toMatchObject({ status: "failed", stateRestored: true });
+      expect(calls().at(-1)).toBe("restore");
+      const [payload] = scheduledPayloads();
+      expect(fs.existsSync(path.join(String(payload?.handoffDir), "verified"))).toBe(false);
+      expect(fs.existsSync(path.join(String(payload?.handoffDir), "uncertain"))).toBe(false);
+    },
+  );
+
   it("restores without waiting out readiness when systemd keeps restarting the candidate", async () => {
     native.crashLoop = true;
     // The previous service had restarted often; starting resets the counter.
