@@ -43,6 +43,7 @@ import {
   mergeToolExecutionFailure,
   resolveToolBatchTermination,
 } from "./tool-batch-completion.js";
+import { isSteeringBlocked, preparedSteering, checkSteering } from "./tool-batch-steering.js";
 import {
   completeUnstartedToolCall,
   completeStartedToolCall,
@@ -608,11 +609,13 @@ async function executeToolCallGroups(
   let fatal: ExecutedToolCallBatch["fatal"];
 
   while (cursor < toolCalls.length) {
-    if (sequential && batch.toolPlan.executionStarted && !batch.signal?.aborted) {
-      const steering = getSteeringAtCheckpoint(batch.config);
-      steeringMessages = Array.isArray(steering) ? steering : await steering;
-    }
-    if (steeringMessages.length > 0) {
+    let allowSteeredCall = await checkSteering(
+      batch,
+      steeringMessages,
+      toolCalls[cursor],
+      sequential,
+    );
+    if (isSteeringBlocked(steeringMessages, allowSteeredCall)) {
       break;
     }
 
@@ -652,19 +655,14 @@ async function executeToolCallGroups(
         throw error;
       }
 
-      const hasReady = entries.some((entry) => "kind" in entry);
-      if (sequential && batch.toolPlan.executionStarted && hasReady && !batch.signal?.aborted) {
-        const steering = getSteeringAtCheckpoint(batch.config);
-        steeringMessages = Array.isArray(steering) ? steering : await steering;
-      }
+      allowSteeredCall = await preparedSteering(batch, steeringMessages, entries, sequential);
       for (const [index, entry] of entries.entries()) {
         ordered[index] = "kind" in entry ? undefined : entry;
       }
 
-      const launched =
-        steeringMessages.length > 0
-          ? undefined
-          : await launchParallelToolCalls(entries, batch.toolPlan);
+      const launched = isSteeringBlocked(steeringMessages, allowSteeredCall)
+        ? undefined
+        : await launchParallelToolCalls(entries, batch.toolPlan);
       fatal = launched?.rejected ? { error: launched.rejected.error } : undefined;
       started = launched?.started ?? [];
       const startedIndices = new Set(started.map(({ index }) => index));
@@ -676,9 +674,10 @@ async function executeToolCallGroups(
       for (const { index, entry, outcome } of launched?.completed ?? []) {
         await settle(index, entry, outcome);
       }
-      const skippedIndex =
-        steeringMessages.length > 0 ? 0 : (launched?.rejected?.index ?? entries.length);
-      if (steeringMessages.length > 0) {
+      const skippedIndex = isSteeringBlocked(steeringMessages, allowSteeredCall)
+        ? 0
+        : (launched?.rejected?.index ?? entries.length);
+      if (isSteeringBlocked(steeringMessages, allowSteeredCall)) {
         for (const entry of entries) {
           if ("kind" in entry) {
             entry.execution.dispose();
