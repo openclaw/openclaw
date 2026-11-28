@@ -327,7 +327,7 @@ export function createUserTurnTranscriptRecorder(
       message: admittedMessage,
       text,
       assertCurrent,
-      dispatched: sentToProvider,
+      externalDispatch: sentToProvider && admissionOwner.promptProjection !== "captures",
       assertWritable: () => {
         assertCurrent();
         if (blocked || sentToProvider) {
