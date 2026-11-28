@@ -1,0 +1,88 @@
+title: Connection-failure reply names the failing model
+
+scenario:
+  id: connection-failure-reply-names-model
+  surface: runtime
+  coverage:
+    primary:
+      - agent-runtime.failure-recovery
+  objective: When the selected model's endpoint refuses the connection, the DM's terminal reply names the provider/model that failed and keeps the curated connection copy, with no raw diagnostics.
+  successCriteria:
+    - Scenario is mock-openai only so live lanes do not pick it up implicitly.
+    - Every model call fails to connect, because the mock provider points at a closed local port.
+    - 'The DM gets an error reply that names both refused models (qa-lab''s primary and its fallback), distinct, before "request failed", and keeps the "Couldn''t connect to the AI service." copy.'
+    - The reply keeps the completed-work caution and carries no raw error text.
+  docsRefs:
+    - docs/gateway/troubleshooting/agent-replies-and-control-ui.md
+  codeRefs:
+    - src/agents/failover/request-error-facts.ts
+    - src/auto-reply/reply/agent-runner-failure-reply.ts
+    - src/shared/assistant-error-format.ts
+  gatewayConfigPatch:
+    models:
+      providers:
+        mock-openai:
+          # Port 9 (discard) has no listener on the QA host, so every request is refused.
+          baseUrl: http://127.0.0.1:9/v1
+  execution:
+    kind: flow
+    summary: Send a DM while the model endpoint refuses connections and read the terminal reply.
+    suiteIsolation: isolated
+    isolationReason: Points the mock provider at a closed port, so no other scenario can share this gateway.
+    retryCount: 0
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-connection-failure-dm
+      prompt: "Connection failure reply QA check. Reply with OK."
+      expectedPrefix: "⚠️ mock-openai/"
+      # qa-lab configures a primary and an alternate fallback model on the refused provider, so the
+      # chain has two connection failures and both must be named, distinct, before "request failed".
+      namedModelsPattern: "^⚠️ (mock-openai/[^,\\s]+), (mock-openai/[^,\\s]+) request failed: "
+      # The reply is matched on the shared connection copy, so main's unnamed reply is caught and reported too.
+      connectionCopy: "Couldn't connect to the AI service."
+      expectedCopy: "request failed: Couldn't connect to the AI service."
+      expectedCaution: "Check the conversation for any completed work before trying again."
+      forbiddenNeedles:
+        - ECONNREFUSED
+        - "127.0.0.1:9"
+        - took too long
+
+flow:
+  steps:
+    - name: names the model in the connection-failure reply
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this seeded scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId:
+              expr: config.conversationId
+            senderName: Alice
+            text:
+              expr: config.prompt
+        # Expected-failure scenario: the reply is an isError warning, so read the bus directly
+        # instead of the failure-aware transport waits.
+        - set: outbound
+          value:
+            expr: "await (async () => { const deadline = Date.now() + liveTurnTimeoutMs(env, 180000); while (Date.now() < deadline) { const found = state.getSnapshot().messages.find((message) => message.direction === 'outbound' && message.conversation?.id === config.conversationId && String(message.text ?? '').includes(config.connectionCopy)); if (found) { return found; } await sleep(250); } throw new Error(`timed out waiting for the connection-failure reply; outbound=${JSON.stringify(state.getSnapshot().messages.filter((message) => message.direction === 'outbound').map((message) => ({ text: message.text, isError: message.isError })))}`); })()"
+        - set: replyText
+          value:
+            expr: "String(outbound.text ?? '')"
+        - assert:
+            expr: "outbound.isError === true && replyText.startsWith(config.expectedPrefix) && ((match) => Boolean(match) && match[1] !== match[2])(new RegExp(config.namedModelsPattern).exec(replyText)) && replyText.includes(config.expectedCopy) && replyText.includes(config.expectedCaution) && !config.forbiddenNeedles.some((needle) => replyText.includes(needle))"
+            message:
+              expr: "`unexpected connection-failure reply: ${replyText}`"
+      detailsExpr: "`reply: ${replyText}`"
