@@ -5,6 +5,7 @@ import { Option, type Command } from "commander";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { resolveCronCompletionStatus } from "../../cron/completion-status.js";
 import type { CronRunLogEntry } from "../../cron/run-log-types.js";
+import { isGatewayTransportError } from "../../gateway/transport-error.js";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
@@ -81,11 +82,24 @@ async function waitForCronRunCompletion(params: {
     // History reads share the wait deadline, but enqueue keeps its own RPC
     // timeout and a zero-duration wait still gets one immediate ledger poll.
     const pollOpts = { ...params.opts, timeout: String(pollTimeoutMs) };
-    const page = (await callGatewayFromCli("cron.runs", pollOpts, {
-      id: params.jobId,
-      runId: params.runId,
-      limit: 1,
-    })) as { entries?: CronRunLogEntry[] };
+    let page: { entries?: CronRunLogEntry[] };
+    try {
+      page = await callGatewayFromCli("cron.runs", pollOpts, {
+        id: params.jobId,
+        runId: params.runId,
+        limit: 1,
+      });
+    } catch (error) {
+      params.signal?.throwIfAborted();
+      if (
+        isGatewayTransportError(error) &&
+        error.kind === "timeout" &&
+        error.timeoutMs === remainingMs
+      ) {
+        break;
+      }
+      throw error;
+    }
     params.signal?.throwIfAborted();
     const entry = page.entries?.[0];
     if (entry?.status === "ok" || entry?.status === "error" || entry?.status === "skipped") {
