@@ -39,6 +39,7 @@ import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js"
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { createControlUiRequestOptions } from "./server-methods/control-ui-request.test-support.js";
 import { controlUiHandlers } from "./server-methods/control-ui.js";
+import { toolsInvokeHandlers } from "./server-methods/tools-invoke.js";
 import type { RespondFn } from "./server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import {
@@ -569,6 +570,36 @@ describe("GitHub agent reader", () => {
     expect(JSON.stringify(result)).toContain("Public reader issue");
     expect(JSON.stringify(result)).not.toContain(token);
     expect(JSON.stringify(result)).not.toContain("synthetic-unused-service-credential");
+  });
+
+  it("reads through a direct tools.invoke request outside an agent run", async () => {
+    fixture = await createFixture();
+    const { context, client, scope } = fixture;
+    const respond = vi.fn<RespondFn>();
+    const params = {
+      name: "github_read",
+      agentId: "reader",
+      args: { url: "https://github.com/octocat/reader/issues/1", refresh: true },
+    };
+    const invoke = expectDefined(toolsInvokeHandlers["tools.invoke"], "tools.invoke handler");
+    await withPluginRuntimeGatewayRequestScope(scope, () =>
+      invoke({
+        req: { id: "invoke-github", method: "tools.invoke", params, type: "req" },
+        params,
+        client,
+        context,
+        respond,
+        isWebchatConnect: () => false,
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, toolName: "github_read", source: "plugin" }),
+      undefined,
+    );
+    const output = JSON.stringify(respond.mock.calls[0]?.[1]);
+    expect(output).toContain("Public reader issue");
+    expect(output).not.toContain(token);
   });
 
   it("shares the GitHub cooldown across tool invocations and the UI reader", async () => {
