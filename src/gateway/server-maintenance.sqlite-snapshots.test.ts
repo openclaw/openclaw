@@ -68,6 +68,7 @@ it("reclaims the installation's abandoned snapshots after startup reconnects", a
         scheduler,
         isNixMode: true,
         logHealth: {
+          debug: () => {},
           info: (message) => {
             errors.push(message);
           },

@@ -106,7 +106,7 @@ function createMaintenanceDeps() {
     ...state,
     broadcast: vi.fn(),
     refreshGatewayHealthSnapshot: vi.fn(state.refreshGatewayHealthSnapshot),
-    logHealth: { info: vi.fn(), error: vi.fn() },
+    logHealth: { debug: vi.fn(), info: vi.fn(), error: vi.fn() },
     runDeliveryQueueMediaGc: vi.fn(async (): Promise<void> => {}),
   };
 }

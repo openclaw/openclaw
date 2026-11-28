@@ -342,7 +342,7 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
         ...createGatewayMaintenanceStateForTest(),
         ...kernel.gatewayRequestContext,
         scheduler: createTestGatewayScheduler(clock.clock),
-        logHealth: { info: vi.fn(), error: vi.fn() },
+        logHealth: { debug: vi.fn(), info: vi.fn(), error: vi.fn() },
         runDeliveryQueueMediaGc: async () => undefined,
       });
       try {
