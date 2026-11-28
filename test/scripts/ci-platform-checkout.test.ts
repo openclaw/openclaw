@@ -108,6 +108,7 @@ for (const [jobId, job] of Object.entries(workflowDefinition.jobs)) {
 // exit must not authorize workspace deletion, Git reuse, or final success.
 const platformCases = [
   { scenario: "timeouts-exhausted", attempts: 3, code: 124, checkout: false },
+  { scenario: "receive-reset", attempts: 3, code: 0, checkout: true },
   { scenario: "recovery", attempts: 4, code: 0, checkout: true },
   { scenario: "early-leader-exit", attempts: 2, code: 0, checkout: true },
   { scenario: "harness-timeout", attempts: 2, code: 124, checkout: true },
@@ -149,7 +150,13 @@ it.concurrent.for([
   { timeout: 55_000 },
   async ({ scenario, attempts, code, checkout, linux, deletions }, { signal: testSignal }) => {
     const setupFailure = scenario.startsWith("non-executable-");
-    const run = readCiCheckoutStep(linux ? "checks-fast-core" : "checks-windows").run;
+    const run = readCiCheckoutStep(
+      linux
+        ? "checks-fast-core"
+        : scenario === "receive-reset"
+          ? "ios-screenshot-capture"
+          : "checks-windows",
+    ).run;
 
     const policyScenario = `${linux ? "linux:" : ""}${scenario}`;
     await withCiCheckoutFixture(
@@ -336,6 +343,11 @@ syncFixtureBuiltinExports();
             ).toBe(true);
           }
           expect(candidateFetch.cwd).toBe(workspace);
+          if (scenario === "receive-reset") {
+            expect(fetches[1]).toEqual(candidateFetch);
+            expect(report.output).toContain("curl 56 Recv failure: Connection reset by peer");
+            expect(report.output).toContain("checkout fetch failed on attempt 1; retrying");
+          }
           expect(fetches.at(-1)?.cwd).toBe(path.join(workspace, ".ci-harness"));
           for (const { args } of fetches) {
             expect(args).toEqual(
