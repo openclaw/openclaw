@@ -74,10 +74,12 @@ once the dashboard is ready. Reconnecting the dashboard during this handoff keep
 window, and **Review permissions** continues in the dashboard. Choose **Set up manually** to use native
 setup instead.
 
-The dashboard connects your AI, shows what it selected, and offers alternatives.
-You can choose another Gateway or review this Mac's permissions from the setup
-card. OpenClaw then guides the remaining setup (memory import, channels, and
-permissions) in the same conversation. Grant macOS permissions any time from
+The dashboard lists the AI access it detected and turns one on only after you
+choose it. If that connection fails, the card shows why so you can try again or
+choose another; setup never switches by itself. You can choose another Gateway
+or review this Mac's permissions from the setup card. OpenClaw then guides the
+remaining setup (memory import, channels, and permissions) in the same
+conversation. Grant macOS permissions any time from
 **Dashboard → Settings → This Mac → Permissions**.
 
 If runtime preparation, Gateway startup or authentication, or dashboard loading
@@ -94,8 +96,9 @@ detection only presents available connections; it checks and activates one after
 you select it. A verified existing model opens the normal dashboard without
 replacing the configured route.
 
-Automatic setup preserves an existing configured model. Otherwise it tries saved
-OpenClaw auth profiles, a stored Codex login, a Claude CLI login, `OPENAI_API_KEY`,
+An existing configured model is kept. To let OpenClaw choose instead, select
+**Set up automatically** on the setup card. It then tries saved OpenClaw auth
+profiles, a stored Codex login, a Claude CLI login, `OPENAI_API_KEY`,
 `ANTHROPIC_API_KEY`, then eligible loaded models in Ollama, LM Studio, or
 llama.cpp. It activates the first connection that passes a live completion. If
 none works, it installs or enables the official Codex plugin and uses its login

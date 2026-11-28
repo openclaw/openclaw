@@ -9,8 +9,9 @@ sidebarTitle: "Onboarding Overview"
 
 OpenClaw supports onboarding from the terminal, the macOS app, and the Linux
 desktop companion. Every path establishes inference first. On macOS, a fresh
-Gateway automatically picks available AI access and verifies a real completion
-before configuring the remaining setup. An existing configured model is kept.
+Gateway lists the AI access it detected, then verifies a real completion with
+the one you choose before configuring the remaining setup. An existing
+configured model is kept.
 The terminal flow also offers the full classic wizard for detailed setup.
 
 ## Which path should I use?
@@ -83,15 +84,17 @@ onboarding in the dashboard. **Set up manually** opens native setup instead.
 It does not automatically connect to a discovered Gateway. Existing local and
 remote setups keep their connection and native onboarding behavior.
 
-The dashboard shows **Connecting your AI…** while automatic setup runs, then a
-summary of the selected provider, model, and Gateway. You can select another
-available provider, use a different Gateway, or review device permissions. If
-sign-in is needed, choose **Sign in with ChatGPT** and follow the inline steps.
-If automatic setup is unavailable, the summary explains the failed attempts and
-offers native AI setup in the Mac app, or `openclaw onboard` in a browser.
+The dashboard lists the AI access detected on the Gateway; opening it turns
+nothing on. Choose a connection and the dashboard shows **Connecting your AI…**
+while it runs a live check, then a summary of the selected provider, model, and
+Gateway. If the check fails, the card shows why and offers **Retry** and the
+other detected connections; it never switches on its own. You can also use a
+different Gateway or review device permissions. When nothing is detected, the
+card offers native AI setup in the Mac app, or `openclaw onboard` in a browser.
 
-Automatic setup keeps an existing configured model. Otherwise it tries usable
-connections in this order:
+An existing configured model is kept. To let OpenClaw choose, select **Set up
+automatically**. If sign-in is needed, choose **Sign in with ChatGPT** and
+follow the inline steps. Automatic setup tries usable connections in this order:
 
 1. Saved OpenClaw auth profiles.
 2. Codex with stored credentials on the Gateway host.

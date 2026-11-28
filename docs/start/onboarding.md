@@ -23,8 +23,8 @@ For terminal-based setup, see [Onboarding overview](/start/onboarding-overview).
 On a fresh install, open the app and follow **Setting up OpenClaw on this Mac**:
 
 1. The app prepares its runtime and starts a local Gateway.
-2. The dashboard opens and connects available AI access.
-3. A live AI test verifies the connection before guided setup continues.
+2. The dashboard opens and lists the AI access it detected. Choose one to use.
+3. A live AI test verifies your choice before guided setup continues.
 
 An already configured model is kept. You can then set up optional features
 and start chatting. To choose the connection yourself, select **Set up manually**.
@@ -161,7 +161,11 @@ connects to a Linux Gateway.
 
 ### Automatic selection
 
-If no model is configured, automatic setup checks these sources in order:
+If no model is configured, the setup card lists detected connections and turns
+none on until you choose one. If your choice fails, the card shows the reason
+and lets you try again or choose another connection; it never switches by
+itself. To let setup choose, select **Set up automatically**. It checks these
+sources in order:
 
 1. Saved OpenClaw auth profiles.
 2. Codex credentials in `CODEX_HOME` or `~/.codex` on the Gateway host.

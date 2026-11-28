@@ -21,7 +21,10 @@ const alternative = candidate("ollama", "Local model", "ollama/qwen3");
 function result(status: SetupAutoResult["status"] = "activated"): SetupAutoResult {
   return { status, selected, alternatives: [alternative], attempts: [], installedPlugins: [] };
 }
-const methods = ["chat", "setup.auto", "setup.activate", "setup.auth.start"].map(
+function detection(setupComplete: boolean, candidates: unknown[] = []) {
+  return { setupComplete, candidates, manualProviders: [], authOptions: [] };
+}
+const methods = ["chat", "setup.detect", "setup.auto", "setup.activate", "setup.auth.start"].map(
   (method) => "openclaw." + method,
 );
 const agentsList: AgentsListResult = makeBootRoster({ scope: "global" });
@@ -32,18 +35,25 @@ const text = (page: Page) => expect(page.textContent);
 const alertText = (page: Page) => expect(page.querySelector('[role="alert"]')?.textContent);
 const expectRpc = (request: Request, method: string, params: unknown) =>
   expect(request).toHaveBeenCalledWith("openclaw.setup." + method, params, { timeoutMs: null });
+type Params = { answer?: unknown; kind?: string };
 function setupRequest(
   auto: () => unknown = () => result(),
-  handlers: Record<string, (params?: { answer?: unknown }) => unknown> = {},
+  handlers: Record<string, (params?: Params) => unknown> = {},
 ) {
-  return vi.fn(async (method: string, params?: { answer?: unknown }) =>
+  return vi.fn(async (method: string, params?: Params) =>
     method === "openclaw.chat.history"
       ? (handlers[method]?.(params) ?? { turns: [] })
-      : method === "openclaw.setup.auto"
-        ? auto()
-        : (handlers[method]?.(params) ?? reply),
+      : method === "openclaw.setup.detect"
+        ? (handlers[method]?.(params) ?? detection(true))
+        : method === "openclaw.setup.auto"
+          ? auto()
+          : (handlers[method]?.(params) ?? reply),
   );
 }
+const calledMethods = (request: Request) =>
+  request.mock.calls
+    .map(([method]) => method)
+    .filter((method) => method.startsWith("openclaw.setup."));
 function unavailable(attempts: SetupAutoResult["attempts"] = []): SetupAutoResult {
   return { status: "unavailable", alternatives: [], attempts, installedPlugins: [] };
 }
@@ -108,7 +118,12 @@ it.each([true, false])("presents a held activation and its outcome (success=%s)"
   const { context } = setupContext(request);
   const { page } = await mountPage(context);
   text(page).toContain("Connecting your AI");
-  expect(request.mock.calls.map(([method]) => method)).toEqual(["openclaw.setup.auto"]);
+  await waitForFast(() =>
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.setup.detect",
+      "openclaw.setup.auto",
+    ]),
+  );
   expectRpc(request, "auto", {});
   setup.resolve(result(ok ? "configured" : "activated"));
   await settled(page);
@@ -129,12 +144,69 @@ it.each([true, false])("presents a held activation and its outcome (success=%s)"
   ).toBe(true);
   activation.resolve(ok ? { ok } : { ok, error: "Local model is offline" });
   await settled(page);
-  expectRpc(request, "activate", { kind: "ollama" });
+  expectRpc(request, "activate", { kind: "ollama", modelRef: "ollama/qwen3" });
   text(page).toContain(ok ? "Using Local model (ollama/qwen3) on gateway.test" : "Using ChatGPT");
   expect(request.mock.calls.filter(([method]) => method === "openclaw.setup.auto")).toHaveLength(1);
   if (!ok) {
-    alertText(page).toContain("Local model is offline");
+    alertText(page).toContain("Couldn’t connect Local model: Local model is offline");
   }
+});
+
+it("offers detected AI without activating it and never switches after a failed choice", async () => {
+  const codex = { ...selected, kind: "codex-cli", recommended: true, credentials: true };
+  const local = { ...alternative, recommended: false };
+  const utility = { ...candidate("apple", "Apple", "apple/local"), modelTarget: "utility" };
+  const loggedOut = {
+    ...candidate("claude-cli", "Claude", "anthropic/claude"),
+    credentials: false,
+  };
+  const request = setupRequest(() => result(), {
+    "openclaw.setup.detect": () => detection(false, [local, utility, loggedOut, codex]),
+    "openclaw.setup.activate": (params) =>
+      params?.kind === "ollama"
+        ? { ok: false, error: "Local model is offline" }
+        : { ok: true, modelRef: codex.modelRef },
+  });
+  const { page } = await mountSetup(request);
+  expect(calledMethods(request)).toEqual(["openclaw.setup.detect"]);
+  text(page).toContain("Choose your AI");
+  expect(
+    [...page.querySelectorAll(".custodian-setup__alternatives button")].map((entry) =>
+      entry.textContent?.trim(),
+    ),
+  ).toEqual(["ChatGPT", "Local model"]);
+  expect(request.mock.calls.filter(([method]) => method === "openclaw.chat")).toHaveLength(0);
+
+  await click(page, "Local model");
+  alertText(page).toContain("Local model is offline");
+  await click(page, "Retry");
+  expect(calledMethods(request)).toEqual([
+    "openclaw.setup.detect",
+    "openclaw.setup.activate",
+    "openclaw.setup.activate",
+  ]);
+  expect(request.mock.calls.filter(([method]) => method === "openclaw.setup.activate")).toEqual([
+    ["openclaw.setup.activate", { kind: "ollama", modelRef: "ollama/qwen3" }, { timeoutMs: null }],
+    ["openclaw.setup.activate", { kind: "ollama", modelRef: "ollama/qwen3" }, { timeoutMs: null }],
+  ]);
+  text(page).not.toContain("Using");
+
+  await click(page, "ChatGPT");
+  expectRpc(request, "activate", { kind: "codex-cli", modelRef: codex.modelRef });
+  text(page).toContain("Using ChatGPT (openai/gpt-5.5) on gateway.test");
+  expect(calledMethods(request)).not.toContain("openclaw.setup.auto");
+});
+
+it("runs the automatic ladder only when the person requests it", async () => {
+  const request = setupRequest(() => result(), {
+    "openclaw.setup.detect": () => detection(false),
+  });
+  const { page } = await mountSetup(request);
+  text(page).toContain("Connect your AI");
+  expect(calledMethods(request)).toEqual(["openclaw.setup.detect"]);
+  await click(page, "Set up automatically");
+  expect(calledMethods(request)).toEqual(["openclaw.setup.detect", "openclaw.setup.auto"]);
+  text(page).toContain("Using ChatGPT (openai/gpt-5.5) on gateway.test");
 });
 
 it("retires a held activation when the visible store is replaced", async () => {
@@ -194,7 +266,7 @@ it("activates an alternative from the standalone compact onboarding surface", as
   await waitForFast(() => expect(surface.textContent).toContain("Using ChatGPT"));
   findButton(surface, "Local model").click();
   await waitForFast(() => expect(surface.textContent).toContain("Using Local model"));
-  expectRpc(request, "activate", { kind: "ollama" });
+  expectRpc(request, "activate", { kind: "ollama", modelRef: "ollama/qwen3" });
 });
 
 it.each(["needs-sign-in", "configured"] as const)("refreshes sign-in from %s", async (status) => {
@@ -252,8 +324,9 @@ it("uses shell-neutral native capabilities for fallback, Gateway selection, and 
   const openGateways = vi.fn();
   const reviewPermissions = vi.fn();
   window["__OPENCLAW_NATIVE_SETUP__"] = { openAiSetup, openGateways, reviewPermissions };
-  const request = vi.fn(async () => unavailable());
+  const request = setupRequest(unavailable, { "openclaw.setup.detect": () => detection(false) });
   const { page } = await mountSetup(request);
+  text(page).toContain("No AI access to reuse was found on gateway.test.");
   await click(page, "Open AI setup");
   await click(page, "Use a different Gateway");
   await click(page, "Review permissions");
@@ -271,23 +344,26 @@ it.each([false, true])(
     vi.stubGlobal("webkit", { messageHandlers: { openclawDeviceSettings: { postMessage: post } } });
     vi.stubGlobal("__OPENCLAW_NATIVE_DEVICE_SETTINGS__", snapshot);
     const nativeDeviceSettings = createNativeDeviceSettingsCapability()!;
-    const request = vi.fn(async () =>
-      unavailable(
-        failedAttempt
-          ? [{ kind: "codex", label: "ChatGPT", error: "Could not prepare the plugin" }]
-          : [],
-      ),
+    const request = setupRequest(
+      () =>
+        unavailable([{ kind: "codex", label: "ChatGPT", error: "Could not prepare the plugin" }]),
+      { "openclaw.setup.detect": () => detection(false) },
     );
     const { context } = setupContext(request);
     try {
       const { page } = await mountPage({ ...context, nativeDeviceSettings });
       await settled(page);
-      text(page).toContain("openclaw onboard");
       if (failedAttempt) {
+        await click(page, "Set up automatically");
         text(page).toContain("Could not prepare the plugin");
       }
+      text(page).toContain("openclaw onboard");
       text(page).toContain("only connect tools you trust");
-      expect(request).toHaveBeenCalledTimes(1);
+      expect(calledMethods(request)).toEqual(
+        failedAttempt
+          ? ["openclaw.setup.detect", "openclaw.setup.auto"]
+          : ["openclaw.setup.detect"],
+      );
       window.dispatchEvent(
         new CustomEvent("openclaw:native-device-settings-changed", {
           detail: {
@@ -307,8 +383,10 @@ it.each([false, true])(
 );
 
 it("shows RPC failures and retries without a premature greeting", async () => {
-  const request = setupRequest(() => {
-    throw new Error("Gateway lost its connection");
+  const request = setupRequest(result, {
+    "openclaw.setup.detect": () => {
+      throw new Error("Gateway lost its connection");
+    },
   });
   const { page } = await mountSetup(request);
   await waitForSolid(() => expect(page.querySelector(".sidebar-issues-button")).not.toBeNull());
