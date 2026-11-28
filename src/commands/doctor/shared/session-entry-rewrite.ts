@@ -33,6 +33,7 @@ import { assertSupportedSessionStoreEntry } from "../../../config/sessions/suppo
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { decodeQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 import { withEngineStoreAdmission } from "../../../infra/database-engine/admission-scope.js";
+import { jsonPathValue } from "../../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -206,29 +207,54 @@ export async function scanDoctorSessionEntryRecords(
   }
 }
 
-/** A legacy cut rotated the window, copied its tree and appended a leaf control. */
+/** Rotated cuts copied a tree and appended a leaf; in-place cuts marked the displaced branch. */
 function readUncountedCutWindow(
   database: Pick<OpenClawAgentDatabase, "db">,
   entry: Record<string, unknown> | null,
 ): string | undefined {
-  if (
-    typeof entry?.previousSessionId !== "string" ||
-    typeof entry.sessionId !== "string" ||
-    entry.compactionCount !== undefined
-  ) {
+  if (typeof entry?.sessionId !== "string" || entry.compactionCount !== undefined) {
     return undefined;
   }
-  return executeSqliteQueryTakeFirstSync(
+  const rotated = typeof entry.previousSessionId === "string";
+  if (!rotated && typeof entry.lifecycleRevision !== "string") {
+    return undefined;
+  }
+  const leaves = getSessionKysely(database.db)
+    .selectFrom("transcript_event_identities as leaf")
+    .where("leaf.session_id", "=", entry.sessionId)
+    .where("leaf.event_type", "=", "leaf");
+  if (rotated) {
+    return executeSqliteQueryTakeFirstSync(database.db, leaves.select("leaf.seq").limit(1))
+      ? entry.sessionId
+      : undefined;
+  }
+  const rows = iterateSqliteQuerySync(
     database.db,
-    getSessionKysely(database.db)
-      .selectFrom("transcript_event_identities")
-      .select("seq")
-      .where("session_id", "=", entry.sessionId)
-      .where("event_type", "=", "leaf")
-      .limit(1),
-  )
-    ? entry.sessionId
-    : undefined;
+    leaves
+      .innerJoin("transcript_events as event", (join) =>
+        join.onRef("event.session_id", "=", "leaf.session_id").onRef("event.seq", "=", "leaf.seq"),
+      )
+      .select((eb) =>
+        eb.fn
+          .coalesce(
+            "event.event_json",
+            jsonPathValue(
+              database.db,
+              eb.ref("event.navigation_json"),
+              eb.val("$.report.entry"),
+              "json",
+            ),
+          )
+          .as("marker"),
+      )
+      .orderBy("leaf.seq", "desc"),
+  );
+  for (const { marker } of rows) {
+    if (marker && safeParseJsonRecord(marker)?.billsDisplaced === true) {
+      return entry.sessionId;
+    }
+  }
+  return undefined;
 }
 
 /** Normalize legacy entries before canonical reads; clean stores stay read-only. */

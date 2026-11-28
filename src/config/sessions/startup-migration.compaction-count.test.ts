@@ -9,7 +9,7 @@ import {
 } from "./session-accessor.js";
 import { runSessionStartupMigration } from "./startup-migration-runtime.js";
 
-it("repairs the missing count of a rotated cut once, from the selected reset window", async () =>
+it("repairs the missing count of rotated and in-place cuts once, from the selected reset window", async () =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
@@ -20,13 +20,14 @@ it("repairs the missing count of a rotated cut once, from the selected reset win
       sessionKey: `agent:main:${name}`,
       sessionId: name,
     });
-    for (const name of ["cut", "known", "fork", "rollover"]) {
+    for (const name of ["cut", "in-place", "compressed", "known", "fork", "rollover"]) {
       const scope = key(name);
       replaceSessionEntrySync(scope, {
         sessionId: name,
         updatedAt: 17,
         label: name,
-        ...(name !== "fork" ? { previousSessionId: "old-id" } : {}),
+        lifecycleRevision: "fixture-revision",
+        ...(["cut", "known", "rollover"].includes(name) ? { previousSessionId: "old-id" } : {}),
         ...(name === "known" ? { compactionCount: 7 } : {}),
       });
       for (const [type, id, parentId] of [
@@ -48,6 +49,8 @@ it("repairs the missing count of a rotated cut once, from the selected reset win
           id: "cut-marker",
           parentId: "displaced",
           targetId: "kept",
+          ...(["in-place", "compressed"].includes(name) ? { billsDisplaced: true } : {}),
+          ...(name === "compressed" ? { padding: "x".repeat(16384) } : {}),
         });
       }
     }
@@ -57,6 +60,8 @@ it("repairs the missing count of a rotated cut once, from the selected reset win
       runSessionStartupMigration({ cfg, env: state.env, log: { info() {}, warn() {} } });
     await run();
     expect(entry("cut")).toMatchObject({ sessionId: "cut", label: "cut", compactionCount: 1 });
+    expect(entry("in-place")?.compactionCount).toBe(1);
+    expect(entry("compressed")?.compactionCount).toBe(1);
     expect(["fork", "rollover", "known"].map(entry)).toEqual(untouched);
     database.db.exec(
       "CREATE TEMP TRIGGER no_second_count_repair BEFORE UPDATE OF entry_json ON session_nodes WHEN OLD.session_key = 'agent:main:cut' BEGIN SELECT RAISE(ABORT, 'count repair repeated'); END",
