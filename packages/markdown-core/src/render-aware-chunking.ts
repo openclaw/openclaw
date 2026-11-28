@@ -189,11 +189,63 @@ function findTokenStarts(text: string): number[] {
   return starts;
 }
 
-function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: number): number {
+/** Link labels and Slack `<...>` tokens, sorted and non-overlapping. */
+function findKeepTogetherRanges(ir: MarkdownIR): SourceRange[] {
+  const ranges: SourceRange[] = ir.links.map(({ start, end }) => ({ start, end }));
+  // Linear scan with `<[^\s>][^>\n]*>` semantics, the token shape findTokenStarts keeps whole.
+  const { text } = ir;
+  let open = -1;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "\n") {
+      open = -1;
+    } else if (char === ">" && open >= 0) {
+      ranges.push({ start: open, end: index + 1 });
+      open = -1;
+    } else if (char === "<" && open < 0 && /[^\s>]/.test(text[index + 1] ?? " ")) {
+      open = index;
+    }
+  }
+  const merged: SourceRange[] = [];
+  for (const range of ranges.toSorted((left, right) => left.start - right.start)) {
+    const last = merged.at(-1);
+    if (last && range.start < last.end) {
+      last.end = Math.max(last.end, range.end);
+    } else if (range.end > range.start) {
+      merged.push({ ...range });
+    }
+  }
+  return merged;
+}
+
+function findMarkdownIRPreservedSplitIndex(
+  text: string,
+  start: number,
+  limit: number,
+  keepTogether: readonly SourceRange[],
+): number {
   const maxEnd = Math.min(text.length, start + limit);
   if (maxEnd >= text.length) {
     return text.length;
   }
+  // Seek the first range ending after start, then advance with the scan.
+  let rangeIndex = 0;
+  let high = keepTogether.length;
+  while (rangeIndex < high) {
+    const mid = Math.floor((rangeIndex + high) / 2);
+    if ((keepTogether[mid]?.end ?? Infinity) <= start) {
+      rangeIndex = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  const insideKeepTogether = (index: number) => {
+    let range = keepTogether[rangeIndex];
+    while (range && range.end <= index) {
+      range = keepTogether[++rangeIndex];
+    }
+    return range !== undefined && range.start <= index;
+  };
 
   let lastOutsideParenNewlineBreak = -1;
   let lastOutsideParenWhitespaceBreak = -1;
@@ -228,7 +280,7 @@ function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: n
     if (char === "\n") {
       // Newlines preserve markdown block structure better than other spaces.
       lastAnyNewlineBreak = index + 1;
-      if (parenDepth === 0) {
+      if (parenDepth === 0 && !insideKeepTogether(index)) {
         lastOutsideParenNewlineBreak = index + 1;
       }
       continue;
@@ -237,7 +289,7 @@ function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: n
       index === start || !/\s/.test(text[index - 1] ?? "") ? index : lastAnyWhitespaceRunStart;
     lastAnyWhitespaceBreak = index + 1;
     lastAnyWhitespaceRunStart = whitespaceRunStart;
-    if (parenDepth === 0) {
+    if (parenDepth === 0 && !insideKeepTogether(index)) {
       lastOutsideParenWhitespaceBreak = index + 1;
       lastOutsideParenWhitespaceRunStart = whitespaceRunStart;
     }
@@ -281,11 +333,12 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
     .filter((span) => span.style === "code" || span.style === "code_block")
     .toSorted((left, right) => left.start - right.start);
   let codeIndex = 0;
+  const keepTogether = findKeepTogetherRanges(ir);
   const ranges: SourceRange[] = [];
   let cursor = 0;
   while (cursor < ir.text.length) {
     const maxEnd = Math.min(ir.text.length, cursor + limit);
-    let preferredEnd = findMarkdownIRPreservedSplitIndex(ir.text, cursor, limit);
+    let preferredEnd = findMarkdownIRPreservedSplitIndex(ir.text, cursor, limit, keepTogether);
     let code = codeSpans[codeIndex];
     while (code && code.end <= preferredEnd) {
       code = codeSpans[++codeIndex];

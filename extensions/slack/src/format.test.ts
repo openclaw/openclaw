@@ -278,10 +278,18 @@ describe("normalizeSlackOutboundText", () => {
 
   it("measures native tokens with spaces as one unit when chunking", () => {
     expect(markdownToSlackMrkdwnChunks("beta beta <@U1|some one> <https://x|a b> x", 23)).toEqual([
-      "beta beta &lt;@U1|some ",
-      "one&gt; <https://x|a b>",
-      " x",
+      "beta beta ",
+      "<@U1|some one> ",
+      "<https://x|a b> x",
     ]);
+  });
+
+  it("keeps a native link whole when a long reply splits next to it", () => {
+    const markdown = `w ${"word ".repeat(793)}<https://example.com/a/b|the docs> end of reply`;
+    const chunks = markdownToSlackMrkdwnChunks(markdown, 4000);
+
+    expect(chunks.at(-1)).toBe("<https://example.com/a/b|the docs> end of reply");
+    expect(chunks.join("")).not.toContain("&lt;");
   });
 
   it("includes transcript protection when a native token exactly fills the chunk budget", () => {
