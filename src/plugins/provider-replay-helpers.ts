@@ -20,6 +20,7 @@ export function buildOpenAICompatibleReplayPolicy(
     duplicateToolCallIdStyle?: "openai";
     modelId?: string | null;
     dropReasoningFromHistory?: boolean;
+    appendOnlyRuntimeContext?: boolean;
   } = {},
 ): ProviderReplayPolicy | undefined {
   if (
@@ -48,7 +49,12 @@ export function buildOpenAICompatibleReplayPolicy(
             : {}),
         }
       : {}),
-    ...(isResponsesFamily ? { allowSyntheticToolResults: true } : {}),
+    ...(isResponsesFamily
+      ? {
+          allowSyntheticToolResults: true,
+          appendOnlyRuntimeContext: options.appendOnlyRuntimeContext ?? true,
+        }
+      : {}),
     applyAssistantFirstOrderingFix: modelApi === "openai-completions",
     validateGeminiTurns: modelApi === "openai-completions",
     validateAnthropicTurns: modelApi === "openai-completions",
