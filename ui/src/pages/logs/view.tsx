@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   elementScroll,
   observeElementOffset,
@@ -93,6 +92,10 @@ function formatLogTime(value: string | null | undefined, formatter: Intl.DateTim
   return Number.isNaN(date.getTime()) ? value : formatter.format(date.getTime());
 }
 
+function logSearchKey(value: string) {
+  return foldSearchCase(value.trim()).normalize("NFC");
+}
+
 export function LogsView(props: LogsProps) {
   const phone = createMediaQuery(
     PHONE_WIDTH_QUERY,
@@ -114,9 +117,7 @@ export function LogsView(props: LogsProps) {
     // eslint-disable-next-line solid/no-react-specific-props -- The shared status API calls this prop className.
     <PanelRefreshStatus status={props.status} className="logs-refresh-status" />
   );
-  const needle = createMemo(() =>
-    foldSearchCase(normalizeLowercaseStringOrEmpty(props.filterText)).normalize("NFC"),
-  );
+  const needle = createMemo(() => logSearchKey(props.filterText));
   const filtered = createMemo(() => {
     const query = needle();
     const levels = LOG_LEVELS.filter((level) => props.levelFilters[level]);
@@ -126,13 +127,9 @@ export function LogsView(props: LogsProps) {
         : (entry: LogRow) =>
             (!entry.level || props.levelFilters[entry.level]) &&
             (!query ||
-              foldSearchCase(
-                normalizeLowercaseStringOrEmpty(
-                  [entry.message, entry.subsystem, entry.raw].filter(Boolean).join(" "),
-                ),
-              )
-                .normalize("NFC")
-                .includes(query));
+              logSearchKey(
+                [entry.message, entry.subsystem, entry.raw].filter(Boolean).join(" "),
+              ).includes(query));
     const rows: LogRow[] = [];
     const byKey = new Map<VirtualItem["key"], number>();
     for (const entry of props.entries) {
