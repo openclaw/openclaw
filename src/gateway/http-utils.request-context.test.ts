@@ -90,6 +90,64 @@ describe("resolveGatewayRequestContext", () => {
       requestContext("", { req: createReq({ "x-openclaw-agent-id": "!!!" }) }),
     ).rejects.toThrow("Unknown agent '!!!'.");
   });
+
+  it("uses the session key agent when the model is generic", async () => {
+    setRuntimeConfigSnapshot({ agents: { list: [{ id: "writer" }] } });
+
+    const result = await requestContext("agent:writer:main");
+
+    expect(result).toMatchObject({
+      agentId: "writer",
+      sessionKey: "agent:writer:main",
+    });
+  });
+
+  it("keeps the configured default when the session key names no configured agent", async () => {
+    const result = await requestContext("agent:missing:main");
+
+    expect(result).toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:missing:main",
+    });
+  });
+
+  it("rejects a header agent that disagrees with the session key", async () => {
+    setRuntimeConfigSnapshot({
+      agents: { list: [{ id: "writer" }, { id: "researcher" }] },
+    });
+
+    await expect(
+      requestContext("agent:writer:main", {
+        req: createReq({
+          "x-openclaw-agent-id": "researcher",
+          "x-openclaw-session-key": "agent:writer:main",
+        }),
+      }),
+    ).rejects.toThrow(/does not match the agent in `x-openclaw-session-key`/u);
+  });
+
+  it("rejects a model alias that disagrees with the session key", async () => {
+    setRuntimeConfigSnapshot({
+      agents: { list: [{ id: "writer" }, { id: "researcher" }] },
+    });
+
+    await expect(
+      requestContext("agent:writer:main", { model: "openclaw/researcher" }),
+    ).rejects.toThrow(/does not match the agent in `x-openclaw-session-key`/u);
+  });
+
+  it("accepts a header agent that matches the session key", async () => {
+    setRuntimeConfigSnapshot({ agents: { list: [{ id: "writer" }] } });
+
+    const result = await requestContext("agent:writer:main", {
+      req: createReq({
+        "x-openclaw-agent-id": "Writer",
+        "x-openclaw-session-key": "agent:writer:main",
+      }),
+    });
+
+    expect(result.agentId).toBe("writer");
+  });
 });
 
 describe("resolveTrustedHttpOperatorScopes", () => {
