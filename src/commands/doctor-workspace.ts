@@ -49,6 +49,9 @@ export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
 }
 
 export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<boolean> {
+  if (!(await statPathIfExists(workspaceDir))) {
+    return false;
+  }
   const entries = await listWorkspaceEntries(workspaceDir);
   if (entries.has(CANONICAL_ROOT_MEMORY_FILENAME)) {
     try {
