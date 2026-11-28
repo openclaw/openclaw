@@ -63,6 +63,9 @@ export async function resolveAcpSpawnRequesterState(params: {
   parentSessionKey?: string;
   requesterAgentId: string;
   ownerAgentId: string;
+  spawnMode: "run" | "session";
+  requestThreadBinding: boolean;
+  streamToParentRequested: boolean;
   ctx: AcpSpawnRequesterContext;
   assertActive?: () => void;
 }) {
@@ -94,10 +97,10 @@ export async function resolveAcpSpawnRequesterState(params: {
   );
   params.assertActive?.();
   return {
-    isSubagentSession,
-    hasActiveSubagentBinding,
-    hasThreadContext,
-    sessionRelayRouteUsable,
+    // Thread-bound requesters require an explicit request to avoid unsolicited progress chatter.
+    streamToParent:
+      params.streamToParentRequested ||
+      (params.spawnMode === "run" && !params.requestThreadBinding && sessionRelayRouteUsable),
     origin: resolveRequesterOriginForChild({
       cfg: params.cfg,
       targetAgentId: params.ownerAgentId,
@@ -110,22 +113,4 @@ export async function resolveAcpSpawnRequesterState(params: {
       requesterMemberRoleIds: params.ctx.agentMemberRoleIds,
     }),
   };
-}
-
-export function shouldStreamAcpSpawnToParent(params: {
-  spawnMode: "run" | "session";
-  requestThreadBinding: boolean;
-  streamToParentRequested: boolean;
-  requester: Awaited<ReturnType<typeof resolveAcpSpawnRequesterState>>;
-}): boolean {
-  // Thread-bound requesters require an explicit request to avoid unsolicited progress chatter.
-  const implicitStreamToParent =
-    params.spawnMode === "run" &&
-    !params.requestThreadBinding &&
-    params.requester.isSubagentSession &&
-    !params.requester.hasActiveSubagentBinding &&
-    !params.requester.hasThreadContext &&
-    params.requester.sessionRelayRouteUsable;
-
-  return params.streamToParentRequested || implicitStreamToParent;
 }

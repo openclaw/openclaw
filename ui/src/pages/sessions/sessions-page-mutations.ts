@@ -13,7 +13,7 @@ import {
   withSessionWorkspaceRecovery,
 } from "../../components/session-workspace-recovery.runtime.ts";
 import { t } from "../../i18n/index.ts";
-import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccessRequest,
@@ -39,7 +39,7 @@ import type { SessionsPageRequestScope } from "./request-scope.ts";
 import { settleSelectedSession, type SessionDeleteRow } from "./selection.ts";
 import type { SessionsPageState } from "./sessions-page-state.types.ts";
 
-registerSessionOrganizationSharedEnglish();
+registerSessionOrganizationEnglish();
 
 type SessionsPageMutationHost = {
   application: ApplicationContext;
@@ -315,9 +315,9 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
       const listed = await fetchPagedSessionRows({
         list: (offset) => scope.sessions.list({ ...listOptions, limit: 1000, offset }),
         isCurrent: () => isRequestScopeCurrent(scope),
-        missingResultError: "archived session enumeration returned no result",
-        stalledPaginationError: "archived session enumeration did not advance",
-        incompletePaginationError: "archived session enumeration was incomplete",
+        missingResultError: t("sessionsView.deleteArchivedListMissing"),
+        stalledPaginationError: t("sessionsView.deleteArchivedListStalled"),
+        incompletePaginationError: t("sessionsView.deleteArchivedListIncomplete"),
       });
       if (!listed) {
         return;

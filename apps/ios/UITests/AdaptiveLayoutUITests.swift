@@ -94,6 +94,10 @@ final class AdaptiveLayoutUITests: XCTestCase {
         self.capture("chat-toolbar-current-window", in: app)
         try self.assertToolbarPainted([showSidebar, actions], in: app.windows.firstMatch)
         actions.tap()
+        let pin = app.buttons["Pin"].firstMatch
+        XCTAssertTrue(pin.waitForExistence(timeout: 5))
+        XCTAssertTrue(pin.isHittable)
+        XCTAssertTrue(app.windows.firstMatch.frame.contains(pin.frame))
         input.tap()
         showSidebar.tap()
         let gatewaySettings = app.buttons["RootTabs.Sidebar.GatewaySettings"].firstMatch
@@ -403,7 +407,7 @@ final class AdaptiveLayoutUITests: XCTestCase {
         let input = app.descendants(matching: .any)["chat-message-input"].firstMatch
         XCTAssertTrue(input.waitForExistence(timeout: 30))
         let window = app.windows.firstMatch.frame
-        let identity = app.buttons["chat-agent-identity"].firstMatch
+        let identity = app.descendants(matching: .any)["chat-agent-identity"].firstMatch
         let actions = app.buttons["Chat actions"].firstMatch
         let composer = app.otherElements["chat-composer-surface"].firstMatch
         for (name, element) in [("identity", identity), ("actions", actions), ("composer", composer)] {

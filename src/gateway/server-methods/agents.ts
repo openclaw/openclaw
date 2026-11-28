@@ -632,7 +632,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
           result,
           errorShape(
             ErrorCodes.UNAVAILABLE,
-            `Agent "${agentId}" was removed from configuration, but deletion cleanup is still pending: ${failures.join("; ")}. Resolve the cleanup failure, then retry agents.delete.`,
+            `Agent "${agentId}" is no longer configured, but deletion cleanup is still pending: ${failures.join("; ")}. Resolve the cleanup failure, then retry agents.delete.`,
           ),
         );
         return;

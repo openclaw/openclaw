@@ -276,7 +276,10 @@ describe("remote model catalog overlay", () => {
   });
 
   it("passes the same startup rows and prices to later workers", async () => {
+    const model = { id: "new", name: "日本語 🦊" };
+    stageBundle({ ...bundle, providers: { anthropic: { models: [model] } } });
     await prepareStartup();
+    expect(overlay()?.models).toEqual([model]);
     const expected = { overlay: overlay(), pricing: activeCatalog({})?.pricing };
     const worker = new Worker(new URL("./remote-overlay.worker.test-support.ts", import.meta.url), {
       execArgv: ["--import", "tsx"],

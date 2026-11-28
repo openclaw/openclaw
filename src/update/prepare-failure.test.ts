@@ -79,29 +79,41 @@ it("discards a rejected Git candidate without leaking its registration or touchi
   }
 });
 
-it("records one failed terminal run when preparation lock acquisition throws", async () => {
-  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-  try {
-    openOpenClawStateDatabase({ env: process.env });
-    const run = await createUpdateRunAsync({ trigger: "cli" });
-    vi.spyOn(fs, "link").mockRejectedValue(new Error("preparation lock failed"));
-    expect(
-      await prepareUpdate({
-        runId: run.runId,
-        runningRoot: root,
-        runningVersion: VERSION,
-        channel: "dev",
-      }),
-    ).toMatchObject({ status: "failed" });
-    expect(await listUpdateRunsAsync()).toEqual([
-      expect.objectContaining({ runId: run.runId, status: "failed", phase: "finished" }),
-    ]);
-    expect(await readTrial()).toBeNull();
-  } finally {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-  }
-});
+it.each(["normal", "bare"])(
+  "records the cause of a long %s preparation exception",
+  async (header) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    try {
+      openOpenClawStateDatabase({ env: process.env });
+      const run = await createUpdateRunAsync({ trigger: "cli" });
+      const token = "sk-abcdefghijklmnopqrstuv";
+      const error = new Error(`preparation lock failed; Authorization: Bearer ${token}`);
+      error.stack = `${header === "bare" ? "Error" : `Error: ${error.message}`}\n    at acquirePreparationLock\n${"    at prepareCaller\n".repeat(100)}`;
+      vi.spyOn(fs, "link").mockRejectedValue(error);
+      expect(
+        await prepareUpdate({
+          runId: run.runId,
+          runningRoot: root,
+          runningVersion: VERSION,
+          channel: "dev",
+        }),
+      ).toMatchObject({ status: "failed" });
+      const runs = await listUpdateRunsAsync();
+      expect(runs).toEqual([
+        expect.objectContaining({ runId: run.runId, status: "failed", phase: "finished" }),
+      ]);
+      const detail = runs[0]?.steps.find((step) => step.step === "outcome")?.detail;
+      expect(detail).toContain("preparation lock failed");
+      expect(detail).toContain("at acquirePreparationLock");
+      expect(detail).not.toContain(token);
+      expect(detail?.length).toBeLessThanOrEqual(1024);
+      expect(await readTrial()).toBeNull();
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+    }
+  },
+);
 
 it("does not publish a trial when preparation outcome bookkeeping throws", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
