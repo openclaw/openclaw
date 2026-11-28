@@ -161,6 +161,19 @@ describe("Signal approval reactions", () => {
     await expect(lookup()).resolves.toBeNull();
   });
 
+  it("lets only a current approver settle a forwarded target-mode prompt", async () => {
+    const hinted = withHint(approvalPayload("exec-1"));
+    expect(hinted?.text).toContain(reactionHint);
+    expect(await registerDelivery(hinted!)).toBe(true);
+    const revoked = { ...targetConfig, channels: { signal: { allowFrom: ["+15550007777"] } } };
+
+    await react({ cfg: targetConfig, actorId: "+15550007777" });
+    await react({ cfg: revoked });
+    expect(resolveApproval).not.toHaveBeenCalled();
+    await react({ cfg: targetConfig });
+    expect(resolveApproval).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects persisted targets containing an invalid approval decision", async () => {
     await registerTarget();
     const runtime = vi.spyOn(signalRuntime, "getOptionalSignalRuntime").mockReturnValue({
