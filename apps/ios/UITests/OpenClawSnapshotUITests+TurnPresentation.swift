@@ -28,6 +28,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(launch.waitForExistence(timeout: 8), "The launch keeps its own row while the turn runs")
         XCTAssertEqual(app.buttons.matching(identifier: "chat-tool-group").count, 1, "Both commands share one row")
         XCTAssertFalse(app.descendants(matching: .any)["chat-tool-activity-cli-e1"].exists, "No command stands alone")
+        XCTAssertTrue(app.descendants(matching: .any)["chat-working-status"].exists, "The turn is still running")
         self.attachScreenshot(named: "running-cli-turn")
     }
 

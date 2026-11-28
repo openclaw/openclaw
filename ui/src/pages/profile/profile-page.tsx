@@ -335,20 +335,33 @@ export function ProfilePage(route: { routeData?: string | null }) {
                   description={t("profilePage.identity.avatarLimits")}
                   control={
                     <span class="identity-avatar-control">
-                      <openclaw-viewer-avatar
-                        prop:user={{
-                          id: profile().id,
-                          name: userProfileDisplayName(
-                            profile().id,
-                            profile().displayName,
-                            profile().githubIdentity?.login,
-                          ),
-                          email: profile().emails[0],
-                          avatarUrl: avatarUrl() ?? undefined,
-                          watchedSessions: [],
-                        }}
-                        variant="profile"
-                      />
+                      <Show
+                        when={view().avatarPreview}
+                        fallback={
+                          <openclaw-viewer-avatar
+                            prop:user={{
+                              id: profile().id,
+                              name: userProfileDisplayName(
+                                profile().id,
+                                profile().displayName,
+                                profile().githubIdentity?.login,
+                              ),
+                              email: profile().emails[0],
+                              avatarUrl: avatarUrl() ?? undefined,
+                              watchedSessions: [],
+                            }}
+                            variant="profile"
+                          />
+                        }
+                      >
+                        {(src) => (
+                          <img
+                            class="viewer-avatar viewer-avatar--profile"
+                            src={src()}
+                            alt={t("profilePage.identity.avatar")}
+                          />
+                        )}
+                      </Show>
                       <Show when={canEditIdentity() && canUpload()}>
                         <button
                           type="button"

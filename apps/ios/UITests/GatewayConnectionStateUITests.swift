@@ -5,7 +5,7 @@ import XCTest
 final class GatewayConnectionStateUITests: XCTestCase {
     /// Release-only boundary proof: unanswered WebSocket connect requests use the
     /// shipped handshake deadline. No app state or shortened timeout is injected.
-    func testIndependentConnectionAndDismissal() async throws {
+    func testIndependentConnectionAndRecovery() async throws {
         let environment = ProcessInfo.processInfo.environment
         try XCTSkipUnless(
             environment["OPENCLAW_IOS_CONNECTION_STATE_PROOF"] == "1",
@@ -17,7 +17,6 @@ final class GatewayConnectionStateUITests: XCTestCase {
             XCTFail("Connection proof requires the owned loopback fixture")
             return
         }
-        // The same assertions and screenshots run against the unchanged baseline.
         continueAfterFailure = false
         let app = XCUIApplication()
         defer { app.terminate() }
@@ -32,11 +31,10 @@ final class GatewayConnectionStateUITests: XCTestCase {
         // Two real failed attempts ensure the first timeout has reached the UI.
         let nodeFailed = try await self.control(fixtureURL, path: "await?node=2")
         XCTAssertTrue(nodeFailed.connectedRoles.contains("operator"))
-        let timeout = app.staticTexts["Connection timed out"]
-        let offlinePlaceholder = app.staticTexts.matching(NSPredicate(
-            format: "label ENDSWITH %@", "; sends when connected")).firstMatch
-        XCTAssertFalse(timeout.exists, "connection-state:healthy-operator:no-global-node-timeout")
-        XCTAssertFalse(offlinePlaceholder.exists, "connection-state:healthy-operator:composer-online")
+        let reconnecting = app.descendants(matching: .any).matching(identifier: "chat-status-strip-text")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "Reconnecting to ")).firstMatch
+        XCTAssertFalse(reconnecting.exists, "connection-state:healthy-operator:no-chat-reconnect-status")
+        XCTAssertFalse(app.staticTexts["Connection timed out"].exists)
         XCTAssertTrue(input.isEnabled, "connection-state:healthy-operator:composer-enabled")
         self.capture(app, named: "connection-node-timeout-operator-healthy")
         if input.isEnabled {
@@ -53,34 +51,27 @@ final class GatewayConnectionStateUITests: XCTestCase {
                 XCTAssertEqual(sent.chatSends, 1)
                 XCTAssertEqual(sent.chatSendRoles, ["operator"])
             }
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)).tap()
         }
         self.capture(app, named: "connection-node-timeout-chat-completed")
 
         _ = try await self.control(fixtureURL, path: "both-timeout", method: "POST")
         let bothFailed = try await self.control(
             fixtureURL, path: "await?node=\(nodeFailed.timeouts.node + 1)&operator=1")
-        XCTAssertTrue(timeout.waitForExistence(timeout: 5), "connection-state:operator-unavailable:timeout-visible")
-        XCTAssertTrue(
-            offlinePlaceholder.waitForExistence(timeout: 5),
-            "connection-state:operator-unavailable:composer-queued")
-        self.capture(app, named: "connection-both-timeout-visible")
-        if timeout.exists {
-            let start = timeout.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            let end = start.withOffset(CGVector(dx: 0, dy: -160))
-            start.press(forDuration: 0.1, thenDragTo: end)
-            XCTAssertTrue(timeout.waitForNonExistence(timeout: 3))
-        }
+        XCTAssertTrue(reconnecting.waitForExistence(timeout: 5), "connection-state:operator-unavailable:reconnecting")
+        XCTAssertTrue(input.isEnabled, "connection-state:operator-unavailable:composer-accepts-text")
+        XCTAssertFalse(app.buttons["chat-status-strip-action"].exists, "The app is already retrying on its own")
+        self.capture(app, named: "connection-both-timeout-reconnecting")
         _ = try await self.control(
             fixtureURL,
             path: "await?node=\(bothFailed.timeouts.node + 1)&operator=\(bothFailed.timeouts.operator + 1)")
-        XCTAssertFalse(timeout.exists, "connection-state:identical-repeated-timeout:stays-dismissed")
-        self.capture(app, named: "connection-identical-timeout-stays-dismissed")
+        XCTAssertTrue(reconnecting.exists, "connection-state:repeated-timeout:still-reconnecting")
+        self.capture(app, named: "connection-repeated-timeout-reconnecting")
 
         _ = try await self.control(fixtureURL, path: "recover", method: "POST")
-        _ = try await self.control(fixtureURL, path: "await?ready=1")
-        XCTAssertTrue(offlinePlaceholder.waitForNonExistence(timeout: 10), "connection-state:recovered:composer-online")
-        XCTAssertTrue(timeout.waitForNonExistence(timeout: 5))
+        let recovered = try await self.control(fixtureURL, path: "await?ready=1")
+        XCTAssertTrue(recovered.connectedRoles.contains("operator"))
+        XCTAssertTrue(input.isEnabled, "connection-state:recovered:composer-enabled")
+        XCTAssertTrue(reconnecting.waitForNonExistence(timeout: 5))
         self.capture(app, named: "connection-recovered")
 
         _ = try await self.control(fixtureURL, path: "pairing", method: "POST")
@@ -90,7 +81,7 @@ final class GatewayConnectionStateUITests: XCTestCase {
     }
 
     /// An automatic reconnect keeps its handoff pending for as long as the saved Gateway
-    /// never answers. Chat must still offer the toolbar route to Gateway settings.
+    /// never answers. Chat must still offer the sidebar route to the connection settings.
     func testToolbarStaysUsableWhileReconnectingToUnreachableGateway() {
         let app = XCUIApplication()
         defer { app.terminate() }
@@ -102,16 +93,20 @@ final class GatewayConnectionStateUITests: XCTestCase {
             "-gateway.manual.enabled", "YES", "-gateway.manual.host", "192.0.2.10", "-gateway.manual.port", "18789",
         ]
         app.launch()
-        let status = app.buttons["chat-agent-identity"]
+        let status = app.descendants(matching: .any)["chat-agent-identity"]
         XCTAssertTrue(status.waitForExistence(timeout: 15))
-        XCTAssertTrue(status.label.contains("Gateway: Connecting"), status.label)
+        XCTAssertFalse(status.label.contains("Gateway:"), status.label)
         XCTAssertFalse(app.textViews["chat-message-input"].isEnabled, "The chat surface waits out the handoff")
 
-        for control in [app.buttons["RootTabs.Sidebar.Show"], status, app.buttons["Chat actions"]] {
+        for control in [app.buttons["RootTabs.Sidebar.Show"], app.buttons["Chat actions"]] {
             XCTAssertTrue(control.isEnabled, "\(control.identifier) \(control.label) must stay enabled")
         }
-        app.buttons["Chat actions"].tap()
-        XCTAssertTrue(app.buttons["chat-gateway-settings"].waitForExistence(timeout: 5))
+        app.buttons["RootTabs.Sidebar.Show"].tap()
+        let settings = app.buttons["RootTabs.Sidebar.GatewaySettings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        XCTAssertTrue(settings.isEnabled)
+        settings.tap()
+        XCTAssertTrue(app.staticTexts["Settings.Title.gateway"].waitForExistence(timeout: 5))
     }
 
     private func launchConnectionApp(_ app: XCUIApplication, setupCode: String) {

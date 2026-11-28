@@ -8,8 +8,10 @@ import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/ru
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronOperatorExecutionRevision } from "../cron/service/jobs-tool-policy.js";
 import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
+import { readVisibleSessionTranscriptMessageEntries } from "../plugin-sdk/session-transcript-runtime.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { projectChatDisplayMessages } from "./chat-display-projection.core.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import {
   createOperatorRecoveryFixture,
@@ -151,6 +153,17 @@ it.for(
         ).enqueueSessionEvent(message, { agentId: "main", sessionKey: SESSION, jobId: job.id });
         const receipt = expectDefined(handoff.mock.results[0]?.value, "auto-disable receipt");
         expect(await receipt.settled).toMatchObject({ executionStarted: true });
+        // The notice shows once: its posted row, not also the repair turn's input.
+        const shown = projectChatDisplayMessages(
+          (
+            await readVisibleSessionTranscriptMessageEntries({
+              agentId: "main",
+              sessionKey: SESSION,
+              sessionId: SESSION_ID,
+            })
+          ).map((entry) => entry.message),
+        ).filter((entry) => JSON.stringify(entry).includes(message));
+        expect(shown.map((entry) => entry.role)).toEqual(["assistant"]);
       } finally {
         handoff.mockRestore();
       }

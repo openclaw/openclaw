@@ -130,7 +130,8 @@ extension OpenClawChatViewModel {
         in sessionKey: String,
         canonicalSessionKey: String? = nil,
         agentID: String? = nil,
-        sessionRoutingContract: String? = nil) async -> String?
+        sessionRoutingContract: String? = nil,
+        preferenceWaitLimit: Duration? = nil) async -> String?
     {
         let target = self.sessionSettingsPatchTarget(
             in: sessionKey,
@@ -139,7 +140,7 @@ extension OpenClawChatViewModel {
             sessionRoutingContract: sessionRoutingContract)
         let hadPendingMutation = (self.inFlightSettingsPatchCountsByTarget[target] ?? 0) > 0
         let failureRevision = self.capabilityPatchFailureRevisionsByTarget[target, default: 0]
-        await self.waitForPendingSessionSettings(for: target)
+        await self.waitForPendingSessionSettings(for: target, atMost: preferenceWaitLimit)
         guard hadPendingMutation,
               self.capabilityPatchFailureRevisionsByTarget[target, default: 0] != failureRevision
         else { return nil }
@@ -148,16 +149,16 @@ extension OpenClawChatViewModel {
 
     var composerPermissionMutationDisabledReason: String? {
         if !self.composerCapabilityOwnerMatches || self.composerCapabilitiesLoading {
-            return String(localized: "Loading composer capabilities.")
+            return String(localized: "Loading chat settings…")
         }
         if !self.composerCapabilityControlsAvailable {
-            return String(localized: "Session capability controls require a newer Gateway.")
+            return String(localized: "Update OpenClaw to change chat settings.")
         }
         if !self.composerCapabilityCatalog.sessionSettingsCASAvailable {
             return String(localized: "Update the Gateway to change permissions.")
         }
         if self.composerCapabilityState.isMutating || self.isUpdatingSessionSettings {
-            return String(localized: "Saving session settings.")
+            return String(localized: "Saving chat settings…")
         }
         if !self.composerCapabilityCatalog.permissionMutationAvailable {
             return String(localized: "You need write access to change permissions.")
@@ -167,16 +168,16 @@ extension OpenClawChatViewModel {
 
     var composerToolOverrideMutationDisabledReason: String? {
         if !self.composerCapabilityOwnerMatches || self.composerCapabilitiesLoading {
-            return String(localized: "Loading composer capabilities.")
+            return String(localized: "Loading chat settings…")
         }
         if !self.composerCapabilityControlsAvailable {
-            return String(localized: "Session capability controls require a newer Gateway.")
+            return String(localized: "Update OpenClaw to change chat settings.")
         }
         if self.composerCapabilityCatalog.toolOverrideMutationRequiresGatewayUpgrade {
-            return String(localized: "Session tool controls require a newer Gateway.")
+            return String(localized: "Update OpenClaw to change tools.")
         }
         if self.composerCapabilityState.isMutating || self.isUpdatingSessionSettings {
-            return String(localized: "Saving session settings.")
+            return String(localized: "Saving chat settings…")
         }
         if !self.composerCapabilityCatalog.toolOverrideMutationAvailable {
             return String(localized: "You need admin access to change tools.")
@@ -186,7 +187,7 @@ extension OpenClawChatViewModel {
 
     var composerWebSearchMutationDisabledReason: String? {
         if self.composerCapabilitiesLoading {
-            return String(localized: "Loading composer capabilities.")
+            return String(localized: "Loading chat settings…")
         }
         if !self.composerCapabilityCatalog.webSearchAvailable {
             return self
@@ -216,7 +217,7 @@ extension OpenClawChatViewModel {
             return disabledReason
         }
         if skill.agentFiltered, self.composerToolOverrides.skills[skill.key] == nil {
-            return String(localized: "Not enabled for this agent. Enable for this session.")
+            return String(localized: "Off for this agent. Turn it on for this chat.")
         }
         return nil
     }
@@ -417,7 +418,7 @@ extension OpenClawChatViewModel {
         String(localized: "Tool changes apply to the next reply.")
     }
 
-    private func patchComposerToolOverrides(_ overrides: OpenClawChatSessionToolOverrides) {
+    func patchComposerToolOverrides(_ overrides: OpenClawChatSessionToolOverrides) {
         let normalized = overrides.isEmpty ? nil : overrides
         self.performComposerCapabilityPatch(
             OpenClawChatSessionSettingsPatch(toolOverrides: .some(normalized)),
@@ -441,7 +442,7 @@ extension OpenClawChatViewModel {
         }
         guard let expectedSessionID = self.composerCapabilitySessionID else {
             self.composerCapabilityState.errorMessage = String(
-                localized: "Refresh this thread before changing its capabilities.")
+                localized: "Reload this chat before changing its tools.")
             return
         }
         let target = self.currentModelPatchTarget()
@@ -527,7 +528,12 @@ extension OpenClawChatViewModel {
                 }
                 guard isCurrentMutation() else { return }
                 self.composerCapabilityState.errorMessage = error.localizedDescription
-                self.errorText = error.localizedDescription
+                self.postSettingChangeFailure(patch) {
+                    self.reportFailure(
+                        String(localized: "Couldn’t update this chat’s settings."),
+                        error,
+                        while: "update chat capabilities")
+                }
             }
         }
     }

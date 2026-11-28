@@ -124,38 +124,6 @@ import Testing
         #expect(state == .error)
     }
 
-    @Test func `chat gateway status labels match display state`() {
-        #expect(ChatProTab.gatewayStatusTitle(state: .disconnected) == "Offline")
-        #expect(ChatProTab.gatewayStatusTitle(state: .connecting) == "Connecting")
-        #expect(ChatProTab.gatewayStatusTitle(state: .error) == "Attention")
-        #expect(ChatProTab.gatewayStatusTitle(state: .connected) == "Connected")
-    }
-
-    @Test func `chat gateway status tones separate healthy issue and offline states`() {
-        #expect(ChatProTab.gatewayStatusTone(state: .connected) == .success)
-        #expect(ChatProTab.gatewayStatusTone(state: .connecting) == .warning)
-        #expect(ChatProTab.gatewayStatusTone(state: .error) == .warning)
-        #expect(ChatProTab.gatewayStatusTone(state: .disconnected) == .error)
-    }
-
-    @Test func `chat gateway status expands on tap or whenever gateway needs attention`() {
-        #expect(!ChatProTab.gatewayStatusShouldExpand(
-            state: .connected,
-            isManuallyExpanded: false))
-        #expect(ChatProTab.gatewayStatusShouldExpand(
-            state: .connected,
-            isManuallyExpanded: true))
-        #expect(ChatProTab.gatewayStatusShouldExpand(
-            state: .connecting,
-            isManuallyExpanded: false))
-        #expect(ChatProTab.gatewayStatusShouldExpand(
-            state: .error,
-            isManuallyExpanded: false))
-        #expect(ChatProTab.gatewayStatusShouldExpand(
-            state: .disconnected,
-            isManuallyExpanded: false))
-    }
-
     @Test func `chat agent badge rejects placeholder question mark`() {
         #expect(AgentIdentityPresentation.badge(avatarText: " 🦞 ", displayName: "Agent Smith") == "🦞")
         #expect(AgentIdentityPresentation.badge(avatarText: "?", displayName: "Agent Smith") == "AS")
