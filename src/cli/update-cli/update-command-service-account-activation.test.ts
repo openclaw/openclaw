@@ -342,6 +342,7 @@ describe("selected unit not run by another account", () => {
 describe("settle step after the installed updater exits", () => {
   type World = {
     version: string;
+    buildId?: string;
     active: string;
     controlGroup?: string;
     cgroupEvents?: string;
@@ -364,6 +365,7 @@ describe("settle step after the installed updater exits", () => {
       driverPid: 1,
       root: "/opt/openclaw",
       candidateVersion: "2026.11.16",
+      candidateBuildId: "build-candidate",
       unit: "openclaw-gateway.service",
       runuser: "/usr/sbin/runuser",
       account: "openclaw",
@@ -379,6 +381,9 @@ describe("settle step after the installed updater exits", () => {
       readFileSync: (file: string) => {
         if (file === `${payload.root}/package.json`) {
           return JSON.stringify({ version: world.version });
+        }
+        if (file === `${payload.root}/dist/build-info.json`) {
+          return JSON.stringify({ buildId: world.buildId ?? "build-candidate" });
         }
         if (file.endsWith("/cgroup.events") && world.cgroupEvents !== undefined) {
           return world.cgroupEvents;
@@ -476,6 +481,18 @@ describe("settle step after the installed updater exits", () => {
 
     expect(events).not.toContain("systemctl start openclaw-gateway.service");
     expect(events.includes("as openclaw: update restore")).toBe(restoreRuns);
+  });
+
+  it("treats a same-version package with another build as the restored previous one", async () => {
+    const events = runSettle(await settleScript(), "settle", {
+      version: "2026.11.16",
+      buildId: "build-previous",
+      active: "active",
+      account: { restore: ok("restored") },
+    });
+
+    expect(events).toContain("as openclaw: update restore");
+    expect(events).not.toContain("as openclaw: update finish");
   });
 
   it.each([

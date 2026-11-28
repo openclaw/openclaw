@@ -11,6 +11,7 @@ import { startSystemdService, stopSystemdService } from "../../daemon/systemd-li
 import { captureSystemdServiceIdentity } from "../../daemon/systemd-service-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
+import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { inspectSystemServiceAccountForAdmission } from "./update-command-admit-service-account.js";
 import {
@@ -93,8 +94,11 @@ const stopped = () => ["inactive", "failed"].includes(show("ActiveState")) && em
 const deadline = Date.now() + 2 * 60 * 60000;
 const settle = () => {
   let version;
+  let buildId = null;
   try { version = JSON.parse(fs.readFileSync(p.root + "/package.json", "utf8")).version; } catch {}
-  const rolledBack = typeof version === "string" && version !== p.candidateVersion;
+  try { buildId = JSON.parse(fs.readFileSync(p.root + "/dist/build-info.json", "utf8")).buildId ?? null; } catch {}
+  // A same-version replacement differs in its build; either difference is the previous package.
+  const rolledBack = typeof version === "string" && (version !== p.candidateVersion || buildId !== p.candidateBuildId);
   if (p.mode === "start") {
     if (rolledBack) { log("previous package " + version + " restored; starting " + p.unit); systemctl("start", p.unit); }
     else log("package is " + version + "; " + p.unit + " stays stopped");
@@ -138,6 +142,7 @@ async function scheduleSettle(
     driverPid: process.ppid,
     root: await fs.realpath(params.root),
     candidateVersion: params.candidateVersion,
+    candidateBuildId: await readBuiltGatewayBuildId(params.root),
     unit: execution.unitName,
     runuser: execution.runuser,
     account: execution.account,
