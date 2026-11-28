@@ -194,6 +194,11 @@ async function deleteGatewayAgentAttempt(
             `Agent "${agentId}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.`,
           );
         }
+        if (retired && !requestedDeleteFiles && lockedJournal?.cleanupCompleted) {
+          // A completed keep-files deletion keeps the registration; repeating it changes nothing.
+          // Claiming its tombstone here would begin a second journal with default paths.
+          return undefined;
+        }
         if ((configured || retired) && lockedJournal?.cleanupCompleted) {
           const claimed = await claimCompletedAgentDeletion(agentId, lockedJournal.operationId);
           const remainingJournal = await readAgentDeletionJournalAsync(agentId);
@@ -223,6 +228,9 @@ async function deleteGatewayAgentAttempt(
         options.recoveryOperationId = deletion.entry.operationId;
         return { deletion, lockedJournal, config: lockedConfig };
       });
+      if (!prepared) {
+        return { ok: true, agentId, removedBindings: 0, removed: [], failed: [] };
+      }
       const { deletion, lockedJournal } = prepared;
       const journal = deletion.entry;
       if (journal.phase === "draining") {
