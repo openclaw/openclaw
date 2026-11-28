@@ -12,6 +12,7 @@ export type AutoMigrateLegacyStateParams = {
   cfg: OpenClawConfigWithLegacyRoster;
   sourceConfigBeforeMigrations?: OpenClawConfigWithLegacyRoster;
   invocationPurpose?: LegacyStateMigrationInvocationPurpose;
+  allowRetainedExecApprovals?: boolean;
   integrityCheck?: "quick" | "full";
   inspectedSessionEntryPaths?: readonly string[];
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;

@@ -92,6 +92,28 @@ export function createConfigMigrationSources(
   );
 }
 
+export function createMigrationDetectionStep(params: {
+  configPath: string;
+  configIncludedPaths: readonly string[];
+  stateDir: string;
+  run: LegacyStateMigrationStep["run"];
+  refusal?: PreparedLegacyStateMigrationStep["refusal"];
+}): LegacyStateMigrationStep {
+  return {
+    id: "migration-detection",
+    phase: "shared",
+    source: [
+      ...createConfigMigrationSources(params.configPath, params.configIncludedPaths),
+      { kind: "path", path: params.stateDir },
+    ],
+    target: [],
+    requiredness: "required",
+    reversibility: "not-applicable",
+    ...(params.refusal ? { refusal: params.refusal } : {}),
+    run: params.run,
+  };
+}
+
 export function createAgentTargetDiscoveryStep(params: {
   configPath: string;
   configIncludedPaths: readonly string[];

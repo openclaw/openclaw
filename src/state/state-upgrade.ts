@@ -312,6 +312,7 @@ export async function upgradeStateDirectory(params: {
                     doctorOnlyStateMigrations: true,
                     configIncludedPaths: snapshot.includedPaths,
                     legacySessionSurfaces,
+                    allowRetainedExecApprovals: true,
                   });
                   logStateMigrationResult(legacy, log);
                   throwIfDoctorStateMigrationRefused(legacy.stepReceipts);
