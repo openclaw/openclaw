@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -524,6 +525,49 @@ suite.define(() => {
     suite.withPage(
       { viewport: { width: 1280, height: 900 }, locale: "en-US", serviceWorkers: "block" },
       ({ page }) => keepsHomeActionsClearOfCaption(page),
+    ));
+  it("keeps the right-docked Browser actions clear of the window controls", () =>
+    suite.withPage(
+      { viewport: { width: 1280, height: 900 }, locale: "en-US", serviceWorkers: "block" },
+      async ({ page }) => {
+        const windowActions = await installWindowChrome(page, "linux");
+        await page.addInitScript(() => {
+          localStorage.setItem(
+            "openclaw.browser.panel.v1",
+            JSON.stringify({ open: true, dock: "right", width: 380 }),
+          );
+        });
+        await installMockGateway(page, {
+          featureMethods: ["browser.request"],
+          methodResponses: { "browser.request": { running: true, tabs: [] } },
+        });
+        await page.goto(`${suite.server.baseUrl}new`);
+        const browser = page.locator("openclaw-browser-panel");
+        const rightDock = browser.locator(".bp--right");
+        const caption = page.locator(".openclaw-window-controls");
+        await Promise.all([rightDock.waitFor(), caption.waitFor()]);
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "browser-right-dock.png"),
+          animations: "disabled",
+        });
+
+        const moveBottom = namedButton(rightDock, "Dock to bottom");
+        const close = namedButton(rightDock, "Close browser panel");
+        const captionBox = (await caption.boundingBox())!;
+        expect((await rightDock.boundingBox())!.y).toBeGreaterThanOrEqual(
+          captionBox.y + captionBox.height,
+        );
+
+        const maximize = namedButton(caption, "Maximize window");
+        await maximize.click();
+        await expect.poll(windowActions).toContain("toggle-maximize");
+        const beforePanelActions = await windowActions();
+        await moveBottom.click();
+        await namedButton(browser.locator(".bp--bottom"), "Dock to right").click();
+        await close.click();
+        await rightDock.waitFor({ state: "hidden" });
+        expect(await windowActions()).toEqual(beforePanelActions);
+      },
     ));
   it.each(["web", "macos", "tauri-linux", "tauri-macos"] as const)(
     "aligns the %s rail, panel header, and content history row",
