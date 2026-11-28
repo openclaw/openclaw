@@ -1,4 +1,5 @@
 import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
+import { buildMentionRegexes } from "openclaw/plugin-sdk/channel-inbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -11,14 +12,18 @@ import {
   normalizeOptionalString as asString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { resolveSlackAccount } from "../../accounts.js";
 import { noteSlackDraftConversationMessage } from "../../draft-message-boundaries.js";
+import { formatSlackTarget } from "../../target-parsing.js";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
+import { resolveAllowBots, resolveSlackChannelConfig } from "../channel-config.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackMonitorEventScope, type SlackEventScope } from "../event-scope.js";
 import { resolveSlackIngressTurnLifecycle, resolveSlackSenderAuthentication } from "../ingress.js";
 import type { SlackMessageHandler } from "../message-handler.js";
 import type { SlackMessageChangedEvent } from "../types.js";
+import { resolveSlackBotSubtypeAdmission } from "./message-subtype-admission.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
 
@@ -199,6 +204,64 @@ export function registerSlackMessageEvents(params: {
               });
               if (!ingressContext) {
                 return;
+              }
+              if (subtypeHandler.botAuthored) {
+                // Subtype events skip the ordinary message pipeline, so apply the same
+                // allowBots precedence here instead of only sender authorization.
+                const runtimeContext = await ctx.readRuntimeContext();
+                const channelConfig =
+                  message.channel &&
+                  (ingressContext.channelType === "channel" ||
+                    ingressContext.channelType === "group")
+                    ? resolveSlackChannelConfig({
+                        teamId: eventScope?.teamId ?? runtimeContext.teamId,
+                        allowUnscoped: runtimeContext.installationIdentity?.kind !== "enterprise",
+                        channelId: message.channel,
+                        channelName: ingressContext.channelName,
+                        channels: runtimeContext.channelsConfig,
+                        channelKeys: runtimeContext.channelsConfigKeys,
+                        defaultRequireMention: runtimeContext.defaultRequireMention,
+                        allowNameMatching: runtimeContext.allowNameMatching,
+                      })
+                    : null;
+                const account = resolveSlackAccount({
+                  cfg: runtimeContext.cfg,
+                  accountId: runtimeContext.accountId,
+                });
+                const allowBotsSetting = resolveAllowBots(
+                  channelConfig,
+                  account.config,
+                  runtimeContext.cfg.channels?.slack,
+                );
+                const mentionRegexes =
+                  allowBotsSetting === "mentions" && message.channel
+                    ? buildMentionRegexes(runtimeContext.cfg, ingressContext.route.agentId, {
+                        provider: "slack",
+                        conversationId: formatSlackTarget({
+                          teamId: eventScope?.teamId,
+                          kind: "channel",
+                          id: message.channel,
+                        }),
+                        providerPolicy: account.config.mentionPatterns,
+                      })
+                    : undefined;
+                if (
+                  (await resolveSlackBotSubtypeAdmission({
+                    allowBots: allowBotsSetting,
+                    botUserId: runtimeContext.botUserId,
+                    text: subtypeHandler.text,
+                    directMessage: ingressContext.channelType === "im",
+                    client: eventScope?.client ?? client,
+                    teamId: eventScope?.teamId ?? runtimeContext.teamId,
+                    mentionRegexes,
+                    log: logVerbose,
+                  })) === "drop"
+                ) {
+                  logVerbose(
+                    `slack: drop bot ${subtypeHandler.eventKind === "message_changed" ? "edit" : "delete"} (${allowBotsSetting === "mentions" ? "bot-missing-mention" : "bot-disabled"}) channel=${message.channel ?? "unknown"}`,
+                  );
+                  return;
+                }
               }
               enqueueRoutedSystemEvent(
                 subtypeHandler.describe(ingressContext.channelLabel),

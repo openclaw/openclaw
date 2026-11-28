@@ -1,4 +1,5 @@
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { SlackMessageEvent } from "../../types.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -6,6 +7,8 @@ import type { SlackEventScope } from "../event-scope.js";
 
 type SlackAuthorizedSystemEventContext = {
   channelLabel: string;
+  channelName?: string;
+  channelType?: SlackMessageEvent["channel_type"];
   route: { agentId: string; sessionKey: string };
 };
 
@@ -48,6 +51,8 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
   });
   return {
     channelLabel,
+    channelName: auth.channelName,
+    channelType: auth.channelType,
     route,
   };
 }
