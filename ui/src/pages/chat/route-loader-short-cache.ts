@@ -95,8 +95,10 @@ export function findLocalSessionReference(
   const slugMatches = slug
     ? matches.filter((row) => controlUiSessionSlug(row.displayName) === slug)
     : [];
-  // A stale name can narrow a short-id tie, but only slug matches resolve a slug-only URL.
-  const narrowed = slugMatches.length || target.kind !== "short" ? slugMatches : matches;
+  // A full UUID survives renames, but a partial cached roster with only a prefix
+  // cannot distinguish a renamed chat from a missing slug match.
+  const canIgnoreSlug = target.kind === "short" && (!slug || target.shortId.length === 32);
+  const narrowed = slugMatches.length || !canIgnoreSlug ? slugMatches : matches;
   return narrowed.length === 1 ? narrowed[0] : undefined;
 }
 

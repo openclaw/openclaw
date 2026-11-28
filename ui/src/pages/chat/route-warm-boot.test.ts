@@ -85,7 +85,7 @@ function warmRoute(scope: "per-sender" | "global" = "per-sender", mainKey = "wor
   };
 }
 
-it.each(["exact", "literal", "short", "title"] as const)(
+it.each(["exact", "literal", "short", "title", "renamed full UUID"] as const)(
   "loads cached %s without Gateway discovery",
   async (mode) => {
     const { context, seed, cache, request, waiting, load } = warmRoute();
@@ -102,6 +102,7 @@ it.each(["exact", "literal", "short", "title"] as const)(
       literal: "thread",
       short: shortName,
       title: "cached-conversation",
+      "renamed full UUID": "previous-title-1234567890abcdef1234567890abcdef",
     }[mode];
     if (literal) {
       seed([row]);
