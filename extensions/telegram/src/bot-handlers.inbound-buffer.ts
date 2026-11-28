@@ -186,13 +186,26 @@ export function createTelegramInboundBuffers({
         );
       });
     },
-    canAppend: (entry, pending) =>
-      entry.debounceLane === pending[0]?.debounceLane &&
-      (entry.debounceLane === "forward" ||
-        (pending.length < 12 &&
-          pending.reduce((total, item) => total + getTelegramTextParts(item.msg).text.length, 0) +
-            getTelegramTextParts(entry.msg).text.length <=
-            50_000)),
+    canAppend: (entry, pending) => {
+      const previous = pending.at(-1);
+      if (!previous || entry.debounceLane !== previous.debounceLane) {
+        return false;
+      }
+      if (entry.debounceLane === "forward") {
+        return true;
+      }
+      // A spool drain can deliver days of history in one tick. Telegram dates have
+      // one-second precision, so a real subsecond burst can cross a second boundary.
+      const gapSeconds = Math.abs(entry.msg.date - previous.msg.date);
+      const quietSeconds = Math.ceil(resolveTelegramDebounceEntryMs(previous, pending) / 1000);
+      return (
+        gapSeconds <= quietSeconds &&
+        pending.length < 12 &&
+        pending.reduce((total, item) => total + getTelegramTextParts(item.msg).text.length, 0) +
+          getTelegramTextParts(entry.msg).text.length <=
+          50_000
+      );
+    },
     // Spooled processing returns at durable turn adoption. A deferred turn already holds
     // its FIFO slot in the session lane, so it releases this sender's key: queued batches
     // and immediate items have no claim heartbeat while they wait here.

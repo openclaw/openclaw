@@ -1041,6 +1041,53 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("keeps text sent far apart separate when spooled updates replay together", async () => {
+    configureOpenDm({ debounceMs: 300 });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const failure = new Error("later input failed before adoption");
+    replySpy
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce(undefined);
+    try {
+      await createTelegramBot({ token: "tok" });
+      const handler = getMessageHandler();
+      const replay = (id: number, text: string, elapsedSeconds: number) =>
+        dispatchSpooledPrivateText(handler, {
+          updateId: id,
+          messageId: id,
+          text,
+          date: 1736380800 + elapsedSeconds,
+          replayUpdate: "full",
+        });
+      const later = () => replay(703, "later", 37 * 60);
+      const burst = [await replay(701, "first", 0), await replay(702, "second", 1), await later()];
+      await vi.advanceTimersByTimeAsync(300);
+      await expect(
+        Promise.all(
+          burst.map((entry) => requireValue(entry.deferredWork, "buffered text replay").task),
+        ),
+      ).resolves.toEqual([
+        { kind: "completed" },
+        { kind: "completed" },
+        { kind: "failed-retryable", error: failure },
+      ]);
+      expect(replySpy.mock.calls.map(([ctx]) => [ctx.MessageSid, ctx.RawBody])).toEqual([
+        ["702", "first\nsecond"],
+        ["703", "later"],
+      ]);
+      const retry = await later();
+      await vi.advanceTimersByTimeAsync(300);
+      await expect(requireValue(retry.deferredWork, "retried text").task).resolves.toEqual({
+        kind: "completed",
+      });
+      expect(replySpy).toHaveBeenCalledTimes(3);
+      expect(replySpy.mock.calls[2]?.[0]).toMatchObject({ MessageSid: "703", RawBody: "later" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps separate text-batch replay settlements isolated when the next batch fails", async () => {
     configureOpenDm({ debounceMs: 300, userTimezone: "UTC" });
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
