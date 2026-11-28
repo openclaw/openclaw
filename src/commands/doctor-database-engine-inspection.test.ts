@@ -77,58 +77,58 @@ describe("Doctor physical engine inspection", () => {
     expect(fs.readdirSync(path.join(root, "state"))).toEqual(["openclaw.sqlite"]);
     expect(fs.readdirSync(path.join(root, "voice-calls", "state"))).toEqual(["openclaw.sqlite"]);
   });
-});
 
-// An installed plugin outside the memory slot never runs, but Doctor still reads its
-// contract. Each `doctor --lint` used to leave that package's capture in the temp directory.
-it("removes an installed plugin's Doctor contract capture when inspection ends", () =>
-  withOpenClawTestState(
-    { label: "doctor-engine-contract-capture", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
-    async (state) => {
-      const pluginId = "inactive-memory";
-      const packageDir = writeManagedNpmPlugin({
-        stateDir: state.stateDir,
-        packageName: "inactive-memory-package",
-        pluginId,
-        version: "1.0.0",
-      });
-      writeFixtureJsonSync(path.join(packageDir, "openclaw.plugin.json"), {
-        id: pluginId,
-        kind: "memory",
-        doctorContract: { stateMigrations: [{ id: "inactive-memory-rows" }] },
-        configSchema: { type: "object" },
-      });
-      fs.writeFileSync(
-        path.join(packageDir, "dist", "doctor-contract-api.js"),
-        `export const stateMigrations = [{
+  // An installed plugin outside the memory slot never runs, but Doctor still reads its
+  // contract. Each `doctor --lint` used to leave that package's capture in the temp directory.
+  it("removes an installed plugin's Doctor contract capture when inspection ends", () =>
+    withOpenClawTestState(
+      { label: "doctor-engine-contract-capture", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+      async (state) => {
+        const pluginId = "inactive-memory";
+        const packageDir = writeManagedNpmPlugin({
+          stateDir: state.stateDir,
+          packageName: "inactive-memory-package",
+          pluginId,
+          version: "1.0.0",
+        });
+        writeFixtureJsonSync(path.join(packageDir, "openclaw.plugin.json"), {
+          id: pluginId,
+          kind: "memory",
+          doctorContract: { stateMigrations: [{ id: "inactive-memory-rows" }] },
+          configSchema: { type: "object" },
+        });
+        fs.writeFileSync(
+          path.join(packageDir, "dist", "doctor-contract-api.js"),
+          `export const stateMigrations = [{
   id: "inactive-memory-rows",
   label: "Inactive memory rows",
   detectLegacyState: async () => null,
   migrateLegacyState: async () => ({ changes: [], warnings: [] }),
 }];
 `,
-      );
-      const config = {
-        plugins: { entries: { [pluginId]: { enabled: true } }, slots: { memory: "memory-core" } },
-      };
-      await state.writeConfig(config);
-      await seedInstalledPluginIndex(
-        { [pluginId]: { source: "npm", installPath: packageDir } },
-        { config, env: state.env },
-      );
-      // The fallback prefix hashes this fresh state dir, so no other run shares it.
-      const prefix = resolvePluginSourceCaptureFallbackPrefix(state.stateDir);
+        );
+        const config = {
+          plugins: { entries: { [pluginId]: { enabled: true } }, slots: { memory: "memory-core" } },
+        };
+        await state.writeConfig(config);
+        await seedInstalledPluginIndex(
+          { [pluginId]: { source: "npm", installPath: packageDir } },
+          { config, env: state.env },
+        );
+        // The fallback prefix hashes this fresh state dir, so no other run shares it.
+        const prefix = resolvePluginSourceCaptureFallbackPrefix(state.stateDir);
 
-      const inspection = await inspectDoctorDatabaseEngines({
-        config,
-        stateDir: state.stateDir,
-        env: state.env,
-      });
+        const inspection = await inspectDoctorDatabaseEngines({
+          config,
+          stateDir: state.stateDir,
+          env: state.env,
+        });
 
-      // "none" (not "unknown") proves Doctor loaded the contract it inspected.
-      expect(inspection.stores.map((store) => store.legacyMigrations?.state)).not.toContain(
-        "unknown",
-      );
-      expect(fs.readdirSync(tmpdir()).filter((name) => name.startsWith(prefix))).toEqual([]);
-    },
-  ));
+        // "none" (not "unknown") proves Doctor loaded the contract it inspected.
+        expect(inspection.stores.map((store) => store.legacyMigrations?.state)).not.toContain(
+          "unknown",
+        );
+        expect(fs.readdirSync(tmpdir()).filter((name) => name.startsWith(prefix))).toEqual([]);
+      },
+    ));
+});
