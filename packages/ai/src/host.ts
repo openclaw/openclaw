@@ -145,6 +145,12 @@ export interface AiTransportHost {
   unwrapModelTransportSentinels?<T extends Model>(model: T, boundary: string): T;
   /** Redacts transport diagnostic text before logging. */
   redactToolPayloadText(text: string): string;
+  /**
+   * Derives a digest for bounded diagnostic content. A content-derived digest confirms
+   * guessed content once published, so hosts derive it with a secret instead of a
+   * public hash. Returns undefined when no secret is available.
+   */
+  hashDiagnosticValue?(value: string): string | undefined;
   /** Normalizes Anthropic inline image blocks before provider payload construction. */
   normalizeAnthropicInlineContentBlocks?: AnthropicInlineContentNormalizer;
   /** Provider-plugin operations required by the generic package transports. */
