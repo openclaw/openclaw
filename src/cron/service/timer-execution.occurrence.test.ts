@@ -122,7 +122,9 @@ describe("scheduled occurrence admission", () => {
       };
       await expect(executeJobCore(state, job)).resolves.toMatchObject({
         status: "error",
-        error: expect.stringContaining("human owner no longer exists"),
+        error: expect.stringContaining(
+          "I did not run this automation. The automation's human owner no longer exists.",
+        ),
         executionStarted: false,
       });
       expect(seen).toEqual([]);

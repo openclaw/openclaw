@@ -1,13 +1,14 @@
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
+import { type OperatorRefusalCause, operatorRefusalText } from "../gateway/operator-refusal.js";
 import { readResidentUserProfileId } from "../state/user-profile-list.js";
 import type { CronStoredJob } from "./types.js";
 
 export class CronHumanOwnerUnavailableError extends Error {
   constructor(
-    message: string,
+    cause: OperatorRefusalCause,
     readonly retryable = false,
   ) {
-    super(message);
+    super(operatorRefusalText(cause, "run this automation"));
   }
 }
 
@@ -16,9 +17,7 @@ export function assertCronHumanOwner(
 ): void {
   if (!job.ownerProfileId) {
     if (job.createdActor?.type === "human" && job.createdActor.source === "profile") {
-      throw new CronHumanOwnerUnavailableError(
-        "The automation's human owner is not recorded. Run openclaw doctor --fix, or ask an administrator to select an owner on the Automations page.",
-      );
+      throw new CronHumanOwnerUnavailableError("automation-owner-unrecorded");
     }
     return;
   }
@@ -26,15 +25,10 @@ export function assertCronHumanOwner(
   try {
     ownerId = readResidentUserProfileId(job.ownerProfileId);
   } catch {
-    throw new CronHumanOwnerUnavailableError(
-      "The automation's human owner could not be checked because the profile catalog is not ready. Retry when the Gateway is ready.",
-      true,
-    );
+    throw new CronHumanOwnerUnavailableError("automation-owner-catalog-unavailable", true);
   }
   if (!ownerId) {
-    throw new CronHumanOwnerUnavailableError(
-      "The automation's human owner no longer exists. Ask an administrator to select a new owner on the Automations page before running it again.",
-    );
+    throw new CronHumanOwnerUnavailableError("automation-owner-removed");
   }
 }
 
