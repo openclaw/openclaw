@@ -143,30 +143,24 @@ import { ensureChannelSetupPluginInstalled } from "./channel-setup/plugin-instal
 import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js";
 import {
   bundledDirectory,
+  type ClawHubInstallCall,
   clawHubRecord,
   firstCall,
+  type InstallChoice,
   installEntry,
   installedPlugin,
+  type InstallPrompt,
   installPolicyConfig,
+  localOption,
   localWorkspace,
   notInstalled,
+  type NpmPackInstallCall,
+  type NpmSpecInstallCall,
   requireCapturedPrompt,
+  runInstall,
+  skipOption,
 } from "./onboarding-plugin-install.test-fixtures.js";
 import type { OnboardingPluginInstallOptions } from "./onboarding-plugin-install.types.js";
-
-function runInstall(
-  entry: OnboardingPluginInstallOptions["entry"],
-  prompter: OnboardingPluginInstallOptions["prompter"],
-  options: Partial<Omit<OnboardingPluginInstallOptions, "entry" | "prompter">> = {},
-) {
-  return ensureOnboardingPluginInstalled({
-    cfg: {},
-    runtime: {} as never,
-    ...options,
-    entry,
-    prompter,
-  });
-}
 
 function progress(update = vi.fn(), stop = vi.fn()) {
   return vi.fn(() => ({ update, stop }));
@@ -196,19 +190,6 @@ function expectDiscoveryInvalidated() {
   );
 }
 
-type InstallChoice = "clawhub" | "npm" | "local" | "skip";
-type InstallPrompt = Parameters<OnboardingPluginInstallOptions["prompter"]["select"]>[0];
-
-type NpmPackInstallCall = Parameters<
-  typeof import("../plugins/install.js").installPluginFromNpmPackArchive
->[0];
-type NpmSpecInstallCall = Parameters<
-  typeof import("../plugins/install.js").installPluginFromNpmSpec
->[0];
-type ClawHubInstallCall = Parameters<
-  typeof import("../plugins/clawhub.js").installPluginFromClawHub
->[0];
-
 function npmCall() {
   return firstCall(installers.npm)[0];
 }
@@ -231,11 +212,6 @@ async function useArtifactConsent() {
   prepareManagedPluginArtifactConsentHandler.mockImplementationOnce(
     actual.prepareManagedPluginArtifactConsentHandler,
   );
-}
-
-const skipOption = { value: "skip", label: "Skip for now" };
-function localOption(hint: string) {
-  return { value: "local", label: "Use local plugin path", hint };
 }
 
 function blockEnablement(pluginId: string) {
@@ -659,10 +635,13 @@ describe("ensureOnboardingPluginInstalled", () => {
 
   it("opens the source menu without waiting on ClawHub", async () => {
     const select = vi.fn(async (_input: InstallPrompt) => "skip");
-    const entry = installEntry({ clawhubSpec: "clawhub:demo-plugin" });
-    const cfg = { update: { channel: "beta" as const } };
-
-    const result = await runInstall(entry, { select } as never, { cfg });
+    const result = await runInstall(
+      installEntry({ clawhubSpec: "clawhub:demo-plugin" }),
+      {
+        select,
+      } as never,
+      { cfg: { update: { channel: "beta" } } },
+    );
 
     expect(result.status).toBe("skipped");
     expect(select).toHaveBeenCalledOnce();

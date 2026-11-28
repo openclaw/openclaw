@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js";
 import type {
   OnboardingPluginInstallEntry,
+  OnboardingPluginInstallOptions,
   OnboardingPluginInstallResult,
 } from "./onboarding-plugin-install.types.js";
 
@@ -81,4 +83,36 @@ export function requireCapturedPrompt<T>(captured: T | undefined): T {
 
 export function firstCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T {
   return requireCapturedPrompt(mock.mock.calls[0]);
+}
+
+export type InstallChoice = "clawhub" | "npm" | "local" | "skip";
+export type InstallPrompt = Parameters<OnboardingPluginInstallOptions["prompter"]["select"]>[0];
+export type NpmPackInstallCall = Parameters<
+  typeof import("../plugins/install.js").installPluginFromNpmPackArchive
+>[0];
+export type NpmSpecInstallCall = Parameters<
+  typeof import("../plugins/install.js").installPluginFromNpmSpec
+>[0];
+export type ClawHubInstallCall = Parameters<
+  typeof import("../plugins/clawhub.js").installPluginFromClawHub
+>[0];
+
+export const skipOption = { value: "skip", label: "Skip for now" };
+export function localOption(hint: string) {
+  return { value: "local", label: "Use local plugin path", hint };
+}
+
+/** Runs onboarding install with an empty config and runtime unless overridden. */
+export function runInstall(
+  entry: OnboardingPluginInstallOptions["entry"],
+  prompter: OnboardingPluginInstallOptions["prompter"],
+  options: Partial<Omit<OnboardingPluginInstallOptions, "entry" | "prompter">> = {},
+) {
+  return ensureOnboardingPluginInstalled({
+    cfg: {},
+    runtime: {} as never,
+    ...options,
+    entry,
+    prompter,
+  });
 }
