@@ -30,9 +30,9 @@ final class VoiceOwnerLog: @unchecked Sendable {
         self.lock.withLock { self.entries }
     }
 
-    func wait(for event: String) async throws {
+    func wait(for event: String, atLeast count: Int = 1) async throws {
         try await self.recorded.wait(event) {
-            self.count(event) > 0
+            self.count(event) >= count
         }
     }
 }

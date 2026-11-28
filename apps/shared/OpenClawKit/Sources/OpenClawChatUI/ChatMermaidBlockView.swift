@@ -215,7 +215,9 @@ private struct ChatMermaidPreviewView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
+                #if os(macOS)
                 Spacer()
+                #endif
                 Button {
                     self.dismiss()
                 } label: {
@@ -226,6 +228,10 @@ private struct ChatMermaidPreviewView: View {
                 .accessibilityLabel("Close diagram preview")
                 #if os(macOS)
                 .keyboardShortcut(.cancelAction)
+                #endif
+                // On iPhone the close sits at the leading edge, as in every sheet and the image viewer.
+                #if os(iOS)
+                Spacer()
                 #endif
             }
             if self.failed {

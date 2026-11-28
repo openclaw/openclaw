@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasPendingAutomationContinuation } from "../../cron/automation-result.js";
 import { resolveCronConfigurationRefusal } from "../../cron/configuration-refusal.js";
+import { resolveCronRateLimitResetAt } from "../../cron/rate-limit-reset.js";
 import {
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
@@ -237,6 +238,8 @@ export async function settleSessionEventTurn(params: {
             finalStatus: failed ? "error" : "ok",
           }),
       ...configurationRefusal,
+      // The settled cause is in-process only; cron keeps the reset as a transient schedule fact.
+      ...(failed ? { rateLimitResetAt: resolveCronRateLimitResetAt(failureCause) } : {}),
     },
   };
 

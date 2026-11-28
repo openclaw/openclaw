@@ -10,7 +10,7 @@ const completionReply = (prefix = "") => ({
 });
 const createRun = (overrides: Partial<SubagentRunRecord> = {}) =>
   createSubagentRunRecord({ runId: "captured", endedAt: 2, ...overrides });
-function expectRejected(captured: SubagentRunRecord, error: string | ErrorConstructor = TypeError) {
+function expectRejected(captured: SubagentRunRecord, error: string | ErrorConstructor) {
   const before = structuredClone(captured);
   expect(() => bindSubagentRunRecord(captured)).toThrow(error);
   expect(captured).toStrictEqual(before);

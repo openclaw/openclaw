@@ -34,11 +34,45 @@ struct IOSMediaArtifactLoader: Sendable {
         self.requestFactory = requestFactory
     }
 
+    // The Gateway's smallest rendition is a 480 px WebP capped at 96 KiB. A miss never requests the original.
+    static let tilePreviewWidth = 480
+    private static let tilePreviewBytes = 96 * 1024
+
+    func tileThumbnail(from response: ArtifactsDownloadResult, expectedGatewayID: String) async throws -> Data {
+        guard response.artifact.type == "image" else { throw LoadError.unsupportedMediaType }
+        let preview: ArtifactsDownloadResult
+        if let data = response.data {
+            guard response.artifact.mimetype == "image/webp", response.encoding == "base64" else {
+                throw LoadError.invalidResponse
+            }
+            guard data.utf8.count <= Self.tilePreviewBytes / 3 * 4 else { throw LoadError.payloadTooLarge }
+            preview = response
+        } else {
+            // A managed ticket covers both representations of the same artifact. Preserve its encoded scope and grant.
+            guard let path = response.url, var parts = URLComponents(string: path),
+                  parts.percentEncodedPath.hasPrefix("/api/chat/media/outgoing/"),
+                  parts.percentEncodedPath.hasSuffix("/full") else { throw LoadError.invalidSource }
+            parts.percentEncodedPath = String(parts.percentEncodedPath.dropLast(4)) + "thumbnail"
+            var query = (parts.queryItems ?? []).filter { $0.name != "width" }
+            query.append(URLQueryItem(name: "width", value: String(Self.tilePreviewWidth)))
+            parts.queryItems = query
+            preview = ArtifactsDownloadResult(artifact: response.artifact, url: parts.string)
+        }
+        guard case let .data(media) = try await self.load(
+            response: preview, kind: .image, expectedGatewayID: expectedGatewayID, maximumBytes: Self.tilePreviewBytes),
+            media.mimeType == "image/webp", media.data.count <= Self.tilePreviewBytes
+        else {
+            throw LoadError.invalidResponse
+        }
+        return media.data
+    }
+
     func load(
         response: ArtifactsDownloadResult,
         kind: OpenClawChatMediaKind,
         playback: OpenClawChatPlaybackMode? = nil,
-        expectedGatewayID: String) async throws -> OpenClawChatLoadedMedia
+        expectedGatewayID: String,
+        maximumBytes: Int? = nil) async throws -> OpenClawChatLoadedMedia
     {
         try await OpenClawChatMediaArtifactLoader.load(response: response, kind: kind, playback: playback) { path in
             guard let connection = await self.connectionProvider(),
@@ -73,7 +107,7 @@ struct IOSMediaArtifactLoader: Sendable {
                 let data: Data
                 let urlResponse: URLResponse
                 do {
-                    let operation = self.requestFactory(tls, kind.maximumDownloadBytes)
+                    let operation = self.requestFactory(tls, maximumBytes ?? kind.maximumDownloadBytes)
                     if let ingress {
                         (data, urlResponse) = try await ingress.load(request, operation)
                     } else {

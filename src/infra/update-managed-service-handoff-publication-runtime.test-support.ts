@@ -4,5 +4,5 @@ export { encodePackageActivationLauncher } from "./package-update-activation-jou
 export { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 export { createPackageIntegrityReader } from "./package-update-integrity.js";
 export { createPublicationOwner } from "./package-update-publication-owner.js";
-export { inspectUpdateRepairDriverAdmission } from "./update-run-activity.js";
+export { inspectUpdateRepairDriverAdmission } from "./update-repair-driver-admission.js";
 export { assertUpdateRecoveryAdmission } from "./update-run-recovery-admission.js";

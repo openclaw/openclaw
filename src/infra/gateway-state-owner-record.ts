@@ -16,7 +16,6 @@ import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
 import {
-  classifyGatewayLockProcessNamespace,
   describeGatewayLockHolder,
   LockPayloadSchema,
   GatewayLockNamespaceError,
@@ -24,6 +23,7 @@ import {
   readGatewayLockProcessNamespace,
   type LockPayload,
 } from "./gateway-lock-payload.js";
+import { classifyGatewayLockProcessNamespace } from "./gateway-lock-recovery-namespace.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import {
   ensureOwnerDirectory,

@@ -23,11 +23,15 @@ import {
 } from "./session-row-delta-fields.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { freezeSessionRow } from "./session-row-identity.js";
-import { prepareSessionRowPublication } from "./session-row-presentation.js";
+import {
+  prepareSessionRowPublication,
+  shareSidebarSessionRows,
+} from "./session-row-presentation.js";
 import {
   createTestProjection,
   seedRow,
 } from "./session-row-projection.read-fixture.test-support.js";
+import { prepareSessionRowPublicationView } from "./session-row-publication.js";
 import { rolePolicyConfig } from "./session-sharing.test-utils.js";
 import * as childDisplay from "./session-utils-display.js";
 import { replaceSessionRowFacts } from "./session-utils-row.js";
@@ -312,6 +316,64 @@ it.each([
   expect(Object.isFrozen(next.pluginExtensions?.[0])).toBe(true);
   expect(Object.isFrozen(after)).toBe(true);
   expect(Reflect.set(after, "length", 3)).toBe(false);
+});
+
+it("bounds retained sidebar rows across distinct authorized child views", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    cfg.agents = { entries: { main: {} }, defaults: { utilityModel: "" } };
+    const now = Date.now();
+    const key = "agent:main:shared-parent";
+    const query = { key, agentId: "main" };
+    const options = { rowMode: "sidebar" } as const;
+    seedRow(key, { sessionId: key, updatedAt: now, visibility: "shared" });
+    const viewers = Array.from({ length: 68 }, (_, index) => {
+      const profile = ensureProfileForEmail(`viewer-${index}@presentation.test`);
+      const child = `agent:main:subagent:private-child-${index}`;
+      seedRow(child, {
+        sessionId: child,
+        updatedAt: now,
+        parentSessionKey: key,
+        spawnedBy: key,
+        visibility: "draft",
+        createdActor: { type: "human", source: "profile", id: profile.id },
+      });
+      return { client: createSessionRowEventPeer(profile, profile.id, now).client, child };
+    });
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    const publish = prepareSessionRowPublication(projection, now);
+    const read = ({ client, child }: (typeof viewers)[number]) => {
+      const row = publish(client).getPresentation().snapshot(query, options).row!;
+      expect(row.childSessions).toEqual([child]);
+      return row;
+    };
+    const first = read(viewers[0]!);
+    const sidebar = (row: GatewaySessionRow, ifRowsRevision?: string) => {
+      const presentation = publish(viewers[0]!.client).getPresentation();
+      const list = presentation.list([row], options);
+      return shareSidebarSessionRows(list.sessions, ifRowsRevision, list.rowHistory);
+    };
+    const revision = sidebar(first).rowsRevision;
+    const materialized = projection.describe(query)!.materialized;
+    const publication = prepareSessionRowPublicationView(projection)();
+    const retained = () => [...publication.rows.get(materialized)!.views.values()].flat();
+    expect(read(viewers[0]!)).toBe(first);
+    for (const viewer of viewers.slice(1)) {
+      read(viewer);
+    }
+    expect(retained()).toHaveLength(64);
+    expect(retained().some((view) => view.row === first)).toBe(false);
+
+    const revisited = read(viewers[0]!);
+    expect(revisited).not.toBe(first);
+    expect(revisited).toEqual(first);
+    expect(read(viewers[0]!)).toBe(revisited);
+    expect(retained()).toHaveLength(64);
+    const replacement = sidebar(revisited, revision);
+    expect(replacement.sessions).toHaveLength(1);
+    expect(replacement.rowsRevision).not.toBe(revision);
+    expect(sidebar(revisited, replacement.rowsRevision).rowsUnchanged).toBe(true);
+  });
 });
 
 it.each(["keyed", "alias"])(

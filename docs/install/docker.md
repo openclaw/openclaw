@@ -264,17 +264,15 @@ Run `docker compose` from the repo root. If you enabled `OPENCLAW_EXTRA_MOUNTS` 
 ### Upgrading container images
 
 When you replace the OpenClaw image but keep the same mounted state/config, the
-image entrypoint runs `openclaw doctor --fix --non-interactive` under exclusive
-maintenance ownership before starting the Gateway. This covers the default image
-command and Compose's foreground Gateway command, including its selected profile.
-Routine image upgrades do not require a separate Doctor pass.
+entrypoint starts the Gateway directly. Boot migrates supported state in place;
+installed plugins converge in the background after readiness. Routine image
+upgrades do not run a separate Doctor pass or take a full pre-repair capture.
 `openclaw update` inside the official image does not replace its code: the
 image declares itself the owner of its installation, so the command and the
 Control UI tell you to pull the new image and recreate the container.
 
 Keep one Gateway replica per state volume, and stop the old container before
-starting its replacement. The startup repair needs exclusive maintenance
-ownership of that state; an overlapping Gateway can prevent it from completing.
+starting its replacement. Boot needs exclusive ownership of that state.
 For Compose, use the same files and overlays as your running deployment:
 
 ```bash
@@ -288,15 +286,6 @@ In Docker Swarm, keep `replicas: 1` and use `update_config.order: stop-first` an
 `Recreate` Deployment strategy, as the [provided manifest](/install/kubernetes)
 does. A shared volume is not a way to scale Gateway replicas. Back up the state
 before upgrading; see [Backups](/install/backups).
-
-Activation retains a full pre-repair copy of local state under
-`<state-dir>.update-captures/` the first time Doctor captures in a container.
-Later starts of the same container (`docker stop`/`docker start`, restart
-policies, host reboots) still run the Doctor repair pass but skip that repeated
-full copy, keep it, and still retire other superseded Doctor copies;
-repair-specific backups still apply. If a capture fails, the next
-start tries again. A new image, a recreated container, or a container whose
-`/tmp` does not persist across restarts captures again.
 
 ### Windows-drive bind mounts
 

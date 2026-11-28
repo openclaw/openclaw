@@ -5,10 +5,14 @@
 // transcript into the worker heap, then appends one `leaf` control row.
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
 import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { scanSessionTranscriptNavigationTree } from "./session-accessor.sqlite-branch-summaries.js";
+import { selectActiveCompactionMarkers } from "./session-accessor.sqlite-compaction-selection.js";
 import { commitSqliteSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { getActiveTranscriptKysely } from "./session-accessor.sqlite-projection-read.js";
@@ -19,7 +23,9 @@ import {
 } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
+  isDegradedCompactionEvent,
   planInPlaceSessionMessageCut,
+  summarizeSelectedCompactions,
   type SessionMessageCutReader,
 } from "./session-message-cut-plan.js";
 import { SESSION_MESSAGE_CUT_MAX_BYTES } from "./session-message-cut-read.js";
@@ -240,10 +246,57 @@ function createSessionMessageCutReader(
         )
       );
     },
-    canonicalSelectionHolds(targetId) {
-      // A reset after the selection is the only normalization that can move the
-      // planned control's target, so an ordinary cut answers without the scan.
-      return !hasResetAfterSelection(targetId) || resolve(targetId).leafId === targetId;
+    selectedCompactions(targetId) {
+      // One compaction payload at a time, bounded by the per-event read budget.
+      // A payload the reader cannot verify (missing, or over the budget) counts
+      // as not degraded: compaction payloads are summaries, far under the budget
+      // in practice, and the cut must not fail for a flag it cannot see.
+      const isDegradedCompactionSeq = (seq: number): boolean => {
+        const payload = executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("transcript_events")
+            .select(["event_json", "event_zstd", "event_utf8_bytes"])
+            .where("session_id", "=", sessionId)
+            .where("seq", "=", seq)
+            .where(transcriptEventReadBytesSql(), "<=", SESSION_MESSAGE_CUT_MAX_BYTES),
+        );
+        if (!payload || (payload.event_json === null && payload.event_zstd === null)) {
+          return false;
+        }
+        return isDegradedCompactionEvent(JSON.parse(readTranscriptPayload(payload)));
+      };
+      if (scanned?.targetId === targetId || hasResetAfterSelection(targetId)) {
+        const tree = resolve(targetId);
+        return tree.leafId === targetId
+          ? summarizeSelectedCompactions(
+              selectSessionTranscriptTreePathNodes(tree, targetId),
+              ({ entry }) => entry?.type,
+              ({ entry }) => typeof entry?.seq === "number" && isDegradedCompactionSeq(entry.seq),
+            )
+          : undefined;
+      }
+      if (targetId === null) {
+        return { count: 0, degraded: false };
+      }
+      // Ordinary rewinds stay on the active projection. Read boundary types in
+      // path order and load bounded summaries only until degradation is known.
+      const position = readIdentity(targetId)?.active_position;
+      if (position == null) {
+        return undefined;
+      }
+      return summarizeSelectedCompactions(
+        iterateSqliteQuerySync(
+          database.db,
+          selectActiveCompactionMarkers(database, sessionId).where(
+            "active.active_position",
+            "<=",
+            position,
+          ),
+        ),
+        (row) => row.type,
+        (row) => isDegradedCompactionSeq(row.event_seq),
+      );
     },
     canonicalBranchPathSeqs(leafEventId) {
       return selectSessionTranscriptTreePathNodes(resolve(leafEventId), leafEventId).flatMap(

@@ -175,6 +175,7 @@ suite.define(() => {
       const sessionKey = "agent:cloud:failed-startup-e2e";
       const message = "surface the failed startup";
       const diagnostic = `cloud profile was removed\n${"Enrollment detail. ".repeat(80)}\nFinal startup diagnostic.`;
+      const [session] = createdSessionListResult(sessionKey).sessions;
       const gateway = await installMockGateway(page, {
         defaultAgentId: "cloud",
         subscriptionInitialHistory: !historyFails,
@@ -183,10 +184,10 @@ suite.define(() => {
         workspaceGit: true,
         methodResponses: {
           ...startupResponses(sessionKey),
-          "sessions.describe": { session: {} },
+          "sessions.describe": { session },
           "chat.history": {
             messages: [],
-            sessionInfo: { hasActiveRun: false, status: "done" },
+            sessionInfo: { ...session, hasActiveRun: false, status: "done" },
           },
         },
       });

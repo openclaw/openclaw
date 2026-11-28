@@ -478,7 +478,8 @@ export async function executePluginOwnedProcess(params: {
       env: params.env,
       prompt: params.prompt,
       ...(params.promptContext ? { promptContext: params.promptContext } : {}),
-      ...(isHostGeneratedInputProvenance(params.context.params.inputProvenance)
+      ...(params.context.params.promptOrigin === "host" ||
+      isHostGeneratedInputProvenance(params.context.params.inputProvenance)
         ? { promptOrigin: "host" as const }
         : {}),
       modelId: params.context.normalizedModel,

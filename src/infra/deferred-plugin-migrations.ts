@@ -174,6 +174,8 @@ export async function readConfigWritePendingMigrations(
 
 export class DeferredPluginMigrationConflictError extends Error {
   readonly pending: readonly DeferredPluginMigration[];
+  /** Public reports use this code's fixed sentence; the message names plugins and phases. */
+  readonly code = "plugin-migration-obligations-changed";
 
   constructor(
     pending: readonly DeferredPluginMigration[],

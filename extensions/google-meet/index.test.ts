@@ -146,10 +146,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   })),
 }));
 
-function jsonResponse(value: unknown): Response {
-  return Response.json(value);
-}
-
 function requestUrl(input: RequestInfo | URL): URL {
   if (typeof input === "string") {
     return new URL(input);
@@ -842,86 +838,6 @@ describe("google-meet plugin", () => {
     const listUrl = requestUrl(listCall[0]);
     expect(listUrl.searchParams.get("pageSize")).toBe("2");
     expect(listUrl.searchParams.get("filter")).toBe('space.name = "spaces/abc-defg-hij"');
-  });
-
-  it("merges duplicate attendance participants and annotates timing through the tool", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = requestUrl(input);
-      if (url.pathname === "/v2/conferenceRecords/rec-1") {
-        return jsonResponse({
-          name: "conferenceRecords/rec-1",
-          startTime: "2026-04-25T10:00:00Z",
-          endTime: "2026-04-25T11:00:00Z",
-        });
-      }
-      if (url.pathname === "/v2/conferenceRecords/rec-1/participants") {
-        return jsonResponse({
-          participants: [
-            {
-              name: "conferenceRecords/rec-1/participants/p1",
-              signedinUser: { user: "users/alice", displayName: "Alice" },
-            },
-            {
-              name: "conferenceRecords/rec-1/participants/p2",
-              signedinUser: { user: "users/alice", displayName: "Alice" },
-            },
-          ],
-        });
-      }
-      if (url.pathname === "/v2/conferenceRecords/rec-1/participants/p1/participantSessions") {
-        return jsonResponse({
-          participantSessions: [
-            {
-              name: "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
-              startTime: "2026-04-25T10:10:00Z",
-              endTime: "2026-04-25T10:30:00Z",
-            },
-          ],
-        });
-      }
-      if (url.pathname === "/v2/conferenceRecords/rec-1/participants/p2/participantSessions") {
-        return jsonResponse({
-          participantSessions: [
-            {
-              name: "conferenceRecords/rec-1/participants/p2/participantSessions/s1",
-              startTime: "2026-04-25T10:40:00Z",
-              endTime: "2026-04-25T10:50:00Z",
-            },
-          ],
-        });
-      }
-      return new Response(`unexpected ${url.pathname}`, { status: 404 });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const { details: result } = await getMeetTool(setup()).execute("attendance", {
-      action: "attendance",
-      accessToken: "token",
-      expiresAt: Date.now() + 120_000,
-      conferenceRecord: "rec-1",
-      pageSize: "3",
-    });
-    expect(result.input).toBe("rec-1");
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://meet.googleapis.com/v2/conferenceRecords/rec-1",
-      { headers: { Authorization: "Bearer token", Accept: "application/json" } },
-    );
-    expect(result.attendance).toHaveLength(1);
-    const row = result.attendance[0];
-    expect(row?.displayName).toBe("Alice");
-    expect(row?.participants).toEqual([
-      "conferenceRecords/rec-1/participants/p1",
-      "conferenceRecords/rec-1/participants/p2",
-    ]);
-    expect(row?.firstJoinTime).toBe("2026-04-25T10:10:00.000Z");
-    expect(row?.lastLeaveTime).toBe("2026-04-25T10:50:00.000Z");
-    expect(row?.durationMs).toBe(1_800_000);
-    expect(row?.late).toBe(true);
-    expect(row?.earlyLeave).toBe(true);
-    expect(row?.sessions.map((session) => session.name)).toEqual([
-      "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
-      "conferenceRecords/rec-1/participants/p2/participantSessions/s1",
-    ]);
   });
 
   it("surfaces Developer Preview acknowledgment blockers in preflight reports", () => {

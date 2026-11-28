@@ -18,7 +18,10 @@ import {
   getWorkerMemoryBudgetSnapshot,
   initializeWorkerMemoryBudget,
 } from "./worker-memory-budget.js";
-import { closeDefaultRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
+import {
+  captureRetainedNativeWorkerSource,
+  closeDefaultRetainedNativeWorkerSource,
+} from "./worker-native-lifecycle.js";
 import { createWorkerTaskHost } from "./worker-task-host.js";
 import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 
@@ -119,6 +122,17 @@ it("joins the host at terminal native close when an endpoint's owner never stops
   const reader = carrier("sqlite-store:agent");
   await reader.started;
 
+  const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  const owner = {};
+  source.retain(owner, async () => {
+    throw new Error("reader cleanup refused");
+  });
+  await expect(closeDefaultRetainedNativeWorkerSource()).rejects.toThrow(
+    "Native worker execution owner cleanup failed",
+  );
+  expect(reader.endpoint.executionStopped).toBe(false);
+
+  source.retain(owner, async () => {});
   await closeDefaultRetainedNativeWorkerSource();
   expect(await reader.exited).toEqual({ code: 0, error: undefined });
   expect(

@@ -175,7 +175,7 @@ it("keeps catalog navigation ordered and disambiguates names only while boards s
 
   await showBoards(
     [sessions, { ...operations, name: "Alpha", icon: "kanban", color: "green" }],
-    ["Alpha (sessions)", "Alpha (cards)"],
+    ["Alpha (Sessions)", "Alpha (Cards)"],
   );
   expect(boardNavigation().map(({ id }) => id)).toEqual(["board-sessions", "board-ops"]);
   expect(navigation("ops").icon).toBe("kanban");
@@ -344,8 +344,8 @@ it("disambiguates a created board and its sibling before pinning through a stale
   form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   await vi.advanceTimersByTimeAsync(0);
   expect(host.ui.pinNavigation).toHaveBeenCalledExactlyOnceWith("board-created");
-  expect(pinnedNavigation).toMatchObject(navigationItem("created", "Created (cards)", "rocket"));
-  expect(siblingAtPin).toMatchObject({ label: "Created (sessions)" });
+  expect(pinnedNavigation).toMatchObject(navigationItem("created", "Created (Cards)", "rocket"));
+  expect(siblingAtPin).toMatchObject({ label: "Created (Sessions)" });
 
   stale.resolve({ cards: [], boards: [existing] });
   await vi.advanceTimersByTimeAsync(0);
