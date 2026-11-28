@@ -109,6 +109,8 @@ export function registerBackupCommand(program: Command) {
         "--postgres-connection-env <name>",
         "Import PostgreSQL stores through the DSN in this environment variable, not the archived connection",
       );
+    } else {
+      command.option("--inventory", "Show recorded asset kinds and SQLite snapshot owners");
     }
     command
       .option("--json", "Output JSON", false)

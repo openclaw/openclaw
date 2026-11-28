@@ -288,11 +288,15 @@ async function withDownloadedBackup<T>(
 
 export async function backupRemoteVerifyCommand(
   runtime: RuntimeEnv,
-  opts: RemoteBackupOptions & { archive: string },
+  opts: RemoteBackupOptions & { archive: string; inventory?: boolean },
 ) {
   return await withDownloadedBackup(runtime, opts, async (archive) => {
     const { backupVerifyCommand } = await import("./backup-verify.js");
-    return await backupVerifyCommand(runtime, { archive, json: opts.json });
+    return await backupVerifyCommand(runtime, {
+      archive,
+      json: opts.json,
+      inventory: opts.inventory,
+    });
   });
 }
 

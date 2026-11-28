@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   recordArchiveSymbolicLink,
   resolvePortableArchivePathKey,
@@ -39,6 +38,11 @@ import {
   verifyBackupSqliteCoverage,
 } from "./backup-verify-manifest.js";
 import {
+  backupRecoveryInventory,
+  type BackupVerifyResult,
+  formatBackupVerifyResult,
+} from "./backup-verify-output.js";
+import {
   assertSqliteSnapshotFileShape,
   prepareDatabaseArtifacts,
   BackupArchiveSpool,
@@ -47,27 +51,9 @@ import {
   assertSnapshotExtractionBudget,
 } from "./backup-verify-spool.js";
 
-type BackupVerifyResult = Awaited<ReturnType<typeof verifyBackupArchive>>;
-
 type SqliteSnapshotIdentity = { role: "global" } | { role: "agent"; agentId: string };
 
 type SqliteSnapshotEntry = NormalizedArchiveEntry & SqliteSnapshotOwner;
-
-function formatResult(result: BackupVerifyResult): string {
-  return [
-    terminalText`Backup archive OK: ${result.archivePath}`,
-    terminalText`Archive root: ${result.archiveRoot}`,
-    terminalText`Created at: ${result.createdAt}`,
-    terminalText`Runtime version: ${result.runtimeVersion}`,
-    terminalText`Assets verified: ${result.assetCount}`,
-    terminalText`Archive entries scanned: ${result.entryCount}`,
-    terminalText`Symbolic links checked: ${result.symlinkCount}`,
-    result.sqliteInventoryVerified
-      ? "SQLite database inventory verified."
-      : "SQLite database coverage unknown: this legacy archive has no database inventory.",
-    ...(result.warnings ?? []).map((warning) => terminalText`${warning}`),
-  ].join("\n");
-}
 
 function assertCanonicalStateAssetRoot(manifest: BackupManifest): void {
   const stateAssets = manifest.assets.filter((asset) => asset.kind === "state");
@@ -710,14 +696,18 @@ export async function verifyBackupArchive(
 /** Verify a backup archive, including snapshot shape and canonical SQLite integrity checks. */
 export async function backupVerifyCommand(
   runtime: RuntimeEnv,
-  opts: { archive: string; json?: boolean },
+  opts: { archive: string; json?: boolean; inventory?: boolean },
 ): Promise<BackupVerifyResult> {
   const onProgress = createBackupProgressLogger((message) =>
     opts.json ? runtime.error(message) : runtime.log(message),
   );
   let result: BackupVerifyResult;
   try {
-    result = await verifyBackupArchive(opts.archive, [], onProgress);
+    const prepared = await prepareBackupArchive(opts.archive, [], onProgress);
+    result = prepared.result;
+    if (opts.inventory) {
+      result.inventory = backupRecoveryInventory(prepared.manifest);
+    }
   } finally {
     onProgress.finish();
   }
@@ -725,7 +715,7 @@ export async function backupVerifyCommand(
   if (opts.json) {
     writeRuntimeJson(runtime, result);
   } else {
-    runtime.log(formatResult(result));
+    runtime.log(formatBackupVerifyResult(result));
   }
   return result;
 }

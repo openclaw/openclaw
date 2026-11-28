@@ -90,6 +90,24 @@ async function writeSmallArchive(
 }
 
 describe("standalone backup database completeness", () => {
+  it.each([false, true])(
+    "reports recorded versus unknown SQLite inventory (recorded=%s)",
+    async (recorded) => {
+      const { archivePath: archive } = await writeSmallArchive(recorded ? [] : undefined);
+      const runtime = createTestRuntime();
+      const result = await backupVerifyCommand(runtime, { archive, inventory: true });
+      expect(result.inventory).toEqual({
+        assetKinds: ["state"],
+        sqliteSnapshots: recorded ? [] : null,
+      });
+      const report = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+      expect(report).toContain("Asset kinds: state");
+      expect(report).toContain(
+        recorded ? "SQLite snapshots: none" : "legacy archive has no database inventory",
+      );
+    },
+  );
+
   it("distinguishes ordinary backups from SQLite-only companions before extraction", async () => {
     const fixture = await writeSmallArchive([], []);
     const target = path.join(fixture.root, "refused");
@@ -302,9 +320,16 @@ describe("standalone backup database completeness", () => {
             verify: true,
           });
           expect(archive.verified).toBe(true);
-          await expect(
-            backupVerifyCommand(runtime, { archive: archive.archivePath, json: true }),
-          ).resolves.toMatchObject({ ok: true, sqliteInventoryVerified: true });
+          const verification = await backupVerifyCommand(runtime, {
+            archive: archive.archivePath,
+            json: true,
+            inventory: true,
+          });
+          expect(verification.sqliteInventoryVerified).toBe(true);
+          expect(verification.inventory?.sqliteSnapshots).toEqual([
+            { role: "global" },
+            ...agents.map(({ agentId }) => ({ role: "agent", agentId })),
+          ]);
           const extracted = state.path("extracted");
           await backupRestoreCommand(runtime, { archive: archive.archivePath, target: extracted });
           const manifest = await readManifest(extracted, archive.archiveRoot);

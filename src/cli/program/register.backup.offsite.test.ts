@@ -405,6 +405,9 @@ describe("offsite backup CLI", () => {
         localArchiveRetained: true,
         assets: [{ kind: "config" }],
       });
+      expect(await from("verify", "config", "latest", "--inventory")).toMatchObject({
+        inventory: { assetKinds: ["config"], sqliteSnapshots: [] },
+      });
       expect((await fs.stat(localCopy)).size).toBe(configOnly.location?.plaintextBytes);
       await fs.writeFile(path.join(destination, "backups", "config", "owner.json"), "x");
       expect(await create("config", "--claim-namespace", "--only-config")).toMatchObject({
