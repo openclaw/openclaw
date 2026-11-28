@@ -97,9 +97,7 @@ function createInternalCoreAliasFixture(prefix: string) {
   const coreSourceParent = writeFile(path.join(root, "src", "host-probe.js"));
   return {
     coreSourceParent,
-    loaderModulePath,
     moduleUrl: pathToFileURL(loaderModulePath).href,
-    root,
     sourcePath,
   };
 }
