@@ -564,7 +564,7 @@ export async function resolveClawHubUpdateSpecs(params: {
           coreVersion: params.coreVersion,
         })
       : undefined;
-  return await resolveClawHubInstallSpecsForUpdateChannel({
+  return resolveClawHubInstallSpecsForUpdateChannel({
     spec: stableSpec || unpinnedSpec ? `clawhub:${stableSpec ?? unpinnedSpec}` : recordSpec,
     updateChannel: params.updateChannel,
     baseUrl: params.record.clawhubUrl,
