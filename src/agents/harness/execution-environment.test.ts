@@ -14,7 +14,7 @@ import type { AgentHarness } from "./types.js";
 
 const input = { sessionId: "policy-session", provider: "fixture", modelId: "fixture-model" };
 type PolicyParams = Partial<Parameters<typeof preparePluginHarnessToolPolicies>[0]>;
-const prepare = (params: PolicyParams = {}) =>
+const prepare = (params: PolicyParams) =>
   preparePluginHarnessToolPolicies({ ...input, ...params, preparedSessionEntry: null });
 const denyExec = { tools: { deny: ["exec"] } };
 const grant = { pluginId: "fixture", toolNames: ["fixture_lookup"] };
