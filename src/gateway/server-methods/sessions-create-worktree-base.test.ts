@@ -54,11 +54,15 @@ const sendRun = (
 const gitUrl = "https://github.com/openclaw/openclaw.git";
 const projectCloneMocks = vi.hoisted(() => ({ materialize: vi.fn() }));
 
-test.each([undefined, false])(
-  "sessions.create isolates a cloned project when worktree is %s",
-  async (worktree) => {
-    const { root, storePath } = await workspaceFixture("shared-clone");
-    const projectRoot = await initializeRepository(root, "project");
+test.each([
+  { selector: "project", worktree: undefined },
+  { selector: "project", worktree: false },
+  { selector: "folder", worktree: undefined },
+] as const)(
+  "sessions.create isolates a cloned project selected by $selector with worktree=$worktree",
+  async ({ selector, worktree }) => {
+    const { workspace, storePath } = await workspaceFixture("shared-clone");
+    const projectRoot = await initializeRepository(workspace, "project");
     const project = await registerClonedProjectRegistry({
       path: projectRoot,
       name: "Shared clone",
@@ -68,11 +72,17 @@ test.each([undefined, false])(
     try {
       await requestOk(
         "sessions.create",
-        { agentId: "main", key, projectId: project.id, worktree },
+        {
+          agentId: "main",
+          key,
+          ...(selector === "folder" ? { cwd: projectRoot } : { projectId: project.id }),
+          worktree,
+        },
         controlUiClient,
       );
       const entry = readSession(storePath, key);
       expect(entry?.worktree?.id).toBeDefined();
+      expect(entry?.projectId).toBe(project.id);
       const owned = await managedWorktrees.findLiveByOwner("session", key);
       expect(owned).toBeDefined();
       expect(entry?.spawnedCwd).toBe(owned?.path);
@@ -339,12 +349,13 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     // Automatic naming is independent of the failed worktree run's settlement.
     await sessionTitleRequests.get({ ...target, sessionId: beforeTitle.sessionId });
     const failed = loadSessionEntry(target)!;
-    expect(failed.displayName).toMatch(/^[a-z]+-[a-z]+$/);
+    expect(failed).not.toHaveProperty("displayName");
     expect(failed.updatedAt).toBeGreaterThanOrEqual(beforeTitle.updatedAt);
     expect(failed).toMatchObject({
       status: "failed",
       lastRunError: expect.stringContaining("has no commits"),
       pendingWorktree: { workspace },
+      titleFallbackReady: true,
     });
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     const transcriptScope = { ...target, sessionId: failed.sessionId };
@@ -361,9 +372,10 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     const recovered = await directSessionReq("sessions.create", selection, options);
     expect(recovered.ok, JSON.stringify(recovered.error)).toBe(true);
     const bound = loadSessionEntry(target)!;
+    expect(bound).not.toHaveProperty("displayName");
     expect(bound).toMatchObject({
       sessionId: failed.sessionId,
-      displayName: failed.displayName,
+      titleFallbackReady: true,
       projectId: project.id,
       lastRunError: failed.lastRunError,
       worktree: { repoRoot: repository },

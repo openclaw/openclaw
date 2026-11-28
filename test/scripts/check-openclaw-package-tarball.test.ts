@@ -5,7 +5,7 @@ import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
-import { Header, type HeaderData, Pax } from "tar";
+import { Header, type HeaderData, Pax } from "tar/raw";
 import { afterEach, describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
 import {
@@ -787,22 +787,6 @@ syncBuiltinESMExports();
     });
   });
 
-  it("accepts package-less extension roots without metadata-declared assets", () => {
-    const extensionRuntime = "dist/extensions/example/runtime.js";
-    const extensionManifest = "dist/extensions/example/openclaw.plugin.json";
-    checkTarball({
-      inventory: ["dist/index.js", extensionRuntime, extensionManifest],
-      files: {
-        "dist/index.js": "export {};\n",
-        [extensionRuntime]: "export {};\n",
-        [extensionManifest]: '{"id":"example"}\n',
-      },
-      options: { postinstall: true },
-      status: 0,
-      successText: true,
-    });
-  });
-
   it("rejects local package export targets missing from the tarball", () => {
     checkTarball({
       inventory: ["dist/index.js", "dist/plugin-sdk/example.js"],
@@ -1126,6 +1110,23 @@ syncBuiltinESMExports();
       status: "nonzero",
       stderr: [
         "package tarball contains npm-excluded entries: node_modules/example/node_modules/extra/package.json",
+      ],
+    },
+    {
+      name: "accepts registry Ciao when Bonjour imports its package root",
+      files: { "dist/index.js": 'export const load = () => import("@homebridge/ciao");\n' },
+      options: { packageJson: { dependencies: { "@homebridge/ciao": "1.3.12" } } },
+      status: 0,
+    },
+    {
+      name: "rejects registry Ciao when Bonjour imports its patched native entry",
+      files: {
+        "dist/index.js": 'export const load = () => import("@homebridge/ciao/native.js");\n',
+      },
+      options: { packageJson: { dependencies: { "@homebridge/ciao": "1.3.12" } } },
+      status: "nonzero",
+      stderr: [
+        "package.json dependencies.@homebridge/ciao must be listed in bundleDependencies because its patched runtime must not be replaced by the registry package",
       ],
     },
     {

@@ -18,11 +18,11 @@ import {
   tryResolveAgentOperationAgentId,
   tryResolveSoleAgentId,
 } from "../agents/agent-scope-config.js";
-import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types.js";
 import { measureAgentStartup } from "../agents/startup-timing.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { readCliGatewayRunFailure, recordCliGatewayRunFailure } from "../cli/failure-output.js";
 import { prepareCliGatewayStateAccess } from "../cli/gateway-rpc.runtime.js";
 import { withProgress } from "../cli/progress.js";
@@ -57,31 +57,16 @@ import {
   resolveAgentIdFromSessionKey,
   scopeLegacySessionKeyToAgent,
 } from "../routing/session-key.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
 import { sleep } from "../utils/sleep.js";
 import { resolveAgentGatewayIdentity } from "./agent-gateway-identity.js";
+import {
+  createYieldFollower,
+  readAcceptedRunContext,
+  type GatewayAgentResponse,
+} from "./agent-gateway-reply.js";
 import { readAgentMessageFile } from "./agent-message-input.js";
-
-type AgentGatewayResult = {
-  payloads?: Array<{
-    text?: string;
-    mediaUrl?: string | null;
-    mediaUrls?: string[];
-  }>;
-  deliveryStatus?: unknown;
-  meta?: EmbeddedAgentRunMeta;
-};
-
-type GatewayAgentResponse = {
-  runId?: string;
-  status?: string;
-  summary?: string;
-  reason?: string;
-  pendingInputId?: string;
-  result?: AgentGatewayResult;
-  deliveryStatus?: unknown;
-};
 
 const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000] as const;
 
@@ -244,19 +229,13 @@ async function loadRemoteGatewayRosterWithShellEnvFallback(
   }
 }
 
-function missingAgentMessageError(): Error {
-  return new Error(
-    `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')} or ${formatCliCommand("openclaw agent --message-file <path> --agent <id>")}.`,
-  );
-}
-
 function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
   const raw =
     opts.timeout !== undefined
       ? parseStrictNonNegativeInteger(opts.timeout)
       : (opts.cfg.agents?.defaults?.timeoutSeconds ?? 600);
   if (raw === undefined) {
-    throw new Error(
+    throwExpectedCliError(
       `Invalid --timeout. Use seconds as a non-negative integer, for example --timeout 600. Use --timeout 0 to disable the timeout.`,
     );
   }
@@ -296,7 +275,7 @@ function validateExplicitSessionKeyForDispatch(
   }
 
   if (classifySessionKeyShape(sessionKey) === "malformed_agent") {
-    throw new Error(
+    throwExpectedCliError(
       `Invalid --session-key "${sessionKey}". Agent-prefixed session keys must use agent:<agent-id>:<session-key>.`,
     );
   }
@@ -308,7 +287,7 @@ function validateExplicitSessionKeyForDispatch(
   const agentId = normalizeAgentId(agentIdRaw);
   const sessionAgentId = resolveAgentIdFromSessionKey(sessionKey);
   if (sessionAgentId !== agentId) {
-    throw new Error(
+    throwExpectedCliError(
       `Agent id "${agentIdRaw}" does not match session key agent "${sessionAgentId}".`,
     );
   }
@@ -454,18 +433,6 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === "AbortError";
 }
 
-function readAcceptedRunContext(payload: unknown) {
-  const accepted = asOptionalRecord(payload);
-  if (accepted?.status !== "accepted") {
-    return undefined;
-  }
-  return {
-    runId: normalizeOptionalString(accepted.runId),
-    sessionKey: normalizeOptionalString(accepted.sessionKey),
-    agentId: normalizeOptionalString(accepted.agentId),
-  };
-}
-
 function isConfirmedChatAbortResponseForRun(value: unknown, runId: string): boolean {
   const response = asOptionalRecord(value);
   if (response?.aborted !== true) {
@@ -501,12 +468,6 @@ function markAgentRunExitCode(status: unknown): void {
   process.exitCode = status === "ok" || status === "completed" ? 0 : 1;
 }
 
-function formatInFlightGatewayAgentMessage(response: GatewayAgentResponse): string {
-  return response.runId
-    ? `Agent run ${response.runId} is already in flight; not starting a duplicate run.`
-    : "Agent run is already in flight; not starting a duplicate run.";
-}
-
 async function agentViaGatewayCommand(
   opts: AgentDispatchOpts,
   runtime: RuntimeEnv,
@@ -538,7 +499,7 @@ async function agentViaGatewayCommand(
     !explicitSessionKey &&
     !hasImplicitGlobalTarget
   ) {
-    throw new Error(
+    throwExpectedCliError(
       `No target session selected. Use --agent <id>, --session-key <key>, --session-id <id>, or --to <E.164>. Run ${formatCliCommand("openclaw agents list")} to see agents.`,
     );
   }
@@ -551,7 +512,7 @@ async function agentViaGatewayCommand(
     const knownAgents =
       opts.remoteGatewayRoster?.agentIds ?? (remoteGateway ? undefined : listAgentIds(cfg));
     if (knownAgents && !knownAgents.includes(agentId)) {
-      throw new Error(
+      throwExpectedCliError(
         `Unknown agent id "${agentIdRaw}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
       );
     }
@@ -663,6 +624,7 @@ async function agentViaGatewayCommand(
     }
     return false;
   };
+  const follower = createYieldFollower({ json: opts.json, timeoutSeconds, runtime });
   const dispatchGatewayAgentCall = async (activeCfg: OpenClawConfig) =>
     await withProgress(
       {
@@ -670,7 +632,7 @@ async function agentViaGatewayCommand(
         indeterminate: true,
         enabled: opts.json !== true,
       },
-      async () =>
+      async (progress) =>
         await callGateway({
           method: "agent",
           beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
@@ -707,9 +669,22 @@ async function agentViaGatewayCommand(
             runContext.accepted = readAcceptedRunContext(payload);
           },
           onSignalAbort: async (request) => {
+            // A yielded turn already ended; stopping the wait leaves its subagents running.
+            if (follower.following) {
+              return;
+            }
             activeConnectionAbortAttempted = true;
             activeConnectionAbortSucceeded = await abortGatewayRun(request, false);
           },
+          onEvent: (event) => follower.onEvent(event),
+          onResponse: async (_request, connection, result) =>
+            await follower.follow({
+              // SAFETY: the same final `agent` response this call returns as `response` below.
+              response: result as GatewayAgentResponse,
+              sessionKey: runContext.accepted?.sessionKey,
+              connection,
+              progress,
+            }),
           ...gatewayIdentity,
         }),
     );
@@ -721,6 +696,11 @@ async function agentViaGatewayCommand(
       response = await dispatchGatewayAgentCall(cfg);
       break;
     } catch (err) {
+      // The turn already answered; only the wait for its subagents ended early.
+      if (follower.following) {
+        response = follower.following;
+        break;
+      }
       if (
         !runContext.accepted &&
         shouldRetryGatewayDispatchWithShellEnvFallback(err) &&
@@ -769,52 +749,7 @@ async function agentViaGatewayCommand(
     throw new Error("gateway agent call did not return a response");
   }
   markAgentRunExitCode(response.status);
-
-  if (opts.json) {
-    const deliveryStatus = response.result?.deliveryStatus;
-    writeRuntimeJson(
-      runtime,
-      deliveryStatus === undefined ? response : { ...response, deliveryStatus },
-    );
-    return response;
-  }
-
-  const payloads = response.result?.payloads ?? [];
-  if (response.result?.meta?.requestShaping?.thinkingClamp) {
-    runtime.log(response.result.meta.requestShaping.thinkingClamp);
-  }
-
-  if (response.reason === "input_withdrawn_before_turn") {
-    runtime.error?.(response.summary);
-    return response;
-  }
-
-  if (response.status === "in_flight") {
-    runtime.error?.(formatInFlightGatewayAgentMessage(response));
-    return response;
-  }
-
-  if (payloads.length === 0) {
-    if (response?.status !== "ok") {
-      runtime.log(response?.summary ? response.summary : "No reply from agent.");
-    }
-    return response;
-  }
-
-  for (const payload of payloads) {
-    const { resolveSendableOutboundReplyParts } = await import("openclaw/plugin-sdk/reply-payload");
-    const { formatOutboundPayloadLog } = await import("../infra/outbound/payloads.js");
-    const parts = resolveSendableOutboundReplyParts({
-      text: payload.text,
-      mediaUrls: payload.mediaUrls,
-      mediaUrl: typeof payload.mediaUrl === "string" ? payload.mediaUrl : undefined,
-    });
-    const out = formatOutboundPayloadLog(parts).trimEnd();
-    if (out) {
-      runtime.log(out);
-    }
-  }
-
+  await follower.finish(response, runContext.accepted?.sessionKey);
   return response;
 }
 
@@ -862,7 +797,7 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
     ["--to", opts.to],
   ]) {
     if (value !== undefined && !value.trim()) {
-      throw new Error(`${flag} must not be blank`);
+      throwExpectedCliError(`${flag} must not be blank`);
     }
   }
   if (opts.json === true) {
@@ -871,21 +806,23 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
   const { messageFile: rawMessageFile, ...rest } = opts;
   const messageFile = readNonBlankString(rawMessageFile);
   if (opts.message !== undefined && messageFile) {
-    throw new Error("Use either --message or --message-file, not both.");
+    throwExpectedCliError("Use either --message or --message-file, not both.");
   }
   if (rawMessageFile !== undefined && !messageFile) {
-    throw new Error("--message-file must not be empty.");
+    throwExpectedCliError("--message-file must not be empty.");
   }
   const message = messageFile ? await readAgentMessageFile(messageFile) : (opts.message ?? "");
   if (!messageFile && !message.trim()) {
-    throw missingAgentMessageError();
+    throwExpectedCliError(
+      `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')} or ${formatCliCommand("openclaw agent --message-file <path> --agent <id>")}.`,
+    );
   }
   // `/compact` cannot run as a plain CLI agent turn: the slash-command handler
   // rejects CLI-originated senders, so the message would fall through to a
   // normal turn and exit 0 without compacting anything (issue #90640 Gap B).
   // Fail loudly and point at the first-class command instead of no-opping.
   if (isCompactControlCommand(message)) {
-    throw new Error(
+    throwExpectedCliError(
       "Slash commands cannot be executed via --message from the CLI. Use: openclaw sessions compact <key>",
     );
   }

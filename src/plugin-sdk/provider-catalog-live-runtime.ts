@@ -104,7 +104,8 @@ export type BuildLiveModelProviderConfigParams<T extends ModelDefinitionConfig> 
     cacheKeyParts?: readonly unknown[];
     /**
      * Provider-owned projection for catalogs that publish richer metadata than model ids.
-     * Defaults to shared capability projection; non-chat rows retain inference.chat=false for pins.
+     * Defaults to shared capability projection; declared non-chat rows retain
+     * inference.chat=false for pins.
      */
     projectRows?: LiveModelRowProjection<T>;
     /** Retry a rejected authenticated catalog request against the provider's public catalog. */
@@ -137,6 +138,12 @@ export type OpenAICompatibleModelDiscoveryOptions = {
    * would build an invalid request. Manifest-published ids bypass it.
    */
   acceptUnknownModel?: (params: { id: string; record: Record<string, unknown> }) => boolean;
+  /**
+   * Provider prior for discovered ids the manifest does not publish whose rows carry no
+   * capability evidence. `"unlikely"` keeps them out of default pickers; typed and configured
+   * refs still run. Rows that declare chat or non-chat support are unaffected.
+   */
+  unknownModelChatEvidence?: "unlikely";
 };
 
 export type BuildOpenAICompatibleProviderCatalogParams = {
@@ -421,6 +428,7 @@ function prepareOpenAICompatibleLiveModelDiscovery(
     ...(params.apiKey ? { apiKey: params.apiKey } : {}),
   };
   const acceptUnknownModel = params.modelDiscovery?.acceptUnknownModel;
+  const unknownModelChatEvidence = params.modelDiscovery?.unknownModelChatEvidence;
   const endpoint = params.modelDiscovery?.endpointUrl
     ? resolveFixedLiveModelDiscoveryEndpoint(fallback.baseUrl, params.modelDiscovery.endpointUrl)
     : resolveLiveModelDiscoveryEndpoint(
@@ -457,7 +465,12 @@ function prepareOpenAICompatibleLiveModelDiscovery(
     projectRows:
       params.modelDiscovery?.projectRows ??
       ((rows, fallbackProvider) =>
-        buildOpenAICompatibleLiveModels(rows, fallbackProvider, acceptUnknownModel)),
+        buildOpenAICompatibleLiveModels(
+          rows,
+          fallbackProvider,
+          acceptUnknownModel,
+          unknownModelChatEvidence,
+        )),
   } satisfies BuildLiveModelProviderConfigParams<ModelDefinitionConfig>;
   return { kind: "live" as const, request, profileId: auth.profileId };
 }

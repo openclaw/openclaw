@@ -250,6 +250,86 @@ suite.define(() => {
     context = undefined;
   });
 
+  it.each(["own", "child"] as const)(
+    "leaves a pending %s question with the Gateway after a composer reply",
+    async (source) => {
+      const childKey = "agent:main:dashboard:superseded-question";
+      const { gateway, page } = await openQuestionPage(undefined, false, [
+        { key: childKey, kind: "direct", parentSessionKey: questionSessionKey, updatedAt: 1 },
+      ]);
+      const request = {
+        ...questionRecord("superseded-manual-step", {
+          questionId: "required_action",
+          header: "Manual step",
+          question: "The browser needs a manual step. Complete it before continuing.",
+          options: [{ label: "Ready to recheck" }, { label: "Stop this task" }],
+          isOther: false,
+        }),
+        sessionKey: source === "child" ? childKey : questionSessionKey,
+      };
+      await gateway.emitGatewayEvent("question.requested", {
+        ...questionRecord("unrelated-question"),
+        sessionKey: "agent:main:unrelated",
+      });
+      const panel = await showQuestion(page, gateway, request);
+      const composer = page.locator(composerSelector);
+      await composer.fill("   ");
+      await composer.press("Enter");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+      await composer.fill("Use the supported browser workflow instead.");
+      await gateway.deferNext("chat.send");
+      await button(page, "Send message").click();
+      const sent = await gateway.waitForRequest("chat.send");
+      expect(sent.params).toMatchObject({
+        sessionKey: questionSessionKey,
+        message: "Use the supported browser workflow instead.",
+      });
+      expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+      await panel.waitFor();
+      const next = questionRecord("replacement-question", {
+        question: "Which replacement workflow should I use?",
+      });
+      await gateway.emitGatewayEvent("question.requested", next);
+      await gateway.resolveDeferred("chat.send", { status: "started", runId: "replacement-run" });
+      await expectCount(
+        page
+          .locator(".chat-group.user")
+          .filter({ hasText: "Use the supported browser workflow instead." }),
+        1,
+      );
+      expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+      await panel.waitFor();
+      if (source === "own") {
+        await gateway.emitGatewayEvent("question.resolved", {
+          id: request.id,
+          status: "cancelled",
+          resolvedBy: "chat-composer-replacement",
+        });
+        await expectCount(panel, 0);
+        await panelFor(page, next.questions[0]!.question).waitFor();
+        await expectCount(page.locator(".chat-question-summary"), 0);
+      }
+    },
+  );
+
+  it("retains the question when a new prompt fails to send", async () => {
+    const { gateway, page } = await openQuestionPage();
+    const panel = await showQuestion(page, gateway, questionRecord("failed-send-question"));
+    await gateway.setMethodResponse("chat.send", {
+      __mockError: { code: "INVALID_REQUEST", message: "Synthetic prompt rejection" },
+    });
+    await page.locator(composerSelector).fill("Use a different approach.");
+    await button(page, "Send message").click();
+    await gateway.waitForRequest("chat.send");
+    await page
+      .locator('.chat-send-status[data-send-state="failed"]')
+      .getByText("Not sent", { exact: true })
+      .waitFor();
+    await panel.waitFor();
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+  });
+
   it("reveals sidebar attention on touch without navigating or closing the drawer", async () => {
     const { gateway, page } = await openQuestionPage({ width: 390, height: 844 }, true);
     const request = questionRecord("sidebar-touch-question", { isOther: false });
@@ -352,7 +432,7 @@ suite.define(() => {
         await expectCount(panel.locator(".chat-question-panel__source"), 0);
         await expectCount(
           page.getByRole("region", { name: "Chat", exact: true }).locator(composerSelector),
-          0,
+          1,
         );
       }
 
@@ -405,6 +485,13 @@ suite.define(() => {
 
   it("opens an external question step without answering until completion is submitted", async () => {
     const { gateway, page } = await openQuestionPage();
+    const submissionCodeLoaded = () =>
+      page.evaluate(() =>
+        performance
+          .getEntriesByType("resource")
+          .some((entry) => entry.name.includes("question-prompt-submission")),
+      );
+    expect(await submissionCodeLoaded()).toBe(false);
     const url = "https://chatgpt.com/apps/github/connector_question_proof";
     const prompt = "Sign in to GitHub on ChatGPT to use it in Codex.";
     await page.context().route(url, (route) =>
@@ -450,6 +537,7 @@ suite.define(() => {
     } satisfies QuestionResolveResult);
     await button(panel, "Submit").click();
     await expectResolution(gateway, { id: request.id, answers });
+    expect(await submissionCodeLoaded()).toBe(true);
     expect(await gateway.getRequests("question.resolve")).toHaveLength(1);
     await expectCount(panel, 0);
     await expectQuestionAttention(page, null);
@@ -517,12 +605,13 @@ suite.define(() => {
   );
 
   defineQuestionFooterTests({
+    artifactDir: () => suite.artifactDir,
     openQuestionPage,
     questionRecord,
     questionSessionKey,
   });
 
-  it("restores the composer without a resolution event and retains later pending-question drafts", async () => {
+  it("keeps the composer through resolution and retains later pending-question drafts", async () => {
     const { gateway, page } = await openQuestionPage();
     const composer = page.locator(composerSelector);
     await composer.fill("Keep this release note draft");
@@ -536,8 +625,8 @@ suite.define(() => {
     await expectCount(page.locator(".chat-thread openclaw-chat-question-panel"), 0);
     await expectCount(panel.getByText("1/1", { exact: true }), 1);
     await expectCount(panel.getByPlaceholder("Type your own answer here"), 1);
-    await expectCount(page.locator(".agent-chat__input"), 0);
-    await expectCount(page.locator(".agent-chat__composer-footer"), 0);
+    await expectCount(page.locator(".agent-chat__input"), 1);
+    await expectCount(page.locator(".agent-chat__composer-footer"), 1);
     await expectFocused(panel.locator(".chat-question-panel"));
 
     await expect
@@ -569,7 +658,7 @@ suite.define(() => {
     await expect.poll(() => composer.inputValue()).toBe("Keep this release note draft");
     await expectFocused(composer);
     await page.locator(".chat-question-panel__collapsed-button").click();
-    await expectCount(page.locator(".agent-chat__input"), 0);
+    await expectCount(page.locator(".agent-chat__input"), 1);
     await expectFocused(panel.locator(".chat-question-panel"));
 
     const answers = { answers: { deploy_target: ["Staging (Recommended)"] } };
@@ -741,10 +830,67 @@ suite.define(() => {
     const outcomeHeading = document.getByRole("heading", { name: "Answered", exact: true });
     await outcomeHeading.waitFor();
     await expectFocused(outcomeHeading);
+    const promptLeft = await document
+      .locator(".chat-question-summary__prompt")
+      .evaluate((prompt) => {
+        const range = prompt.ownerDocument.createRange();
+        range.selectNodeContents(prompt);
+        return range.getBoundingClientRect().left;
+      });
+    const labelLeft = await document
+      .locator(".chat-question-summary__line strong")
+      .evaluate((label) => label.getBoundingClientRect().left);
+    expect(Math.abs(promptLeft - labelLeft)).toBeLessThan(1);
     expect(await page.title()).toBe("Answered — OpenClaw");
     expect(await document.textContent()).not.toContain(fakeSecret);
     expect(await document.textContent()).not.toContain("stored");
     expect(new URL(page.url()).pathname).toBe(`/operator/ask/${request.id}`);
+  });
+
+  it("keeps the file field and question actions inside the phone panel before and after selection", async () => {
+    const page = await newPage({ width: 390, height: 844 }, true);
+    const request = questionRecord("file-question-layout", {
+      header: "Notes file",
+      question: "Which notes file should be included?",
+      options: [],
+      presentation: "form",
+      isOther: true,
+      resource: { viewId: "file-review", selection: "explicit", userOptions: { kind: "file" } },
+    });
+    const name =
+      "chapter07_revision0426_reviewannotations_editorialreadingorder_sourceappendix.txt";
+    await installMockGateway(page, {
+      featureMethods: ["question.get", "mcp.app.formResource"],
+      methodResponses: {
+        "question.get": { question: request },
+        "mcp.app.formResource": { resources: [{ uri: "review://notes", name }] },
+      },
+    });
+    await page.goto(new URL("ask/" + request.id, suite.server.baseUrl).toString());
+    const panel = page.locator(".chat-question-panel");
+    const input = panel.getByLabel("Notes file");
+    const remove = button(panel, "Remove");
+    await input.waitFor();
+    const checkFit = async () => {
+      const overflow = await panel.evaluate((el) => el.scrollWidth - el.clientWidth);
+      expect(overflow).toBeLessThanOrEqual(1);
+    };
+    await checkFit();
+    await input.setInputFiles({ name, mimeType: "text/plain", buffer: Buffer.from("Notes") });
+    await remove.waitFor();
+    await checkFit();
+    const filename = panel.getByText(name, { exact: true });
+    const label = await filename.boundingBox();
+    const action = await remove.boundingBox();
+    expect(await filename.getAttribute("title")).toBe(name);
+    expect(await filename.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+    expect(label!.x + label!.width).toBeLessThan(action!.x);
+    expect(label!.y).toBeGreaterThanOrEqual(action!.y - 1);
+    expect(label!.y + label!.height).toBeLessThanOrEqual(action!.y + action!.height + 1);
+    await remove.tap();
+    await remove.waitFor({ state: "detached" });
+    await checkFit();
+    expect(await button(panel, "Submit").isDisabled()).toBe(true);
   });
 
   it("keeps a long /ask document on one scroller with reachable answers at phone width", async () => {

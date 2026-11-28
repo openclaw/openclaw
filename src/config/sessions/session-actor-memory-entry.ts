@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { clearSessionActorProgressCardForReset } from "../../session-cards/session-actor-progress-card-memory.js";
 import { shouldPreserveSessionCleanupEntry } from "./cleanup-service-read.policy.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
+import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { syncSessionActorMemoryConversations } from "./session-actor-memory-conversation.js";
 import type {
   SessionActorMemoryEntryCommand,
@@ -360,8 +361,20 @@ export function executeSessionActorMemoryEntryCommand(
       };
     }
     case "session.lifecycle.reclaim": {
-      const countEntries = () =>
-        [...context.entries()].filter(([, value]) => value.hot.entry).length;
+      const countEntries = (removed?: Set<string>) => {
+        let count = 0;
+        for (const [key, { hot }] of context.entries()) {
+          if (hot.entry) {
+            count++;
+            if (removed?.size && !isInternalSessionEffectsKey(key)) {
+              removed.delete(hot.entry.sessionId.trim());
+            }
+          }
+        }
+        return count;
+      };
+      const retainedMcp = command.input.retainedMcpSessionIds;
+      const removedMcp = retainedMcp?.length ? new Set<string>() : undefined;
       const beforeCount = countEntries();
       const removedSessionKeys: string[] = [];
       const archivedSessionKeys: string[] = [];
@@ -389,6 +402,14 @@ export function executeSessionActorMemoryEntryCommand(
             ? eligible.entries.some((entry) => entry.sessionKey === candidate.sessionKey)
             : isDeepStrictEqual(current?.hot.entry, candidate.expected)
         ) {
+          const id = current?.hot.entry?.sessionId.trim();
+          if (
+            id &&
+            retainedMcp?.includes(id) &&
+            !isInternalSessionEffectsKey(candidate.sessionKey)
+          ) {
+            removedMcp?.add(id);
+          }
           context.remove(candidate.sessionKey);
           removedSessionKeys.push(candidate.sessionKey);
         }
@@ -410,7 +431,15 @@ export function executeSessionActorMemoryEntryCommand(
           archivedSessionKeys.push(archive.sessionKey);
         }
       }
-      return { removedSessionKeys, archivedSessionKeys, beforeCount, afterCount: countEntries() };
+      // Archives and sibling entries can still own the ID after the removals.
+      const afterCount = countEntries(removedMcp);
+      return {
+        removedSessionKeys,
+        archivedSessionKeys,
+        beforeCount,
+        afterCount,
+        ...(removedMcp?.size ? { retiredMcpSessionIds: [...removedMcp] } : {}),
+      };
     }
   }
   throw new Error("Unknown memory entry command");

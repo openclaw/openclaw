@@ -61,10 +61,8 @@ describe("docker E2E watchdog entrypoint", () => {
         "--input-type=module",
         "-e",
         `import assert from 'node:assert/strict';
-        const { parseTimeoutMs } = await import(${JSON.stringify(pathToFileURL(watchdogPath).href)});
-        assert.deepEqual(['900s', '1.5s', '0', '2m', '0.01ms', '1h', '7'].map(parseTimeoutMs),
-          [900000, 1500, 1, 120000, 1, 3600000, 7000]);
-        assert.throws(() => parseTimeoutMs('invalid'), /unsupported timeout value/);`,
+        const { runWatchdog } = await import(${JSON.stringify(pathToFileURL(watchdogPath).href)});
+        assert.equal(typeof runWatchdog, 'function');`,
       ],
       { encoding: "utf8", env, timeout: 5_000 },
     );
@@ -72,5 +70,49 @@ describe("docker E2E watchdog entrypoint", () => {
     expect(importResult.status, importResult.stderr).toBe(0);
     expect(importResult.stdout).toBe("");
     expect(importResult.stderr).toBe("");
+  });
+
+  it("arms the timeout the CLI duration names", () => {
+    const watchdogUrl = pathToFileURL(path.resolve("scripts/lib/docker-e2e-watchdog.mjs")).href;
+    // Files, not `-e` flags: the Bun lane runs this test with Bun as process.execPath.
+    const root = harness.createTempDir("openclaw-watchdog-durations-");
+    const child = path.join(root, "child.mjs");
+    const probe = path.join(root, "probe.mjs");
+    fs.writeFileSync(child, "");
+    // Record the armed delay; the trivial child exits first and settles the watchdog.
+    fs.writeFileSync(
+      probe,
+      `
+      const delays = [];
+      const setTimer = globalThis.setTimeout;
+      globalThis.setTimeout = (callback, ms, ...rest) => {
+        delays.push(ms);
+        return setTimer(callback, ms, ...rest);
+      };
+      process.on("exit", () => console.log(JSON.stringify(delays[0])));
+      const { runWatchdog } = await import(${JSON.stringify(watchdogUrl)});
+      await runWatchdog("e2e", process.argv[2], [process.execPath, ${JSON.stringify(child)}]);
+    `,
+    );
+    const run = (value: string) =>
+      spawnSync(process.execPath, [probe, value], {
+        encoding: "utf8",
+        env: testRunnerFixtureEnv(),
+        timeout: 5_000,
+      });
+    for (const [value, ms] of [
+      ["900s", 900_000],
+      ["1.5s", 1_500],
+      ["0", 1],
+      ["2m", 120_000],
+      ["0.01ms", 1],
+      ["1h", 3_600_000],
+      ["7", 7_000],
+    ] as const) {
+      expect(run(value).stdout.trim(), value).toBe(String(ms));
+    }
+    const invalid = run("invalid");
+    expect(invalid.status).toBe(1);
+    expect(invalid.stderr).toContain("unsupported timeout value: invalid");
   });
 });

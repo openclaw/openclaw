@@ -351,10 +351,7 @@ describe("confirmed visible message ownership", () => {
       expect(
         await commitConfirmedVisibleMessage({
           ...send,
-          expectedGeneration: {
-            sessionKey: "agent:main:telegram:direct:shared",
-            sessionId: "requester-session",
-          },
+          expectedGeneration: { sessionKey: "agent:main:telegram:direct:shared" },
         }),
       ).toMatchObject({ ok: true });
       const history = async (sessionKey: string, sessionId: string) =>

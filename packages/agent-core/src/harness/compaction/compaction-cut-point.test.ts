@@ -1,43 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { projectSessionModelContextNavigation } from "../../../../../src/config/sessions/session-model-context-navigation.js";
+import { assert, describe, expect, it } from "vitest";
 import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
-import { findCutPointFromSource } from "./compaction-cut-point.js";
-import { estimateTokens, findCutPoint as findArrayCutPoint } from "./compaction.js";
+import {
+  collectCompactionCutEntryFact,
+  findCutPointFromFacts,
+  getMessageFromEntryForCompaction,
+} from "./compaction-cut-point.js";
+import { estimateTokens, findCutPoint } from "./compaction.js";
 import { createMessageEntry as messageEntry } from "./compaction.test-support.js";
 import { assistant, text, toolCall, toolResult, user } from "./shard-fixtures.test-support.js";
-
-const cutPointImplementations = [
-  ["array", findArrayCutPoint],
-  [
-    "indexed",
-    (entries, start, end, keep, constraints) => {
-      const navigation = entries.map(projectSessionModelContextNavigation);
-      let release = () => {};
-      return findCutPointFromSource(
-        {
-          length: entries.length,
-          metadata: (index: number) => navigation[index],
-          get: (index) => {
-            // A planner must consume payloads before advancing its hydration window.
-            release();
-            const entry = entries[index];
-            if (entry?.type !== "message") {
-              return entry;
-            }
-            const { proxy, revoke } = Proxy.revocable(structuredClone(entry.message), {});
-            release = revoke;
-            return { ...entry, message: proxy };
-          },
-        },
-        start,
-        end,
-        keep,
-        constraints,
-      );
-    },
-  ],
-] satisfies Array<[string, typeof findArrayCutPoint]>;
 
 const KEEP_RECENT_TOKENS = 20000;
 const LARGE_TOOL_OUTPUT = "x".repeat(120000);
@@ -82,7 +53,58 @@ function buildTranscriptWithToolResult(
   ].map(messageEntry);
 }
 
-describe.each(cutPointImplementations)("findCutPoint (%s)", (_implementation, findCutPoint) => {
+it("keeps occurrence cuts and pending budgets after releasing the source payloads", () => {
+  const entries = [
+    userText("old request", 1),
+    callingAssistant("bash", "repeat"),
+    { ...toolResultText("large removed payload ".repeat(10_000), 2), toolCallId: "repeat" },
+    userText("pending request", 3),
+    callingAssistant("read", "repeat"),
+    {
+      ...toolResultText("synthetic", 4),
+      toolCallId: "repeat",
+      isError: true,
+      details: { openclawSyntheticMissingToolResult: true },
+    },
+    callingAssistant("read", "other"),
+    { ...toolResultText("late real result", 5), toolCallId: "repeat" },
+    { ...toolResultText("other result", 6), toolCallId: "other" },
+    assistantText("complete", 7),
+  ].map(messageEntry);
+  const facts = structuredClone(entries.map((entry) => collectCompactionCutEntryFact(entry)));
+  const estimates = entries.map((entry) => {
+    const message = getMessageFromEntryForCompaction(entry);
+    return message ? estimateTokens(message) : 0;
+  });
+  const estimateAt = (index: number) => {
+    const value = estimates[index];
+    assert(value !== undefined);
+    return value;
+  };
+  const constraints = { requestBoundary: { entryId: "entry-3", preserve: true } };
+  const budgets = [1, 100, 20_000];
+  const expected = budgets.map((budget) =>
+    findCutPoint(entries, 0, entries.length, budget, constraints),
+  );
+  expect(expected[0]?.firstKeptEntryIndex).toBe(3);
+  const retention = {
+    ...constraints,
+    budget: { maxTokens: 100, reserveTokens: 10, estimateTokens },
+  };
+  const retained = findCutPoint(entries, 0, entries.length, 100, retention);
+  entries.length = 0;
+  expect(JSON.stringify(facts)).not.toContain("removed payload");
+  budgets.forEach((budget, index) => {
+    expect(findCutPointFromFacts(facts, 0, facts.length, budget, constraints, estimateAt)).toEqual(
+      expected[index],
+    );
+  });
+  expect(findCutPointFromFacts(facts, 0, facts.length, 100, retention, estimateAt)).toEqual(
+    retained,
+  );
+});
+
+describe("findCutPoint", () => {
   function foregroundBudget(entries: SessionTreeEntry[]) {
     const maxTokens = entries
       .slice(2)
@@ -192,29 +214,6 @@ describe.each(cutPointImplementations)("findCutPoint (%s)", (_implementation, fi
     ).toEqual({ firstKeptEntryIndex: 2, turnStartIndex: -1, isSplitTurn: false });
   });
 
-  it.each([true, false])("preserves custom carrier turn classification (%s)", (carrier) => {
-    const entries = [
-      messageEntry(userText("Start", 1), 0),
-      messageEntry(
-        {
-          role: "custom",
-          customType: "openclaw.runtime-context",
-          content: "Runtime note",
-          display: false,
-          details: { source: "openclaw-runtime-context", runtimeContextCarrier: carrier },
-          timestamp: 2,
-        },
-        1,
-      ),
-      messageEntry(assistantText("Latest answer", 3), 2),
-    ];
-    expect(findCutPoint(entries, 0, entries.length, 1)).toEqual({
-      firstKeptEntryIndex: 2,
-      turnStartIndex: carrier ? 0 : 1,
-      isSplitTurn: true,
-    });
-  });
-
   it("trims the prefix instead of keeping the whole transcript", () => {
     const entries = buildTranscriptWithToolResult();
 
@@ -243,74 +242,43 @@ describe.each(cutPointImplementations)("findCutPoint (%s)", (_implementation, fi
   });
 });
 
-describe.each(cutPointImplementations)(
-  "findCutPoint with metadata (%s)",
-  (_implementation, findCutPoint) => {
-    // Gateway runs write these entries: a model snapshot inside a turn, and the bootstrap
-    // marker after each completed run, right before the next user message.
-    const metadata = (index: number, customType: string): SessionTreeEntry => ({
-      type: "custom",
-      customType,
-      data: { timestamp: index },
-      id: `entry-${index}`,
-      parentId: `entry-${index - 1}`,
-      timestamp: new Date(index).toISOString(),
-    });
-    const long = (label: string) => `${label} ${"checklist line. ".repeat(250)}`;
-    const transcript = (turn2User: string, turn2Reply: string) => [
-      messageEntry(userText(long("turn 1"), 1), 0),
-      messageEntry(assistantText("reply 1", 2), 1),
-      metadata(2, "openclaw:bootstrap-context:full"),
-      messageEntry(userText(turn2User, 4), 3),
-      metadata(4, "model-snapshot"),
-      messageEntry(assistantText(turn2Reply, 6), 5),
-      metadata(6, "openclaw:bootstrap-context:full"),
-    ];
+describe("findCutPoint with metadata before the selected message", () => {
+  // Gateway runs write these entries: a model snapshot inside a turn, and the bootstrap
+  // marker after each completed run, right before the next user message.
+  const metadata = (index: number, customType: string): SessionTreeEntry => ({
+    type: "custom",
+    customType,
+    data: { timestamp: index },
+    id: `entry-${index}`,
+    parentId: `entry-${index - 1}`,
+    timestamp: new Date(index).toISOString(),
+  });
+  const long = (label: string) => `${label} ${"checklist line. ".repeat(250)}`;
+  const transcript = (turn2User: string, turn2Reply: string) => [
+    messageEntry(userText(long("turn 1"), 1), 0),
+    messageEntry(assistantText("reply 1", 2), 1),
+    metadata(2, "openclaw:bootstrap-context:full"),
+    messageEntry(userText(turn2User, 4), 3),
+    metadata(4, "model-snapshot"),
+    messageEntry(assistantText(turn2Reply, 6), 5),
+    metadata(6, "openclaw:bootstrap-context:full"),
+  ];
 
-    it("keeps the marker without splitting the previous complete turn", () => {
-      const entries = transcript(long("turn 2"), "reply 2");
-      expect(findCutPoint(entries, 0, entries.length, 500)).toEqual({
-        firstKeptEntryIndex: 2,
-        turnStartIndex: -1,
-        isSplitTurn: false,
-      });
+  it("keeps the marker without splitting the previous complete turn", () => {
+    const entries = transcript(long("turn 2"), "reply 2");
+    expect(findCutPoint(entries, 0, entries.length, 500)).toEqual({
+      firstKeptEntryIndex: 2,
+      turnStartIndex: -1,
+      isSplitTurn: false,
     });
+  });
 
-    it("still splits a turn when metadata precedes a cut inside it", () => {
-      const entries = transcript("turn 2", long("reply 2"));
-      expect(findCutPoint(entries, 0, entries.length, 500)).toEqual({
-        firstKeptEntryIndex: 4,
-        turnStartIndex: 3,
-        isSplitTurn: true,
-      });
+  it("still splits a turn when metadata precedes a cut inside it", () => {
+    const entries = transcript("turn 2", long("reply 2"));
+    expect(findCutPoint(entries, 0, entries.length, 500)).toEqual({
+      firstKeptEntryIndex: 4,
+      turnStartIndex: 3,
+      isSplitTurn: true,
     });
-  },
-);
-
-it("plans from recorded token costs without hydrating any transcript payload", () => {
-  const entries = Array.from({ length: 100 }, (_, index) =>
-    messageEntry(userText("Older conversation text", index), index),
-  );
-  entries.push(messageEntry(assistantText("Latest answer", 101), 100));
-  const navigation = entries.map(projectSessionModelContextNavigation);
-  const tokens = entries.map((entry) =>
-    entry.type === "message" ? estimateTokens(entry.message) : 0,
-  );
-  let payloadReads = 0;
-  const result = findCutPointFromSource(
-    {
-      length: entries.length,
-      metadata: (index) => navigation[index],
-      tokens: (index) => tokens[index] ?? 0,
-      get(index) {
-        payloadReads++;
-        return entries[index];
-      },
-    },
-    0,
-    entries.length,
-    1,
-  );
-  expect(result).toEqual({ firstKeptEntryIndex: 100, turnStartIndex: 99, isSplitTurn: true });
-  expect(payloadReads).toBe(0);
+  });
 });

@@ -199,6 +199,10 @@ export function createVitestResolveConfig(repoRoot: string) {
         ),
       },
       {
+        find: "@openclaw/ai/internal/session-resources",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "session-resources.ts"),
+      },
+      {
         find: /^@openclaw\/ai\/internal\/(.+)$/,
         replacement: path.join(repoRoot, "packages", "ai", "src", "internal", "$1.ts"),
       },

@@ -27,6 +27,8 @@ async function parkExpiringRun(method: "callValue" | "agentWait") {
       {
         id: `bridge:${method}:1`,
         method,
+        startedAtMs: Date.now(),
+        liveness: {},
         args: method === "agentWait" ? ["collector-1"] : ["openclaw:core:slow", {}],
         reply: owner.inbox.createReply(`bridge:${method}:1`),
         cancel,

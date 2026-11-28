@@ -60,6 +60,15 @@ async function managedWorkspace(row = localWorkspaceProjectionFixture(randomUUID
   return { row, sessionKey, worktree, scope, session, cfg };
 }
 
+it("rejects a forged session owner at the local projection boundary", async () => {
+  const { scope, session, cfg } = await managedWorkspace();
+  const sessionKey = "agent:main:other-session";
+  await replaceSessionEntry({ ...scope, sessionKey }, session);
+  await expect(resolveLocalWorkspaceOwner({ ...scope, sessionKey, cfg })).rejects.toThrow(
+    "Local sandbox managed workspace owner changed",
+  );
+});
+
 it.each(["unrelated publication", "selected identity", "selected removal"])(
   "scopes local workspace resolution while reading across %s",
   async (change) => {
@@ -107,8 +116,8 @@ it.each(["unrelated publication", "selected identity", "selected removal"])(
 it.each([
   ["retired worktree", "Worktree owner or binding changed"],
   ["replaced worktree", "Worktree owner or binding changed"],
-  ["deleted session", "Local sandbox workspace authority changed"],
-  ["rotated session", "Local sandbox workspace authority changed"],
+  ["deleted session", "Local sandbox workspace changed"],
+  ["rotated session", "Local sandbox workspace changed"],
   ["released publication", "GitHub publication session lifecycle changed"],
 ])("refuses the next filesystem effect after %s", async (change, refusal) => {
   const { row, sessionKey, worktree, scope, session, cfg } = await managedWorkspace();
@@ -127,7 +136,7 @@ it.each([
   if (!owner) {
     throw new Error("Expected a resolved workspace owner");
   }
-  row.projection_path = localWorkspaceProjectionPath(owner);
+  row.projection_path = await localWorkspaceProjectionPath(owner);
   await fs.mkdir(row.projection_path, { recursive: true });
   await withLocalWorkspaceStore({ worktreeId: worktree.id }, (store) => store.create(row));
   let refusedEffect: Promise<void> | undefined;
@@ -259,13 +268,13 @@ it("retains local-workspace authority through browser transaction and commit gra
     lifecycleRevision: "replacement",
     updatedAt: 2,
   });
-  expect(() => owner!.assertCurrent()).toThrow("Local sandbox workspace authority changed");
+  expect(() => owner!.assertCurrent()).toThrow("Local sandbox workspace changed");
   using released = await resolveLocalWorkspaceOwner(ownerParams);
   released![Symbol.dispose]();
-  expect(() => released!.assertCurrent()).toThrow("Local sandbox workspace authority changed");
+  expect(() => released!.assertCurrent()).toThrow(/Local sandbox workspace (changed|was released)/);
   using closed = await resolveLocalWorkspaceOwner(ownerParams);
   expect(sql.queries).toEqual([]);
   // Explicit teardown seals the database and releases its lease on the host.
   await closeOpenClawAgentDatabasesAsync();
-  expect(() => closed!.assertCurrent()).toThrow("Local sandbox workspace authority changed");
+  expect(() => closed!.assertCurrent()).toThrow(/Local sandbox workspace (changed|was released)/);
 });

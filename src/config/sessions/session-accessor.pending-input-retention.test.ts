@@ -1,6 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -85,7 +85,7 @@ it.each([
         ? bindSessionPendingInputSources([receipt], message("collected-retention"))!
         : receipt;
       const timer = execution.run(makeTimer);
-      execution.finish("cancelled");
+      execution.finish("cancelled", "failed");
       await execution.settled?.();
       expect(() => execution.run(() => {})).toThrow(SessionPendingInputCustodyError);
       return { reference, timer };

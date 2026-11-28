@@ -42,6 +42,14 @@ export type CiTimingRun = {
 
 type Samples = Map<string, number[]>;
 type WorkerCeilings = Map<string, Set<number | "unspecified" | "ambiguous">>;
+type ParentGenerationSample = {
+  parent: string;
+  generationKey: string;
+  expectedParts: number;
+  observedParts: number;
+  summedSeconds: number;
+  runParentSeconds?: number;
+};
 
 function normalizeTimingLog(text: string): string {
   // Quoted child output remains nested; only gh's outer job/step columns are removed.
@@ -52,15 +60,28 @@ function normalizeTimingLog(text: string): string {
 }
 
 function timingNamespace(key: string): string {
+  const owner = /"OPENCLAW_CI_TEST_RUNTIME","(node|bun)"/u.exec(key)?.[1];
+  const policy = /"OPENCLAW_CI_TEST_RUNTIME_POLICY","([^"]+)"/u.exec(key)?.[1];
+  if (owner && policy) {
+    return `${policy}:${owner}`;
+  }
   return (
-    /^(bun-all|bun-native|node-subset|dual-all|bun):/u.exec(key)?.[1] ??
+    /^(bun-all:(?:node|bun)|dual-all:bun|bun-all|bun-native|node-subset|dual-all|bun):/u.exec(
+      key,
+    )?.[1] ??
     /"OPENCLAW_CI_TEST_RUNTIME_POLICY","([^"]+)"/u.exec(key)?.[1] ??
     "node"
   );
 }
 
-function splitRuntimeTimingLogs(text: string): { text: string; prefix: string }[] {
+function splitRuntimeTimingLogs(
+  text: string,
+): { text: string; prefix: string; runtime?: string }[] {
   const policy = readLogEnv(text, "OPENCLAW_CI_TEST_RUNTIME_POLICY");
+  const owner = readLogEnv(text, "OPENCLAW_CI_TEST_RUNTIME");
+  if (owner === null || (owner && owner !== "node" && owner !== "bun")) {
+    return [];
+  }
   if (policy !== "bun-all" && policy !== "dual-all") {
     return [{ text, prefix: "" }];
   }
@@ -78,7 +99,7 @@ function splitRuntimeTimingLogs(text: string): { text: string; prefix: string }[
         return [line];
       }
       const runtime = /^(?:bun:|bun-native:|node-subset:)/u.exec(shard[1]!)?.[0] ?? "";
-      if (!(runtime ? includeBun : includeNode)) {
+      if (!(runtime && !(owner && runtime === "node-subset:") ? includeBun : includeNode)) {
         return [];
       }
       return [line.replace(`[shard:${runtime}`, "[shard:")];
@@ -112,6 +133,12 @@ function splitRuntimeTimingLogs(text: string): { text: string; prefix: string }[
       })
       .join("\n");
   };
+  // A split leg is not the historical serial envelope. Only dual-all
+  // has a full Node pass that can reuse the original Node costs.
+  if (owner) {
+    const prefix = owner === "node" && policy === "dual-all" ? "" : `${policy}:${owner}:`;
+    return [{ text: collapse(owner === "node", owner === "bun"), prefix, runtime: owner }];
+  }
   return policy === "bun-all"
     ? [{ text: collapse(true, true), prefix: "bun-all:" }]
     : [
@@ -492,6 +519,7 @@ function readPackedReleaseLog(text: string, labels: string[], samples: Samples) 
   const jobWorkers = readJobWorkerCeiling(text);
   if (
     ciTimingRunnerProfile(labels) !== "github" ||
+    readLogEnv(text, "OPENCLAW_CI_TEST_RUNTIME") ||
     readLogEnv(text, "OPENCLAW_CI_TEST_RUNTIME_POLICY") !== "dual-all" ||
     resources?.requestedPlans !== 1 ||
     resources.admittedPlans !== 1 ||
@@ -1106,17 +1134,31 @@ function recordCompleteParentSamples(
     generation.parts.set(parsed.part, median(values));
     generations.set(parsed.generationKey, generation);
   }
-  for (const { parent, expected, parts } of generations.values()) {
+  const observations: ParentGenerationSample[] = [];
+  for (const [generationKey, { parent, expected, parts }] of generations) {
+    const total = [...parts.values()].reduce((sum, duration) => sum + duration, 0);
+    observations.push({
+      parent,
+      generationKey,
+      expectedParts: expected,
+      observedParts: parts.size,
+      summedSeconds: total,
+    });
     if (parts.size !== expected) {
       continue;
     }
     // Inventory-specific child keys expire when files move. Retain the full
     // measured cost at its parent so the next inventory has a measured floor.
     // One run/profile supplies one sample, even after retries or repartitioning.
-    const total = [...parts.values()].reduce((sum, duration) => sum + duration, 0);
     const direct = samples.get(parent);
     samples.set(parent, [Math.max(total, direct ? median(direct) : 0)]);
   }
+  for (const observation of observations) {
+    if (observation.observedParts === observation.expectedParts) {
+      observation.runParentSeconds = median(samples.get(observation.parent)!);
+    }
+  }
+  return observations;
 }
 
 function refitMap(
@@ -1214,6 +1256,8 @@ export function refitTestTimings(
       .flat()
       .map((observation) => [runtimePlacementTimingIdentity(observation), observation]),
   );
+  const parentSamples: (ParentGenerationSample & { runId: number; profile: CiTimingProfile })[] =
+    [];
   const uniqueRuns = new Map<number, CiTimingRun>();
   for (const run of runs) {
     const retained = uniqueRuns.get(run.id);
@@ -1298,7 +1342,10 @@ export function refitTestTimings(
             for (const [identity, values] of runtime[profile]) {
               const observation = descriptors.get(identity)!;
               if (runtimeLog.prefix) {
-                observation.env.OPENCLAW_CI_TEST_RUNTIME_POLICY = runtimeLog.prefix.slice(0, -1);
+                observation.env.OPENCLAW_CI_TEST_RUNTIME_POLICY = runtimeLog.prefix.split(":")[0]!;
+                if (runtimeLog.runtime) {
+                  observation.env.OPENCLAW_CI_TEST_RUNTIME = runtimeLog.runtime;
+                }
               }
               const key = runtimePlacementTimingIdentity(observation);
               runtimeDescriptors.set(key, observation);
@@ -1348,11 +1395,14 @@ export function refitTestTimings(
       changedUiFiles.add(file);
     }
     for (const profile of CI_TIMING_PROFILES) {
-      recordCompleteParentSamples(
+      const generations = recordCompleteParentSamples(
         current[profile],
         observedParents[profile],
         !run.pullRequestMergeRef && !run.logs.some((log) => log.kind === "release-packed"),
       );
+      for (const sample of generations) {
+        parentSamples.push(Object.assign(sample, { runId: run.id, profile }));
+      }
       for (const [identity, values] of currentRuntime[profile]) {
         recordSample(runtimeSamples[profile], identity, median(values));
       }
@@ -1591,6 +1641,12 @@ export function refitTestTimings(
   }
   return {
     timings,
+    parentSamples: parentSamples.toSorted(
+      (a, b) =>
+        a.runId - b.runId ||
+        a.profile.localeCompare(b.profile) ||
+        a.generationKey.localeCompare(b.generationKey),
+    ),
     changes: changes.toSorted((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
     runIds,
     rejectedWorkerKeys,

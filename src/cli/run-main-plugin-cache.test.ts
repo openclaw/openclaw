@@ -2,7 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   cache: { kind: "operation" as const },
-  retirePluginCache: vi.fn(async () => ({ cleanupCount: 0, failures: [] })),
+  retirePluginCache: vi.fn(async () => ({ failures: [] })),
 }));
 
 // mock-isolation: assert the CLI owner passes terminal settlement without loading real plugin state.

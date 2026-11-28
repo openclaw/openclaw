@@ -85,7 +85,7 @@ it("retains missed shutdown markers in terminal writes without marking resets or
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
     const f = createSessionCompoundWorkerFixture();
-    const retained = { queuedInputIds: ["accepted-input"], hadBackgroundExec: true as const };
+    const retained = { sourceRunId: "previous" };
     const cases: Array<{
       name: string;
       key?: string;
@@ -97,8 +97,13 @@ it("retains missed shutdown markers in terminal writes without marking resets or
       entry?: Partial<SessionEntry>;
       marker?: SessionEntry["resumeAfterRestart"];
     }> = [
-      { name: "missing", shutdown: true, marker: { queuedInputIds: [] } },
-      { name: "queued", shutdown: true, entry: { resumeAfterRestart: retained }, marker: retained },
+      { name: "missing", shutdown: true, marker: { sourceRunId: "running" } },
+      {
+        name: "replaced-execution",
+        shutdown: true,
+        entry: { resumeAfterRestart: retained },
+        marker: { sourceRunId: "running" },
+      },
       { name: "reset" },
       { name: "stop", shutdown: true, stopReason: "aborted" },
       { name: "stale", shutdown: true, stale: true },
@@ -108,7 +113,14 @@ it("retains missed shutdown markers in terminal writes without marking resets or
         shutdown: true,
         unstarted: true,
         unstartedRunId: "running",
-        marker: { queuedInputIds: [] },
+        marker: {},
+      },
+      {
+        name: "pending-continuation",
+        shutdown: true,
+        unstarted: true,
+        entry: { lifecycleRunId: undefined, resumeAfterRestart: retained },
+        marker: retained,
       },
       { name: "cron", shutdown: true, key: "agent:main:cron:scheduled" },
       { name: "child", shutdown: true, key: "agent:main:subagent:child" },
@@ -150,7 +162,7 @@ it("retains missed shutdown markers in terminal writes without marking resets or
               phase: "end",
               aborted: true,
               stopReason: test.stopReason ?? "restart",
-              ...(test.unstarted ? { executionStarted: false } : {}),
+              executionStarted: !test.unstarted,
             },
           },
         });

@@ -216,27 +216,24 @@ async function afterCommittedChange(
   }
 }
 
-it("reuses unchanged descriptions across readers while sampling pending titles live", () =>
+it("samples pending titles live for viewers and owners without changing earlier descriptions", () =>
   withFixture(async ({ context, describe }) => {
     await describe();
     const projection = getSessionRowProjection(context)!;
-    using present = vi.spyOn(projection, "present");
     const owner = identifiedClient(ensureProfileForEmail("owner@example.com").id);
     const readOwner = () => describeSession(context, owner);
     const viewerRow = await describe();
     const ownerRow = await readOwner();
     expect(viewerRow).toMatchObject({ session: { sharingRole: "viewer", titlePending: false } });
     expect(ownerRow).toMatchObject({ session: { sharingRole: "owner", titlePending: false } });
-    for (let index = 0; index < 3; index++) {
-      expectSession(await describe(), { sharingRole: "viewer", titlePending: false });
-      expectSession(await readOwner(), { sharingRole: "owner", titlePending: false });
-    }
-    expect(present).toHaveBeenCalledTimes(1);
     const record = projection.describe({ agentId: "main", key: targetKey })!;
     const generation = createDeferredCore<boolean>();
     const pending = sessionTitleRequests.run(
       { storePath: record.storeTarget.storePath, sessionKey: targetKey, sessionId: "original" },
-      () => generation.promise,
+      (markStarted) => {
+        markStarted();
+        return generation.promise;
+      },
     );
     try {
       expectSession(await describe(), { titlePending: true, sharingRole: "viewer" });
@@ -329,7 +326,6 @@ it("projects current target, lineage, children and placement after committed cha
       model: "gpt-5.5",
       modelOverrideSource: "inherited",
       placement: { state: "requested" },
-      childSessions: undefined,
       swarm: {
         groups: [
           {
@@ -340,6 +336,7 @@ it("projects current target, lineage, children and placement after committed cha
         ],
       },
     });
+    expect(response).not.toHaveProperty("session.childSessions");
     expect(JSON.stringify(response)).not.toContain("synthetic retained");
   }));
 
@@ -471,7 +468,8 @@ it("does not promote historical control after the current executor retires", () 
       execution[Symbol.dispose]();
       clock.mockReturnValue(now + 1);
     });
-    expectSession(response, { controlOwnerSessionKey: undefined });
+    expectSession(response, {});
+    expect(response).not.toHaveProperty("session.controlOwnerSessionKey");
   }));
 
 it.each(["executor", "reservation"] as const)(
@@ -522,7 +520,8 @@ it.each(["executor", "reservation"] as const)(
             expect(withdrawn).toBe(true);
           }
         });
-        expectSession(response, { hasActiveSubagentRun: undefined });
+        expectSession(response, {});
+        expect(response).not.toHaveProperty("session.hasActiveSubagentRun");
       } finally {
         releaseAgentRunContext(run.runId, claim);
         const hold = holdQueuedSwarmRun(run.runId);

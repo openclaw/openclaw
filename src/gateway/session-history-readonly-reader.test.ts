@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
   isSessionNodePayloadSelect,
@@ -310,7 +310,7 @@ it.each(["entry", "actor"] as const)(
         },
       };
       const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
-      const actor = captureDurableSessionActor({
+      const actor = await captureDurableSessionActor({
         database: target.database,
         target: actorTarget,
         lifetime: authority,
@@ -390,6 +390,7 @@ it.each([
                   kind: "list",
                   sessionKey: transcript.sessionKey,
                   includeDownloadData,
+                  includeAttachments: true,
                   ...(assistantOnly ? { messageRole: "assistant" as const } : {}),
                 },
               },
@@ -400,31 +401,40 @@ it.each([
         if (result.kind !== "artifacts" || result.result.kind !== "list") {
           throw new Error("expected artifact list");
         }
-        return result.result.artifacts;
+        return result.result;
       };
+      const readArtifacts = async (assistantOnly = false) => (await read(assistantOnly)).artifacts;
       const replace = async (title: string) => {
         await replaceTranscriptEvents(transcript, [
           { type: "session", version: 3, id: transcript.sessionId },
           messageEvent("artifact", message(title)),
+          messageEvent(
+            "catalog-upload",
+            {
+              role: "user",
+              content: [],
+              __openclaw: {
+                media: [
+                  {
+                    url: "media://inbound/catalog-upload.png",
+                    contentType: "image/png",
+                    kind: "image",
+                    fileName: "catalog-upload.png",
+                    sizeBytes: 2048,
+                  },
+                ],
+              },
+            },
+            "artifact",
+          ),
         ]);
         await waitForSessionTranscriptProjection(transcript);
       };
-      const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
-      const payloadReads: string[] = [];
-      // oxlint-disable-next-line typescript/unbound-method -- Forward with the native statement receiver.
-      const iterate = prototype.iterate;
-      const observer = vi.spyOn(prototype, "iterate").mockImplementation(function (
-        this: StatementSync,
-        ...args
-      ) {
-        if (
-          this.sourceSQL.includes("event_json") &&
-          this.sourceSQL.includes("session_transcript_active_events")
-        ) {
-          payloadReads.push(this.sourceSQL);
-        }
-        return iterate.apply(this, args);
-      });
+      const observed = observeSqliteReadSql(Object.getPrototypeOf(database.db.prepare("SELECT 1")));
+      const payloadReads = () =>
+        observed.queries.filter(
+          (sql) => sql.includes("event_json") && sql.includes("session_transcript_active_events"),
+        );
       try {
         await replace("first.txt");
         // Cold canonical admission uses a publication scope, which cannot populate derived caches.
@@ -432,14 +442,21 @@ it.each([
           createReadonlySessionHistoryReader(target).readSessionMessageCountAsync(transcript),
         );
         const first = await read();
-        expect(first).toMatchObject([{ title: "first.txt", sizeBytes: 5, download: { mode } }]);
-        expect(first[0]).not.toHaveProperty("data");
-        expect(first[0]).not.toHaveProperty("url");
-        expect(payloadReads.length).toBeGreaterThan(0);
-        payloadReads.length = 0;
+        expect(first.artifacts).toMatchObject([
+          { title: "first.txt", sizeBytes: 5, download: { mode } },
+        ]);
+        expect(first.artifacts[0]).not.toHaveProperty("data");
+        expect(first.artifacts[0]).not.toHaveProperty("url");
+        expect(payloadReads().length).toBeGreaterThan(0);
+        observed.queries.length = 0;
         expect(await read()).toEqual(first);
-        expect(payloadReads).toEqual([]);
-        expect((await read(false, true))[0]).toMatchObject(source);
+        expect(payloadReads()).toEqual([]);
+        const withDownload = await read(false, true);
+        expect(withDownload.artifacts[0]).toMatchObject(source);
+        expect(first.attachments?.messages).toMatchObject([
+          { __openclaw: { id: "catalog-upload", seq: expect.any(Number) } },
+        ]);
+        expect(withDownload.attachments).toEqual(first.attachments);
 
         await appendTranscriptMessage(transcript, {
           eventId: "upload",
@@ -447,18 +464,18 @@ it.each([
           message: message("uploaded.txt", "user"),
         });
         await waitForSessionTranscriptProjection(transcript);
-        expect((await read()).map((a) => a.title)).toEqual(["first.txt", "uploaded.txt"]);
-        expect((await read(true)).map((a) => a.title)).toEqual(["first.txt"]);
+        expect((await readArtifacts()).map((a) => a.title)).toEqual(["first.txt", "uploaded.txt"]);
+        expect((await readArtifacts(true)).map((a) => a.title)).toEqual(["first.txt"]);
         await replace("replacement.txt");
-        expect((await read()).map((a) => a.title)).toEqual(["replacement.txt"]);
+        expect((await readArtifacts()).map((a) => a.title)).toEqual(["replacement.txt"]);
         await replace("same-length-rewrite.txt");
-        expect((await read()).map((a) => a.title)).toEqual(["same-length-rewrite.txt"]);
+        expect((await readArtifacts()).map((a) => a.title)).toEqual(["same-length-rewrite.txt"]);
         await replaceTranscriptEvents(transcript, [
           { type: "session", version: 3, id: transcript.sessionId },
         ]);
-        expect(await read()).toEqual([]);
+        expect(await readArtifacts()).toEqual([]);
       } finally {
-        observer.mockRestore();
+        observed.restore();
         owner.close();
       }
     });
@@ -500,7 +517,7 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
         if (admission === "policy") {
           setCanonicalSqliteSessionMainKey(database, "custom");
         } else if (admission === "receipt") {
-          invalidateOpenClawAgentDatabaseValidation(database.path);
+          invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
         }
         clearNodeSqliteKyselyCacheForDatabase(connection);
         // oxlint-disable-next-line typescript/unbound-method -- Forward with the actual native reader.

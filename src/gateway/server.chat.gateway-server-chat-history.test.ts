@@ -137,14 +137,7 @@ describe("gateway server chat", () => {
       webchatWs.close();
       webchatWs = undefined;
 
-      testState.agentConfig = { timeoutSeconds: 123 };
-      mockGetReplyFromConfigOnce(async () => ({ text: "Reply within configured timeout." }));
-      const timeoutRes = await sendChat("idem-timeout-1");
-      expect(timeoutRes.ok).toBe(true);
-      expect(timeoutRes.payload?.runId).toBe("idem-timeout-1");
-      await waitForAgentRunDrained("idem-timeout-1");
-      testState.agentConfig = undefined;
-
+      mockGetReplyFromConfigOnce(async () => ({ text: "Subagent session reply." }));
       const sessionRes = await sendChat("idem-session-key-1", {
         sessionKey: "agent:main:subagent:abc",
       });

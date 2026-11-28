@@ -695,9 +695,10 @@ describe("resolveApiKeyForProviderCore", () => {
     const store = authStore({ [id]: ended });
     await expect(
       storedAuth("acme", undefined, { allowAuthProfileFallback: false, store }),
-    ).rejects.toThrow(
-      `Sign in again with openclaw models auth login --provider acme --profile-id '${id}'.`,
-    );
+    ).rejects.toMatchObject({
+      message: `The acme sign-in "${id}" has ended or was rejected.`,
+      cause: expect.objectContaining({ reason: "refresh_rejected" }),
+    });
   });
 
   it("prefers explicit api-key provider SecretRef config over ambient auth profiles", async () => {

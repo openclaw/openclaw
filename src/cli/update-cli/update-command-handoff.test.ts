@@ -48,7 +48,12 @@ it
     const resultPath = path.join(root, "result.json");
     const managerPath = path.join(root, "manager-calls");
     const control = await fs.realpath(await tempDirs.make("openclaw-cli-handoff-control-"));
-    const leasePath = path.join(control, "managed-update-handoffs.sqlite");
+    const uid = process.getuid?.();
+    const leasePath = path.join(
+      control,
+      uid === undefined ? "openclaw" : `openclaw-${uid}`,
+      "managed-update-handoffs.sqlite",
+    );
     const readTrace = () => fs.readFile(tracePath, "utf8");
     await fs.mkdir(path.join(root, "dist"));
     await fs.writeFile(
@@ -97,6 +102,7 @@ process.stdin.once('end',()=>{if(child.exitCode===null&&child.signalCode===null)
         ...process.env,
         OPENCLAW_STATE_DIR: root,
         OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+        TMPDIR: control,
         OPENCLAW_LAUNCHD_LABEL: `ai.openclaw.handoff-test.${process.pid}`,
         OPENCLAW_UPDATE_RUN_HANDOFF: undefined,
         OPENCLAW_SUPERVISOR_MODE: undefined,

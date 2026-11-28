@@ -467,7 +467,7 @@
     },
     "historyRecovery.attestNativeLogin": {
       "label": "Attest Native Claude Login",
-      "help": "Off by default. When on, OpenClaw reads the access token of the native Claude login on this Gateway and sends it only to https://api.anthropic.com/api/oauth/profile to learn which account owns it, so saved history is replayed only to that same account. When off, history recovery never reads or sends that token, and fresh native-login sessions get no saved history."
+      "help": "Off by default. When on, OpenClaw reads the access token of the native Claude login on this Gateway and sends it only to https://api.anthropic.com/api/oauth/profile to learn which account owns it, so a session's saved history is never replayed to a different account. When off, history recovery never reads or sends that token, and the native login is unidentified: it receives saved history unless another identified account already ran the session."
     }
   }
 }

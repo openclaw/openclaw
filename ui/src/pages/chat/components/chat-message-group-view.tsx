@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { messageSubagentCompletions } from "../../../../../src/shared/subagent-completion.js";
 import { PersonName } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
@@ -24,11 +25,13 @@ import { RewindButton } from "./chat-message-confirmation-view.tsx";
 import {
   type GroupMessage,
   type MessageGroupFrame,
-  type NativeMessageGroupOptions,
   prepareGroupMessage,
   prepareMessageGroupFrame,
-  resolveFileLinkOwnerOptions,
 } from "./chat-message-group-frame.ts";
+import {
+  resolveFileLinkOwnerOptions,
+  type NativeMessageGroupOptions,
+} from "./chat-message-group-options.ts";
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
   hasMessageActionButtons,
@@ -50,8 +53,9 @@ import {
 import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
 import type { ReplyConnectorElements } from "./chat-reply-connector.tsx";
 import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
+import { ChatSubagentCompletion } from "./chat-subagent-completion.tsx";
 
-export type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
+export type { NativeMessageGroupOptions } from "./chat-message-group-options.ts";
 
 function MessageActionsRow(props: {
   messageKey?: string;
@@ -104,6 +108,7 @@ function PreparedMessage(props: {
   index: number;
   options: NativeMessageGroupOptions & Pick<GroupedMessageOptions, "replyLine">;
   prepared?: ReturnType<typeof prepareGroupMessage>;
+  completionDelay?: number;
   /** Off when the row under a flat reply carries its reactions. */
   bubbleReactions?: boolean;
 }) {
@@ -133,25 +138,14 @@ function PreparedMessage(props: {
       };
     }
     const entryId = persistedMessageEntryId(props.item.message) ?? undefined;
-    const openFile = props.options.onOpenWorkspaceFile;
     return {
-      ...props.options,
+      ...resolveFileLinkOwnerOptions(props.group, props.options, entryId),
       firstBubbleKey:
         props.options.firstBubbleKey !== undefined
           ? props.options.firstBubbleKey
           : (props.group.messages.find((message) => message.hasVisibleContent)?.key ?? null),
       isStreaming: isStreaming(),
       entryId,
-      // Tool-row file links carry their message like rendered markdown links, so earlier
-      // messages keep reading their original source; sender-owned links stay session-scoped.
-      ...(entryId && openFile && !props.group.senderSession?.sessionKey
-        ? {
-            onOpenWorkspaceFile: (target: { path: string; line?: number | null }) => {
-              const owned = { ...target, messageEntryId: entryId };
-              openFile(owned);
-            },
-          }
-        : {}),
       showToolCalls: props.options.showToolCalls ?? true,
       assistantMessageDisclosure,
       messageActions: actionDetails,
@@ -165,22 +159,35 @@ function PreparedMessage(props: {
   });
   return (
     <>
-      <GroupedMessage
-        preparation={prepared().source}
-        messageKey={props.item.key}
-        options={options()}
-        onOpenSidebar={props.options.onOpenSidebar}
-        reactions={
-          <Show when={props.bubbleReactions !== false}>
-            <GroupMessageReactions
-              group={props.group}
-              actionDetails={prepared().actions}
-              isStreaming={isStreaming()}
-              options={props.options}
-            />
-          </Show>
+      <Show
+        when={messageSubagentCompletions(props.item.message).length > 0}
+        fallback={
+          <GroupedMessage
+            preparation={prepared().source}
+            messageKey={props.item.key}
+            options={options()}
+            onOpenSidebar={props.options.onOpenSidebar}
+            reactions={
+              <Show when={props.bubbleReactions !== false}>
+                <GroupMessageReactions
+                  group={props.group}
+                  actionDetails={prepared().actions}
+                  isStreaming={isStreaming()}
+                  options={props.options}
+                />
+              </Show>
+            }
+          />
         }
-      />
+      >
+        <ChatSubagentCompletion
+          completions={messageSubagentCompletions(props.item.message)}
+          elapsed={props.completionDelay}
+          onOpenSession={
+            props.options.subagents?.onOpenSession ?? props.options.subagents?.onOpenSubagent
+          }
+        />
+      </Show>
       <Show when={resumed()}>
         {(handoff) => (
           <ChatHandoffResume
@@ -236,6 +243,7 @@ export function MessageGroupContent(props: {
   group: MessageGroupData;
   options: NativeMessageGroupOptions;
   footerReactionMessageKey?: string;
+  completionDelay?: { key: string; elapsed: number };
 }) {
   const options = createMemo(() => resolveFileLinkOwnerOptions(props.group, props.options));
   return (
@@ -252,6 +260,9 @@ export function MessageGroupContent(props: {
             item={item()}
             index={index()}
             options={{ ...options(), isForwarded: hasForwardedSource(props.group) }}
+            completionDelay={
+              props.completionDelay?.key === item().key ? props.completionDelay.elapsed : undefined
+            }
             bubbleReactions={props.footerReactionMessageKey !== item().key}
           />
         )}
@@ -319,6 +330,9 @@ function SenderIdentity(props: { frame: MessageGroupFrame }) {
     <>
       <Show when={frame().showSenderName}>
         <PersonName label={frame().who} link={activityLink()} class="chat-sender-name" />
+      </Show>
+      <Show when={frame().suggestedByLabel}>
+        <span class="chat-message-source">{frame().suggestedByLabel}</span>
       </Show>
       <Show when={frame().visibleSources?.length}>
         <span class="chat-message-source">
@@ -507,11 +521,11 @@ function FramedMessageGroup(props: {
     <div
       ref={(element) => (replyElements.group = element)}
       class={frame().className}
-      style={`${
+      style={
         frame().normalizedRole === "user" || frame().isForwarded
           ? (participantPalette.read()?.style(frame().senderHue) ?? "")
           : ""
-      }${options().frameFooter === false ? ";margin-block-end:calc(var(--chat-run-block-gap) - 2px)" : ""}`}
+      }
       data-chat-row-key={props.group.key}
       data-chat-streaming={props.group.isStreaming ? "true" : undefined}
       data-file-session-key={frame().sessionKey}
@@ -551,6 +565,7 @@ function FramedMessageGroup(props: {
                   frame().normalizedRole === "user" &&
                   Boolean(
                     frame().visibleSources?.length ||
+                    frame().suggestedByLabel ||
                     frame().isPeerGroup ||
                     (frame().showSenderName && frame().avatarPlacement !== "footer"),
                   ),
@@ -675,7 +690,9 @@ export function MessageGroup(props: {
     >
       <Show
         when={
-          normalizeRoleForGrouping(props.group.role) !== "tool" || options().showToolCalls !== false
+          Boolean(props.group.compaction) ||
+          normalizeRoleForGrouping(props.group.role) !== "tool" ||
+          options().showToolCalls !== false
         }
       >
         <Show

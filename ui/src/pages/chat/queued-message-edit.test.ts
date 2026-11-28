@@ -20,7 +20,8 @@ import {
   renderComposerInto,
   disposeComposer,
 } from "./chat-composer.test-support.ts";
-import { applyChatAgentsList } from "./chat-history.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { applyChatAgentsList, loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession as admitForSession } from "./chat-outbox-admission.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
@@ -224,6 +225,46 @@ it.each(["move", "remove"])("retains edits after peer %s and navigation", async 
   expect(cancelEdit(host as never)).toBe(true);
   expect(storedOrder(host)).toEqual(expectedOrder);
 });
+
+it.each(["message 1, corrected", "/review-this queued correction"])(
+  "sends a queued edit once after reconnect history settles without another submit: %s",
+  async (draft) => {
+    const history = createDeferred<ChatHistoryResult>();
+    const result: ChatHistoryResult = {
+      messages: [],
+      sessionInfo: {
+        key: SESSION_KEY,
+        sessionId: "queued-edit-session",
+        kind: "direct",
+        hasActiveRun: false,
+      },
+    };
+    const historyRequest = vi.fn(() => history.promise);
+    const { host, sendRequest } = sendFixture([{}], {
+      currentSessionId: "queued-edit-session",
+      requestHandlers: { "chat.startup": historyRequest },
+    });
+    startEdit(host, "queued-1", draft);
+    const loading = loadChatHistory(host, { startup: true, deferBranches: true });
+    const sending = submitQueuedEdit(host);
+    try {
+      await vi.waitFor(() => expect(historyRequest).toHaveBeenCalledOnce());
+      expect(sendRequest).not.toHaveBeenCalled();
+      expect(storedOrder(host)).toEqual(["message 1"]);
+      expect(host.chatQueuedEdit?.draftText).toBe(draft);
+      history.resolve(result);
+      await Promise.all([loading, sending]);
+      expect(sendRequest).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ sessionKey: SESSION_KEY, message: draft }),
+      );
+      expect(host.chatQueuedEdit).toBeNull();
+      expect(historyRequest).toHaveBeenCalledOnce();
+    } finally {
+      history.resolve(result);
+      await Promise.all([loading, sending]);
+    }
+  },
+);
 
 it.each(["cancelled", "changed"])("aborts edits %s during refresh", async (change) => {
   const { history, historyRequest, sendRequest, host } = historyRefreshFixture();

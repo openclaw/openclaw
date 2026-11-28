@@ -1,10 +1,8 @@
 import { parseTelegramTargetForTest } from "../../../test/helpers/infra/telegram-targets.js";
 import type {
   ChannelMessagingAdapter,
-  ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelOutboundSessionRoute } from "../../plugin-sdk/core.js";
 import {
   createChannelTestPluginBase,
@@ -84,35 +82,24 @@ export const forumMessagingForTest: ChannelMessagingAdapter = {
   preserveHeartbeatThreadIdForGroupRoute: true,
 };
 
-export function createTestChannelPlugin(params: {
-  id: ChannelPlugin["id"];
-  label?: string;
-  outbound?: ChannelOutboundAdapter;
-  messaging?: ChannelMessagingAdapter;
-  resolveDefaultTo?: (params: { cfg: OpenClawConfig }) => string | undefined;
-}): ChannelPlugin {
-  return {
-    ...createChannelTestPluginBase({
-      id: params.id,
-      label: params.label,
-      capabilities: { chatTypes: ["direct", "group"] },
-      config: {
-        listAccountIds: () => [],
-        ...(params.resolveDefaultTo ? { resolveDefaultTo: params.resolveDefaultTo } : {}),
-      },
-    }),
-    ...(params.outbound ? { outbound: params.outbound } : {}),
-    ...(params.messaging ? { messaging: params.messaging } : {}),
-  };
-}
-
 export function createGenericTargetTestPlugin(
   id: ChannelPlugin["id"],
   label = String(id),
 ): ChannelPlugin {
-  return createTestChannelPlugin({
-    id,
-    label,
+  return {
+    ...createChannelTestPluginBase({
+      id,
+      label,
+      capabilities: { chatTypes: ["direct", "group"] },
+      config: {
+        listAccountIds: () => [],
+        resolveDefaultTo: ({ cfg }) => {
+          const channels = cfg.channels as Record<string, { defaultTo?: unknown }> | undefined;
+          const value = channels?.[id]?.defaultTo;
+          return typeof value === "string" ? value : undefined;
+        },
+      },
+    }),
     outbound: {
       deliveryMode: "direct",
       sendText: async () => ({ channel: id, messageId: `${id}-msg` }),
@@ -129,25 +116,14 @@ export function createGenericTargetTestPlugin(
       // Syntax alone never admits an implicit owner destination.
       inferTargetChatType: ({ to }) => (/^user:/i.test(to) ? "direct" : undefined),
     },
-    resolveDefaultTo: ({ cfg }) => {
-      const channels = cfg.channels as Record<string, { defaultTo?: unknown }> | undefined;
-      const value = channels?.[id]?.defaultTo;
-      return typeof value === "string" ? value : undefined;
-    },
-  });
+  };
 }
 
 export function createForumTargetTestPlugin(): ChannelPlugin {
   return { ...createGenericTargetTestPlugin("forum", "Forum"), messaging: forumMessagingForTest };
 }
 
-export function createTargetsTestRegistry(
-  plugins: ChannelPlugin[] = [
-    createGenericTargetTestPlugin("alpha", "Alpha"),
-    createGenericTargetTestPlugin("beta", "Beta"),
-    createForumTargetTestPlugin(),
-  ],
-) {
+export function createTargetsTestRegistry(plugins: ChannelPlugin[]) {
   return createTestRegistry(
     plugins.map((plugin) => ({ pluginId: plugin.id, plugin, source: "test" })),
   );

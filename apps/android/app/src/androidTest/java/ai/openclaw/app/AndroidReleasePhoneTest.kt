@@ -107,7 +107,7 @@ class AndroidReleasePhoneTest {
           .put("loading", viewModel.chatHistoryLoading.value)
           .put("healthy", viewModel.chatHealthOk.value)
           .put("pendingRuns", viewModel.pendingRunCount.value)
-          .put("streaming", viewModel.chatStreamingAssistantText.value != null)
+          .put("streaming", viewModel.chatStreamingAssistant.value?.text != null)
           .put("errorPresent", viewModel.chatError.value != null)
           .put("messageCount", messages.size)
         val counts = JSONObject()

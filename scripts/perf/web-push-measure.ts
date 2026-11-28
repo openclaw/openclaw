@@ -18,6 +18,8 @@ import { PerformanceObserver, performance } from "node:perf_hooks";
 import { parseArgs } from "node:util";
 import webPush from "web-push";
 import { prepareWebPushNotificationSender } from "../../src/infra/push-web.js";
+import { resolveSystemBin } from "../../src/infra/resolve-system-bin.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -64,10 +66,14 @@ const observer = new PerformanceObserver((list) => {
 try {
   let port = 41071;
   if (values.mode === "https") {
+    const openssl = resolveSystemBin("openssl", { trust: "standard" });
+    if (!openssl) {
+      throw new Error("OpenSSL is required for --mode https; install it in a system directory.");
+    }
     const keyPath = path.join(stateDir, "key.pem");
     const certPath = path.join(stateDir, "cert.pem");
     execFileSync(
-      "openssl",
+      openssl,
       [
         "req",
         "-x509",
@@ -139,12 +145,7 @@ try {
     await send(params);
   }
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   observer.observe({ entryTypes: ["gc"] });
   const blocked: number[] = [];

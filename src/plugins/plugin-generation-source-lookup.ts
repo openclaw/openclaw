@@ -2,8 +2,15 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
-import { throwSettledAggregate } from "../infra/error-graph-internal.js";
+import {
+  settleWithCleanup,
+  throwIfSettledRejected,
+  throwSettledAggregate,
+} from "../infra/error-graph-internal.js";
+import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
+import { createPluginCaptureOwner } from "./plugin-capture-native-resource.client.js";
 import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import type {
   PluginFrozenSourceSnapshot,
@@ -16,10 +23,6 @@ import {
 } from "./plugin-instance-error.js";
 import type { PluginNativeRecovery } from "./plugin-native-admission.js";
 import {
-  createPluginNativeReferenceValidator,
-  linkPluginNativeReference,
-} from "./plugin-native-reference.js";
-import {
   createPluginDependencyResolver,
   createPluginSourceCapture,
   type PluginModuleCapture,
@@ -27,7 +30,12 @@ import {
   findPluginCapturedPackage,
   type PluginPackageCapture,
 } from "./plugin-package-metadata-capture.js";
-import type { PluginNativeArtifactFact } from "./plugin-source-admission.types.js";
+import { copyPluginRecoveryFiles } from "./plugin-recovery-source-copy.js";
+import {
+  pluginSourceCaptureDirectory,
+  resolvePluginSourceCaptureStorage,
+} from "./plugin-source-capture-context.js";
+import { createPluginSourceCaptureState } from "./plugin-source-capture-state.js";
 import { readPluginCapturedCode } from "./plugin-source-file.js";
 import type { PluginCapturedSourceFact } from "./plugin-source-verification.js";
 // These owner-defined operations copy captured source trees; their cost scales with
@@ -43,11 +51,24 @@ export function isPluginSourceCaptureOperation(operation: object): boolean {
   return sourceCaptureOperations.has(operation);
 }
 
-type SourceCustody = {
-  source: PluginRecoverySource;
+type SourceCustody<Source> = {
+  source: Source;
   files: ReadonlyMap<string, PluginCapturedSourceFact>;
+  executionAliases: ReadonlyMap<string, string>;
+  executionSources: ReadonlyMap<string, string>;
+  packageManifests: ReadonlyMap<string, Record<string, unknown> | null>;
+  modules?: ReadonlyMap<string, PluginInspectedModule>;
 };
-export type PluginSourceCustodyFork = Pick<SourceCustody, "source" | "files">;
+/** Plain inspection facts; executable lookup callbacks stay with each consuming capture. */
+export type PluginInspectedModule = {
+  staticImports: ReadonlySet<string>;
+  observed: ReadonlyMap<string, string | null | undefined>;
+  acquisitions: ReadonlyArray<
+    { kind: "file"; source: string } | { kind: "dependency"; importer: string; name: string }
+  >;
+};
+export type PluginSourceCustodyFork = SourceCustody<PluginRecoverySource>;
+export type PluginSourceCustodyTransfer = SourceCustody<RecoveryInput>;
 const sourceCustody = new AsyncLocalStorage<{
   closing: boolean;
   prepared: Map<object, Map<string, Promise<PreparedSourceCustody>>>;
@@ -138,6 +159,8 @@ function createPluginGenerationSourceCustody() {
 export function createPluginSourceFacts(
   dependencyLookupBoundary: Parameters<typeof createPluginDependencyResolver>[0],
   captureForCustody: boolean,
+  executionAliases: ReadonlyMap<string, string>,
+  executionSources: ReadonlyMap<string, string>,
 ) {
   const files = new Map<string, PluginCapturedSourceFact>();
   const links = new Map<string, string>();
@@ -173,9 +196,11 @@ export function createPluginSourceFacts(
       };
     },
     resolveDependency: createPluginDependencyResolver(dependencyLookupBoundary),
-    captureCustody: (capture: () => PluginRecoverySource): SourceCustody => ({
+    captureCustody: <T>(capture: () => T) => ({
       source: capture(),
       files,
+      executionAliases,
+      executionSources,
     }),
   };
 }
@@ -247,15 +272,7 @@ export type PluginRecoverySource = {
   disposeAsync: () => Promise<void>;
 };
 
-function copyRecoverySource({
-  rootDir,
-  sourceRoot,
-  capturedRoot,
-  boundaryRoot,
-  sources,
-  directories,
-  native: suppliedNative,
-}: {
+type RecoveryInput = {
   rootDir: string;
   sourceRoot: string;
   capturedRoot: string;
@@ -263,120 +280,214 @@ function copyRecoverySource({
   sources: ReadonlyMap<string, string>;
   directories: ReadonlySet<string>;
   native?: PluginNativeRecovery;
-}): PluginRecoverySource {
-  let native = suppliedNative;
+};
+
+function copyRecoverySource(input: RecoveryInput): PluginRecoverySource {
   let recovery: ReturnType<typeof createPluginSourceCapture> | undefined;
   try {
     recovery = createPluginSourceCapture();
-    const directory = recovery.directory;
-    const relocate = (filename: string) =>
-      path.join(directory, path.relative(boundaryRoot, filename));
-    const fileReferenceTargets = new Map<string, PluginNativeArtifactFact>();
     const metrics = getPluginGenerationMetrics();
-    let copiedBytes = 0;
-    // Keep dependency links within the new capture without reopening installed packages.
-    fs.cpSync(boundaryRoot, recovery.directory, {
-      recursive: true,
-      verbatimSymlinks: true,
-      filter: (from, to) => {
-        const fact = native?.references.get(from);
-        if (!fact) {
-          const entry = fs.lstatSync(from);
-          if (metrics && entry.isFile()) {
-            copiedBytes += entry.size;
-          }
-          if (entry.isSymbolicLink()) {
-            const target = fs.readlinkSync(from);
-            const relative = path.isAbsolute(target)
-              ? relativePluginPathInsideRootSync(boundaryRoot, target)
-              : undefined;
-            if (relative !== undefined) {
-              // Windows junctions store absolute targets. A verbatim copy would
-              // point at the seed after custody disposes it, then fail on fork.
-              fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
-              fs.symlinkSync(
-                path.relative(path.dirname(to), path.join(directory, relative)),
-                to,
-                fs.statSync(from).isDirectory() ? "junction" : "file",
-              );
-              return false;
-            }
-          }
-          return true;
-        }
-        const retained = { ...fact, sourceIdentity: fact.capturedIdentity };
-        if (linkPluginNativeReference(fact.capturedPath, to, retained) !== "symlink") {
-          fileReferenceTargets.set(to, retained);
-        }
-        native!.references.set(from, retained);
-        return false;
+    const steps = copyPluginRecoveryFiles(
+      {
+        rootDir: input.rootDir,
+        boundaryRoot: input.boundaryRoot,
+        references: input.native?.references,
+        namespaces: input.native?.namespaces,
+        measureBytes: metrics !== undefined,
       },
-    });
-    if (metrics) {
-      metrics.copiedBytes += copiedBytes;
-    }
-    const assertReference = createPluginNativeReferenceValidator(recovery.directory, rootDir);
-    for (const [target, fact] of fileReferenceTargets) {
-      assertReference(target, fact, native!.namespaces.get(fact.namespace)!);
-    }
-    const copiedSources = new Map(
-      Array.from(sources, ([source, captured]) => [source, relocate(captured)]),
+      recovery.directory,
     );
-    const previousNative = native;
-    native = previousNative?.fork(relocate);
-    previousNative?.dispose();
-    const sourceCapture = recovery;
-    const root = relocate(capturedRoot);
-    const copiedDirectories = new Set([...directories].map(relocate));
-    let disposed = false;
-    return {
-      rootDir: root,
-      directories: copiedDirectories,
-      sourceCapture,
-      resolve: createRecoverySourceResolver(rootDir, sourceRoot, copiedSources),
-      native,
-      fork: markPluginSourceCaptureOperation(() => {
-        if (disposed) {
-          throw new Error("Plugin source recovery has been disposed");
-        }
-        return copyRecoverySource({
-          rootDir,
-          sourceRoot,
-          capturedRoot: root,
-          boundaryRoot: directory,
-          sources: copiedSources,
-          directories: copiedDirectories,
-          native: native?.fork(),
-        });
-      }),
-      dispose() {
-        if (!disposed) {
-          disposed = true;
-          try {
-            sourceCapture.dispose();
-          } finally {
-            native?.dispose();
-          }
-        }
-      },
-      async disposeAsync() {
-        if (!disposed) {
-          disposed = true;
-          await Promise.all([sourceCapture.disposeAsync(), native?.disposeAsync()]);
-        }
-      },
-    };
+    let step = steps.next();
+    while (!step.done) {
+      fs.cpSync(...step.value);
+      step = steps.next();
+    }
+    if (metrics) {
+      metrics.copiedBytes += step.value;
+    }
+    return retainRecoverySource(input, recovery);
   } catch (error) {
     try {
       recovery?.dispose();
     } finally {
-      native?.dispose();
+      input.native?.dispose();
     }
     if (hasErrnoCode(error, "ENOENT")) {
       throw new PluginSourceRecoveryUnavailableError(error);
     }
     throw error;
   }
+}
+
+export async function receivePluginSourceCustody(
+  transfer: PluginSourceCustodyTransfer,
+  preparation: { close(): Promise<void>; assertAvailable(): void },
+): Promise<PluginSourceCustodyFork> {
+  // Keep the origin pinned through the copy. A destination outside the preparation scope
+  // owns its directory and native leases independently once the original session closes.
+  let source: PluginRecoverySource | undefined;
+  try {
+    const received = await settleWithCleanup(
+      pluginSourceCaptureDirectory.exit(async () => {
+        source = await copyRecoverySourceAsync(transfer.source);
+        preparation.assertAvailable();
+        return source;
+      }),
+      () => preparation.close(),
+      "Plugin operation source handoff and preparation cleanup failed",
+    );
+    return { ...transfer, source: received };
+  } catch (error) {
+    try {
+      await source?.disposeAsync();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Plugin operation source handoff and destination cleanup failed",
+        { cause: cleanupError },
+      );
+    }
+    throw error;
+  }
+}
+
+async function copyRecoverySourceAsync(input: RecoveryInput): Promise<PluginRecoverySource> {
+  let release: (() => Promise<void>) | undefined;
+  let recovery: ReturnType<typeof createPluginSourceCapture> | undefined;
+  try {
+    // Recovery ports and their descriptor outlive the caller, so neither may capture its context.
+    const owner = await runInDetachedAsyncContext(() =>
+      createPluginCaptureOwner(captureRetainedNativeWorkerSource({ runtimeGeneration: undefined })),
+    );
+    let disposal: Promise<void> | undefined;
+    const dispose = () =>
+      (disposal ??= settleWithCleanup(
+        owner.releaseSource(1),
+        () => owner.close(),
+        "Plugin recovery source release and owner close failed",
+      ));
+    // The broker can own ID 1 even if its successful copy reply never reaches the caller.
+    // Releasing an absent ID is safe; closing an owner with a live source is rejected.
+    release = dispose;
+    const metrics = getPluginGenerationMetrics();
+    const { root, copiedBytes } = await owner.copyRecovery(1, {
+      rootDir: input.rootDir,
+      boundaryRoot: input.boundaryRoot,
+      references: input.native?.references,
+      namespaces: input.native?.namespaces,
+      measureBytes: metrics !== undefined,
+      storage: resolvePluginSourceCaptureStorage(),
+      directory: pluginSourceCaptureDirectory.getStore(),
+    });
+    recovery = createPluginSourceCaptureState({
+      directory: root.directory,
+      outputRoot: root.managedRoot,
+      dispose() {
+        void dispose().catch((error: unknown) => process.emitWarning(String(error)));
+      },
+      disposeAsync: dispose,
+    });
+    if (metrics) {
+      metrics.copiedBytes += copiedBytes;
+    }
+    return joinBrokerRecoveryDisposal(retainRecoverySource(input, recovery));
+  } catch (error) {
+    try {
+      throwIfSettledRejected(
+        await Promise.allSettled([
+          recovery ? recovery.disposeAsync() : release?.(),
+          input.native?.disposeAsync(),
+        ]),
+        "Plugin recovery custody cleanup failed",
+      );
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Plugin recovery capture and cleanup failed",
+        {
+          cause: cleanupError,
+        },
+      );
+    }
+    if (hasErrnoCode(error, "ENOENT")) {
+      throw new PluginSourceRecoveryUnavailableError(error);
+    }
+    throw error;
+  }
+}
+
+// Binding failure can start synchronous disposal before its outer owner joins it. Keep
+// the complete native and directory release available to every subsequent waiter.
+function joinBrokerRecoveryDisposal(source: PluginRecoverySource): PluginRecoverySource {
+  let closing: Promise<void> | undefined;
+  const disposeAsync = () => (closing ??= source.disposeAsync());
+  return {
+    ...source,
+    dispose() {
+      void disposeAsync().catch((error: unknown) => process.emitWarning(String(error)));
+    },
+    disposeAsync,
+  };
+}
+
+function retainRecoverySource(
+  input: RecoveryInput,
+  sourceCapture: ReturnType<typeof createPluginSourceCapture>,
+): PluginRecoverySource {
+  const { rootDir, sourceRoot, capturedRoot, boundaryRoot, sources, directories } = input;
+  const directory = sourceCapture.directory;
+  const relocate = (filename: string) =>
+    path.join(directory, path.relative(boundaryRoot, filename));
+  const copiedSources = new Map(
+    Array.from(sources, ([source, captured]) => [source, relocate(captured)]),
+  );
+  const previousNative = input.native;
+  const native = previousNative?.fork(relocate);
+  input.native = native;
+  previousNative?.dispose();
+  const root = relocate(capturedRoot);
+  const copiedDirectories = new Set([...directories].map(relocate));
+  let disposed = false;
+  return {
+    rootDir: root,
+    directories: copiedDirectories,
+    sourceCapture,
+    resolve: createRecoverySourceResolver(rootDir, sourceRoot, copiedSources),
+    native,
+    fork: markPluginSourceCaptureOperation(() => {
+      if (disposed) {
+        throw new Error("Plugin source recovery has been disposed");
+      }
+      return copyRecoverySource({
+        rootDir,
+        sourceRoot,
+        capturedRoot: root,
+        boundaryRoot: directory,
+        sources: copiedSources,
+        directories: copiedDirectories,
+        native: native?.fork(),
+      });
+    }),
+    dispose() {
+      if (!disposed) {
+        disposed = true;
+        try {
+          sourceCapture.dispose();
+        } finally {
+          native?.dispose();
+        }
+      }
+    },
+    async disposeAsync() {
+      if (!disposed) {
+        disposed = true;
+        throwIfSettledRejected(
+          await Promise.allSettled([sourceCapture.disposeAsync(), native?.disposeAsync()]),
+          "Plugin recovery directory and native custody cleanup failed",
+        );
+      }
+    },
+  };
 }
 
 /** Resolves captured source identities and gives recovery its own copy of their bytes. */
@@ -405,7 +516,29 @@ export function createPluginGenerationSourceLookup({
     const captured = getCapturedSource(capturedPaths, rootDir, sourceRoot, source);
     return captured && isPathInside(capturedRoot, captured) ? captured : undefined;
   };
+  const recoveryInput = () => {
+    for (const captured of new Set(capturedPaths.values())) {
+      assertModuleAvailable(captured);
+    }
+    const native = captureNativeRecovery?.();
+    if (native) {
+      // Recovery links read the retained snapshots, never the installed originals.
+      for (const [filename, fact] of native.references) {
+        native.references.set(filename, { ...fact, sourceIdentity: fact.capturedIdentity });
+      }
+    }
+    return {
+      rootDir,
+      sourceRoot,
+      capturedRoot,
+      boundaryRoot,
+      sources: new Map(capturedPaths),
+      directories: new Set(capturedDirectories),
+      native,
+    };
+  };
   return {
+    recoveryInput,
     hasSource: (source: string) => resolveCaptured(source) !== undefined,
     resolve: markPluginSourcePreparationOperation((source: string, rejectHardlinks = false) => {
       // Public exports may be loaded for the first time after the original package
@@ -424,20 +557,12 @@ export function createPluginGenerationSourceLookup({
       assertModuleAvailable(captured);
       return captured;
     }),
-    captureRecoverySource: markPluginSourceCaptureOperation(() => {
-      for (const captured of new Set(capturedPaths.values())) {
-        assertModuleAvailable(captured);
-      }
-      return copyRecoverySource({
-        rootDir,
-        sourceRoot,
-        capturedRoot,
-        boundaryRoot,
-        sources: new Map(capturedPaths),
-        directories: new Set(capturedDirectories),
-        native: captureNativeRecovery?.(),
-      });
-    }),
+    captureRecoverySource: markPluginSourceCaptureOperation(() =>
+      copyRecoverySource(recoveryInput()),
+    ),
+    captureRecoverySourceAsync: markPluginSourceCaptureOperation(() =>
+      copyRecoverySourceAsync(recoveryInput()),
+    ),
   };
 }
 
@@ -478,6 +603,7 @@ export function createPluginGenerationModuleLookup({
       originalSources.has(filename) ? packageForFile(filename)?.capturedRoot : undefined,
     assertModuleAvailable,
     prepareModule: markPluginSourcePreparationOperation((filename: string) => {
+      assertModuleAvailable(filename);
       // Directory capture is valid, but selecting that directory as a module is not.
       if (capturedDirectories.has(filename)) {
         readPluginCapturedCode(filename, true);

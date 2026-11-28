@@ -36,6 +36,7 @@ import {
   getModelProviderRequestTransport,
   resolveProviderRequestHeaders,
 } from "./provider-request-config.js";
+import { createDecisionTool } from "./tools/decision-tool.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const traceKey = Symbol.for("openclaw.test.decision-prepared-path");
@@ -625,6 +626,60 @@ it.each([
     });
   },
 );
+
+it("dispatches decision_evaluate to a custom TypeSafe model without a catalog row", async () => {
+  const root = roots.make("decision-typesafe-custom-");
+  fs.mkdirSync(path.join(root, "bundled"));
+  const model = "decision";
+  await harness.withDecisionServer(
+    () => ({
+      status: 200,
+      body: {
+        model,
+        answers: { q: { type: "noul", noul: 0.37 } },
+        usage: { input_tokens: 3, output_tokens: 1 },
+      },
+    }),
+    async ({ origin, requests }) => {
+      const cfg = harness.decisionConfig(root, `typesafe/${model}`, {
+        load: { paths: [fileURLToPath(new URL("../../extensions/typesafe", import.meta.url))] },
+        entries: { typesafe: { enabled: true } },
+      });
+      cfg.models = { providers: { typesafe: { baseUrl: origin + "/v1", models: [] } } };
+      await withEnvAsync(
+        harness.decisionEnv(root, { OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION }),
+        async () => {
+          await harness.activateDecisionRegistry(cfg);
+          await using prepared = await harness.prepareDecisionRuntime(cfg, "typesafe", model);
+          expect(prepared.snapshot.modelCatalog.entries).not.toContainEqual(
+            expect.objectContaining({ provider: "typesafe", id: model }),
+          );
+          const tool = createDecisionTool("main", {
+            config: cfg,
+            preparedModelRuntime: prepared.snapshot,
+          });
+          const result = await tool!.execute("custom", { contractVersion: 2, ...textBatch() });
+          expect(result.details, JSON.stringify(result.details)).toMatchObject({
+            status: "ok",
+            result: { answers: { q: { type: "boolean", probabilityTrue: 0.37 } } },
+          });
+          const image = await tool!.execute("custom-image", {
+            contractVersion: 2,
+            state: { type: "image", dataUri: "data:image/png;base64,AA==" },
+            questions: { q: { type: "boolean" } },
+          });
+          expect(image.details).toMatchObject(harness.unavailable("unsupported-input"));
+          expect(requests).toHaveLength(1);
+          expect(requests[0]).toMatchObject({
+            url: origin + "/v1/systemone",
+            body: { model, questions: { q: { type: "noul" } } },
+          });
+          expect(requests[0]?.headers.get("authorization")).toBeNull();
+        },
+      );
+    },
+  );
+});
 
 it("runs both SDK versions through the source TypeSafe plugin, prepared auth, and loopback transport", async () => {
   const root = roots.make("decision-typesafe-host-");

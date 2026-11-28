@@ -182,6 +182,19 @@ describe("models cli", () => {
     expect(command).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["models --agent other-person fallbacks list", "does not support --agent"],
+    ["models --agent other-person image-fallbacks list", "does not support --agent"],
+  ] as const)("rejects unsupported agent scope: %s", async (args, message) => {
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      throw new ExitError(code);
+    });
+    await expect(runModelsCommand(args)).rejects.toMatchObject({ code: 1 });
+    expect(error).toHaveBeenCalledWith(expect.stringContaining(message));
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
   it("selects the image model field for set-image", async () => {
     await runModelsCommand("models set-image openai/gpt-image-1");
     expect(mocks.modelsSetCommand).toHaveBeenCalledWith(
@@ -203,6 +216,39 @@ describe("models cli", () => {
       await expect(program.parseAsync(["models", "auth"], { from: "user" })).rejects.toMatchObject({
         exitCode: 0,
       });
+    } finally {
+      process.exitCode = originalExitCode;
+    }
+  });
+
+  it.each([
+    "add",
+    "activate",
+    "logout",
+    "login",
+    "setup-token",
+    "paste-token",
+    "paste-api-key",
+    "login-github-copilot",
+    "order set",
+    "order clear",
+  ])("describes agent selection in auth %s help", async (subcommand) => {
+    let output = "";
+    const program = new Command()
+      .enablePositionalOptions()
+      .exitOverride()
+      .configureOutput({ writeOut: (text) => (output += text), writeErr: () => {} });
+    registerModelsCli(program);
+    const originalExitCode = process.exitCode;
+    try {
+      await expect(
+        program.parseAsync(["models", "auth", ...subcommand.split(" "), "--help"], {
+          from: "user",
+        }),
+      ).rejects.toMatchObject({ exitCode: 0 });
+      expect(output.replace(/\s+/g, " ")).toContain(
+        "Agent id (default: the only configured agent; required when multiple agents are configured)",
+      );
     } finally {
       process.exitCode = originalExitCode;
     }

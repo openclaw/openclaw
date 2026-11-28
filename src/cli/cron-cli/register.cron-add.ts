@@ -10,6 +10,7 @@ import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { CronCliError } from "./cron-cli-error.js";
+import { parseCronCommandArgv } from "./input-options.js";
 import { listCronJobsFromGateway } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import {
@@ -20,13 +21,11 @@ import {
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   assertCronCliJobSpec,
-  callCronReadFromCli,
   assertCronTimeoutSupported,
   buildCronCommandShellArgvForGateway,
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
   handleCronCliError,
-  parseCronCommandArgv,
   parseCronCommandEnv,
   parseCronIntegerOption,
   parseCronNoOutputTimeoutOption,
@@ -46,7 +45,7 @@ export function registerCronStatusCommand(cron: Command) {
       .description("Show automations scheduler status")
       .action(async (opts) => {
         try {
-          const res = await callCronReadFromCli("cron.status", opts, {});
+          const res = await callGatewayFromCli("cron.status", opts, {});
           printCronJson(res);
         } catch (err) {
           handleCronCliError(err);

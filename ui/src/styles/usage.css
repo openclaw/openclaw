@@ -40,8 +40,7 @@
 .usage-overview-layout,
 .session-detail-panel,
 .session-detail-content,
-.session-detail-row,
-.session-detail-bottom {
+.session-detail-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 14px;
@@ -105,11 +104,6 @@
   font-size: 11px;
 }
 
-.session-log-tools {
-  display: grid;
-  gap: 8px;
-}
-
 /* Header: a quiet toolbar and a summary strip on the page surface, no card. */
 .usage-header {
   position: relative;
@@ -132,8 +126,7 @@
 .sessions-card-header,
 .timeseries-header-row,
 .context-breakdown-header,
-.session-detail-header,
-.session-logs-header {
+.session-detail-header {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -216,9 +209,7 @@
 
 .usage-date-input,
 .usage-select,
-.usage-query-input,
-.usage-filters-inline select,
-.usage-filters-inline input[type="text"] {
+.usage-query-input {
   min-height: var(--settings-control-height);
   border: 1px solid var(--field-border);
   border-radius: var(--field-radius);
@@ -232,22 +223,15 @@
   padding: 0 var(--field-padding-inline);
 }
 
-select.usage-select {
-  width: auto;
-}
-
 .usage-separator,
 .usage-query-hint,
 .sessions-card-count,
 .session-bar-meta,
 .context-weight-desc,
 .timeseries-summary,
-.session-log-meta,
-.session-logs-header-count,
 .context-breakdown-more,
 .usage-lineage-note,
 .session-detail-indicator,
-.session-log-tools summary,
 .legend-item,
 .usage-creators-more > summary {
   color: var(--muted);
@@ -716,40 +700,14 @@ select.usage-select {
   background: var(--bg-hover);
 }
 
-.usage-filter-option {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 8px;
-  align-items: center;
-  padding: 6px 8px;
-  min-height: var(--menu-item-height);
-  border-radius: var(--menu-item-radius);
-  background: transparent;
-  font-size: 12px;
-}
-
-.usage-filter-option .oc-menu-item__check,
 .usage-value-picker__option .oc-menu-item__check {
   order: 0;
   margin-inline-start: 0;
 }
 
-.usage-filter-select [data-value="command:clear"] + .usage-filter-option {
-  margin-block-start: 9px;
-}
-
-.usage-filter-select [data-value="command:clear"] + .usage-filter-option::before {
-  position: absolute;
-  inset-inline: 8px;
-  top: -5px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  content: "";
-}
-
 .usage-query-chips,
 .usage-query-suggestions,
-.usage-badges,
-.session-log-tools-list {
+.usage-badges {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -889,27 +847,12 @@ select.usage-select {
 .usage-summary-grid,
 .session-summary-grid,
 .usage-insights-grid,
-.context-breakdown-grid,
-.session-logs-list {
+.context-breakdown-grid {
   display: grid;
   gap: 10px;
 }
 
 /* Long conversation text must not recursively size implicit grid columns in WebKit. */
-.session-logs-list {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.session-logs-list--windowed {
-  display: block;
-  height: min(70vh, 640px);
-  overflow: auto;
-  overscroll-behavior: contain;
-}
-
-.session-logs-window {
-  position: relative;
-}
 
 .usage-summary-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1046,12 +989,6 @@ select.usage-select {
   transition:
     border-color 0.18s var(--ease-out),
     box-shadow 0.18s var(--ease-out);
-}
-
-/* Fixed width: identity names arrive with the data and must not move the controls beside it. */
-select.usage-creator-filter {
-  width: 260px;
-  max-width: 100%;
 }
 
 .usage-creator-row--unrecorded :is(th, td) {
@@ -1340,91 +1277,12 @@ select.usage-creator-filter {
   border-top: 1px solid var(--border);
 }
 
-.usage-summary-strip--windows {
-  grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr));
-}
-
-.cost-window {
-  display: grid;
-  align-content: start;
-  gap: 4px;
-  min-width: 0;
-  padding: 14px 16px;
-}
-
-.cost-window__label {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-}
-
-.cost-window__value {
-  color: var(--text-strong);
-  font-size: 1.375rem;
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1.15;
-}
-
-.cost-window__meta {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
-}
-
-/* Mini daily columns: tinted by value; the newest day stands out; hover reads a day out. */
-.usage-bars {
-  position: relative;
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 36px;
-  margin-top: 14px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
-.usage-bars__bar {
-  flex: 1 1 0;
-  min-width: 2px;
-  border-radius: 2px 2px 0 0;
-  background: color-mix(in srgb, var(--accent) var(--usage-bar-tint, 45%), transparent);
-}
-
-.usage-bars__bar--current {
-  background: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
-}
-
-.usage-bars__bar--hover {
-  background: var(--text-strong);
-}
-
-.usage-bars__tip {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 4px);
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  white-space: nowrap;
-  pointer-events: none;
-}
-
-.usage-bars__tip b {
-  color: var(--text-strong);
-  font-variant-numeric: tabular-nums;
-}
-
 /* One shrinkable column: a wide child must not widen its card past the grid track. */
 .daily-chart-compact,
 .cost-breakdown,
 .sessions-card,
 .session-timeseries-compact,
-.context-details-panel,
-.session-logs-compact {
+.context-details-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 12px;
@@ -1830,9 +1688,6 @@ select.usage-creator-filter {
 }
 
 /* The detail panel is a side column: its sections stack. */
-.session-detail-bottom {
-  grid-template-columns: minmax(0, 1fr);
-}
 
 .usage-badges {
   margin-bottom: 2px;
@@ -1843,8 +1698,7 @@ select.usage-creator-filter {
 }
 
 .session-timeseries-compact,
-.context-details-panel,
-.session-logs-compact {
+.context-details-panel {
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -1915,105 +1769,15 @@ select.usage-creator-filter {
   background: var(--bg);
 }
 
-.session-logs-header {
-  align-items: flex-start;
-}
-
-.session-log-filters {
-  margin: 0;
-}
-
-.usage-filters-inline {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-}
-
-.usage-filters-inline select[multiple] {
-  min-width: 150px;
-  min-height: 112px;
-  padding: 8px;
-}
-
-.usage-filters-inline input[type="text"] {
-  flex: 1 1 220px;
-  padding: 0 var(--field-padding-inline);
-}
-
-.session-log-has-tools {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-}
-
-.session-log-entry {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg);
-}
-
-.session-log-entry.user {
-  border-color: color-mix(in srgb, var(--accent) 18%, var(--border));
-}
-
-.session-log-entry.assistant {
-  border-color: color-mix(in srgb, var(--info) 18%, var(--border));
-}
-
-.session-log-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 10px;
-  font-size: 12px;
-}
-
-.session-log-role {
-  font-weight: 700;
-  color: var(--text-strong);
-}
-
-.session-log-content {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.session-log-tools summary {
-  font-weight: 600;
-}
-
-.session-log-tools-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 6px 8px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 8%, var(--card));
-  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border));
-  font-size: 12px;
-}
-
 :root[data-theme-mode="light"] .session-bar-row,
 :root[data-theme-mode="light"] .usage-insight-card,
 :root[data-theme-mode="light"] .session-timeseries-compact,
-:root[data-theme-mode="light"] .context-details-panel,
-:root[data-theme-mode="light"] .session-logs-compact {
+:root[data-theme-mode="light"] .context-details-panel {
   background: var(--card);
 }
 
 @container (max-width: 900px) {
-  .usage-grid,
-  .session-detail-bottom {
+  .usage-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2066,8 +1830,7 @@ select.usage-creator-filter {
 }
 
 @media (max-width: 900px) {
-  .usage-grid,
-  .session-detail-bottom {
+  .usage-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2099,8 +1862,7 @@ select.usage-creator-filter {
     border-top: 0;
   }
 
-  .usage-controls,
-  .usage-filters-inline {
+  .usage-controls {
     align-items: stretch;
   }
 
@@ -2108,10 +1870,6 @@ select.usage-creator-filter {
   .usage-query-actions,
   .timeseries-controls {
     justify-content: flex-start;
-  }
-
-  .session-log-entry {
-    align-items: flex-start;
   }
 
   .session-bar-row,
@@ -2350,30 +2108,6 @@ select.usage-creator-filter {
   }
 
   /* Side by side when both labels fit; wider mono themes wrap instead of truncating. */
-  .session-log-filters > .usage-filter-select {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
-  .session-log-filters .usage-filter-trigger {
-    width: 100%;
-  }
-
-  .session-log-filters .usage-filter-trigger > .oc-menu-item__label {
-    justify-content: space-between;
-    width: 100%;
-    min-width: 0;
-  }
-
-  .session-log-filters .usage-filter-trigger__label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .session-log-filters > .session-log-has-tools {
-    flex: 1 0 100%;
-  }
 }
 
 /* Legend: every stacked series with its share of the range. */

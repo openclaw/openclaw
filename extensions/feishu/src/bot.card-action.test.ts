@@ -126,6 +126,11 @@ it("handles card action with JSON object payload without logging content", async
   expect(log.mock.calls.flat().join("\n")).not.toContain('{"a":"b"}');
 });
 
+it("dispatches an agent button tap as data without the mark", async () => {
+  await dispatch(cardEvent(quickAction({ a: "feishu.payload.button", q: "::/pick a" })));
+  expect(message()).toMatchObject({ content: JSON.stringify({ text: "callback_data: /pick a" }) });
+});
+
 it("opens approval cards with resolved DM type and preserved interaction context", async () => {
   getChat.mockResolvedValueOnce({ code: 0, data: { chat_mode: "p2p" } });
   await dispatch(cardEvent(approvalAction()), { accountId: "main" });

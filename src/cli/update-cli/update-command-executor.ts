@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
+import { resolvePackageReleaseSlotForRootSync } from "../../infra/package-release-slot-path.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
   captureManagedUpdateLeaseDatabaseIdentity,
@@ -209,7 +210,12 @@ export async function withUpdateCommandExecutor<T>(
           return;
         }
         const key = occupiedSlotKey(root);
-        if (key === installLease.key) {
+        // The release the installation's package link selects is that installation by its
+        // real path; any other spelling of it is an occupied slot and takes its own lease.
+        if (
+          key === installLease.key ||
+          resolvePackageReleaseSlotForRootSync(root) === installLease.key
+        ) {
           return;
         }
         if (slotLease) {
@@ -233,6 +239,7 @@ export async function withUpdateCommandExecutor<T>(
         assertCurrent();
       });
       const executor: UpdateCommandExecutor = {
+        exclude: (excluded) => activation.exclude(excluded),
         async enter(root, enterOptions) {
           // Executor closure owns its recovery error unless a deadline already failed.
           if (active || activation.failure) {
@@ -388,16 +395,20 @@ export async function withUpdateCommandExecutor<T>(
               if (!active) {
                 throw new UpdateCommandRecoveryPendingError("Update executor admission is closed.");
               }
-              acquired = requireUpdateCommandAcquisition(
-                store.acquire(key, randomUUID(), { kind: "update" }),
-                () => {
-                  const retained = admissionStore.read(key);
-                  // Only explicit repair settles a cancelled original after its updater exits.
-                  return retained.kind === "current" && retained.lease.version === 4
+              const result = store.acquire(key, randomUUID(), { kind: "update" });
+              if (result.kind !== "acquired") {
+                const retained = admissionStore.read(key);
+                // Only explicit repair settles a cancelled original after its updater exits.
+                const message =
+                  retained.kind === "current" && retained.lease.version === 4
                     ? `Another update executor owns this installation. It retains cancelled update custody (owner ${retained.lease.owner}, lease version 4, last activity ${new Date(retained.lease.updatedAt).toISOString()}). If that update has exited, run ${formatCliCommand("openclaw update repair")} to settle it.`
                     : `Another update executor owns this installation. If no update is running, retry ${formatCliCommand("openclaw update repair")} in a moment; it settles once the interrupted update's processes are gone.`;
-                },
-              );
+                // The message names the lease owner; public reports use this code's fixed sentence.
+                throw Object.assign(new UpdateCommandRecoveryPendingError(message), {
+                  code: "update-executor-owned",
+                });
+              }
+              acquired = result;
             } finally {
               legacyFence.release();
             }

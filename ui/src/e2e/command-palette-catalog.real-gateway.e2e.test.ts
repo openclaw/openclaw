@@ -506,12 +506,17 @@ suite.define(() => {
           expect.objectContaining({ provider: "ollama", id: "refresh-fixture:latest" }),
         );
         expect(JSON.stringify(failed)).not.toContain("private upstream error body");
-        await automations.locator('[data-test-id="cron-new-task"]').click();
+        // Without an automation, the page's empty state offers New automation.
+        const create = automations.locator('[data-test-id="cron-new-task"]');
+        await create.click();
         await automations.getByText(warning, { exact: true }).waitFor({ state: "visible" });
-        await automations.locator('[data-test-id="cron-back"]').click();
-        await automations.locator('[data-test-id="cron-new-task"]').waitFor({ state: "visible" });
+        await automations
+          .locator(".cron-editor-actions")
+          .getByRole("button", { name: "Cancel", exact: true })
+          .click();
+        await automations.locator(".cron-overview-empty").waitFor({ state: "visible" });
         expect(await automations.getByText(warning, { exact: true }).count()).toBe(0);
-        await automations.locator('[data-test-id="cron-new-task"]').click();
+        await create.click();
         await automations.getByText(warning, { exact: true }).waitFor({ state: "visible" });
         await page.keyboard.press("ControlOrMeta+K");
         await page.locator(".cmd-palette__input").fill("refresh-fixture");

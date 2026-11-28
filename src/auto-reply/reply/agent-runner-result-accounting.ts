@@ -12,13 +12,11 @@ import { reduceSessionActorEntry } from "../../config/sessions/session-actor-red
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { captureModelCostPricing } from "../../model-catalog/usage-pricing.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import { MODEL_FALLBACK_NOTICE_KIND } from "../../shared/model-fallback-notice.js";
-import {
-  captureModelCostPricing,
-  estimateAggregateUsageCostAsync,
-} from "../../utils/usage-format.js";
+import { estimateAggregateUsageCostAsync } from "../../utils/usage-format.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";

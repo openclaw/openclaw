@@ -55,6 +55,7 @@ openclaw agents bind --agent work --bind telegram:ops
 openclaw agents unbind --agent work --bind telegram:ops
 openclaw agents set-identity --workspace ~/.openclaw/workspace --from-identity
 openclaw agents set-identity --agent main --avatar avatars/openclaw.png
+openclaw agents render-blobster design.json --out ~/.openclaw/workspace/avatars/blobster.svg
 openclaw agents delete work
 ```
 
@@ -211,11 +212,18 @@ Options: `--agent <id>` (defaults to the current default agent), `--bind <channe
 
 Options: `--agent <id>`, `--workspace <dir>`, `--identity-file <path>`, `--from-identity`, `--name <name>`, `--theme <theme>`, `--emoji <emoji>`, `--avatar <value>`, `--json`. See [Set identity](#set-identity) below.
 
+### `agents render-blobster <design>`
+
+Options: `--out <path>` (required, `.svg` or `.png`), `--json`.
+
+Validates a versioned Blobster design JSON file (or `-` for standard input) against OpenClaw's bounded SVG shape allowlist and writes a deterministic 256×256 `.svg` or transparent `.png` without network access or Gateway configuration. Use `--json` to return `{ id, name, description, out, format, bytes }`. In chat, the bundled `create-blobster` skill uses this command to preview and apply custom Blobster avatars for agents and [Templates](/cli/templates).
+
 ### `agents delete <id>`
 
 Options: `--force`, `--json`.
 
 - The only configured agent cannot be deleted.
+- An agent that is no longer in config but still has a registered database (for example, after its directory was deleted by hand) can be deleted the same way. Deletion skips paths that are already gone and removes the agent's database registration, which stops Doctor's `Skipped missing registered agent database` warning. If any of the agent's paths still exist, the confirmation lists them before anything moves to Trash. An id with no config entry, deletion record, or registration is still reported as not found.
 - Without `--force`, interactive confirmation is required (fails in a non-TTY session; re-run with `--force`).
 - Workspace, agent state, and session transcript directories move to Trash, not hard-deleted. If Trash is unavailable, the agent is removed from config but cleanup remains pending. After config publication succeeds, Gateway deletion returns `UNAVAILABLE` with the path failures in its error message and the existing `removed` and `failed` details attached to the error response. Offline deletion reports those path outcomes through `--json`.
 - Gateway deletion durably closes new sessions, turns, and automations, then aborts and waits for active turns and background memory/session work to settle before retiring storage. In a shared session store, deletion cancels only the deleted agent's work; surviving agents remain admitted. Already accepted storage work settles before retirement. Late session writes are refused as soon as draining starts without interrupting cleanup. A terminal status update refused by deletion does not block the drain; deletion still waits for the turn's execution and cleanup to finish. Gateway-wide session views, health summaries, usage-cost reports and backfill, and terminal snapshots continue for surviving agents without reopening the deleting agent's store. The Gateway resumes interrupted deletions after restart, including journals from older versions.

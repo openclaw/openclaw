@@ -159,15 +159,18 @@ export function resolveTransientCronRetryDecision(params: {
       reason: "permanent error",
     };
   }
-  const retryHint = resolveCronExecutionRetryHint({
-    error: params.error,
-    retryOn: undefined,
-    classifiedReason:
-      params.errorClassification?.kind === "reason"
-        ? params.errorClassification.reason
-        : params.lastErrorReason,
-    executionStarted: params.executionStarted,
-  });
+  const retryHint =
+    params.errorClassification?.kind === "session-conflict"
+      ? { retryable: params.executionStarted !== true, category: undefined }
+      : resolveCronExecutionRetryHint({
+          error: params.error,
+          retryOn: undefined,
+          classifiedReason:
+            params.errorClassification?.kind === "reason"
+              ? params.errorClassification.reason
+              : params.lastErrorReason,
+          executionStarted: params.executionStarted,
+        });
   const consecutiveErrors = params.consecutiveErrors ?? 0;
   if (!retryHint.retryable) {
     return {
@@ -250,11 +253,8 @@ export function resolveDeliveryState(params: {
         failureNotification: noFailureNotification,
       };
     }
-    return {
-      status: "unknown",
-      error: params.error,
-      failureNotification: noFailureNotification,
-    };
+    // The run failed before reporting any delivery: its error is the run's, not delivery's.
+    return { status: "unknown", failureNotification: noFailureNotification };
   }
   if (params.delivered === false) {
     return {

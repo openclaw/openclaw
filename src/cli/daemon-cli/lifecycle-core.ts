@@ -21,7 +21,6 @@ import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
 import { GatewayRestartPreparationError } from "../../infra/restart-intent-error.js";
-import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
@@ -34,14 +33,14 @@ import {
   createServiceLifecycleMutationAudit,
 } from "./lifecycle-audit.js";
 import { createServiceRestartIntent } from "./lifecycle-restart-intent.js";
-import { buildDaemonServiceSnapshot, createDaemonActionContext } from "./response.js";
+import {
+  buildDaemonServiceSnapshot,
+  createDaemonActionContext,
+  mergeWarnings,
+} from "./response.js";
 import type { GatewayRestartSnapshot } from "./restart-health.types.js";
 import { filterContainerGenericHints, resolveDaemonInstallBlockMessage } from "./shared.js";
-import type { DaemonLifecycleOptions } from "./types.js";
-
-type ServiceLifecycleOptions = DaemonLifecycleOptions & {
-  restartIntent?: GatewayRestartIntent;
-};
+import type { ServiceLifecycleOptions } from "./types.js";
 
 type ServiceTarget = {
   serviceNoun: string;
@@ -74,14 +73,6 @@ type ServiceStartRepairContext = ServiceRecoveryContext & {
   state: GatewayServiceState;
   issues: GatewayServiceStartRepairIssue[];
 };
-
-function mergeWarnings(
-  captured: readonly string[],
-  reported?: readonly string[],
-): string[] | undefined {
-  const combined = [...captured, ...(reported ?? [])];
-  return combined.length > 0 ? combined : undefined;
-}
 
 async function failServiceNotLoaded(
   params: ServiceTarget & { renderStartHints: () => string[] },
@@ -211,6 +202,7 @@ export async function runServiceStart(params: {
   service: GatewayService;
   renderStartHints: () => string[];
   opts?: ServiceLifecycleOptions;
+  beforeServiceMutation?: () => void | Promise<void>;
   onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult<"started"> | null>;
   repairLoadedService?: (
     ctx: ServiceStartRepairContext,
@@ -301,6 +293,7 @@ export async function runServiceStart(params: {
         env: process.env,
         stdout,
         warn,
+        beforeMutation: params.beforeServiceMutation,
         onMutation: createServiceLifecycleMutationAudit({
           serviceNoun: params.serviceNoun,
           action: "start",
@@ -476,7 +469,7 @@ export async function runServiceRestart(params: {
     command: GatewayServiceState["command"] | undefined;
   };
   expectedPort?: number;
-  beforeServiceMutation?: () => void;
+  beforeServiceMutation?: () => void | Promise<void>;
   repairLoadedService?: (
     ctx: ServiceStartRepairContext,
   ) => Promise<ServiceRecoveryResult<"restarted"> | null>;
@@ -509,8 +502,14 @@ export async function runServiceRestart(params: {
   let handledRecovery: ServiceRecoveryResult<"restarted"> | null = null;
   let handledRepair: ServiceRecoveryResult<"restarted"> | null = null;
   let recoveredLoadedState: boolean | null = null;
-  const { prepare: prepareGatewayRestartIntent, clear: clearPreparedRestartIntent } =
-    createServiceRestartIntent({ ...params, intent: restartIntent });
+  const { prepare: prepareIntent, clear: clearPreparedRestartIntent } = createServiceRestartIntent({
+    ...params,
+    intent: restartIntent,
+  });
+  const prepareGatewayRestartIntent = async () => {
+    await params.beforeServiceMutation?.();
+    await prepareIntent();
+  };
   const emitScheduledRestart = (
     restartStatus: ReturnType<typeof describeGatewayServiceRestart>,
     serviceLoaded: boolean,
@@ -549,12 +548,6 @@ export async function runServiceRestart(params: {
       fail(`${params.serviceNoun} restart failed: ${String(err)}`);
       return false;
     }
-  }
-
-  // Loaded services cross the native mutation boundary here. Not-loaded recovery
-  // may still target a separately verified unmanaged listener.
-  if (loaded && !handledRecovery) {
-    params.beforeServiceMutation?.();
   }
 
   if (!loaded && !handledRecovery) {
@@ -684,6 +677,7 @@ export async function runServiceRestart(params: {
           env: process.env,
           stdout,
           warn,
+          beforeMutation: params.beforeServiceMutation,
           onMutation: gatewayRestartAudit,
         });
       } catch (err) {

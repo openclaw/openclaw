@@ -22,34 +22,13 @@ Use the `prtags` skill from the `prtags` repo at `skills/prtags/SKILL.md` when i
 
 ### Install the CLIs
 
-Install `prtags` from the pinned release below.
-Do not rely on an old local build unless the maintainer explicitly wants to test unreleased behavior.
-
-`prtags` CLI install path:
-
-```bash
-GOBIN="$HOME/.local/bin" go install github.com/dutifuldev/prtags/cmd/prtags@v0.1.2
-```
-
-`prtags` lives outside the OpenClaw organization, so this install stays pinned to a reviewed
-version that the Go module proxy resolves and the public checksum database verifies. `GOBIN` keeps
-the installed executable in the same user-local directory as the previous installer, so an existing
-`$HOME/.local/bin` `PATH` continues to resolve the newly installed version.
-Do not install it by piping a remote script into a shell, and do not point the install at a branch:
-either one executes whatever that third party serves at run time, with the maintainer's own
-privileges. Moving to a newer `prtags` release is a reviewed change to this file, not a mid-task step.
+When installation is actually needed, read
+[the setup procedure](references/setup.md#install-the-clis) in full.
 
 ### Authenticate prtags
 
-`prtags` should be logged in with the maintainer's own GitHub account through OAuth device flow.
-Do not use a shared maintainer token for interactive triage.
-
-```bash
-prtags auth login
-prtags auth status
-```
-
-The expected outcome is that `prtags` stores the logged-in maintainer identity locally and uses that account for authenticated writes.
+When authentication is actually needed, read
+[the setup procedure](references/setup.md#authenticate-prtags) in full.
 
 ## Missing-Setup Rule
 
@@ -60,7 +39,7 @@ As soon as you discover that `prtags` is missing or not logged in at the write s
 Do not continue in a partial write mode after that point.
 
 If `prtags` is missing, ask the user to run the pinned install command from
-[Install the CLIs](#install-the-clis).
+[Install the CLIs](references/setup.md#install-the-clis).
 Keep that section as the single source of the installed version; do not improvise another install path.
 
 If `prtags auth status` shows that the user is not logged in, ask the user to run:
@@ -185,81 +164,18 @@ If you only have wording similarity, that is not enough.
 
 ## Step 1: Read The Target
 
-Start by reading the target itself.
-Use live GitHub for current target state.
-
-For a PR:
-
-```bash
-gh pr view <number> --json number,title,state,mergedAt,body,closingIssuesReferences,files,comments,reviews,statusCheckRollup
-```
-
-For an issue:
-
-```bash
-gh issue view <number> --json number,title,state,body,comments,closedAt
-```
-
-Record:
-
-- target type and number
-- title
-- problem statement
-- proposed intent
-- subsystem
-- whether it is open, closed, or merged
-- whether there is already a likely duplicate thread mentioned by humans
+Read [the discovery procedure](references/discovery.md) in full before gathering
+or accepting duplicate evidence.
 
 ## Step 2: Search Broadly With Gitcrawl
 
-Use `gitcrawl` first because it is the local OpenClaw history and clustering source.
-Do not switch to broad live GitHub search unless `gitcrawl` is missing data, stale, or failing.
-
-Start with the target and nearby threads:
-
-```bash
-gitcrawl threads openclaw/openclaw --numbers <issue-or-pr-number> --include-closed --json
-gitcrawl neighbors openclaw/openclaw --number <issue-or-pr-number> --limit 20 --json
-```
-
-Then search key phrases and subsystem terms:
-
-```bash
-gitcrawl search openclaw/openclaw --query "<key phrase from title or body>" --mode hybrid --limit 20 --json
-gitcrawl search openclaw/openclaw --query "<subsystem or error phrase>" --mode hybrid --limit 20 --json
-```
-
-Inspect likely clusters:
-
-```bash
-gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --body-chars 280 --json
-```
-
-For PRs, verify likely code overlap with live file data:
-
-```bash
-gh pr view <candidate-pr> --json number,title,state,mergedAt,files,body,comments,reviews
-```
-
-For issues, verify likely duplicate issue state and comments live:
-
-```bash
-gh issue view <candidate-issue> --json number,title,state,body,comments,closedAt
-```
+Read [the discovery procedure](references/discovery.md) in full before gathering
+or accepting duplicate evidence.
 
 ## Step 3: Use Live GitHub Search For Gaps
 
-Use targeted live GitHub search after `gitcrawl` when:
-
-- the target is too new for the local store
-- comments or reviews matter and the local store lacks them
-- the exact phrase did not appear in local results but the issue/PR is current enough that GitHub should know it
-
-```bash
-gh search prs --repo openclaw/openclaw --match title,body --limit 50 -- "<key phrase>"
-gh search issues --repo openclaw/openclaw --match title,body --limit 50 -- "<key phrase>"
-gh search issues --repo openclaw/openclaw --match comments --limit 50 -- "<error or maintainer phrase>"
-```
+Read [the discovery procedure](references/discovery.md) in full before gathering
+or accepting duplicate evidence.
 
 ## Step 4: Decide The Outcome
 
@@ -281,134 +197,27 @@ Use `duplicate_needs_judgment` when:
 
 ## Step 5: Reuse Or Create One prtags Group
 
-Before creating a group, search `prtags` for an existing one.
-
-Start with text search over groups:
-
-```bash
-prtags search text -R openclaw/openclaw "<problem phrase>" --types group --limit 10
-prtags search similar -R openclaw/openclaw "<problem summary>" --types group --limit 10
-prtags group list -R openclaw/openclaw
-```
-
-Inspect likely groups:
-
-```bash
-prtags group get <group-id>
-prtags group get <group-id> --include-metadata
-```
-
-Reuse an existing group when:
-
-- it represents the same problem
-- it already contains clearly related members
-- adding the target would keep the group coherent
-
-Do not widen an existing group just because `gitcrawl` placed several PRs or issues near each other.
-Confirm that the actual implementation path and maintainer intent still match before adding the new member.
-
-Create a new group only when no existing group clearly fits.
-
-Create the group with a problem-based title and an intent-based description:
-
-```bash
-prtags group create -R openclaw/openclaw \
-  --kind mixed \
-  --title "<problem-centered title>" \
-  --description "<same intent, subsystem, and duplicate-resolution path>" \
-  --status open
-```
-
-Then attach the target and any known duplicate members:
-
-```bash
-prtags group add-pr <group-id> <pr-number>
-prtags group add-issue <group-id> <issue-number>
-```
-
-If a target appears to already belong to another duplicate group and you cannot safely reuse that group, stop.
-Do not create a second group.
+Before authorized group, field, annotation, or comment-sync writes, read
+[the curation procedure](references/curation.md) in full. Apply the setup and
+one-group rules above; group writes own automatic comment sync.
 
 ## Step 6: Ensure The Annotation Fields Exist
 
-Use `field ensure` so the skill is idempotent.
-
-Recommended target-level fields:
-
-```bash
-prtags field ensure -R openclaw/openclaw --name duplicate_status --scope pull_request --type enum --enum-values not_duplicate,candidate,confirmed --filterable
-prtags field ensure -R openclaw/openclaw --name duplicate_status --scope issue --type enum --enum-values not_duplicate,candidate,confirmed --filterable
-prtags field ensure -R openclaw/openclaw --name duplicate_confidence --scope pull_request --type enum --enum-values low,medium,high --filterable
-prtags field ensure -R openclaw/openclaw --name duplicate_confidence --scope issue --type enum --enum-values low,medium,high --filterable
-prtags field ensure -R openclaw/openclaw --name duplicate_rationale --scope pull_request --type text --searchable
-prtags field ensure -R openclaw/openclaw --name duplicate_rationale --scope issue --type text --searchable
-```
-
-Recommended group-level fields:
-
-```bash
-prtags field ensure -R openclaw/openclaw --name duplicate_confidence --scope group --type enum --enum-values low,medium,high --filterable
-prtags field ensure -R openclaw/openclaw --name duplicate_rationale --scope group --type text --searchable
-prtags field ensure -R openclaw/openclaw --name cluster_summary --scope group --type text --searchable
-```
+Before authorized group, field, annotation, or comment-sync writes, read
+[the curation procedure](references/curation.md) in full. Apply the setup and
+one-group rules above; group writes own automatic comment sync.
 
 ## Step 7: Save The Maintainer Judgment In prtags
 
-For a PR:
-
-```bash
-prtags annotation pr set -R openclaw/openclaw <pr-number> \
-  duplicate_status=confirmed \
-  duplicate_confidence=high \
-  duplicate_rationale="<same problem, same fix direction, overlapping files and comments>"
-```
-
-For an issue:
-
-```bash
-prtags annotation issue set -R openclaw/openclaw <issue-number> \
-  duplicate_status=confirmed \
-  duplicate_confidence=high \
-  duplicate_rationale="<same user-visible problem and same intended fix path>"
-```
-
-For the group:
-
-```bash
-prtags annotation group set <group-id> \
-  duplicate_confidence=high \
-  cluster_summary="<one-sentence problem summary>" \
-  duplicate_rationale="<why these items belong in one duplicate cluster>"
-```
-
-When the evidence is incomplete, set `duplicate_status=candidate` and lower the confidence.
-
-If a per-PR or per-issue annotation write fails because `prtags` cannot resolve the target, do not force a fallback write path.
-Keep the group state you were able to write, report that the curation backend is still missing the target object, and defer the target-level annotation until `prtags` catches up.
+Before authorized group, field, annotation, or comment-sync writes, read
+[the curation procedure](references/curation.md) in full. Apply the setup and
+one-group rules above; group writes own automatic comment sync.
 
 ## Step 8: Let prtags Sync The Group Comment
 
-Do not tell the agent to create a GitHub comment directly.
-`prtags` owns the outbound GitHub comment as a derived projection of group state.
-
-In the normal case, do not manually trigger comment sync.
-When comment sync is configured, group writes already enqueue the derived comment projection automatically.
-
-Use manual sync only as a repair or retry path:
-
-```bash
-prtags group sync-comments <group-id>
-```
-
-If the maintainer needs to see which groups still need attention, use:
-
-```bash
-prtags group list-comment-sync-targets -R openclaw/openclaw
-```
-
-The skill should treat the GitHub comment as a consequence of correct `prtags` group state.
-It should not treat manual comment authoring as part of the normal duplicate workflow.
-It should also not treat `sync-comments` as a required step for every duplicate decision.
+Before authorized group, field, annotation, or comment-sync writes, read
+[the curation procedure](references/curation.md) in full. Apply the setup and
+one-group rules above; group writes own automatic comment sync.
 
 ## Output Format
 

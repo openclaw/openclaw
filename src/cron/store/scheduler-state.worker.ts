@@ -79,7 +79,6 @@ export function recordSkippedCronRunsInWorker(
                 nowMs: () => policy.nowMs,
                 cronConfig: policy.cronConfig,
                 defaultAgentId: policy.defaultAgentId,
-                failureRepairTimeoutMs: policy.failureRepairTimeoutMs,
                 log: createCronMutationLogger(outcome.logs),
               },
               preparedFailureAlert: {

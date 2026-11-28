@@ -22,6 +22,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
+import { focusProgrammatically } from "../../lib/programmatic-focus.ts";
 import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
@@ -30,9 +31,10 @@ import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
-import { sessionHubTabs } from "../sessions/session-hub-tabs.ts";
+import { sessionHubTabs, type SessionHubTab } from "../sessions/session-hub-tabs.ts";
 import "../../styles/settings.css";
 import "../../styles/hub-tabs.css";
+import { WorktreeReferenceChoice } from "./reference-choice.tsx";
 import { WorktreesModel } from "./worktrees-model.ts";
 
 const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees";
@@ -94,6 +96,34 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
     await Promise.resolve();
     return present(captured, operation, result, retired);
   }
+  const repositories = createMemo(() =>
+    [...new Set(view().records.map((record) => record.repoRoot))].map((value) => ({
+      value,
+      label: pathDisplayName(value),
+      description: value,
+    })),
+  );
+  const repoLabels = createMemo(() => {
+    const paths = repositories().map(({ value }) => ({
+      value,
+      parts: value.split(/[\\/]+/u).filter(Boolean),
+    }));
+    return new Map(
+      paths.map(({ value, parts }) => {
+        for (let n = 1; n <= parts.length; n++) {
+          const suffix = parts.slice(-n).join("/");
+          if (
+            !paths.some(
+              (other) => other.value !== value && other.parts.slice(-n).join("/") === suffix,
+            )
+          ) {
+            return [value, suffix] as const;
+          }
+        }
+        return [value, value] as const;
+      }),
+    );
+  });
   const operation = () => pending().operation() ?? view().operation;
   const busy = () => operation() !== null || view().operationPending;
 
@@ -127,7 +157,7 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
 
   return (
     <>
-      <HubPageHeader<"sessions" | "worktrees">
+      <HubPageHeader<SessionHubTab>
         active="worktrees"
         tabs={sessionHubTabs("worktrees", (tab) => model.context.navigate(tab))}
         docsUrl={WORKTREES_DOCS_URL}
@@ -141,7 +171,21 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
             </InlineAlert>
           </Show>
           <Show when={view().error}>
-            <InlineAlert tone="danger" role="alert">
+            <InlineAlert
+              tone="danger"
+              role="alert"
+              action={
+                <Show when={view().listLoaded && view().listFailed}>
+                  <button
+                    class="btn btn--sm"
+                    disabled={!model.gateway.connected || busy()}
+                    onClick={() => void model.load()}
+                  >
+                    {t("common.retry")}
+                  </button>
+                </Show>
+              }
+            >
               {view().error}
             </InlineAlert>
           </Show>
@@ -174,20 +218,17 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
               <SettingsRow
                 title={t("worktrees.repo")}
                 control={
-                  <input
-                    class="settings-input"
-                    type="text"
-                    aria-label={t("worktrees.repo")}
-                    disabled={operation() === "create"}
+                  <WorktreeReferenceChoice
+                    id="worktrees-create-repo"
+                    label={t("worktrees.repo")}
                     value={view().createRepoRoot}
-                    onInput={(event) => model.update({ createRepoRoot: event.currentTarget.value })}
-                    onChange={(event) => {
-                      model.update({
-                        createRepoRoot: event.currentTarget.value,
-                        createBaseRef: "",
-                      });
-                      void model.loadCreateBranches();
-                    }}
+                    options={repositories()}
+                    emptyLabel={t("worktrees.chooseRepository")}
+                    customLabel={t("worktrees.customRepository")}
+                    scope={scope()}
+                    disabled={operation() === "create"}
+                    onInput={(value) => model.setCreateRepository(value)}
+                    onCommit={() => void model.loadCreateBranches()}
                   />
                 }
               />
@@ -209,21 +250,17 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                 title={t("worktrees.baseBranch")}
                 control={
                   <>
-                    <input
-                      class="settings-input"
-                      type="text"
-                      aria-label={t("worktrees.baseBranch")}
-                      disabled={operation() === "create"}
-                      placeholder={t("worktrees.baseBranchPlaceholder")}
-                      list="worktrees-create-branches"
+                    <WorktreeReferenceChoice
+                      id="worktrees-base-ref"
+                      label={t("worktrees.baseBranch")}
                       value={view().createBaseRef}
-                      onInput={(event) =>
-                        model.update({ createBaseRef: event.currentTarget.value })
-                      }
+                      options={view().createBranches.map((value) => ({ value, label: value }))}
+                      emptyLabel={t("worktrees.baseBranchPlaceholder")}
+                      customLabel={t("worktrees.customRef")}
+                      scope={view().createRepoRoot}
+                      disabled={operation() === "create"}
+                      onInput={(createBaseRef) => model.update({ createBaseRef })}
                     />
-                    <datalist id="worktrees-create-branches">
-                      <For each={view().createBranches}>{(name) => <option value={name} />}</For>
-                    </datalist>
                     {view().createBranchesRefreshing ? (
                       <span role="status">{t("common.refreshing")}</span>
                     ) : undefined}
@@ -268,11 +305,19 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                   <For each={view().records} keyed={(record) => record.id}>
                     {(record) => (
                       <SettingsRow
-                        title={record().name}
+                        title={
+                          <span class="worktree-row__name" title={record().name}>
+                            <span>{record().name.slice(0, -10)}</span>
+                            <span>{record().name.slice(-10)}</span>
+                          </span>
+                        }
                         description={
-                          <>
-                            <span title={record().repoRoot}>
-                              {pathDisplayName(record().repoRoot)}
+                          <details class="worktree-row__details">
+                            <summary title={record().repoRoot}>
+                              {repoLabels().get(record().repoRoot)}
+                            </summary>
+                            <span id={`worktree-repository-${record().id}`}>
+                              {record().repoRoot}
                             </span>
                             {" · "}
                             {record().branch}
@@ -280,7 +325,7 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                             {owner(record())}
                             {" · "}
                             {formatRelativeTimestamp(record().lastActiveAt)}
-                          </>
+                          </details>
                         }
                         control={
                           <>
@@ -298,18 +343,32 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                                   : t("worktrees.adminRequiredTooltip")
                               }
                               aria-label={`${record().removedAt ? t("worktrees.restore") : t("common.delete")}: ${record().name}`}
+                              aria-describedby={`worktree-repository-${record().id}`}
                               disabled={
                                 !model.gateway.connected ||
                                 !view().operatorAccess.canAdmin ||
                                 busy()
                               }
-                              onClick={() =>
-                                void mutate("row", () =>
-                                  record().removedAt
-                                    ? model.restore(record())
-                                    : model.removeWorktree(record()),
-                                )
-                              }
+                              onClick={(event) => {
+                                const trigger = event.currentTarget;
+                                const epoch = model.gateway.readEpoch();
+                                void (async () => {
+                                  await mutate("row", () =>
+                                    record().removedAt
+                                      ? model.restore(record())
+                                      : model.removeWorktree(record()),
+                                  );
+                                  // A confirmation cannot restore its disabled invoker. Restore it
+                                  // after refresh only if this row remains and focus hasn't moved.
+                                  if (
+                                    epoch === model.gateway.readEpoch() &&
+                                    trigger.isConnected &&
+                                    document.activeElement === document.body
+                                  ) {
+                                    focusProgrammatically(trigger, { preventScroll: true });
+                                  }
+                                })();
+                              }}
                             >
                               {record().removedAt ? t("worktrees.restore") : t("common.delete")}
                             </button>

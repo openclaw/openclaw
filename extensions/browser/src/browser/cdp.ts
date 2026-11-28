@@ -9,6 +9,7 @@ import {
   type CdpActionTimeouts,
   type CdpDocumentIdentities,
 } from "./cdp-page-session.js";
+import { PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS } from "./cdp-timeouts.js";
 import {
   appendCdpPath,
   assertCdpEndpointAllowed,
@@ -36,6 +37,35 @@ export async function getDocumentIdentitiesViaCdp(opts: {
     commandTimeoutMs: opts.timeoutMs ?? 5000,
     ...(opts.lookup ? { lookup: opts.lookup } : {}),
   });
+}
+
+/** Chrome emits Inspector.targetCrashed before acknowledging Inspector.enable on a dead page. */
+export async function readCdpTargetCrashState(opts: {
+  wsUrl: string;
+  lookup?: typeof dnsLookupCb;
+  signal?: AbortSignal;
+}): Promise<boolean | undefined> {
+  let crashed = false;
+  try {
+    await withCdpSocket(opts.wsUrl, (send) => send("Inspector.enable"), {
+      lookup: opts.lookup,
+      signal: opts.signal,
+      abortScope: "operation",
+      handshakeRetries: 0,
+      handshakeTimeoutMs: PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS,
+      commandTimeoutMs: PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS,
+      onEvent(method) {
+        if (method === "Inspector.targetCrashed") {
+          crashed = true;
+        }
+      },
+    });
+    return crashed;
+  } catch {
+    opts.signal?.throwIfAborted();
+    // A failed connection says nothing about the renderer. Let the requested action proceed.
+    return undefined;
+  }
 }
 
 export async function captureScreenshot(opts: {

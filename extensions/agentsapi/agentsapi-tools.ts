@@ -77,6 +77,24 @@ export type AgentsApiToolSurface = {
   readonly lastToolError: AgentHarnessAttemptResult["lastToolError"];
 };
 
+/**
+ * The function output: each text block, and a placeholder for each other block, one per line.
+ * Without `withText` it is only what serialization adds, which the result bound reserves. The
+ * bound never adds a block (its notice goes into a text block it keeps, and it only removes
+ * others), so the reserve computed before the cut covers the output after it.
+ */
+function serializeFunctionOutput(content: readonly unknown[], withText = true): string {
+  return content
+    .map((block) =>
+      isRecord(block) && block.type === "text" && typeof block.text === "string"
+        ? withText
+          ? block.text
+          : ""
+        : "[Image result omitted from Agents API function output]",
+    )
+    .join("\n");
+}
+
 /** Gateway functions retain host authority; shell and file tools stay in the hosted VM. */
 export async function buildAgentsApiToolSurface(
   params: AgentHarnessAttemptParamsV2,
@@ -245,7 +263,8 @@ export async function buildAgentsApiToolSurface(
   let lastToolError: AgentsApiToolSurface["lastToolError"];
   const executionBoundaries = createAgentHarnessToolExecutionBoundaryRegistry();
   const contextTokens = params.contextTokenBudget ?? params.model.contextWindow;
-  const maxChars =
+  // Cap for strings this adapter builds after the result bound (errors, serialized output).
+  const maxOutputChars =
     contextTokens === undefined
       ? DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS
       : resolveLiveToolResultMaxChars({ contextWindowTokens: contextTokens });
@@ -399,6 +418,13 @@ export async function buildAgentsApiToolSurface(
         runId: params.runId,
         signal,
         boundaries: executionBoundaries,
+        // File tools run in the hosted VM, which cannot open a Gateway file: size-only notice.
+        // The bound reserves the separators and placeholders this adapter adds when it serializes.
+        resultBound: {
+          contextWindowTokens: contextTokens,
+          spill: false,
+          reservedChars: (content) => serializeFunctionOutput(content, false).length,
+        },
         prepareArguments: (args) => {
           if (!isRecord(args)) {
             throw new Error(`Arguments for OpenClaw tool ${call.name} must be an object`);
@@ -557,20 +583,11 @@ export async function buildAgentsApiToolSurface(
           assertCurrent();
           signal.throwIfAborted();
           dispatchAfterHook(presented);
-          let text = "";
-          for (const block of presented.content) {
-            if (text.length >= maxChars) {
-              break;
-            }
-            const next =
-              block.type === "text"
-                ? block.text
-                : "[Image result omitted from Agents API function output]";
-            text += `${text ? "\n" : ""}${sliceToolResultTextToBudget(next, maxChars - text.length)}`;
-          }
-          text = sliceToolResultTextToBudget(
-            text || "Tool completed with no text output.",
-            maxChars,
+          // The bound reserved this serialization's separators and placeholders; the cap here
+          // never cuts a bounded result.
+          const text = sliceToolResultTextToBudget(
+            serializeFunctionOutput(presented.content) || "Tool completed with no text output.",
+            maxOutputChars,
           );
           return {
             transcriptResult: observed,
@@ -602,7 +619,7 @@ export async function buildAgentsApiToolSurface(
           return {
             transcriptResult: failed,
             success: false,
-            error: sliceToolResultTextToBudget(message, maxChars),
+            error: sliceToolResultTextToBudget(message, maxOutputChars),
           };
         },
       });

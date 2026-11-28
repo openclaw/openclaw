@@ -5,6 +5,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -54,7 +55,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await fixture.settle();
+  await fixture.cleanup();
   clearRuntimeConfigSnapshot();
   resetCliRunnerPrepareTestDeps();
   cliBackendsTesting.resetDepsForTest();
@@ -83,6 +84,10 @@ function prepareAuthorized(params: Parameters<typeof fixture.prepare>[0] = {}) {
   });
   return fixture
     .prepare({ ...params, toolAuthorityFingerprint: "turn-authority", preparedRunAdmission })
+    .then(async (context) => {
+      await context.preparedBackend.cleanup?.();
+      return context;
+    })
     .finally(preparedRunAdmission.close);
 }
 
@@ -144,3 +149,34 @@ it.each([
     expect(context.params.prompt).toMatch(/^restored context\n\n/);
   },
 );
+
+it("renders one system prompt for every turn source of a conversation", async () => {
+  const conversation = {
+    sessionKey: "agent:main:telegram:direct:1222",
+    sessionEntry: {
+      sessionId: "session-test",
+      updatedAt: 1,
+      chatType: "direct" as const,
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "1222", accountId: "default" },
+        origin: { provider: "telegram", surface: "telegram", chatType: "direct" },
+      }),
+    },
+  };
+  const user = await prepareAuthorized({
+    ...conversation,
+    messageChannel: "telegram",
+    messageProvider: "telegram",
+    agentAccountId: "default",
+  });
+  // sessions_send turns run on the internal channel with no route of their own.
+  const peer = await prepareAuthorized({
+    ...conversation,
+    messageChannel: "webchat",
+    messageProvider: "webchat",
+    inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+  });
+
+  expect(user.systemPrompt).toContain("channel=telegram");
+  expect(peer.systemPrompt).toBe(user.systemPrompt);
+});

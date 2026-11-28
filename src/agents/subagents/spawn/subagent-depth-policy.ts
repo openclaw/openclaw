@@ -57,9 +57,15 @@ export function getSubagentDepthFromEntryLookup(
 /** Classifies coordination from the exact session entry and its canonical ACP metadata. */
 export function isSubagentSessionFromEntry(
   sessionKey: string,
-  entry: SessionEntry | null | undefined,
+  entry:
+    | Pick<SessionEntry, "spawnDepth" | "spawnedBy" | "parentSessionKey" | "createdIndependently">
+    | null
+    | undefined,
   acpMeta?: unknown,
 ): boolean {
+  if (entry?.createdIndependently === true) {
+    return false;
+  }
   const spawnDepth = normalizeSpawnDepth(entry?.spawnDepth);
   return (
     (spawnDepth === undefined

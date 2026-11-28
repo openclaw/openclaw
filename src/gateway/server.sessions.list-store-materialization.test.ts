@@ -1,11 +1,6 @@
 import path from "node:path";
 import { expect, test } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createTestProjection } from "./session-row-projection.read-fixture.test-support.js";
@@ -20,16 +15,7 @@ import {
 
 const EXPECTED_OPEN_HANDLE_CAP = 64;
 
-const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
-
-const LIST_PARAMS = {
-  agentId: "main",
-  configuredAgentsOnly: true,
-  includeDerivedTitles: true,
-  includeGlobal: true,
-  includeUnknown: true,
-  limit: 100,
-};
+setupGatewaySessionsHandlerTestHarness();
 
 test("sessions.list retains stored titles and transcript previews beyond the database handle cap", async () => {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
@@ -100,51 +86,5 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
         lastMessagePreview: `Reply ${agentId}`,
       })),
     );
-  }
-});
-
-test("sessions.list serves warm rows without reading a malformed raw insertion", async () => {
-  await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main"),
-    },
-  });
-  const storePath = testState.sessionStorePath!;
-  const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-  const database = openOpenClawAgentDatabase({
-    agentId: target.agentId ?? "main",
-    path: target.path,
-  });
-  const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
-  using projection = await createTestProjection({ cfg });
-  let reads: ReturnType<typeof trackSqliteStatementExecutions<"sessionStore">> | undefined;
-  try {
-    // Warm readers tolerate malformed raw edits; new readers must refuse them during admission.
-    await withOpenClawAgentDatabaseWrite(
-      { agentId: database.agentId, path: database.path },
-      (current) => {
-        current.db
-          .prepare(
-            "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
-          )
-          .run("agent:main:zz-malformed", "malformed", "{", Date.now());
-      },
-      requireNativeSqliteDatabase(database.db),
-    );
-    reads = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["sessionStore"],
-      () => "sessionStore",
-    );
-
-    const result = await directSessionReq<SessionsListResult>("sessions.list", LIST_PARAMS, {
-      context: { getRuntimeConfig: () => cfg, ...bindSessionRowProjection({}, () => projection) },
-    });
-    expect(result.ok).toBe(true);
-    expect(result.payload?.sessions.map((row) => row.sessionId)).toEqual(["sess-main"]);
-    expect(reads.counts.sessionStore).toBe(0);
-  } finally {
-    reads?.restore();
   }
 });

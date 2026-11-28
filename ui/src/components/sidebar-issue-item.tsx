@@ -34,7 +34,7 @@ registerEnglishCatalog(registerSidebarAttentionEnglish);
 type SidebarIssueItemHandlers = {
   basePath: string;
   onDismiss?: () => void;
-  onNavigate: (routeId: NavigationRouteId) => void;
+  onNavigate: (routeId: NavigationRouteId, options?: { search: string }) => void;
   onOpen: (item: SidebarAttentionItem) => void;
 };
 
@@ -70,6 +70,7 @@ export function renderSidebarMentionItem(params: {
       {(id) => (
         <article
           class="sidebar-mention-row"
+          inert={params.dismissing}
           data-attention-kind="mention"
           data-mention-id={id}
           aria-label={label()}
@@ -337,9 +338,11 @@ export function SidebarIssueItem(props: {
     const action = props.item.action;
     return action.kind === "askCustodian"
       ? action.alert.facts.filter((fact) => fact !== props.item.label)
-      : action.kind === "openClawIdRecovery"
-        ? [props.item.detail]
-        : [];
+      : action.kind === "openClawIdBrowserApproval"
+        ? props.item.detail.split("\n")
+        : action.kind === "openClawIdRecovery"
+          ? [props.item.detail]
+          : [];
   });
   return (
     <Show
@@ -391,7 +394,8 @@ export function SidebarIssueItem(props: {
                 ]}
                 onClick={() => props.handlers.onOpen(props.item)}
               >
-                {props.item.action.kind === "openClawIdRecovery"
+                {props.item.action.kind === "openClawIdRecovery" ||
+                props.item.action.kind === "openClawIdBrowserApproval"
                   ? props.item.action.label
                   : askBrandLabel()}
               </button>
@@ -412,10 +416,13 @@ export function SidebarIssueItem(props: {
             <a
               ref={sidebarAttentionFocusRef("row")}
               class="sidebar-issues-panel__navigation-link"
-              href={pathForRoute(action().routeId, props.handlers.basePath)}
+              href={`${pathForRoute(action().routeId, props.handlers.basePath)}${action().search ?? ""}`}
               data-issue-row-focus
               onClick={(event) =>
-                handleNavigationClick(event, () => props.handlers.onNavigate(action().routeId))
+                handleNavigationClick(event, () => {
+                  const search = action().search;
+                  props.handlers.onNavigate(action().routeId, search ? { search } : undefined);
+                })
               }
             >
               <SidebarIssueContent item={props.item} />

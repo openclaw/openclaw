@@ -13,10 +13,10 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { readImageMetadataFromHeader } from "./image-header-metadata.js";
 import {
   createImageProcessor,
   getImageMetadata,
-  readImageMetadataFromHeader,
   readImageProbeFromHeader,
   resizeToJpeg,
 } from "./media-services.js";

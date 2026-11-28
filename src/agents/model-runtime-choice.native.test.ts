@@ -24,6 +24,12 @@ const published = vi.hoisted((): { owner?: PreparedModelRuntimeSnapshot } => ({}
 vi.mock("./prepared-model-catalog.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./prepared-model-catalog.js")>()),
   getPublishedPreparedModelCatalogOwnerSnapshot: () => published.owner,
+  loadPublishedPreparedModelCatalogOwnerSnapshot: async () => {
+    if (!published.owner) {
+      throw new Error("No published test model owner");
+    }
+    return published.owner;
+  },
   materializePreparedModelCatalogOwner: (owner: PreparedModelRuntimeSnapshot) => owner,
   loadProviderScopedThinkingCatalog: async () => {
     if (!published.owner) {
@@ -53,6 +59,56 @@ const custom: OpenClawConfig = {
   plugins: { enabled: false },
   ...configFor("fixture", "https://custom.invalid/v1", { api: "openai-completions" }),
 };
+
+it.each(["auto", "openclaw"])(
+  "preflights the %s turn runtime without borrowing a signed-in alternative",
+  async (runtime) => {
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: true },
+      agents: { defaults: { models: { "fixture/model": { agentRuntime: { id: runtime } } } } },
+    };
+    const entry: ModelCatalogEntry = {
+      provider: "fixture",
+      id: "model",
+      name: "Model",
+      api: "openai-completions",
+    };
+    const registry = harnessRegistry("native-test", {
+      authBootstrap: "harness",
+      supports: ({ requestedRuntime }) => ({ supported: requestedRuntime === "native-test" }),
+      readModelCatalogReadiness: () => ({ accountType: "oauth" }),
+    });
+    const owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, {
+      pluginRegistry: registry,
+      modelCatalog: {
+        entries: [entry],
+        // The alternate harness is opt-in, not the native owner of this catalog row.
+        routeVariants: [entry],
+      },
+    });
+    bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+    published.owner = owner;
+    // The picker may offer a signed-in opt-in harness; the ordinary turn still uses the host.
+    expect(await preparePublishedModelRuntimeChoice({ ...request, cfg })).toMatchObject({
+      kind: "ready",
+      runtimeId: "native-test",
+    });
+    expect(
+      await preparePublishedModelRuntimeChoice({ ...request, cfg, useConfiguredRuntime: true }),
+    ).toMatchObject({ kind: "unavailable" });
+    bindPreparedModelRuntimeAuth(owner, {
+      store: {
+        version: 1,
+        profiles: {
+          "fixture:account": { type: "api_key", provider: "fixture", key: "synthetic-key" },
+        },
+      },
+    });
+    expect(
+      await preparePublishedModelRuntimeChoice({ ...request, cfg, useConfiguredRuntime: true }),
+    ).toMatchObject({ kind: "ready", runtimeId: "openclaw" });
+  },
+);
 
 it.each([
   ["published", "before request"],
@@ -557,14 +613,16 @@ it("validates off-catalog host routes without granting an incompatible runtime",
 });
 
 it.each(["implicit", "configured"] as const)(
-  "admits a %s native-only model for spawn like the turn path",
+  "admits a %s native-only model for spawn with its catalog capabilities",
   async (routing) => {
     // Only the native runtime lists this model; no API row can materialize it.
     const entry: ModelCatalogEntry = {
       provider: "fixture",
       id: "native-only",
       name: "Native only",
-      reasoning: true,
+      reasoning: false,
+      input: ["text"],
+      contextWindow: 65_536,
       nativeRuntime: "native-test",
     };
     const cfg: OpenClawConfig =
@@ -606,12 +664,19 @@ it.each(["implicit", "configured"] as const)(
     ).toMatchObject({
       kind: "resolved",
       ref: { provider: "fixture", model: "native-only" },
-      model: { provider: "fixture", id: "native-only" },
+      model: {
+        provider: "fixture",
+        id: "native-only",
+        reasoning: false,
+        input: ["text"],
+        contextWindow: 65_536,
+        maxTokens: 32_768,
+      },
     });
   },
 );
 
-it("rejects a stale native observation without renewing it", async () => {
+it("renews an implicit native observation only when catalog preparation is allowed", async () => {
   // This choice also runs inside config write locks; native discovery there needs its own decision.
   const entry: ModelCatalogEntry = {
     provider: "fixture",
@@ -621,6 +686,7 @@ it("rejects a stale native observation without renewing it", async () => {
     nativeRuntime: "native-test",
   };
   const registry = createEmptyPluginRegistry();
+  let ready = false;
   registry.agentHarnesses.push({
     pluginId: "native-test",
     source: "fixture",
@@ -630,11 +696,15 @@ it("rejects a stale native observation without renewing it", async () => {
       authBootstrap: "harness",
       supports: () => ({ supported: true }),
       // Another agent's turn retired the client that produced this observation.
-      readModelCatalogReadiness: () => undefined,
+      readModelCatalogReadiness: () => (ready ? { accountType: "oauth" } : undefined),
+      loadModelCatalog: async () => [entry],
       runAttempt: vi.fn(),
     },
   });
-  const reload = vi.fn(async () => ({ entries: [entry], routeVariants: [entry] }));
+  const reload = vi.fn(async () => {
+    ready = true;
+    return { entries: [entry], routeVariants: [entry] };
+  });
   const owner = {
     ...createModelRuntimeChoiceOwnerFixture({}, () => true, {
       pluginRegistry: registry,
@@ -651,4 +721,17 @@ it("rejects a stale native observation without renewing it", async () => {
     message: expect.stringContaining("Refresh the model catalog and choose again"),
   });
   expect(reload).not.toHaveBeenCalled();
+  expect(
+    await preparePublishedModelRuntimeChoice({
+      ...request,
+      cfg: {},
+      useConfiguredRuntime: true,
+      prepareNativeCatalog: (operation) => operation(),
+    }),
+  ).toMatchObject({ kind: "ready", runtimeId: "native-test" });
+  expect(reload).toHaveBeenCalledWith({
+    provider: "fixture",
+    modelId: "model",
+    runtime: "native-test",
+  });
 });

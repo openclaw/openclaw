@@ -32,6 +32,7 @@ import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
 import { clearGatewayMaintenanceHandles } from "./server-maintenance-lifecycle.js";
 import { refreshConnectedNodeSurfaceCaches } from "./server-methods/nodes.read.js";
 import { assertGatewayRuntimeSecurityConfig } from "./server-runtime-config.js";
+import { logGatewayReady } from "./server-startup-readiness.js";
 import { startGatewayTlsRenewal } from "./server-tls-renewal.js";
 import type { GatewayHttpTransport } from "./server-transport-bridge.js";
 import { startWorkerHumanPresence } from "./server/client-human-presence.js";
@@ -398,15 +399,10 @@ export async function finishGatewayStartup(params: {
       ? []
       : await startupTrace.measure("runtime.worker-pool-metrics", collectGatewayWorkerPoolMetrics)),
   ]);
-  const preparedReadiness = await getReadiness.prepare();
-  if (!lifecycle.closePreludeStarted && preparedReadiness.publish().ready) {
-    startupTrace.mark("ready");
-    log.info(
-      opts.updateCanary
-        ? "candidate gateway ready; autonomous sidecars suppressed"
-        : "gateway ready",
-    );
-  }
+  await logGatewayReady(
+    { getReadiness, log, startupTrace, isClosing: () => lifecycle.closePreludeStarted },
+    opts.updateCanary,
+  );
   finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
   if (opts.updateCanary) {
     // Copied queues and jobs must not resume; the canary owns only startup probes.

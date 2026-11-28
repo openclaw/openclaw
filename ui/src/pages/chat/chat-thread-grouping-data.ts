@@ -1,5 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
+import { messageSubagentCompletions } from "../../../../src/shared/subagent-completion.js";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
   readChatThreadMessageIdentity,
@@ -23,6 +24,7 @@ import {
   chatItemStartsUserTurn,
   hasForwardedSource,
   isInterSessionMessage,
+  messageStartsProjectedTurnBoundary,
   readAutomationRun,
 } from "./chat-turn-boundary.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
@@ -331,6 +333,13 @@ export function groupPreparedChatMessages(
       if (currentSource) {
         item.replyCurrentSource = currentSource;
       }
+      // A completion receipt keeps its place in the turn without answering the prompt.
+      if (
+        shared &&
+        item.messages.every((entry) => messageSubagentCompletions(entry.message).length > 0)
+      ) {
+        continue;
+      }
     } else if (item.kind !== "stream") {
       continue;
     }
@@ -339,7 +348,36 @@ export function groupPreparedChatMessages(
       item.replyToMessage = message;
     }
   }
-  return result;
+  let activityBoundary = false;
+  return result.flatMap((item) => {
+    if (item.kind === "compaction") {
+      const startsActivityGroup = activityBoundary;
+      activityBoundary = false;
+      return [
+        {
+          kind: "group" as const,
+          key: `group:${item.key}`,
+          role: "tool",
+          messages: [],
+          compaction: item,
+          timestamp: item.timestamp,
+          visibleContent: "none" as const,
+          isStreaming: false,
+          ...(item.runId ? { runId: item.runId } : {}),
+          ...(startsActivityGroup ? { startsActivityGroup: true as const } : {}),
+        },
+      ];
+    }
+    if (item.kind === "notice" && item.activityBoundary) {
+      activityBoundary = true;
+      return [];
+    }
+    if (activityBoundary && item.kind === "group") {
+      activityBoundary = false;
+      return [{ ...item, startsActivityGroup: true as const }];
+    }
+    return [item];
+  });
 }
 
 function groupChatItemSegment(
@@ -402,6 +440,7 @@ function groupChatItemSegment(
       key: item.key,
       ...(normalized.replyTarget ? { replyTarget: normalized.replyTarget } : {}),
       hasVisibleContent:
+        messageSubagentCompletions(item.message).length > 0 ||
         hasVisibleReasoning ||
         (showReasoning && role === "assistant" && Boolean(extractThinkingCached(item.message))) ||
         visibleContent === "non-text" ||
@@ -420,6 +459,7 @@ function groupChatItemSegment(
     const senderLabel =
       role === "user" || role === "assistant" ? (normalized.senderLabel ?? null) : null;
     const sender = role === "user" ? normalized.sender : undefined;
+    const suggestedBy = role === "user" ? normalized.suggestedBy : undefined;
     const timestamp = normalized.timestamp || Date.now();
     const runId =
       role === "assistant" || role === "tool" ? transcriptRunId(item.message) : undefined;
@@ -434,7 +474,7 @@ function groupChatItemSegment(
     const startsProjectedTurn =
       item.startsTurn === true ||
       rowsAfterHiddenTurn?.has(item.key) === true ||
-      asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
+      messageStartsProjectedTurnBoundary(item.message);
     const splitsAssistantKind =
       role === "assistant" &&
       currentGroup?.role === "assistant" &&
@@ -468,7 +508,8 @@ function groupChatItemSegment(
           currentGroup.senderSession?.sessionKey !== normalized.senderSession?.sessionKey ||
           currentGroup.senderSession?.label !== normalized.senderSession?.label ||
           currentGroup.senderSession?.agentId !== normalized.senderSession?.agentId ||
-          senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
+          senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender) ||
+          senderIdentityKey(currentGroup.suggestedBy) !== senderIdentityKey(suggestedBy)))
     ) {
       if (currentGroup) {
         result.push(currentGroup);
@@ -482,6 +523,7 @@ function groupChatItemSegment(
         senderLabel,
         ...(normalized.senderSession ? { senderSession: normalized.senderSession } : {}),
         ...(sender ? { sender } : {}),
+        ...(suggestedBy ? { suggestedBy } : {}),
         ...(normalized.sourceClients ? { sourceClients: normalized.sourceClients } : {}),
         messages: [source],
         visibleContent,

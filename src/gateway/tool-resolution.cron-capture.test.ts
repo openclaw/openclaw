@@ -164,7 +164,11 @@ it.each(["inherited", "finite", "schema-filtered", "denied", "excluded"] as cons
           turnSourceAccountId: "default",
           operationalRunInstance,
           approvalAuthority: authority,
-          receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+          receiptAuthority: () => {
+            if (!validateAgentRunDelegatedAuthority(authority)) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
           gatewayContextResolver: () => context,
         },
         async () => {

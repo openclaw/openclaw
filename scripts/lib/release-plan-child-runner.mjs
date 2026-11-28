@@ -54,7 +54,11 @@ try {
     }
     toolingModules.set(record.path, {
       bytes: decodeBase64(record.bytesBase64),
-      format: record.path.endsWith(".mjs") ? "module" : "module-typescript",
+      format: record.path.endsWith(".json")
+        ? "json"
+        : record.path.endsWith(".mjs")
+          ? "module"
+          : "module-typescript",
       imports: new Map(record.imports),
     });
   }

@@ -30,6 +30,18 @@ afterEach(async () => {
   await i18n.setLocale("en");
   setCurrentThemeBranding(resolveThemeBranding(undefined));
 });
+it.each(["Code Mode", "Tool Search", "QuickJS"])(
+  "finds the normal Tools settings for %s before the schema loads",
+  (query) => {
+    expect(search(query)).toContainEqual(
+      expect.objectContaining({
+        routeId: "ai-agents",
+        search: "?section=tools",
+        hash: "#config-section-tools",
+      }),
+    );
+  },
+);
 
 it("does not advertise hidden Lobsterdex choices while retaining the rest of tab icon settings", () => {
   setCurrentThemeBranding(resolveThemeBranding({ lobsterdex: false }));
@@ -235,6 +247,7 @@ it("searches and displays static settings blocks in the active locale", async ()
 
   expectBlocks(
     search("modelo"),
+    { routeId: "ai-agents", search: "?section=tools", hash: "#config-section-tools" },
     { routeId: "model-providers", hash: "#settings-model-behavior" },
     { routeId: "appearance", hash: "#settings-appearance-sidebar" },
   );

@@ -3,16 +3,14 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { hasErrnoCode } from "./errno.js";
-import {
-  classifyGatewayLockProcessNamespace,
-  parseGatewayLockPayload,
-} from "./gateway-lock-payload.js";
+import { parseGatewayLockPayload } from "./gateway-lock-payload.js";
+import { classifyGatewayLockProcessNamespace } from "./gateway-lock-recovery-namespace.js";
 import { readGatewayOwnerLeaseAsync } from "./gateway-owner-lease.js";
 import {
   resolveGatewayStateOwnerPath,
   tryAcquireGatewayStateOwner,
 } from "./gateway-state-owner.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 
 // Worker renewal proves custody, not main-thread progress through startup.
 const GATEWAY_STARTUP_BUDGET_MS = 5 * 60_000;

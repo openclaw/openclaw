@@ -59,7 +59,8 @@ it("keeps the current listing usable while its card body is loading", async () =
   flush();
   await waitForSolid(() => {
     expect(view.container.querySelector(".chat-clawhub-card")).toBe(card);
-    expect(card.textContent).toContain("Community description");
+    expect(card.textContent).toContain("Community plugin");
+    expect(card.querySelector(".chat-clawhub-card__status .btn__spinner")).not.toBeNull();
     expect(card.querySelector(".plugin-official-badge")).toBeNull();
   });
   card.querySelector<HTMLButtonElement>(".chat-clawhub-card__listing")!.click();

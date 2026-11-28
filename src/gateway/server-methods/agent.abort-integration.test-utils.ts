@@ -1420,7 +1420,7 @@ describe("gateway agent handler chat.abort integration", () => {
           timeout: 120,
           idempotencyKey: runId,
         },
-        cfg: {},
+        cfg: { agents: { defaults: { model: "openai/gpt-6-astra" } } },
         sessionEntry: { sessionId, updatedAt: nowMs },
         resolvedSessionKey: "agent:main:main",
         activeSessionAgentId: "main",

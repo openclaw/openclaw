@@ -114,7 +114,9 @@ export function ConfirmDialogView(props: {
         initialOptions.requiredAcknowledgement ||
         initialOptions.skipPreference ? (
           <div class="oc-dialog__body">
-            {initialOptions.details ? (
+            {typeof initialOptions.details === "function" ? (
+              initialOptions.details()
+            ) : initialOptions.details ? (
               <div class="exec-approval-command mono">{initialOptions.details}</div>
             ) : undefined}
             {initialOptions.requiredAcknowledgement ? (

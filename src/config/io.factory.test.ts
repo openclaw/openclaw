@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 
@@ -75,6 +76,19 @@ it.each([
       expect.objectContaining({ path: "plugins.entries.codex" }),
     );
   }
+});
+
+it("keeps ordinary config IO independent of Doctor result handling", () => {
+  expect(
+    findSourceImportBackedges(
+      [
+        "src/config/io.factory.ts",
+        "src/config/io.runtime-write-finalization.ts",
+        "src/config/mutate.ts",
+      ],
+      ["src/infra/update-doctor-result.ts"],
+    ),
+  ).toEqual([]);
 });
 
 it("reads and records normal observation without importing the writer", async () => {

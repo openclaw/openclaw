@@ -126,6 +126,13 @@ reports the negotiated role and the current socket's effective authorization
 scopes even when no device token is issued (shape above). `deviceToken`, when
 present, is the primary reusable credential for the same device and role.
 
+The `session-approval-recipients-v1` hello capability allows authenticated people
+without global `operator.approvals` scope to request session approval replay with
+`includeApprovals: true`. The Gateway selects the creator, reviewer, and own-turn
+status recipients; this opt-in grants no review authority. Without that advertised
+capability, clients must keep approval opt-in limited to approvals-scoped operators
+and subscribe to the plain transcript for other readers.
+
 Optional hello fields:
 
 | Field                             | Client use                                                                                                                                                                                                                                                                                   |
@@ -271,6 +278,11 @@ storage, and publishes the correlation only after the row commits. It is not
 provider replay data. This worker-only field travels between the exact
 builds admitted by the bundle, version, and feature checks above.
 
+Historical assistant messages in launch history, inference context, and transcript
+commits may omit `usage.cost` when no price was recorded. Missing cost remains
+unknown, not zero. Fresh inference terminal messages retain required cost fields;
+this history distinction does not enable older worker builds.
+
 For an identity-audited attached run, the live turn capability can record the
 credential, build, owner-epoch, and placement checks as one enforced admission
 receipt. The receipt contains none of the credential, build hashes, tokens,
@@ -314,6 +326,10 @@ unsupported capability declarations.
 | `ultrafast`                | Accepts the explicit `"ultrafast"` value. Without it, session responses/events project it as Fast (`true`) for released decoders; stored selection and execution are unchanged. |
 | `chat-only-assistant-text` | Renders assistant text from `chat`, omitting redundant assistant-text `agent` events. See [event families](/gateway/protocol/rpc-bootstrap-and-events#common-event-families).   |
 | `chat-queue-status`        | Displays authoritative pending-input receipts instead of transient successful queue acknowledgments. Refusals, drops, and errors remain visible.                                |
+
+Advertise `chat-history-queue-observation` to receive the queue-wide
+[pending-input observation](/gateway/protocol/rpc-session-control#chat-input-reconciliation)
+with chat history and startup.
 
 Without the health/presence options, clients retain full cached hello health and
 presence. The Control UI advertises `hello-health-on-demand` and

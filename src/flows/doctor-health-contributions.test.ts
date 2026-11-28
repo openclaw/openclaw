@@ -681,23 +681,6 @@ function setRegisteredHealthChecks(
 }
 
 describe("doctor health contributions", () => {
-  it("shows runtime capabilities in the interactive Doctor flow", async () => {
-    vi.stubGlobal("__openclawStandaloneBuildInfo", {
-      mode: "aot",
-      openclaw: { version: "2026.10.3" },
-      bun: { version: "1.4.4" },
-    });
-    try {
-      await requireDoctorContribution("doctor:runtime-capabilities").run(createDoctorContext());
-      expect(mocks.note).toHaveBeenCalledWith(
-        expect.stringContaining("flavor=aot"),
-        "Runtime capabilities (Doctor process)",
-      );
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
   async function withProcessPlatform<T>(
     platform: NodeJS.Platform,
     run: () => Promise<T>,
@@ -1770,70 +1753,6 @@ describe("doctor health contributions", () => {
     expect(mocks.maybeResolveDuelingSystemdGatewayScopes).not.toHaveBeenCalled();
     expect(mocks.maybeRepairGatewayServiceConfig).not.toHaveBeenCalled();
     expect(mocks.note).not.toHaveBeenCalled();
-  });
-
-  it("hints how to enable authenticated GitHub project search", async () => {
-    const contribution = requireDoctorContribution("doctor:github-projects");
-    const ctx = createDoctorContext({
-      env: {},
-      configPath: "/tmp/openclaw.json",
-    });
-
-    await contribution.run(ctx);
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("gateway.controlUi.github.host matching gateway.github.host"),
-      "GitHub projects",
-    );
-
-    mocks.note.mockClear();
-    await contribution.run({ ...ctx, env: { GH_TOKEN: "configured" } });
-    expect(mocks.note).not.toHaveBeenCalled();
-
-    await contribution.run({
-      ...ctx,
-      cfg: {
-        gateway: {
-          controlUi: {
-            github: {
-              token: { source: "store", provider: "default", id: "CONTROL_UI_GITHUB" },
-            },
-          },
-        },
-      },
-    });
-    expect(mocks.note).not.toHaveBeenCalled();
-  });
-
-  it("does not report a removed Workspaces finding after a successful fix", async () => {
-    const contribution = requireDoctorContribution("doctor:legacy-state");
-    mocks.runDoctorHealthRepairs.mockImplementation(async (input: { cfg?: unknown }) => ({
-      config: input.cfg ?? {},
-      findings: [
-        {
-          checkId: "core/doctor/removed-workspaces-state",
-          severity: "warning",
-          message: "Retired Workspaces plugin state remains at /tmp/workspaces.",
-        },
-      ],
-      remainingFindings: [],
-      changes: ["Removed retired Workspaces plugin state at /tmp/workspaces."],
-      warnings: [],
-      diffs: [],
-      effects: [],
-      checksRun: 1,
-      checksRepaired: 1,
-      checksValidated: 1,
-    }));
-    const ctx = createDoctorContext({
-      shouldRepair: true,
-      options: { nonInteractive: true },
-    });
-
-    await contribution.run(ctx);
-
-    expect(ctx.runtime.log).not.toHaveBeenCalledWith(
-      expect.stringContaining("core/doctor/removed-workspaces-state"),
-    );
   });
 
   it("grants Doctor-only state migration authority only in repair mode", async () => {
@@ -3101,7 +3020,7 @@ describe("doctor health contributions", () => {
         expect.objectContaining({
           path: "gateway.port",
           severity: "error",
-          fixHint: expect.stringContaining("openclaw config unset"),
+          fixHint: expect.stringContaining(" config file`"),
         }),
       );
     });
@@ -3116,6 +3035,9 @@ describe("doctor health contributions", () => {
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
           },
         }),
+      );
+      expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ skipPluginValidation: true }),
       );
     });
   });

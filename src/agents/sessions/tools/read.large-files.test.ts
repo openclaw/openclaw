@@ -88,6 +88,40 @@ it("bounds first-page source reads and reports uncounted totals explicitly", asy
   });
 });
 
+it("decodes only selected UTF-8 lines while retaining exact totals below the sniff window", async () => {
+  const root = tempDirs.make("read-decode-window-");
+  const filePath = path.join(root, "notes.txt");
+  await fs.writeFile(filePath, "café 🦞\r\n".repeat(20_000));
+  const decodes = vi.spyOn(TextDecoder.prototype, "decode");
+  const conversions = vi.spyOn<Buffer, "toString">(Buffer.prototype, "toString");
+  const result = await createReadTool(root).execute("decode-window", {
+    path: filePath,
+    offset: 100,
+    limit: 2,
+  });
+  const largestDecode = Math.max(
+    0,
+    ...decodes.mock.calls.map(([input]) => input?.byteLength ?? 0),
+    ...conversions.mock.calls.map(([, start, end], index) => {
+      const buffer = conversions.mock.contexts[index];
+      if (!Buffer.isBuffer(buffer)) {
+        throw new Error("Expected a Buffer conversion receiver");
+      }
+      return (end ?? buffer.length) - (start ?? 0);
+    }),
+  );
+  expect(result.details).toMatchObject({
+    kind: "truncated",
+    content: "café 🦞\ncafé 🦞",
+    truncation: { totalLines: 20_000 },
+    continuation: { kind: "line", offset: 102 },
+  });
+  // Windows validates the complete file before selecting its legacy code page.
+  if (process.platform !== "win32") {
+    expect(largestDecode).toBeLessThan(64 * 1024);
+  }
+});
+
 it("keeps the classified file when its pathname is atomically replaced", async () => {
   const root = tempDirs.make("read-admitted-file-");
   const filePath = path.join(root, "notes.txt");

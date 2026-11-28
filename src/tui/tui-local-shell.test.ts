@@ -25,6 +25,7 @@ function createShellSupervisor(
     spawn,
     cancel: vi.fn<ProcessSupervisor["cancel"]>(),
     cancelScope,
+    release: vi.fn<ProcessSupervisor["release"]>(async () => undefined),
     acquireScopeCleanup: vi.fn<ProcessSupervisor["acquireScopeCleanup"]>((scopeKey) => async () => {
       cancelScope(scopeKey);
       await cleanupScope(scopeKey);

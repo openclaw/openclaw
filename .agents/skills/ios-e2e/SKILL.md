@@ -63,6 +63,7 @@ Crashes land in `~/Library/Logs/DiagnosticReports/OpenClaw-*.ips`; the first `Op
 2. Pair a fresh simulator through the real onboarding UI: `sim=$(pnpm --silent ios:sim:pair | tail -1)` (`--app` for another build, `--profile` for another profile).
 3. Exercise the change through visible controls. A chat round trip: type into `chat-message-input`, tap `chat-send-message`, then wait for a word only the reply contains.
 4. Compare builds: the same steps on `main` and on the change, each on its own fresh simulator, with matching screenshots.
+   For visual PR evidence, follow the shared [PR visual-proof standard](../openclaw-pr-maintainer/references/media.md#pr-visual-proof) and [native annotation geometry](../proof-video/references/annotations.md#geometry). Generate separate annotated copies in the task's PR artifact directory. This step does not apply to App Store screenshots; do not change `ios:screenshots`, Fastlane/release workflows, or their output directories.
 5. Stop the Gateway and delete the simulators.
 
 Node commands, permissions, auth failures, outages, rejected sends, upgrades and iPad layout: [PROOF.md](PROOF.md), which also lists what only a device proves. Chat scrolling, streaming, keyboard and relaunch stability (rows jumping, drifting or rebuilding), measured against a scripted model: [BEHAVIOR.md](BEHAVIOR.md).

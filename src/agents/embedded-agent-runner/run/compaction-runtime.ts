@@ -19,7 +19,10 @@ import {
 } from "../../../context-engine/types.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { acknowledgeReplySessionTransition } from "../../../sessions/session-controller.session-reader.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import {
+  readRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-manager-api.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
@@ -83,7 +86,6 @@ export type EmbeddedRunCompactionRecoveryInput = {
     target?: ContextEngineSessionTarget;
   };
   prepareCompactedTranscriptRetry: (assertActive: () => void) => Promise<void>;
-  armPostCompactionGuard: () => void;
   usageAccumulator: UsageAccumulator;
 } & ReturnType<typeof createEmbeddedRunCompactionRuntime>;
 
@@ -251,6 +253,7 @@ async function executeRecoveryCompaction(
       ? { currentTokenCount: recovery.currentTokenCount }
       : {}),
     force: true,
+    reason: recoveryKind,
     compactionTarget: "budget",
     runtimeContext,
     runtimeSettings,
@@ -264,6 +267,7 @@ async function executeRecoveryCompaction(
           owner.withTranscriptWrites(backendParams.abortSignal, () => {
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
+                operatorAuthority: readRunOperatorAuthority(runParams),
                 requestBudget: input.state.compactionRequestBudget,
                 requestFromEntryId,
                 pendingRequestState:
@@ -363,6 +367,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
   hookRunner: PreparedEmbeddedRunInput["hookRunner"];
   hookContext: PreparedEmbeddedRunInput["hookContext"];
   sessionPromptState: SessionPromptState;
+  isTurnTainted?: () => boolean;
 }) {
   const { runParams: params, contextEngine, hookRunner, hookContext, sessionPromptState } = input;
   const abortSignal = params.abortSignal;
@@ -524,7 +529,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
       },
     };
   };
-  const prepareRecoverySession = async (contextTokenBudget: number) => {
+  const prepareRecoverySession = async () => {
     const owner = prepareRecoveryOwner();
     const sessionManager =
       memoryManager ??
@@ -534,7 +539,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
             SessionManager.openAsync(
               owner.session.target,
               params.workspaceDir,
-              resolveEmbeddedSessionContextLimits({ contextTokenBudget }),
+              resolveEmbeddedSessionContextLimits({}),
             ),
           ));
     owner.assertActive();
@@ -555,6 +560,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
   const resolveActiveHookContext = () => ({
     ...hookContext,
     sessionId: sessionPromptState.sessionId,
+    ...(input.isTurnTainted ? { turnTainted: input.isTurnTainted() } : {}),
   });
   const adoptCompactionTranscript = async (
     compactResult: CompactionResult,

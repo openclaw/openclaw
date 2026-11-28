@@ -11,7 +11,7 @@ import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import {
   buildGatewayCrashLoopBreakerDecision,
-  maintenanceStartupReasons,
+  isRepairableMaintenanceStartupFailure,
 } from "./gateway-boot-lifecycle.kernel.js";
 import {
   publishGatewayRecentCrashes,
@@ -127,20 +127,37 @@ export type GatewayBootLifecycleStart = {
 };
 
 /** Inspection keeps snapshot preparation off the caller's event loop. */
-export async function readGatewayLastShutdownAsync(env = process.env) {
+async function readLastShutdownRecord(env: NodeJS.ProcessEnv, current?: boolean) {
   const reply = await executeExistingOpenClawStateRead(
     { env },
     { type: "gatewayBoot.lastShutdown", input: undefined },
-    { signal: getAsyncWorkSignal() },
+    { signal: getAsyncWorkSignal(), current },
   );
   return reply?.shutdown;
 }
 
+const isInstallationReplacement = (reason: string | null | undefined): reason is string =>
+  reason?.startsWith("gateway.installation_replaced:") === true;
+
+export async function readGatewayLastShutdownAsync(env = process.env) {
+  const shutdown = await readLastShutdownRecord(env);
+  return shutdown && { reason: shutdown.reason, completedAtMs: shutdown.completedAtMs };
+}
+
 export async function readGatewayLastInstallationReplacementAsync(env = process.env) {
   const lastShutdown = await readGatewayLastShutdownAsync(env);
-  return lastShutdown?.reason?.startsWith("gateway.installation_replaced:")
+  return isInstallationReplacement(lastShutdown?.reason)
     ? { reason: lastShutdown.reason, completedAtMs: lastShutdown.completedAtMs }
     : undefined;
+}
+
+/**
+ * Whether that Gateway process recorded, as the latest shutdown, its exit for a replaced
+ * installation. Stop authority depends on the answer, so it never reuses an inspection snapshot.
+ */
+export async function didGatewayExitForReplacedInstallation(pid: number, env = process.env) {
+  const shutdown = await readLastShutdownRecord(env, true);
+  return shutdown?.pid === pid && isInstallationReplacement(shutdown.reason);
 }
 
 /** Decide from prior boots, then record this boot in the existing lifecycle writer. */
@@ -284,6 +301,21 @@ export async function completeGatewayBootLifecycle(
   }
 }
 
+/** Read-only: the rows `repairGatewayMaintenanceStartupFailures` would change. */
+export async function countRepairableGatewayMaintenanceStartupFailures(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<number> {
+  if (!pathMayExistSync(resolveOpenClawStateSqlitePath(env))) {
+    return 0;
+  }
+  const reply = await executeExistingOpenClawStateRead(
+    { env },
+    { type: "gatewayBoot.repairableMaintenanceFailures", input: undefined },
+    { signal: getAsyncWorkSignal(), current: true },
+  );
+  return reply?.count ?? 0;
+}
+
 export function repairGatewayMaintenanceStartupFailures(
   env: NodeJS.ProcessEnv = process.env,
 ): number {
@@ -299,8 +331,7 @@ export function repairGatewayMaintenanceStartupFailures(
           kysely
             .updateTable("gateway_boot_lifecycle")
             .set({ outcome: "startup_failure_repaired" })
-            .where("outcome", "=", "startup_failed")
-            .where("startup_reason", "in", maintenanceStartupReasons),
+            .where(isRepairableMaintenanceStartupFailure),
         );
         return Number(result.numAffectedRows ?? 0);
       },

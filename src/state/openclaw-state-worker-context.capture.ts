@@ -20,8 +20,12 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 /** Capture read authority without constructing a worker environment. */
 export function captureOpenClawStateReadContextWithAdmission(
   pathname: string,
-  captureAdmission: (pathname: string) => OpenClawStateWorkerContext["admission"],
+  captureAdmission: (
+    pathname: string,
+    preparedIdentity?: DatabasePathIdentity,
+  ) => OpenClawStateWorkerContext["admission"],
   knownIdentity: (pathname: string) => DatabasePathIdentity | undefined,
+  preparedIdentity?: DatabasePathIdentity,
 ): Pick<
   OpenClawStateWorkerContext,
   | "admission"
@@ -35,7 +39,7 @@ export function captureOpenClawStateReadContextWithAdmission(
   | "liveStateReads"
 > & { assertPublicationCurrent: () => void } {
   const schema = captureOpenClawStateSchemaReadAdmission(pathname);
-  const capturedAdmission = captureAdmission(pathname);
+  const capturedAdmission = captureAdmission(pathname, preparedIdentity);
   const serviceInstallation = getGatewayServiceInstallation();
   const integrity = capturedAdmission.captureIntegrity?.();
   const assertPublicationCurrent = capturedAdmission.assertCurrent;
@@ -50,6 +54,7 @@ export function captureOpenClawStateReadContextWithAdmission(
         return capturedAdmission.identity;
       },
       captureIntegrity: capturedAdmission.captureIntegrity,
+      isCurrent: () => capturedAdmission.isCurrent() && schema.isCurrent(),
       assertCurrent() {
         capturedAdmission.assertCurrent();
         schema.assertCurrent();

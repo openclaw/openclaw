@@ -13,6 +13,7 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   decodeSlackApprovalAction,
@@ -73,9 +74,11 @@ async function respondEphemeral(
     return;
   }
   try {
+    // Without replace_original: false, Slack's response_url replaces the source message.
     await respond({
       text,
       response_type: "ephemeral",
+      replace_original: false,
     });
   } catch {
     // Best-effort feedback only.
@@ -658,7 +661,7 @@ export function registerSlackBlockActionHandler(params: {
       normalizeOptionalString(parsed.typedActionWithText.action_ts) ?? parsed.typedBody.trigger_id,
     ].filter(Boolean);
     const accepted = await enqueueSlackInteractionEvent(
-      eventPayload,
+      agentControlText(pluginInteractionData) ?? eventPayload,
       route,
       {
         contextKey: contextParts.join(":"),

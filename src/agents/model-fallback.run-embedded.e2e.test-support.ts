@@ -9,7 +9,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import type { AuthProfileStore } from "./auth-profiles.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import { modelDefinition } from "./model-auth.fixtures.test-support.js";
@@ -22,7 +21,7 @@ import {
 
 type Workspace = { agentDir: string; workspaceDir: string };
 
-export function embeddedParams(
+function embeddedParams(
   { agentDir, workspaceDir, runId, sessionKey }: Workspace & { runId: string; sessionKey: string },
   config: OpenClawConfig,
   sessionId = `session:${runId}`,
@@ -169,35 +168,6 @@ export async function withModelFallbackWorkspace<T>(
   }
 }
 
-export async function writeFallbackAuthStore(
-  agentDir: string,
-  usageStats?: AuthProfileStore["usageStats"],
-  options?: { primaryProvider?: string },
-) {
-  const primaryProvider = options?.primaryProvider ?? "openai";
-  const primaryProfileId = `${primaryProvider}:p1`;
-  saveAuthProfileStore(
-    {
-      version: 1,
-      profiles: {
-        [primaryProfileId]: {
-          type: "api_key",
-          provider: primaryProvider,
-          key: "sk-primary",
-        },
-        "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
-      },
-      usageStats:
-        usageStats ??
-        ({
-          [primaryProfileId]: { lastUsed: 1 },
-          "groq:p1": { lastUsed: 2 },
-        } as const),
-    },
-    agentDir,
-  );
-}
-
 export async function readFallbackUsageStats(agentDir: string) {
   return ensureAuthProfileStore(agentDir, { syncExternalCli: false }).usageStats ?? {};
 }
@@ -229,24 +199,7 @@ export async function writeFallbackMultiProfileAuthStore(
   );
 }
 
-export const OVERLOADED_ERROR_PAYLOAD =
-  '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
-export const CLOUDFLARE_502_ERROR_PAYLOAD =
-  "502 <!doctype html><html><head><title>502 Bad Gateway</title></head>" +
-  "<body><h1>502 Bad Gateway</h1><p>cloudflare-nginx</p></body></html>";
 export const RATE_LIMIT_ERROR_MESSAGE = "rate limit exceeded";
-export const LONG_RATE_LIMIT_ERROR_MESSAGE =
-  "429 Too Many Requests: subscription usage limit reached";
-export const NO_ENDPOINTS_FOUND_ERROR_MESSAGE =
-  "404 No endpoints found for deepseek/deepseek-r1:free.";
-// Captured verbatim from a real local HTTP 429 round-tripped through the real
-// OpenRouter transport (streamOpenAICompletions) carrying the exact body reported
-// in #147546 — not hand-typed. See test/plugins/openrouter-per-day-rate-limit.integration.test.ts
-// and src/agents/embedded-agent-runner/run/attempt-recovery.test.ts, which independently
-// verify a real HTTP round-trip produces this exact string.
-export const REAL_TRANSPORT_PER_DAY_CAP_ERROR_MESSAGE =
-  "429 Rate limit exceeded: free-models-per-day-high-balance.";
-export const NO_ERROR_DETAILS_MESSAGE = "Unknown error (no error details in response)";
 
 export type EmbeddedAttemptParams = {
   provider: string;

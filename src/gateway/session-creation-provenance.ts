@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import type { SessionRow } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { requesterCreatorProfileId, type RequesterOrigin } from "../agents/requester-origin.js";
 import { attributeDelegatedSessionCreator } from "../config/sessions/session-entry-provenance.js";
 import type {
@@ -7,14 +8,17 @@ import type {
 } from "../config/sessions/session-entry-provenance.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
+import type { OpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
 
 export type TrustedSessionCreation = Partial<AgentRuntimeSessionSpawnContext> & {
   skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
   via: SessionCreatedVia;
-  surface?: "plugin-dock";
+  surface?: SessionRow["createdSurface"];
   actor?: SessionCreatedActor;
   /** Creator-owned isolation requirement resolved only by the trusted Gateway boundary. */
   sandbox?: "required";
+  /** Attested membership source for creation policy; never persisted as session identity. */
+  openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
   /** Exact spawning session retained separately from the stable actor identity. */
   requesterSessionKey?: string;
   /** Live host-only ingress intent; never accepted from wire arguments. */
@@ -37,7 +41,8 @@ type SessionCreationClient = {
       requesterOrigin?: RequesterOrigin;
       assertCurrent?: () => void;
     };
-    operatorRunAuthority?: { profileId: string };
+    openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
+    operatorRunAuthority?: { profileId: string; openclawIdPrincipal?: OpenClawIdTunnelPrincipal };
   };
 };
 
@@ -45,8 +50,12 @@ export function resolveOperatorSessionCreation(
   client: SessionCreationClient | null | undefined,
   options: { allowTrustedHint?: boolean } = {},
 ): TrustedSessionCreation {
+  const principal =
+    client?.internal?.openclawIdPrincipal ??
+    client?.internal?.operatorRunAuthority?.openclawIdPrincipal;
+  const memberSource = principal?.kind === "member" ? { openclawIdPrincipal: principal } : {};
   if (options.allowTrustedHint && client?.internal?.sessionCreation) {
-    return client.internal.sessionCreation;
+    return { ...client.internal.sessionCreation, ...memberSource };
   }
   const agentRuntimeIdentity = client?.internal?.agentRuntimeIdentity;
   if (options.allowTrustedHint && agentRuntimeIdentity?.sessionSpawnContext) {
@@ -54,6 +63,7 @@ export function resolveOperatorSessionCreation(
       requesterProfileId,
       gitContributorProfileId,
       completionOwnerSessionKey,
+      createdIndependently,
       requesterSenderIsOwner,
       inheritedToolPolicy,
       inheritedPermissionMode,
@@ -62,11 +72,13 @@ export function resolveOperatorSessionCreation(
     } = agentRuntimeIdentity.sessionSpawnContext;
     return {
       via: "spawn",
+      ...memberSource,
       actor: { type: "agent", id: agentRuntimeIdentity.agentId },
       requesterSessionKey: agentRuntimeIdentity.sessionKey,
       ...(requesterProfileId ? { requesterProfileId } : {}),
       ...(gitContributorProfileId ? { gitContributorProfileId } : {}),
       ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
+      ...(createdIndependently ? { createdIndependently } : {}),
       requesterSenderIsOwner,
       inheritedToolPolicy,
       ...(inheritedPermissionMode ? { inheritedPermissionMode } : {}),
@@ -74,11 +86,14 @@ export function resolveOperatorSessionCreation(
       ...(spawnModelAutoSelection ? { spawnModelAutoSelection } : {}),
     };
   }
-  const profileId = client?.authenticatedUserProfile?.profileId;
+  const profileId =
+    client?.authenticatedUserProfile?.profileId ??
+    (principal?.kind === "member" ? client?.internal?.operatorRunAuthority?.profileId : undefined);
   // Profile linking can canonicalize this id after connection attach, so session
   // ownership follows the live trusted profile while audit keeps its frozen facts.
   return {
     via: "operator",
+    ...memberSource,
     ...(profileId
       ? { actor: { type: "human" as const, source: "profile" as const, id: profileId } }
       : {}),
@@ -88,8 +103,7 @@ export function resolveOperatorSessionCreation(
 export function resolveAgentRunSessionCreation(
   client: SessionCreationClient | null | undefined,
 ): TrustedSessionCreation {
-  const actor = resolveOperatorSessionCreation(client).actor;
-  return { via: "run", ...(actor ? { actor } : {}) };
+  return { ...resolveOperatorSessionCreation(client), via: "run" };
 }
 
 /** Validate the selected execution identity before accepting an operator tool creation. */

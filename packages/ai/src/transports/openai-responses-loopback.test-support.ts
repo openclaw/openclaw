@@ -16,7 +16,9 @@ export const responsesLoopbackModel = createModel({
   maxTokens: 256,
 });
 
-export async function createResponsesLoopbackServer(events: (turn: number) => unknown[]) {
+export async function createResponsesLoopbackServer(
+  events: (turn: number) => unknown[] | { status: number; body: unknown },
+) {
   const requests: Array<Record<string, unknown>> = [];
   const rawRequests: string[] = [];
   const authorization: Array<string | undefined> = [];
@@ -35,6 +37,11 @@ export async function createResponsesLoopbackServer(events: (turn: number) => un
     });
     request.on("end", () => {
       const reply = eventsForRequest(body);
+      if (!Array.isArray(reply)) {
+        response.writeHead(reply.status, { "content-type": "application/json" });
+        response.end(JSON.stringify(reply.body));
+        return;
+      }
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.end(reply.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
     });
@@ -45,7 +52,9 @@ export async function createResponsesLoopbackServer(events: (turn: number) => un
     authorization.push(request.headers.authorization);
     socket.on("message", (body) => {
       assert(Buffer.isBuffer(body), "Expected a Buffer from the WebSocket server");
-      for (const event of eventsForRequest(body.toString("utf8"))) {
+      const reply = eventsForRequest(body.toString("utf8"));
+      assert(Array.isArray(reply), "HTTP status fixtures require SSE transport");
+      for (const event of reply) {
         socket.send(JSON.stringify(event));
       }
     });

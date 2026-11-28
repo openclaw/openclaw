@@ -147,29 +147,6 @@ its own thread immediately. Idle-limit eviction unsubscribes the least recently
 used conversation, after which Codex applies its separate unloading delay and a
 later resumed session can require approvals again.
 
-On constrained hosts, reduce native Codex subagent fan-out before increasing the
-Gateway heap:
-
-```json5
-{
-  plugins: {
-    entries: {
-      codex: {
-        config: {
-          appServer: {
-            args: ["-c", "agents.max_threads=3", "app-server", "--listen", "stdio://"],
-          },
-        },
-      },
-    },
-  },
-}
-```
-
-That setting limits native child threads for the bundled Codex default
-multi-agent backend. If you explicitly enable Codex multi-agent v2, use
-`features.multi_agent_v2.max_concurrent_threads_per_session=3` instead; the v2
-limit includes the root thread and cannot be combined with `agents.max_threads`.
 For more Codex headroom, increase the host, container, or cgroup memory
 allocation. An OS hard limit can terminate Codex rather than backpressure it.
 
@@ -203,11 +180,11 @@ prompt into a fresh session after restarting the Codex app-server or
 OpenClaw Gateway so old threads are dropped and native hook registrations
 are recreated.
 
-**Codex tool calls create too many short-lived hook processes:** set
-`plugins.entries.codex.config.appServer.loopDetectionPreToolUseRelay: false`
-and restart the gateway. This disables only the Codex `PreToolUse` subprocess
-used for OpenClaw loop detection and its no-policy marker. Required
-`before_tool_call` and trusted-tool policy relays remain enabled.
+**Codex tool calls create too many short-lived hook processes:** OpenClaw
+installs the Codex `PreToolUse` relay only for `before_tool_call` hooks,
+trusted-tool policy and native execution custody. The retired
+`appServer.loopDetectionPreToolUseRelay` setting has no effect;
+`openclaw doctor --fix` removes it.
 
 **A non-Codex model uses the built-in harness:** expected unless provider
 or model runtime policy routes it to another harness. Plain non-OpenAI

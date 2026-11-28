@@ -3,7 +3,10 @@ import { expect, it } from "vitest";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { evaluateControlUiContext } from "../../test-helpers/control-ui-e2e-context.ts";
-import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+} from "../../test-helpers/control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI team secrets mocked Gateway E2E",
@@ -163,6 +166,63 @@ suite.define(() => {
     });
   });
 
+  it.each([390, 820, 1180, 1440])(
+    "keeps an environment value readable beside its updater at %i px",
+    async (width) => {
+      await suite.withPage(
+        {
+          viewport: {
+            width,
+            height: width === 390 ? 844 : width === 820 ? 1180 : width === 1180 ? 820 : 900,
+          },
+          hasTouch: true,
+        },
+        async ({ page }) => {
+          await page.addInitScript(
+            (key) => localStorage.setItem(key, JSON.stringify({ textScale: 140 })),
+            controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+          );
+          const region = {
+            ...entry("ATLAS_WORKSPACE_AUTOMATION_REGION", "eu-central-1"),
+            updatedBy: "atlas.workspace.automation.service.account@example.invalid",
+          };
+          await openStore(page, { list: { entries: [region] } }, ["secrets.store.set"]);
+          const row = page.getByRole("listitem", { name: region.name });
+          const value = row.locator(".secrets-store__value");
+          await value.waitFor({ state: "attached" });
+          await page.evaluate(() => document.fonts.ready);
+          const fits = await value.evaluate(
+            (el) => el.clientWidth > 0 && el.scrollWidth <= el.clientWidth + 1,
+          );
+          expect(fits, "the full short environment value is painted").toBe(true);
+          const name = row.locator(".secrets-store__env-name");
+          expect(await name.textContent()).toBe(region.name);
+          expect(await name.locator("span").last().textContent()).toBe("_REGION");
+          const attribution = row.locator(".secrets-store__attribution");
+          expect(
+            await attribution.locator("time").evaluate((el) => {
+              const range = document.createRange();
+              range.selectNodeContents(el);
+              return new Set(Array.from(range.getClientRects(), (rect) => Math.round(rect.top)))
+                .size;
+            }),
+          ).toBe(1);
+          await attribution.locator("summary").press("Enter");
+          // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the rendered visible text.
+          expect(await attribution.locator(":scope > span").innerText()).toContain(
+            region.updatedBy,
+          );
+          await attribution.locator("summary").press("Enter");
+          await button(row, "Actions: " + region.name).tap();
+          await row.locator('.oc-menu-item[data-value="edit"]').click();
+          expect(await field(modal(page, "Edit secret"), "Value").inputValue()).toBe(
+            "eu-central-1",
+          );
+        },
+      );
+    },
+  );
+
   it("validates and saves protected, environment, and mixed bulk entries", async () => {
     await suite.withPage({ colorScheme: "dark" }, async ({ page }) => {
       const gateway = await openStore(page, {
@@ -187,6 +247,13 @@ suite.define(() => {
       await protectedBulk.getByText("1 protected secret detected").waitFor();
       await reject(protectedBulk, "EMPTY_API_KEY: Enter a value.");
 
+      const invalidName = await openDialog(page, "Add", "Add secret");
+      await field(invalidName, "Name").fill("A".repeat(129));
+      await reject(
+        invalidName,
+        "Use 1–128 characters: start with A–Z, then use A–Z, 0–9, or underscores.",
+      );
+
       const secret = await openDialog(page, "Add", "Add secret");
       await field(secret, "Name").fill("SERVICE_API_KEY");
       await field(secret, "Value").fill("super-secret-material");
@@ -194,7 +261,7 @@ suite.define(() => {
       await field(secret, "Name").press("Enter");
       await notice(
         page,
-        "Saved SERVICE_API_KEY as Protected secret. Add a SecretRef or enable destination-bound Gateway egress to use it. 2 runtime warnings.",
+        "Saved SERVICE_API_KEY as Protected secret. Add a SecretRef or enable destination-bound Gateway egress to use it. Runtime warnings: 2.",
       );
       expect(await page.content()).not.toContain("super-secret-material");
 
@@ -215,7 +282,7 @@ suite.define(() => {
       await button(envBulk, "Save").click();
       await notice(
         page,
-        "Saved 2 entries (1 protected, 1 agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next reply.",
+        "Entries saved: 2 (1 protected, 1 agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next reply.",
       );
 
       expect((await gateway.getRequests("secrets.store.set")).map(({ params }) => params)).toEqual([
@@ -229,6 +296,36 @@ suite.define(() => {
         { name: "BULK_PRIVATE_KEY", value: "line one\nline two", kind: "secret" },
         { name: "EMPTY_BULK_ENV", value: "", kind: "env" },
       ]);
+    });
+  });
+
+  it("keeps partial counts conservative when a saved write returns an error", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const savedEntry = entry("AUDIT_URL", "https://service.example.test");
+      const gateway = await openStore(page, {
+        list: { sequence: [[], [savedEntry], [savedEntry]].map((entries) => ({ entries })) },
+        set: {
+          __mockError: {
+            code: "UNAVAILABLE",
+            message:
+              "Secret store entry was saved, but post-write runtime refresh failed. Resolve provider errors and retry secrets.reload.",
+          },
+        },
+      });
+      const dialog = await openDialog(page, "Bulk add");
+      await dialog.locator('dialog[data-phase="open"]').waitFor();
+      await bulkValue(dialog).fill("AUDIT_URL=https://service.example.test");
+      await button(dialog, "Save").click();
+      const failure = dialog.getByRole("alert");
+      await failure.waitFor();
+      expect(await failure.textContent()).toContain("Confirmed saves before the error: 0 of 1.");
+      expect(await failure.textContent()).toContain("entry was saved");
+      expect(await page.getByRole("listitem", { name: "AUDIT_URL", exact: true }).count()).toBe(1);
+      await button(dialog, "Cancel").click();
+      await button(page, "Retry").click();
+      await page.getByRole("listitem", { name: "AUDIT_URL", exact: true }).waitFor();
+      expect(await gateway.getRequests("secrets.store.set")).toHaveLength(1);
+      expect(await gateway.getRequests("secrets.store.list")).toHaveLength(3);
     });
   });
 

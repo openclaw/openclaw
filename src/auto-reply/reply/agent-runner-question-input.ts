@@ -73,7 +73,6 @@ export async function runReplyQuestionInput(
     followupRun.controllerInput?.abortSignal.throwIfAborted();
     sourceAbort?.throwIfAborted();
     queuedAbort?.throwIfAborted();
-    followupRun.operatorAuthority?.assertCurrent();
   };
   const state = resolveReplyOperationRunState(opts);
   const injection =
@@ -128,7 +127,7 @@ export async function runReplyQuestionInput(
         return {
           handled: true,
           payload: markReplyPayloadForSourceSuppressionDelivery({
-            text: `The answer was not sent: ${error.message}. Use the question controls in the Control UI, or check the active run and your permissions before retrying.`,
+            text: `The answer was not sent: ${error.message}. Use the question controls in the OpenClaw app, or check the active run and your permissions before retrying.`,
             isError: true,
           }),
         };

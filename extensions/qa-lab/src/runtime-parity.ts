@@ -40,6 +40,7 @@ import {
   readQaTranscriptMessages,
 } from "./runtime-transcript.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
+import type { QaSuiteScenarioResult } from "./suite-types.js";
 
 const CANONICAL_RUNTIME_IDS = ["openclaw", "codex"] as const satisfies readonly RuntimeId[];
 
@@ -106,7 +107,7 @@ type QaGatewayLike = {
   tempRoot: string;
 };
 
-type QaSuiteScenarioLike = {
+type QaSuiteScenarioLike = Pick<QaSuiteScenarioResult, "runtimeParitySessionKeys"> & {
   details?: string;
   status: "pass" | "fail" | "skip";
   steps?: Array<{ details?: string; status?: "pass" | "fail" | "skip" }>;
@@ -164,7 +165,6 @@ const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
 const TOOL_RESULT_MISSING_ERROR_CLASS = "tool-result-missing";
 const PENDING_TOOL_RESULT_POLL_MS = 25;
-const RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX = "RUNTIME_PARITY_SESSION_KEY=";
 const BOOT_STATE_LINE_RE =
   /\b(?:FailoverError|No API key found|Codex app-server|agent harness selected|auth profile|runtime policy|restart mode:|plugin|doctor)\b/i;
 const TOOL_RESULT_ERROR_RE = /\b(?:error|failed|failure|timeout|denied|enoent|not found)\b/i;
@@ -1057,25 +1057,6 @@ async function loadSettledRuntimeParityCaptureSources(params: {
   return sources;
 }
 
-function runtimeParitySessionKeysFromScenarioResult(result: QaSuiteScenarioLike) {
-  const sessionKeys = new Set<string>();
-  const detailBlocks = [result.details, ...(result.steps ?? []).map((step) => step.details)];
-  for (const detailBlock of detailBlocks) {
-    for (const line of detailBlock?.split(/\r?\n/u) ?? []) {
-      if (!line.startsWith(RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX)) {
-        continue;
-      }
-      const sessionKey = readNonEmptyString(
-        line.slice(RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX.length),
-      );
-      if (sessionKey) {
-        sessionKeys.add(sessionKey);
-      }
-    }
-  }
-  return [...sessionKeys];
-}
-
 async function loadRuntimeParityMockToolCalls(
   mockBaseUrl: string | undefined,
   parentPrompts: readonly string[],
@@ -1115,7 +1096,7 @@ export async function captureRuntimeParityCell(
   params: RuntimeParityCaptureParams,
 ): Promise<RuntimeParityCell> {
   const agentId = params.agentId ?? DEFAULT_AGENT_ID;
-  const preferredSessionKeys = runtimeParitySessionKeysFromScenarioResult(params.scenarioResult);
+  const preferredSessionKeys = params.scenarioResult.runtimeParitySessionKeys ?? [];
   const { sessions, transcriptBytes } = await loadSettledRuntimeParityCaptureSources({
     gateway: params.gateway,
     agentId,
