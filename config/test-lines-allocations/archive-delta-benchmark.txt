@@ -1,0 +1,4 @@
+# Exact net growth for the new archive-delta CLI regression suite.
+# Covers verified reconstruction/reporting, CLI usage, corruption rejection,
+# and preservation of existing output; no native updater proof is claimed.
+98
