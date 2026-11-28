@@ -3,7 +3,7 @@ import { isUnrecordedScheduledAccountRefusal } from "../agents/scheduled-unrecor
 import { CRON_INFERENCE_ACCOUNT_RETIRED_CODE } from "./inference-binding.js";
 import type { CronRunOutcome } from "./types.js";
 
-/** True when the run reached its recorded account and that account was removed or signed out. */
+/** True when the run reached its recorded account and that account is gone or was replaced. */
 function isRetiredAccountRefusal(error: unknown): boolean {
   return (
     findErrorProperty(error, (candidate) =>

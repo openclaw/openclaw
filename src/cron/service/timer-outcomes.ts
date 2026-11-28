@@ -1,4 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { buildProviderReauthCommand } from "../../agents/failover-error.js";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
@@ -45,11 +46,14 @@ type CronScheduleOwnership = "current" | "stale";
 type CronTriggerOwnership = "current" | "stale";
 
 // The refusal in automation history names the account; the notice names only the steps.
-function retiredAccountPauseText(job: CronJob): string {
+function retiredAccountPauseText(job: CronStoredJob): string {
   const name = truncateUtf16Safe((job.name || job.id).replace(/\s+/g, " ").trim(), 120);
+  const signIn = job.inferenceBinding
+    ? buildProviderReauthCommand(job.inferenceBinding.provider)
+    : undefined;
   return [
-    `⚠️ Automation "${name}" was paused: the account it runs on was removed or signed out.`,
-    `Sign in again with \`openclaw models auth login\` and record the account with \`openclaw automations edit ${job.id} --model <provider/model>@<profileId>\`, or choose another account.`,
+    `⚠️ Automation "${name}" was paused: the account it runs on was removed, signed out or replaced since the automation recorded it.`,
+    `Sign in again if needed${signIn ? ` (\`${signIn}\`)` : ""}, then record the account with \`openclaw automations edit ${job.id} --model <provider/model>@<profileId>\` (list accounts: \`openclaw gateway call models.authStatus\`). To use a key in the environment or provider config instead: \`openclaw automations edit ${job.id} --model <provider/model>\`.`,
     `Then run \`openclaw automations enable ${job.id}\`.`,
   ].join("\n");
 }
@@ -269,11 +273,11 @@ export function applyJobResult(
       // A failed check has not consumed the paced occurrence; its backoff retry still owns it.
       job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
     }
-    // A retired account can never run this job as written; like a gone parent, the job pauses
-    // once with its own notice, which replaces the failure alert.
+    // A removed, signed-out or replaced account can never run this job as written; like a gone parent,
+    // the job pauses once with its own notice, which replaces the failure alert. A fallback
+    // that finishes the run keeps it ok, so the job keeps running.
     const retiredAccount =
-      result.status === "error" &&
-      result.failureNotificationDetail?.kind === "inference-account-retired";
+      runFailed && result.failureNotificationDetail?.kind === "inference-account-retired";
     if (!result.parentUnavailable && !retiredAccount) {
       finalizeCronFailureNotifications(state, {
         job,

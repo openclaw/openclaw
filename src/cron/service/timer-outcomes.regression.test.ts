@@ -7,6 +7,7 @@ import {
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { AuthProfileAuthorizationError } from "../../agents/auth-profiles/authorization-contract.js";
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import type { RestartRecoveryOperatorSource } from "../../gateway/operator-run-recovery-source.codec.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -654,5 +655,18 @@ it("leaves a newer operator edit alone when a pause result is stale", () => {
   const { job, apply, deferredNotifications } = outcomeFixture(startedAt);
   apply(parentPause(), { scheduleOwnership: "stale" });
   expect(job.enabled).toBe(true);
+  expect(deferredNotifications.filter((notice) => notice.kind === "auto-disabled")).toEqual([]);
+});
+
+it("keeps a job running when only the authorization owner changed, not the account", () => {
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt);
+  // A state database lifecycle change retires the capture, but the account is still there,
+  // so the producer's refusal carries no retired-account code.
+  const refusal = new Error("Automation outcome runs on account openai:work, which was removed", {
+    cause: new AuthProfileAuthorizationError("retired"),
+  });
+  apply({ status: "error", error: refusal.message, ...resolveCronConfigurationRefusal(refusal) });
+  expect(job.enabled).toBe(true);
+  expect(job.state.nextRunAtMs).toBeGreaterThan(startedAt);
   expect(deferredNotifications.filter((notice) => notice.kind === "auto-disabled")).toEqual([]);
 });

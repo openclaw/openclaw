@@ -66,7 +66,7 @@ type FallbackRun = {
 };
 
 async function runSessionFallback(
-  params: { primaryRevoked: boolean; backupFails?: boolean },
+  params: { primary: "live" | "removed" | "replaced"; backupFails?: boolean },
   check: (run: FallbackRun) => void | Promise<void>,
 ) {
   await withOpenClawTestState(
@@ -156,10 +156,16 @@ async function runSessionFallback(
         if (!binding) {
           throw new Error("Expected a recorded primary account");
         }
-        if (params.primaryRevoked) {
+        if (params.primary !== "live") {
           expect(
             await removeAuthProfilesAcrossOwnerStores({ profileIds: ["openai:primary"] }),
           ).toBe(true);
+        }
+        if (params.primary === "replaced") {
+          // Signing in again under the same id starts a new authorization.
+          await persistAuthProfileBatch({
+            profiles: [apiKeyProfile("openai:primary", "key-primary-again")],
+          });
         }
         // The fallback provider records no account, so it follows its live order.
         await setAuthProfileOrder({
@@ -202,12 +208,12 @@ async function runSessionFallback(
   );
 }
 
-it.each(["live", "primary-revoked"] as const)(
+it.each(["live", "removed"] as const)(
   "a session-target job fails over to another provider's live account (%s)",
-  async (kind) => {
-    await runSessionFallback({ primaryRevoked: kind === "primary-revoked" }, ({ hits, result }) => {
+  async (primary) => {
+    await runSessionFallback({ primary }, ({ hits, result }) => {
       // A removed recorded account refuses only its own candidate; it is never replaced.
-      expect(hits.primary).toEqual(kind === "live" ? ["Bearer key-primary"] : []);
+      expect(hits.primary).toEqual(primary === "live" ? ["Bearer key-primary"] : []);
       expect(result.status, result.error).toBe("ok");
       expect(result.errorClassification).toBeUndefined();
       expect(hits.backup).toEqual(["Bearer key-backup-other"]);
@@ -215,47 +221,52 @@ it.each(["live", "primary-revoked"] as const)(
   },
 );
 
-it("pauses a recurring job once when its recorded account is gone and no fallback answers", async () => {
-  await runSessionFallback({ primaryRevoked: true, backupFails: true }, ({ hits, job, result }) => {
-    expect(hits.primary).toEqual([]);
-    expect(result.status).toBe("error");
-    const startedAt = Date.now();
-    const state = createCronRegressionState({
-      storePath: "/tmp/cron-session-fallback.json",
-      nowMs: () => startedAt,
-      runIsolatedAgentJob: createDefaultIsolatedRunner(),
-    });
-    const deferredNotifications: DeferredCronNotifications = [];
-    const apply = () =>
-      applyJobResult(
-        state,
-        job,
-        {
-          ...result,
-          startedAt,
-          endedAt: startedAt + 10,
-          errorReason: resolveCronRunErrorReason(
-            result.error,
-            result.provider,
-            result.errorClassification,
-          ),
-        },
-        { deferredNotifications },
-      );
-    apply();
+it.each(["removed", "replaced"] as const)(
+  "pauses a recurring job once when its recorded account was %s and no fallback answers",
+  async (primary) => {
+    await runSessionFallback({ primary, backupFails: true }, ({ hits, job, result }) => {
+      expect(hits.primary).toEqual([]);
+      expect(result.status).toBe("error");
+      const startedAt = Date.now();
+      const state = createCronRegressionState({
+        storePath: "/tmp/cron-session-fallback.json",
+        nowMs: () => startedAt,
+        runIsolatedAgentJob: createDefaultIsolatedRunner(),
+      });
+      const deferredNotifications: DeferredCronNotifications = [];
+      const apply = () =>
+        applyJobResult(
+          state,
+          job,
+          {
+            ...result,
+            startedAt,
+            endedAt: startedAt + 10,
+            errorReason: resolveCronRunErrorReason(
+              result.error,
+              result.provider,
+              result.errorClassification,
+            ),
+          },
+          { deferredNotifications },
+        );
+      apply();
 
-    expect(job.enabled).toBe(false);
-    expect(job.state.nextRunAtMs).toBeUndefined();
-    expect(deferredNotifications).toEqual([
-      expect.objectContaining({ kind: "auto-disabled", text: expect.any(String) }),
-    ]);
-    const text = deferredNotifications[0]?.text ?? "";
-    expect(text).toContain("openclaw models auth login");
-    expect(text).toContain("openclaw automations enable session-fallback");
-    // The account id stays in automation history, not in chat.
-    expect(text).not.toContain("openai:primary");
-    // A later settled result for the paused job sends nothing new.
-    apply();
-    expect(deferredNotifications).toHaveLength(1);
-  });
-});
+      expect(job.enabled).toBe(false);
+      expect(job.state.nextRunAtMs).toBeUndefined();
+      expect(deferredNotifications).toEqual([
+        expect.objectContaining({ kind: "auto-disabled", text: expect.any(String) }),
+      ]);
+      const notice = deferredNotifications.find((item) => item.kind === "auto-disabled");
+      const text = notice?.kind === "auto-disabled" ? notice.text : "";
+      expect(text).toMatch(/openclaw models auth login --provider '?openai'?/u);
+      expect(text).toContain("openclaw automations edit session-fallback --model");
+      expect(text).toContain("openclaw automations enable session-fallback");
+      // The account id stays in automation history, not in chat.
+      expect(text).not.toContain("openai:primary");
+      // A later settled result for the paused job sends nothing new.
+      apply();
+      expect(deferredNotifications).toHaveLength(1);
+    });
+  },
+);
