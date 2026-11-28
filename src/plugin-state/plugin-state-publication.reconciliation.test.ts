@@ -7,11 +7,13 @@ import {
   assertPluginStatePublicationPreserves,
   assertPluginStatePublicationSettled,
   beginPluginStatePublication,
+  capturePluginStateReadDependencies,
   isPluginStatePublicationUnavailable,
   pluginStatePublication,
   reconcilePluginStatePublication,
 } from "./plugin-state-publication.js";
 import {
+  createPluginStateKeyedStoreV2,
   createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
 } from "./plugin-state-store.js";
@@ -174,5 +176,58 @@ describe("plugin state unknown settlement reconciliation", () => {
       expect(() => assertPluginStatePublicationSettled(identity, receiptScope)).not.toThrow();
       expect(native.lookup("lease")).toBeUndefined();
     });
+  });
+});
+
+it("invalidates an overlapping plugin-state read without throwing on the boolean path", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const store = createPluginStateKeyedStoreV2<string>(
+      "read-capture-test",
+      { namespace: "bindings", maxEntries: 10 },
+      { assertCurrent() {} },
+    );
+    await store.register("binding", "before");
+    const stable = await capturePluginStateReadDependencies(() => store.lookup("other"));
+    try {
+      const stale = await capturePluginStateReadDependencies(async () => {
+        const value = await store.lookup("binding");
+        await store.register("binding", "after");
+        return value;
+      });
+      try {
+        expect(stale.value).toBe("before");
+        expect(stable.isCurrent()).toBe(true);
+
+        let current: boolean;
+        let errors: number;
+        {
+          using constructor = vi.spyOn(globalThis, "Error");
+          current = stale.isCurrent();
+          errors = constructor.mock.calls.length;
+        }
+        expect(current).toBe(false);
+        expect(errors).toBe(0);
+        expect(() => stale.assertCurrent()).toThrow(
+          "Plugin state changed while preparing session ownership",
+        );
+
+        const context = captureOpenClawStateWorkerContext();
+        const identity = context.admission.identity.key;
+        settleUnknown(identity);
+        expect(stable.isCurrent()).toBe(false);
+        await expect(
+          reconcilePluginStatePublication(identity, () =>
+            confirmPluginStateCommittedInWorker(context, {
+              pluginId: "read-capture-test",
+              namespace: "bindings",
+            }),
+          ),
+        ).resolves.toBe(true);
+      } finally {
+        stale.release();
+      }
+    } finally {
+      stable.release();
+    }
   });
 });

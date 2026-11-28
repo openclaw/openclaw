@@ -88,6 +88,7 @@ function TranscriptEntry(props: {
   actions: CustodianActions["session"];
   message: CustodianMessage;
   activeWizardMessage: CustodianMessage | undefined;
+  onSkip: (message: CustodianMessage) => void;
 }) {
   const question = () => props.message.question;
   const questionKey = () => `${props.message.id}:${question()?.id}`;
@@ -131,7 +132,7 @@ function TranscriptEntry(props: {
                 !props.store().canSend ||
                 props.store().answeredQuestions.has(questionKey()),
               onSelect: (label: string) => props.actions.answerQuestion(props.message, label),
-              onSkip: () => props.actions.dismissQuestion(props.message),
+              onSkip: () => props.onSkip(props.message),
             }}
           />
         </div>
@@ -475,6 +476,12 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
                 actions={actions().session}
                 message={message()}
                 activeWizardMessage={activeWizardMessage()}
+                onSkip={(entry) => {
+                  if (entry.question?.skipAction !== "exit") {
+                    textarea?.focus({ preventScroll: true });
+                  }
+                  actions().session.dismissQuestion(entry);
+                }}
               />
             )}
           </For>

@@ -17,6 +17,9 @@ struct SettingsHubScreen: View {
     var onRouteChange: ((SettingsRoute?) -> Void)?
     var onClose: (() -> Void)?
     var onSelectPage: ((RootTabs.SidebarDestination) -> Void)?
+    var onTrySkill: ((String) -> Void)?
+    /// Preset search text for the Skills or Plugins screen when search opens one for a named item.
+    var toolQuery = ""
     var gatewaySetupRequest: GatewaySetupRequest?
     var onGatewaySetupRequestHandled: ((Int) -> Void)?
 
@@ -53,6 +56,7 @@ struct SettingsHubScreen: View {
 
             Section {
                 self.appearance
+                NativeNotificationSettingsRow()
                 self.link("Voice & Talk", icon: "mic", route: .voiceAndTalk)
                 self.link("Permissions", icon: "checkmark.shield", route: .permissions)
                 self.link("Accessories", icon: "applewatch", route: .accessories)
@@ -68,10 +72,19 @@ struct SettingsHubScreen: View {
             }
 
             Section {
+                NativePersonalSettingsRow(agentID: self.agentID, agentName: self.appModel.chatAgentName)
+                self.link("Chat", icon: "bubble.left", route: .chatPreferences)
                 self.link("Sidebar", icon: "sidebar.left", route: .sidebarPages)
                 self.link("About", icon: "info.circle", route: .about)
             } header: {
                 SettingsSectionTitle("App")
+            }
+
+            Section {
+                self.link("Skills", icon: "book", route: .skills)
+                self.link("Plugins", icon: "shippingbox", route: .plugins)
+            } header: {
+                SettingsSectionTitle("Tools")
             }
 
             Section {
@@ -104,6 +117,10 @@ struct SettingsHubScreen: View {
                 OpenClawSheetCloseItem(identifier: "SettingsHub.Close", action: onClose)
             }
         }
+    }
+
+    private var agentID: String {
+        self.appModel.chatAgentId.trimmedNonEmpty ?? "main"
     }
 
     private var accountRequest: SettingsAccount.Request {
@@ -241,10 +258,20 @@ struct SettingsHubScreen: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Accessories")
             .navigationBarTitleDisplayMode(.inline)
+        case .chatPreferences:
+            NativeChatSettingsScreen()
         case .storage:
             NativeStorageSettingsScreen()
         case .sidebarPages:
             RootSidebarPagesEditor(onSelect: { self.onSelectPage?($0) }, presentedAsSheet: false)
+        case .skills, .plugins:
+            NativeToolSettingsScreen(
+                kind: route == .skills ? .skills : .plugins,
+                agentID: self.agentID,
+                agentName: self.appModel.chatAgentName,
+                gatewayName: self.appModel.gatewayServerName,
+                initialQuery: self.toolQuery,
+                onTrySkill: self.onTrySkill)
         case .advanced:
             self.advanced
         default:
