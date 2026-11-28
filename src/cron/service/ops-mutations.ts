@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
 import { resolveBundledCliBackendAuthPolicy } from "../../agents/cli-runner/cli-backend-auth-policy.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
@@ -60,6 +61,42 @@ import {
   warnIfDisabled,
 } from "./store.js";
 
+/** A native login has no stored credential ID. Verify its model and runtime on explicit reselection. */
+async function selectsNativeModelProfile(
+  modelRef: string,
+  modelRuntime: string | null | undefined,
+  agentId: string,
+  profileId: string,
+): Promise<boolean> {
+  const { getRuntimeConfig } = await import("../../config/io.js");
+  const { resolveDefaultModelForAgent } = await import("../../agents/model-selection-config.js");
+  const { resolveModelRefWithConfiguredAliases } =
+    await import("../../agents/model-selection-shared.js");
+  const { resolveCliRuntimeExecutionProvider } =
+    await import("../../agents/model-runtime-aliases.js");
+  const cfg = getRuntimeConfig();
+  const defaultProvider =
+    resolveDefaultModelForAgent({ cfg, agentId })?.provider ?? DEFAULT_PROVIDER;
+  const selected = resolveModelRefWithConfiguredAliases({
+    cfg,
+    agentId,
+    raw: modelRef,
+    defaultProvider,
+  });
+  if (!selected) {
+    return false;
+  }
+  const { provider, model: modelId } = selected.ref;
+  const runtime = resolveCliRuntimeExecutionProvider(
+    { cfg, agentId, provider, modelId, authProfileId: profileId },
+    modelRuntime ? { policy: { id: modelRuntime } } : undefined,
+  );
+  return Boolean(
+    runtime &&
+    resolveBundledCliBackendAuthPolicy(runtime)?.nativeAuthProfileIds?.includes(profileId),
+  );
+}
+
 /** Capture the selected credential before the worker commits the definition for any writer. */
 async function prepareModelProfileAuthorization(
   mutation: Exclude<CronJobMutation, { kind: "remove" }>,
@@ -72,19 +109,35 @@ async function prepareModelProfileAuthorization(
       ? splitTrailingAuthProfile(entry.payload.model ?? "").profile
       : undefined;
   const profileId = selectedProfile(job);
+  const authoredModel =
+    mutation.kind === "update" && mutation.patch.payload && "model" in mutation.patch.payload
+      ? mutation.patch.payload.model
+      : undefined;
   if (
     !profileId ||
     resolveBundledCliBackendAuthPolicy("claude-cli")?.nativeAuthProfileIds?.includes(profileId)
   ) {
+    if (
+      profileId &&
+      typeof authoredModel === "string" &&
+      previous?.ownerReauthorizationRequired &&
+      job.payload.kind === "agentTurn" &&
+      (await selectsNativeModelProfile(
+        authoredModel,
+        job.payload.modelRuntime,
+        resolveCronJobEffectiveAgentId(job, source.defaultAgentId),
+        profileId,
+      ))
+    ) {
+      mutation.options.nativeModelProfileReselected = true;
+    }
     if (previous?.modelAuthProfileAuthorizationId !== undefined) {
       mutation.options.modelAuthProfileAuthorizationId = null;
       delete job.modelAuthProfileAuthorizationId;
     }
     return;
   }
-  const explicitReselection =
-    mutation.kind === "update" && mutation.patch.payload && "model" in mutation.patch.payload;
-  if (!explicitReselection && selectedProfile(previous) === profileId) {
+  if (typeof authoredModel !== "string" && selectedProfile(previous) === profileId) {
     // Changing the agent or redeclaring the same pin cannot adopt a replacement credential.
     return;
   }

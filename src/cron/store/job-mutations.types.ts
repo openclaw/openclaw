@@ -27,6 +27,7 @@ type CronJobMutationOptions = Pick<
   scheduledToolPolicy?: CronScheduledToolPolicy | null;
   bindSourceConversation?: NonNullable<CronStoredJob["sourceConversation"]>;
   modelAuthProfileAuthorizationId?: string | null;
+  nativeModelProfileReselected?: true;
   captured: boolean;
   runtimeAuthority?: CronRuntimeAuthority;
 };

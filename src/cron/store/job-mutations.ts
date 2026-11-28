@@ -326,7 +326,9 @@ export function planCronJobMutation(
     // The transfer below retires even authority freshly captured by the outgoing owner.
     if (
       mutation.kind === "update" &&
-      (options.runtimeAuthority || options.modelAuthProfileAuthorizationId)
+      (options.runtimeAuthority ||
+        options.modelAuthProfileAuthorizationId ||
+        options.nativeModelProfileReselected)
     ) {
       delete nextJob.ownerReauthorizationRequired;
     }

@@ -85,10 +85,13 @@ const schedule = (kind: "at" | "every" | "cron", at: number): CronJobCreate["sch
       : { kind, expr: "* * * * *", tz: "UTC", staggerMs: 0 };
 
 describe("ordinary session agent turns", () => {
-  it("pauses a transferred job and removes the previous owner's explicit account", async () => {
+  it("requires fresh stored or native account selection after an ownership transfer", async () => {
     const state = await createOpenClawTestState({ label: "cron-transferred-account" });
     onTestFinished(() => state.cleanup());
-    setRuntimeConfigSnapshot({});
+    const nativeModel = "anthropic/claude-sonnet-4-6";
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { models: { [nativeModel]: { agentRuntime: { id: "claude-cli" } } } } },
+    });
     await state.writeAuthProfiles({
       version: 1,
       profiles: {
@@ -124,6 +127,16 @@ describe("ordinary session agent turns", () => {
     });
     await cron.run(job.id, "force");
     expect(run).toHaveBeenCalledOnce();
+
+    await cron.update(job.id, { ownerProfileId: "alice" });
+    await cron.update(job.id, { enabled: true });
+    await cron.run(job.id, "force");
+    expect(run).toHaveBeenCalledOnce();
+    await cron.update(job.id, {
+      payload: { kind: "agentTurn", model: `${nativeModel}@anthropic:claude-cli` },
+    });
+    await cron.run(job.id, "force");
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it.each(
