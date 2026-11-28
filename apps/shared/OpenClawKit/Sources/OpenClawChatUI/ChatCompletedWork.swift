@@ -1,7 +1,7 @@
 import Foundation
 
 extension ChatTranscriptRow {
-    struct CompletedWork: Hashable {
+    struct CompletedWork: Hashable, Identifiable {
         let anchorID: UUID
         let messages: [OpenClawChatMessage]
         let durationMilliseconds: Double?
@@ -32,6 +32,8 @@ extension ChatTranscriptRow {
         runWorking: Bool,
         activeRunIDs: Set<String> = [],
         searchActive: Bool = false,
+        liveToolRunIDs: Set<String> = [],
+        narratedRunID: String? = nil,
         runDurations: [String: Double]? = nil) -> [Self]
     {
         guard !searchActive else { return rows }
@@ -73,10 +75,36 @@ extension ChatTranscriptRow {
 
         return turns.enumerated().flatMap { index, turn -> [Self] in
             let isFenced = ownership.fenced[index]
-            // A handoff's closing line describes the whole request, not one run's work.
+            // A handoff's closing line describes the whole request, not one run's work. Only OpenAI
+            // models mark what they say between tool calls, so only their turns fold; every other
+            // model's text stays where it was said (web isOpenAIWorkSegment, chat-turn-presentation.ts:219-243).
             guard !liveTurns.contains(index), terminalReplies[index] != nil,
-                  !turn.contains(where: { $0.workMessage?.hasConfirmedHandoff == true })
-            else { return isFenced ? turn : Self.coalescingActivityRuns(turn) }
+                  !turn.contains(where: { $0.workMessage?.hasConfirmedHandoff == true }),
+                  Self.isOpenAIWork(turn)
+            else {
+                #if os(iOS)
+                if liveTurns.contains(index), !liveToolRunIDs.isEmpty {
+                    let parts = turn.flatMap { row -> [Self] in
+                        guard case let .message(message) = row, let runID = message.workRunID,
+                              liveToolRunIDs.contains(runID) else { return [row] }
+                        return message.workPresentationParts.map(Self.message)
+                    }
+                    // Claude CLI history rows carry no run ID. Inside the turn the narrated run's input
+                    // opened (or steered into), they are that run's steps, not a separate stretch.
+                    let input = turn.first?.workMessage
+                    let untaggedRunID = narratedRunID.flatMap { runID in
+                        input?.workRunID == runID || input?.steerTargetRunID == runID ? runID : nil
+                    }
+                    return Self.coalescingActivityRuns(
+                        parts,
+                        finished: false,
+                        liveToolRunIDs: liveToolRunIDs,
+                        narratedRunID: narratedRunID,
+                        untaggedRunID: untaggedRunID)
+                }
+                #endif
+                return isFenced ? turn : Self.coalescingActivityRuns(turn, finished: !liveTurns.contains(index))
+            }
             let continuationID = continuations[index].flatMap { turns[$0].first?.id }
             if isFenced {
                 return Self.foldingNestedWork(
@@ -97,13 +125,28 @@ extension ChatTranscriptRow {
     /// Tool-only rows that nothing visible separates become one disclosure; a lone call stays
     /// its own row. Narration, answers, failures that ended a run and input boundaries bound a
     /// run (web coalesceActivityRuns and isActivityGroup, chat-turn-presentation.ts:494-582).
-    private static func coalescingActivityRuns(_ rows: [Self]) -> [Self] {
+    static func coalescingActivityRuns(
+        _ rows: [Self],
+        finished: Bool = true,
+        liveToolRunIDs: Set<String> = [],
+        narratedRunID: String? = nil,
+        untaggedRunID: String? = nil) -> [Self]
+    {
         var result: [Self] = []
         var run: [OpenClawChatMessage] = []
-        func flush() {
+        func runID(_ message: OpenClawChatMessage) -> String? {
+            message.workRunID ?? untaggedRunID
+        }
+        func flush(atTail: Bool = false) {
             defer { run = [] }
             // Hidden yield context rides along without counting as an operation.
             let operations = run.reduce(0) { $0 + ChatToolActivity.items(message: $1).count }
+            // The working claw owns the unfinished stretch; inspection still uses the complete transcript.
+            if atTail, let narratedRunID, liveToolRunIDs.contains(narratedRunID),
+               run.last.flatMap(runID) == narratedRunID
+            {
+                return
+            }
             guard operations > 1, let first = run.first else {
                 result.append(contentsOf: run.map(Self.message))
                 return
@@ -115,18 +158,31 @@ extension ChatTranscriptRow {
                 isActivityRun: true)))
         }
         for row in rows {
+            #if os(iOS)
+            // Some CLI histories retain a thinking signature without any reasoning to display.
+            // No visible reasoning separates the surrounding operations in a live run either.
+            if !row.startsTurn, case let .message(message) = row, message.role == "assistant",
+               finished || runID(message).map(liveToolRunIDs.contains) == true,
+               !message.endsRunInFailure, !message.content.isEmpty,
+               message.content.allSatisfy({ $0.type?.lowercased() == "thinking" && ($0.thinking ?? "").isEmpty })
+            { continue }
+            #endif
             // A row that starts a turn keeps its own place so turn ownership stays visible; a
-            // launch stays its own row and bounds the logs around it.
-            if case let .message(message) = row, message.isActivityRow, !row.startsTurn,
-               !message.recordsSessionLaunch
+            // launch stays its own row and bounds the logs around it, live or finished, as on the web.
+            if case let .message(message) = row, message.isActivityRow || (message.isNestedToolActivity &&
+                runID(message).map(liveToolRunIDs.contains) == true),
+                !row.startsTurn, !message.recordsSessionLaunch
             {
+                #if os(iOS)
+                if let previous = run.last, runID(previous) != runID(message) { flush() }
+                #endif
                 run.append(message)
                 continue
             }
             flush()
             result.append(row)
         }
-        flush()
+        flush(atTail: true)
         return result
     }
 
@@ -465,7 +521,28 @@ extension ChatTranscriptRow {
         return (next, previous)
     }
 
-    private var workMessage: OpenClawChatMessage? {
+    /// Every model-authored row was answered by an OpenAI model. Host rows, streamed commentary and
+    /// subagent completions are not authors; a turn with no author does not fold.
+    static func isOpenAIWork(_ turn: [Self]) -> Bool {
+        var foundAuthor = false
+        for row in turn {
+            let messages: [OpenClawChatMessage] = switch row {
+            case let .message(message): [message]
+            case let .completedWork(work): work.messages
+            case .systemNotice, .historyDivider: []
+            }
+            for message in messages where message.role.lowercased() == "assistant" &&
+                message.provider?.lowercased() != "openclaw" && message.streamSegmentID == nil &&
+                !message.content.contains(where: { $0.type == "subagent_completion" })
+            {
+                guard message.isRecordedOpenAIModel else { return false }
+                foundAuthor = true
+            }
+        }
+        return foundAuthor
+    }
+
+    var workMessage: OpenClawChatMessage? {
         if case let .message(message) = self { return message }
         return nil
     }
@@ -577,7 +654,7 @@ extension OpenClawChatMessage {
 
     /// A row that shows only tool operations: no narration, media, final answer, or the
     /// failure that ended its run (web isActivityGroup, chat-turn-presentation.ts:497-524).
-    fileprivate var isActivityRow: Bool {
+    var isActivityRow: Bool {
         guard !self.isForwardedTurnBoundary, !self.hasWorkMedia else { return false }
         let role = self.role.lowercased()
         if ["tool", "toolresult", "tool_result"].contains(role) { return true }
@@ -618,6 +695,30 @@ extension OpenClawChatMessage {
 }
 
 extension OpenClawChatMessage {
+    /// The saved response, not the composer's model, says which model answered; a router counts by
+    /// the model it served (web isRecordedOpenAIModel, chat-turn-presentation.ts:186-216).
+    var isRecordedOpenAIModel: Bool {
+        func lowered(_ value: String?) -> String {
+            value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        }
+        let (model, provider, served) = (lowered(self.model), lowered(self.provider), lowered(self.responseModel))
+        guard !provider.isEmpty, !model.isEmpty else { return false }
+        let direct = ["openai", "codex", "openai-codex"].contains(provider)
+        func upstream(_ id: String) -> (provider: String, model: String)? {
+            let id = !direct && id.hasPrefix(provider + "/") ? String(id.dropFirst(provider.count + 1)) : id
+            guard let slash = id.firstIndex(of: "/") else { return nil }
+            let vendor = id[..<slash].trimmingCharacters(in: .whitespaces)
+            let name = id[id.index(after: slash)...].trimmingCharacters(in: .whitespaces)
+            return vendor.isEmpty || name.isEmpty ? nil : (vendor, name)
+        }
+        if let actual = upstream(served) { return actual.provider == "openai" }
+        let requested = upstream(model)
+        if direct { return requested.map { $0.provider == "openai" } ?? true }
+        guard let requested, requested.provider == "openai" else { return false }
+        let undated = served.replacingOccurrences(of: #"-\d{4}-\d{2}-\d{2}$"#, with: "", options: .regularExpression)
+        return served.isEmpty || served == requested.model || undated == requested.model
+    }
+
     /// A spoken realtime-voice rendition: its own footer identity, never collapsible work.
     var isRealtimeVoiceTranscript: Bool {
         self.provenance?.kind == "realtime_voice" || self.model == "realtime-voice"

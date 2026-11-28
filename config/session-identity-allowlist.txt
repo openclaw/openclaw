@@ -1472,7 +1472,6 @@ src/state/openclaw-agent-execution-transcript.worker.ts	2
 src/state/openclaw-agent-execution.worker.ts	1
 src/state/openclaw-agent-worker-store.ts	1
 src/state/openclaw-agent-write-admission.ts	8
-src/state/openclaw-state-db-async-lifecycle.ts	2
 src/state/openclaw-state-db-open.ts	1
 src/state/openclaw-state-db-task-delivery-recovery.ts	1
 src/state/openclaw-state-worker-context.ts	1
