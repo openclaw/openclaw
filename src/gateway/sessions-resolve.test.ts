@@ -93,6 +93,25 @@ describe("resolveSessionKeyFromResolveParams", () => {
     );
   });
 
+  it("resolves a shared title to the remaining agent's session", () => {
+    const liveKey = "agent:main:thread:12345678-0aaa-4000-8000-000000000001";
+    const retiredKey = "agent:retired:thread:12345678-0bbb-4000-8000-000000000002";
+    const displayName = "Shared dashboard";
+    setStore(
+      {
+        [liveKey]: session(liveKey, { displayName }),
+        [retiredKey]: session(retiredKey, { displayName, updatedAt: 2 }),
+      },
+      { [liveKey]: "main", [retiredKey]: "main" },
+    );
+
+    const query = { reference: { key: "agent:main:missing", slug: "shared-dashboard" } };
+    expect(resolve(query, { agents: { entries: { main: {}, retired: {} } } })).toMatchObject({
+      ambiguous: true,
+    });
+    expect(resolve(query)).toEqual(resolved(liveKey, { displayName }));
+  });
+
   it("applies agent scoping to short-id matches", () => {
     const mainKey = "agent:main:thread:feedface-0000-4000-8000-000000000001";
     const workKey = "agent:work:thread:feedface-0000-4000-8000-000000000002";
