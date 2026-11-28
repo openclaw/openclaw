@@ -8,7 +8,7 @@ import {
   getPluginStateCapacity,
   resetPluginStateStoreForTests,
 } from "../../plugin-state/plugin-state-store.js";
-import * as pluginStateSqlite from "../../plugin-state/plugin-state-store.sqlite.js";
+import * as pluginStateWorker from "../../plugin-state/plugin-state-worker-client.js";
 import { buildSafeExternalPrompt } from "../../security/external-content.js";
 import { buildChannelJoinIntroPrompt } from "./join-intro-prompt.js";
 import { reportChannelRoomJoin } from "./report-channel-room-join.js";
@@ -96,13 +96,14 @@ describe("reportChannelRoomJoin", () => {
   it("never repeats a delivered introduction when its durable commit fails", async () => {
     const params = createJoinParams("commit-failed");
     const commitFailure = vi
-      .spyOn(pluginStateSqlite, "pluginStateUpdate")
+      .spyOn(pluginStateWorker, "comparePluginStateUpdateInWorker")
       .mockImplementationOnce(() => {
         throw new Error("durable commit failed");
       });
 
     try {
       await expectJoin(params);
+      expect(commitFailure).toHaveBeenCalledOnce();
       await expectJoin(params, { kind: "skipped", reason: "already-introduced" });
       expect(runCronIsolatedAgentTurn).toHaveBeenCalledOnce();
       expect(params.resolveRoomContext).toHaveBeenCalledOnce();

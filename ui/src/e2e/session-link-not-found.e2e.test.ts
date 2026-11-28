@@ -37,6 +37,7 @@ suite.define(() => {
         expect(decoration).toBe("none");
       }
       const subtitle = state.locator(".lazy-view-error__subtitle");
+      expect(await subtitle.textContent()).toBe("OpenClaw couldn’t find a session for this link.");
       expect(await subtitle.evaluate((el) => getComputedStyle(el).textWrap)).toBe("balance");
       const suppressed =
         "openclaw-chat-page, .agent-chat__input textarea, openclaw-toast-host .app-toast";

@@ -74,10 +74,11 @@ suite.define(() => {
             await page.getByRole("status").filter({ hasText: "Loading Workboard…" }).waitFor();
             gate.resolve();
             if (outcome === "network failure") {
-              await page
+              const alert = page
                 .getByRole("alert")
-                .filter({ hasText: "Check your connection and reload this page." })
-                .waitFor();
+                .filter({ hasText: "Couldn’t load Workboard. Reload this page." });
+              await alert.waitFor();
+              expect(await alert.textContent()).not.toContain("/__openclaw__/plugins/");
               await page.unroute(chunks);
               await page.reload();
             }

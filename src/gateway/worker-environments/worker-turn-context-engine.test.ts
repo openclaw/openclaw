@@ -266,8 +266,8 @@ it.each(["direct", "outer"] as const)(
 
 it("retains plugin tool authority when a worker RPC enters from a separate async context", async () => {
   await worker.seedActivePlacement();
-  const input = worker.turn("retained-plugin-tool");
   const pluginId = "retained-worker-tool";
+  const input = worker.turn("retained-plugin-tool", { extraPlugins: [pluginId] });
   const pluginDir = path.join(input.workspaceDir, pluginId);
   await mkdir(pluginDir, { recursive: true });
   await writeFile(
@@ -278,7 +278,11 @@ it("retains plugin tool authority when a worker RPC enters from a separate async
   await writeFile(pluginEntry, `module.exports = { id: "${pluginId}", register() {} };`);
   const config = {
     ...input.config,
-    plugins: { load: { paths: [pluginEntry] }, entries: { [pluginId]: { enabled: true } } },
+    plugins: {
+      ...input.config.plugins,
+      load: { paths: [pluginEntry] },
+      entries: { [pluginId]: { enabled: true } },
+    },
   };
   await using runtime = await acquireAgentRunPreparedModelRuntime({
     config,

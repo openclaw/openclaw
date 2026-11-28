@@ -297,7 +297,7 @@ export const toolResultWarningDedupe = {
   sessionRecovery: createDedupeCache({ ttlMs: 0, maxSize: TOOL_RESULT_WARNING_DEDUPE_LIMIT }),
 };
 
-type ToolResultTruncationOptions = {
+export type ToolResultTruncationOptions = {
   suffix?: (truncatedChars: number) => string;
   minKeepChars?: number;
   minimumRawWeight?: number;

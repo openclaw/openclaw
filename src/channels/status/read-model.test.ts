@@ -23,17 +23,17 @@ describe("channel status read model", () => {
     expect(accounts.has("slack")).toBe(false);
   });
 
-  it("finds legacy live accounts by id/name fallback for status summaries", () => {
+  it("finds legacy live accounts by name fallback for status summaries", () => {
     const liveAccounts = getRuntimeChannelAccounts({
       payload: {
         channelAccounts: {
-          discord: [{ name: "default", running: true }],
+          discord: [{ name: "legacy-account", running: true }],
         },
       },
       channelId: "discord",
     });
 
-    expect(hasRuntimeCredentialAvailable({ liveAccounts, accountId: "default" })).toBe(true);
+    expect(hasRuntimeCredentialAvailable({ liveAccounts, accountId: "legacy-account" })).toBe(true);
   });
 
   it("does not treat unavailable runtime credentials as available", () => {

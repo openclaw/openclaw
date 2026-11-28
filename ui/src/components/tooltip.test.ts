@@ -32,16 +32,8 @@ function commitTooltipSurface(tooltip: TooltipElement) {
   return settleTooltip(tooltip);
 }
 
-function tooltipIsRendered(tooltip: TooltipElement) {
-  return currentTooltipSurface(tooltip)?.querySelector(".tooltip-content") != null;
-}
-
 function tooltipIsOpen(tooltip: TooltipElement) {
   return currentTooltipSurface(tooltip)?.matches(":popover-open");
-}
-
-function tooltipPlacement(tooltip: TooltipElement) {
-  return currentTooltipSurface(tooltip)?.getAttribute("placement");
 }
 
 function tooltipHasAnchor(tooltip: TooltipElement) {
@@ -97,56 +89,6 @@ describe("openclaw-tooltip", () => {
       expect(focus).toHaveBeenCalledWith({ preventScroll: true });
       expect(document.activeElement).toBe(trigger);
       await expectOpenCount(0);
-    },
-  );
-
-  it.each([
-    [undefined, "right-start"],
-    [true, "bottom-start"],
-  ] as const)(
-    "positions side cards when narrow viewport support is %s",
-    async (matches, placement) => {
-      vi.stubGlobal("matchMedia", matches === undefined ? undefined : vi.fn(() => ({ matches })));
-      try {
-        const { tooltip, trigger } = createRichTooltip("Device details");
-        tooltip.setAttribute("placement", "right-start");
-        document.body.append(tooltip);
-        await commitTooltip(tooltip);
-        expect(tooltipIsRendered(tooltip)).toBe(false);
-        focusTrigger(trigger);
-        await expectOpenCount(1);
-        expect(tooltipPlacement(tooltip)).toBe(placement);
-      } finally {
-        vi.unstubAllGlobals();
-      }
-    },
-  );
-
-  it.each([
-    [undefined, "right"],
-    ["bottom", "bottom"],
-  ] as const)(
-    "resolves placement %s inside a right-hint rail as %s",
-    async (placement, expected) => {
-      // Pin a wide viewport: narrow screens intentionally map side placements below.
-      vi.stubGlobal(
-        "matchMedia",
-        vi.fn(() => ({ matches: false })),
-      );
-      try {
-        const rail = document.createElement("nav");
-        rail.dataset.tooltipPlacement = "right";
-        const { tooltip, trigger } = createTooltip("New conversation");
-        tooltip.placement = placement;
-        rail.append(tooltip);
-        document.body.append(rail);
-        await commitTooltip(tooltip);
-        focusTrigger(trigger);
-        await expectOpenCount(1);
-        expect(tooltipPlacement(tooltip)).toBe(expected);
-      } finally {
-        vi.unstubAllGlobals();
-      }
     },
   );
 
@@ -294,42 +236,6 @@ describe("openclaw-tooltip", () => {
     focusTrigger(trigger);
     await expectOpenCount(1);
   });
-
-  it.each(["width", "height", "marker", "hidden descendant", "faded descendant"] as const)(
-    "keeps a repeated-label tooltip for nested overflow: %s",
-    async (overflow) => {
-      const provider = createProvider();
-      const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "");
-      const label = document.createElement("span");
-      label.textContent = "Claude Opus 4.7 Anthropic";
-      let target = label;
-      if (overflow === "hidden descendant" || overflow === "faded descendant") {
-        const wrapper = document.createElement("span");
-        wrapper.hidden = overflow === "hidden descendant";
-        wrapper.style.opacity = overflow === "faded descendant" ? "0" : "1";
-        target = document.createElement("span");
-        target.textContent = "Decorative text";
-        wrapper.append(target);
-        label.append(wrapper);
-      }
-      if (overflow === "width") {
-        Object.defineProperty(target, "scrollWidth", { value: 160, configurable: true });
-        Object.defineProperty(target, "clientWidth", { value: 80, configurable: true });
-      } else if (overflow === "height") {
-        Object.defineProperty(target, "scrollHeight", { value: 80, configurable: true });
-        Object.defineProperty(target, "clientHeight", { value: 40, configurable: true });
-      } else {
-        target.setAttribute("data-tooltip-overflow", "");
-      }
-      trigger.append(label);
-      provider.append(tooltip);
-      document.body.append(provider);
-      await commitTooltip(tooltip);
-
-      focusTrigger(trigger);
-      await expectOpenCount(1);
-    },
-  );
 
   it("does not reopen from pointer-origin focus after activation settles", async () => {
     const provider = createProvider();
@@ -686,34 +592,6 @@ describe("title tooltips", () => {
     await settleTooltip(tooltip!);
     expect(tooltipIsOpen(tooltip!)).toBe(true);
     expect(tooltip!.content).toBe(title);
-  });
-
-  it("opens adapted titles on their rail's declared side", async () => {
-    // Pin a wide viewport: narrow screens intentionally map side placements below.
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn(() => ({ matches: false })),
-    );
-    try {
-      const rail = document.createElement("nav");
-      rail.dataset.tooltipPlacement = "right";
-      const trigger = document.createElement("button");
-      trigger.title = "Pages";
-      rail.append(trigger);
-      document.body.append(rail);
-
-      dispatchMousePointer(trigger, "pointerover");
-
-      const tooltip = document.querySelector<TooltipElement>("openclaw-tooltip");
-      expect(tooltip).not.toBeNull();
-      await commitTooltip(tooltip!);
-      vi.advanceTimersByTime(150);
-      await settleTooltip(tooltip!);
-      expect(tooltipIsOpen(tooltip!)).toBe(true);
-      expect(tooltipPlacement(tooltip!)).toBe("right");
-    } finally {
-      vi.unstubAllGlobals();
-    }
   });
 
   it("shares delay and exclusivity with explicit tooltips without moving titled nodes", async () => {

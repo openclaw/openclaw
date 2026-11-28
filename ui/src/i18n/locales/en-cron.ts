@@ -281,6 +281,8 @@ const enCron = {
       to: "Recipient",
       toPlaceholder: "+1555… or chat ID",
       toHelp: "A chat ID, phone number, or user ID. Leave blank to use the channel’s default.",
+      recipientSuggestionsUnavailable:
+        "Couldn’t load recipient suggestions. You can enter the recipient in the editor under {advanced} → {results}. Details: {details}",
       advanced: "Advanced",
       advancedTask: "Task",
       advancedConditions: "Conditions",
@@ -452,6 +454,13 @@ const enCron = {
       reload: "Reload scratch",
       save: "Save scratch",
       clear: "Remove scratch",
+      loadFailed: "Couldn’t load scratch. Use Load scratch to try again.",
+      reloadFailed:
+        "Couldn’t reload scratch. Copy any edits you want to keep before trying Reload scratch again.",
+      saveUnconfirmed:
+        "OpenClaw couldn’t confirm the save. Copy any edits you want to keep, then use Reload scratch to check what’s saved.",
+      removeUnconfirmed:
+        "OpenClaw couldn’t confirm removal. Copy any edits you want to keep, then use Reload scratch to check what’s saved.",
       empty:
         "No scratch saved yet. Saving an empty editor creates empty scratch; removing it leaves scratch unset.",
       limit: "{bytes} / {max} bytes",

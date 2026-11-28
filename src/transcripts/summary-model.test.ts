@@ -3,10 +3,13 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { FailoverError } from "../agents/failover-error.js";
 import "../agents/model-fallback-runner.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
+import { createTranscriptSummaryUpdates, persistTranscriptSummary } from "./capture-summary.js";
+import { resolveTranscriptsConfig } from "./config.js";
 import { createTranscriptSpeakerLabels } from "./speaker-labels.js";
+import type { TranscriptsStore } from "./store.js";
 import { summarizeTranscriptsWithModel as enhanceTranscriptSummary } from "./summary-model.js";
-import { summarizeTranscripts } from "./summary.js";
 import "./summary-model.runtime.js";
+import { summarizeTranscripts } from "./summary.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./types.js";
 
 const { runIsolatedCompletion, resolveSimpleCompletionSelectionForAgent } = vi.hoisted(() => ({
@@ -189,6 +192,40 @@ describe("model-backed transcript summaries", () => {
       cleanup.resolve();
       await pending;
     }
+  });
+  it("stops utility fallbacks once a newer capture owner supersedes the summary", async () => {
+    const turns = utterances.map(({ text, speaker }) => ({ text, speakerLabel: speaker!.label! }));
+    const snapshot = { inputRevision: "in", nextSequence: 3, summaryRevision: "s", turns };
+    const store = {
+      readSummarySnapshot: async () => ({ ...snapshot, utteranceCount: 3 }),
+      writeSummary: async () => undefined,
+      summaryScope: () => "superseded-meeting",
+    } as unknown as TranscriptsStore;
+    const utilityModel = {
+      primary: "openai/utility-test-model",
+      fallbacks: ["openai/utility-backup"],
+    };
+    const cfg = { agents: { defaults: { utilityModel } }, plugins: { enabled: false } };
+    const capture = {
+      config: resolveTranscriptsConfig({}),
+      cfg,
+      stateDir: "/tmp/oc-t",
+      store,
+      session,
+    };
+    let newer: { stop(): Promise<void> } | undefined;
+    // Isolated completion re-checks its caller after resolving the model.
+    runIsolatedCompletion.mockImplementation(async (request) => {
+      request.assertCurrent?.();
+      newer ??= await createTranscriptSummaryUpdates({ ...capture, logger: { warn() {} } });
+      request.assertCurrent?.();
+      return completion(JSON.stringify(notes), request.model);
+    });
+    await persistTranscriptSummary(capture);
+    await newer?.stop();
+    expect(runIsolatedCompletion.mock.calls.map(([call]) => call.model)).toEqual([
+      "utility-test-model",
+    ]);
   });
   it("uses visible JSON notes while retaining deterministic transcript identity and participants", async () => {
     runIsolatedCompletion.mockResolvedValue(

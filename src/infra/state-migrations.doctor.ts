@@ -65,6 +65,7 @@ import { listLegacyPairingStoreFiles } from "./pairing-files.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 import { isPathInside, safeStatSync } from "./path-guards.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
+import { migrateLegacyAcpSessionMetadata } from "./state-migrations.acp-session-metadata.js";
 import { legacyAgentQuarantineNotices } from "./state-migrations.agent-dir-receipt.js";
 import {
   detectLegacyApnsRegistrations,
@@ -177,7 +178,6 @@ import {
 import {
   listLegacySessionKeys,
   mergeSessionStoreAliasPlans,
-  migrateLegacyAcpSessionMetadata,
   resolveSessionStoreOwnership,
   type SessionStoreOwnership,
 } from "./state-migrations.session-store.js";

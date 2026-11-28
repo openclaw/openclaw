@@ -33,7 +33,12 @@ import { assertSupportedSessionStoreEntry } from "../../../config/sessions/suppo
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { decodeQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 import { withEngineStoreAdmission } from "../../../infra/database-engine/admission-scope.js";
-import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../../../infra/kysely-sync.js";
+import { jsonPathValue } from "../../../infra/database-engine/json-values.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
+} from "../../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../../infra/sql-connection.js";
 import {
   prepareArtifactPreservingSqliteRead,
@@ -53,6 +58,7 @@ import { withOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent
 import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
+  type OpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
@@ -86,7 +92,7 @@ export async function scanDoctorSessionEntryRecords(
   scope: DoctorSessionScanScope,
   visit: (record: { sessionKey: string; entry: Record<string, unknown> }) => void,
   expectedIdentity: DatabaseFileIdentity,
-  visitStartupRow?: (row: StartupSessionRow) => void,
+  visitStartupRow?: (row: StartupSessionRow, database: Pick<OpenClawAgentDatabase, "db">) => void,
 ): Promise<void> {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const databaseOptions = toDatabaseOptions(resolved);
@@ -149,7 +155,7 @@ export async function scanDoctorSessionEntryRecords(
               .select(["current_session_id", "updated_at"])
               .select(legacyState.as("legacy_state")),
           )) {
-            visitStartupRow(row);
+            visitStartupRow(row, database);
             if (row.legacy_state) {
               visitLegacyRow(row);
             }
@@ -201,16 +207,70 @@ export async function scanDoctorSessionEntryRecords(
   }
 }
 
-/** Startup normalizes legacy outcomes before canonical reads; clean stores stay read-only. */
-export async function repairLegacySessionRunOutcomes(
+/** Rotated cuts copied a tree and appended a leaf; in-place cuts marked the displaced branch. */
+function readUncountedCutWindow(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  entry: Record<string, unknown> | null,
+): string | undefined {
+  if (typeof entry?.sessionId !== "string" || entry.compactionCount !== undefined) {
+    return undefined;
+  }
+  const rotated = typeof entry.previousSessionId === "string";
+  if (!rotated && typeof entry.lifecycleRevision !== "string") {
+    return undefined;
+  }
+  const leaves = getSessionKysely(database.db)
+    .selectFrom("transcript_event_identities as leaf")
+    .where("leaf.session_id", "=", entry.sessionId)
+    .where("leaf.event_type", "=", "leaf");
+  if (rotated) {
+    return executeSqliteQueryTakeFirstSync(database.db, leaves.select("leaf.seq").limit(1))
+      ? entry.sessionId
+      : undefined;
+  }
+  const rows = iterateSqliteQuerySync(
+    database.db,
+    leaves
+      .innerJoin("transcript_events as event", (join) =>
+        join.onRef("event.session_id", "=", "leaf.session_id").onRef("event.seq", "=", "leaf.seq"),
+      )
+      .select((eb) =>
+        eb.fn
+          .coalesce(
+            "event.event_json",
+            jsonPathValue(
+              database.db,
+              eb.ref("event.navigation_json"),
+              eb.val("$.report.entry"),
+              "json",
+            ),
+          )
+          .as("marker"),
+      )
+      .orderBy("leaf.seq", "desc"),
+  );
+  for (const { marker } of rows) {
+    if (marker && safeParseJsonRecord(marker)?.billsDisplaced === true) {
+      return entry.sessionId;
+    }
+  }
+  return undefined;
+}
+
+/** Normalize legacy entries before canonical reads; clean stores stay read-only. */
+export async function repairLegacyStartupSessionEntries(
   scope: DoctorSessionScanScope,
   assertCurrent: () => void,
-  visitStartupRow: (row: StartupSessionRow) => void,
+  visitStartupEntry: (
+    entry: ReturnType<typeof parseSqliteSessionEntryRecord>,
+    sessionKey: string,
+  ) => void,
   warn: (message: string) => void,
 ): Promise<{ repaired: number; terminalUnmatched: number }> {
   assertCurrent();
   const expectedIdentity = readDatabasePathIdentitySync(scope.storePath);
-  const sessionKeys: string[] = [];
+  const runKeys = new Set<string>();
+  const cutKeys = new Set<string>();
   const tombstones = new Set<string>();
   const warnings = new Map<string, string>();
   let terminalUnmatched = 0;
@@ -242,14 +302,20 @@ export async function repairLegacySessionRunOutcomes(
         tombstones.has(sessionKey) ||
         (isRecord(resume) && ("queuedInputIds" in resume || "queuedInputSources" in resume))
       ) {
-        sessionKeys.push(sessionKey);
+        runKeys.add(sessionKey);
       }
     },
     expectedIdentity,
-    visitStartupRow,
+    (row, database) => {
+      const entry = parseSqliteSessionEntryRecord(row);
+      visitStartupEntry(entry, row.session_key);
+      if (readUncountedCutWindow(database, entry) !== undefined) {
+        cutKeys.add(row.session_key);
+      }
+    },
   );
   assertCurrent();
-  if (sessionKeys.length === 0) {
+  if (runKeys.size === 0 && cutKeys.size === 0) {
     reportWarnings();
     return { repaired: 0, terminalUnmatched };
   }
@@ -271,13 +337,27 @@ export async function repairLegacySessionRunOutcomes(
     });
     assertRepairCurrent();
   }
+  const countCut = cutKeys.size
+    ? (await import("../../../config/sessions/session-accessor.sqlite-compaction-selection.js"))
+        .countRetainedCutCompactions
+    : undefined;
   const repair = () =>
     withEngineStoreAdmission(() => {
       assertRepairCurrent();
       return rewriteDoctorSessionEntries({
         scope,
-        sessionKeys,
-        rawTransform: (entry, sessionKey, updatedAt) => {
+        sessionKeys: [...runKeys, ...cutKeys],
+        rawTransform: (stored, sessionKey, updatedAt, database) => {
+          const cut = cutKeys.has(sessionKey)
+            ? readUncountedCutWindow(database, stored)
+            : undefined;
+          const entry =
+            countCut && cut !== undefined
+              ? { ...stored, compactionCount: countCut(database, cut) }
+              : stored;
+          if (!runKeys.has(sessionKey)) {
+            return { entry };
+          }
           const tombstone = inspectLegacyRestartTombstone(entry);
           if (tombstone && !tombstone.doctorOnly) {
             warnings.set(sessionKey, tombstone.warning);
@@ -349,6 +429,7 @@ export function rewriteDoctorSessionEntries(
           entry: Record<string, unknown>,
           sessionKey: string,
           updatedAt: number,
+          database: Pick<OpenClawAgentDatabase, "db">,
         ) => SessionEntryStateRepair;
         transform?: never;
       }
@@ -407,7 +488,7 @@ export function rewriteDoctorSessionEntries(
             const previousFields = new Map(
               Object.entries(entry).map(([key, value]) => [key, JSON.stringify(value)]),
             );
-            const repair = params.rawTransform(entry, sessionKey, row.updated_at);
+            const repair = params.rawTransform(entry, sessionKey, row.updated_at, database);
             const transformed = repair.entry;
             if (repair.pendingInputOrigins?.inputs.length) {
               for (const origin of repair.pendingInputOrigins.inputs) {

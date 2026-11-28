@@ -240,13 +240,13 @@ struct ChatToolActivityTests {
             ["\(ChatSessionLaunch.linkScheme):0", "\(ChatSessionLaunch.linkScheme):1"])
         // The refused launch is its own row with its outcome.
         #expect(items[2].sessionLaunch?.phase == .failed)
-        #expect(items[2].rowTitle == "Couldn't launch subagent Docs")
+        #expect(items[2].rowTitle == "Couldn’t launch subagent Docs")
         #expect(items[2].isError)
 
         // Failure first: neither row takes the other's verb.
         let reversed = [items[2], items[0]]
         #expect(ChatToolActivityList.visibleRuns(reversed) == [[0], [1]])
-        #expect(reversed.map(\.rowTitle) == ["Couldn't launch subagent Docs", "Launched Auditor audit"])
+        #expect(reversed.map(\.rowTitle) == ["Couldn’t launch subagent Docs", "Launched Auditor audit"])
 
         let unnamed = ChatSessionLaunch(
             kind: .subagent,
@@ -257,6 +257,16 @@ struct ChatToolActivityTests {
             == "Launched 2 agents")
         let chat = ChatSessionLaunch(kind: .chat, phase: .succeeded, label: nil, childKey: "agent:main:dashboard:x")
         #expect(String(ChatSessionLaunch.title([chat], linksChildren: true).characters) == "Opened child chat")
+    }
+
+    @Test func `tool activity without shell inputs still names the operation`() {
+        for (state, label) in [(ChatToolActivityItem.State.running, "Running command"), (.finished, "Ran command")] {
+            let item = ChatToolActivityItem(
+                id: "call", name: "exec", arguments: nil, details: nil, resultText: nil, state: state,
+                liveDiffStat: nil)
+            #expect(item.rowTitle == label)
+            #expect(item.commandPreview == nil)
+        }
     }
 
     @Test func `failed command reads as ran with its exit code`() throws {
@@ -273,7 +283,7 @@ struct ChatToolActivityTests {
         let item = try #require(ChatToolActivity.items(message: merged).first)
 
         #expect(item.displayState == .failed)
-        #expect(item.commandVerb == "Ran")
+        #expect(item.rowTitle == "Ran")
         #expect(item.commandPreview == "swift test --filter Chat")
         #expect(String(localized: item.statusTitle) == "Exit code 2")
     }

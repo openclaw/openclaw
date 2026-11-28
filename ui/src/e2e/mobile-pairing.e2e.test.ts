@@ -502,9 +502,7 @@ suite.define(() => {
         expect(await qr.count()).toBe(0);
         await gateway.rejectDeferred("device.pair.setupCode", { message: "setup unavailable" });
         const error = page.getByRole("alert");
-        expect(await error.getByText("Couldn’t create a setup code. Try again.").isVisible()).toBe(
-          true,
-        );
+        expect(await error.getByText("Couldn’t get a setup code.").isVisible()).toBe(true);
         expect(await error.getByText("setup unavailable", { exact: false }).isVisible()).toBe(true);
         await captureUiProof(page, "09-desktop-error.png");
 
@@ -512,7 +510,7 @@ suite.define(() => {
           "device.pair.setupCode",
           setupResult("setup-recovered", "full"),
         );
-        await page.getByRole("button", { name: "Reload" }).click();
+        await page.getByRole("button", { name: "Create setup code" }).click();
         await qr.waitFor();
 
         await page.clock.install();
@@ -525,7 +523,7 @@ suite.define(() => {
             .getByText("gateway request timed out after 30000ms: device.pair.setupCode")
             .isVisible(),
         ).toBe(true);
-        await page.getByRole("button", { name: "Reload" }).click();
+        await page.getByRole("button", { name: "Create setup code" }).click();
         await qr.waitFor();
         await page.locator(".device-pair-setup__close").click();
         await dialog.waitFor({ state: "hidden" });

@@ -220,9 +220,9 @@ extension OpenClawChatComposer {
                         Task { await self.viewModel.switchToBranch(branch.leafEntryId) }
                     })) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(self.branchTitle(branch))
+                            Text(Self.branchTitle(branch))
                                 .font(OpenClawChatTypography.captionSemiBold)
-                            Text(self.branchMetadata(branch))
+                            Text(Self.branchMetadata(branch))
                                 .font(OpenClawChatTypography.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -242,12 +242,12 @@ extension OpenClawChatComposer {
         .disabled(!self.viewModel.canSwitchSessionBranch)
     }
 
-    private func branchTitle(_ branch: OpenClawChatSessionBranch) -> String {
+    static func branchTitle(_ branch: OpenClawChatSessionBranch) -> String {
         let headline = branch.headline.trimmingCharacters(in: .whitespacesAndNewlines)
         return headline.isEmpty ? String(localized: "Untitled branch") : headline
     }
 
-    private func branchMetadata(_ branch: OpenClawChatSessionBranch) -> String {
+    static func branchMetadata(_ branch: OpenClawChatSessionBranch) -> String {
         var parts = [Self.branchMessageCount(branch.messageCount)]
         if let updatedAt = branch.updatedAt,
            let date = try? Date(updatedAt, strategy: .iso8601)

@@ -637,6 +637,14 @@ public enum OpenClawChatGatewayRequests {
             timeoutMs: self.defaultTimeoutMs)
     }
 
+    /// Replaces the set of sessions whose PRs this connection watches (src/gateway/server-methods/control-ui.ts).
+    public static func sessionPullRequestsSubscribe(sessionKeys: [String]) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "controlUi.sessionPullRequests.subscribe",
+            params: ["sessionKeys": AnyCodable(sessionKeys)],
+            timeoutMs: self.defaultTimeoutMs)
+    }
+
     public static func progressCardGet(sessionKey: String, agentID: String?) -> OpenClawChatGatewayRequest {
         self.progressCardRequest("progressCard.get", sessionKey: sessionKey, agentID: agentID)
     }
