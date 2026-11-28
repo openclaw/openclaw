@@ -233,6 +233,8 @@ export type CreateGatewaySessionParams = {
     gitContributorProfileId?: string;
     /** Trusted owner status of the spawning invocation, never synthetic child launch authority. */
     requesterSenderIsOwner?: boolean;
+    /** Spawn label titles the child task and is stored without the agent-wide unique claim. */
+    unclaimedLabel?: true;
     sandbox?: "required";
     openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
     skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];

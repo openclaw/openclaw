@@ -987,7 +987,7 @@ async function createGatewaySessionInScope(
           ? { certifyNotCommitted: true as const }
           : {}),
         creationOperation: params.creationOperation,
-        label,
+        label: creation?.via === "spawn" && creation.unclaimedLabel ? undefined : label,
         ...(params.initialEntry
           ? {
               activeSessionKey: target.canonicalKey,

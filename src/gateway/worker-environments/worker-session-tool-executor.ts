@@ -235,6 +235,8 @@ export function createWorkerSessionToolExecutor(
               via: "spawn",
               actor: { type: "agent", id: source.agentId },
               requesterSessionKey: source.sessionKey,
+              // Worker spawns are forced visible; their label titles the task, as hidden spawns do.
+              unclaimedLabel: true,
               inheritedToolPolicy: {
                 version: 1,
                 allow: authorizedTools,

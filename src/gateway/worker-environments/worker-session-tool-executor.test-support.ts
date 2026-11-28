@@ -129,12 +129,16 @@ vi.mock("../../agents/tools/sessions-spawn-tool.js", async () => {
       label: "Sessions",
       description: "Spawn",
       parameters: {},
-      execute: async (_toolCallId: string, args: { task: string; worktree?: boolean }) => {
+      execute: async (
+        _toolCallId: string,
+        args: { task: string; label?: string; worktree?: boolean },
+      ) => {
         sharedMocks.spawnCallerIdentity(getGatewayToolCallerIdentity());
         sharedMocks.spawnArgs(args);
         const details = await options.callGateway("sessions.create", {
           parentSessionKey: options.agentSessionKey,
           task: args.task,
+          ...(args.label ? { label: args.label } : {}),
           ...(args.worktree ? { worktree: true } : {}),
         });
         return {
