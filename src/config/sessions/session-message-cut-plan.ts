@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import { readMessageWorkContext } from "../../chat/work-context.js";
 import { assertModelSelectionUnlocked } from "../../sessions/model-overrides.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
@@ -20,7 +21,6 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
   selectSessionTranscriptTreeTipNodes,
-  type SessionTranscriptTree,
 } from "./transcript-tree.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 import { MIN_READABLE_SESSION_VERSION } from "./version.js";
@@ -70,12 +70,8 @@ export type SessionMessageCutReader = {
   readEditorMessage(entryId: string): Record<string, unknown> | undefined;
   /** True when the canonical navigation owner lists this entry as a selectable tip. */
   isBranchTip(entryId: string): boolean;
-  /**
-   * Count since the last reset on the selected path, or undefined for an invalid selection.
-   * Reset normalization can rewrite a control onto the current leaf, which would
-   * silently ignore the request, so both modes refuse instead.
-   */
-  selectedCompactionCount(targetId: string | null): number | undefined;
+  /** Compaction facts on the canonical target path, or undefined if a reset invalidates the target. */
+  selectedCompactions(targetId: string | null): { count: number; degraded: boolean } | undefined;
   /** Canonical path to this leaf, as physical sequences; indexed readers only. */
   canonicalBranchPathSeqs?(leafEventId: string): readonly number[] | undefined;
   activeLeafEventId(): string | null;
@@ -84,28 +80,37 @@ export type SessionMessageCutReader = {
   allocateEventId(): string;
 };
 
-export function countCompactionsSinceReset(events: Iterable<unknown>): number {
+export function summarizeSelectedCompactions<T>(
+  events: Iterable<T>,
+  eventType: (event: T) => unknown,
+  isDegraded: (event: T) => boolean,
+) {
   let count = 0;
+  let degraded = false;
   for (const event of events) {
-    const type = asRecord(event)?.type;
+    const type = eventType(event);
     if (type === "reset") {
       count = 0;
     } else if (type === "compaction") {
       count++;
+      degraded ||= isDegraded(event);
     }
   }
-  return count;
+  return { count, degraded };
 }
 
-export function countSelectedPathCompactions(
-  tree: SessionTranscriptTree<unknown>,
-  targetId: string | null,
-) {
-  return tree.leafId === targetId
-    ? countCompactionsSinceReset(
-        selectSessionTranscriptTreePathNodes(tree, targetId).map(({ entry }) => entry),
-      )
-    : undefined;
+/**
+ * True when this event is a compaction whose committed details mark the history
+ * quality-degraded (a summary committed without passing the safeguard audit).
+ * Shared by the cut planners and both readers so the flag is derived from the
+ * selected transcript path in one place.
+ */
+export function isDegradedCompactionEvent(event: unknown): boolean {
+  const record = asRecord(event);
+  return (
+    record?.type === "compaction" &&
+    parseCompactionDetails(record.details)?.qualityDegraded === true
+  );
 }
 
 /**
@@ -161,8 +166,16 @@ export function createMemorySessionMessageCutReader(
         selectSessionTranscriptTreeTipNodes(tree).some((tip) => tip.id === entryId)
       );
     },
-    selectedCompactionCount: (targetId) =>
-      countSelectedPathCompactions(resolve(targetId), targetId),
+    selectedCompactions(targetId) {
+      const selected = resolve(targetId);
+      return selected.leafId === targetId
+        ? summarizeSelectedCompactions(
+            selectSessionTranscriptTreePathNodes(selected, targetId),
+            ({ entry }) => asRecord(entry)?.type,
+            ({ entry }) => isDegradedCompactionEvent(entry),
+          )
+        : undefined;
+    },
     activeLeafEventId: () => tree.leafId,
     tailEventId: () => tree.nodes.at(-1)?.id ?? null,
     allocateEventId,
@@ -175,6 +188,13 @@ export function planSessionMessageCut(
   events: readonly TranscriptEvent[],
   params: SessionMessageCutIntent & { mode: "fork" },
   sourceRepositoryWorkspaceId?: string,
+  /**
+   * Reads the degradation flag from the copied prefix's compaction payloads.
+   * SQLite readers supply this because navigation rows carry no details; when
+   * absent (memory transcripts already carry full payloads) the prefix is
+   * scanned directly.
+   */
+  hasDegradedCompaction?: (prefix: readonly TranscriptEvent[]) => boolean,
 ): SessionMessageCutPlan {
   const refusal = refuseUnselectableMessageCut(entry, params, sourceRepositoryWorkspaceId);
   if (refusal) {
@@ -211,7 +231,15 @@ export function planSessionMessageCut(
     result: {
       status: "created",
       key: params.targetKey,
-      entry: buildMessageCutSessionEntry(currentEntry, params, nextSessionId),
+      entry: buildMessageCutSessionEntry(
+        currentEntry,
+        params,
+        nextSessionId,
+        // The forked transcript is the prefix itself.
+        hasDegradedCompaction
+          ? hasDegradedCompaction(cut.prefix)
+          : cut.prefix.some((event) => isDegradedCompactionEvent(event)),
+      ),
       ...readMessageCutEditorFields(cut.message),
     },
   };
@@ -260,8 +288,8 @@ export function planInPlaceSessionMessageCut(
   }
   // A later reset re-roots navigation, so the canonical owner would rewrite this
   // control onto the current leaf and ignore the request. Refuse it instead.
-  const compactionCount = reader.selectedCompactionCount(repointTargetId);
-  if (compactionCount === undefined) {
+  const compactions = reader.selectedCompactions(repointTargetId);
+  if (!compactions) {
     return { status: params.mode === "switch" ? "not-branch-tip" : "off-active-path" };
   }
   if (settledWorkspaceConflicts(currentEntry, params)) {
@@ -290,7 +318,10 @@ export function planInPlaceSessionMessageCut(
         currentEntry,
         params,
         currentEntry.sessionId,
-        compactionCount,
+        // The repoint selects a new active path; its degradation is what /status
+        // must show, not the displaced branch's flag.
+        compactions.degraded,
+        compactions.count,
       ),
       ...readMessageCutEditorFields(message),
     },
@@ -348,11 +379,17 @@ function settledWorkspaceConflicts(
  * Fork installs a detached identity. Rewind and switch keep theirs and reset
  * only the state the moved transcript tail invalidates, so the next turn
  * rebuilds context, run and harness facts from the new active path.
+ *
+ * `compactionQualityDegraded` is the one transcript-derived field that is set
+ * rather than cleared: it describes the selected path, so the caller derives it
+ * from the new active path (fork prefix, or the repoint target's path) instead
+ * of spreading the displaced branch's flag.
  */
 function buildMessageCutSessionEntry(
   currentEntry: SessionEntry,
   params: SessionMessageCutIntent,
   sessionId: string,
+  compactionQualityDegraded: boolean,
   compactionCount?: number,
 ): SessionEntry {
   const forked = params.mode === "fork";
@@ -399,6 +436,7 @@ function buildMessageCutSessionEntry(
     contextTokensSource: undefined,
     contextBudgetStatus: undefined,
     compactionCount,
+    compactionQualityDegraded: compactionQualityDegraded ? true : undefined,
     transcriptByteCompactionLatch: undefined,
     memoryFlush: undefined,
     cliSessionBindings: undefined,

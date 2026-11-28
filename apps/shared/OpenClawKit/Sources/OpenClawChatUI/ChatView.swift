@@ -175,6 +175,7 @@ public struct OpenClawChatView: View {
             self.viewModel.refreshSourceContext()
         }
         .modifier(ChatPresentationActivity(viewModel: self.viewModel, isOnScreen: self.isOnScreen))
+        .modifier(ChatTranscriptRoom.Provider())
         .onChange(of: self.turnRecapObservation, initial: true) { _, observation in
             self.updateTurnRecap(observation)
         }
@@ -500,6 +501,7 @@ extension OpenClawChatView {
         // Ensure the message list claims vertical space on the first layout pass.
         .frame(maxHeight: .infinity, alignment: .top)
         .layoutPriority(1)
+        .modifier(ChatTranscriptRoom.Reader())
         .simultaneousGesture(
             TapGesture().onEnded {
                 self.dismissKeyboardIfNeeded()
@@ -1593,9 +1595,7 @@ extension OpenClawChatView {
         let name = self.assistantName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return name.isEmpty ? String(localized: "Assistant") : name
     }
-}
 
-extension OpenClawChatView {
     /// Measure the detail pane, not the screen: a visible sidebar and window resizing
     /// change the space available to chat independently of device orientation.
     private var columnLayout: ChatColumnLayout {

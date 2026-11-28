@@ -74,6 +74,8 @@ extension OpenClawChatComposer {
                     .frame(
                         width: CleanChatComposerMetrics.controlTouchSize,
                         height: CleanChatComposerMetrics.controlTouchSize)
+                    // A full touch target that takes the gap after it, so no neighbor's target overlaps it.
+                    .frame(width: CleanChatComposerMetrics.controlTouchSize, alignment: .leading)
                     .contentShape(Rectangle())
             }
             .menuIndicator(.hidden)

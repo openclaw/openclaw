@@ -7,6 +7,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { createSqliteFamilyEngines } from "../infra/database-engine/selection-fixture.test-support.js";
 import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
+import { openRawDatabase } from "./database-preflight-fixtures.test-support.js";
+import { prestartGatewayStateSchemaReader } from "./openclaw-agent-schema-inspection-worker.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { StateSchemaInspection } from "./openclaw-state-schema-preflight.js";
@@ -96,4 +98,26 @@ it("joins the unused PostgreSQL reader when startup aborts during state discover
     state.resolve(stateReply());
     await preflight.catch(() => {});
   }
+});
+
+it("joins an early SQLite schema reader when startup ends before inspection", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("preflight-unused-state-reader-") };
+  const statePath = resolveOpenClawStateSqlitePath(env);
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  {
+    using database = openRawDatabase(statePath);
+    database.exec("CREATE TABLE fixture(value TEXT)");
+  }
+  vi.mocked(fork).mockClear();
+
+  const closed = vi.fn();
+  {
+    await using reader = prestartGatewayStateSchemaReader(env);
+    expect(reader).toBeDefined();
+    const child = vi.mocked(fork).mock.results[0]?.value;
+    expect(child?.connected).toBe(true);
+    child?.once("close", closed);
+  }
+
+  expect(closed).toHaveBeenCalledOnce();
 });
