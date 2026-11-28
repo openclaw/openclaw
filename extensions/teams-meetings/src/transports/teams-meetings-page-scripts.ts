@@ -2,6 +2,7 @@ import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { TEAMS_MEETING_SELECTORS } from "./teams-meetings-selectors.js";
 import { teamsMeetingStatusPrelude } from "./teams-meetings-status-prejoin-source.js";
 import { normalizeTeamsMeetingUrlForReuse } from "./teams-meetings-urls.js";
+import { teamsWorkMeetingThread } from "./teams-meetings-work-coordinates.js";
 
 export const teamsMeetingPageScripts = MeetingPlatformAdapter.createPageScripts({
   platform: {
@@ -16,12 +17,35 @@ export const teamsMeetingPageScripts = MeetingPlatformAdapter.createPageScripts(
     },
   },
   normalizeUrl: normalizeTeamsMeetingUrlForReuse,
-  pageIdentitySource: () => `const meetingIdentity = (rawUrl) => {
+  pageIdentitySource: () => `const workMeetingThread = ${teamsWorkMeetingThread.toString()};
+  const meetingIdentity = (rawUrl) => {
     try {
+      if (!rawUrl || Array.from(rawUrl).some((character) =>
+        character.charCodeAt(0) <= 32 || character.charCodeAt(0) === 127 || character === "\\\\")) return undefined;
+      const raw = rawUrl.match(/^https:\\/\\/(teams\\.microsoft\\.com|teams\\.live\\.com)(?::443)?(\\/[^?#]*)(?:[?#]|$)/i);
+      if (!raw) return undefined;
       const parsed = new URL(rawUrl);
+      if (raw[2] !== parsed.pathname || parsed.port || parsed.username || parsed.password) return undefined;
       const host = parsed.hostname.toLowerCase();
       if (parsed.protocol !== "https:") return undefined;
       if (host === "teams.microsoft.com") {
+        if (parsed.pathname.toLowerCase() === "/light-meetings/launch") {
+          const threadId = workMeetingThread(parsed.searchParams.getAll("coords"));
+          return threadId ? "teams-work:" + threadId : undefined;
+        }
+        const launcherTarget = parsed.pathname.toLowerCase() === "/dl/launcher/launcher.html"
+          ? parsed.searchParams.get("url")
+          : undefined;
+        const launcherMatch = launcherTarget?.match(/^\\/_#\\/meet\\/([0-9]+)(?:\\?(.+))?$/i);
+        const shortMeeting = parsed.pathname.match(/^\\/meet\\/([0-9]+)\\/?$/) ||
+          (launcherMatch ? [undefined, launcherMatch[1]] : undefined);
+        if (shortMeeting) {
+          const launcherParams = launcherMatch ? new URLSearchParams(launcherMatch[2] || "") : undefined;
+          const passcodes = launcherParams ? launcherParams.getAll("p") : parsed.searchParams.getAll("p");
+          const passcode = passcodes[0];
+          if (passcodes.length !== 1 || !passcode) return undefined;
+          return "teams-work:meet:" + shortMeeting[1] + ":p:" + encodeURIComponent(passcode);
+        }
         const match = parsed.pathname.match(/^\\/l\\/meetup-join\\/([^/]+)(?:\\/0)?\\/?$/i);
         if (!match?.[1]) return undefined;
         const threadId = decodeURIComponent(match[1]);

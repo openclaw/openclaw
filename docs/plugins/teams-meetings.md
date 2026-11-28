@@ -8,7 +8,8 @@ title: "Microsoft Teams meetings plugin"
 ---
 
 The `teams-meetings` plugin joins work links under
-`teams.microsoft.com/l/meetup-join/...` and consumer links under
+`teams.microsoft.com/l/meetup-join/...` or
+`teams.microsoft.com/meet/<numeric-id>?p=<HashedPasscode>` and consumer links under
 `teams.live.com/meet/...` as a guest in the OpenClaw Chrome profile. It does not
 create meetings, dial in, call Microsoft Graph, or capture audio/video
 recordings.
@@ -22,6 +23,11 @@ Use the [shared Live configuration](/plugins/meeting-plugins#configure-teams-or-
 under `plugins.entries.teams-meetings.config`. Browser participant audio is
 captured separately from native assistant-microphone injection, so Live can
 hear interruptions while speaking.
+
+Keep the entire work meeting URL, including its `p` query parameter. This opaque
+value is not the separately displayed meeting passcode. The plugin does not
+decode it or convert short links to legacy links. Different `p` values identify
+different browser sessions even when the numeric meeting ID is the same.
 
 ## Handle Teams policy and manual actions
 

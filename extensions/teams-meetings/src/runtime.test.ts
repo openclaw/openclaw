@@ -4,7 +4,7 @@ import {
   useMeetingTestState,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { describe, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { teamsMeetingsPlugin } from "../index.js";
 
 const resolveTeamsMeetingsConfig = teamsMeetingsPlugin.config.resolveConfig;
@@ -20,9 +20,9 @@ const logger = {
   debug: vi.fn(),
 };
 
-function runtimeHarness(options?: { tabOpen?: boolean }) {
+function runtimeHarness(url: string, options?: { tabOpen?: boolean }) {
   return createMeetingBrowserFixture({
-    url: URL,
+    url,
     tabId: "teams-tab",
     title: "Teams call",
     leaveSessionMatched: true,
@@ -48,12 +48,13 @@ function runtimeHarness(options?: { tabOpen?: boolean }) {
 
 function runtimeFixture(
   options: {
+    url?: string;
     config?: Parameters<typeof resolveTeamsMeetingsConfig>[0];
     harness?: { tabOpen?: boolean };
     fullConfig?: ConstructorParameters<typeof teamsMeetingsPlugin.Runtime>[0]["fullConfig"];
   } = {},
 ) {
-  const harness = runtimeHarness(options.harness);
+  const harness = runtimeHarness(options.url ?? URL, options.harness);
   const runtime = new teamsMeetingsPlugin.Runtime({
     config: resolveTeamsMeetingsConfig(
       options.config ?? {
@@ -77,5 +78,43 @@ describe("Microsoft Teams meeting session flow", () => {
     rewrittenUrl: "https://teams.microsoft.com/v2/",
     rewrittenUrlTestName: "recovers the tracked tab after Teams rewrites the in-call URL",
     endedHealth: {},
+  });
+});
+
+describe("Microsoft Teams short-link session flow", () => {
+  const shortUrl = "https://teams.microsoft.com/meet/1234567890123?p=Synthetic-runtime-token";
+  it("joins, reuses with tracking, reports, reads captions, and safely leaves through core", async () => {
+    const { runtime } = runtimeFixture({ url: shortUrl });
+    const first = await runtime.join({ url: shortUrl, mode: "transcribe" });
+    const reused = await runtime.join({ url: shortUrl + "&tracking=two", mode: "transcribe" });
+    expect(reused.session.id).toBe(first.session.id);
+    expect(runtime.list()).toHaveLength(1);
+    expect(await runtime.status(first.session.id)).toMatchObject({ found: true });
+    expect(await runtime.transcript(first.session.id)).toMatchObject({ found: true, lines: [] });
+    expect(await runtime.speak(first.session.id, "Synthetic test")).toMatchObject({
+      spoken: false,
+    });
+    expect(await runtime.leave(first.session.id)).toMatchObject({ found: true, browserLeft: true });
+  });
+  it("does not reuse a session for a different opaque passcode", async () => {
+    const { runtime } = runtimeFixture({ url: shortUrl });
+    const first = await runtime.join({ url: shortUrl, mode: "transcribe" });
+    const second = await runtime.join({
+      url: shortUrl.replace("Synthetic-runtime-token", "Different-runtime-token"),
+      mode: "transcribe",
+    });
+    expect(second.session.id).not.toBe(first.session.id);
+    await runtime.leave(first.session.id);
+    await runtime.leave(second.session.id);
+  });
+  it("recovers the tracked short-link tab after the server 302s it to the work-host launcher page", async () => {
+    const { runtime, harness } = runtimeFixture({ url: shortUrl });
+    const joined = await runtime.join({ url: shortUrl, mode: "transcribe" });
+    harness.state.tabUrl =
+      "https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fmeet%2F1234567890123%3Fp%3DSynthetic-runtime-token";
+    harness.gatewayRequest.mockClear();
+    const status = await runtime.status(joined.session.id);
+    expect(status.session?.chrome?.health?.browserUrl).toBe(harness.state.tabUrl);
+    await runtime.leave(joined.session.id);
   });
 });
