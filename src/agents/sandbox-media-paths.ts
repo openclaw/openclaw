@@ -46,9 +46,9 @@ export async function resolveSandboxedBridgeMediaPath(params: {
     ? safeFileURLToPath(mediaPathInfo.resolved, "linux")
     : mediaPathInfo.resolved;
   let rewrittenFrom = mediaPathInfo.rewrittenFrom;
-  const stagedMediaPath = rewrittenFrom
-    ? undefined
-    : params.sandbox.stagedMediaPaths?.get(filePath);
+  // Staged copies are keyed by their media:// URI as well as by upload handle.
+  const aliasKey = rewrittenFrom ?? filePath;
+  const stagedMediaPath = params.sandbox.stagedMediaPaths?.get(aliasKey);
   if (stagedMediaPath) {
     // A real workspace entry remains authoritative over the producer's staged alias.
     const directStat = await params.sandbox.bridge.stat({
@@ -56,7 +56,7 @@ export async function resolveSandboxedBridgeMediaPath(params: {
       cwd: params.sandbox.root,
     });
     if (!directStat) {
-      rewrittenFrom = filePath;
+      rewrittenFrom = aliasKey;
       filePath = stagedMediaPath;
     }
   }

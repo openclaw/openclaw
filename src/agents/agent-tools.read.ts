@@ -17,6 +17,7 @@ import {
 import {
   createSandboxMutationOperations,
   createSandboxReadOperations,
+  type SandboxFileOperationsParams,
 } from "./agent-tools.read.operations.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { assertSandboxPathWithinAnyRoot } from "./agent-tools.workspace-roots.js";
@@ -536,11 +537,7 @@ export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
   };
 }
 
-type SandboxToolParams = {
-  abortSignal?: AbortSignal;
-  root: string;
-  bridge: SandboxFsBridge;
-  memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+type SandboxToolParams = SandboxFileOperationsParams & {
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
   modelHasVision?: boolean;

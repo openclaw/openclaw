@@ -69,6 +69,25 @@ export function resolveMediaReferenceSandboxPath(
   };
 }
 
+/**
+ * Sandbox read path for a media:// source: the flat inbound path when a workspace entry exists
+ * there, otherwise the turn's staged copy. Returns undefined for sources that are not media-store
+ * URIs.
+ */
+export async function resolveSandboxMediaStoreReadPath(params: {
+  source: string;
+  stagedMediaPaths?: ReadonlyMap<string, string>;
+  exists: (sandboxPath: string) => Promise<boolean>;
+}): Promise<string | undefined> {
+  const normalizedSource = normalizeMediaReferenceSource(params.source);
+  if (!classifyMediaReferenceSource(normalizedSource).isMediaStoreUrl) {
+    return undefined;
+  }
+  const { resolved, rewrittenFrom } = resolveMediaReferenceSandboxPath(normalizedSource);
+  const stagedPath = rewrittenFrom ? params.stagedMediaPaths?.get(rewrittenFrom) : undefined;
+  return stagedPath && !(await params.exists(resolved)) ? stagedPath : resolved;
+}
+
 /** Resolves inbound media:// URIs or first-level inbound file paths to concrete store files. */
 export async function resolveInboundMediaReference(source: string): Promise<{
   id: string;

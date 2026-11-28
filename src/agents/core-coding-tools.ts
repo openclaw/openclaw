@@ -191,6 +191,7 @@ type CoreCodingToolsOptions = {
   strictWorkspaceRoot?: boolean;
   readOnly: boolean;
   sandbox?: SandboxContext;
+  stagedMediaPaths?: ReadonlyMap<string, string>;
   skillsSnapshot?: SkillSnapshot;
   skillReadResources?: SkillSnapshot["resolvedSkills"];
   skillInstructionPaths?: readonly string[];
@@ -341,6 +342,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       ? createSandboxedReadTool({
           root: sandboxRoot,
           bridge: sandboxFsBridge!,
+          stagedMediaPaths: options.stagedMediaPaths,
           modelContextWindowTokens: options.modelContextWindowTokens,
           imageSanitization: options.imageSanitization,
           modelHasVision: options.modelHasVision,

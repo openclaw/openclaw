@@ -1,9 +1,5 @@
 import { detectMime } from "@openclaw/media-core/mime";
-import {
-  classifyMediaReferenceSource,
-  normalizeMediaReferenceSource,
-  resolveMediaReferenceSandboxPath,
-} from "../media/media-reference.js";
+import { resolveSandboxMediaStoreReadPath } from "../media/media-reference.js";
 import {
   type MemoryWriteProvenanceObserver,
   withMemoryWriteProvenance,
@@ -13,10 +9,11 @@ import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-iden
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { decodeReadTextBuffer } from "./sessions/tools/read-text-capture.js";
 
-type SandboxFileOperationsParams = {
+export type SandboxFileOperationsParams = {
   abortSignal?: AbortSignal;
   root: string;
   bridge: SandboxFsBridge;
+  stagedMediaPaths?: ReadonlyMap<string, string>;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
 };
 
@@ -24,13 +21,13 @@ export function createSandboxReadOperations(params: SandboxFileOperationsParams)
   return {
     resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
       resolveSandboxFileQueueKey(params, absolutePath, signal),
-    resolvePath: (filePath: string) => {
-      const normalizedMediaSource = normalizeMediaReferenceSource(filePath);
-      if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
-        return resolveMediaReferenceSandboxPath(normalizedMediaSource, "media/inbound").resolved;
-      }
-      return resolveContainerPathCandidate(filePath);
-    },
+    resolvePath: async (filePath: string) =>
+      (await resolveSandboxMediaStoreReadPath({
+        source: filePath,
+        stagedMediaPaths: params.stagedMediaPaths,
+        exists: async (sandboxPath) =>
+          Boolean(await params.bridge.stat({ filePath: sandboxPath, cwd: params.root })),
+      })) ?? resolveContainerPathCandidate(filePath),
     decodeText: ({ buffer, absolutePath }: { buffer: Buffer; absolutePath: string }) =>
       params.bridge.resolvePath({ filePath: absolutePath, cwd: params.root }).hostPath
         ? decodeReadTextBuffer({ buffer })
