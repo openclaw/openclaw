@@ -303,9 +303,15 @@ export function createTalkTranscriptionRelaySession(
     },
     onPartial: (text: string) => onTranscript(text, false),
     onTranscript: (text: string) => onTranscript(text, true),
-    onError: (error: Error) => {
+    onError: (error: Error, details?: { terminal: true }) => {
       const relay = getActiveRelay();
       if (!relay) {
+        return;
+      }
+      // The provider session recovers from non-terminal errors on its own. A
+      // draining session gets no more audio, so any error there ends it.
+      if (!details?.terminal && !relay.draining) {
+        relay.context.logGateway.warn(`transcription provider error: ${error.message}`);
         return;
       }
       failTranscriptionSession(relay, error.message);

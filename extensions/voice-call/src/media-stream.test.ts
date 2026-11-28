@@ -619,6 +619,45 @@ describe("MediaStreamHandler security hardening", () => {
     });
   });
 
+  it("closes the media stream when the STT session stops mid-call", async () => {
+    let request: RealtimeTranscriptionSessionCreateRequest | undefined;
+    const onConnectReady = createDeferred<void>();
+    const onDisconnect = vi.fn();
+    const handler = createHandler({
+      transcriptionProvider: createStubSttProvider((req) => {
+        request = req;
+        return createStubSession();
+      }),
+      shouldAcceptStream: () => true,
+      onConnect: () => onConnectReady.resolve(),
+      onDisconnect,
+    });
+    await withConnection(handler, async (ws) => {
+      try {
+        sendStart(ws, "MZ-stt-stop", "CA-stt-stop");
+        await onConnectReady.promise;
+
+        const closed = waitForClose(ws);
+        request?.onError?.(new Error("Unexpected server response: 503"));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 20);
+        });
+        expect(ws.readyState).toBe(WebSocket.OPEN);
+
+        request?.onError?.(new Error("reconnect limit reached"), { terminal: true });
+
+        await vi.waitFor(() => expect(ws.readyState).toBe(WebSocket.CLOSED));
+        expect(await closed).toEqual({ code: 1011, reason: "STT session failed" });
+        await vi.waitFor(() =>
+          expect(onDisconnect).toHaveBeenCalledExactlyOnceWith("CA-stt-stop", "MZ-stt-stop"),
+        );
+      } finally {
+        // Server cleanup waits for open streams; an unfixed handler never closes this one.
+        ws.terminate();
+      }
+    });
+  });
+
   it("rejects oversized pre-start frames at the websocket maxPayload guard before validation runs", async () => {
     const shouldAcceptStream = vi.fn(() => true);
     const handler = createHandler({ preStartTimeoutMs: 1_000, shouldAcceptStream });

@@ -187,6 +187,7 @@ export function buildDeepgramRealtimeTranscriptionProvider({
             new Error(
               `Deepgram realtime retained transcript exceeded ${DEEPGRAM_REALTIME_MAX_RETAINED_TRANSCRIPT_BYTES} bytes`,
             ),
+            { terminal: true },
           );
           transport.closeNow();
           return false;
