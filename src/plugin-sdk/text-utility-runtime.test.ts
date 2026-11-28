@@ -1,9 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { escapeHtml, runChannelProbe } from "./text-utility-runtime.js";
+import {
+  clampInt as ownedClampInt,
+  clampNumber as ownedClampNumber,
+} from "../../packages/normalization-core/src/number-coercion.js";
+import {
+  clamp,
+  clampInt,
+  clampNumber,
+  escapeHtml,
+  runChannelProbe,
+} from "./text-utility-runtime.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+it("preserves the numeric owner and clamp alias through the public SDK", () => {
+  expect(clampNumber).toBe(ownedClampNumber);
+  expect(clampInt).toBe(ownedClampInt);
+  expect(clamp).toBe(clampNumber);
 });
 
 describe("escapeHtml", () => {

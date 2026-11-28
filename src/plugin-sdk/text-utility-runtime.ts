@@ -3,6 +3,12 @@ import type { BaseProbeResult } from "../channels/plugins/types.public.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { monotonicNow } from "../shared/monotonic-time.js";
 
+export {
+  clamp,
+  clampInt,
+  clampNumber,
+} from "../../packages/normalization-core/src/number-coercion.js";
+
 export { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 export { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 export { findGraphemeChunkEnd } from "@openclaw/normalization-core/grapheme";
@@ -51,9 +57,6 @@ export async function runChannelProbe<
 
 export {
   CONFIG_DIR,
-  clamp,
-  clampInt,
-  clampNumber,
   displayPath,
   displayString,
   ensureDir,

@@ -107,6 +107,8 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "asPositiveInteger",
       "asPositiveSafeInteger",
       "asSafeIntegerInRange",
+      "clampInt",
+      "clampNumber",
       "clampTimerTimeoutMs",
       "clampPositiveTimerTimeoutMs",
       "finiteSecondsToTimerSafeMilliseconds",
@@ -135,6 +137,11 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "timestampMsToIsoFileStamp",
       "timestampMsToIsoString",
     ],
+  },
+  {
+    file: "packages/normalization-core/src/number-coercion.ts",
+    kind: "variable",
+    names: ["clamp"],
   },
   {
     file: "packages/normalization-core/src/boolean-coercion.ts",
@@ -300,6 +307,40 @@ const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
     name: "toLintErrorObject",
     kind: "function",
     reason: "Standalone copied response reader cannot resolve workspace packages.",
+  },
+  {
+    file: "packages/retry/src/index.ts",
+    name: "clampNumber",
+    kind: "function",
+    reason:
+      "Retry configuration accepts unknown values, uses a fallback, and permits omitted bounds.",
+  },
+  {
+    file: "extensions/logbook/src/config.ts",
+    name: "clampNumber",
+    kind: "function",
+    reason:
+      "Logbook configuration applies a fallback for non-finite input, then rounds before bounds.",
+  },
+  {
+    file: "extensions/imessage/src/monitor/catchup.ts",
+    name: "clampInt",
+    kind: "function",
+    reason:
+      "Catchup configuration resolves optional input with a fallback through resolveIntegerOption.",
+  },
+  {
+    file: "scripts/lib/vitest-local-scheduling.mts",
+    name: "clamp",
+    kind: "variable",
+    reason:
+      "Native test launcher and compiler load this module before TSX or workspace provisioning.",
+  },
+  {
+    file: "ui/src/pages/debug/debug-overlay-layout.runtime.ts",
+    name: "clamp",
+    kind: "function",
+    reason: "Overlay layout bounds a Position against the current viewport and element dimensions.",
   },
 ] as const satisfies readonly {
   file: string;

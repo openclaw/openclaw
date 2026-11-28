@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { asPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { asPositiveInteger, clampNumber } from "@openclaw/normalization-core/number-coercion";
 import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { codeModeGcAttribution } from "../logging/code-mode-diagnostic.js";
-import { clampNumber } from "../utils.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { CodeModeHeadlessAbortError, CodeModeHeadlessTimeoutError } from "./code-mode-errors.js";
 import type {

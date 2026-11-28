@@ -2,6 +2,7 @@
  * Resolves memory-search source, sync, and ranking configuration.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { clampNumber } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   normalizeConfiguredMemoryExtraPaths,
@@ -15,7 +16,6 @@ import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-owner.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 type MemorySearchSource = "memory" | "sessions";
