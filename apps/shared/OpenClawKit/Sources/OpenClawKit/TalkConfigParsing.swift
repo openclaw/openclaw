@@ -115,6 +115,33 @@ public enum TalkConfigParsing {
         let supported = Set(supportedLocaleIDs.compactMap(self.normalizedSpeechLocaleID))
         let candidates = (preferredLocaleIDs + [fallbackLocaleID])
             .compactMap(self.normalizedSpeechLocaleID)
-        return candidates.first { supported.isEmpty || supported.contains($0) }
+        if supported.isEmpty {
+            return candidates.first
+        }
+        for candidate in candidates {
+            if supported.contains(candidate) {
+                return candidate
+            }
+            if let aliased = self.chineseRecognitionLocaleID(candidate, supported: supported) {
+                return aliased
+            }
+        }
+        return nil
+    }
+
+    /// Device locales use script tags such as zh-Hans-US. Recognizers publish zh-CN, zh-TW, and zh-HK.
+    static func chineseRecognitionLocaleID(_ localeID: String, supported: Set<String>) -> String? {
+        let language = Locale.Language(identifier: localeID)
+        guard language.languageCode?.identifier == "zh" else { return nil }
+        let region = language.region?.identifier
+        let ranked: [String] = switch language.script?.identifier {
+        case "Hans":
+            ["zh-CN"]
+        case "Hant":
+            region == "HK" || region == "MO" ? ["zh-HK", "zh-TW"] : ["zh-TW", "zh-HK"]
+        default:
+            []
+        }
+        return ranked.first { supported.contains($0) }
     }
 }

@@ -142,6 +142,30 @@ struct TalkConfigParsingTests {
         #expect(fallback == "en-US")
     }
 
+    @Test func `simplified Chinese script locale selects zh-CN before English`() {
+        let simplified = TalkConfigParsing.resolvedSpeechRecognitionLocaleID(
+            preferredLocaleIDs: ["zh-Hans-US"],
+            supportedLocaleIDs: ["zh-CN", "zh-TW", "en-US"])
+        let hongKong = TalkConfigParsing.resolvedSpeechRecognitionLocaleID(
+            preferredLocaleIDs: ["zh-Hant-HK"],
+            supportedLocaleIDs: ["zh-CN", "zh-HK", "zh-TW", "en-US"])
+        let traditional = TalkConfigParsing.resolvedSpeechRecognitionLocaleID(
+            preferredLocaleIDs: ["zh-Hant-US"],
+            supportedLocaleIDs: ["zh-CN", "zh-TW", "en-US"])
+        let exact = TalkConfigParsing.resolvedSpeechRecognitionLocaleID(
+            preferredLocaleIDs: ["zh-TW"],
+            supportedLocaleIDs: ["zh-CN", "zh-TW", "en-US"])
+        let english = TalkConfigParsing.resolvedSpeechRecognitionLocaleID(
+            preferredLocaleIDs: ["zh-Hans-US"],
+            supportedLocaleIDs: ["en-US"])
+
+        #expect(simplified == "zh-CN")
+        #expect(hongKong == "zh-HK")
+        #expect(traditional == "zh-TW")
+        #expect(exact == "zh-TW")
+        #expect(english == "en-US")
+    }
+
     @Test func `snapshot keeps speaker voice precedence separate from voice`() {
         let talk: [String: AnyCodable] = [
             "realtime": AnyCodable([

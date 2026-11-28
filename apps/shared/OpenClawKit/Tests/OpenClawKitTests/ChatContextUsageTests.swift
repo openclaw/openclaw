@@ -302,7 +302,9 @@ struct ChatContextUsageTests {
         #expect(context.percent == 75)
         // Output is not part of the prompt, so it never draws on the budget bar.
         #expect(context.segments.map(\.component) == [.cacheRead, .cacheWrite, .input])
-        #expect(abs(context.segments.map(\.fraction).reduce(0, +) - 2_243_959.0 / 3_000_000) < 0.000_001)
+        let fractionTotal = context.segments.map(\.fraction).reduce(0, +)
+        let expectedFraction = 2_243_959.0 / 3_000_000
+        #expect(abs(fractionTotal - expectedFraction) < 0.000_001)
         #expect(presentation.pressure == .warning)
     }
 
