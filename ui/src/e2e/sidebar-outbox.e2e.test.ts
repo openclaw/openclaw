@@ -80,14 +80,15 @@ suite.define(() => {
   it("reviews a rejected submission through System without sending or deleting its draft", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       const sessionKey = "agent:main:release-notes";
+      const session = outboxSession(sessionKey, "Release notes");
       const { gateway, composer } = await openOutbox(page, {
         sessionKey,
-        sessions: [outboxSession(sessionKey, "Release notes")],
+        sessions: [session],
         methodResponses: {
           "chat.history": {
             messages: [],
             sessionId: `session:${sessionKey}`,
-            sessionInfo: { hasActiveRun: false, status: "done" },
+            sessionInfo: { ...session, hasActiveRun: false, status: "done" },
             thinkingLevel: null,
           },
         },
