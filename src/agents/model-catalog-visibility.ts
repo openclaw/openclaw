@@ -52,7 +52,11 @@ export function resolveLogicalModelCatalogEntryState(params: {
       ? { kind: "selected", route: selectedRoute }
       : { kind: "unresolved" };
   return {
-    authBacked: params.authBacked ?? params.evaluation.availability === true,
+    // A temporary cooldown changes readiness, not the credential-backed catalog membership.
+    authBacked:
+      params.authBacked ??
+      (params.evaluation.availability === true ||
+        params.evaluation.unavailableReason === "cooldown"),
     compatible: params.evaluation.routeResolution?.kind !== "incompatible",
     routeManaged,
     routeProjection,

@@ -683,7 +683,7 @@ export async function prepareModelsListResult({
               evaluation.evidence === "synthetic";
             return resolveLogicalModelCatalogEntryState({
               evaluation,
-              authBacked: evaluation.availability === true || syntheticLocal,
+              authBacked: syntheticLocal ? true : undefined,
             });
           };
         },
