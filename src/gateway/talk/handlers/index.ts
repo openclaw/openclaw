@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   errorShape,
@@ -40,6 +41,7 @@ import {
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "../../../tts/provider-registry.js";
 import { withSpeakerSelectionFallbackCompat } from "../../../tts/speaker.js";
 import { CODE_HEAVY_SPOKEN_FALLBACK, isCodeHeavySpeechText } from "../../../tts/speech-text.js";
+import { resolveTtsConfig } from "../../../tts/tts-settings.js";
 import { synthesizeTalkSpeech } from "../../../tts/tts-synthesis.js";
 import type { TtsDirectiveOverrides } from "../../../tts/tts.js";
 import { ADMIN_SCOPE, READ_SCOPE, TALK_SECRETS_SCOPE } from "../../operator-scopes.js";
@@ -438,7 +440,13 @@ export const talkHandlers: GatewayRequestHandlers = {
           overrides.providerOverrides = { [setup.provider]: providerOverrides };
         }
       }
-      const speechText = isCodeHeavySpeechText(text) ? CODE_HEAVY_SPOKEN_FALLBACK : text;
+      const { maxTextLength } = resolveTtsConfig(setup.cfg);
+      // Synthesis rejects text over the cap; like auto-TTS, speak the start of a long reply instead.
+      const speechText = isCodeHeavySpeechText(text)
+        ? CODE_HEAVY_SPOKEN_FALLBACK
+        : text.length > maxTextLength
+          ? `${truncateUtf16Safe(text, maxTextLength - 3)}...`
+          : text;
       const result = await synthesizeTalkSpeech({
         text: speechText,
         cfg: setup.cfg,

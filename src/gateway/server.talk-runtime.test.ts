@@ -69,6 +69,15 @@ describe("gateway talk runtime", () => {
       );
     }));
 
+  it("speaks the start of a reply longer than tts.maxTextLength", () =>
+    withAcmeSpeechProvider(async () => {
+      const res = await invokeTalkSpeakDirect({ text: "a".repeat(4097) });
+      expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
+      expect(synthesizeSpeechMock).toHaveBeenCalledWith(
+        expect.objectContaining({ text: `${"a".repeat(4093)}...` }),
+      );
+    }));
+
   it("resolves the prototype-named talk voice alias and forwards provider overrides", async () => {
     await setTalkConfig({
       provider: "elevenlabs",
