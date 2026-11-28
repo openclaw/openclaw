@@ -197,16 +197,18 @@ suite.define(() => {
             await nameInput.press("Enter");
             await text(".profile-hero__name").toBe("Remote Person");
             // The sibling's profile event can arrive before this editor's save completes.
-            await editor
-              .locator('#settings-profile-identity input[type="file"]:enabled')
-              .setInputFiles({
-                name: "avatar.png",
-                mimeType: "image/png",
-                buffer: Buffer.from(
-                  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a6kAAAAASUVORK5CYII=",
-                  "base64",
-                ),
-              });
+            const [chooser] = await Promise.all([
+              editor.waitForEvent("filechooser"),
+              editor.getByRole("button", { name: "Choose image" }).click(),
+            ]);
+            await chooser.setFiles({
+              name: "avatar.png",
+              mimeType: "image/png",
+              buffer: Buffer.from(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a6kAAAAASUVORK5CYII=",
+                "base64",
+              ),
+            });
             const image = editor.locator(".identity-avatar-control img");
             await expect
               .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))

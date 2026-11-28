@@ -301,6 +301,41 @@ suite.define(() => {
       await expect(chooser).toBeEnabled();
     });
   });
+  it("explains why a Tailscale profile cannot accept an avatar during an identity refresh", async () => {
+    await suite.withPage(undefined, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        authMethod: "tailscale",
+        operatorScopes: ["operator.read"],
+        roleAllowsAdmin: false,
+        basePath,
+        presenceUsers: testPresenceUsers,
+        methodResponses: { "users.self": { profile: testProfile } },
+      });
+      await page.goto(new URL(profilePath, suite.server.baseUrl).href);
+      const chooser = page.locator(".identity-avatar-control > button");
+      await expect(chooser).toBeEnabled();
+      const [fileChooser] = await Promise.all([page.waitForEvent("filechooser"), chooser.click()]);
+      const reads = await gateway.deferNext("users.self");
+      await gateway.emitGatewayEvent("sessions.changed", { reason: "profile-identity" });
+      await gateway.waitForRequest("users.self", { after: reads });
+      await expect(chooser).toBeDisabled();
+      await expect(chooser).toHaveText("Loading…");
+      await fileChooser.setFiles({ name: "avatar.png", mimeType: "image/png", buffer: avatarPng });
+
+      await expect(page.locator("#settings-profile-identity [role=alert]")).toHaveText(
+        "Your profile is busy. Wait for it to finish, then choose the image again.",
+      );
+      expect(await gateway.getRequests("users.setAvatar")).toHaveLength(0);
+      await screenshot(page, "avatar-refresh.png");
+      await gateway.resolveDeferred("users.self");
+
+      await expect(chooser).toBeEnabled();
+      const [retry] = await Promise.all([page.waitForEvent("filechooser"), chooser.click()]);
+      await retry.setFiles({ name: "avatar.png", mimeType: "image/png", buffer: avatarPng });
+      const request = await gateway.waitForRequest("users.setAvatar");
+      expect(request.params).toMatchObject({ profileId: testProfile.id, mime: "image/png" });
+    });
+  });
   it("preserves a linked unavailable Discord account before an available unlinked account", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await openProfilePage(page, {
