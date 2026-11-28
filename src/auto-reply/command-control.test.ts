@@ -147,15 +147,10 @@ describe("resolveCommandAuthorization", () => {
     expect(resolveLegacy).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "uses explicit owner allowlist when allowFrom is wildcard",
-      channelConfig: { allowFrom: ["*"] },
-    },
-  ])("$name", ({ channelConfig }) => {
+  it("uses explicit owner allowlist when allowFrom is wildcard", () => {
     const cfg = {
       commands: { ownerAllowFrom: ["whatsapp:+15551234567"] },
-      channels: { whatsapp: channelConfig },
+      channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig;
     const resolveSender = (senderId: string) =>
       authorize(
