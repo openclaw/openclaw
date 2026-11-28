@@ -54,6 +54,7 @@ function fixture() {
     name: "openclaw",
     type: "module",
     version: "0.0.0",
+    openclaw: { schemaVersions: { state: 40, agent: 42 } },
   });
   writeJson(path.join(root, "dist/build-info.json"), {
     version: "0.0.0",

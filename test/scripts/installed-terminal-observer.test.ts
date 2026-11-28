@@ -1214,7 +1214,11 @@ function publishedHelperFixture() {
   fs.mkdirSync(path.join(root, "node_modules"));
   fs.writeFileSync(path.join(root, heartbeat), "// unused fixture heartbeat\n");
   fs.writeFileSync(path.join(root, "openclaw.mjs"), "await import('./dist/parent.mjs');\n");
-  writeJson(path.join(root, "package.json"), { name: "openclaw", version: "2026.10.9" });
+  writeJson(path.join(root, "package.json"), {
+    name: "openclaw",
+    version: "2026.10.9",
+    openclaw: { schemaVersions: { state: 20, agent: 25 } },
+  });
   writeJson(path.join(root, "dist/build-info.json"), {
     version: "2026.10.9",
     commit: helpers.sourceCommit,
@@ -1714,7 +1718,13 @@ it.each([false, true])(
         "const db = new (require('node:sqlite').DatabaseSync)(':memory:'); db.close();\n",
       );
     }
-    writeJson(path.join(packageRoot, "package.json"), { name: "openclaw", version: "1.0.0" });
+    writeJson(path.join(packageRoot, "package.json"), {
+      name: "openclaw",
+      version: "1.0.0",
+      openclaw: {
+        schemaVersions: historical ? { state: 20, agent: 25 } : { state: 40, agent: 42 },
+      },
+    });
     writeJson(path.join(packageRoot, "dist/build-info.json"), {
       version: "1.0.0",
       commit: revision,
@@ -2062,7 +2072,11 @@ it("admits package-bound heartbeat lifetimes only outside predecessor observatio
     workerData.databaseAdmissionPort.close(); workerData.lossPort.close();
     const db = new (require('node:sqlite').DatabaseSync)(':memory:'); db.close();`;
   fs.writeFileSync(worker, source);
-  writeJson(path.join(packageRoot, "package.json"), { name: "openclaw", version: "1.0.0" });
+  writeJson(path.join(packageRoot, "package.json"), {
+    name: "openclaw",
+    version: "1.0.0",
+    openclaw: { schemaVersions: { state: 40, agent: 42 } },
+  });
   writeJson(path.join(packageRoot, "dist/build-info.json"), {
     version: "1.0.0",
     commit: "a".repeat(40),

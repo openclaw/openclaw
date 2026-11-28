@@ -27,7 +27,29 @@ export function readInstalledTerminalMetadata(
   version: string;
   build: Record<string, unknown>;
   files: Record<string, string | null>;
+  schemaVersions: { state: number; agent: number };
 };
+export function collectInstalledTerminalApplication(
+  root: string,
+  identity: PackageIdentity,
+  contracts: Record<
+    string,
+    {
+      entry: string;
+      entrySha256: string;
+      sha256: string;
+      additionalRoots?: Record<string, string>;
+      dynamic: Record<
+        string,
+        {
+          sha256: string;
+          imports: Array<[number, number, string, string]>;
+        }
+      >;
+    }
+  >,
+  schemaDigests: Record<string, string>,
+): ReturnType<typeof prepareInstalledTerminalApplication>;
 export function prepareInstalledTerminalApplication(
   root: string,
   identity: PackageIdentity,
