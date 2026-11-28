@@ -31,7 +31,27 @@ public enum GatewayEndpointID {
     }
 
     private static func normalizeServiceNameForID(_ rawName: String) -> String {
-        let decoded = BonjourEscapes.decode(rawName)
+        // Persisted IDs use the original scalar-per-escape mapping, including values above 255.
+        // Keep it separate from UTF-8 display decoding; changing these bytes requires migrating
+        // every saved profile, credential, and TLS pin keyed by the ID.
+        var decoded = ""
+        var i = rawName.startIndex
+        while i < rawName.endIndex {
+            if rawName[i] == "\\" {
+                let digits = rawName[rawName.index(after: i)...].prefix(3)
+                if digits.count == 3, digits.allSatisfy(\.isNumber),
+                   let value = Int(digits),
+                   let scalar = UnicodeScalar(value)
+                {
+                    decoded.append(Character(scalar))
+                    i = rawName.index(i, offsetBy: 4)
+                    continue
+                }
+            }
+
+            decoded.append(rawName[i])
+            i = rawName.index(after: i)
+        }
         return decoded.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 }
