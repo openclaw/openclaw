@@ -861,6 +861,9 @@ describe("active-memory plugin", () => {
       archiveRemovedEntryTranscripts: false,
       orphanTranscriptMinAgeMs: 0,
       sessionKeySegmentPrefix: parseAgentSessionKey(sessionKey)?.rest,
+      // Foreground helper teardown scopes the orphan sweep to its own segment
+      // so recall completion does not rescan unrelated orphans (#202134).
+      scopeOrphanSweepToSessionKeySegmentPrefix: true,
       storePath: path.join(stateDir, "sessions.json"),
       transcriptContentMarker: `"runId":"${sessionId}"`,
     });

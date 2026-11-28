@@ -161,6 +161,13 @@ type SessionLifecycleArtifactsCleanupParams = {
   pluginOwnerId?: string;
   sessionStore?: string;
   sessionKeySegmentPrefix: string;
+  /**
+   * Foreground helper teardown only: restrict the orphan transcript sweep to
+   * the cleanup's own session-key segment. When unset, the shared
+   * marker-based reclamation contract applies and orphans outside the entry
+   * prefix are still reclaimed.
+   */
+  scopeOrphanSweepToSessionKeySegmentPrefix?: boolean;
   storePath?: string;
   transcriptContentMarker: string;
   nowMs?: number;
@@ -658,6 +665,12 @@ export async function cleanupSessionLifecycleArtifacts(
     archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts,
     ...(params.pluginOwnerId !== undefined ? { pluginOwnerId: params.pluginOwnerId } : {}),
     sessionKeySegmentPrefix: params.sessionKeySegmentPrefix,
+    ...(params.scopeOrphanSweepToSessionKeySegmentPrefix === undefined
+      ? {}
+      : {
+          scopeOrphanSweepToSessionKeySegmentPrefix:
+            params.scopeOrphanSweepToSessionKeySegmentPrefix,
+        }),
     transcriptContentMarker: params.transcriptContentMarker,
     orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
     nowMs: params.nowMs,

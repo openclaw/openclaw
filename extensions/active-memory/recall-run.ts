@@ -86,6 +86,12 @@ async function cleanupActiveMemoryRecallSession(params: {
         archiveRemovedEntryTranscripts: false,
         orphanTranscriptMinAgeMs: 0,
         sessionKeySegmentPrefix,
+        // Foreground helper teardown runs while recall completion holds the
+        // session writer: scope the orphan sweep to this recall's own segment
+        // so unrelated orphan transcripts are not rescanned on every recall
+        // (#202134). Cross-prefix marker reclamation still runs on the
+        // shared maintenance path.
+        scopeOrphanSweepToSessionKeySegmentPrefix: true,
         storePath: params.storePath,
         transcriptContentMarker: `"runId":"${params.sessionId}"`,
       });

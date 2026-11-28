@@ -390,6 +390,13 @@ export type LifecycleArtifactCleanupInput = {
   archiveDirectory: string;
   pluginOwnerId?: string;
   sessionKeySegmentPrefix: string;
+  /**
+   * Foreground helper teardown only (for example Active Memory recall cleanup):
+   * restrict the orphan transcript sweep to the cleanup's own session-key
+   * segment. When unset, the shared marker-based reclamation contract applies
+   * and orphans outside the entry prefix are still reclaimed (#165254, #182245).
+   */
+  scopeOrphanSweepToSessionKeySegmentPrefix?: boolean;
   transcriptContentMarker: string;
   orphanTranscriptMinAgeMs: number;
   nowMs: number;
