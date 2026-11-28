@@ -167,8 +167,8 @@ export async function updateSystemServicePackage(
     packageRoot: root,
     runCommand: (argv, options) =>
       runCommandWithTimeout(argv, {
-        ...(typeof options === "number" ? {} : options),
-        timeoutMs: Math.min(remaining(), typeof options === "number" ? options : options.timeoutMs),
+        ...options,
+        timeoutMs: Math.min(remaining(), options.timeoutMs),
       }),
     runStep: (step) =>
       runUpdateStep({
