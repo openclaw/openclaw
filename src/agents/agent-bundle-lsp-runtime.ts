@@ -328,6 +328,31 @@ function handleIncomingData(session: LspSession, chunk: Buffer | string) {
     }
     const record = msg as Record<string, unknown>;
 
+    // Server requests have their own id space and must not consume our pending responses.
+    if ("method" in record) {
+      if (typeof record.id === "number" || typeof record.id === "string") {
+        try {
+          session.process.stdin?.write(
+            encodeLspMessage({
+              jsonrpc: "2.0",
+              id: record.id,
+              ...(record.method === "window/showMessageRequest"
+                ? { result: null }
+                : { error: { code: -32601, message: "Method not found" } }),
+            }),
+          );
+        } catch (error) {
+          session.forceClose = true;
+          failLspSession(session, toErrorObject(error, "LSP response failed"));
+          void disposeSession(session).catch(() => {});
+          return;
+        }
+      } else if (!("id" in record)) {
+        logDebug(`bundle-lsp:${session.serverName}: notification ${String(record.method)}`);
+      }
+      continue;
+    }
+
     if ("id" in record && typeof record.id === "number") {
       const pending = session.pendingRequests.take(record.id);
       if (pending) {
@@ -337,9 +362,6 @@ function handleIncomingData(session: LspSession, chunk: Buffer | string) {
           pending.resolve(record.result);
         }
       }
-    }
-    if ("method" in record && !("id" in record)) {
-      logDebug(`bundle-lsp:${session.serverName}: notification ${String(record.method)}`);
     }
   }
   if (!parsed.ok) {
