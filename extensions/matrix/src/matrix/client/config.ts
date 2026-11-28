@@ -31,7 +31,10 @@ import {
 } from "../account-config.js";
 import { resolveMatrixConfigFieldPath } from "../config-paths.js";
 import type { MatrixStoredCredentials } from "../credentials-state.js";
-import { resolveMatrixLocalTimeoutMs } from "../sdk/client-support.js";
+import {
+  isMatrixAccessTokenInvalidatedError,
+  resolveMatrixLocalTimeoutMs,
+} from "../sdk/client-support.js";
 import { fetchMatrixWhoamiIdentity, retryMatrixAuthRequest } from "./auth-request.js";
 import { resolveGlobalMatrixEnvConfig, resolveScopedMatrixEnvConfig } from "./env-auth.js";
 import { repairCurrentTokenStorageMetaDeviceId } from "./storage.js";
@@ -65,6 +68,21 @@ function credentialsMatchBackfillAuthLineage(params: {
 }
 
 type MatrixLoginResponse = { access_token?: string; user_id?: string; device_id?: string };
+
+async function isCachedMatrixTokenInvalidated(params: {
+  homeserver: string;
+  accessToken: string;
+  ssrfPolicy?: MatrixResolvedConfig["ssrfPolicy"];
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+}): Promise<boolean> {
+  try {
+    await fetchMatrixWhoamiIdentity(params);
+  } catch (err) {
+    // Only a definitive token rejection drops the cache; transient failures keep it.
+    return isMatrixAccessTokenInvalidatedError(err);
+  }
+  return false;
+}
 
 const MATRIX_AUTH_SECRET_FIELDS = ["accessToken", "password"] as const;
 type MatrixAuthSecretField = (typeof MATRIX_AUTH_SECRET_FIELDS)[number];
@@ -474,7 +492,7 @@ export async function resolveMatrixAuth(params?: {
   }
 
   if (cachedCredentials) {
-    return buildResolvedMatrixAuth(resolved, {
+    const cachedAuth = buildResolvedMatrixAuth(resolved, {
       accountId,
       homeserver: cachedCredentials.homeserver,
       userId: cachedCredentials.userId,
@@ -482,6 +500,24 @@ export async function resolveMatrixAuth(params?: {
       password: tokenAuthPassword,
       deviceId: cachedCredentials.deviceId || resolved.deviceId,
     });
+    // Without a password there is nothing to fall back to, so keep the cached token as-is.
+    const canPasswordLogin =
+      Boolean(resolved.password) || hasConfiguredMatrixSecret(authInputs.password?.value, cfg);
+    if (
+      !canPasswordLogin ||
+      !(await isCachedMatrixTokenInvalidated({
+        homeserver: cachedAuth.homeserver,
+        accessToken: cachedAuth.accessToken,
+        ssrfPolicy: cachedAuth.ssrfPolicy,
+        dispatcherPolicy: cachedAuth.dispatcherPolicy,
+      }))
+    ) {
+      return cachedAuth;
+    }
+    // The homeserver revoked the cached token (device deleted or logged out). Drop it so the
+    // password login below creates a fresh device instead of retrying the dead token forever.
+    const { clearMatrixCredentials } = await loadMatrixCredentialsWriteRuntime();
+    await clearMatrixCredentials(env, accountId);
   }
 
   if (!resolved.userId) {
