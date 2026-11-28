@@ -536,6 +536,7 @@ export function installModelPromptProjection(params: {
         if (projection) {
           const { target, targetProjection, frozen } = projection;
           let { text } = projection;
+          let keepTranscriptText = false;
           const captureProjection = params.recorder?.captureModelPromptProjection;
           if (frozen === undefined && captureProjection) {
             const capture = () => captureProjection(text, assertCurrent);
@@ -546,12 +547,13 @@ export function installModelPromptProjection(params: {
             const capturedText = readModelPromptProjection(captured);
             // A turn already dispatched without a projection keeps its transcript text.
             if (capturedText === undefined) {
-              continue;
+              keepTranscriptText = true;
+            } else {
+              text = capturedText;
             }
-            text = capturedText;
           }
           // Replay snapshots are immutable; only replace the runtime view.
-          if (targetProjection !== text) {
+          if (!keepTranscriptText && targetProjection !== text) {
             const projectedTarget = {
               ...target,
               __openclaw: {
