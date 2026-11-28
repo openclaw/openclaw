@@ -56,7 +56,6 @@ const enSystems = {
     online: "Online",
     offline: "Offline",
     unknown: "Unknown",
-    unavailable: "Unavailable",
     desktop: "Desktop",
     host: "This computer",
     worker: "Cloud device",

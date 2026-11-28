@@ -19,7 +19,7 @@ type EnglishCatalog = TranslationMap & {
   capacityMeter: TranslationMap;
   skillGroups: TranslationMap;
   skillStatus: TranslationMap;
-  labsPage: TranslationMap & { swarm: TranslationMap };
+  labsPage: TranslationMap;
   agentChip: TranslationMap;
   agentsHome: TranslationMap;
   logbook: TranslationMap;
@@ -1177,8 +1177,6 @@ const startupEnglish = {
     saveFailed: "The feature setting could not be saved.",
     decisionAssistance: {},
     usageRankedToolIndex: {},
-
-    swarm: {},
 
     hostDesktop: {},
     openclawId: {},
