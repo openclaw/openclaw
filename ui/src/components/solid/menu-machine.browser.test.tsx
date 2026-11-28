@@ -1,7 +1,7 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal, flush, onCleanup, onSettled } from "solid-js";
 import { afterEach, expect, it } from "vitest";
-import { mountMenu, surface, trigger } from "../../test-helpers/solid-menu.tsx";
+import { item, mountMenu, trigger } from "../../test-helpers/solid-menu.tsx";
 import { createOverlay } from "../overlay-lifecycle.ts";
 import { useMenuMachine, type MenuBinding } from "./menu-machine.ts";
 
@@ -17,7 +17,7 @@ it.each(["ltr", "rtl"] as const)("backs out of a cold submenu before Escape in %
   const assign = trigger("people-assign");
   assign.focus();
   press(dir === "ltr" ? "ArrowRight" : "ArrowLeft");
-  expect(surface("people-assign").contains(document.activeElement)).toBe(true);
+  expect(document.activeElement).toBe(item("Ada Rivera", "people-assign"));
   press(dir === "ltr" ? "ArrowLeft" : "ArrowRight");
   expect(document.activeElement).toBe(assign);
   expect(handle.overlay.open).toBe(true);

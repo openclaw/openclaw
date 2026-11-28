@@ -117,9 +117,8 @@ export function useMenuMachine(
       pending.push({ run: intent, highlightedValue });
     }
   };
-  const load = async () => {
+  const load = async (loadedParent?: MenuRuntime) => {
     // A submenu may already be visible, but its Zag machine must start with its parent.
-    const loadedParent = parentRuntime();
     if (!mounted || runtime || loading || (parent && !loadedParent)) {
       return;
     }
@@ -179,14 +178,15 @@ export function useMenuMachine(
     mounted = true;
     const stopOpen = overlay.subscribe((open) => {
       notify();
-      if (open) {
-        void load();
-      } else {
+      if (!open) {
         pending = [];
+      } else if (!parent) {
+        void load();
       }
     });
-    if (overlay.open || parentRuntime()) {
-      void load();
+    const loadedParent = parentRuntime();
+    if (overlay.open || loadedParent) {
+      void load(loadedParent);
     }
     return () => {
       mounted = false;
@@ -211,7 +211,7 @@ export function useMenuMachine(
       if (loaded) {
         loaded.updateInputs(dir, catalog, selected);
       } else if (loadedParent) {
-        void load();
+        void load(loadedParent);
       }
     },
   );
@@ -330,7 +330,7 @@ export function useMenuMachine(
       if (isStaleChunkImportError(error())) {
         void retryStaleChunkReloadWhenReachable({ canReload: () => mounted && overlay.open });
       } else {
-        void load();
+        void load(parentRuntime());
       }
     },
     item(value, disabled, type, checked = false, label = value) {
