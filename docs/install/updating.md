@@ -1295,24 +1295,29 @@ custody, candidate Doctor verifies the older updater's entire physical database
 inventory and derives committed-content generations from the same observation.
 Migration attribution and final settlement use those committed generations;
 receipts sent back to the older updater retain its physical fingerprint format.
-Each Doctor interval verifies its input again. Changed data, intervening commits,
+Each Doctor interval verifies its input again, from fresh bytes or from a digest
+whose file identity is unchanged (below). Changed data, intervening commits,
 replaced files, and tampered backups still refuse automatic restoration. The
 installed extended-stable updater does not need to contain this repair.
 The private rehearsal also preserves the source's legacy cron partition identity
 before migrating the copied state. An unmatched historical partition still needs
 an explicit Doctor selection.
 
-Within one database-generation observation, update and Doctor workers reuse a
+Within one Doctor database write capture, update and Doctor workers reuse a
 verified digest while the file's device, inode, size, and nanosecond birth,
-modification, and change times remain identical. Each family observation still
-checks the database, WAL, and rollback journal; private-copy verification and
-WAL commit checks remain in place. Changed or unavailable identities require
-hashing again. Reuse ends with that observation and does not cross Doctor
-invocations. Reuse also requires nanosecond bigint stat fields and modification
-and change times more than two seconds older than the start of hashing. Recent
-writes can share a coarse filesystem timestamp even when nanosecond fields are
-available, so their digests are recomputed. Millisecond-only stats never enable
-reuse. The runtime performing the observation must contain this change;
+modification, and change times remain identical. A digest one observation
+verified also serves later observations of the same capture, but only for a
+family with no WAL or rollback journal and only when the worker comes from the
+same runtime. Each family observation still checks the database, WAL, and
+rollback journal; private-copy verification and WAL commit checks remain in
+place. Changed or unavailable identities require hashing again. Families with a
+WAL or journal, and receipt checks, never use a digest from an earlier
+observation. Digests stay in memory, end with the capture, and do not cross
+Doctor invocations. Reuse also requires nanosecond bigint stat fields and
+modification and change times more than two seconds older than the start of
+hashing. Recent writes can share a coarse filesystem timestamp even when
+nanosecond fields are available, so their digests are recomputed.
+Millisecond-only stats never enable reuse. The runtime performing the observation must contain this change;
 a newer candidate cannot change an older installed updater's own reads.
 
 Update snapshots and database backups accept a database whose only integrity

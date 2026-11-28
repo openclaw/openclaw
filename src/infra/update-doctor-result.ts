@@ -227,6 +227,8 @@ export function createUpdateDoctorDatabaseWriteCapture(
   let receipt: UpdateDatabaseWriteReceipt | undefined;
   let rebuiltIndexes: Record<string, string> = {};
   const openedSqlitePaths = new Set<string>();
+  // In memory for this run only: later generation reads skip bytes an earlier read verified.
+  const digests: import("./sqlite-file-generation.js").SqliteFileDigests = new Map();
   const historicalScans = createUpdateDoctorHistoricalScanCapture(options);
   const read = async () => {
     if (!expectedGenerations) {
@@ -238,7 +240,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
         await import("./update-candidate-state.js");
       observation = await readUpdateDatabaseGenerationPairIsolated(
         Object.keys(expectedGenerations),
-        options,
+        { ...options, digests },
       );
     } catch (error) {
       if (hasCommandProcessCleanupError(error)) {
@@ -293,6 +295,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
       return runWithUpdateDoctorMigrationCapture(
         {
           openedSqlitePaths,
+          digests,
           expected: (pathname) => expectedGenerations?.[pathname],
           rebuiltIndex: (pathname) => rebuiltIndexes[pathname],
           assertCurrent: () => options.assertCurrent?.(),

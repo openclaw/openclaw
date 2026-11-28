@@ -1,11 +1,17 @@
+import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+import * as candidateState from "./update-candidate-state.js";
+import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
 import {
   captureUpdateDoctorConfigWrites,
   consumeUpdatePostInstallDoctorResult,
   createDeferredConfiguredPluginRepairDoctorResult,
+  createUpdateDoctorDatabaseWriteCapture,
   createUpdatePostInstallDoctorResultPath,
   normalizeUpdatePostInstallDoctorWarnings,
   recordUpdateDoctorConfigMigration,
@@ -186,5 +192,61 @@ describe("post-install doctor result IPC", () => {
       },
       null,
     );
+  });
+});
+
+describe("Doctor database write capture digest reuse", () => {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  });
+
+  it("reuses a digest its own capture verified through the real worker, never across captures", async () => {
+    const dir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "doctor-digests-"));
+    dirs.push(dir);
+    const file = path.join(dir, "state.sqlite");
+    const database = new DatabaseSync(file);
+    database.exec("CREATE TABLE t(v TEXT); INSERT INTO t VALUES ('x');");
+    database.close();
+    // Digest reuse needs mtime and ctime more than two seconds older than the worker's clock,
+    // so the worker's clock runs three seconds ahead instead of the test waiting.
+    const workerClock = `--import=data:text/javascript,${encodeURIComponent(
+      "const now = Date.now; Date.now = () => now() + 3000;",
+    )}`;
+    const expected = readUpdateDatabaseGenerations([file]);
+    const spy = vi.spyOn(candidateState, "readUpdateDatabaseGenerationPairIsolated");
+    const open = () => {
+      const warnings: string[] = [];
+      const capture = createUpdateDoctorDatabaseWriteCapture(expected, {
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: dir,
+          NODE_OPTIONS: [process.env.NODE_OPTIONS, workerClock].filter(Boolean).join(" "),
+        },
+        signal: new AbortController().signal,
+        warn: (message) => warnings.push(message),
+      })!;
+      return { capture, warnings };
+    };
+    const first = open();
+    await first.capture.admit();
+    const digests = spy.mock.calls.at(-1)![1]!.digests!;
+    const stat = fsSync.statSync(file, { bigint: true });
+    expect(digests.get(file)).toMatchObject({
+      sha256: createHash("sha256").update(fsSync.readFileSync(file)).digest("hex"),
+      size: stat.size,
+      ino: stat.ino,
+    });
+    digests.set(file, { ...digests.get(file)!, sha256: "0".repeat(64) });
+    await first.capture.settle();
+    // The worker took the poisoned digest instead of hashing, so the generation moved.
+    expect(first.capture.receipt?.unchanged).toBe(false);
+    expect(first.warnings).toEqual([]);
+    const second = open();
+    await second.capture.admit();
+    await second.capture.settle();
+    expect(spy.mock.calls.at(-1)![1]!.digests).not.toBe(digests);
+    expect(spy.mock.calls.at(-1)![1]!.digests!.get(file)?.sha256).not.toBe("0".repeat(64));
+    expect(second.capture.receipt?.unchanged).toBe(true);
   });
 });
