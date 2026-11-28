@@ -48,6 +48,8 @@ export async function tryAnswerBoundAcpQuestion(
   }
   // Captured answers must not replay as prompts, even when persistence or adoption fails.
   state.markInboundDedupeReplayUnsafe();
+  // A failed answer must settle its source without waiting on the asking turn, too.
+  state.replyOperationRunState.questionInputHandled = true;
   const stale = {
     reason: "acp_question_answer_refused",
     error: "The question is no longer available for this answer.",
@@ -56,7 +58,6 @@ export async function tryAnswerBoundAcpQuestion(
   if (!(await injection.admit())) {
     return stale;
   }
-  let consumed = false;
   try {
     const recorder = replyOptions?.userTurnTranscriptRecorder;
     const input = bindUserTurnInput(recorder, () => {
@@ -96,12 +97,10 @@ export async function tryAnswerBoundAcpQuestion(
         throw error;
       }
     }
-    consumed = true;
     injection.accepted(true);
-    state.replyOperationRunState.questionInputHandled = true;
     await state.turnAdoption?.adopt();
     return outcome;
   } finally {
-    injection.finish(consumed);
+    injection.finish(true);
   }
 }

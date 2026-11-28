@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
 import {
@@ -18,6 +18,7 @@ import {
 } from "./gateway-question-dispatch.js";
 import {
   cancelPendingAgentQuestionForSession,
+  capturePendingChannelQuestion,
   claimPendingAgentQuestionAnswer,
   claimPendingAgentQuestionAnswerFromCaller,
   claimPreparedPendingAgentQuestionAnswer,
@@ -137,6 +138,64 @@ describe("gateway harness questions", () => {
       cleanup();
     }),
   );
+  it("does not capture an ordinary follow-up while the channel answer is being persisted", async () => {
+    const sessionKey = "agent:main:channel-answer";
+    const scope = "channel-A";
+    const gatewayCall = vi.fn<AgentHarnessQuestionGatewayCall>(async () => ({}));
+    const open = () =>
+      registerPendingAgentQuestion({
+        sessionKey,
+        questionId,
+        questions,
+        channelAnswerScope: scope,
+        gatewayCall,
+        answer: Promise.resolve({ status: "pending" }),
+      });
+    const first = open();
+    const started = createDeferred();
+    const release = createDeferred();
+    let submitted: Promise<boolean> | undefined;
+    try {
+      const pending = capturePendingChannelQuestion(sessionKey, scope);
+      const stale = capturePendingChannelQuestion(sessionKey, scope);
+      if (!pending || !stale) {
+        throw new Error("missing open question");
+      }
+      submitted = Promise.resolve(
+        pending(
+          {
+            text: "first",
+            persist: async () => {
+              started.resolve();
+              await release.promise;
+            },
+          },
+          async () => {},
+        ),
+      );
+      await withTestTimeout(started.promise, 3000, "answer never entered persistence");
+      expect(capturePendingChannelQuestion(sessionKey, scope)).toBeUndefined();
+      release.resolve();
+      await expect(submitted).resolves.toBe(true);
+      first.dispose();
+      const replacement = open();
+      try {
+        expect(capturePendingChannelQuestion(sessionKey, "channel-B")).toBeUndefined();
+        expect(await stale({ text: "stale" }, async () => {})).toBe(false);
+        expect(gatewayCall).toHaveBeenCalledOnce();
+        const fresh = capturePendingChannelQuestion(sessionKey, scope);
+        expect(await fresh?.({ text: "replacement answer" }, async () => {})).toBe(true);
+        expect(gatewayCall).toHaveBeenCalledTimes(2);
+      } finally {
+        replacement.dispose();
+      }
+    } finally {
+      release.resolve();
+      first.dispose();
+      await withTestTimeout(Promise.allSettled([submitted]), 3000, "answer attempt did not drain");
+    }
+  });
+
   it.each(["failed", "aborted"] as const)(
     "records a secret prompt delivery failure only while pending: %s",
     async (outcome) => {

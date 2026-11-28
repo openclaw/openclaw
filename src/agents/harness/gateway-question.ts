@@ -280,7 +280,12 @@ export async function claimPendingAgentQuestionAnswer(params: {
 export function capturePendingChannelQuestion(sessionKey: string, scope: string) {
   const key = sessionKey.trim();
   const captured = pendingAgentQuestions.get(key);
-  if (captured?.channelAnswerScope !== scope) {
+  if (
+    !captured ||
+    captured.channelAnswerScope !== scope ||
+    captured.resolving ||
+    (captured.kind === "gateway" && captured.cancelRequested)
+  ) {
     return undefined;
   }
   return (
