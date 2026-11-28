@@ -122,7 +122,6 @@ export function Skills(props: SkillsProps) {
       : afterStatus;
   };
   const acceptedFiltered = createMemo(() => filterSkills(skills()));
-  const groups = createMemo(() => groupSkills(acceptedFiltered()));
   const detailSkill = createMemo(() =>
     props.state.skillsDetailKey
       ? (skills().find((skill) => skill.skillKey === props.state.skillsDetailKey) ?? null)
@@ -181,7 +180,7 @@ export function Skills(props: SkillsProps) {
                       </Show>
                     }
                   >
-                    <SkillsInventory groups={groups()} view={props} />
+                    <SkillsInventory skills={acceptedFiltered()} view={props} />
                   </Show>
                 </Show>
               </>
@@ -275,13 +274,13 @@ function SkillPageFocus(props: {
   );
 }
 
-function SkillsInventory(props: { groups: SkillGroup[]; view: SkillsProps }) {
-  const skills = createMemo(() => props.groups.flatMap((group) => group.skills));
-  const visible = createProgressiveList(skills, { initial: 1, batch: 500 });
-  const groups = createMemo(() => {
+function SkillsInventory(props: { skills: SkillStatusEntry[]; view: SkillsProps }) {
+  const groups = createMemo(() => groupSkills(props.skills));
+  const visible = createProgressiveList(() => props.skills, { initial: 1, batch: 500 });
+  const visibleGroups = createMemo(() => {
     let remaining = visible.items().length;
     // Reveal one grouped prefix so adding earlier rows never moves a later heading.
-    return props.groups.flatMap((group) => {
+    return groups().flatMap((group) => {
       const count = Math.min(remaining, group.skills.length);
       remaining -= count;
       return count > 0
@@ -295,7 +294,7 @@ function SkillsInventory(props: { groups: SkillGroup[]; view: SkillsProps }) {
     });
   });
   return (
-    <For each={groups()} keyed={(entry) => entry.group.id}>
+    <For each={visibleGroups()} keyed={(entry) => entry.group.id}>
       {(entry) => (
         <SkillGroupView
           group={entry().group}
