@@ -7,7 +7,7 @@ import { GatewayServiceAuthorityError } from "../daemon/service-update-authority
 import { acquireWithWait } from "../infra/acquire-with-wait.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertLegacyGatewayStoppedForMaintenance } from "../infra/gateway-lock-legacy.js";
-import { GatewayLockError, readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
+import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
