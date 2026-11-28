@@ -599,7 +599,7 @@ public enum OpenClawChatTransportSendError: Error, Sendable {
 
 struct OpenClawChatQueueModeUnsupportedError: LocalizedError, Sendable {
     var errorDescription: String? {
-        String(localized: "This connection cannot send with Steer or Queue. Send normally or reconnect to the gateway.")
+        String(localized: "This connection can’t send with Steer or Queue. Send normally or reconnect.")
     }
 }
 
@@ -613,9 +613,9 @@ public enum OpenClawChatProgressCardError: LocalizedError, Sendable {
 
 public enum OpenClawChatTransportUpgradeMessage {
     public static let progressCardAgentScope =
-        String(localized: "Update the gateway to load progress cards for this agent.")
+        String(localized: "Update OpenClaw to see plans for this agent.")
     public static let routingContract = String(
-        localized: "Update the gateway before sending queued messages. This version requires safe delivery routing.")
+        localized: "Update OpenClaw before sending queued messages.")
 }
 
 public enum OpenClawChatRunTerminalState: Sendable, Equatable {
