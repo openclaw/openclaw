@@ -1,3 +1,9 @@
+import {
+  BRANCH_SUMMARY_PREFIX,
+  BRANCH_SUMMARY_SUFFIX,
+  COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_SUMMARY_SUFFIX,
+} from "openclaw/plugin-sdk/agent-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { expect, it } from "vitest";
@@ -196,8 +202,8 @@ it.each(["file", "sqlite"] as const)(
       yieldText,
       "Keep the agreed task scope.",
       "Ran `check`\n```\nEarlier check failed.\n```\n\nCommand exited with code 2",
-      "The following is a summary of a branch that this conversation came back from:\n\n<summary>\nPrior branch decision.</summary>",
-      "The conversation history before this point was compacted into the following summary:\n\n<summary>\nPrior task context.\n</summary>",
+      `${BRANCH_SUMMARY_PREFIX}Prior branch decision.${BRANCH_SUMMARY_SUFFIX}`,
+      `${COMPACTION_SUMMARY_PREFIX}Prior task context.${COMPACTION_SUMMARY_SUFFIX}`,
     ].map((text) => ({
       type: "message",
       role: "user",

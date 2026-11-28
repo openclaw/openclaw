@@ -481,8 +481,8 @@ export function installModelPromptProjection(params: {
       !(
         frozen !== undefined ||
         text !== firstText ||
-        (recorder?.captureModelPromptProjection &&
-          !firstText?.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE))
+        // A capturing harness freezes every dispatched turn, inter-session text included.
+        recorder?.captureModelPromptProjection
       )
     ) {
       return undefined;
@@ -542,7 +542,7 @@ export function installModelPromptProjection(params: {
               : capture());
             assertCurrent();
             const capturedText = readModelPromptProjection(captured);
-            // A turn already dispatched without a projection keeps its transcript text.
+            // Only an `external` harness's earlier dispatch leaves the turn at its transcript text.
             if (capturedText === undefined) {
               continue;
             }

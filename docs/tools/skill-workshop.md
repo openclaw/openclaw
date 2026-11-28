@@ -341,7 +341,9 @@ and why) lives in the state database and keeps the newest 500 entries per agent.
   The Workshop's **History** view lists the latest change per skill. Select a
   change to open the skill's own **History** tab, where you can compare versions,
   restore an earlier version, or undo a change. **Archive** and **Restore**
-  switch a skill between the Active and Archived lists. The **Drafts** list
+  move the skill to the other list immediately. The row says **Archiving…** or
+  **Restoring…** until the Gateway confirms. If the request is refused, the skill
+  returns to its original list and the Workshop shows the error. The **Drafts** list
   appears in `propose` mode or while drafts wait; see [Drafts](#drafts). The page
   header holds the learning mode switch and
   **Learn from history**. If the learning configuration cannot be loaded, the

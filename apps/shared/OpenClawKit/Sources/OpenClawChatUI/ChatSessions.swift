@@ -181,6 +181,10 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
     public let thinkingDefault: String?
     public let input: [String]?
     public let agentRuntime: OpenClawChatAgentRuntime?
+    /// The name an operator configured for the provider, when there is one.
+    public let providerName: String?
+    /// Service tiers the selected account advertises; nil means unknown.
+    public let serviceTiers: [String]?
 
     public init(
         modelID: String,
@@ -197,7 +201,9 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
         thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil,
         thinkingDefault: String? = nil,
         input: [String]? = nil,
-        agentRuntime: OpenClawChatAgentRuntime? = nil)
+        agentRuntime: OpenClawChatAgentRuntime? = nil,
+        providerName: String? = nil,
+        serviceTiers: [String]? = nil)
     {
         self.modelID = modelID
         self.name = name
@@ -214,6 +220,8 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
         self.thinkingDefault = thinkingDefault
         self.input = input
         self.agentRuntime = agentRuntime
+        self.providerName = providerName
+        self.serviceTiers = serviceTiers
     }
 
     /// Provider-qualified model ref used for picker identity and selection tags.
@@ -273,8 +281,13 @@ public enum OpenClawChatModelUnavailableReason: Sendable, Equatable, Hashable {
     public var pickerDescription: String {
         switch self {
         case .missingAuth: String(localized: "Sign-in needed")
+        #if os(iOS)
+        case .authFailed: String(localized: "Sign-in failed")
+        case .cooldown: String(localized: "Temporarily unavailable")
+        #else
         case .authFailed: String(localized: "Authentication failed")
         case .cooldown: String(localized: "Cooling down")
+        #endif
         case .unknown: String(localized: "Unavailable")
         }
     }
@@ -663,6 +676,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var endedAt: Double?
     public var runtimeMs: Double?
     public var agentRuntime: OpenClawChatAgentRuntime?
+    /// The chat's Goal; an explicit null in a change clears it.
+    public var goal: OpenClawChatSessionGoal?
 
     public var systemSent: Bool?
     public var abortedLastRun: Bool?

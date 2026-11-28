@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import Testing
 import UIKit
@@ -85,7 +86,7 @@ import UIKit
                 #expect(model.talkMode.statusText == "Existing conversation")
                 #expect(model.chatSessionKey == "agent:main:voice-session")
                 #expect(model.consumeOpenChatRequest(model.openChatRequestID))
-                #expect(model.liveVoiceStartError == nil)
+                #expect(model.toasts.current == nil)
             }
         }
     }
@@ -103,7 +104,7 @@ import UIKit
 
             #expect(!model.pendingLiveVoiceStart)
             #expect(!model.talkMode.isEnabled)
-            #expect(model.liveVoiceStartError?.contains("Connect to your Gateway") == true)
+            #expect(model.toasts.current?.toast.text == "Connect to start Live Voice.")
             model.consumeLiveVoiceStartRequest(
                 isSceneActive: true, isOnboardingPresented: false, hasGatewayConfiguration: true)
             #expect(!model.talkMode.isEnabled)
@@ -122,7 +123,9 @@ import UIKit
 
             #expect(!model.pendingLiveVoiceStart)
             #expect(!model.talkMode.isEnabled)
-            #expect(model.liveVoiceStartError == "Demo mode only")
+            #expect(model.talkMode.statusText == "Demo mode only")
+            #expect(model.toasts.current?.toast.text == "Couldn’t start Live Voice.")
+            #expect(model.toasts.current?.toast.action?.title == "Try again")
             #expect(model.consumeOpenChatRequest(model.openChatRequestID))
         }
     }

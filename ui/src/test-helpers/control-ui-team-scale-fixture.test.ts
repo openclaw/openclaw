@@ -79,7 +79,7 @@ describe("Team-scale Gateway fixture", () => {
       }
       const windowed = await request("sessions.messages.subscribe", {
         key,
-        initialHistory: { limit: 80, maxBytes: 256 * 1024, knownState: {} },
+        initialHistory: { limit: 24, maxBytes: 256 * 1024, knownState: {} },
       });
       const tail = asOptionalRecord(asOptionalRecord(windowed.payload.initialHistory)?.payload);
       expect(tail).toMatchObject({
@@ -95,12 +95,12 @@ describe("Team-scale Gateway fixture", () => {
           pendingInputs: "fixture-pending-inputs-v1",
         },
       });
-      expect(tail?.messages).toHaveLength(80);
+      expect(tail?.messages).toHaveLength(24);
       expect(tail).toHaveProperty("messages.0.__openclaw", {
-        id: `team-message-${messageCount - 79}`,
-        seq: messageCount - 79,
+        id: `team-message-${messageCount - 23}`,
+        seq: messageCount - 23,
       });
-      expect(tail).toHaveProperty("messages.79.__openclaw", {
+      expect(tail).toHaveProperty("messages.23.__openclaw", {
         id: `team-message-${messageCount}`,
         seq: messageCount,
       });
@@ -111,10 +111,10 @@ describe("Team-scale Gateway fixture", () => {
         maxBytes: 3 * 1024 * 1024,
         cursor: tail?.olderCursor,
       });
-      expect(older.payload.messages).toHaveLength(Math.min(messageCount - 80, 1000));
+      expect(older.payload.messages).toHaveLength(Math.min(messageCount - 24, 1000));
       expect(older.payload).toHaveProperty(
         "messages.0.__openclaw.id",
-        `team-message-${Math.max(1, messageCount - 1079)}`,
+        `team-message-${Math.max(1, messageCount - 1023)}`,
       );
       let exhausted = older;
       if (mode === "large") {
@@ -125,7 +125,7 @@ describe("Team-scale Gateway fixture", () => {
           maxBytes: 3 * 1024 * 1024,
           cursor: older.payload.olderCursor,
         });
-        expect(exhausted.payload.messages).toHaveLength(20);
+        expect(exhausted.payload.messages).toHaveLength(76);
         expect(exhausted.payload).toHaveProperty("messages.0.__openclaw.id", "team-message-1");
       }
       expect(exhausted.payload).toMatchObject({ hasMore: false });

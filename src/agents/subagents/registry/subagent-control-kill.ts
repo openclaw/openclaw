@@ -19,7 +19,10 @@ import {
   type KillTree,
   type KillSelection,
 } from "./subagent-control-kill-scope.js";
-import { settleSubagentKillSources } from "./subagent-control-kill-settlement.js";
+import {
+  isKilledSubagentTarget,
+  settleSubagentKillSources,
+} from "./subagent-control-kill-settlement.js";
 import {
   getLatestOwnedSubagentRun,
   prepareSessionSubagentKillSelection,
@@ -610,7 +613,6 @@ export async function killSubagentRunAdmin(
   }
   const expectedTaskRunId = params.expectedTaskRunId?.trim();
   if (
-    (expectedRunId && entry.runId !== expectedRunId) ||
     (expectedTaskRunId && (entry.taskRunId ?? entry.runId) !== expectedTaskRunId) ||
     (params.expectedGeneration !== undefined && entry.generation !== params.expectedGeneration) ||
     (params.expectedOwnerKey?.trim() &&
@@ -671,16 +673,15 @@ export async function killSubagentRunAdmin(
       // Descendant cleanup can yield long enough for the target run to finish.
       // Return the freshest registry state so task cancellation cannot make a stale kill sticky.
       const targetState = resolveSubagentKillTargetState(tree.entry) ?? stopResult.targetState;
-      const killedTarget =
-        targetState?.state === "terminal" && targetState.task.status === "cancelled";
       const stopResultAlreadyClearedAbort =
-        stopResult.targetState !== undefined &&
-        !(
-          stopResult.targetState.state === "terminal" &&
-          stopResult.targetState.task.status === "cancelled"
-        );
+        stopResult.targetState !== undefined && !isKilledSubagentTarget(stopResult.targetState);
       const resolved = stopped.session;
-      if (targetState && !killedTarget && !stopResultAlreadyClearedAbort && resolved) {
+      if (
+        targetState &&
+        !isKilledSubagentTarget(targetState) &&
+        !stopResultAlreadyClearedAbort &&
+        resolved
+      ) {
         await persistSubagentAbortedLastRun({
           childSessionKey: targetSessionKey,
           session: resolved,
@@ -714,8 +715,7 @@ export async function killSubagentRunAdmin(
       const instance = caller?.operationalRunInstance;
       if (
         errors.length === 0 &&
-        targetState?.state === "terminal" &&
-        targetState.task.status === "cancelled" &&
+        isKilledSubagentTarget(targetState) &&
         caller &&
         instance &&
         instance.runId === tree.entry.requesterTurnRunId &&

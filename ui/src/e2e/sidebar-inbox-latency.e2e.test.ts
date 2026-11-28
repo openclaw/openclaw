@@ -1,6 +1,10 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { inboxMention } from "../components/sidebar-inbox.test-support.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createSidebarCustomizationSuite } from "./sidebar-customization.test-support.ts";
 
@@ -40,6 +44,84 @@ async function expectInboxOnNextFrame(page: Page, populated: boolean) {
 }
 
 suite.define(() => {
+  it.each(["reduce", "no-preference"] as const)(
+    "dismisses a mention before acknowledgement (%s)",
+    async (reducedMotion) => {
+      await suite.withPage(
+        { reducedMotion, viewport: { width: 1280, height: 800 } },
+        async ({ page }) => {
+          const first = inboxMention("first");
+          const second = inboxMention("second");
+          const gateway = await installMockGateway(page, {
+            presenceUsers: [
+              {
+                self: true,
+                id: "viewer",
+                identity: { type: "profile", id: "viewer" },
+                name: "Viewer",
+              },
+            ],
+            featureMethods: [
+              ...defaultControlUiFeatureMethods,
+              "mentions.list",
+              "mentions.dismiss",
+            ],
+            methodResponses: {
+              "mentions.list": {
+                gatewayInstanceId: "e2e-gateway-boot",
+                revision: 1,
+                items: [first, second],
+              },
+            },
+          });
+          await page.goto(suite.server.baseUrl + "activity");
+          await page.locator(".sidebar-issues-button:visible").click();
+          const panel = page.locator("#sidebar-issues-panel");
+          const tab = panel.getByRole("tab", { name: /Mentions/ });
+          await tab.click();
+          const row = panel.locator('[data-mention-id="first"]');
+          await gateway.deferNext("mentions.dismiss");
+          // Sample the actual exit in its starting task, not on a wall-clock deadline.
+          const opacity = await row.getByRole("button").evaluate((button) => {
+            if (!(button instanceof HTMLButtonElement)) {
+              throw new Error("Expected a mention dismiss button");
+            }
+            const article = button.closest("article")!;
+            button.focus();
+            button.click();
+            const exit = article.getAnimations()[0];
+            if (!exit?.effect) {
+              return null;
+            }
+            exit.pause();
+            exit.currentTime = Number(exit.effect.getComputedTiming().duration) / 2;
+            return Number(getComputedStyle(article).opacity);
+          });
+          await gateway.waitForRequest("mentions.dismiss");
+          expect(await tab.locator(".hub-tab__badge").textContent()).toBe("1");
+          expect(
+            await panel
+              .locator('[data-mention-id="second"] summary')
+              .evaluate((node) => node === document.activeElement),
+          ).toBe(true);
+          if (reducedMotion === "reduce") {
+            expect(opacity).toBeNull();
+          } else {
+            expect(opacity).toBeGreaterThan(0);
+            expect(opacity).toBeLessThan(1);
+            expect(await row.getAttribute("inert")).not.toBeNull();
+            await row.evaluate((node) => node.getAnimations()[0]!.finish());
+          }
+          await row.waitFor({ state: "detached" });
+          await gateway.rejectDeferred("mentions.dismiss", { message: "Dismissal failed" });
+          await row.waitFor();
+          expect(await tab.locator(".hub-tab__badge").textContent()).toBe("2");
+          await panel.getByText("Dismissal failed", { exact: true }).waitFor();
+        },
+      );
+    },
+  );
+
   it.each([false, true])("opens loaded Inbox on the next frame (items: %s)", async (populated) => {
     await suite.withPage(
       {
