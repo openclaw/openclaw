@@ -324,6 +324,42 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
   });
 
   it.each([
+    ["local", true, undefined, true],
+    ["local", false, undefined, false],
+    ["unknown", true, undefined, false],
+    ["local", true, "telegram", false],
+  ] satisfies Array<[CronScheduledToolCallerOrigin["kind"], boolean, string | undefined, boolean]>)(
+    "resolves channel-only scheduled authority for %s origin (configured=%s, provider=%s)",
+    (kind, configured, messageProvider, allowed) => {
+      const tools = () =>
+        project(
+          resolveProfile({
+            config: {
+              channels: { whatsapp: { accounts: configured ? { work: {} } : {} } },
+              tools: { allow: ["read"] },
+            },
+            sessionKey: "agent:main:cron:job:run:turn",
+            agentId: "main",
+            messageProvider,
+            messageChannel: "whatsapp",
+            scheduledToolPolicy: {
+              version: 1,
+              mode: "account",
+              ownerSessionKey: "agent:main:main",
+              ownerAccountId: "work",
+              ownerOrigin: { kind },
+            },
+          }),
+        );
+      if (allowed) {
+        expect(tools()).toEqual(["read"]);
+      } else {
+        expect(tools).toThrow('Scheduled account "work" is unavailable');
+      }
+    },
+  );
+
+  it.each([
     ["external", true, "telegram"],
     ["unknown", true, "whatsapp"],
     ["local", false, "whatsapp"],
