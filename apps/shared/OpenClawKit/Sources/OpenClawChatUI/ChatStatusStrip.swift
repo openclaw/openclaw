@@ -148,13 +148,21 @@ public final class OpenClawChatStatusStrip {
     }
 
     /// Posts or replaces the owner's status. Reposting the same sentence keeps its place in time, so an
-    /// owner can post on every change without restarting its delay or its timer.
-    public func post(_ status: OpenClawChatStatus) {
-        let at = self.now()
-        if var existing = self.entries[status.id], existing.status == status {
+    /// owner can post on every change without restarting its delay or its timer. With `continuingWait`,
+    /// a different sentence in the same slot keeps the start of an uninterrupted wait of the same length.
+    public func post(_ status: OpenClawChatStatus, continuingWait: Bool = false) {
+        let previous = self.entries[status.id]
+        if var existing = previous, existing.status == status {
             existing.status = status
             self.entries[status.id] = existing
             return
+        }
+        let at: ContinuousClock.Instant = if continuingWait, status.appearDelay > .zero, let previous,
+                                             previous.status.appearDelay == status.appearDelay
+        {
+            previous.postedAt
+        } else {
+            self.now()
         }
         self.nextOrder &+= 1
         var expiresAt: ContinuousClock.Instant?
