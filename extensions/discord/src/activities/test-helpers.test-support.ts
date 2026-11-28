@@ -83,12 +83,16 @@ export function createActivityTestRuntime(
 
 export function createRegisteredActivityFixture(
   cfg = createActivityTestConfig(),
-  vendorAssetPath = "/synthetic-missing-discord-activity-sdk.mjs",
+  vendorAssetPath:
+    | string
+    | ((input: string) => string) = "/synthetic-missing-discord-activity-sdk.mjs",
   runtimeConfig = cfg,
 ) {
   const routes: Array<Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]> = [];
   const presenters: Array<Parameters<OpenClawPluginApi["registerWidgetPresenter"]>[0]> = [];
-  const resolvePath = vi.fn(() => vendorAssetPath);
+  const resolvePath = vi.fn(
+    typeof vendorAssetPath === "function" ? vendorAssetPath : () => vendorAssetPath,
+  );
   registerDiscordActivities(
     createTestPluginApi({
       config: cfg,
