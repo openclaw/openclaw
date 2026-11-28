@@ -224,6 +224,33 @@ it("saves account mentions with pending gating and a per-browser override", asyn
   });
 });
 
+it("shows a confirmed agent selection before an overlapping refresh finishes", () => {
+  const refresh = createDeferred();
+  const initial = webPush();
+  const [current, setCurrent] = createSignal(initial);
+  const view = renderSection({
+    get webPush() {
+      return current();
+    },
+  });
+  const labels = () =>
+    view
+      .getAllByRole("button", { name: "Choose notification agents" })
+      .map((row) => row.textContent);
+  expect(labels()).toEqual(["All agents", "Account default: All agents"]);
+
+  setCurrent({ ...initial, read: refresh.promise });
+  flush();
+  setCurrent({
+    ...webPush(false, { ...userPreferences, agentIds: ["research", "support"] }),
+    read: refresh.promise,
+  });
+  flush();
+  const confirmed = labels();
+  refresh.resolve();
+  expect(confirmed).toEqual(["2 selected", "Account default: 2 selected"]);
+});
+
 it("retires a rejected read when a replacement finishes", async () => {
   const failed = createDeferred();
   const replacement = createDeferred();
