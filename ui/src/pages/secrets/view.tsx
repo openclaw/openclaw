@@ -154,13 +154,15 @@ function SecretsTable(props: SecretsStoreViewProps) {
         <Show
           when={props.read().length > 0}
           fallback={
-            <SettingsEmpty
-              message={
-                <>
-                  {t("secretsStore.empty")} <DocsLink url={DOCS_URL}>{t("common.docs")}</DocsLink>
-                </>
-              }
-            />
+            <Show when={props.state.store.loaded}>
+              <SettingsEmpty
+                message={
+                  <>
+                    {t("secretsStore.empty")} <DocsLink url={DOCS_URL}>{t("common.docs")}</DocsLink>
+                  </>
+                }
+              />
+            </Show>
           }
         >
           <div class="secrets-store__list" role="list">
@@ -171,6 +173,13 @@ function SecretsTable(props: SecretsStoreViewProps) {
                   const item = entry();
                   return item.kind === "env" ? item.value : item.allowedHosts?.join(", ");
                 };
+                const nameEnd = () => {
+                  const name = entry().name,
+                    underscore = name.lastIndexOf("_");
+                  return underscore > 0 && name.length - underscore <= 16
+                    ? underscore
+                    : Math.max(0, name.length - 10);
+                };
                 return (
                   <div
                     class="settings-row secrets-store__row"
@@ -179,13 +188,22 @@ function SecretsTable(props: SecretsStoreViewProps) {
                   >
                     <div class="settings-row__text">
                       <code class="settings-row__title secrets-store__name" title={entry().name}>
-                        {entry().name}
+                        <Show when={!secret()} fallback={entry().name}>
+                          <span class="secrets-store__env-name">
+                            <span>{entry().name.slice(0, nameEnd())}</span>
+                            <span>{entry().name.slice(nameEnd())}</span>
+                          </span>
+                        </Show>
                       </code>
-                      <span
+                      <div
                         class={[
                           "settings-row__desc",
                           "secrets-store__meta",
-                          { "secrets-store__meta--flow": secret() },
+                          {
+                            "secrets-store__meta--flow": secret(),
+                            "secrets-store__meta--attributed":
+                              !secret() && Boolean(entry().updatedBy),
+                          },
                         ]}
                       >
                         <Show when={detail()}>
@@ -206,14 +224,30 @@ function SecretsTable(props: SecretsStoreViewProps) {
                             </>
                           )}
                         </Show>
-                        <time
-                          class="secrets-store__updated"
-                          datetime={new Date(entry().updatedAtMs).toISOString()}
-                          title={timestamp().format(entry().updatedAtMs)}
+                        <Show
+                          when={!secret() && entry().updatedBy}
+                          fallback={
+                            <time
+                              class="secrets-store__updated"
+                              datetime={new Date(entry().updatedAtMs).toISOString()}
+                              title={timestamp().format(entry().updatedAtMs)}
+                            >
+                              {updatedLabel(entry())}
+                            </time>
+                          }
                         >
-                          {updatedLabel(entry())}
-                        </time>
-                      </span>
+                          <details class="secrets-store__updated secrets-store__attribution">
+                            <summary title={updatedLabel(entry())}>
+                              <time datetime={new Date(entry().updatedAtMs).toISOString()}>
+                                {updatedLabel(entry())}
+                              </time>
+                            </summary>
+                            <span>
+                              {entry().updatedBy} · {timestamp().format(entry().updatedAtMs)}
+                            </span>
+                          </details>
+                        </Show>
+                      </div>
                     </div>
                     <div class="settings-row__control">
                       <SettingsStatus

@@ -41,7 +41,7 @@ function makeAdapter(foldCase = false): InternalChannelIngressAdapter {
 const adapter = makeAdapter();
 const lowerCaseAdapter = makeAdapter(true);
 
-function resolveState(overrides: Partial<ChannelIngressStateInput> = {}) {
+function resolveState(overrides: Partial<ChannelIngressStateInput>) {
   return resolveChannelIngressState({
     channelId: "test",
     accountId: "default",

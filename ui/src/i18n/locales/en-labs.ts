@@ -25,21 +25,6 @@ const enLabs = {
       unavailable: "Couldn’t load this setting. Reconnect or refresh to try again.",
       refresh: "Refresh configuration",
     },
-    codeMode: {
-      title: "Code Mode",
-      description:
-        "Set the global default for compact JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
-      executor: "Code Mode executor",
-      executorDescription:
-        "Node.js is for trusted code; its VM is not a security sandbox. QuickJS runs code in an isolated WebAssembly runtime. Calls through OpenClaw tools use the same permissions. Applies to new replies; agent overrides take precedence.",
-      executorNode: "Node.js (default)",
-      executorQuickjs: "QuickJS (isolated)",
-    },
-    toolSearch: {
-      title: "Tool search for all models",
-      description:
-        "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls; turning it off disables the global default.",
-    },
     usageRankedToolIndex: {
       title: "Usage-ranked tool index",
       description:
@@ -51,7 +36,7 @@ const enLabs = {
         "Suggest a next message after a reply in the active conversation. Adds a tool-free model call using conversation context. Tab accepts the suggestion into your draft; it never sends automatically. Off by default.",
       model: "Prediction model",
       modelDescription:
-        "Utility is recommended for short, lower-cost predictions. Session uses the current session model; Default uses the agent’s configured primary model. An unavailable choice skips predictions instead of switching models.",
+        "Utility uses the agent’s utility model and may try its configured fallback models. Session uses the current session model; Default uses the agent’s configured primary model. Without a utility model, Utility skips predictions.",
       utility: "Utility model (recommended)",
       conversation: "Session model",
       default: "Default model",
@@ -60,10 +45,6 @@ const enLabs = {
       title: "Speech bubbles",
       description:
         "Try speech bubbles with compact tool activity. Home uses bubbles by default while enabled; each browser keeps its explicit conversation choices. Disabling this lab restores the standard view without clearing those choices.",
-    },
-    templates: {
-      title: "Templates",
-      description: "Templates are ready-made agents for specific tasks.",
     },
     hostDesktop: {
       title: "Desktop on the computer running OpenClaw",

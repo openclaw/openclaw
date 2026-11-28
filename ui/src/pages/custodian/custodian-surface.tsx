@@ -15,6 +15,11 @@ import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
@@ -83,6 +88,7 @@ function TranscriptEntry(props: {
   actions: CustodianActions["session"];
   message: CustodianMessage;
   activeWizardMessage: CustodianMessage | undefined;
+  onSkip: (message: CustodianMessage) => void;
 }) {
   const question = () => props.message.question;
   const questionKey = () => `${props.message.id}:${question()?.id}`;
@@ -126,7 +132,7 @@ function TranscriptEntry(props: {
                 !props.store().canSend ||
                 props.store().answeredQuestions.has(questionKey()),
               onSelect: (label: string) => props.actions.answerQuestion(props.message, label),
-              onSkip: () => props.actions.dismissQuestion(props.message),
+              onSkip: () => props.onSkip(props.message),
             }}
           />
         </div>
@@ -309,27 +315,32 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
     },
   });
   let revealedMessages = false;
-  createScrollPosition(() => {
-    const initialMessageId = store().messages.at(-1)?.id ?? null;
-    return {
-      reveal: {
-        identity: [initialMessageId],
-        target: () => {
-          // Initial empty chrome does not reveal; clearing an existing transcript still does.
-          if (initialMessageId === null && !revealedMessages) {
-            return undefined;
-          }
-          revealedMessages = true;
-          const lastMessage = host.contains(transcriptNode)
-            ? transcriptNode?.lastElementChild
-            : undefined;
-          return lastMessage instanceof HTMLElement ? lastMessage : undefined;
+  // Only a new message schedules a reveal; drafts and status updates must not cancel it.
+  const latestMessageId = createMemo(() => store().messages.at(-1)?.id ?? null);
+  createScrollPosition(
+    () => {
+      const initialMessageId = latestMessageId();
+      return {
+        reveal: {
+          identity: [initialMessageId],
+          target: () => {
+            // Initial empty chrome does not reveal; clearing an existing transcript still does.
+            if (initialMessageId === null && !revealedMessages) {
+              return undefined;
+            }
+            revealedMessages = true;
+            const lastMessage = host.contains(transcriptNode)
+              ? transcriptNode?.lastElementChild
+              : undefined;
+            return lastMessage instanceof HTMLElement ? lastMessage : undefined;
+          },
         },
-      },
-    };
-  });
+      };
+    },
+    { revealTiming: "animation-frame" },
+  );
   const handleKeydown = (event: KeyboardEvent) => {
-    if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+    if (event.key !== "Enter" || event.shiftKey || isComposingKeyboardEvent(event)) {
       return;
     }
     event.preventDefault();
@@ -465,6 +476,12 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
                 actions={actions().session}
                 message={message()}
                 activeWizardMessage={activeWizardMessage()}
+                onSkip={(entry) => {
+                  if (entry.question?.skipAction !== "exit") {
+                    textarea?.focus({ preventScroll: true });
+                  }
+                  actions().session.dismissQuestion(entry);
+                }}
               />
             )}
           </For>
@@ -536,7 +553,12 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
                         }}
                         onBeforeInput={handleTextareaOverflowInteraction}
                         onCompositionStart={handleTextareaOverflowInteraction}
-                        onBlur={handleTextareaOverflowInteraction}
+                        onCompositionEnd={recordCompositionEnd}
+                        onKeyUp={clearCompositionEnd}
+                        onBlur={(event) => {
+                          handleTextareaOverflowInteraction(event);
+                          clearCompositionEnd(event);
+                        }}
                         onWheel={handleTextareaOverflowInteraction}
                         onPointerDown={handleTextareaOverflowInteraction}
                         onScroll={handleTextareaOverflowScroll}
@@ -552,6 +574,9 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
                       disabled={sending() || !store().canSend}
                       onInput={(event) => store().setInput(event.currentTarget.value)}
                       onKeyDown={handleKeydown}
+                      onCompositionEnd={recordCompositionEnd}
+                      onKeyUp={clearCompositionEnd}
+                      onBlur={clearCompositionEnd}
                     />
                   </Show>
                   <span class="agent-chat__composer-placeholder" aria-hidden="true">

@@ -13,6 +13,7 @@ import {
   buildAggregatesFromSessions,
   createUsageOverview,
   usageFixture,
+  usageTotals,
 } from "./view.test-support.ts";
 
 const aggregates = buildAggregatesFromSessions([]);
@@ -28,15 +29,32 @@ function mountInsights(currentTotals: () => UsageTotals, currentAggregates: () =
         return currentAggregates();
       },
       stats: { durationCount: 0, avgDurationMs: 0, errorRate: 0 },
-      showCostHint: false,
       errorHours: [],
-      sessionCount: 1,
-      totalSessions: 1,
     }),
   );
 }
 
 describe("UsageInsights", () => {
+  it("keeps an unmeasured cache rate neutral and rates measured results", () => {
+    const [current, setCurrent] = createSignal(usageTotals(0, 0));
+    const { container } = mountInsights(current, () => aggregates);
+    for (const [input, cacheRead, label, tone] of [
+      [0, 0, "—", undefined],
+      [100, 0, "0.0%", "bad"],
+      [50, 50, "50.0%", "warn"],
+      [25, 75, "75.0%", "good"],
+    ] as const) {
+      setCurrent(usageTotals(input, 0, { cacheRead, totalTokens: input + cacheRead }));
+      flush();
+      const card = container
+        .querySelector("#usage-summary-hint-cache-hit-rate")!
+        .closest(".usage-summary-card")!;
+      expect(text(card, ".usage-summary-value")).toBe(label);
+      for (const value of ["bad", "warn", "good"]) {
+        expect(card.classList.contains("usage-summary-card--" + value)).toBe(value === tone);
+      }
+    }
+  });
   it("renders overview hints as focusable tooltip anchors and identifies agents in the breakdown", async () => {
     const [currentTotals, setCurrentTotals] = createSignal(totals);
     const [currentAggregates, setCurrentAggregates] = createSignal({
@@ -56,8 +74,8 @@ describe("UsageInsights", () => {
     expect(text(cacheCard, ".usage-summary-value")).toBe("30.0%");
     expect(text(cacheCard, ".usage-summary-sub")).toBe("300 cached · 1.0K prompt");
     const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
-    expect(buttons).toHaveLength(5);
-    expect(tooltips).toHaveLength(5);
+    expect(buttons).toHaveLength(3);
+    expect(tooltips).toHaveLength(3);
     expect(
       [...container.querySelectorAll(".usage-list-item .agent-row-chip")].map((chip) =>
         chip.getAttribute("data-agent-id"),
@@ -130,10 +148,7 @@ describe("UsageInsights", () => {
             ],
           },
           stats: { durationCount: 0, avgDurationMs: 0, errorRate: 0 },
-          showCostHint: false,
           errorHours: [],
-          sessionCount: 1,
-          totalSessions: 1,
         }),
       { container },
     );

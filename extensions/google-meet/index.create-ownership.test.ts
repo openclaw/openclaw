@@ -6,6 +6,8 @@ import plugin from "./index.js";
 import { MEET_URL, MEET_URL_EN } from "./src/test-support/fixtures.test-helpers.js";
 import {
   createGoogleMeetToolGatewayForTest,
+  getMeetTool,
+  invokeGoogleMeetGatewayMethodForTest,
   setupGoogleMeetPlugin,
 } from "./src/test-support/plugin-harness.js";
 
@@ -39,6 +41,25 @@ function browserProxyPayload(result: unknown) {
 describe("registered Google Meet create tab ownership", () => {
   meetingTestState = useMeetingTestState(createOpenClawTestState);
   afterEach(() => vi.restoreAllMocks());
+
+  it("rejects invalid join choices before launching a browser or creating a space", async () => {
+    const harness = setupGoogleMeetPlugin(plugin, { defaultTransport: "chrome-node" });
+    vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockImplementation(
+      createGoogleMeetToolGatewayForTest(harness.methods),
+    );
+    const result = await getMeetTool(harness).execute("join", {
+      action: "join",
+      url: MEET_URL,
+      mode: "transribe",
+    });
+    expect(result.details.error).toContain("mode must be");
+    await expect(
+      invokeGoogleMeetGatewayMethodForTest(harness.methods, "googlemeet.create", {
+        transport: "chorme",
+      }),
+    ).rejects.toThrow("transport must be");
+    expect(harness.nodesInvoke).not.toHaveBeenCalled();
+  });
 
   it.each([false, true])("preserves create tab ownership (preexisting=%s)", async (preexisting) => {
     const targetId = "created-meet-tab";

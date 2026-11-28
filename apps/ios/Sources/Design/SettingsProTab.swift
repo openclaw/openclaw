@@ -1,3 +1,4 @@
+import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 
@@ -36,8 +37,9 @@ struct SettingsProTab: View {
     @State var isRefreshingGateway = false
     @State var connectingGateway: GatewayConnectionAttempt?
     @State var gatewayRegistry = GatewaySettingsStore.GatewayRegistry.empty
+    @State var renamingGateway: GatewaySettingsStore.GatewayRegistryEntry?
+    @State var gatewayNameDraft = ""
     @State var pendingForgetGateway: GatewaySettingsStore.GatewayRegistryEntry?
-    @State var selectedAgentPickerId = ""
     @State var gatewayAuthFields = GatewayConnectionController.ManualAuthOverride.Fields()
     @State var manualGatewayPortText = ""
     @State var manualGatewayContextPath: String?
@@ -50,13 +52,14 @@ struct SettingsProTab: View {
     @State var scannerScanID: UInt64 = 0
     @State var pendingTargetSuppression = GatewayPendingTargetSuppression()
     @State var showQRScanner = false
+    @State var pairUsingCode = false
     @State var scannerError: String?
     @State var showResetOnboardingAlert = false
     @State var suppressCredentialPersist = false
     @State var watchDirectSetupStatusText: String?
     @State var isSendingWatchDirectSetup = false
     @State var notificationStatus: SettingsNotificationStatus = .checking
-    @State var diagnosticsLastRunText = "Not run"
+    @State var diagnosticsLastRunText: String?
     @State var diagnosticsIssueCount: Int?
     let directRoute: SettingsRoute?
     let registersNavigationDestinations: Bool
@@ -160,15 +163,6 @@ struct SettingsProTab: View {
                 // Leaving a fixture must reload the saved registry and credentials before they are editable.
                 self.syncSettingsState()
             }
-            .onChange(of: self.selectedAgentPickerId) { _, newValue in
-                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                self.appModel.setSelectedAgentId(trimmed.isEmpty ? nil : trimmed)
-            }
-            .onChange(of: self.appModel.selectedAgentId ?? "") { _, newValue in
-                if newValue != self.selectedAgentPickerId {
-                    self.selectedAgentPickerId = newValue
-                }
-            }
             .onChange(of: self.setupCode) { _, newValue in
                 if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     self.clearStagedGatewaySetupLink()
@@ -185,6 +179,77 @@ struct SettingsProTab: View {
             }
     }
 
+    private func gatewayPairingSheet(scanID: UInt64) -> some View {
+        NavigationStack {
+            Group {
+                if self.pairUsingCode {
+                    Form {
+                        SecureField(text: self.$setupCode) {
+                            Text("Setup code").font(OpenClawType.body)
+                        }
+                        .font(OpenClawType.body)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityLabel("Setup code")
+                        .accessibilityIdentifier("SettingsHub.SetupCode")
+                        .disabled(self.connectingGateway != nil)
+                        Button {
+                            Task { await self.applySetupCodeAndConnect() }
+                        } label: {
+                            Text("Connect").font(OpenClawType.subheadSemiBold)
+                        }
+                        .disabled(!self.canApplyGatewaySetup || self.connectingGateway != nil)
+                        if let status = self.setupStatusLine, self.setupStatusText != nil {
+                            Text(status)
+                                .font(OpenClawType.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } else {
+                    QRScannerView(
+                        onResult: { self.queueScannedResult($0, scanID: scanID) },
+                        onError: { _ in
+                            guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
+                            self.showPairingCode()
+                        },
+                        onDismiss: {
+                            guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
+                            self.showQRScanner = false
+                        })
+                        .ignoresSafeArea()
+                        .safeAreaInset(edge: .bottom) {
+                            Button {
+                                self.showPairingCode()
+                            } label: {
+                                Text("Paste setup code")
+                                    .font(OpenClawType.subheadSemiBold)
+                            }
+                            .buttonStyle(.bordered)
+                            .padding()
+                        }
+                }
+            }
+            .navigationTitle("Pair Gateway")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                OpenClawSheetCloseItem {
+                    self.scannerResultHandoff.cancel()
+                    self.showQRScanner = false
+                    self.setupCode = ""
+                }
+            }
+        }
+        .openClawSheetHeaderEdge()
+        .tint(.primary)
+    }
+
+    private func showPairingCode() {
+        self.scannerResultHandoff.cancel()
+        self.setupStatusText = nil
+        self.pendingTargetSuppression.resumeAutoConnect(.qrScanner, controller: self.gatewayController)
+        self.pairUsingCode = true
+    }
+
     private func settingsModalPresentation(_ content: some View) -> some View {
         let scanID = self.scannerScanID
         return content
@@ -192,40 +257,13 @@ struct SettingsProTab: View {
                 isPresented: self.$showQRScanner,
                 onDismiss: {
                     self.processQueuedScannerResult()
+                    if self.pairUsingCode {
+                        self.setupCode = ""
+                        self.pairUsingCode = false
+                    }
                 },
                 content: {
-                    NavigationStack {
-                        QRScannerView(
-                            onResult: { result in
-                                self.queueScannedResult(result, scanID: scanID)
-                            },
-                            onError: { error in
-                                guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
-                                self.showQRScanner = false
-                                self.setupStatusText = "Scanner error: \(error)"
-                                self.scannerError = error
-                            },
-                            onDismiss: {
-                                guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
-                                self.showQRScanner = false
-                            })
-                            .ignoresSafeArea()
-                            .navigationTitle("Scan QR Code")
-                            .navigationBarTitleDisplayMode(.inline)
-                            .font(OpenClawType.body)
-                            .toolbar {
-                                ToolbarItem(placement: .topBarLeading) {
-                                    Button {
-                                        self.scannerResultHandoff.cancel()
-                                        self.showQRScanner = false
-                                    } label: {
-                                        Text("Cancel")
-                                            .font(OpenClawType.subheadSemiBold)
-                                    }
-                                    .font(OpenClawType.subheadSemiBold)
-                                }
-                            }
-                    }
+                    self.gatewayPairingSheet(scanID: scanID)
                 })
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
                 Button(role: .destructive) {
@@ -239,7 +277,7 @@ struct SettingsProTab: View {
                         .font(OpenClawType.subheadSemiBold)
                 }
             } message: {
-                Text("This disconnects, clears saved gateway credentials, and reopens onboarding.")
+                Text("This disconnects, clears saved Gateway credentials, and restarts onboarding.")
                     .font(OpenClawType.subhead)
             }
             .alert(
@@ -259,20 +297,42 @@ struct SettingsProTab: View {
                 Text(self.scannerError ?? "")
                     .font(OpenClawType.subhead)
             }
-            .confirmationDialog(
-                String(
-                    format: String(localized: "Forget %@?"),
-                    self.pendingForgetGateway?.name ?? String(localized: "gateway")),
+            .alert(
+                String(localized: "Rename connection"),
                 isPresented: Binding(
-                    get: { self.pendingForgetGateway != nil },
-                    set: {
-                        if !$0 {
-                            self.pendingForgetGateway = nil
-                        }
-                    }),
-                titleVisibility: .visible,
-                // The action only schedules Task; dismissal clears state before that task resumes.
-                presenting: self.pendingForgetGateway)
+                    get: { self.renamingGateway != nil },
+                    set: { if !$0 { self.renamingGateway = nil } }),
+                presenting: self.renamingGateway)
+            { entry in
+                TextField(text: self.$gatewayNameDraft) { Text("Name").font(SettingsType.label) }
+                    .font(SettingsType.label)
+                    .autocorrectionDisabled()
+                Button(role: .cancel) {} label: { Text("Cancel").font(OpenClawType.subhead) }
+                Button {
+                    if !GatewaySettingsStore.setGatewayName(self.gatewayNameDraft, stableID: entry.stableID) {
+                        self.gatewayActionStatusText = String(localized: "Couldn’t save the name")
+                    }
+                } label: { Text("Save").font(OpenClawType.subheadSemiBold) }
+                    .disabled(self.gatewayNameDraft.trimmedNonEmpty == nil)
+                    .keyboardShortcut(.defaultAction)
+            } message: { entry in
+                Text(verbatim: self.gatewayEndpointSummary(entry)).font(SettingsType.description)
+            }
+            .confirmationDialog(
+                    String(
+                        format: String(localized: "Forget %@?"),
+                        self.pendingForgetGateway
+                            .map(self.gatewayRegistry.compactName) ?? String(localized: "Connection")),
+                    isPresented: Binding(
+                        get: { self.pendingForgetGateway != nil },
+                        set: {
+                            if !$0 {
+                                self.pendingForgetGateway = nil
+                            }
+                        }),
+                    titleVisibility: .visible,
+                    // The action only schedules Task; dismissal clears state before that task resumes.
+                    presenting: self.pendingForgetGateway)
             { entry in
                 Button(role: .destructive) {
                     Task { await self.forgetGateway(entry) }
@@ -286,14 +346,14 @@ struct SettingsProTab: View {
                     Text("Cancel")
                         .font(OpenClawType.subheadSemiBold)
                 }
-            } message: { _ in
-                // Keep the extraction key contiguous for the native localization inventory.
-                Text(
-                    String(
-                        localized:
-                        "This removes saved credentials, device access, TLS trust, and cached chats for this gateway."))
-                    .font(OpenClawType.subhead)
-            }
+                } message: { _ in
+                    // Keep the extraction key contiguous for the native localization inventory.
+                    Text(
+                        String(
+                            localized:
+                            "This removes credentials, device access, TLS trust, and chats saved for this connection."))
+                        .font(OpenClawType.subhead)
+                }
     }
 
     private func applyGatewaySetupRequestIfNeeded() {

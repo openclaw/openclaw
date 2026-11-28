@@ -186,19 +186,19 @@ describe("sandbox explain command", () => {
       restoreActivePluginRegistrySnapshot(previousRegistry);
     }
   });
-
   it.each([
     [
-      "unknown",
       "nope-agent",
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
     ],
-    ["blank", "", "--agent must not be blank"],
-  ])("rejects an explicit %s agent", async (_label, agent, message) => {
+    [" ", "--agent must not be blank"],
+  ])("rejects an explicit agent %j", async (agent, message) => {
     mockCfg = config({ mode: "off" }, { main: {} });
-    await expect(explain({ agent })).rejects.toThrow(message);
+    await expect(explain({ agent })).rejects.toMatchObject({
+      message,
+      name: agent.trim() ? "Error" : "ExpectedCliError",
+    });
   });
-
   it("reads a missing session without creating or registering an agent database", async () => {
     await withOpenClawTestState({ label: "sandbox-explain-readonly" }, async (state) => {
       const agentDatabasePath = path.join(state.agentDir("readonly"), "openclaw-agent.sqlite");

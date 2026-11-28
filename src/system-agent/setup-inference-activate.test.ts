@@ -85,6 +85,34 @@ describe("setup activation credentials and configuration", () => {
     expect(restored).toEqual(setup.config);
   });
 
+  it("restores a size-dropping first config write when its activation is not applied", async () => {
+    // The write pipeline stamps metadata the in-memory candidate lacks.
+    const setup = await fixture({
+      authMethod: "api_key",
+      fresh: true,
+      addProviderDuringLogin: true,
+    });
+    delete setup.config.meta;
+    await writeConfig(setup, setup.config);
+    let complete: (() => Promise<boolean>) | undefined;
+    const result = await setup.activate("api-key", true, {
+      apiKey: "synthetic-recovery-key",
+      onActivationCompletion: (completion) => {
+        complete = completion;
+      },
+    });
+    expect(result).toMatchObject({ ok: true });
+    assert(complete);
+    const candidate = await fs.readFile(setup.configPath);
+    // Keep this regression tied to the size-drop guard as the fixture evolves.
+    expect(candidate.byteLength).toBeGreaterThanOrEqual(512);
+    await expect(complete()).rejects.toThrow("The previous connection was restored on disk");
+    const recovered = await fs.readFile(setup.configPath);
+    expect(recovered.byteLength).toBeLessThan(Math.floor(candidate.byteLength / 2));
+    const { meta: _meta, ...restored } = JSON.parse(recovered.toString("utf8"));
+    expect(restored).toEqual(setup.config);
+  });
+
   it.each([
     { target: "utility" as const, requested: undefined },
     { target: undefined, requested: "utility" as const },
@@ -96,6 +124,51 @@ describe("setup activation credentials and configuration", () => {
       expect(result).toMatchObject({ ok: false, status: "unavailable" });
       expectCalls(setup, 0, 0);
       expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
+    },
+  );
+
+  it.each([
+    { contextTokens: 8_192, automatic: true, utility: false, prompted: false, ok: false },
+    { contextTokens: 8_192, automatic: false, utility: false, prompted: false, ok: true },
+    { contextTokens: 8_192, automatic: false, utility: false, prompted: true, ok: true },
+    { contextTokens: 32_768, automatic: true, utility: false, prompted: false, ok: true },
+    { contextTokens: 8_192, automatic: true, utility: true, prompted: false, ok: true },
+  ])(
+    "checks a $contextTokens-token context (auto $automatic, utility $utility, prompted $prompted)",
+    async ({ contextTokens, automatic, utility, prompted, ok }) => {
+      const setup = await fixture({
+        authMethod: "api_key",
+        ...(utility ? { modelTarget: "utility" as const } : {}),
+      });
+      setup.run.mockImplementation(async (params) => {
+        const reply = await setup.reply(params);
+        const agentMeta = {
+          sessionId: "probe",
+          provider: "openai",
+          model: modelRef,
+          contextTokens,
+        };
+        return { ...reply, meta: { ...reply.meta, agentMeta } };
+      });
+      vi.mocked(setup.prompter.confirm).mockResolvedValue(true);
+      const result = await setup.activate("api-key", prompted ? undefined : true, {
+        apiKey: "synthetic-context-key",
+        ...(automatic ? { automaticSetup: true } : {}),
+      });
+      const shortfall = `${modelRef} has an effective context window of 8192 tokens`;
+      expect(result.ok, result.ok ? undefined : result.error).toBe(ok);
+      if (!result.ok) {
+        expect(result).toMatchObject({ status: "unavailable" });
+        expect(result.error).toContain(shortfall);
+        return;
+      }
+      // A manual small pick warns once: in the prompter when there is one, else in the lines.
+      const warned = contextTokens < 16_384 && !automatic && !utility;
+      const noted = vi
+        .mocked(setup.prompter.note)
+        .mock.calls.some(([message]) => message.includes(shortfall));
+      expect(noted).toBe(warned && prompted);
+      expect(result.lines.some((line) => line.includes(shortfall))).toBe(warned && !prompted);
     },
   );
 
@@ -592,6 +665,21 @@ describe("setup activation credentials and configuration", () => {
       }
     },
   );
+
+  it("reports a saved sign-in whose model is at capacity in one plain sentence", async () => {
+    const setup = await fixture();
+    setup.run.mockRejectedValueOnce(new Error("Selected model is at capacity"));
+
+    expect(await setup.activate()).toEqual({
+      ok: false,
+      status: "rate_limit",
+      error:
+        "Your sign-in is saved. The model check failed because the provider is busy or limiting requests. Wait a few minutes, then try again.",
+      disposition: "rejected-before-promotion",
+    });
+    expect(setup.readProfile()?.[1]).toMatchObject(credential);
+    expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
+  });
 
   it("keeps working credentials and rotation after rejected replacement", async () => {
     const setup = await fixture();

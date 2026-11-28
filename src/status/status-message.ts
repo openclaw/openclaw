@@ -1,9 +1,5 @@
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
-  asNonNegativeFiniteNumber,
-  asPositiveFiniteNumber,
-} from "@openclaw/normalization-core/number-coercion";
-import {
   type FastMode,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -63,12 +59,15 @@ import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
-import { formatTokenCount, formatUsd } from "../utils/usage-format.js";
+import { formatUsd } from "../utils/usage-format.js";
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
-import { formatContextTokensValue } from "./status-context-format.js";
-import { formatModelEndpointUrl } from "./status-model-endpoint.js";
+import {
+  formatContextTokensValue,
+  formatEstimatedContextBudgetTokens,
+} from "./status-context-format.js";
+import { formatStatusEndpoint } from "./status-model-endpoint.js";
 import {
   formatTokensPairValue,
   formatCacheHitValue,
@@ -116,6 +115,8 @@ type StatusArgs = StatusMessageUsageArgs & {
   resolvedElevated?: ElevatedLevel;
   modelAuth?: string;
   selectedEndpoint?: string;
+  /** "not sent" when the session's last request to this OpenAI-style route had no prompt cache key. */
+  selectedCacheKey?: string;
   activeModelAuth?: string;
   usageLine?: string;
   uptimeValue?: string;
@@ -172,25 +173,6 @@ function resolveExecutionLabel(
   const sandboxMode = args.agent?.sandbox?.mode ?? "off";
   return sandboxMode === "off" ? "direct" : `unknown/${sandboxMode}`;
 }
-
-const formatEstimatedContextBudgetTokens = (
-  status: SessionEntry["contextBudgetStatus"] | undefined,
-  contextTokens: number | null | undefined,
-) => {
-  if (!status || status.source !== "pre-prompt-estimate") {
-    return null;
-  }
-  const estimate = asNonNegativeFiniteNumber(status.estimatedPromptTokens);
-  if (estimate === undefined) {
-    return null;
-  }
-  const estimatedPromptTokens = Math.floor(estimate);
-  const ctx = asPositiveFiniteNumber(contextTokens);
-  const pct = ctx ? Math.min(999, Math.round((estimatedPromptTokens / ctx) * 100)) : null;
-  const totalLabel = formatTokenCount(estimatedPromptTokens);
-  const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
-  return `~${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}% est)` : " (est)"}`;
-};
 
 export const formatContextUsageShort = (
   total: number | null | undefined,
@@ -662,9 +644,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const liveSwitchNote = entry?.liveModelSwitchPending ? " · ⏳ live switch pending" : "";
   const modelValue = `${selectedModelLabel}${modelNote}${overrideLabel}${liveSwitchNote}`;
 
-  const selectedEndpoint = args.selectedEndpoint
-    ? formatModelEndpointUrl(args.selectedEndpoint)
-    : undefined;
+  const selectedEndpoint = formatStatusEndpoint(args.selectedEndpoint, args.selectedCacheKey);
   const configuredFallbacks = (() => {
     const modelConfig = args.agent?.model;
     if (typeof modelConfig === "object" && modelConfig) {

@@ -18,6 +18,7 @@ import {
   hasSiblingThreadWork,
   hasThreadOwnership,
   invalidateThreadOwnership,
+  isEphemeralThreadPolicy,
   revertRetainedThreadInstructions,
   type RetainedLiveThread,
   type CodexEphemeralThreadPolicy,
@@ -322,7 +323,7 @@ async function releaseRetainedThread(
     ) {
       // A failed unsubscribe leaves the native subscription alive. Retain it as
       // most recently used; renewing TTL prevents a zero-delay retry spin.
-      if (retained.ephemeralPolicy === undefined) {
+      if (!isEphemeralThreadPolicy(retained.ephemeralPolicy)) {
         retained.expiresAt = performance.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS;
       }
       runtime.retainedThreads.set(threadId, retained);
@@ -356,7 +357,7 @@ async function evictExcessIdleThreads(
   const idleThreads = () =>
     [...runtime.retainedThreads].filter(
       ([threadId, thread]) =>
-        thread.ephemeralPolicy === undefined && !runtime.protectedThreads.has(threadId),
+        !isEphemeralThreadPolicy(thread.ephemeralPolicy) && !runtime.protectedThreads.has(threadId),
     );
   let idleThreadIds = idleThreads();
   while (idleThreadIds.length > CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE) {
@@ -402,10 +403,9 @@ export async function retainCodexAppServerLiveThread(
     serviceTier,
     // Ephemeral history has no disk resume source. Preserve its existing client lifetime,
     // rather than subjecting it to the persistent registry's idle eviction.
-    expiresAt:
-      ephemeralPolicy === undefined
-        ? performance.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS
-        : Number.POSITIVE_INFINITY,
+    expiresAt: isEphemeralThreadPolicy(ephemeralPolicy)
+      ? Number.POSITIVE_INFINITY
+      : performance.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS,
     release:
       (releaseThread ? (physicalThreadReleases.get(releaseThread) ?? releaseThread) : undefined) ??
       defaultThreadRelease(client),
@@ -770,7 +770,7 @@ export function protectCodexAppServerLiveThread(
       if (retained) {
         // A detached child is live activity, not parent idleness. Its terminal
         // delivery starts the parent's normal warm-session retention window.
-        if (retained.ephemeralPolicy === undefined) {
+        if (!isEphemeralThreadPolicy(retained.ephemeralPolicy)) {
           retained.expiresAt = performance.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS;
         }
         runtime.retainedThreads.delete(threadId);

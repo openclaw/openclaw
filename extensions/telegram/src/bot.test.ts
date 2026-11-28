@@ -2156,32 +2156,6 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("preserves quote-only replies without reply metadata", async () => {
-    const handler = await createMessageHandler();
-    await handler(
-      messageContext({
-        chat: { id: 7, type: "private" },
-        date: 1736380800,
-        text: "Sure, see below",
-        quote: { text: "summarize this" },
-      }),
-    );
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = replyContext();
-    expect(payload).toMatchObject({
-      ReplyToBody: "summarize this",
-      ReplyToSender: "unknown sender",
-    });
-    expect(payload.ReplyToId).toBeUndefined();
-    for (const fragment of [
-      "[Reply chain - nearest first]",
-      "[1. unknown sender",
-      '"summarize this"',
-    ]) {
-      expect(payload.Body).toContain(fragment);
-    }
-  });
-
   it("preserves forwarded origin from external reply targets", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();

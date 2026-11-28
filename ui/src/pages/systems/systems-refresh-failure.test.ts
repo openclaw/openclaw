@@ -1,19 +1,34 @@
 /* @vitest-environment jsdom */
 import type { EnvironmentSummary } from "@openclaw/gateway-protocol";
 import { createRouter, definePage } from "@openclaw/uirouter";
+import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createContext, createSessions } from "../../test-helpers/app-sidebar.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { setupSidebarTest } from "../../test-helpers/app-sidebar-setup.ts";
+import {
+  createContext,
+  createSessions,
+  createGatewayHarness,
+} from "../../test-helpers/app-sidebar.ts";
 import {
   createApplicationGateway,
   createApplicationGatewaySnapshot,
 } from "../../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { renderSidebar, renderSolid } from "./systems-route-view.tsx";
 import { createSystems } from "./systems-state.ts";
 import { systemMeasurements } from "./systems-telemetry.ts";
 import { systemInfo } from "./systems.test-support.ts";
 
-afterEach(() => vi.restoreAllMocks());
+setupSidebarTest();
+afterEach(() => {
+  cleanupSolid();
+  vi.restoreAllMocks();
+});
 
 it.each(["system.info", "node.list"])(
   "retires failed %s enrichment on inventory refresh while periodic failures stay last-known",
@@ -113,3 +128,84 @@ it.each(["system.info", "node.list"])(
     }
   },
 );
+
+it("keeps unknown inventory neutral without hiding offline recovery", async () => {
+  const firstRead = createDeferred<EnvironmentSummary[]>();
+  let inventory = () => firstRead.promise;
+  const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
+  vi.spyOn(client, "request").mockImplementation(async (method) => {
+    if (method === "environments.list") {
+      return { environments: await inventory() };
+    }
+    if (method === "system.info") {
+      return systemInfo;
+    }
+    if (method === "node.list") {
+      return { nodes: [] };
+    }
+    if (method === "backup.status") {
+      return { targets: [], schedules: [], locations: [] };
+    }
+    throw new Error("Unexpected request: " + method);
+  });
+  const gateway = createGatewayHarness(client);
+  gateway.publish({
+    hello: gatewayHelloForMethods(
+      ["environments.list", "system.info", "node.list"],
+      ["operator.admin"],
+    ),
+  });
+  const runtimeConfig = createRuntimeConfigCapability(gateway.gateway);
+  const context = Object.assign(createContext(gateway.gateway, createSessions("main", [])), {
+    runtimeConfig,
+    router: createRouter({
+      routes: [definePage({ id: "systems", path: "/systems", component: () => ({}) })],
+    }),
+  });
+  const controller = createSystems(context);
+  try {
+    const sidebar = renderSidebar({ controller })!;
+    const data = { controller };
+    const mounted = mountSolid(() => [
+      createComponent(renderSolid, { data, presented: true, loaderPending: false }),
+      sidebar,
+    ]);
+    const page = mounted.container.querySelector<HTMLElement>("openclaw-systems-page")!;
+    const state = () => page.querySelector<HTMLElement>(".systems-desktop .systems-state")!;
+    const heading = () => page.querySelector<HTMLElement>(".systems-heading")!;
+    await waitForSolid(() => expect(state()).not.toBeNull());
+    expect(state().style.visibility).toBe("hidden");
+    firstRead.reject(new Error("Device inventory unavailable"));
+    await waitForSolid(() =>
+      expect(page.querySelector(".systems-callout--error")?.textContent).toContain(
+        "Device inventory unavailable",
+      ),
+    );
+    expect.soft(sidebar.querySelector(".systems-sidebar__empty")).toBeNull();
+    expect.soft(state().style.visibility).toBe("hidden");
+    expect.soft(heading().style.visibility).toBe("hidden");
+    controller.updatePresentation({ query: "fleet" });
+    flush();
+    expect.soft(sidebar.querySelector(".systems-sidebar__empty")).toBeNull();
+    gateway.publish({ phase: "reconnecting" });
+    await waitForSolid(() => expect(state().style.visibility).not.toBe("hidden"));
+    expect(state().textContent).toContain("Reconnect to refresh devices or open a desktop.");
+    inventory = async () => [
+      { id: "gateway", type: "local", label: "Gateway", status: "available" },
+    ];
+    gateway.publish({ phase: "connected" });
+    await waitForSolid(() => expect(controller.state.inventory).not.toBeNull());
+    await waitForSolid(() =>
+      expect(sidebar.querySelector(".systems-sidebar__empty")?.textContent).toContain(
+        "No devices match your search.",
+      ),
+    );
+    expect(heading().style.visibility).not.toBe("hidden");
+    controller.updatePresentation({ query: "" });
+    await waitForSolid(() => expect(sidebar.querySelector(".systems-sidebar__empty")).toBeNull());
+    expect(sidebar.textContent).toContain("Gateway");
+  } finally {
+    cleanupSolid();
+    runtimeConfig.dispose();
+  }
+});

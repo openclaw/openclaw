@@ -277,6 +277,11 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
           messages: 3,
           payloadBytes: 567,
           payloadBytesByRequestClass: { "session.actor.completeTurn": 500, other: 67 },
+          payloadComponents: {
+            "session.actor.appendTranscriptEvent": {
+              receipt_other: { bytes: 123, samples: 2, unmeasured: 1 },
+            },
+          },
           unmeasuredMessages: 1,
         },
         {
@@ -342,6 +347,9 @@ openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="author
 openclaw_worker_message_payload_bytes_total{direction="to_worker",kind="authority",request_class="other"} 0
 openclaw_worker_messages_total{direction="from_worker",kind="authority"} 3
 openclaw_worker_message_unmeasured_total{direction="from_worker",kind="authority"} 1
+openclaw_worker_authority_component_sampled_bytes_total{component="receipt_other",request_class="session.actor.appendTranscriptEvent"} 123
+openclaw_worker_authority_component_samples_total{component="receipt_other",request_class="session.actor.appendTranscriptEvent",result="measured"} 2
+openclaw_worker_authority_component_samples_total{component="receipt_other",request_class="session.actor.appendTranscriptEvent",result="unmeasured"} 1
 openclaw_session_row_selections_total{kind="parent",task="control-ui-pr"} 4
 openclaw_session_row_selection_rows_total{kind="parent",task="control-ui-pr"} 12
 openclaw_session_row_selection_resets_total 2
@@ -443,9 +451,23 @@ openclaw_worker_retired_total{reason="idle_timeout",script="sqlite-store.worker.
   }
   expectMetrics(
     metrics.render(),
-  )(`openclaw_child_process_spawn_total{family="node",operation="none"} 5
-openclaw_child_process_spawn_total{family="node",operation="sqlite.scoped-read.broker"} 1
-openclaw_child_process_spawn_total{family="git",operation="repository.identities"} 4`);
+  )(`openclaw_child_process_spawn_total{family="node",operation="none",thread="unknown",transport="unknown"} 5
+openclaw_child_process_spawn_total{family="node",operation="sqlite.scoped-read.broker",thread="unknown",transport="unknown"} 1
+openclaw_child_process_spawn_total{family="git",operation="repository.identities",thread="unknown",transport="unknown"} 4`);
+  for (const transport of ["native.descriptor", "native.no-broker", "broker"] as const) {
+    metrics.record({
+      type: "diagnostic.child_process.spawn",
+      family: "git",
+      operation: "workspace.inventory",
+      transport,
+      thread: "main",
+      count: 2,
+      intervalMs: 60_000,
+    });
+    expectMetrics(metrics.render())(
+      `openclaw_child_process_spawn_total{family="git",operation="workspace.inventory",thread="main",transport="${transport}"} 2`,
+    );
+  }
 });
 
 it("accumulates trusted and internal runtime windows without recounting scrapes", () => {

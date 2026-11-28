@@ -1,6 +1,6 @@
 import type { DesktopAvailability, EnvironmentSummary } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo, onSettled } from "solid-js";
+import { For, Show, createMemo, createUniqueId, onSettled } from "solid-js";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { Icon } from "../solid/icon.tsx";
@@ -243,6 +243,8 @@ function DesktopHostSetupNotice(props: { setup: DesktopHostSetup; loading: boole
 
 export function DesktopPicker(props: {
   automatic: boolean;
+  notice?: string | null;
+  onDisconnect: () => void;
   environments: EnvironmentSummary[];
   hostSetup?: DesktopHostSetup | null;
   loading: boolean;
@@ -252,6 +254,25 @@ export function DesktopPicker(props: {
   onConnect: (environmentId: string) => void;
   onRefresh: () => void;
 }) {
+  const nameFor = (environment: EnvironmentSummary) => {
+    const label = environment.label?.trim();
+    if (desktopSourceForEnvironment(environment).kind === "host") {
+      return props.presentation === "desktop" && label ? label : t("desktop.thisMachine");
+    }
+    return label && environment.id !== `node:${label}` ? label : environment.id;
+  };
+  const repeatedNames = createMemo(() => {
+    const seen = new Set<string>();
+    const repeated = new Set<string>();
+    for (const environment of props.environments) {
+      const name = nameFor(environment);
+      if (seen.has(name)) {
+        repeated.add(name);
+      }
+      seen.add(name);
+    }
+    return repeated;
+  });
   return (
     <>
       {props.automatic ? (
@@ -265,11 +286,24 @@ export function DesktopPicker(props: {
           {props.hostSetup ? (
             <DesktopHostSetupNotice setup={props.hostSetup} loading={props.loading} />
           ) : (
-            <div class="desktop-status" role="status">
-              <button class="desktop-button" type="button" onClick={() => props.onRefresh()}>
-                {t("common.retry")}
-              </button>
-            </div>
+            (props.loading || props.notice) && (
+              <PanelEmptyState
+                presentation={props.presentation}
+                icon={<Icon name="monitor" />}
+                heading={t("desktop.title")}
+                description={props.loading ? t("desktop.loading") : (props.notice ?? "")}
+                action={
+                  <button
+                    class="desktop-button desktop-source-retry"
+                    type="button"
+                    aria-label={props.loading ? t("desktop.disconnect") : undefined}
+                    onClick={() => (props.loading ? props.onDisconnect() : props.onRefresh())}
+                  >
+                    {t(props.loading ? "desktop.disconnect" : "common.retry")}
+                  </button>
+                }
+              />
+            )
           )}
         </>
       ) : (
@@ -325,7 +359,8 @@ export function DesktopPicker(props: {
                   <DesktopEnvironment
                     environment={environment()}
                     onConnect={props.onConnect}
-                    useLabel={props.presentation === "desktop"}
+                    name={nameFor(environment())}
+                    showId={repeatedNames().has(nameFor(environment()))}
                   />
                 )}
               </For>
@@ -340,17 +375,26 @@ export function DesktopPicker(props: {
 function DesktopEnvironment(props: {
   environment: EnvironmentSummary;
   onConnect: (environmentId: string) => void;
-  useLabel?: boolean;
+  name: string;
+  showId: boolean;
 }) {
+  const nameId = createUniqueId();
   return (
     <div class="desktop-environment">
       <div class="desktop-environment__details">
-        <div class="desktop-environment__id">
-          {props.useLabel && props.environment.label
-            ? props.environment.label
-            : desktopSourceForEnvironment(props.environment).kind === "host"
-              ? t("desktop.thisMachine")
-              : props.environment.id}
+        <div id={nameId} class="desktop-environment__id">
+          <span
+            class="desktop-environment__label"
+            data-identifier={props.name === props.environment.id ? "true" : undefined}
+            title={props.name}
+          >
+            <bdi>{props.name}</bdi>
+          </span>
+          {props.showId && props.name !== props.environment.id && (
+            <span class="desktop-environment__qualifier" title={props.environment.id}>
+              <bdi dir="ltr">{props.environment.id}</bdi>
+            </span>
+          )}
         </div>
         <div class="desktop-environment__meta">
           <span>{props.environment.worker?.state ?? props.environment.status}</span>
@@ -369,6 +413,7 @@ function DesktopEnvironment(props: {
       <button
         class="desktop-button desktop-button--primary"
         type="button"
+        aria-describedby={nameId}
         onClick={() => props.onConnect(props.environment.id)}
       >
         {t("desktop.connect")}

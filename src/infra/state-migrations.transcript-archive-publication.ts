@@ -203,6 +203,7 @@ export function repairPublishedTranscriptArchive(params: {
   params.signal?.throwIfAborted();
   assertAgentDatabaseMaintenanceAuthority();
   replaceFileAtomicSync({
+    allowDrvfsRenameRecovery: true,
     beforeRename: () => {
       params.signal?.throwIfAborted();
       // Staging and fsync can outlive the timer-driven lease heartbeat. Recheck

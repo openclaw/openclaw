@@ -136,6 +136,6 @@ export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: Runt
   if (
     Object.values(updated.agents?.defaults?.models ?? {}).every((entry) => !entry?.alias?.trim())
   ) {
-    runtime.log("No aliases configured.");
+    runtime.log("No explicit model aliases remain in your config.");
   }
 }

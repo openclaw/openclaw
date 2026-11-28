@@ -7,7 +7,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import { readTranscriptStorageRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import type { CompactionProvider } from "../../plugins/compaction-provider.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";

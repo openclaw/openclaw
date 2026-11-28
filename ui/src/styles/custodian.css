@@ -409,6 +409,8 @@ openclaw-custodian-page {
 }
 
 .custodian-surface .agent-chat__composer-input-row {
+  /* Unlike Chat's footer, this row carries Send beside the editor. */
+  padding-inline-end: var(--chat-composer-editor-inset-block);
   padding-bottom: var(--chat-composer-editor-inset-block);
 }
 
@@ -524,6 +526,8 @@ openclaw-custodian-page {
 }
 
 .custodian__change-card {
+  /* Dotted configuration paths appear in both the summary and the disclosure. */
+  overflow-wrap: anywhere;
   padding: 11px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);

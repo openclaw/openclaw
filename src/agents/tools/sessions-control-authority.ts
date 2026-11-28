@@ -1,7 +1,6 @@
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveOperatorRolePolicyForAssignment } from "../../gateway/operator-role-policy.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
@@ -19,7 +18,7 @@ export async function prepareSessionControlTarget(params: {
   sessionKey: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string | null;
-  operation: "archive" | "restore" | "stop";
+  operation: "archive" | "restore" | "stop" | "snooze";
   authority?: AdmittedRunOperatorAuthority;
 }) {
   // Identity-only callers compose their own invocation guard. In particular, accepted
@@ -81,7 +80,7 @@ export async function prepareSessionControlTarget(params: {
       if (!source) {
         return;
       }
-      if (!profile || profile.profileId !== source.authority.profileId || !profile.isCurrent()) {
+      if (!profile || profile.profileId !== source.authority.profileId) {
         throw new ToolAuthorizationError(
           "Session controls require a current authenticated profile.",
         );
@@ -101,19 +100,16 @@ export async function prepareSessionControlTarget(params: {
         },
         currentFacts,
         {
-          policy: resolveOperatorRolePolicyForAssignment(
-            profile.profileId,
-            profile.role,
-            cfg,
-            profile.githubLogin ?? null,
-          ),
+          // The role this turn was admitted with; a role change applies to the next turn.
+          policy: source.authority.readCurrentRoleFacts?.().policy,
           aliases: new Set(profile.aliases),
         },
       );
       if (denied) {
         throw new ToolAuthorizationError("Session control access was revoked or denied.");
       }
-      if (source.allows("operator.admin")) {
+      // Sidebar snooze/wake requires ordinary write access, not archive's creator check.
+      if (params.operation === "snooze" || source.allows("operator.admin")) {
         return;
       }
       const creatorId = sessionCreatorProfileId(current.createdActor);

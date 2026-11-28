@@ -17,6 +17,7 @@ import { performance, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -109,12 +110,7 @@ try {
   global.gc();
   await nextTurn();
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   observer.observe({ entryTypes: ["gc"] });
   const before = { memory: process.memoryUsage(), load: loadavg() };

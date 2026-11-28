@@ -4,7 +4,6 @@
 :root[data-theme="absolutely-light"] {
   --accent-foreground: #ffffff;
   --chat-send-foreground: var(--accent-foreground);
-  --sidebar-rail-action-stroke-width: 2.15px;
   --sidebar-rail-surface: color-mix(in srgb, var(--text) 4%, var(--bg-content));
   --bg: color-mix(in srgb, var(--text) 2%, var(--bg-content));
   --bg-muted: color-mix(in srgb, var(--text) 4%, var(--bg-content));

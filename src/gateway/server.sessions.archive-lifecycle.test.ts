@@ -1,5 +1,11 @@
+import { mkdtempSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import * as processControl from "../agents/bash-process-control.js";
+import { getSession, listRunningSessions } from "../agents/bash-process-registry.js";
+import { createExecTool } from "../agents/bash-tools.exec-run.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
@@ -11,6 +17,8 @@ import {
 } from "../sessions/session-controller.lifecycle.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { isPidAlive } from "../shared/pid-alive.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   disposeSessionReadContexts,
   initializeSessionReadContext,
@@ -35,6 +43,7 @@ import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   expectNoSessionQueueCleanup,
+  getSessionsHandlers,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
@@ -42,6 +51,8 @@ import { registerWorkerInferenceSessionControl } from "./worker-environments/inf
 import { createWorkerInferenceDrainService } from "./worker-environments/inference-control.test-helpers.js";
 import type { WorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
+
+vi.mock("../agents/bash-process-control.js", { spy: true });
 
 const {
   createConfiguredGlobalAgentSessionStore,
@@ -310,6 +321,99 @@ archiveTest(
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
     expect(await replacement).toBeInstanceOf(Error);
   },
+);
+
+test.for(["disconnect", "Stop", "profile change", "invalidation", "grant revocation"] as const)(
+  "receipt Archive settles only its admitted drain after %s",
+  (change, { signal }) =>
+    withArchiveCleanup(signal, async (cleanup) => {
+      const session = await activeArchive("receipt-drain", cleanup);
+      const { active, persistence, storePath, sessionKey, sessionId } = session;
+      const queuedKey = "agent:main:receipt-queued";
+      await upsertSessionEntryCore(
+        { storePath, sessionKey: queuedKey },
+        { sessionId: "queued", updatedAt: 1 },
+      );
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      cleanup.releaseOnAbort(() => release.resolve());
+      const predecessor = cleanup.track(
+        runSessionMutation({
+          scope: storePath,
+          identities: [queuedKey, "queued"],
+          run: () => {
+            entered.resolve();
+            return release.promise;
+          },
+        }),
+      );
+      await waitForArchivePhase(entered.promise, predecessor, signal);
+
+      const client = identifiedClient("receipt-owner");
+      const connection = new AbortController();
+      const stop = new AbortController();
+      let grantCurrent = true;
+      client.connect.caps = ["personal-session-pins"];
+      client.connectionSignal = connection.signal;
+      const starts: string[] = [];
+      const context = await archiveLifecycleRequestContext({
+        ...active.context,
+        workerEnvironmentService: createWorkerInferenceDrainService((id) => {
+          starts.push(id);
+          return { drained: Promise.resolve(), hasWork: () => false, release() {} };
+        }),
+      });
+      context.isConnectionActive = (id, expected) =>
+        id === client.connId && expected === client && !connection.signal.aborted;
+      const respond = vi.fn();
+      const params = {
+        patch: { archived: true, requestArchiveUndo: true },
+        targets: [archiveTarget(sessionKey, sessionId), archiveTarget(queuedKey, "queued")],
+      };
+      const method = "sessions.patchMany";
+      const handlers = await getSessionsHandlers();
+      const archive = cleanup.track(
+        Promise.resolve(
+          handlers[method]!({
+            req: { type: "req", id: "receipt-drain", method, params },
+            params,
+            respond,
+            client,
+            context,
+            signal: stop.signal,
+            hasCurrentClientAuthority: () => grantCurrent,
+            isWebchatConnect: () => false,
+          }),
+        ).catch((error: unknown) => error),
+      );
+      await waitForArchivePhase(active.terminalStarted, archive, signal);
+      expect(active.controller.signal.aborted).toBe(true);
+      expect(session.read()?.archivedAt).toBeUndefined();
+      if (change === "disconnect") {
+        connection.abort();
+      } else if (change === "grant revocation") {
+        grantCurrent = false;
+      } else if (change === "Stop") {
+        stop.abort();
+      } else if (change === "profile change") {
+        client.authenticatedUserProfile!.profileId = "other";
+      } else if (change === "invalidation") {
+        client.invalidated = true;
+      }
+      release.resolve();
+      persistence.resolve();
+      expect(await archive).toMatchObject(
+        change === "Stop" ? { name: "AbortError" } : { error: { code: "FORBIDDEN" } },
+      );
+      expect(starts).toEqual([sessionId]);
+      expect(respond).not.toHaveBeenCalled();
+      const queued = loadSessionEntry({ storePath, sessionKey: queuedKey });
+      expect(queued?.sessionId).toBe("queued");
+      expect(queued?.archivedAt).toBeUndefined();
+      expect(session.read()?.archivedAt).toEqual(
+        change === "Stop" ? undefined : expect.any(Number),
+      );
+    }),
 );
 
 archiveTest(
@@ -747,4 +851,76 @@ archiveTest(
     expect(current().state).toBe("active");
     expect(dispatch).not.toHaveBeenCalled();
   },
+);
+
+test.each([true, false])(
+  "archive stops the chat's service and leftover process (stop confirmed=%s)",
+  async (confirmed) => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { storePath, sessionKey, sessionId } = await createArchiveSession(
+      `archive-processes-${confirmed}`,
+    );
+    const sleeper = `${JSON.stringify(process.execPath)} -e 'setTimeout(() => {}, 60000)'`;
+    const pids = await withEnvAsync(
+      {
+        OPENCLAW_SERVICE_MARKER: "archive-test",
+        OPENCLAW_EXEC_SHELL_SNAPSHOT: "0",
+        SHELL: "/bin/sh",
+      },
+      async () => {
+        const exec = createExecTool({
+          host: "gateway",
+          mode: "full",
+          ask: "off",
+          allowBackground: true,
+          notifyOnExit: false,
+          scopeKey: sessionKey,
+          cwd: mkdtempSync(path.join(os.tmpdir(), "archive-exec-")),
+        });
+        const service = await exec.execute("service", {
+          command: `echo PID=$$; exec ${sleeper}`,
+          background: true,
+        });
+        const { sessionId: id } = service.details as { sessionId: string };
+        await vi.waitFor(() => expect(getSession(id)?.aggregated).toMatch(/PID=\d+/));
+        const left = await exec.execute("left", {
+          command: `${sleeper} >/dev/null 2>&1 & echo PID=$!`,
+        });
+        return [
+          getSession(id)!.aggregated,
+          (left.details as { aggregated: string }).aggregated,
+        ].map((text) => Number(/PID=(\d+)/.exec(text)![1]));
+      },
+    );
+    try {
+      expect(pids.every(isPidAlive)).toBe(true);
+      if (!confirmed) {
+        vi.mocked(processControl.stopSessionExecProcesses).mockRejectedValueOnce(
+          new Error("Command cleanup could not be confirmed"),
+        );
+      }
+      const archived = await archiveSession(sessionKey, sessionId);
+      if (confirmed) {
+        expect(archived.ok).toBe(true);
+        expectArchived(storePath, sessionKey);
+        expect(pids.filter(isPidAlive)).toEqual([]);
+        expect(listRunningSessions().filter((session) => session.scopeKey === sessionKey)).toEqual(
+          [],
+        );
+      } else {
+        expectArchiveUnavailable(archived, storePath, sessionKey);
+      }
+    } finally {
+      for (const pid of pids) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Already stopped.
+        }
+      }
+    }
+  },
+  60_000,
 );

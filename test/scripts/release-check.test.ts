@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { create } from "tar";
+import { create } from "tar/raw";
 import { describe, expect, vi } from "vitest";
 import { parse } from "yaml";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";

@@ -23,6 +23,7 @@ import { measureAgentStartup } from "../agents/startup-timing.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { readCliGatewayRunFailure, recordCliGatewayRunFailure } from "../cli/failure-output.js";
 import { prepareCliGatewayStateAccess } from "../cli/gateway-rpc.runtime.js";
 import { withProgress } from "../cli/progress.js";
@@ -244,19 +245,13 @@ async function loadRemoteGatewayRosterWithShellEnvFallback(
   }
 }
 
-function missingAgentMessageError(): Error {
-  return new Error(
-    `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')} or ${formatCliCommand("openclaw agent --message-file <path> --agent <id>")}.`,
-  );
-}
-
 function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
   const raw =
     opts.timeout !== undefined
       ? parseStrictNonNegativeInteger(opts.timeout)
       : (opts.cfg.agents?.defaults?.timeoutSeconds ?? 600);
   if (raw === undefined) {
-    throw new Error(
+    throwExpectedCliError(
       `Invalid --timeout. Use seconds as a non-negative integer, for example --timeout 600. Use --timeout 0 to disable the timeout.`,
     );
   }
@@ -296,7 +291,7 @@ function validateExplicitSessionKeyForDispatch(
   }
 
   if (classifySessionKeyShape(sessionKey) === "malformed_agent") {
-    throw new Error(
+    throwExpectedCliError(
       `Invalid --session-key "${sessionKey}". Agent-prefixed session keys must use agent:<agent-id>:<session-key>.`,
     );
   }
@@ -308,7 +303,7 @@ function validateExplicitSessionKeyForDispatch(
   const agentId = normalizeAgentId(agentIdRaw);
   const sessionAgentId = resolveAgentIdFromSessionKey(sessionKey);
   if (sessionAgentId !== agentId) {
-    throw new Error(
+    throwExpectedCliError(
       `Agent id "${agentIdRaw}" does not match session key agent "${sessionAgentId}".`,
     );
   }
@@ -538,7 +533,7 @@ async function agentViaGatewayCommand(
     !explicitSessionKey &&
     !hasImplicitGlobalTarget
   ) {
-    throw new Error(
+    throwExpectedCliError(
       `No target session selected. Use --agent <id>, --session-key <key>, --session-id <id>, or --to <E.164>. Run ${formatCliCommand("openclaw agents list")} to see agents.`,
     );
   }
@@ -551,7 +546,7 @@ async function agentViaGatewayCommand(
     const knownAgents =
       opts.remoteGatewayRoster?.agentIds ?? (remoteGateway ? undefined : listAgentIds(cfg));
     if (knownAgents && !knownAgents.includes(agentId)) {
-      throw new Error(
+      throwExpectedCliError(
         `Unknown agent id "${agentIdRaw}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
       );
     }
@@ -862,7 +857,7 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
     ["--to", opts.to],
   ]) {
     if (value !== undefined && !value.trim()) {
-      throw new Error(`${flag} must not be blank`);
+      throwExpectedCliError(`${flag} must not be blank`);
     }
   }
   if (opts.json === true) {
@@ -871,21 +866,23 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
   const { messageFile: rawMessageFile, ...rest } = opts;
   const messageFile = readNonBlankString(rawMessageFile);
   if (opts.message !== undefined && messageFile) {
-    throw new Error("Use either --message or --message-file, not both.");
+    throwExpectedCliError("Use either --message or --message-file, not both.");
   }
   if (rawMessageFile !== undefined && !messageFile) {
-    throw new Error("--message-file must not be empty.");
+    throwExpectedCliError("--message-file must not be empty.");
   }
   const message = messageFile ? await readAgentMessageFile(messageFile) : (opts.message ?? "");
   if (!messageFile && !message.trim()) {
-    throw missingAgentMessageError();
+    throwExpectedCliError(
+      `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')} or ${formatCliCommand("openclaw agent --message-file <path> --agent <id>")}.`,
+    );
   }
   // `/compact` cannot run as a plain CLI agent turn: the slash-command handler
   // rejects CLI-originated senders, so the message would fall through to a
   // normal turn and exit 0 without compacting anything (issue #90640 Gap B).
   // Fail loudly and point at the first-class command instead of no-opping.
   if (isCompactControlCommand(message)) {
-    throw new Error(
+    throwExpectedCliError(
       "Slash commands cannot be executed via --message from the CLI. Use: openclaw sessions compact <key>",
     );
   }

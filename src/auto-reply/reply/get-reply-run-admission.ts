@@ -96,11 +96,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionStore,
   } = params;
   const assertPreparationActive = composeSessionSourceAssertion(
-    [
-      opts?.operatorAuthority?.assertCurrent,
-      opts?.internalEventExecution?.assertCurrent,
-      opts?.scheduledAutomation?.assertCurrent,
-    ],
+    [opts?.internalEventExecution?.assertCurrent, opts?.scheduledAutomation?.assertCurrent],
     (assertSourceCurrent) => {
       opts?.abortSignal?.throwIfAborted();
       opts?.replyOperation?.abortSignal.throwIfAborted();
@@ -317,11 +313,17 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     const explicitThink =
       (directives.hasThinkDirective && directives.thinkLevel !== undefined) ||
       explicitThinkingLevelOverride !== undefined;
-    if (explicitThink) {
-      return finishReplyPreparation(typing, () => ({
-        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog, thinkingRuntime)}.`,
-      }));
+    if (explicitThink && !opts?.normalizeThinkingLevelOverride) {
+      const text = `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog, thinkingRuntime)}.`;
+      // Session events settle before a model run starts here. Give their owner the
+      // same actionable reason the interactive caller receives.
+      opts?.internalEventExecution?.onFailed?.(text);
+      return finishReplyPreparation(typing, () => ({ text }));
     }
+  }
+
+  if (opts?.normalizeThinkingLevelOverride && explicitThinkingLevelOverride !== undefined) {
+    resolvedThinkLevel = thinkingSelection.level;
   }
 
   const providedReplyOperation = opts?.replyOperation;

@@ -13,6 +13,7 @@ import { expect } from "vitest";
 import {
   assertStableProviderPrefix,
   snapshotProviderPrefix,
+  omitResponsesReplayEnvelopes,
   type ProviderPrefixSnapshot,
 } from "../../scripts/e2e/lib/anthropic-cache/prefix-stability.mjs";
 import type { OpenClawConfig } from "../config/config.js";
@@ -252,18 +253,7 @@ export async function runEmbeddedReleasePrefixScenario(
             } else {
               effectiveInput = payload.input;
             }
-            effectivePayload = {
-              ...payload,
-              input: effectiveInput.map((item) => {
-                // Responses may omit provider item envelopes during replay; call IDs
-                // and function-call-output envelopes remain part of the input contract.
-                return isRecord(item) &&
-                  (item.type === "function_call" ||
-                    (item.type === "message" && item.role === "assistant"))
-                  ? omitWireFields(item, ["id", "status"])
-                  : item;
-              }),
-            };
+            effectivePayload = { ...payload, input: omitResponsesReplayEnvelopes(effectiveInput) };
           }
           // Stored outputs have provider-owned object key order. Canonicalize the
           // effective context only; the captured wire and every content byte stay intact.

@@ -37,16 +37,10 @@ export function runOpenAIOAuthTlsPreflight(options?: {
   return runHttpTlsPreflight(OPENAI_AUTH_PROBE_URL, options);
 }
 
+/** CLI-only repair text (doctor) for a `tls-cert` preflight failure; sign-in never shows it. */
 export function formatOpenAIOAuthTlsPreflightFix(
   result: Exclude<HttpTlsPreflightResult, { ok: true }>,
 ): string {
-  if (result.kind !== "tls-cert") {
-    return [
-      "OpenAI OAuth prerequisites check failed due to a network error before the browser flow.",
-      `Cause: ${result.message}`,
-      "Verify DNS/firewall/proxy access to auth.openai.com and retry.",
-    ].join("\n");
-  }
   const prefix = resolveHomebrewPrefixFromExecPath(process.execPath);
   const certBundlePath = prefix ? path.join(prefix, "etc", "openssl@3", "cert.pem") : null;
   const lines = [

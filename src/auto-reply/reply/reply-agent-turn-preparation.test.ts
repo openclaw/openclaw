@@ -1,5 +1,5 @@
 import { assert, beforeEach, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { bindIngressLifecycleToReplyOptions } from "../../channels/message/ingress-drain-lifecycle.js";
 import { createChannelIngressDrain } from "../../channels/message/ingress-drain.js";
@@ -19,10 +19,7 @@ import { createSessionGoalFixture } from "../../gateway/session-goal.test-suppor
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import { releaseSessionControllerClaim } from "../../sessions/session-controller.mailbox.js";
 import * as configuredOwners from "../../state/user-channel-identity-operations.js";
-import {
-  bindCommandOwnerAuthority,
-  captureCommandOwnerAssertion,
-} from "../command-owner-authority.js";
+import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import type { FollowupRun } from "./queue/types.js";
 import { createPreparationRun } from "./reply-agent-turn-preparation.test-support.js";
 import type { ScheduledSessionAutomation } from "./session-event-contract.js";
@@ -270,13 +267,15 @@ it("reports a queued event's admission refusal to its source before consuming it
 });
 
 it.each([
-  { match: "sender-id", enqueuedOwner: false },
-  { match: "sender-id", enqueuedOwner: true },
-  { match: "sender-e164", enqueuedOwner: false },
-  { match: "sender-e164", enqueuedOwner: true },
+  { match: "sender-id", enqueuedOwner: false, currentOwner: true },
+  { match: "sender-id", enqueuedOwner: true, currentOwner: false },
+  { match: "sender-id", enqueuedOwner: true, currentOwner: true },
+  { match: "sender-e164", enqueuedOwner: false, currentOwner: true },
+  { match: "sender-e164", enqueuedOwner: true, currentOwner: false },
+  { match: "sender-e164", enqueuedOwner: true, currentOwner: true },
 ] as const)(
-  "resolves $match owner privileges at the admission fence after enqueue owner=$enqueuedOwner",
-  async ({ match, enqueuedOwner }) => {
+  "recomputes $match owner privileges from enqueue owner=$enqueuedOwner under current owner=$currentOwner",
+  async ({ match, enqueuedOwner, currentOwner }) => {
     const queued = createRun();
     const channel = match === "sender-e164" ? "whatsapp" : "telegram";
     const senderId = match === "sender-e164" ? "123456789@lid" : "alice";
@@ -286,9 +285,9 @@ it.each([
     const originalConfig = {
       commands: { ownerAllowFrom: [enqueuedOwner ? configuredOwner : otherOwner] },
     };
-    const admittedOwner = !enqueuedOwner;
+    const admittedOwner = currentOwner;
     const admittedConfig = {
-      commands: { ownerAllowFrom: [admittedOwner ? configuredOwner : otherOwner] },
+      commands: { ownerAllowFrom: [currentOwner ? configuredOwner : otherOwner] },
     };
     const laterConfig = { ...admittedConfig, tools: { deny: ["message"] } };
     const durableOwnerRead = vi
@@ -325,13 +324,11 @@ it.each([
         traceAuthorized: admittedOwner,
       });
       expect(execution.run.config).toEqual(admittedConfig);
-      const assertOwner = captureCommandOwnerAssertion(execution.run);
-      if (admittedOwner) {
-        expect(assertOwner).toBeDefined();
-        expect(assertOwner).not.toThrow();
-        setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: [] } });
-      }
-      expect(assertOwner).toThrow("Channel operator authority changed");
+      const owner = getCommandOwnerAuthority(execution.run);
+      expect(owner?.isCurrent()).toBe(admittedOwner);
+      // The owner decision is fixed at admission; a later config change does not flip it.
+      setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: [] } });
+      expect(owner?.isCurrent()).toBe(admittedOwner);
       expect(queued.run).toMatchObject({
         requesterOrigin: { senderId, senderE164 },
         senderIsOwner: enqueuedOwner,
@@ -344,47 +341,68 @@ it.each([
   },
 );
 
-it.each([false, true])(
-  "preserves operator precedence only while custody is live, revoked=%s",
-  async (revoked) => {
+it.each([
+  { previousOwner: false, allowed: false },
+  { previousOwner: false, allowed: true },
+  { previousOwner: true, allowed: false },
+  { previousOwner: true, allowed: true },
+])(
+  "readmits a queued event's command-owner reference once (previous=$previousOwner, allowed=$allowed)",
+  async ({ previousOwner, allowed }) => {
     const queued = createRun();
-    const controller = new AbortController();
-    const assertCurrent = vi.fn(() => controller.signal.throwIfAborted());
-    queued.operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: revoked ? "alice" : "alice-profile",
-      scopes: ["operator.admin"],
-      assertCurrent,
-      signal: controller.signal,
+    queued.run.senderIsOwner = previousOwner;
+    const recoveryReference = { version: 2 as const, id: "11111111-1111-4111-8111-111111111111" };
+    bindCommandOwnerAuthority(queued.run, {
+      recoveryReference,
+      isCurrent: () => true,
     });
-    queued.run.requesterOrigin = {
-      sessionKey: revoked ? "main" : "agent:original:telegram:direct:alice",
-      messageProvider: "telegram",
-      senderId: "alice",
-      ...(!revoked && { operatorProfileId: "alice-profile" }),
-    };
-    queued.run.senderIsOwner = true;
-    if (revoked) {
-      state.resolveConfig.mockImplementation(async (config) => {
-        controller.abort(new Error("operator source retired"));
-        return config;
+    const generation = new Int32Array(new SharedArrayBuffer(8));
+    Atomics.store(generation, 0, Number(allowed));
+    using _ = vi
+      .spyOn(configuredOwners, "prepareConfiguredCommandOwnerAuthority")
+      .mockResolvedValue({
+        recoveryReference,
+        isCurrent: Object.assign(() => Atomics.load(generation, 0) === 1, {
+          transferable: {
+            generation: generation.buffer,
+            lifetime: { revision: new SharedArrayBuffer(8), epoch: 0n },
+            entries: [],
+          },
+        }),
       });
-      await expect(prepare(queued)).rejects.toThrow("operator source retired");
-      expect(state.admitReply).toHaveBeenCalledOnce();
-      expect(operation.complete).toHaveBeenCalledOnce();
-      expect(state.preflight).not.toHaveBeenCalled();
-    } else {
-      queued.run.config = { commands: { ownerAllowFrom: ["telegram:other"] } };
-      queued.run.traceAuthorized = true;
-      using durableOwnerRead = vi
-        .spyOn(configuredOwners, "prepareConfiguredCommandOwnerAuthority")
-        .mockResolvedValue(undefined);
-      const turn = await admitted(prepare(queued));
-      expect(turn.queued.run).toMatchObject({ senderIsOwner: true, traceAuthorized: true });
-      expect(assertCurrent).toHaveBeenCalled();
-      expect(durableOwnerRead).not.toHaveBeenCalled();
-    }
+    const turn = await admitted(prepare(queued));
+    expect(turn.queued.run).toMatchObject({
+      senderIsOwner: allowed,
+      traceAuthorized: allowed,
+    });
+    const owner = getCommandOwnerAuthority(turn.queued.run);
+    Atomics.store(generation, 0, 0);
+    expect(owner?.isCurrent()).toBe(allowed);
   },
 );
+
+it("preserves operator precedence for the admitted operator", async () => {
+  const queued = createRun();
+  queued.operatorAuthority = createTestOperatorAuthority({
+    profileId: "alice-profile",
+    scopes: ["operator.admin"],
+  });
+  queued.run.requesterOrigin = {
+    sessionKey: "agent:original:telegram:direct:alice",
+    messageProvider: "telegram",
+    senderId: "alice",
+    operatorProfileId: "alice-profile",
+  };
+  queued.run.senderIsOwner = true;
+  queued.run.config = { commands: { ownerAllowFrom: ["telegram:other"] } };
+  queued.run.traceAuthorized = true;
+  using durableOwnerRead = vi
+    .spyOn(configuredOwners, "prepareConfiguredCommandOwnerAuthority")
+    .mockResolvedValue(undefined);
+  const turn = await admitted(prepare(queued));
+  expect(turn.queued.run).toMatchObject({ senderIsOwner: true, traceAuthorized: true });
+  expect(durableOwnerRead).not.toHaveBeenCalled();
+});
 it.each([
   "paused",
   "blocked",

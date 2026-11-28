@@ -21,7 +21,7 @@ import { readUserTurnMentionInvitation } from "../../sessions/user-turn-transcri
 import type { AgentMessage } from "../runtime/index.js";
 import { getSessionCompactionPersistence } from "./session-compaction-persistence.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
-import { SessionManagerCore } from "./session-manager-core.js";
+import { SessionManagerHydration } from "./session-manager-hydration.js";
 import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
 import {
   adoptPersistedMessage,
@@ -32,7 +32,7 @@ import {
 import type { SessionEntry } from "./session-manager-types.js";
 
 /** Released synchronous SDK methods keep their native transaction and publication contract. */
-export class SessionManagerNativePersistence extends SessionManagerCore {
+export class SessionManagerNativePersistence extends SessionManagerHydration {
   #initialWriter: InitialSessionTranscriptWriter | undefined;
   #navigationEpoch = 0;
 

@@ -1,4 +1,5 @@
 import { isOwnedTranscriptPayload } from "../config/sessions/transcript-json.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { projectModelContextMessages } from "../shared/model-context-message.js";
 import type { PluginHookName } from "./types.js";
 
@@ -114,7 +115,7 @@ export function cloneHookIsolationValue<T>(hookName: PluginHookName, value: T): 
   }
 }
 
-/** Copy dispatch envelopes while retaining only payloads sealed by the transcript owner. */
+/** Copy dispatch envelopes while retaining only proven immutable payloads. */
 export function clonePromptHookEvent<T extends { messages: unknown[] }>(
   hookName: PluginHookName,
   event: T,
@@ -188,7 +189,8 @@ export function clonePromptHookEvent<T extends { messages: unknown[] }>(
               value !== null &&
                 typeof value === "object" &&
                 ((ownedMessage !== undefined && Reflect.get(ownedMessage, key) === value) ||
-                  isOwnedTranscriptPayload(value)),
+                  isOwnedTranscriptPayload(value) ||
+                  isDeeplyFrozenPlainData(value)),
             );
           }
           messages[index] = envelope;

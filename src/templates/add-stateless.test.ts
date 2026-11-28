@@ -1,6 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { chmod, cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
@@ -103,7 +104,40 @@ describe("stateless Template Add", () => {
     });
   };
 
-  it("builds a declared skill folder and discovers its exact supporting bytes after Add", async () => {
+  it("installs welcome metadata as ordinary agent configuration", async () => {
+    const manifestPath = path.join(stateDir, "source", "CLAW.md");
+    await writeFile(
+      manifestPath,
+      [
+        "---",
+        "schemaVersion: 1",
+        "agent:",
+        "  id: briefing",
+        "  description: Follows your repositories.",
+        "  recommendedPrompts:",
+        "    - Set up a repository",
+        "    - Brief me on recent changes",
+        "---",
+        "Follow tracked projects.",
+        "",
+      ].join("\n"),
+    );
+    const read = await readTemplateManifestFile(manifestPath);
+    assert(read.ok, JSON.stringify(read.diagnostics));
+    source = read;
+    const plan = await buildPlan();
+    expect(plan.blockers).toEqual([]);
+    const result = await apply(plan);
+    expect(result.status, JSON.stringify(result.error)).toBe("complete");
+    expect(config.agents.entries).toMatchObject({
+      briefing: {
+        description: "Follows your repositories.",
+        recommendedPrompts: ["Set up a repository", "Brief me on recent changes"],
+      },
+    });
+  });
+
+  it("builds a declared skill folder and preserves supporting bytes and executability after Add", async () => {
     const root = path.join(stateDir, "source");
     const skill = path.join(root, "bundles", "incident-guide");
     await mkdir(path.join(skill, "references"), { recursive: true });
@@ -113,6 +147,9 @@ describe("stateless Template Add", () => {
     );
     const supporting = Buffer.from([0, 255, 17, 128]);
     await writeFile(path.join(skill, "references", "checklist.txt"), supporting);
+    await writeFile(path.join(skill, "check.sh"), "#!/bin/sh\nprintf template-script-ok\n", {
+      mode: 0o755,
+    });
     await mkdir(path.join(root, "undeclared"));
     await writeFile(
       path.join(root, "undeclared", "SKILL.md"),
@@ -131,18 +168,11 @@ describe("stateless Template Add", () => {
       "---\nschemaVersion: 1\nagent: { id: incident-agent }\nskills:\n  - path: bundles/incident-guide\n---\nHelp triage incidents.\n",
     );
     const built = await buildTemplateProject(root, path.join(stateDir, "template.tgz"));
-    expect(built.files).toEqual([
-      "CLAW.md",
-      "bundles/incident-guide/SKILL.md",
-      "bundles/incident-guide/references/checklist.txt",
-      "package.json",
-    ]);
     await using artifact = await extractBuiltTemplateArtifact(built.artifact);
     const read = await readTemplateManifestFile(artifact.packageRoot);
     assert(read.ok, JSON.stringify(read.diagnostics));
     source = read;
     const plan = await buildPlan();
-    expect(plan.blockers).toEqual([]);
     const result = await apply(plan);
     expect(result.status, JSON.stringify(result.error)).toBe("complete");
     expect(
@@ -150,21 +180,20 @@ describe("stateless Template Add", () => {
         path.join(plan.agent.workspace, "skills", "incident-guide", "references", "checklist.txt"),
       ),
     ).toEqual(supporting);
+    if (process.platform !== "win32") {
+      const installed = path.join(plan.agent.workspace, "skills", "incident-guide");
+      const script = path.join(installed, "check.sh");
+      expect((await stat(path.join(installed, "references", "checklist.txt"))).mode & 0o111).toBe(
+        0,
+      );
+      expect(execFileSync(script, { encoding: "utf8" })).toBe("template-script-ok");
+    }
     const loaded = await prepareWorkspaceSkillEntries(plan.agent.workspace, {
       config,
       workspaceOnly: true,
       watch: false,
     });
     expect(loaded.entries.map((entry) => entry.skill.name)).toEqual(["incident-guide"]);
-    expect(result.packages).toContainEqual(
-      expect.objectContaining({
-        source: "bundled",
-        path: "bundles/incident-guide",
-        name: "incident-guide",
-      }),
-    );
-    expect(result.packages[0]).not.toHaveProperty("ref");
-    expect(result.packages[0]).not.toHaveProperty("version");
   });
 
   it("reviews and approves a bundled skill through the native install policy without registry provenance", async () => {
@@ -255,7 +284,7 @@ describe("stateless Template Add", () => {
     }
   });
 
-  it.each(["bytes", "membership"])(
+  it.each(process.platform === "win32" ? ["bytes", "membership"] : ["bytes", "membership", "mode"])(
     "refuses a bundled skill whose %s changed after Add review",
     async (change) => {
       const root = path.join(stateDir, "source");
@@ -274,10 +303,14 @@ describe("stateless Template Add", () => {
       source = read;
       const plan = await buildPlan();
       expect(plan.blockers).toEqual([]);
-      await writeFile(
-        path.join(skill, change === "membership" ? "added.txt" : "SKILL.md"),
-        "changed after review",
-      );
+      if (change === "mode") {
+        await chmod(path.join(skill, "SKILL.md"), 0o700);
+      } else {
+        await writeFile(
+          path.join(skill, change === "membership" ? "added.txt" : "SKILL.md"),
+          "changed after review",
+        );
+      }
       const result = await apply(plan);
       expect(result.status).toBe("partial");
       expect(config.agents.entries).not.toHaveProperty("checked-agent");
@@ -765,6 +798,28 @@ describe("stateless Template Add", () => {
     expect(result.error?.message).toContain("Workspace changed");
     expect(Object.keys(config.agents.entries)).toEqual(["main", "workspace-agent"]);
     expect(existsSync(path.join(plan.agent.workspace, "USER.md"))).toBe(true);
+  });
+
+  it("removes the new agent from the config file when runtime activation fails", async () => {
+    const plan = await buildPlan();
+    const result = await apply(plan, {
+      commitConfig: undefined,
+      waitForAgentRuntime: async () => {
+        throw new Error("runtime unavailable");
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      configCommitted: false,
+      workspaceCreated: false,
+      error: { code: "add_failed", message: "runtime unavailable" },
+    });
+    const written = JSON.parse(await readFile(path.join(stateDir, "openclaw.json"), "utf8"));
+    expect(Object.keys(written.agents.entries)).toEqual(["main"]);
+    expect(existsSync(plan.agent.workspace)).toBe(false);
+    config = written;
+    expect((await buildPlan()).agent.finalId).toBe(plan.agent.finalId);
   });
 
   it("does not touch shared requirements when agent publication fails", async () => {

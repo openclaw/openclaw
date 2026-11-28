@@ -18,6 +18,7 @@ import { PerformanceObserver, performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { setRuntimeConfigSnapshot } from "../../src/config/runtime-snapshot.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const [prsPath, relevancePath, requestedIterations] = process.argv.slice(2);
 assert(prsPath && relevancePath);
@@ -146,12 +147,7 @@ const observer = new PerformanceObserver((list) => {
 });
 observer.observe({ entryTypes: ["gc"] });
 if (allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 const hostLoad = loadavg();
 const cpu = process.cpuUsage();

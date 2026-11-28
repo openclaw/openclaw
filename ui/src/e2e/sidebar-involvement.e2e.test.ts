@@ -95,6 +95,8 @@ suite.define(() => {
         await gateway.waitForRequest("sessions.list", { match: { involvingMe: true } });
         await sidebar.getByText("My dependency update", { exact: true }).waitFor();
         await toggle.waitFor();
+        // The old unfiltered frame also contains these rows, but has two children.
+        await expect.poll(async () => (await toggle.textContent())?.trim()).toBe("1");
         if ((await toggle.getAttribute("aria-expanded")) !== "true") {
           await toggle.click();
         }
@@ -117,7 +119,6 @@ suite.define(() => {
         expect(await row(unrelatedNestedKey).count()).toBe(0);
         expect(await row(sharedKey).count()).toBe(1);
         expect(await row(nestedKey).count()).toBe(1);
-        expect((await toggle.textContent())?.trim()).toBe("1");
         await chooseSidebarOwner(page, "all");
         await row(unrelatedKey).waitFor();
         await row(unrelatedNestedKey).waitFor();

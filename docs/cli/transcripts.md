@@ -266,6 +266,12 @@ Oversized rows or invalid cursors fail visibly.
 Summary participants and model/heuristic provenance are shown when available;
 older summaries need not contain them.
 
+Meeting notes, the Meetings transcript tab, and the full Markdown transcript
+order speech by its start time. Equal start times keep their append order.
+A turn without a usable time and explicit zone keeps its place between the surrounding
+groups of timed turns. Paginated API reads and JSONL exports follow append order.
+Clients can use their existing cursor to pick up late transcriptions.
+
 For compatibility with clients released before archive pagination, `transcripts.get`
 without `limit`, `cursor`, or `query` retains the most recent 2,000 utterances in
 chronological order, with each sanitized text clipped to 4,000 UTF-16 units.
@@ -346,7 +352,13 @@ so bounded readers see the notes before long transcripts.
 Gateway shutdown, restart, and capture-disable drainage save final heuristic notes
 without starting new model inference. You can regenerate model notes from the saved
 transcript with the tool's `summarize` action after the Gateway is available again.
-Participants come from speaker labels in first-appearance order, not model guesses.
+Notes use the first recorded name for each speaker ID. If two speakers have the
+same name, the second appears as `Sam (2)`, for example. When names overlap or
+change during a meeting, the model selects relevant remarks for each section.
+The notes quote those remarks with their recorded speakers. If someone assigns
+work to another person, the quote preserves who said it and whom they named.
+Recorders that supply only labels keep label-based attribution. JSONL exports preserve the original
+speaker ID and name on each utterance.
 Summary JSON records `source` as `model` or `heuristic` and, for model notes, the
 model reference used.
 

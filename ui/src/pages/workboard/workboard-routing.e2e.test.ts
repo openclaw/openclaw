@@ -153,11 +153,13 @@ suite.define(() => {
   it("refreshes board navigation after browser Back retains an unfinished card draft", async () => {
     await withPage(async (page) => {
       const gateway = await installWorkboard(page);
-      await page.goto(`${suite.server.baseUrl}apps`);
-      const sidebar = page.locator("openclaw-app-sidebar");
-      await button(sidebar, "Pages").click();
+      // The Workboard sidebar lists each board with its pin toggle.
+      await page.goto(`${suite.server.baseUrl}workboard`);
+      await boardEntry(page).hover();
       await button(boardEntry(page), "Pin").click();
       const pinned = pinnedBoard(page);
+      await pinned.waitFor();
+      await page.goto(`${suite.server.baseUrl}apps`);
       await pinned.click();
       await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
       await page.getByRole("button", { name: /New card/u }).click();

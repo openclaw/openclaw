@@ -2,7 +2,7 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeOptionalAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCronDeliverySessionKey } from "../session-target.js";
-import type { CronJob, CronMessageChannel } from "../types.js";
+import type { CronDelivery, CronJob, CronMessageChannel } from "../types.js";
 
 export type CronNotificationRouting = { defaultAgentId?: string };
 
@@ -62,6 +62,8 @@ export function resolveCronNotificationQueueOwner(
 }
 
 type CronFailureAlertRoute = {
+  target?: CronDelivery["target"];
+  directPolicy?: CronDelivery["directPolicy"];
   channel: CronMessageChannel;
   to?: string;
   mode?: "announce" | "webhook";
@@ -90,7 +92,7 @@ export type CronNotificationIntent = { routing?: CronNotificationRouting } & (
       kind: "failure-repair";
       job: CronNotificationJob;
       text: string;
-      fallback?: CronFailureAlertNotification;
+      fallback: CronFailureAlertNotification;
     }
   | CronFailureAlertNotification
 );

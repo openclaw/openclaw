@@ -238,7 +238,7 @@ suite.define(() => {
           await gateway.setOnline(false);
           await page
             .locator(".sidebar-shell__connection .gateway-status")
-            .getByText("Reconnecting…", { exact: true })
+            .getByText("Reconnecting", { exact: true })
             .waitFor();
         }
         expect(requests).toEqual([]);

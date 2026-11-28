@@ -46,7 +46,7 @@ const enGitHubConnections = {
     continue: "Continue with GitHub",
     usage: "Where these accounts are used",
     usageDescription:
-      "My GitHub is used only when you choose it to publish a PR. You need write access to the session, and work must be finished and accepted on this computer. Agent commands, model actions, previews, and cloud devices keep the shared account. Finish work on a cloud device and bring it back to this computer before publishing with My GitHub. Connecting My GitHub changes no defaults.",
+      "My GitHub is used only when you choose it to publish a PR. You need write access to the session, and work must be finished and accepted. Agent commands, model actions, previews, and cloud devices keep the agent’s account. Connecting My GitHub changes no defaults.",
     details: "Account details",
     agentTitle: "GitHub account",
     agentDescription:
@@ -92,9 +92,8 @@ const enGitHubConnections = {
     githubCancelling: "Requesting cancellation…",
     githubFinishing: "Finishing sign-in…",
     githubCancelFailed: "Couldn’t confirm cancellation",
-    githubCancelFailedHint:
-      "Sign-in is still active. Wait for it to finish or try cancelling again.",
-    githubRetryCancel: "Try cancelling again",
+    githubCancelFailedHint: "Sign-in may still be active.",
+    githubRetryCancel: "Try canceling again",
     githubCodeReady: "Code ready",
     githubWaiting: "Waiting for approval…",
     githubSlowDown: "Waiting for GitHub…",

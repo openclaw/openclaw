@@ -6,9 +6,14 @@ import type { WebSocket } from "ws";
 import { buildDeepgramRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 import { createSocketServer } from "./websocket.test-support.js";
 
+// The saved-key store is fixture-owned; no test reads real credentials.
+const savedKey = vi.fn<(lookup: object) => Promise<string | undefined>>();
 const provider = buildDeepgramRealtimeTranscriptionProvider({
   createRealtimeTranscriptionWebSocketSession,
+  isProviderAuthProfileConfiguredAsync: async (lookup) => (await savedKey(lookup)) !== undefined,
+  resolveProviderAuthProfileApiKey: savedKey,
 });
+const savedKeyLookup = { provider: "deepgram", cfg: {}, profileTypes: ["api_key"] };
 
 async function createScenario(onConnection: (ws: WebSocket) => void, endpointingMs?: number) {
   const { baseUrl, requests } = await createSocketServer(onConnection, "/deepgram/v1");
@@ -57,6 +62,7 @@ function sendResult(ws: WebSocket, [text, final = false, end = false, flush = fa
 afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
+  savedKey.mockReset();
 });
 
 it("normalizes nested config and connects through an explicit HTTP base URL", async () => {
@@ -87,9 +93,42 @@ it("normalizes nested config and connects through an explicit HTTP base URL", as
   expect(headers.authorization).toBe("Token dg-key");
 });
 
+it.each([
+  ["a key saved for Deepgram", {}, "", "Token saved-key"],
+  ["the Voice Call key before a saved one", { apiKey: "config-key" }, "", "Token config-key"],
+  ["DEEPGRAM_API_KEY before a saved one", {}, "env-key", "Token env-key"],
+])("connects with %s", async (_name, keyConfig, envKey, authorization) => {
+  vi.stubEnv("DEEPGRAM_API_KEY", envKey);
+  savedKey.mockResolvedValue("saved-key");
+  const { baseUrl, requests } = await createSocketServer(() => {}, "/deepgram/v1");
+  const providerConfig = { ...keyConfig, baseUrl };
+  // Unnamed, as a candidate of automatic selection, the saved key does not count.
+  expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig })).toBe(
+    authorization !== "Token saved-key",
+  );
+  expect(
+    await provider.isConfiguredAsync?.({ cfg: {}, providerConfig, selectedExplicitly: true }),
+  ).toBe(true);
+  const session = provider.createSession({ cfg: {}, providerConfig });
+  await session.connect();
+  session.close();
+  expect(requests[0]?.headers.authorization).toBe(authorization);
+  // Only a provider with no other key asks the store, and only for its own API key.
+  expect(savedKey.mock.calls).toEqual(
+    authorization === "Token saved-key" ? [[savedKeyLookup], [savedKeyLookup]] : [],
+  );
+});
+
+it("reports a missing key when connecting", async () => {
+  vi.stubEnv("DEEPGRAM_API_KEY", "");
+  expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig: {} })).toBe(false);
+  const session = provider.createSession({ providerConfig: {} });
+  await expect(session.connect()).rejects.toThrow(/^Deepgram API key missing$/);
+  session.close();
+});
+
 const privateUrlConfig = { apiKey: "key", baseUrl: "ftp://host/secret" };
 it.each([
-  ["API_KEY", "", {}, /^Deepgram API key missing$/],
   ["BASE_URL", "!", { apiKey: "key" }, /^Invalid Deepgram baseUrl: value is not a valid URL$/],
   ["BASE_URL", "", privateUrlConfig, /^(?!.*secret)Invalid Deepgram baseUrl: unsupported scheme/],
 ] as const)("validates DEEPGRAM_%s=%s", (env, value, providerConfig, error) => {

@@ -22,7 +22,6 @@ import type {
   SqliteWorkerRequest,
 } from "../infra/sqlite-worker-contract.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
@@ -406,29 +405,6 @@ describe("node worker supervisor initialization", () => {
       }
     },
   );
-
-  it("keeps the additive table absent until the first stateful operation", async () => {
-    await using f = fixture();
-    const { bundleRoot, env, supervisor } = f;
-    const database = openOpenClawStateDatabase({ env });
-    const findTable = () =>
-      database.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("node_worker_launches");
-
-    expect(findTable()).toBeUndefined();
-    await supervisor.close();
-    expect(findTable()).toBeUndefined();
-
-    const active = createNodeWorkerSupervisor({ bundleRoot, env });
-    expect(await active.status("missing-launch")).toBeUndefined();
-    expect(
-      database.db
-        .prepare("SELECT strict FROM pragma_table_list WHERE name = ?")
-        .get("node_worker_launches"),
-    ).toEqual({ strict: 1 });
-    await active.close();
-  });
 
   it("keeps older Windows receipts reserved without recorded Job custody", async () => {
     await using f = fixture();

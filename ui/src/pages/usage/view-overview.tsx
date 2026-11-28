@@ -5,6 +5,7 @@ import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../../../../src/infra/session-cost-usage-totals.js";
+import { measuredPromptTokens } from "../../../../src/shared/prompt-cache-hit-rate.js";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
@@ -191,10 +192,7 @@ export function UsageInsights(props: {
   totals: UsageTotals | null;
   aggregates: UsageAggregates;
   stats: UsageInsightStats;
-  showCostHint: boolean;
   errorHours: InsightItem[];
-  sessionCount: number;
-  totalSessions: number;
 }) {
   const providerDisplayLabel = useProviderDisplayLabel();
   const state = createMemo(() => {
@@ -209,8 +207,7 @@ export function UsageInsights(props: {
     const avgTokens = aggregates.messages.total
       ? Math.round(totals.totalTokens / aggregates.messages.total)
       : 0;
-    const avgCost = aggregates.messages.total ? totals.totalCost / aggregates.messages.total : 0;
-    const cacheBase = totals.input + totals.cacheRead + totals.cacheWrite;
+    const cacheBase = measuredPromptTokens(totals);
     const cacheHitRate = cacheBase > 0 ? totals.cacheRead / cacheBase : 0;
     const cacheHitLabel = cacheBase > 0 ? `${(cacheHitRate * 100).toFixed(1)}%` : empty;
     const errorRatePct = stats.errorRate * 100;
@@ -331,7 +328,6 @@ export function UsageInsights(props: {
       throughputLabel,
       throughputCostLabel,
       avgTokensLabel: formatUsageTokens(avgTokens),
-      avgCostLabel: formatAnalysisCost(avgCost),
       cacheHitLabel,
       totals,
       cacheBase,
@@ -386,11 +382,13 @@ export function UsageInsights(props: {
                   value={insights().cacheHitLabel}
                   sub={`${formatUsageTokens(insights().totals.cacheRead)} ${t("usage.overview.cached")} · ${formatUsageTokens(insights().cacheBase)} ${t("usage.overview.prompt")}`}
                   tone={
-                    insights().cacheHitRate > 0.6
-                      ? "good"
-                      : insights().cacheHitRate > 0.3
-                        ? "warn"
-                        : "bad"
+                    insights().cacheBase > 0
+                      ? insights().cacheHitRate > 0.6
+                        ? "good"
+                        : insights().cacheHitRate > 0.3
+                          ? "warn"
+                          : "bad"
+                      : undefined
                   }
                 />
                 <SummaryStat
@@ -406,32 +404,6 @@ export function UsageInsights(props: {
                         ? "warn"
                         : "good"
                   }
-                />
-                <SummaryStat
-                  hintId="average-cost"
-                  metric="avgCost"
-                  hint={t(
-                    props.showCostHint
-                      ? "usage.overview.avgCostHintMissing"
-                      : "usage.overview.avgCostHint",
-                  )}
-                  value={insights().avgCostLabel}
-                  sub={`${formatAnalysisCost(insights().totals.totalCost)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`}
-                />
-                <SummaryStat
-                  hintId="sessions"
-                  hint={false}
-                  metric="sessions"
-                  value={props.sessionCount}
-                  sub={t("usage.overview.sessionsInRange", {
-                    count: props.totalSessions.toLocaleString(),
-                  })}
-                />
-                <SummaryStat
-                  hintId="errors"
-                  metric="errors"
-                  value={insights().aggregates.messages.errors}
-                  sub={`${insights().aggregates.messages.toolResults.toLocaleString()} ${t("usage.overview.toolResults")}`}
                 />
               </div>
               <div class="usage-insights-grid">

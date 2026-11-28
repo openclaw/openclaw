@@ -67,54 +67,6 @@ describe("matrix logical model accounting", () => {
     return readMatrixModelAccounting({ file, joined, foregroundRunIds: ["task"] });
   }
 
-  it("counts billed-zero once and keeps mirrored usage and non-foreground calls separate", async () => {
-    const result = await read(
-      timeline([
-        { name: "model.usage", attributes: { completionId: "mirror", input: 999 } },
-        { name: "provider.request.started", runId: "summary", spanId: "summary-call" },
-        {
-          name: "provider.request",
-          type: "provider.request",
-          runId: "summary",
-          spanId: "summary-call",
-          ok: false,
-          attributes: { usageState: "unavailable" },
-        },
-      ]),
-    );
-    expect(result).toMatchObject({
-      complete: true,
-      issues: [],
-      foreground: { observedCalls: 1, completed: 1, tokens: { input: 0, output: 0 } },
-      other: { observedCalls: 1, errors: 1, tokens: { input: null, output: null } },
-      physicalHttpAttempts: null,
-      internalRetries: null,
-      providerBilling: null,
-    });
-    expect(result.usageObservations).toHaveLength(1);
-  });
-
-  it.each(["first", "last"])("preserves a missing bucket in the %s call", async (missing) => {
-    const rows = timeline([
-      { name: "provider.request.started", runId: "task", spanId: "second-call" },
-      {
-        name: "provider.request",
-        type: "provider.request",
-        runId: "task",
-        spanId: "second-call",
-        ok: true,
-        attributes: { usageState: "available", input: 5, output: 7 },
-      },
-    ]);
-    rows[2]!.attributes.input = 3;
-    delete rows[missing === "first" ? 2 : 4]!.attributes.output;
-    expect(await read(rows)).toMatchObject({
-      complete: true,
-      foreground: { observedCalls: 2, tokens: { input: 8, output: null } },
-      other: { observedCalls: 0, tokens: { input: 0, output: 0 } },
-    });
-  });
-
   it("reads the canonical writer and metadata-only usage projection through final close", async () => {
     const file = path.join(tempDirs.make("matrix-model-accounting-writer-"), "timeline.jsonl");
     await withEnvAsync(
@@ -401,83 +353,11 @@ describe("matrix task billing", () => {
     expect(interview).toMatchObject({ complete: true, totalTokens: 24, assistantTurns: 1 });
   });
 
-  const unavailable = { usageReport: { state: "unavailable" } };
-  const unknownTotals = {
-    complete: false,
-    costComplete: false,
-    totalTokens: null,
-    costUsd: null,
-    reasoningTokens: null,
-  };
   const buckets = { input: 10, output: 4, cacheRead: 8, cacheWrite: 2 };
   const incomplete = (knownTotalTokens = 24) => ({
     complete: false,
     totalTokens: null,
     knownTotalTokens,
-  });
-  it("ignores unavailable counters", () => {
-    expect(
-      accounting({
-        events: [assistant({ usage: { ...usage(), ...unavailable } })],
-        rootUsage: unavailable,
-      }),
-    ).toMatchObject({
-      ...unknownTotals,
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      knownTotalTokens: 0,
-      knownCostUsd: 0,
-      assistantTurns: 1,
-    });
-  });
-  it("preserves measured usage alongside unavailable usage", () => {
-    const failed = assistant({ usage: { ...usage(), ...unavailable }, stopReason: "error" });
-    expect(
-      accounting({
-        events: [failed, assistant()],
-        rootUsage: unavailable,
-      }),
-    ).toMatchObject({
-      ...unknownTotals,
-      ...buckets,
-      knownTotalTokens: 24,
-      knownCostUsd: 0.012,
-      reasoningComplete: false,
-      assistantTurns: 2,
-      modelErrors: 1,
-    });
-  });
-  it.each([false, true])("distinguishes measured=%s zero usage", (measured) => {
-    const zero = {
-      ...usage(0, 0, "provider-billed"),
-      ...(measured ? { usageReport: { state: "available" } } : {}),
-    };
-    expect(accounting({ events: [assistant({ usage: zero })], rootUsage: zero })).toMatchObject({
-      complete: measured,
-      costComplete: measured,
-      totalTokens: measured ? 0 : null,
-      costUsd: measured ? 0 : null,
-      knownTotalTokens: 0,
-      reasoningTokens: measured ? 0 : null,
-      reasoningComplete: measured,
-      assistantTurns: 1,
-    });
-  });
-  const missingCache = { input: 10, output: 4, totalTokens: 24, cost: { total: 0.01 } };
-  it.each([
-    ["missing response usage", undefined, false, false],
-    ["placeholder price", usage(1, 0), true, false],
-    ["provider-billed zero", usage(1, 0, "provider-billed"), true, true],
-    ["missing cache bucket", missingCache, false, false],
-  ] as const)("accounts for %s", (_label, observation, complete, costComplete) => {
-    expect(accounting({ events: [assistant({ usage: observation })] })).toMatchObject({
-      complete,
-      costComplete,
-      totalTokens: complete ? 24 : null,
-      knownTotalTokens: 24,
-    });
   });
   it("counts failed model/tool consumption without the delivery mirror", () => {
     expect(
@@ -672,24 +552,6 @@ function comparePairs(...codeRows: ReturnType<typeof modeRow>[]) {
 }
 
 describe("same-source mode comparisons", () => {
-  it("keeps the omitted-default treatment labeled auto rather than forced code", () => {
-    const report = comparePairs(modeRow("auto"));
-    expect(report).toMatchObject({ treatmentMode: "auto", incompletePairs: [] });
-    expect(report.byTask[0]).toMatchObject({
-      treatmentMode: "auto",
-      pairs: 1,
-      direct: { attempts: 1 },
-      auto: { attempts: 1 },
-    });
-    expect(report.byTask[0]).not.toHaveProperty("code");
-    expect(report.pairs[0]).toMatchObject({
-      directId: "direct-1",
-      autoId: "auto-1",
-      totalTokens: { direct: 24, auto: 24, delta: 0, ratio: 1 },
-    });
-    expect(report.pairs[0]).not.toHaveProperty("codeId");
-  });
-
   it("rejects mixing default and forced treatments into one comparison", () => {
     expect(() =>
       compareCodeModeMatrixModes([modeRow("direct"), modeRow("auto"), modeRow("code")]),

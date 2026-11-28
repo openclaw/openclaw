@@ -54,7 +54,25 @@ const SIGNAL_FORMAT_PROFILE = FormatCapabilityProfile.define({
   chunk: { limit: 4_000, unit: "chars" },
 });
 
+// Parsers percent-encode non-ASCII destinations, while labels keep the authored characters.
+function decodeLinkHref(href: string): string {
+  try {
+    // "%25" stays encoded: "%2541" (a literal "%41") and "%41" ("A") are different targets.
+    const decoded = decodeURI(href.replace(/%25/gi, "%2525"));
+    // A decoded space or control would no longer read as one URL, so keep the suffix.
+    return /[\s\p{Cc}]/u.test(decoded) ? href : decoded;
+  } catch {
+    return href;
+  }
+}
+
 function renderSignalText(ir: MarkdownIR): SignalFormattedText {
+  // Preserve spaces owned by inline code, including at the end of a chunk.
+  // Slice in IR coordinates before link fallbacks can shift the style ranges.
+  const codeEnd = ir.styles.findLast((span) => span.style === "code")?.end ?? 0;
+  const keepCodeTail = codeEnd > 0 && codeEnd > ir.text.trimEnd().length;
+  // A fresh slice keeps the parser's quote metadata, which a spread copy would drop.
+  const retained = sliceMarkdownIR(ir, 0, keepCodeTail ? codeEnd : ir.text.length);
   const normalize = (value: string, preserveSuffixCase: boolean) => {
     const normalized = value
       .trim()
@@ -65,24 +83,25 @@ function renderSignalText(ir: MarkdownIR): SignalFormattedText {
       ? normalized.replace(/^[^/?#]+/, (host) => host.toLowerCase())
       : normalizeLowercaseStringOrEmpty(normalized);
   };
+  // Core owns link suffixes; Signal retains its established normalized-URL de-duplication.
+  retained.links = retained.links.filter((link) => {
+    const label = retained.text.slice(link.start, link.end);
+    const href = link.href.trim();
+    const preserveSuffixCase = /^https?:\/\//i.test(href);
+    const comparableHref = href.replace(/^mailto:/, "");
+    const normalizedLabel = normalize(label, preserveSuffixCase);
+    return (
+      normalize(comparableHref, preserveSuffixCase) !== normalizedLabel &&
+      normalize(decodeLinkHref(comparableHref), preserveSuffixCase) !== normalizedLabel
+    );
+  });
   const rendered = renderMarkdownWithAttributedRanges(
-    // Core owns link suffixes; Signal retains its established normalized-URL de-duplication.
-    {
-      ...ir,
-      links: ir.links.filter((link) => {
-        const label = ir.text.slice(link.start, link.end);
-        const href = link.href.trim();
-        const preserveSuffixCase = /^https?:\/\//i.test(href);
-        return (
-          normalize(label, preserveSuffixCase) !==
-          normalize(href.replace(/^mailto:/, ""), preserveSuffixCase)
-        );
-      }),
-    },
+    retained,
     {
       styleMap: SIGNAL_STYLE_MAP,
       annotationStyleMap: { assistant_transcript_role: "MONOSPACE" },
-      trimEnd: true,
+      blockquotePrefix: "> ",
+      trimEnd: !keepCodeTail,
     },
     SIGNAL_FORMAT_PROFILE,
   );
@@ -95,7 +114,6 @@ function markdownToSignalIR(markdown: string, options: SignalMarkdownOptions): M
     linkify: true,
     enableSpoilers: true,
     headingStyle: "rich",
-    blockquotePrefix: "> ",
     tableMode: options.tableMode,
   });
 }

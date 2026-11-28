@@ -14,20 +14,18 @@ import {
 } from "./terminal-panel.test-support.ts";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
-export function panelFixture(timers = false, afterUnmount = () => {}, autoCreate = true) {
+export function panelFixture() {
   const create: CreateGhosttyTerminalMock = vi.fn();
   const tag = defineTestTerminalPanelElement(create);
   const terminals: ReturnType<typeof createTerminalController>[] = [];
-  panelTestStorage(create, timers, afterUnmount);
+  panelTestStorage(create, true);
   beforeEach(() => {
     terminals.length = 0;
-    if (autoCreate) {
-      create.mockImplementation(async () => {
-        const terminal = createTerminalController();
-        terminals.push(terminal);
-        return terminal;
-      });
-    }
+    create.mockImplementation(async () => {
+      const terminal = createTerminalController();
+      terminals.push(terminal);
+      return terminal;
+    });
   });
   return {
     create,

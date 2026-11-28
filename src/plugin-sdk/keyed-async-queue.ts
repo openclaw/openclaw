@@ -1,4 +1,5 @@
 // Keyed async queue helpers serialize async plugin work by key while preserving parallelism.
+import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 /** Optional lifecycle hooks fired around each queued task. */
 export type KeyedAsyncQueueHooks = {
   onEnqueue?: () => void;
@@ -13,6 +14,8 @@ type KeyedAsyncTask<T, TKey> = {
   };
   task: () => Promise<T>;
   hooks?: KeyedAsyncQueueHooks;
+  /** Cancel admission only; a running task retains its keys until it settles. */
+  signal?: AbortSignal;
 } & ({ key: TKey } | { keys: readonly TKey[] });
 
 /** Reserve every task key before yielding; unrelated keys remain independent. */
@@ -22,6 +25,7 @@ export function enqueueKeyedTask<T>(params: {
   key: string;
   task: () => Promise<T>;
   hooks?: KeyedAsyncQueueHooks;
+  signal?: AbortSignal;
 }): Promise<T>;
 export function enqueueKeyedTask<T, TKey>(params: KeyedAsyncTask<T, TKey>): Promise<T> {
   params.hooks?.onEnqueue?.();
@@ -30,9 +34,17 @@ export function enqueueKeyedTask<T, TKey>(params: KeyedAsyncTask<T, TKey>): Prom
     "keys" in params
       ? Promise.allSettled(keys.map((key) => params.tails.get(key) ?? Promise.resolve()))
       : (params.tails.get(params.key) ?? Promise.resolve()).catch(() => undefined);
-  const current = previous.then(params.task).finally(() => {
-    params.hooks?.onSettle?.();
-  });
+  const admitted = params.signal ? racePromiseWithAbortSignal(previous, params.signal) : previous;
+  // Cancellation rejects the waiter promptly, but its reservation still joins
+  // the predecessor before settling. Otherwise later writers could overlap it.
+  const current = previous
+    .then(() => {
+      params.signal?.throwIfAborted();
+      return params.task();
+    })
+    .finally(() => {
+      params.hooks?.onSettle?.();
+    });
   const tail = current.then(
     () => undefined,
     () => undefined,
@@ -48,7 +60,7 @@ export function enqueueKeyedTask<T, TKey>(params: KeyedAsyncTask<T, TKey>): Prom
     }
   };
   tail.then(cleanup, cleanup);
-  return current;
+  return params.signal ? admitted.then(() => current) : current;
 }
 
 /** Small per-key async queue wrapper for plugin runtimes that need serialized work. */

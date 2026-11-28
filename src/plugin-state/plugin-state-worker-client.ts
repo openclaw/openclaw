@@ -132,11 +132,13 @@ async function executeAdmitted<Key extends keyof PluginStateWorkerOperations>(
       capturedContext ?? captureOpenClawStateWorkerContext({ path: databasePath, env });
     if (checks.readDependency) {
       const identity = context.admission.identity.key;
-      recordPluginStateReadDependency({
-        ...checks.readDependency,
-        identity: identity.startsWith("file:") ? identity : undefined,
-        assertCurrent: context.admission.assertCurrent,
-      });
+      recordPluginStateReadDependency(
+        {
+          ...checks.readDependency,
+          identity: identity.startsWith("file:") ? identity : undefined,
+        },
+        context.admission,
+      );
     }
     // SAFETY: Key and input are correlated by every caller; this forms the dispatch union.
     const typedCommand = command as PluginStateCommand;
@@ -614,6 +616,7 @@ export async function lookupManyPluginStateInWorker(
   if (input.keys.length === 0) {
     return [];
   }
+  input.keys = [...input.keys];
   const results = await execute(
     { env, assertActive, sessionEntryCurrent, context, signal },
     { type: "pluginState.lookupMany", input },
@@ -647,10 +650,10 @@ export function clearRuntimeHealthInWorker(
 
 export const countPluginStateInWorker = createOperation("pluginState.count", () => 0);
 export const registerPluginStateJournalInWorker = createOperation("pluginState.appendJournal");
-export const listPluginStateInKeyRangeInWorker = createOperation(
-  "pluginState.entriesInKeyRange",
-  () => [],
-);
+const listKeyRange = createOperation("pluginState.entriesInKeyRange", () => []);
+export function listPluginStateInKeyRangeInWorker(params: Input<"pluginState.entriesInKeyRange">) {
+  return listKeyRange({ ...params, valueFilter: params.valueFilter && { ...params.valueFilter } });
+}
 export const movePluginStateEntriesInWorker = createOperation("pluginState.moveEntries");
 
 /**

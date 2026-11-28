@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   expectObjectFields,
   mockCall,
@@ -183,8 +184,8 @@ async function withPlanFile(
     os.tmpdir(),
     `openclaw-secrets-cli-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
   );
-  await fs.writeFile(planPath, contents, "utf8");
   try {
+    await fs.writeFile(planPath, contents, "utf8");
     await run(planPath);
   } finally {
     await fs.rm(planPath, { force: true });
@@ -192,6 +193,7 @@ async function withPlanFile(
 }
 
 describe("secrets CLI", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const runSecrets = async (args: string[]) => {
     const program = new Command();
     program.exitOverride();
@@ -303,6 +305,42 @@ describe("secrets CLI", () => {
     await runSecrets(["secrets", "audit", "--allow-exec"]);
     expect(mockFirstObjectArg(runSecretsAudit).allowExec).toBe(true);
   });
+
+  it.each(["configure", "apply", "dry-run"])(
+    "prints preserved-account warnings for human-readable %s output",
+    async (mode) => {
+      const warning =
+        'Auth profile "other-account" retains its plaintext credential. Add an explicit auth-profile target to migrate this account.';
+      const applyOnlyWarning = "Additional apply warning.";
+      runSecretsApply.mockResolvedValue({
+        ...createSecretsApplyResult({ mode: mode === "dry-run" ? "dry-run" : "write" }),
+        warningCount: 4,
+        warnings: [warning, applyOnlyWarning, warning, applyOnlyWarning],
+      });
+      if (mode === "configure") {
+        const configured = createConfigureInteractiveResult();
+        runSecretsConfigureInteractive.mockResolvedValue({
+          ...configured,
+          preflight: { ...configured.preflight, warningCount: 2, warnings: [warning, warning] },
+        });
+        await runSecrets(["secrets", "configure", "--apply", "--yes"]);
+      } else {
+        await withPlanFile(async (planPath) => {
+          await runSecrets([
+            "secrets",
+            "apply",
+            "--from",
+            planPath,
+            ...(mode === "dry-run" ? ["--dry-run"] : []),
+          ]);
+        });
+      }
+      expect(runtimeLogs.filter((line) => line === `- warning: ${warning}`)).toHaveLength(1);
+      expect(runtimeLogs.filter((line) => line === `- warning: ${applyOnlyWarning}`)).toHaveLength(
+        1,
+      );
+    },
+  );
 
   it("shows the irreversibility warning before applying configured targets (#83883)", async () => {
     const configured = createConfigureInteractiveResult({
@@ -474,7 +512,7 @@ describe("secrets CLI", () => {
       runtimeLogs.length = 0;
       runtimeErrors.length = 0;
 
-      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-cli-fifo-"));
+      const tmpDir = tempDirs.make("openclaw-secrets-cli-fifo-");
       const fifoPath = path.join(tmpDir, "plan.json");
       await execFileAsync("mkfifo", [fifoPath]);
 
@@ -505,7 +543,6 @@ describe("secrets CLI", () => {
           const releaseWriter = execFileAsync("sh", ["-c", 'printf x > "$1"', "sh", fifoPath]);
           await Promise.allSettled([parse, releaseWriter]);
         }
-        await fs.rm(tmpDir, { recursive: true, force: true });
       }
     },
   );

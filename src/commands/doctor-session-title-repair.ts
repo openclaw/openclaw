@@ -26,9 +26,12 @@ function readLegacySessionTitle(
   scope: Parameters<typeof readSessionTranscriptBoundedMessageTailPage>[0],
 ) {
   try {
+    // Read-only: a writer open records the agent database's admission and registration in
+    // the state database, so every candidate would write even when it yields no title.
     const { totalMessages } = readSessionTranscriptMessageEventPage(scope, {
       maxMessages: 0,
       offset: 0,
+      readOnly: true,
     });
     if (!totalMessages) {
       return undefined;
@@ -37,6 +40,7 @@ function readLegacySessionTitle(
       maxMessages: 100,
       maxBytes: 64 * 1024,
       offset: Math.max(0, totalMessages - 100),
+      readOnly: true,
     });
     // A skipped first message must not let a later task become the session title.
     if (head.totalMessages !== totalMessages || head.events.length !== head.scannedMessages) {
@@ -106,6 +110,7 @@ export async function repairLegacySessionTitles(params: {
             if (
               !recoveredFromProjections &&
               !entry.incognito &&
+              !entry.titleFallbackReady &&
               !isIncognitoSessionKey(sessionKey) &&
               // Spawn owns child labels; its first user message is a runtime task envelope.
               !isSubagentSessionKey(sessionKey) &&

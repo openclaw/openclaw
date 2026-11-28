@@ -174,6 +174,25 @@ function persistedFixture() {
 }
 
 describe("prepared catalog source composition", () => {
+  it("leaves acquired provider inventory to its live owner while preserving authored and static rows", async () => {
+    const { facts, generation } = persistedFixture();
+    const registries: PreparedConfiguredModelRegistries = new Map();
+    const cold = await prepareBatch({ facts, generation }, { registries });
+    expect(
+      cold.catalogs.get(facts.input)!.templateModelRegistry.find(providerId, "persisted-only"),
+    ).toBeDefined();
+
+    const owned = await prepareBatch(
+      { facts, generation },
+      { registries, ownedCatalogProviders: new Map([[facts.input, [providerId]]]) },
+    );
+    const registry = owned.catalogs.get(facts.input)!.templateModelRegistry;
+    expect(registry.find(providerId, "persisted-only")).toBeUndefined();
+    expect(registry.getAll().map(({ id }) => id)).toEqual(
+      expect.arrayContaining(["authored-only", "configured-only", "curated-only"]),
+    );
+  });
+
   it.each([true, false])(
     "admits persisted-only models only with current credentials (%s)",
     async (authenticated) => {

@@ -84,7 +84,7 @@ it("keeps Retry and Discard reachable when exact history deduplicates the reject
     onRetrySessionPlacementStartup,
     onDiscardSessionPlacementStartup,
   });
-  expect(container.querySelectorAll(".chat-group.user")).toHaveLength(1);
+  await waitForSolid(() => expect(container.querySelectorAll(".chat-group.user")).toHaveLength(1));
   expect(container.querySelector(".chat-send-status__retry")).toBeNull();
   const errorAction = (label: string) =>
     Array.from(container.querySelectorAll<HTMLButtonElement>(".chat-error button")).find(

@@ -1,4 +1,5 @@
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   type ActiveSessionSqliteMigrationRun,
@@ -126,6 +127,9 @@ export async function compactSqliteDatabase(
 ): Promise<void> {
   try {
     if (options.operation === "import-finalize") {
+      if (getDatabaseEngineInput("agent")) {
+        return;
+      }
       await closeOpenClawAgentDatabaseByPathAsync(resolveTargetSqlitePath(target));
     }
     report.compact = await compactDoctorSessionSqliteTarget(target, options);

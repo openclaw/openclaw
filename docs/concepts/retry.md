@@ -51,7 +51,7 @@ An OpenAI SDK stream that fails with malformed server-sent event JSON also quali
 
 A Responses stream that ends before its terminal event also qualifies for transient recovery, including when a tool call is still unfinished. Partial tool arguments are never executed. A completed response with inconsistent tool-call identities does not qualify as a disconnected stream. A Gemini or Vertex AI stream that ends inside an event frame qualifies the same way; a whole frame of malformed JSON does not.
 
-Responses tool calls that accumulate 4 KiB of consecutive trailing whitespace are aborted early and qualify for the same bounded transient recovery. This limit applies to the whitespace run, not the total argument size. Transport diagnostics label this abort `degenerate_output`; session watchdog recovery is labeled `session_watchdog`.
+A streamed tool call whose arguments accumulate 4 KiB of consecutive trailing whitespace is aborted early, with every provider, and qualifies for the same bounded transient recovery. This limit applies to the whitespace run, not the total argument size. The abort is labeled `degenerate_output`; if retries run out, the reply says the model's output turned into blank characters. Session watchdog recovery is labeled `session_watchdog`.
 
 Completed Responses replies are delivered immediately, even if the provider has not closed the HTTP response yet. OpenClaw discards up to 64 KiB of trailing bytes for at most 250 ms in the background so a finished connection can be reused. Trailing events never add output or tool calls. Cancellation and Gateway shutdown stop the drain.
 
@@ -102,7 +102,7 @@ policy does not wrap arbitrary Git commands run by agents or setup scripts.
 - Uses `retry_after` when available, otherwise exponential backoff.
 - A reply, delete, or reaction held by flood control has a five-minute retry budget, counted from its first attempt and including time spent queued or waiting on Telegram's response. Once another flood wait would pass that budget, it stops waiting; an attempt already in flight can still finish after the five minutes. A final reply that Telegram refused this way is not dropped: it stays in the delivery queue and is sent again later, up to the queue's retry limit, and no "please ask again" notice is sent for it. A reply split into several messages stops at the refused part.
 - HTML/Markdown parse errors are not retried; they fall back to plain text on the first attempt.
-- When durable final-reply recovery stops after an unconfirmed send or exhausted retries, the Gateway hands the existing uncertainty notice to lifecycle delivery without waiting for another incoming message. The ambiguous answer is not resent. Notice delivery uses the same bounded durable queue and can itself fail if the channel remains unavailable.
+- When durable final-reply recovery stops after an unconfirmed resend or exhausted retries, the Gateway hands the existing uncertainty notice to lifecycle delivery without waiting for another incoming message. Notice delivery uses the same bounded durable queue and can itself fail if the channel remains unavailable.
 
 ## Configuration
 
@@ -142,9 +142,14 @@ Producer leases last 60 seconds and renew every 20 seconds while the owner is
 active. This tolerates brief Gateway stalls; recovery of a vanished producer
 waits until its last lease expires.
 
-Lease expiry does not erase evidence that a send already started. Those entries
-still require reconciliation before replay, and an unreplaced owner can record a
-late result without authorizing another send.
+Lease expiry does not erase evidence that a send already started. When the
+channel can reconcile such an entry, its answer decides: an already-sent message
+is settled and a proven unsent one is replayed. Without that proof, only an
+ordinary agent final text (no media, interactive controls, or tool-initiated
+action) is resent, once per entry, accepting a rare duplicate over a lost reply.
+If that resend is also interrupted, recovery stops and the uncertainty notice is
+sent. An unreplaced owner can record a late result without authorizing another
+send.
 The same rule applies when heartbeat renewal fails: new sends stop, but a concrete
 receipt from an already-started send can settle its unchanged claim. A replacement
 claim still rejects the old producer, and a partial batch remains with recovery.

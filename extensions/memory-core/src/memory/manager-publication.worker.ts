@@ -56,6 +56,7 @@ import {
 } from "./manager-embedding-cache.js";
 import {
   upgradeMemoryIndexProviderKey,
+  writeMemoryEmbeddingRefusal,
   writeMemoryIndexMetadata,
 } from "./manager-index-metadata.js";
 import { readMemoryIndex } from "./manager-index-read.js";
@@ -184,7 +185,10 @@ export function bindSqliteWorkerBackend(
   context: {
     databasePath: string;
     database: EngineConnection;
-    admitSearchExtensions?: (definitions: Readonly<Record<string, SearchSchema>>) => void;
+    admitSearchExtensions?: (
+      definitions: Readonly<Record<string, SearchSchema>>,
+      options?: { rebuild: true },
+    ) => void;
     admit(stage: "transaction" | "commit"): void;
   },
 ) {
@@ -475,6 +479,11 @@ function createPublicationBackend(
       if (command.type === "index.writeMetadata") {
         return withFacts(writeSingleStatement(() => writeMemoryIndexMetadata(db, command.input)));
       }
+      if (command.type === "index.writeEmbeddingRefusal") {
+        return withFacts(
+          writeSingleStatement(() => writeMemoryEmbeddingRefusal(db, command.input)),
+        );
+      }
       if (command.type === "source.refresh") {
         return withFacts(
           write(() => {
@@ -682,7 +691,7 @@ function createPublicationBackend(
         if (staged?.kind !== "source") {
           throw new Error("Memory publication input was not started");
         }
-        header = staged.header;
+        header = { ...staged.header, verifiedFile: command.input.verifiedFile };
         rows = readStagedRows<MemorySourceIndexRow>(staged);
       }
       let facts: ReturnType<typeof readMemoryDatabaseFacts> | undefined;

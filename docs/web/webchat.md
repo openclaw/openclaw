@@ -38,7 +38,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 - Compaction entries render as a history divider showing the context reduction when token measurements are available. Ordinary conversation history and Fork remain available; compaction does not create a separate checkpoint browsing or restoration surface.
 - Control UI remembers the backing Gateway `sessionId` returned by `chat.history`. It includes that id on follow-up `chat.send` calls. Reconnects and page refreshes therefore continue the same stored conversation, unless the user starts or resets a session.
 - After a graceful Gateway restart, a running root conversation receives one ordinary resume input and keeps its transcript. The new turn uses current authority and delivery context, without restoring an old client or requester grant. A crash does not resume work automatically; send a message to continue. See [Restart recovery](/gateway/restart-recovery).
-- Foreground sends also include the displayed branch's leaf from the rendered history as `expectedLeafEntryId`. If another client switched branches first, Control UI parks the message for review and refreshes the transcript instead of posting it to the new branch. Reconnect and restored-outbox replays intentionally omit this precondition after reconciling current history.
+- Foreground sends also include the displayed branch's leaf from the rendered history as `expectedLeafEntryId`. A message queued during a turn is still sent after the reply lands, because the displayed leaf stays on the active branch. If another client rewound or switched branches away from that leaf, Control UI parks the message for review and refreshes the transcript instead of posting it to the new branch. Reconnect and restored-outbox replays intentionally omit this precondition after reconciling current history.
 - When you change a chat setting and immediately send, Control UI shows **Applying session settings** until that change and its session refresh finish. Later background session refreshes do not extend this wait. Opening a pane without changing a setting does not create a settings wait.
 - Control UI shows an attempted prompt immediately with its normal message footer and working indicator. Routine send latency does not add a **Queued** footer or a **Waiting for turn to start** notice. Failed sends, review holds, and connection recovery keep their visible recovery actions; unsubmitted follow-ups remain in the composer queue.
 - `chat.send` takes a key that prevents duplicate requests (Control UI uses the run id). The Gateway dedupes repeated requests that reuse the same key. Retried or duplicate in-flight submits do not create a second run when the session, message, attachments, and mention selections match. Reusing that key with different mention selections is rejected.
@@ -80,9 +80,11 @@ must not predict it from history length or treat `status: "started"` as persiste
 Chat admission rechecks current committed session access independently of sidebar
 refreshes. Durable input custody still checks that authority at the write boundary.
 The Control UI replaces its provisional source with accepted custody, then with
-the saved transcript row. Accepted inputs stay below saved conversation history until
-they are committed to the transcript. Its renderer keeps a loaded local preview in the same image
-element during this handoff while saved media metadata and image bytes load.
+the saved transcript row. Accepted queued inputs initially follow saved conversation
+history. In an open chat pane, an input already displayed stays before later user
+turns, including turns that arrive as saved rows without a local send. Its renderer
+keeps a loaded local preview in the same image element during this handoff while
+saved media metadata and image bytes load.
 Authoritative text, media replacements, and removals still win. Unavailable or
 access-denied media shows a visible reason.
 Once custody, a consumption record, or a committed user-message receipt retires

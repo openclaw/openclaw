@@ -34,6 +34,7 @@ const totals = {
   cacheReadCost: 6,
   cacheWriteCost: 2,
   missingCostEntries: 0,
+  cacheUnmeasuredInput: 0,
 };
 
 const emptyTotals = createEmptyCostUsageTotals();

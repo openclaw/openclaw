@@ -1,6 +1,6 @@
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-import { releaseExitedOpenClawAgentDatabaseLeaseInDatabase } from "./openclaw-agent-db-lease.js";
+import { releaseExitedOpenClawAgentDatabaseLeaseInDatabase } from "./openclaw-agent-db-lease-rows.js";
 import { requireOpenClawStateDatabaseIdentity } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";

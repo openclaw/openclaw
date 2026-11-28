@@ -26,6 +26,7 @@ For custom servers, leave room for the full OpenClaw prompt, tools, history, and
 | ---------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | [ds4](/providers/ds4)                                | Local DeepSeek V4 Flash on macOS Metal with OpenAI-compatible tool calls                     |
 | LiteLLM / OAI-proxy / custom OpenAI-compatible proxy | You front another model API and need OpenClaw to treat it as OpenAI                          |
+| [Llama](/providers/llama)                            | llama.cpp's desktop app: download models in a GUI and let the app run the server             |
 | [llama.cpp](/plugins/llama-cpp)                      | Hardware-aware model selection, verified downloads, and an OpenClaw-managed server           |
 | [llmman](/providers/llmman)                          | OCI-registry model pulls, upstream llama.cpp/vLLM/MLX engines, hybrid local + hosted routing |
 | [LM Studio](/providers/lmstudio)                     | First-time local setup, GUI loader, native Responses API                                     |
@@ -332,6 +333,8 @@ It uses vLLM's native scheduler and is disabled by default.
 
 If the model loads cleanly but full agent turns misbehave, check transport first, then inspect tool use and the context budget.
 
+Setup's connection check sends a short prompt without tools, so it can pass on a model whose context window is too small for a real first turn, which also carries the system prompt and tool definitions. When the effective window is below 16,384 tokens, automatic setup skips the model, and a model you choose yourself is accepted with a warning that names the window and what to raise.
+
 1. **Check the local model responds** - no tools, no agent context:
 
    ```bash
@@ -357,17 +360,14 @@ Ollama receives it as `num_predict`; an explicit request `maxTokens` or authored
 `params.num_predict` takes precedence. Set realistic `maxTokens` and context
 limits for custom model entries. Discovered local Ollama models default to half
 of the 32,768-token local context cap (16,384 output tokens), or less for smaller
-windows. Ollama Cloud models use their documented output limit, or their
-context window when a separate output limit is unavailable. Set
-`params: { num_predict: -1 }` to restore Ollama's unlimited default; an explicit
-request output cap still wins.
+windows. Curated Ollama Cloud models use their documented output limit;
+uncurated cloud models default to 32,768 output tokens (less for smaller
+windows), because a context window is not an output limit. Set
+`params: { num_predict: -1 }` to restore Ollama's unlimited default; an
+explicit request output cap still wins.
 
-Embedded agent runs also watch long text and reasoning from models with a known
-total parameter count in the **32B class or smaller** (less than 34 billion, to
-allow for rounded model names). Discovery/catalog metadata takes precedence over
-a size inferred from the model name. Active-parameter-only MoE names do not establish
-the total size. The detector stays off for larger models and models whose size is
-unknown. There is no separate setting.
+Embedded agent runs also watch long text and reasoning from every model. There is
+no separate setting.
 
 The first check starts around 16,000 characters, with increasing intervals and a
 bounded recent tail. A single repeated line, repeated windows, or a repeated period
@@ -381,8 +381,8 @@ When it triggers, OpenClaw stops the model request and reports a repetition
 failure. The affected unfinished block is replaced with
 `[Repetitive output stopped]` in session history, so later turns do not imitate
 the discarded text. Earlier unaffected blocks and completed tool work remain.
-Side effects are not retried automatically. Choose a stronger model or request a
-smaller output, then start a new turn.
+Side effects are not retried automatically. Shorten or rephrase the request, then
+start a new turn.
 
 ## Troubleshooting
 
@@ -410,7 +410,7 @@ Setup no longer writes this flag. For older installations, `openclaw doctor --fi
 
 If you already tune Tool Search globally, OpenClaw leaves that config alone. Set `tools.toolSearch: false` to opt out of the lean-mode Tool Search default.
 
-Lean Tool Search directories list tool names and owners without descriptions. Full descriptions and schemas remain available through Tool Search. Removing optional tools therefore cannot expand the remaining directory descriptions. Lean mode keeps the ordinary system instructions, skills, and workspace context.
+Lean mode keeps the ordinary system instructions, skills, and workspace context.
 
 In structured `tools` mode, lean runs keep `exec` directly visible beside the Tool Search controls so coding-tuned local models can still choose their familiar shell path. This changes schema visibility only: normal tool policy, sandboxing, and exec approvals still apply. Explicit `code` and `directory` modes keep their normal compaction behavior.
 

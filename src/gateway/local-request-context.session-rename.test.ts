@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
@@ -58,12 +58,11 @@ describe("guest session rename through the agent catalog", () => {
       const beforeRename = sessionToolsEntry(sessionKey)!;
       expect(beforeRename.createdActor).toEqual(original.createdActor);
       const controller = new AbortController();
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
+      const operatorAuthority = createTestOperatorAuthority({
         profileId,
         scopes: ["operator.sessions.write"],
         signal: controller.signal,
         readCurrentRoleFacts: () => ({ assignedRole: "view" }),
-        assertCurrent: () => {},
       });
       await withPersonalToolTurn(
         {
@@ -115,7 +114,7 @@ describe("guest session rename through the agent catalog", () => {
                 sessionKey: TARGET,
                 expectedSessionId: "session-tools-target-id",
               },
-              "Session-scoped writes require your own session",
+              "session is shared for this connection",
             ],
             [
               { action: "patch", label: "Stale", expectedSessionId: "replaced-session" },
@@ -151,10 +150,10 @@ describe("guest session rename through the agent catalog", () => {
               expectedSessionId: "replacement-session",
             }),
           ).rejects.toThrow("current durable session identity");
-          controller.abort(new Error("guest access revoked"));
+          controller.abort(new Error("guest run stopped"));
           await expect(
-            tool.execute("revoked", { action: "patch", label: "Revoked rename" }),
-          ).rejects.toThrow("guest access revoked");
+            tool.execute("stopped", { action: "patch", label: "Stopped rename" }),
+          ).rejects.toThrow("guest run stopped");
           expect(sessionToolsEntry(sessionKey)?.label).toBe("Research plan");
         },
       );
@@ -185,12 +184,11 @@ describe("guest session rename through the agent catalog", () => {
         const scopes = [scope];
         cfg.gateway!.roles!.definitions.view!.scopes = scopes;
         const canRename = scopes[0] !== "operator.read";
-        const operatorAuthority = createAdmittedRunOperatorAuthority({
+        const operatorAuthority = createTestOperatorAuthority({
           profileId,
           scopes,
           signal: new AbortController().signal,
           readCurrentRoleFacts: () => ({ assignedRole: "view" }),
-          assertCurrent: () => {},
         });
         await withPersonalToolTurn(
           {

@@ -254,7 +254,6 @@ export async function sendPayload(
       ctxPayload: turn.context.ctxPayload,
       plan,
       info: { kind: "final" },
-      retryAmbiguousFinalText: true,
       replyToMode: effectiveReplyToMode,
       // ReplyToId describes inbound ancestry. Reuse the preview's prepared target
       // so an untagged final cannot inherit a topic-creation service message.
@@ -572,11 +571,13 @@ export async function finalizePendingAnswerBlockDraft(turn: Turn): Promise<void>
   turn.activeAnswerBlockDelivery = undefined;
 }
 
-export async function deliverFallback(turn: Turn, replies: ReplyPayload[], silent: boolean) {
+export async function deliverFallback(turn: Turn, reply: ReplyPayload, silent: boolean) {
   try {
     const result = await deliverReplies({
-      replies,
+      replies: [reply],
       ...createDeliveryBaseOptions(turn),
+      // A restart status is not the final answer the next Gateway must still deliver.
+      ...(reply.isStatusNotice ? { transcriptMirror: undefined } : {}),
       silent,
       mediaLoader: loadWebMedia,
     });

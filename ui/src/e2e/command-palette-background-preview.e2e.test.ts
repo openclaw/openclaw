@@ -63,7 +63,7 @@ suite.define(() => {
         .poll(() => bubble.textContent())
         .toContain("Fix the weird timing for automations.");
       const indicator = preview.locator(".chat-thread-inner .chat-working-indicator");
-      await expect.poll(() => indicator.textContent()).toContain("Starting…");
+      await expect.poll(() => indicator.textContent()).toContain("Starting");
       await expect.poll(() => indicator.textContent()).toMatch(/\d+s/u);
       expect(await preview.locator(".chat-pane__session-title").first().textContent()).toBe(
         "New session",
@@ -82,7 +82,7 @@ suite.define(() => {
       const retry = await gateway.waitForRequest("sessions.create", { after: 1 });
       expect(retry.params).toMatchObject({ key, message: prompt });
       await expect.poll(() => preview.textContent()).not.toContain("Fixture refused this start");
-      await expect.poll(() => indicator.textContent()).toContain("Starting…");
+      await expect.poll(() => indicator.textContent()).toContain("Starting");
 
       await gateway.resolveDeferred("sessions.create", {
         key,

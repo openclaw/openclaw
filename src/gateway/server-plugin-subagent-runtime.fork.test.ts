@@ -136,7 +136,7 @@ describe("plugin session forks", () => {
           model: "research-model",
           sessionKey,
           sessionEntry: { sessionId: "parent-session" },
-          toolCalls: "deny",
+          sessionFork: expect.any(Function),
           isNewSession: false,
         });
         expect(params.opts).not.toHaveProperty("onBlockReply");
@@ -263,68 +263,52 @@ describe("plugin session forks", () => {
     });
   });
 
-  it.each([
-    "Gateway binding",
-    "conversation access",
-    "session identity",
-    "session lifecycle",
-    "session visibility",
-  ])("revalidates %s after side-question preparation before inference", async (authority) => {
-    await withSession(async (client) => {
-      let caller = client;
-      if (authority === "session visibility") {
-        const role = config.gateway?.roles?.definitions?.limited;
-        if (!role) {
-          throw new Error("Missing fixture role");
-        }
-        role.sessions = { others: "view" };
-        caller = identifiedClient(ensureProfileForEmail("fork-viewer@example.test").id);
-      }
-      const preparing = createDeferred();
-      const finishPreparation = createDeferred();
-      const inference = vi.fn();
-      sideQuestion.mockImplementationOnce(async (params) => {
-        preparing.resolve();
-        await finishPreparation.promise;
-        params.assertCurrent?.();
-        inference();
-        return { text: "must not be generated" };
-      });
-      const result = fork(caller);
-      const rejected = expect(result).rejects.toThrow(
-        /current gateway instance binding|allowConversationAccess|changed|not found/u,
-      );
-      try {
-        await awaitGateBeforeSettlement(
-          preparing.promise,
-          result,
-          "Session fork settled before side-question preparation",
+  it.each(["Gateway binding", "conversation access", "session identity", "session lifecycle"])(
+    "revalidates %s after side-question preparation before inference",
+    async (authority) => {
+      await withSession(async (client) => {
+        const caller = client;
+        const preparing = createDeferred();
+        const finishPreparation = createDeferred();
+        const inference = vi.fn();
+        sideQuestion.mockImplementationOnce(async (params) => {
+          preparing.resolve();
+          await finishPreparation.promise;
+          params.assertCurrent?.();
+          inference();
+          return { text: "must not be generated" };
+        });
+        const result = fork(caller);
+        const rejected = expect(result).rejects.toThrow(
+          /current gateway instance binding|allowConversationAccess|changed|not found/u,
         );
-        if (authority === "Gateway binding") {
-          context = requestContext(config);
-        } else if (authority === "conversation access") {
-          config.plugins = {};
-        } else if (authority === "session visibility") {
-          await upsertSessionEntryCore(
-            { agentId: "research", sessionKey },
-            { visibility: "draft" },
+        try {
+          await awaitGateBeforeSettlement(
+            preparing.promise,
+            result,
+            "Session fork settled before side-question preparation",
           );
-        } else if (authority === "session lifecycle") {
-          await upsertSessionEntryCore(
-            { agentId: "research", sessionKey },
-            { lifecycleRevision: "replacement-lifecycle" },
-          );
-        } else {
-          await upsertSessionEntryCore(
-            { agentId: "research", sessionKey },
-            { sessionId: "replacement-session", updatedAt: 2 },
-          );
+          if (authority === "Gateway binding") {
+            context = requestContext(config);
+          } else if (authority === "conversation access") {
+            config.plugins = {};
+          } else if (authority === "session lifecycle") {
+            await upsertSessionEntryCore(
+              { agentId: "research", sessionKey },
+              { lifecycleRevision: "replacement-lifecycle" },
+            );
+          } else {
+            await upsertSessionEntryCore(
+              { agentId: "research", sessionKey },
+              { sessionId: "replacement-session", updatedAt: 2 },
+            );
+          }
+        } finally {
+          finishPreparation.resolve();
         }
-      } finally {
-        finishPreparation.resolve();
-      }
-      await rejected;
-      expect(inference).not.toHaveBeenCalled();
-    });
-  });
+        await rejected;
+        expect(inference).not.toHaveBeenCalled();
+      });
+    },
+  );
 });

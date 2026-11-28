@@ -227,6 +227,11 @@ snippet (optionally scope `sessionKey` to the transcript ID), then pass its retu
 sanitized excerpt. These tools enforce session visibility independently on each
 request. Memory-search line numbers are not session-history offsets.
 
+Session indexing excludes generated exec completion wakes and lost-process
+notices, including command output tails. Ordinary user messages and assistant
+replies remain eligible. Previously indexed output is removed on the next
+reindex.
+
 The recall prompt recommends only enabled tools. Without session-history tools,
 report the excerpt limitation instead of reading raw transcript files.
 `memory_get` reports unsupported paths as read errors, not missing arguments or a

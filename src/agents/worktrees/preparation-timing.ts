@@ -5,7 +5,8 @@ import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-event
 import { recordDiagnosticsTimelineDuration } from "../../infra/diagnostics-timeline.js";
 import type { ProvisionCopyDetails } from "../../infra/fs-safe-copy-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { LocalWorkspacePausePhase } from "../sandbox/local-workspace-quiescence.js";
+import type { SpawnResult } from "../../process/exec-result.js";
+import type { LocalWorkspacePausePhase } from "../sandbox/types.js";
 
 type PreparationPhase =
   | `reuse.${LocalWorkspacePausePhase | "probeCanonical" | "probeProjection" | "capturePreparation"}`
@@ -64,6 +65,7 @@ type PreparationPhase =
   | "workspaceLayout";
 type TemplateState = "warm" | "cold" | "unavailable" | "reused";
 type TemplateDetails = {
+  identity?: string;
   reason?: string;
   missReason?:
     | "no-generation"
@@ -73,8 +75,29 @@ type TemplateDetails = {
     | "invalid";
   priorSourceCommit?: string;
   requestedSourceCommit?: string;
+  refreshRejectReason?:
+    | "template-missing"
+    | "validation-failed"
+    | "attributes-changed"
+    | "checkout-policy-mismatch"
+    | "diff-probe-failed";
+  validationFailure?:
+    | "checkout-policy"
+    | "status-probe"
+    | "status-malformed"
+    | "dirty"
+    | "head-mismatch";
+  refreshErrorClass?:
+    | "exit-nonzero"
+    | "timeout"
+    | "no-output-timeout"
+    | "signal"
+    | "output-truncated";
   backend?: string;
   cloneBytes?: number;
+  nativeCloneCount?: number;
+  nativeCloneWriteBytes?: number;
+  nativeCloneUnmeasuredCount?: number;
   errorCode?: string;
 };
 type PreparationTimingState = {
@@ -122,10 +145,39 @@ export function recordWorktreePreparationFailure(phase: PreparationPhase, error:
   }
 }
 
+/** Record only the completed probe's bounded outcome, never its repository output. */
+export function recordWorktreeTemplateProbeFailure(
+  reason: "validation-failed" | "diff-probe-failed",
+  result: Pick<SpawnResult, "termination" | "code" | "stdoutTruncatedBytes">,
+) {
+  setWorktreePreparationTemplate(undefined, {
+    refreshRejectReason: reason,
+    validationFailure: reason === "validation-failed" ? "status-probe" : undefined,
+    refreshErrorClass:
+      result.termination !== "exit"
+        ? result.termination
+        : result.code !== 0
+          ? "exit-nonzero"
+          : "output-truncated",
+  });
+}
+
 export function setWorktreePreparationCopyDetails(details: ProvisionCopyDetails) {
   const current = preparation.getStore();
   if (current) {
     current.copyDetails = details;
+  }
+}
+
+export function recordWorktreeNativeClone(writeBytes: number | undefined) {
+  const details = preparation.getStore()?.templateDetails;
+  if (details) {
+    details.nativeCloneCount = (details.nativeCloneCount ?? 0) + 1;
+    if (writeBytes === undefined) {
+      details.nativeCloneUnmeasuredCount = (details.nativeCloneUnmeasuredCount ?? 0) + 1;
+    } else {
+      details.nativeCloneWriteBytes = (details.nativeCloneWriteBytes ?? 0) + writeBytes;
+    }
   }
 }
 
@@ -165,14 +217,14 @@ export async function timeWorktreePreparationPhase<T>(
 }
 
 export async function withWorktreePreparationTiming<T>(
-  kind: "managed" | "sandbox",
+  kind: "managed" | "managed-prewarm" | "sandbox",
   run: () => Promise<T>,
 ): Promise<T> {
   const startedAt = Date.now();
   const start = performance.now();
   const emit = createQueuedDiagnosticPhaseEmitter();
   const current: PreparationTimingState = {
-    enabled: kind === "managed",
+    enabled: kind !== "sandbox",
     template: "unavailable",
     templateDetails: { reason: "not-requested" },
     phases: {},

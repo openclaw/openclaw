@@ -112,12 +112,14 @@ describe("normalizePluginsConfig", () => {
       {
         allowPromptModification: false,
         allowConversationAccess: true,
+        allowModelRequest: true,
         timeoutMs: 250,
         timeouts: { before_prompt_build: 90_000, agent_end: 60_000 },
       },
       {
         allowPromptModification: false,
         allowConversationAccess: true,
+        allowModelRequest: true,
         timeoutMs: 250,
         timeouts: { before_prompt_build: 90_000, agent_end: 60_000 },
       },
@@ -127,6 +129,7 @@ describe("normalizePluginsConfig", () => {
       {
         allowPromptModification: "nope",
         allowConversationAccess: "nope",
+        allowModelRequest: "yes",
         timeoutMs: 0,
         timeouts: { before_prompt_build: 900_000 },
       },

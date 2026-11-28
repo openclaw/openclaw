@@ -213,3 +213,20 @@ it("does not dispatch after cancellation during payload preparation", async () =
   expect(result.stopReason).toBe("aborted");
   expect(fetchMock).not.toHaveBeenCalled();
 });
+
+it.each([
+  [{ state: "unavailable" }, { state: "unavailable" }],
+  [
+    { state: "available", promptTokens: 30, totalTokens: 33 },
+    { state: "available", promptTokens: 30, totalTokens: 33 },
+  ],
+  // Without an upstream snapshot, Pi's counters measure the prompt: 50 + 10 + 4.
+  [undefined, { state: "available", promptTokens: 64, totalTokens: 76 }],
+])("keeps an upstream context snapshot %j over its counters", async (upstream, expected) => {
+  mockEvents([
+    { type: "start" },
+    { type: "done", reason: "stop", usage: { ...usage, contextUsage: upstream } },
+  ]);
+  const result = await run().result();
+  expect(result.usage.contextUsage).toEqual(expected);
+});

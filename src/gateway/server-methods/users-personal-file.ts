@@ -10,7 +10,6 @@ import {
 import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   resolveGatewayPersonalToolParticipant,
 } from "../../agents/tools/gateway-caller-context.js";
@@ -28,6 +27,7 @@ import {
   isOpenClawIdTunnelPrincipalCurrent,
   openclawIdSubjectRolePolicy,
 } from "../openclaw-id/tunnel-principal.js";
+import { operatorRoleSubject } from "../operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js";
@@ -49,7 +49,6 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
   const workspaceDir = resolveAgentWorkspaceDir(context.getRuntimeConfig(), agentId);
   const operatorAuthority = client?.internal?.operatorRunAuthority;
   const toolCaller = getGatewayToolCallerIdentity();
-  const assertToolCurrent = captureGatewayToolCallerAssertion();
   const currentProfile = () => {
     try {
       resolveGatewayPersonalToolParticipant(client?.internal?.agentRuntimeIdentity, {
@@ -57,7 +56,7 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       })?.assertCurrent();
     } catch (error) {
       throw new PersonalFileAccessError(
-        "Personal instructions are unavailable in this turn. Ask in your own Control UI turn with a new message.",
+        "Personal instructions are unavailable in this turn. Ask again yourself with a new message in the OpenClaw app.",
         { cause: error },
       );
     }
@@ -90,15 +89,13 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
         !requesterAuthority?.source ||
         requesterAuthority.source !== operatorAuthority.source ||
         requesterAuthority.profileId !== operatorAuthority.profileId ||
-        !assertToolCurrent
+        !toolCaller?.operationalRunInstance
       ) {
         throw new PersonalFileAccessError("Personal instructions require an admitted user turn.");
       }
       // Dispatch may issue a narrower grant. Bind by the opaque original source
       // and subject, while retaining both the run and narrowed grant lifetimes.
       assertAdmittedRunOperatorAuthority(requesterAuthority);
-      assertToolCurrent();
-      operatorAuthority.assertCurrent();
       id = operatorAuthority.profileId;
     } else {
       if (
@@ -134,6 +131,7 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
           profile?.role ?? null,
           cfg,
           profile?.githubLogin ?? null,
+          operatorRoleSubject(profile),
         ),
     );
     if (

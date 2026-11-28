@@ -65,6 +65,7 @@
  * snapshotRefUpdates counts changed recovery refs, separately from retained refs.
  */
 import assert from "node:assert/strict";
+import { createHook } from "node:async_hooks";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -91,6 +92,8 @@ const { values } = parseArgs({
     files: { type: "string", default: "62000" },
     "file-bytes": { type: "string", default: "18432" },
     worktrees: { type: "string", default: "3" },
+    "registry-worktrees": { type: "string", default: "0" },
+    "placement-replicas": { type: "string", default: "0" },
     profile: { type: "boolean", default: false },
     "pending-integration": { type: "boolean", default: false },
     "reuse-pending-integration": { type: "boolean", default: false },
@@ -149,6 +152,10 @@ if (values.prepare) {
 assert(values.output && global.gc, "--output and --expose-gc are required");
 const output = path.resolve(values.output);
 const worktrees = Number(values.worktrees);
+const registryWorktrees = Number(values["registry-worktrees"]);
+assert(Number.isSafeInteger(registryWorktrees) && registryWorktrees >= 0);
+const placementReplicas = Number(values["placement-replicas"]);
+assert(Number.isSafeInteger(placementReplicas) && placementReplicas >= 0);
 const scratchClones = Number(values["scratch-clones"]);
 const scratchOrder = values["scratch-order"];
 const observeMs = Number(values["observe-ms"]);
@@ -341,24 +348,90 @@ if (scratchOrder) {
   }
 }
 const sessions = 5_000;
+// Census scale without duplicating 800 full file inventories: protected checkouts
+// have real Git registrations, while the removable cohort has the complete tree.
+const censusRecords: ManagedWorktreeRecord[] = [];
+const censusLeases: Array<{ release: () => Promise<void> }> = [];
+for (let index = worktrees; index < registryWorktrees; index++) {
+  const id = `25622562-2562-4562-8562-${String(index).padStart(12, "0")}`;
+  const checkout = path.join(output, "state", "worktrees", fingerprint, id);
+  const branch = `openclaw/census-${index}`;
+  git(
+    repo,
+    "worktree",
+    "add",
+    "--quiet",
+    "--no-checkout",
+    "-b",
+    branch,
+    checkout,
+    fixture.snapshot,
+  );
+  const record: ManagedWorktreeRecord = {
+    id,
+    name: `census-${index}`,
+    repoFingerprint: fingerprint,
+    repoRoot: repo,
+    path: checkout,
+    branch,
+    baseRef: "main",
+    ownerKind: "session",
+    ownerId: `agent:main:synthetic-${index}`,
+    createdAt: 1,
+    lastActiveAt: 1,
+  };
+  await insertRegistryWorktree(process.env, record, { provisionedPaths: [] });
+  if (index < registryWorktrees / 2) {
+    fs.mkdirSync(path.join(checkout, "nested/.git"), { recursive: true });
+    fs.writeFileSync(path.join(checkout, "nested/.git/HEAD"), "ref: refs/heads/main\n");
+    const { deferFailedWorktreeRemoval } =
+      await import("../../src/agents/worktrees/registry-retirement.js");
+    await deferFailedWorktreeRemoval({
+      env: process.env,
+      id,
+      stage: "nested-repository",
+      reason: "synthetic nested repository",
+      elapsedMs: 0,
+      now: Date.now(),
+      previousAttempts: 0,
+      observed: record,
+      assertCurrent() {},
+    });
+  } else if (index === registryWorktrees - 3) {
+    const { acquireWorktreeRunLease } = await import("../../src/agents/worktrees/run-lease.js");
+    censusLeases.push(await acquireWorktreeRunLease(id));
+  } else if (index >= registryWorktrees - 2) {
+    git(repo, "worktree", "lock", "--reason", "synthetic foreign owner", checkout);
+  }
+  censusRecords.push(record);
+}
 if (values["agent-db-fixture"] && !reused) {
   const destination = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.copyFileSync(
-    values["agent-db-fixture"],
-    destination,
-    fs.constants.COPYFILE_FICLONE | fs.constants.COPYFILE_EXCL,
-  );
+  if (process.platform === "darwin") {
+    // Node's clone flag can fall back to copying the entire 35 GiB fixture on APFS.
+    assert(!fs.existsSync(destination));
+    execFileSync("/bin/cp", ["-c", "-n", values["agent-db-fixture"], destination]);
+  } else {
+    fs.copyFileSync(
+      values["agent-db-fixture"],
+      destination,
+      fs.constants.COPYFILE_FICLONE | fs.constants.COPYFILE_EXCL,
+    );
+  }
 }
 for (let offset = 0; offset < sessions; offset += 100) {
   runOpenClawAgentWriteTransaction(
     (database) => {
       for (let index = offset; index < Math.min(offset + 100, sessions); index++) {
-        const record = records[index];
+        const record = records[index] ?? censusRecords[index - worktrees];
         writeSessionEntry(database, `agent:main:synthetic-${index}`, {
           // Preserve the canonical fixture's current transcript window.
           sessionId: `team-shape-session-${index}`,
-          updatedAt: 1,
+          updatedAt:
+            registryWorktrees && index >= registryWorktrees / 2 && index < registryWorktrees - 3
+              ? Date.now()
+              : 1,
           lifecycleRevision: `synthetic-${index}`,
           status: "done",
           ...(record
@@ -399,6 +472,68 @@ const snapshotRefsBefore = new Set(
 );
 agentDatabase.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 const agentDatabaseBytes = fs.statSync(agentDatabase.path).size;
+if (placementReplicas) {
+  const { resolveSessionWorkerPlacementContext } =
+    await import("../../src/gateway/session-worker-placement-context.js");
+  const { capturePlacementReplicaRead } =
+    await import("../../src/gateway/worker-environments/placement-turn-authority.js");
+  const { captureOpenClawStateWorkerContext } =
+    await import("../../src/state/openclaw-state-worker-context.js");
+  const { createWorkerSessionPlacementStore } =
+    await import("../../src/gateway/worker-environments/placement-store.js");
+  const store = resolveSessionWorkerPlacementContext().workerSessionPlacementService!;
+  const writer = createWorkerSessionPlacementStore();
+  const context = captureOpenClawStateWorkerContext();
+  // Immutable synthetic read postimages populate the existing placement replica,
+  // as a long-lived Gateway accumulates completed local sessions.
+  capturePlacementReplicaRead(context.admission.identity)(
+    Array.from({ length: placementReplicas }, (_, index) => ({
+      sessionId: `resident-${index}`,
+      sessionKey: `agent:main:resident-${index}`,
+      agentId: "main",
+      state: "local" as const,
+      executionMode: "worker-turn" as const,
+      generation: 1,
+      turnClaim: null,
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workspaceBaseManifestRef: null,
+      remoteWorkspaceDir: null,
+      workerBundleHash: null,
+      lastTranscriptAckCursor: null,
+      lastLiveEventAckCursor: null,
+      recoveryError: null,
+      terminalReason: null,
+      terminalAtMs: null,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      stateChangedAtMs: 1,
+    })),
+  );
+  for (let index = 0; index < 64; index++) {
+    await writer.startDispatch({
+      sessionId: `remote-${index}`,
+      sessionKey: `agent:main:remote-${index}`,
+      agentId: "main",
+    });
+  }
+  const prepare = store.prepareMaintenancePlacements!.bind(store);
+  let publication = 0;
+  store.prepareMaintenancePlacements = async () => {
+    const inventory = await prepare();
+    await writer.releaseTurnIfOwned(
+      await writer.claimTurn({
+        sessionId: "resident-0",
+        sessionKey: "agent:main:resident-0",
+        agentId: "main",
+        owner: { kind: "local" },
+        claimId: `fixture-${++publication}`,
+        runId: `fixture-${publication}`,
+      }),
+    );
+    return inventory;
+  };
+}
 const preparationFlushMs: number[] = [];
 const pressureFiles = [1, 2, 3, 4, 5, 30].map((full) => {
   const file = path.join(output, `synthetic-psi-${full}`);
@@ -433,7 +568,7 @@ const scheduler = new GatewayScheduler({
         const timer = setTimeout(() => void run(), delayMs);
         return () => clearTimeout(timer);
       }
-      // Park the unrelated hourly recurrence; only cleanup continuation timers advance.
+      // Park hourly sweeps; cleanup pressure continuations can wait five minutes.
       if (delayMs > 10 * 60_000 || (scratchOrder && delayMs >= 60_000)) {
         return () => {};
       }
@@ -445,6 +580,21 @@ const scheduler = new GatewayScheduler({
     },
   },
 });
+// Periodic Git maintenance is independent of this cleanup measurement. Cancel
+// that job by identity so its deadline cannot suppress a cleanup continuation.
+const scope = scheduler.scope.bind(scheduler);
+scheduler.scope = () => {
+  const owner = scope();
+  const schedule = owner.schedule;
+  owner.schedule = (params) => {
+    const job = schedule(params);
+    if (!observeMs && params.id === "maintenance:worktrees:git") {
+      job.cancel();
+    }
+    return job;
+  };
+  return owner;
+};
 const removals: Array<{ id: string; atMs: number; wallMs: number }> = [];
 const admissions: number[] = [];
 let scratchCompleted: (() => void) | undefined;
@@ -502,6 +652,20 @@ const sampleKernel = () => {
 };
 let kernelTimer: ReturnType<typeof setInterval> | undefined;
 const loop = monitorEventLoopDelay({ resolution: 10 });
+let maxCallbackMs = 0;
+const callbackStarts = new Map<number, number>();
+const callbacks = createHook({
+  before(id) {
+    callbackStarts.set(id, performance.now());
+  },
+  after(id) {
+    const start = callbackStarts.get(id);
+    if (start !== undefined) {
+      maxCallbackMs = Math.max(maxCallbackMs, performance.now() - start);
+      callbackStarts.delete(id);
+    }
+  },
+});
 let owner: ReturnType<typeof startWorktreeMaintenance> | undefined;
 let observationTimer: ReturnType<typeof setTimeout> | undefined;
 const broker = process.platform === "linux" ? createSpawnBrokerHost() : undefined;
@@ -546,6 +710,7 @@ try {
   const cpuBefore = process.cpuUsage();
   const mainCpuBefore = process.threadCpuUsage();
   const started = performance.now();
+  callbacks.enable();
   if (scratchBinding === "stale") {
     bindingTimer = setInterval(() => {
       bindingPublications++;
@@ -590,6 +755,7 @@ try {
       }),
   );
   const wallMs = performance.now() - started;
+  callbacks.disable();
   clearInterval(bindingTimer);
   const processCpu = process.cpuUsage(cpuBefore);
   const mainCpu = process.threadCpuUsage(mainCpuBefore);
@@ -621,6 +787,10 @@ try {
   const archived = new Map(
     (await managedWorktrees.listRegistryRecords()).map((record) => [record.id, record]),
   );
+  for (const record of censusRecords) {
+    assert.equal(archived.get(record.id)?.removedAt, undefined);
+    assert(fs.existsSync(record.path));
+  }
   const trees: string[] = [];
   for (const record of observeMs || scratchOrder || pendingIntegration ? [] : records) {
     const current = archived.get(record.id);
@@ -659,6 +829,7 @@ try {
     "src/agents/worktrees/registry-read.kernel.ts",
     "src/agents/worktrees/registry-retirement.ts",
     "src/gateway/worktree-maintenance.ts",
+    "src/gateway/worker-environments/placement-read-authority.ts",
     "src/gateway/scratch-maintenance-custody.ts",
     "src/sessions/session-controller.queries.ts",
     "src/infra/host-io-pressure.ts",
@@ -679,11 +850,15 @@ try {
     diagnosticProfile: values.profile,
     node: process.version,
     platform: process.platform,
+    runtime: process.versions,
     spawnBroker: Boolean(broker),
     runtimeImportWarmupMs,
     filesPerWorktree: fixture.files,
     bytesPerWorktree: fixture.files * fixture.fileBytes,
     worktrees,
+    registryWorktrees: records.length + censusRecords.length,
+    placementReplicas,
+    maxCallbackMs,
     pendingIntegration,
     snapshotRefs: git(repo, "for-each-ref", "--format=%(refname)", "refs/openclaw/snapshots/")
       .split("\n")
@@ -740,6 +915,7 @@ try {
   fs.writeFileSync(path.join(output, "report.json"), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));
 } finally {
+  callbacks.disable();
   clearInterval(bindingTimer);
   releaseAgentRunContext("synthetic-scratch-binding", bindingClaim);
   clearTimeout(observationTimer);
@@ -749,6 +925,9 @@ try {
   try {
     await owner?.stop();
     await scheduler.stop();
+    for (const lease of censusLeases) {
+      await lease.release();
+    }
     await drainGlobalSingletonLifecycleState();
   } finally {
     await broker?.close();

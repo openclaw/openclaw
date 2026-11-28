@@ -1,4 +1,5 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { err, ok } from "@openclaw/normalization-core/result";
 import {
   TOOL_USAGE_RETENTION_MS,
   type ToolUsageCatalogEntry,
@@ -10,7 +11,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-con
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentDatabaseOperations } from "../../state/openclaw-agent-execution-contract.js";
-import { captureOpenClawAgentDatabasePreparationExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
@@ -52,29 +53,62 @@ function withDatabase<T>(
   );
 }
 
+/**
+ * Runs one usage operation in a write admission. `create` lets a live agent's
+ * write create its store; without it a missing store yields undefined.
+ */
+async function runUsageOperation<Key extends UsageOperation>(
+  options: OpenClawAgentDatabaseOptions,
+  assertCurrent: () => void,
+  type: Key,
+  input: AgentDatabaseOperations[Key]["input"],
+  create: boolean,
+): Promise<{ value: AgentDatabaseOperations[Key]["output"] } | undefined> {
+  assertCurrent();
+  // Creation authority and prepare go together; the store refuses a creating
+  // capture that never prepares.
+  const captured = captureOpenClawAgentDatabaseExecutionAsync(
+    options,
+    {},
+    create ? "inherit" : undefined,
+  ).then(
+    (execution) => ok(execution),
+    (error: unknown) => err<never, unknown>(error),
+  );
+  const source = createSessionWorkerExecutionSource(assertCurrent, "Tool usage database changed");
+  try {
+    return await runOpenClawAgentWorkerWrite(options, async () => {
+      const acquired = await captured;
+      if (!acquired.ok) {
+        throw acquired.error;
+      }
+      const execution = acquired.value;
+      if (create) {
+        await execution.prepare(source);
+      }
+      return await execution.runExisting(source, async (worker) => ({
+        value: await worker.execute({ type, input }),
+      }));
+    });
+  } finally {
+    const acquired = await captured;
+    if (acquired.ok) {
+      await acquired.value.release();
+    }
+  }
+}
+
 async function write<Key extends UsageOperation>(
   options: OpenClawAgentDatabaseOptions,
   assertCurrent: () => void,
   type: Key,
   input: AgentDatabaseOperations[Key]["input"],
 ): Promise<AgentDatabaseOperations[Key]["output"]> {
-  assertCurrent();
-  const execution = captureOpenClawAgentDatabasePreparationExecution(options);
-  const source = createSessionWorkerExecutionSource(assertCurrent, "Tool usage database changed");
-  try {
-    return await runOpenClawAgentWorkerWrite(options, async () => {
-      await execution.prepare(source);
-      const result = await execution.runExisting(source, async (worker) => ({
-        value: await worker.execute({ type, input }),
-      }));
-      if (!result) {
-        throw new Error("Tool usage database disappeared before write");
-      }
-      return result.value;
-    });
-  } finally {
-    await execution.release();
+  const result = await runUsageOperation(options, assertCurrent, type, input, true);
+  if (!result) {
+    throw new Error("Tool usage database disappeared before write");
   }
+  return result.value;
 }
 
 export function readAgentToolUsageStatus(
@@ -90,6 +124,27 @@ export function readAgentToolUsageStatus(
 
 export async function readAgentToolUsage(input: AgentToolUsageOptions): Promise<ToolUsageRow[]> {
   return (await readAgentToolUsageStatus(input)).rows;
+}
+
+/**
+ * Ranking boundaries read scores and record this session's sighting time for
+ * each offered tool the agent has not recorded yet.
+ */
+export async function readAgentToolUsageForRanking(
+  input: AgentToolUsageOptions & { sightings: Readonly<Record<string, number>> },
+): Promise<Pick<AgentToolUsageStatus, "rows" | "firstSeen">> {
+  const now = input.now ?? Date.now();
+  const status = await readAgentToolUsageStatus({ ...input, now });
+  const sightings = Object.fromEntries(
+    Object.entries(input.sightings).filter(([id]) => status.firstSeen[id] === undefined),
+  );
+  if (Object.keys(sightings).length === 0) {
+    return status;
+  }
+  const firstSeen = await withDatabase(input, (options, current) =>
+    write(options, current, "toolUsage.firstSeen", { sightings, now }),
+  );
+  return { rows: status.rows, firstSeen };
 }
 
 export function flushAgentToolUsage(
@@ -220,11 +275,14 @@ export async function pruneRegisteredAgentToolUsage(input: {
     ) {
       continue;
     }
-    await write(
+    // Retention only maintains existing stores: an operator may have removed a retired
+    // agent's directory while its registration stays (#205927), so never create one here.
+    await runUsageOperation(
       { agentId: entry.agentId, path: entry.path, env },
       input.assertCurrent,
       "toolUsage.prune",
       { now: input.now },
+      false,
     );
   }
 }

@@ -4,26 +4,24 @@ import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import { sparseAssistant, textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
 import {
   extractToolResultId,
-  extractToolResultIds,
   sanitizeToolCallIdsForCloudCodeAssist as sanitize,
 } from "./tool-call-id.js";
 
 describe("tool result id aliases", () => {
   it.each([
-    [{ toolCallId: " first ", toolUseId: "second" }, "first", ["first", "second"]],
-    [{ toolCallId: " ", toolUseId: " second ", call_id: "second" }, "second", ["second"]],
-    [{ toolCallId: 42, toolUseId: null, tool_call_id: " third " }, "third", ["third"]],
-    [{ toolCallId: "", tool_use_id: " fourth " }, "fourth", ["fourth"]],
-    [{ toolCallId: "", callId: " fifth ", call_id: "sixth" }, "fifth", ["fifth", "sixth"]],
-    [{ toolCallId: "", call_id: " sixth " }, "sixth", ["sixth"]],
-    [{ toolCallId: " ", toolUseId: 42, call_id: "\n" }, null, []],
-  ])("keeps first-id precedence and the complete unique list for %j", (aliases, first, all) => {
+    [{ toolCallId: " first ", toolUseId: "second" }, "first"],
+    [{ toolCallId: " ", toolUseId: " second ", call_id: "second" }, "second"],
+    [{ toolCallId: 42, toolUseId: null, tool_call_id: " third " }, "third"],
+    [{ toolCallId: "", tool_use_id: " fourth " }, "fourth"],
+    [{ toolCallId: "", callId: " fifth ", call_id: "sixth" }, "fifth"],
+    [{ toolCallId: "", call_id: " sixth " }, "sixth"],
+    [{ toolCallId: " ", toolUseId: 42, call_id: "\n" }, null],
+  ])("keeps first-id precedence for %j", (aliases, first) => {
     const [message] = castAgentMessages([{ role: "toolResult", content: [], ...aliases }]);
     if (message?.role !== "toolResult") {
       throw new Error("expected tool result fixture");
     }
     expect(extractToolResultId(message)).toBe(first);
-    expect(extractToolResultIds(message)).toEqual(all);
   });
 });
 

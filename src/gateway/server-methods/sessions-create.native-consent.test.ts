@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import {
   registerNative,
   useNativeProcessFixture,
@@ -65,10 +65,9 @@ it.each([
       delete client.authenticatedUserId;
       if (profiled) {
         client.internal = {
-          operatorRunAuthority: createAdmittedRunOperatorAuthority({
+          operatorRunAuthority: createTestOperatorAuthority({
             profileId: profile.id,
             scopes,
-            assertCurrent() {},
           }),
         };
       }

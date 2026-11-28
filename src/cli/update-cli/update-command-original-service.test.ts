@@ -627,6 +627,20 @@ it.for([
   },
 );
 
+it.skipIf(process.platform === "win32")(
+  "certifies a running service before an empty package destination is published",
+  async () => {
+    const root = state.path("not-yet-installed");
+    const run: Run = updateRun(state.env);
+    await withUpdateCommandExecutor(run.runId, async (executor) => {
+      run.executorFence = await executor.enter(root, { serviceRoot: rootA });
+      await expect(
+        observeOriginalManagedServiceRuntime({ root, opts: { json: true, run } }, before),
+      ).resolves.toMatchObject({ root: rootA, verified: true });
+    });
+  },
+);
+
 it("refuses B ledger admission independently from compatible service A state", async () => {
   const parentDir = state.path("parent-state");
   await fs.mkdir(parentDir);

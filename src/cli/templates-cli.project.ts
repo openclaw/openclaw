@@ -207,7 +207,7 @@ export async function runTemplatesDevCommand(
       );
     }
     const config = configSnapshot.resolved;
-    const existingMcpServers = config.mcp?.servers ?? {};
+    const existingMcpServers = configSnapshot.authoredConfig?.mcp?.servers ?? {};
     const existingAgentIds = listAgentIds(config);
     plan = await buildTemplateAddPlan({
       manifest: result.manifest,
@@ -223,6 +223,11 @@ export async function runTemplatesDevCommand(
       diagnostics: result.diagnostics,
       context: {
         config,
+        resolvePreferredModel: async (requested) => {
+          const { resolveLocalTemplatePreferredModel } =
+            await import("../templates/preferred-model-runtime.js");
+          return resolveLocalTemplatePreferredModel(requested, config);
+        },
         agentId: opts.agentId,
         ...(opts.workspace ? { workspace: opts.workspace } : {}),
         existingAgentIds,

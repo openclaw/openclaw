@@ -327,12 +327,12 @@ afterEach(() => {
   }
 });
 
-it("rejects blank --to selectors before local or Gateway dispatch", async () => {
-  mockGatewaySuccessReply();
+it.each(["", "   "])("rejects blank --to %j before local or Gateway dispatch", async (to) => {
   for (const local of [false, true]) {
-    for (const value of ["", "   "]) {
-      await expect(runText({ local, to: value })).rejects.toThrow("--to must not be blank");
-    }
+    await expect(runText({ local, to })).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: "--to must not be blank",
+    });
   }
   expectUncalled(callGateway, agentCommand);
 });
