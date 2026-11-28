@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { LlamaCppHardware } from "./hardware.js";
-import { recommendLlamaCppModel, resolveLlamaCppCatalogArtifact } from "./model-catalog.js";
+import {
+  recommendLlamaCppModel,
+  resolveLlamaCppCatalogArtifact,
+  resolveLlamaCppModelCandidates,
+  withLlamaCppPromptReuse,
+} from "./model-catalog.js";
 
 const GIB = 1024 ** 3;
 const SMALL_MODEL = "qwen3.5-4b-q4_k_m";
@@ -129,5 +134,35 @@ describe("local model recommendation", () => {
       expectedSha256: "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
     });
     expect(resolveLlamaCppCatalogArtifact("hf:example/arbitrary/model.gguf")).toBeUndefined();
+  });
+});
+
+describe("Gemma prompt reuse", () => {
+  function recipe(id: string) {
+    const found = resolveLlamaCppModelCandidates(hardware(64), "metal").recipes.find(
+      (candidate) => candidate.model.id === id,
+    );
+    if (!found) {
+      throw new Error(`missing catalog recipe ${id}`);
+    }
+    return found;
+  }
+
+  it("keeps a full sliding-window cache for Gemma when memory has room for it", () => {
+    const model = withLlamaCppPromptReuse(recipe("gemma-4-e4b-it-q4_k_m"), hardware(36), "metal");
+
+    expect(model.params).toMatchObject({ swaFull: true });
+  });
+
+  it("keeps the smaller cache when the larger one would not fit", () => {
+    const gemma = recipe("gemma-4-e4b-it-q4_k_m");
+
+    expect(withLlamaCppPromptReuse(gemma, hardware(16), "metal")).toBe(gemma.model);
+  });
+
+  it("leaves models without a sliding window unchanged", () => {
+    const qwen = recipe(MEDIUM_MODEL);
+
+    expect(withLlamaCppPromptReuse(qwen, hardware(64), "metal")).toBe(qwen.model);
   });
 });
