@@ -131,6 +131,7 @@ const m = {
     mode: "emit" as const,
     coalesced: false,
     cooldownMsApplied: 0,
+    emitHooksQueued: false,
   })),
   advanceCronActiveJobGeneration: vi.fn(),
   resetCronActiveJobs: vi.fn(),

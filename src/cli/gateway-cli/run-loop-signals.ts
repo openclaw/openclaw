@@ -338,13 +338,13 @@ export function createGatewayRunSignals(params: {
           { acceptedAtMs, deferRestartDrain },
         );
       };
-      enqueueSignal(true, handleRestart, (error, acceptedAtMs, timedOut) => {
-        if (!authorized && !timedOut) {
+      enqueueSignal(true, handleRestart, (error, acceptedAtMs) => {
+        if (!authorized) {
           restartSignalFailed(error, false);
           return;
         }
         gatewayLog.warn(
-          `Handling SIGUSR2 without stored restart intent: ${formatErrorMessage(error)}`,
+          `Restart intent could not be read; continuing the authorized local restart: ${formatErrorMessage(error)}`,
         );
         try {
           handleRestart(null, acceptedAtMs);
