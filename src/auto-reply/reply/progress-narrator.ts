@@ -5,7 +5,7 @@ import {
   noteSessionActivityEvent,
 } from "../../agents/session-activity-notes.js";
 import { isCommandBearingToolCall } from "../../agents/tool-display.js";
-import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
+import { resolveUtilityModelSelectionForAgent } from "../../agents/utility-model.js";
 import { PROGRESS_STATUS_PREAMBLE_FRESH_MS } from "../../channels/progress-draft-compositor.js";
 import { sanitizeProgressStatusText } from "../../channels/progress-draft-status-text.js";
 import { isChannelProgressDraftWorkToolName } from "../../channels/streaming.js";
@@ -59,8 +59,14 @@ export function attachProgressNarratorToReplyOptions(params: {
     return opts;
   }
   // Explicit config or a provider-declared default both enable narration;
-  // utilityModel: "" and providers without a default keep it off.
-  if (!resolveUtilityModelRefForAgent({ cfg: params.cfg, agentId: params.agentId })) {
+  // utilityModel: "" and providers without a default keep it off, and so does a
+  // turn whose role refuses every utility model: no narration attempt is made.
+  const utility = resolveUtilityModelSelectionForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    modelPolicy: opts.operatorAuthority?.modelPolicy,
+  });
+  if (!("modelRef" in utility)) {
     return opts;
   }
   const { cfg, agentId } = params;
@@ -169,6 +175,7 @@ export function attachProgressNarratorToReplyOptions(params: {
         prepared,
         input,
         abortSignal: signal,
+        operatorAuthority: opts.operatorAuthority,
         // Runtime timers require integer milliseconds; the outer deadline stays exact.
         timeoutMs: Math.ceil(remainingTimeoutMs),
       });

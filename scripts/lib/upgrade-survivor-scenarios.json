@@ -25,6 +25,7 @@
     "missing-configured-plugin-migration",
     "missing-load-path",
     "custom-plugin-siblings",
+    "boot-plugin-convergence",
     "projects-doctor",
     "channel-owner-policy",
     "projects-startup-migration",

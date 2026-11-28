@@ -128,37 +128,21 @@ extension OpenClawSnapshotUITests {
         let app = try XCTUnwrap(self.app)
         let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
-        let model = app.buttons["chat-composer-inline-model"]
+        // The model and effort chips show while the draft is focused.
+        let model = self.inlineModelChip(in: app)
         XCTAssertTrue(model.waitForExistence(timeout: 3))
-        XCTAssertEqual(model.value as? String, "gpt-5.6-sol")
+        XCTAssertEqual(model.value as? String, "GPT-5.6")
         self.assertMinimumTouchTarget(model)
         self.assertMinimumTouchTarget(app.buttons["chat-realtime-control"])
         self.assertMinimumTouchTarget(app.buttons["RootTabs.Sidebar.Show"])
         self.assertMinimumTouchTarget(app.buttons["Chat actions"])
         self.attachScreenshot(named: "accessibility-empty-composer-and-header")
         model.tap()
-        let alternative = app.buttons["anthropic/claude-opus-4-1"]
-        XCTAssertTrue(alternative.waitForExistence(timeout: 3))
-        // Native menus can open scrolled to the selected item at accessibility sizes.
-        // Navigate the actual menu before tapping; XCTest's implicit scroll can miss the row.
-        let menu = app.collectionViews.containing(.button, identifier: "anthropic/claude-opus-4-1").firstMatch
-        let visibleBounds = app.frame.insetBy(dx: 20, dy: 90)
-        for _ in 0..<4 {
-            print("MODEL_ROW_BOUNDS: \(alternative.frame), menu=\(menu.frame), hittable=\(alternative.isHittable)")
-            if alternative.frame.intersection(visibleBounds).height >= 44, alternative.isHittable { break }
-            let viewport = menu.frame.intersection(app.frame.insetBy(dx: 0, dy: 50))
-            let origin = app.coordinate(withNormalizedOffset: .zero)
-            let start = origin.withOffset(CGVector(dx: viewport.midX, dy: viewport.minY + 40))
-            let end = origin.withOffset(CGVector(dx: viewport.midX, dy: viewport.maxY - 40))
-            start.press(forDuration: 0.05, thenDragTo: end)
-        }
-        let visibleRow = alternative.frame.intersection(visibleBounds)
-        XCTAssertGreaterThanOrEqual(visibleRow.height, 44, alternative.debugDescription)
-        XCTAssertTrue(alternative.isHittable)
+        let alternative = self.pickerModelRow("anthropic/claude-opus-4-1", provider: "anthropic", in: app)
+        XCTAssertTrue(alternative.isEnabled)
         self.attachScreenshot(named: "accessibility-model-choice-visible")
-        app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: visibleRow.midX, dy: visibleRow.midY)).tap()
-        self.waitForValue("claude-opus-4-1", of: model)
+        alternative.tap()
+        self.waitForValue("Claude Opus 4.1", of: model)
         input.tap()
         input.typeText("Accessible draft")
         XCTAssertTrue((input.value as? String ?? "").contains("Accessible draft"))
@@ -199,6 +183,94 @@ extension OpenClawSnapshotUITests {
 
         let defaultMode = app.buttons["chat-composer-permission-default"]
         XCTAssertTrue(defaultMode.wait(for: \.isHittable, toEqual: true, timeout: 5))
+    }
+
+    func testColdCatalogRevealsModelAndGaugeWithoutMovingControls() {
+        let app = self.configuredApp(
+            for: Self.chatScreenshotTarget,
+            appearance: "dark",
+            screenshotMode: true,
+            additionalArguments: ["--openclaw-empty-chat-fixture", "--openclaw-slow-model-catalog-fixture"])
+        self.app = app
+        app.launch()
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        let model = app.buttons["chat-composer-inline-model"]
+        let gauge = app.buttons["chat-composer-inline-effort"]
+        let fixed = [
+            self.chatMessageInput(in: app), app.buttons["chat-attachment-picker"],
+            app.buttons["chat-composer-inline-permissions"], app.buttons["chat-dictation-control"],
+            app.buttons["chat-realtime-control"],
+        ]
+        XCTAssertFalse(model.exists, "The cold fixture must reach the unresolved catalog state")
+        XCTAssertFalse(gauge.exists, "Don't present provisional options ahead of their model")
+        let frames = fixed.map(\.frame)
+        self.waitForValue("GPT-5.6", of: model, timeout: 12)
+        XCTAssertTrue(gauge.isHittable)
+        XCTAssertEqual(fixed.map(\.frame), frames)
+    }
+
+    func testLongModelPreservesComposerControlsAcrossFirstSend() throws {
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: [
+            "--openclaw-empty-chat-fixture", "--openclaw-composer-model-layout-fixture",
+        ])
+        let app = try XCTUnwrap(self.app)
+        try self.startNewChatFromSidebar()
+        let model = self.inlineModelChip(in: app)
+        self.waitForValue("GPT-5.6", of: model)
+        let gauge = app.buttons["chat-composer-inline-effort"]
+        let mic = app.buttons["chat-dictation-control"]
+        let primary = app.buttons["chat-realtime-control"]
+        let fixed = [
+            app.buttons["chat-attachment-picker"],
+            app.buttons["chat-composer-inline-permissions"],
+            mic,
+            primary,
+        ]
+        let input = self.chatMessageInput(in: app)
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
+        let fixedFrames = fixed.map(\.frame)
+        let gaugeFrame = gauge.frame
+        let inputFrame = input.frame
+        func checkRow(gaugeExpected: Bool) {
+            XCTAssertEqual(input.frame, inputFrame)
+            XCTAssertEqual(fixed.map(\.frame), fixedFrames)
+            XCTAssertEqual(gauge.exists, gaugeExpected)
+            if gaugeExpected {
+                XCTAssertTrue(gauge.isHittable)
+                XCTAssertEqual(gauge.frame, gaugeFrame)
+                self.assertMinimumTouchTarget(gauge)
+            }
+        }
+        func pick(_ id: String, name: String) {
+            model.tap()
+            self.pickerModelRow("openai/\(id)", provider: "openai", in: app).tap()
+            self.waitForValue(name, of: model)
+        }
+        pick("atlas-extended", name: "Atlas Extended Context Research Preview")
+        self.assertNoHorizontalOverlap([fixed[0], fixed[1], model, gauge, mic, primary])
+        checkRow(gaugeExpected: true)
+        self.attachScreenshot(named: "composer-long-speed")
+        // Type on the visible software keyboard; XCTest typeText can replace it with hardware input.
+        XCTAssertTrue(keyboard.exists)
+        let letter = keyboard.keys.matching(NSPredicate(format: "label ==[c] %@", "h")).firstMatch
+        XCTAssertTrue(letter.waitForExistence(timeout: 3))
+        letter.tap()
+        let send = app.buttons["chat-send-message"]
+        XCTAssertEqual(send.frame, fixedFrames[3])
+        send.tap()
+        XCTAssertTrue(primary.waitForExistence(timeout: 8))
+        self.waitForValue("Atlas Extended Context Research Preview", of: model)
+        checkRow(gaugeExpected: true)
+        // The far edge of the advertised 44 pt hit target must open Speed, not dictation.
+        gauge.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        XCTAssertTrue(app.descendants(matching: .any)["chat-effort-bar-speed"].waitForExistence(timeout: 3))
+        gauge.tap()
+        pick("nova-extended", name: "Nova Extended Context Research Preview")
+        checkRow(gaugeExpected: false)
+        self.attachScreenshot(named: "composer-long-no-options")
     }
 
     func testChatComposerReturnInsertsNewlineWithoutSending() throws {
