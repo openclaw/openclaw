@@ -259,6 +259,13 @@ function defaultBoxes(count) {
 }
 
 async function renderLocal(template, texts, flags) {
+  const out = flags.out ?? path.resolve(process.cwd(), `${template.id}.svg`);
+  const extension = path.extname(out).toLowerCase();
+  if (extension && extension !== ".svg" && extension !== ".png") {
+    throw new Error(
+      `Unsupported local output extension: ${extension}. Use --out with .svg or .png.`,
+    );
+  }
   const { buffer } = await cachedTemplateImage(template);
   const imageMime = mimeFromExt(extFromUrl(template.imageUrl));
   const imageData = `data:${imageMime};base64,${buffer.toString("base64")}`;
@@ -290,9 +297,8 @@ async function renderLocal(template, texts, flags) {
   ${textNodes}
 </svg>
 `;
-  const out = flags.out ?? path.resolve(process.cwd(), `${template.id}.svg`);
   await mkdir(path.dirname(path.resolve(out)), { recursive: true });
-  if (path.extname(out).toLowerCase() === ".png") {
+  if (extension === ".png") {
     let browser;
     try {
       const { chromium } = await import("playwright-core");
