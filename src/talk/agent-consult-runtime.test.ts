@@ -8,6 +8,13 @@ import {
   emitTrustedDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+import {
+  GatewayDrainingError,
+  getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import {
@@ -40,6 +47,20 @@ vi.mock("../auto-reply/reply/session-fork.js", async (importOriginal) => {
 });
 
 let state: OpenClawTestState;
+
+async function setupConsultTestState() {
+  const actual = await vi.importActual<typeof import("../auto-reply/reply/session-fork.js")>(
+    "../auto-reply/reply/session-fork.js",
+  );
+  forkSessionEntryFromParent.mockImplementation(actual.forkSessionEntryFromParent);
+  state = await createOpenClawTestState({ label: "talk-consult", layout: "state-only" });
+}
+
+async function teardownConsultTestState() {
+  forkSessionEntryFromParent.mockReset();
+  clientVoiceSessionTesting.reset();
+  await state.cleanup();
+}
 
 function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
   const sessionStore: Record<string, SessionEntry> = {};
@@ -152,19 +173,8 @@ function expectForkTarget(call: RunEmbeddedAgentParams, sessionId = call.session
 }
 
 describe("realtime voice agent consult runtime", () => {
-  beforeEach(async () => {
-    const actual = await vi.importActual<typeof import("../auto-reply/reply/session-fork.js")>(
-      "../auto-reply/reply/session-fork.js",
-    );
-    forkSessionEntryFromParent.mockImplementation(actual.forkSessionEntryFromParent);
-    state = await createOpenClawTestState({ label: "talk-consult", layout: "state-only" });
-  });
-
-  afterEach(async () => {
-    forkSessionEntryFromParent.mockReset();
-    clientVoiceSessionTesting.reset();
-    await state.cleanup();
-  });
+  beforeEach(setupConsultTestState);
+  afterEach(teardownConsultTestState);
 
   it("does not start a consult after its caller has closed", async () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime();
@@ -640,5 +650,104 @@ describe("realtime voice agent consult runtime", () => {
       senderId,
       senderIsOwner: owner,
     });
+  });
+});
+
+describe("realtime voice agent consult root admission", () => {
+  beforeEach(async () => {
+    await setupConsultTestState();
+    resetGatewayWorkAdmission();
+  });
+  afterEach(async () => {
+    resetGatewayWorkAdmission();
+    await teardownConsultTestState();
+  });
+
+  it("consults under a fresh root after the calling bridge's root released", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    const bridgeRoot = tryBeginGatewayRootWorkAdmission("facetime:plugin-service");
+    expect(bridgeRoot).not.toBeNull();
+    const start = createDeferred();
+    let consult: ReturnType<typeof runConsult> | undefined;
+    // Mirrors the reported bug: the tool-call callback is created while the plugin
+    // service's root is still live and only fires after that root has released, so
+    // the consult inherits a released root through Node's async context propagation.
+    await bridgeRoot!.run(async () => {
+      consult = (async () => {
+        await start.promise;
+        return runConsult(runtime);
+      })();
+    });
+    bridgeRoot!.release();
+    start.resolve();
+
+    await expect(consult).resolves.toEqual({ text: "Speak this." });
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("counts once under a live caller root", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    const started = createDeferred();
+    const release = createDeferred();
+    runEmbeddedAgent.mockImplementationOnce(async () => {
+      started.resolve();
+      await release.promise;
+      return { payloads: [{ text: "Done." }], meta: {} };
+    });
+    const talkRoot = tryBeginGatewayRootWorkAdmission("talk-agent-consult");
+    expect(talkRoot).not.toBeNull();
+    let consult: ReturnType<typeof runConsult> | undefined;
+    await talkRoot!.run(async () => {
+      consult = runConsult(runtime);
+      await started.promise;
+      // The consult must nest under the already-admitted root, not open a second one.
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+    });
+    release.resolve();
+    await expect(consult).resolves.toEqual({ text: "Done." });
+    talkRoot!.release();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("refuses a consult while the gateway is genuinely draining", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    markGatewayRestartDraining();
+    try {
+      await expect(runConsult(runtime)).rejects.toThrowError(GatewayDrainingError);
+    } finally {
+      resetGatewayWorkAdmission();
+    }
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("releases the consultation root after a failed run", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    runEmbeddedAgent.mockImplementationOnce(async () => {
+      throw new Error("provider exploded");
+    });
+    await expect(runConsult(runtime)).rejects.toThrow("provider exploded");
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("releases the consultation root after cancellation", async () => {
+    const { runtime } = createAgentRuntime();
+    const controller = new AbortController();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const consult = runConsult(runtime, {
+      abortSignal: controller.signal,
+      onRunStarted: async () => {
+        entered.resolve();
+        await release.promise;
+        return { cleanup: () => {} };
+      },
+    });
+    await entered.promise;
+    controller.abort(new Error("voice session closed"));
+    release.resolve();
+    await expect(consult).rejects.toThrow("voice session closed");
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 });
