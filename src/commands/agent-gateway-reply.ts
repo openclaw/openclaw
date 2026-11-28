@@ -1,6 +1,7 @@
 // Prints a Gateway agent reply. A turn that yields to its subagents ends before its
 // answer exists, so the CLI keeps the agent connection open for the session's follow-up.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
   hasCompletionMessageSessionSpawn,
@@ -32,7 +33,19 @@ function formatInFlightGatewayAgentMessage(response: GatewayAgentResponse): stri
     : "Agent run is already in flight; not starting a duplicate run.";
 }
 
-export async function printGatewayAgentReply(
+export function readAcceptedRunContext(payload: unknown) {
+  const accepted = asOptionalRecord(payload);
+  if (accepted?.status !== "accepted") {
+    return undefined;
+  }
+  return {
+    runId: normalizeOptionalString(accepted.runId),
+    sessionKey: normalizeOptionalString(accepted.sessionKey),
+    agentId: normalizeOptionalString(accepted.agentId),
+  };
+}
+
+async function printGatewayAgentReply(
   reply: GatewayAgentResponse,
   opts: { json?: boolean },
   runtime: RuntimeEnv,
@@ -96,11 +109,14 @@ function messageText(message: unknown): string | undefined {
 }
 
 /**
- * The agent connection already receives `agent` lifecycle and `chat` events for the
- * session and its children, so it is observed from the first frame: no subscription,
- * no gap before the yield. Session runs are serialized, so the first run that starts in
- * the session after one of the turn's children ends is the follow-up. A follow-up that
- * yields again hands over to the next run in the same way.
+ * The agent connection is an unscoped session-event audience (no `session-scoped-events`
+ * cap; see server-broadcast.transport.test.ts "visits only the session audience"), so it
+ * already receives `agent` lifecycle and `chat` events for the session and its children.
+ * They are observed from the first frame: no subscription, no gap before the yield.
+ * Session runs are serialized, so the follow-up is the first run that starts in the session
+ * after one of the turn's children ends. Accepted edge: another turn (heartbeat, inbound
+ * message) starting in that idle window, or after a follow-up that yields again, is taken
+ * for the follow-up. Exact matching needs the settle run id, which the protocol does not carry.
  */
 export function createYieldFollower(params: {
   json?: boolean;
@@ -111,13 +127,16 @@ export function createYieldFollower(params: {
   const buffered: EventFrame[] = [];
   let observe: ((event: EventFrame) => void) | undefined;
   let printed = false;
-  let pending = 0;
   let outcome: YieldFollowUp | undefined;
   const follower = {
     /** The yielded turn whose follow-up the connection is waiting for. */
     following: undefined as GatewayAgentResponse | undefined,
     onEvent(event: EventFrame) {
-      if (json || (event.event !== "agent" && event.event !== "chat")) {
+      const payload = asOptionalRecord(event.payload);
+      const relevant =
+        (event.event === "agent" && payload?.stream === "lifecycle") ||
+        (event.event === "chat" && payload?.state !== "delta");
+      if (json || !relevant) {
         return;
       }
       if (observe) {
@@ -149,11 +168,10 @@ export function createYieldFollower(params: {
         spawns?.filter((spawn) => spawn.expectsCompletionMessage).map((spawn) => spawn.runId),
       );
       follower.following = response;
-      pending = children.size;
       printed = true;
       await printGatewayAgentReply(response, {}, runtime);
       input.progress.setLabel(
-        `Waiting on ${pending === 1 ? "1 subagent" : `${pending} subagents`}…`,
+        `Waiting on ${children.size === 1 ? "1 subagent" : `${children.size} subagents`}…`,
       );
       const done = Promise.withResolvers<YieldFollowUp>();
       let childEnded = false;
@@ -200,8 +218,11 @@ export function createYieldFollower(params: {
       for (const event of buffered.splice(0)) {
         observe(event);
       }
-      const deadline = AbortSignal.timeout(timeoutSeconds * 1000);
-      deadline.addEventListener("abort", () => done.resolve({ kind: "timeout" }), { once: true });
+      // `--timeout 0` disables the turn's deadline, and so the wait's.
+      if (timeoutSeconds > 0) {
+        const deadline = AbortSignal.timeout(timeoutSeconds * 1000);
+        deadline.addEventListener("abort", () => done.resolve({ kind: "timeout" }), { once: true });
+      }
       input.connection.addEventListener("abort", () => done.resolve({ kind: "disconnected" }), {
         once: true,
       });
@@ -225,14 +246,13 @@ export function createYieldFollower(params: {
         }
         return;
       }
-      const count = pending === 1 ? "1 subagent" : `${pending} subagents`;
       const where = sessionKey ? `session ${sessionKey}` : "the session";
       runtime.error?.(
         outcome.kind === "failed"
           ? `The follow-up reply failed: ${outcome.reason}`
           : outcome.kind === "timeout"
-            ? `Stopped waiting after ${timeoutSeconds}s; ${count} still working. The result will be added to ${where}.`
-            : `Lost the Gateway connection while waiting on ${count}. The result will still be added to ${where}.`,
+            ? `Stopped waiting after ${timeoutSeconds}s. The subagents' result will be added to ${where}.`
+            : `Stopped waiting for the subagents. Their result will still be added to ${where}.`,
       );
       process.exitCode = 1;
     },

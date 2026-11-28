@@ -134,7 +134,7 @@ it("says where a yielded turn's result goes when the connection drops during the
 
   expect(runtime.log).toHaveBeenCalledWith("Checking with a helper.");
   expect(runtime.error).toHaveBeenCalledWith(
-    "Lost the Gateway connection while waiting on 1 subagent. The result will still be added to session agent:main:main.",
+    "Stopped waiting for the subagents. Their result will still be added to session agent:main:main.",
   );
   expect(process.exitCode).toBe(1);
 });

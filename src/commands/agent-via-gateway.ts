@@ -61,7 +61,11 @@ import type { RuntimeEnv } from "../runtime.js";
 import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
 import { sleep } from "../utils/sleep.js";
 import { resolveAgentGatewayIdentity } from "./agent-gateway-identity.js";
-import { createYieldFollower, type GatewayAgentResponse } from "./agent-gateway-reply.js";
+import {
+  createYieldFollower,
+  readAcceptedRunContext,
+  type GatewayAgentResponse,
+} from "./agent-gateway-reply.js";
 import { readAgentMessageFile } from "./agent-message-input.js";
 
 const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000] as const;
@@ -429,18 +433,6 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === "AbortError";
 }
 
-function readAcceptedRunContext(payload: unknown) {
-  const accepted = asOptionalRecord(payload);
-  if (accepted?.status !== "accepted") {
-    return undefined;
-  }
-  return {
-    runId: normalizeOptionalString(accepted.runId),
-    sessionKey: normalizeOptionalString(accepted.sessionKey),
-    agentId: normalizeOptionalString(accepted.agentId),
-  };
-}
-
 function isConfirmedChatAbortResponseForRun(value: unknown, runId: string): boolean {
   const response = asOptionalRecord(value);
   if (response?.aborted !== true) {
@@ -677,10 +669,14 @@ async function agentViaGatewayCommand(
             runContext.accepted = readAcceptedRunContext(payload);
           },
           onSignalAbort: async (request) => {
+            // A yielded turn already ended; stopping the wait leaves its subagents running.
+            if (follower.following) {
+              return;
+            }
             activeConnectionAbortAttempted = true;
             activeConnectionAbortSucceeded = await abortGatewayRun(request, false);
           },
-          onEvent: follower.onEvent,
+          onEvent: (event) => follower.onEvent(event),
           onResponse: async (_request, connection, result) =>
             await follower.follow({
               response: result as GatewayAgentResponse,
@@ -699,8 +695,8 @@ async function agentViaGatewayCommand(
       response = await dispatchGatewayAgentCall(cfg);
       break;
     } catch (err) {
-      // The turn already answered; only the wait for its subagents lost the connection.
-      if (follower.following && isGatewayTransportError(err)) {
+      // The turn already answered; only the wait for its subagents ended early.
+      if (follower.following) {
         response = follower.following;
         break;
       }

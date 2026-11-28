@@ -40,7 +40,6 @@ import type {
   CallGatewayBaseOptions,
   CallGatewayCliOptions,
   CallGatewayOptions,
-  GatewayRequestFunction,
 } from "./call-options.js";
 import { ensureGatewaySupportsRequiredFeatures } from "./call-required-features.js";
 import { fitScopesToStoredDeviceGrant, resolveCliScopeRetry } from "./call-scopes.js";
