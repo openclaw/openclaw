@@ -15,7 +15,11 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
-import type { HealthCheck, HealthCheckContext } from "../flows/health-checks.js";
+import type { HealthCheck, HealthCheckContext, HealthFinding } from "../flows/health-checks.js";
+import {
+  loadDeviceIdentityIfPresent,
+  loadOrCreateDeviceIdentity,
+} from "../infra/device-identity.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
@@ -33,6 +37,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { maybeMigrateHeartbeatFilesToScratch } from "./doctor-heartbeat-scratch-migration.js";
 import { assertHeartbeatScratchMigrationUnambiguous } from "./doctor-heartbeat-scratch-preflight.js";
 import { runDoctorLintCliInProcess } from "./doctor-lint-runner.js";
@@ -40,6 +45,7 @@ import { runDoctorLintCli } from "./doctor-lint.js";
 import { verifyDoctorLintOAuthStateIsolation } from "./doctor-lint.oauth-isolation.test-support.js";
 import { verifyDoctorLintPrivateAuthRetirement } from "./doctor-lint.private-auth-retirement.test-support.js";
 import { snapshotDoctorLintSqliteFamily } from "./doctor-lint.test-support.js";
+import { prepareStartupClientCredentials } from "./startup-client-credentials.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 // Bundled Doctor checks still run; this one reports the plugin switch tests turn off.
@@ -183,6 +189,52 @@ describe("doctor lint state isolation", () => {
         expect(process.env.OPENCLAW_PROFILE).toBeUndefined();
       },
     );
+  });
+
+  it("uses migrated client credentials in --all as in the selected checks", async () => {
+    await withOpenClawTestState({ prefix: "doctor-lint-client-credentials-" }, async (state) => {
+      const claim = await acquireTestPortBlock({ offsets: [0] });
+      try {
+        const config: OpenClawConfig = {
+          gateway: { mode: "local", port: claim.port, auth: { mode: "none" } },
+          plugins: { enabled: false },
+        };
+        await state.writeConfig(config);
+        const identity = loadOrCreateDeviceIdentity({ env: state.env });
+        openOpenClawStateDatabase({ env: state.env });
+        await closeOpenClawStateDatabaseAsync();
+        await prepareStartupClientCredentials({ env: state.env, config, runtime });
+        expect(loadDeviceIdentityIfPresent({ env: state.env })).toEqual(identity);
+        const pairingId = "core/doctor/device-pairing";
+        const gatewayId = "core/doctor/gateway-health";
+        mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
+          await realHealthCheck(pairingId),
+          await realHealthCheck(gatewayId),
+        ]);
+        using stdout = captureStdout();
+        const findingsFor = async (options: { includeAllChecks?: boolean; onlyIds?: string[] }) => {
+          await runDoctorLintCli(runtime, { json: true, ...options });
+          const payload: { findings: HealthFinding[] } = JSON.parse(
+            String(stdout.mock.calls.at(-1)?.[0]),
+          );
+          return payload.findings.filter(
+            ({ checkId }) => checkId === pairingId || checkId === gatewayId,
+          );
+        };
+        expect(await findingsFor({ onlyIds: [pairingId] })).toEqual([]);
+        // No Gateway is listening. A connection failure means identity admission succeeded.
+        const gatewayFindings = await findingsFor({ onlyIds: [gatewayId] });
+        expect(gatewayFindings).toEqual([
+          expect.objectContaining({
+            checkId: gatewayId,
+            message: expect.stringContaining("Gateway not reachable"),
+          }),
+        ]);
+        expect(await findingsFor({ includeAllChecks: true })).toEqual(gatewayFindings);
+      } finally {
+        await claim.release();
+      }
+    });
   });
 
   it.each(["rehearsal-worker", "ordinary-default"] as const)(
