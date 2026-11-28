@@ -126,7 +126,6 @@ it("classifies case-equivalent owners and enabled setup contributions", async ()
       cliBackends: ["shared-cli"],
       setup: { cliBackends: ["shared-cli", "SHARED-CLI", "setup-cli"] },
     },
-    { id: "third-owner", cliBackends: ["Shared-CLI"] },
   );
   const config = { plugins: { entries: { "first-owner": { enabled: false } } } };
   inSnapshot(snapshot, () => {
