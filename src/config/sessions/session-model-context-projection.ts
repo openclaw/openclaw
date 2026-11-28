@@ -32,6 +32,15 @@ import {
 
 const registeredDeepProjectors = new WeakSet<DatabaseSync>();
 
+/** The fields isPendingBackgroundResultMessage reads, so reset planning can place pending results. */
+const BACKGROUND_RESULT_MESSAGE_NAVIGATION_KEYS = [
+  "role",
+  "provider",
+  "model",
+  "excludeFromContext",
+  "openclawModelPlacement",
+] as const;
+
 /** JavaScript owner for rows native JSON cannot project: SQLite deep JSON, PostgreSQL JSONB-invalid escapes. */
 export function projectModelContextJson(
   raw: string,
@@ -218,18 +227,29 @@ export function projectResetBoundaryNavigationSql(
     "customType",
     "display",
   ]);
+  const pickedJson = (path: string, keys: readonly string[]) => {
+    const picked = jsonPickObject(db, jsonPathValue(db, event, sql.lit(path), "json"), keys);
+    // The scalar subquery loses SQLite's JSON subtype before embedding its object.
+    return isPostgresSqlConnection(db)
+      ? picked
+      : getNodeSqliteKysely(db).fn<string>("json", [picked]);
+  };
+  const role = jsonObjectValue(db, { role: jsonPathValue(db, event, sql.lit("$.message.role")) });
+  // PostgreSQL's CASE needs one result type; both branches cross as JSON text.
+  const roleOnly = isPostgresSqlConnection(db) ? sql<string>`${role}::text` : role;
+  // A preserved tail resolves background result placements, so it needs their ids and pending flags.
+  const message = /* kysely-allow-raw: only placement flags join the role; payload text stays out. */ sql<string>`CASE
+    WHEN ${jsonPathValue(db, event, sql.lit("$.message.openclawModelPlacement"))} = 'pending'
+    THEN ${pickedJson("$.message", BACKGROUND_RESULT_MESSAGE_NAVIGATION_KEYS)}
+    ELSE ${roleOnly} END`;
+  const navigation = jsonSetPath(db, entry, sql.lit("$.message"), message, true);
   // Malformed rows must reach JSON.parse unchanged; CASE guards the native projection.
   return /* kysely-allow-raw: reset planning uses navigation metadata, never durable transcript payloads. */ sql<string>`CASE WHEN ${jsonNativeFieldsValid(db, event)} THEN
     CASE WHEN ${jsonType(db, event)} = 'object' THEN
-      ${jsonSetPath(
-        db,
-        entry,
-        sql.lit("$.message"),
-        jsonObjectValue(db, {
-          role: jsonPathValue(db, event, sql.lit("$.message.role")),
-        }),
-        true,
-      )}
+      CASE WHEN ${jsonPathValue(db, event, sql.lit("$.type"))} = 'custom'
+        AND ${jsonPathValue(db, event, sql.lit("$.customType"))} = ${BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE}
+      THEN ${jsonSetPath(db, navigation, sql.lit("$.data"), pickedJson("$.data", ["afterEntryId", "resultEntryIds"]), true)}
+      ELSE ${navigation} END
     ELSE ${event} END
     ELSE ${event} END`;
 }

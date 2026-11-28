@@ -1,4 +1,5 @@
 import { sql, type Expression, type RawBuilder } from "kysely";
+import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import {
   jsonNativeFieldsValid,
   jsonPathValue,
@@ -624,12 +625,19 @@ export function transcriptEventResetNavigationSql(
     /* kysely-allow-raw: closed transcript aliases select the native identity fallback. */ sql.ref<string>(
       `${alias}.event_json`,
     );
-  return storedProjectionSql(
-    database,
-    "reset",
-    projectResetBoundaryNavigationSql(database, identity),
-    alias,
-  );
+  const metadata =
+    /* kysely-allow-raw: closed transcript aliases select the native navigation envelope. */ sql.ref(
+      `${alias}.navigation_json`,
+    );
+  const storedModel = jsonPathValue<string>(database, metadata, sql.lit("$.model"), "json");
+  // Compressed and cold rows from 2026.11.10 stored a `reset` projection with only the message
+  // role; their stored `model` projection carries the placement facts reset planning reads.
+  return /* kysely-allow-raw: placement rows re-derive the reset projection from the stored model projection. */ sql<string>`CASE
+    WHEN ${metadata} IS NOT NULL AND (
+      ${jsonPathValue(database, metadata, sql.lit("$.model.message.openclawModelPlacement"))} = 'pending'
+      OR ${jsonPathValue(database, metadata, sql.lit("$.model.customType"))} = ${BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE})
+    THEN ${projectResetBoundaryNavigationSql(database, storedModel)}
+    ELSE ${storedProjectionSql(database, "reset", projectResetBoundaryNavigationSql(database, identity), alias)} END`;
 }
 
 export function transcriptEventModelNavigationSql(

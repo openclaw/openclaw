@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -6,7 +7,11 @@ import {
   projectPlacedBackgroundResultMessage,
   readBackgroundResultPlacement,
 } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
-import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
+import {
+  collectSessionContextEntryFact,
+  iterateSessionContextEntryFacts,
+  type SessionContextEntryFact,
+} from "../../../packages/agent-core/src/harness/session/session.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { selectRecentUserAssistantReplayRecords } from "./transcript-replay.js";
 import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
@@ -47,6 +52,26 @@ export function createSessionResetBoundaryId(): string {
   return randomUUID();
 }
 
+/** Full entries, or reset navigation rows, which keep only the fields context selection reads. */
+function isResetWindowEntry(entry: unknown): entry is SessionTreeEntry {
+  if (isIndexedSessionEntry(entry)) {
+    return true;
+  }
+  if (!isRecord(entry) || recordId(entry) === undefined) {
+    return false;
+  }
+  switch (entry.type) {
+    case "message":
+      return isRecord(entry.message) && typeof entry.message.role === "string";
+    // Boundaries cut the window; their reason, summary and token count are not projected.
+    case "reset":
+    case "compaction":
+      return entry.firstKeptEntryId === undefined || typeof entry.firstKeptEntryId === "string";
+    default:
+      return false;
+  }
+}
+
 function projectLatestBoundaryWindow(entries: readonly unknown[]): unknown[] {
   if (
     entries.some(
@@ -55,17 +80,23 @@ function projectLatestBoundaryWindow(entries: readonly unknown[]): unknown[] {
         isPendingBackgroundResultMessage(asOptionalRecord(entry)?.message),
     )
   ) {
-    return Array.from(
-      iterateSessionContextEntries(entries.filter(isIndexedSessionEntry)),
-      ({ entry, placement }) =>
-        placement && entry.type === "message"
-          ? {
-              ...placement,
-              type: "message",
-              message: projectPlacedBackgroundResultMessage(entry.message),
-            }
-          : entry,
-    );
+    // SQLite passes navigation rows without message bodies, so select the window from facts.
+    const sources = new Map<SessionContextEntryFact, SessionTreeEntry>();
+    const facts = entries.filter(isResetWindowEntry).map((entry) => {
+      const fact = collectSessionContextEntryFact(entry);
+      sources.set(fact, entry);
+      return fact;
+    });
+    return Array.from(iterateSessionContextEntryFacts(facts), ({ entry: fact, placement }) => {
+      const entry = sources.get(fact)!;
+      return placement && entry.type === "message"
+        ? {
+            ...sources.get(placement),
+            type: "message",
+            message: projectPlacedBackgroundResultMessage(entry.message),
+          }
+        : entry;
+    });
   }
   const boundaryIndex = entries.findLastIndex((entry) => {
     const type = asOptionalRecord(entry)?.type;
