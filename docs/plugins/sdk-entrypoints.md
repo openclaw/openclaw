@@ -635,3 +635,16 @@ Gateway sources cannot supply original links. Receivers use the advertised catal
 pair for every list/read, and the legacy pair only when the catalog pair is absent.
 These selectors narrow publication, not reader authority.
 See [Session Share](/plugins/session-share) for numbered setup and disclosure.
+
+## Native embedding wire codecs
+
+`openclaw/plugin-sdk/embedding-native-runtime` supplies the pure native wire
+builders and vector readers shared by direct Google, Bedrock and Voyage memory
+providers and credential-scoped router consumers. It does not resolve credentials,
+choose offers, fetch URLs, retry requests or set billing rates.
+
+Google helpers preserve task text, inline parts and native dimension checks.
+Bedrock helpers keep each finite model family, inference-profile identity,
+Cohere version and Marengo version distinct. The caller must validate the selected
+offer, enforce request/response limits and reject unsupported input before dispatch.
+Native synchronous batch results must be staged until every vector is validated.
