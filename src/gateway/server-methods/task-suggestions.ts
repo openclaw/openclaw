@@ -450,8 +450,7 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
         return;
       }
       const { suggestion } = created;
-      // The registry is ephemeral; live events keep open Control UI tabs in sync
-      // without turning suggestions into durable task state.
+      // Notify connected clients when pending suggestions leave the in-memory registry.
       for (const evicted of created.evictedPendingSuggestions) {
         broadcastResolvedTaskSuggestion(context, evicted, "expired");
       }

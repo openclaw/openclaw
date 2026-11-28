@@ -946,8 +946,8 @@ after the visible transcript is ready. Simply connecting does not fetch unopened
 conversations.
 
 Background refreshes for saved sidebar filters, groups, automation status, and the
-Inbox wait until the conversation appears. Task suggestions and the progress
-card then refresh after the transcript paints. Changing a filter or opening a
+Inbox wait until the conversation appears. The progress card refreshes after
+the transcript paints. Changing a filter or opening a
 group-targeted New session remains immediate.
 
 Panes share outbox recovery for the same conversation. Activity in another
@@ -1575,10 +1575,6 @@ cards**. Hiding it keeps the saved progress available in Details; new activity,
 refreshing, and navigation do not turn it back on.
 
 ## Chat transcript layout
-
-Suggested-task cards show their short summaries in full. Unusually long summaries
-scroll within the card, and **Show instructions** expands the complete task prompt.
-In short windows, the card body scrolls while the header and Start controls stay visible.
 
 Use the mouse wheel or trackpad over the composer or its surrounding space to
 scroll the conversation while the footer stays pinned. Persistent notices and

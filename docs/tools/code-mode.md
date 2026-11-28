@@ -138,8 +138,8 @@ that the current capability and tool policy do not expose.
 
 Actual delegated helpers still use child tools (`sessions_spawn` for OpenClaw or
 ACP delegation, native collaboration tools for Codex helpers). Proactive,
-unrequested follow-up proposals use `suggest_task` when enabled; suggestion cards
-do not start work until accepted.
+unrequested follow-up proposals use `suggest_task` when enabled. Work starts only
+if the operator accepts the suggestion.
 
 ## Why use it
 

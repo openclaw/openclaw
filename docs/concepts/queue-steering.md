@@ -184,7 +184,7 @@ Shared-credential WebUI/WebChat access has a separate owner-authorized continuat
 
 This does not link identities or identify the human behind a shared credential. Message authors stay distinct, and the active execution keeps its original requester, permissions, personal context, and delegation rules. Two different personal administrators do not gain this exception. Other different-person collaboration remains limited to the same channel, account, conversation, and thread.
 
-Authorized cross-transport continuation also retains the active execution's task-suggestion tools and delivery setting. Channel guidance does not remove a WebUI execution's suggestion tools, and WebUI guidance does not add them to a channel execution. A queued new execution uses its submitting transport's setting.
+Authorized cross-transport continuation also retains the active execution's task-suggestion tools and delivery setting. Steering from another transport neither adds nor removes those tools. A queued new execution uses its submitting transport's setting.
 
 This continuation rule applies to ordinary human guidance. It does not change questions, approvals, cancellation, or explicit cross-session `sessions_send` authorization. It does not bypass access revocation or authorize a new execution configuration. Explicit execution-setting changes, including a different workspace, execution policy, or selected model, can require a followup.
 

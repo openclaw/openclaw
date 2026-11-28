@@ -829,7 +829,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/e2e/chat-flow.pending-settings.e2e.test.ts",
   "ui/src/e2e/chat-flow.queue-edit.e2e.test.ts",
   "ui/src/e2e/chat-flow.session-start.e2e.test.ts",
-  "ui/src/e2e/chat-flow.task-suggestions.e2e.test.ts",
   "ui/src/e2e/chat-github-publication.e2e.test.ts",
   "ui/src/e2e/chat-header-session-lineage.e2e.test.ts",
   "ui/src/e2e/chat-image-lightbox.e2e.test.ts",

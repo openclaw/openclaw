@@ -1559,25 +1559,18 @@ openclaw-chat-video-player {
   white-space: nowrap;
 }
 
-/* One gutter stacks notices and suggestions. On wide panes the tray deliberately
-   overhangs the transcript; the full-width notice lane passes pointer input through. */
+/* The full-width notice lane passes pointer input through to the transcript. */
 .chat-gutter-stack {
   position: absolute;
   z-index: 24;
   top: calc(var(--chat-mobile-pane-header-height, 0px) + 10px);
   right: 14px;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
   width: calc(100% - 28px);
   min-height: 0;
   max-height: calc(100cqh - var(--chat-mobile-pane-header-height, 0px) - 20px);
   justify-items: end;
-  gap: var(--space-3);
   pointer-events: none;
-}
-
-.chat-gutter-stack > * {
-  pointer-events: auto;
 }
 
 .chat-gutter-header {

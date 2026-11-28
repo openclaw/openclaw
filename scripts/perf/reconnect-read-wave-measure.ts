@@ -702,7 +702,6 @@ async function runController() {
       caps: [
         "agent-kind",
         "approvals",
-        "task-suggestions",
         "terminal-offset-seq",
         "terminal-session-metadata",
         "terminal-upload-path-style",

@@ -1625,7 +1625,6 @@
   "ui/src/pages/chat/chat-pane-startup-subscriptions.ts",
   "ui/src/pages/chat/chat-pane-state-owner.ts",
   "ui/src/pages/chat/chat-pane-state.ts",
-  "ui/src/pages/chat/chat-pane-task-suggestions.ts",
   "ui/src/pages/chat/chat-pane.tsx",
   "ui/src/pages/chat/chat-panel-header-actions.tsx",
   "ui/src/pages/chat/chat-pending-input-display.ts",
