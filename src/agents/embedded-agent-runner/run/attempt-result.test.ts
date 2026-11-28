@@ -44,6 +44,7 @@ type ResultInput = {
   finalPresentation?: EmbeddedRunAttemptResult["finalPresentation"];
   allowedToolNames?: string[];
   capabilityToolNames?: string[];
+  lastReplyScrubbedEndingToolName?: string;
 };
 
 function createResultFixture(params: ResultInput = {}) {
@@ -121,6 +122,7 @@ function createResultFixture(params: ResultInput = {}) {
             : undefined,
       },
       cache: {},
+      lastReplyScrubbedEndingToolName: () => params.lastReplyScrubbedEndingToolName,
     },
   };
   return { input, state, settled, prompt, hookRunner };
@@ -218,6 +220,70 @@ describe("attempt result projection", () => {
       ).toBe(expected);
     },
   );
+
+  it("flags a text-only call written in the notation replay shows for past calls", () => {
+    expect(
+      completeResult({
+        currentAttemptCompletedAssistant: textAssistant(
+          '[tool call id=call_read name=read] {"path":"notes.txt"}',
+        ),
+        allowedToolNames: ["read"],
+      }).textToolCallAttempt,
+    ).toBe(true);
+  });
+
+  it.each([undefined, "read", "unoffered"])(
+    "flags a reply whose text call was scrubbed away: %s",
+    (scrubbed) => {
+      expect(
+        completeResult({
+          currentAttemptCompletedAssistant: textAssistant("Let me check the notes file first."),
+          allowedToolNames: ["read"],
+          lastReplyScrubbedEndingToolName: scrubbed,
+        }).textToolCallName,
+      ).toBe(scrubbed === "read" ? "read" : undefined);
+    },
+  );
+
+  it.each([
+    [
+      "a call after prose on one line",
+      "Let me check <function=read><parameter=path>notes.txt</parameter></function>",
+      true,
+    ],
+    [
+      "a wrapped call after prose on one line",
+      "Let me check <tool_call><function=read><parameter=path>notes.txt</parameter></function></tool_call>",
+      true,
+    ],
+    [
+      "a reply cut off inside the call",
+      "Let me check <tool_call><function=read><parameter=path>notes",
+      true,
+    ],
+    ["a reply cut off at a wrapped opener", "Let me check <tool_call><function=read>", true],
+    [
+      "an answer that ends by naming the tag",
+      "To read a file the model writes <function=read>",
+      false,
+    ],
+    ["an answer that ends by naming the wrapper", "Qwen wraps its calls in <tool_call>", false],
+    [
+      "prose after the call",
+      "Use <function=read><parameter=path>a</parameter></function> to read files.",
+      false,
+    ],
+    ["prose after the opener", "The <function=read> tag reads files.", false],
+    ["inline code", "The tag is `<function=read>`", false],
+    ["an unknown tool", "Let me check <function=frobnicate>", false],
+  ] as const)("flags a reply that ends in an inline text call: %s", (_name, text, expected) => {
+    expect(
+      completeResult({
+        currentAttemptCompletedAssistant: textAssistant(text),
+        allowedToolNames: ["read"],
+      }).textToolCallName,
+    ).toBe(expected ? "read" : undefined);
+  });
 
   it.each([false, true])("corrects deferred text calls only when available: %s", (available) => {
     const assistant = textAssistant(

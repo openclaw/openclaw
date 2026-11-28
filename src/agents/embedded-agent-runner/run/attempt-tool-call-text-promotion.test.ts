@@ -1,8 +1,9 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   createAssistantVisibleStreamText,
   sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
+import { wrapStreamFnPromoteStandaloneTextToolCalls } from "./attempt-tool-call-text-promotion.js";
 import {
   assistantMessage,
   collectPromotionEvents,
@@ -162,3 +163,32 @@ it.each([
     }
   },
 );
+
+const readCall = "<function=read>\n<parameter=path>\nnotes.txt\n</parameter>\n</function>";
+
+// A scrubbed call never reaches terminal recovery as text; the wrapper must report it.
+it.each([
+  ["prose before a wrapped call", `Let me check.\n<tool_call>\n${readCall}\n</tool_call>`, true],
+  ["a wrapped call alone", `<tool_call>\n${readCall}\n</tool_call>`, true],
+  ["prose before a bare call", `Let me check.\n${readCall}`, true],
+  ["prose before a bracket call", 'Let me check.\n[tool:read]\n{"path":"notes.txt"}', true],
+  ["prose after the call", `Example:\n${readCall}\nThat is all.`, false],
+  ["an unfinished call", "Let me check.\n<function=read>\n<parameter=path>\nnotes.txt", true],
+  ["a fenced example", `Example:\n\`\`\`xml\n${readCall}\n\`\`\``, false],
+  ["a promoted standalone call", readCall, false],
+  ["an ordinary answer", "notes.txt says hello.", false],
+] as const)("reports a reply that ends with a scrubbed call: %s", async (_name, text, expected) => {
+  const onResult = vi.fn();
+  const message = assistantMessage([{ type: "text", text }]);
+  const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(
+    (() => ({ result: async () => message, async *[Symbol.asyncIterator]() {} })) as never,
+    new Set(["read"]),
+    onResult,
+  );
+  const stream = await wrapped({} as never, {} as never, {} as never);
+  const result = record(await stream.result(), "result message");
+  expect(onResult.mock.calls).toEqual([[expected ? "read" : undefined]]);
+  if (expected) {
+    expect(JSON.stringify(result.content)).not.toContain("notes.txt");
+  }
+});

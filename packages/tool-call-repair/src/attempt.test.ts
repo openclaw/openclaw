@@ -10,6 +10,8 @@ const wrappedXml =
   "<tool_call><function=read><parameter=path>proof.txt</parameter></function></tool_call>";
 const react = 'Action: read\nAction Input: {"path":"proof.txt"}';
 const legacy = '[TOOL_CALL]{tool => "read", args => {"path":"proof.txt"}}[/TOOL_CALL]';
+// Byte-for-byte what OpenAI-compatible replay renders for a call it cannot send natively.
+const replayed = '[tool call id=call_read name=read] {"path":"notes.txt"}';
 
 it.each([
   [call, "write"],
@@ -38,6 +40,8 @@ it.each([
   [react, "read"],
   ["Action: read\r\nAction Input: proof.txt", "read"],
   [legacy, "read"],
+  [replayed, "read"],
+  [`[tool call id=call_other name=unregistered] {"nested":{"text":"} ]"}}\n${replayed}`, "read"],
 ])("recognizes a structured attempt: %s", (text, expected) =>
   expect(findPlainTextToolCallName(text, hasToolName)).toBe(expected),
 );
@@ -58,7 +62,7 @@ it.each([
   `${fenced}\nThis is an example; it has not run.`,
   `\`\`\`text\ncall write proof.txt\n\`\`\``,
   '```json\n{"name":"write","arguments":{}}',
-  ...[wrappedXml, react, legacy].flatMap((text) => [
+  ...[wrappedXml, react, legacy, replayed].flatMap((text) => [
     text.replaceAll("read", "unregistered"),
     `Here is an example:\n${text}`,
     `Here is an example:\n\`\`\`\n${text}\n\`\`\``,
@@ -73,6 +77,11 @@ it.each([
   'Action: read\nAction Input: {"path":"proof.txt"}\nObservation: example result',
   '[TOOL_CALL]{tool => "read", args => {}}',
   '[TOOL_CALL]{tool => "read"}[/TOOL_CALL]',
+  "[tool call id=call_read name=read]",
+  '[tool call id=call_read name=read] {"path":"notes.txt"',
+  '[tool call id=call_read name=read] ["notes.txt"]',
+  `${replayed}\nThe call above is how history shows a tool call.`,
+  `${replayed}\n[tool result id=call_read name=read] contents`,
 ])("preserves prose, examples, and unknown tools: %s", (text) =>
   expect(findPlainTextToolCallName(text, hasToolName)).toBeUndefined(),
 );
@@ -106,6 +115,14 @@ it("names the tool in a legacy bracketed call", () => {
   expect(detectToolCallShapedText('[TOOL_CALL]{tool => "read"}')).toBeNull();
 });
 
+it("names the tool in a replay-notation call", () => {
+  expect(detectToolCallShapedText(`note ${replayed}`)).toEqual({
+    kind: "bracketed_tool_call",
+    toolName: "read",
+  });
+  expect(detectToolCallShapedText("[tool call id=call_read name=read] done")).toBeNull();
+});
+
 // Each reply shape below took seconds on the former single-regex checks.
 it.each([
   [
@@ -122,6 +139,11 @@ it.each([
     "repeated legacy openers",
     () => detectToolCallShapedText(`{${'[TOOL_CALL]{TOOL=>"G"'.repeat(950)}a`),
     null,
+  ],
+  [
+    "repeated replay-notation openers",
+    () => findPlainTextToolCallName("[tool call id=a name=read] {".repeat(8_000), hasToolName),
+    undefined,
   ],
   [
     "an Action line before blank lines",

@@ -75,6 +75,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     onModelUsage,
     getPromptCacheObservation,
     isModelCallActive,
+    lastReplyScrubbedEndingToolName,
   } = installEmbeddedAttemptStreamGuards(input, {
     onRejectedProviderReplayRepaired: () => {
       repairedRejectedProviderReplay = true;
@@ -237,6 +238,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     history: preparedHistory,
     isProbeSession,
     isToolBoundarySafe: () => toolBoundaryRef.current?.() ?? false,
+    lastReplyScrubbedEndingToolName,
     onBlockReplyFlush,
     promptActiveSession,
     stream: preparedStream,

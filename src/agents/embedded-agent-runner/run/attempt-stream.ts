@@ -326,7 +326,14 @@ export function installEmbeddedAttemptStreamGuards(
     transcriptPolicy,
     attempt.provider,
   );
-  installStreamWrapper(wrapStreamFnPromoteStandaloneTextToolCalls, liveAllowedToolNames);
+  let lastReplyScrubbedEndingToolName: string | undefined;
+  installStreamWrapper(
+    wrapStreamFnPromoteStandaloneTextToolCalls,
+    liveAllowedToolNames,
+    (value) => {
+      lastReplyScrubbedEndingToolName = value;
+    },
+  );
   installStreamWrapper(wrapStreamFnTrimToolCallNames, liveAllowedToolNames, {
     // Unknown-tool recovery stays active even when configurable loop detection is disabled.
     unknownToolThreshold: 10,
@@ -511,5 +518,6 @@ export function installEmbeddedAttemptStreamGuards(
     },
     getPromptCacheObservation: cacheObserver.getObservation,
     isModelCallActive: () => activeModelCallId !== undefined,
+    lastReplyScrubbedEndingToolName: () => lastReplyScrubbedEndingToolName,
   };
 }
