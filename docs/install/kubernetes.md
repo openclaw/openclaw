@@ -153,8 +153,11 @@ Gateway startup and admitted Doctor repair restore the private modes of the
 stores this installation owns before credential admission and Doctor's recovery
 capture, so a remount
 that widens them no longer blocks startup. The restore covers the client
-credential store, the daemon runtime pin store, their SQLite sidecars, and the
-sibling `<stateDir>.update-captures` directory.
+credential store, the daemon runtime pin store, their SQLite sidecars, the
+sibling `<stateDir>.update-captures` directory, and the stores whose names are
+minted at runtime: each managed GitHub identity profile under
+`<stateDir>/credentials/github`, and the `<stateDir>/codex-runtime` bundle an
+enrolled worker's `codex.app-server` reads.
 Ordinary state writes harden their own database and sidecars without repeating
 this startup repair across the other private stores.
 
@@ -164,12 +167,17 @@ keeping the files inside private — so only the private stores under and beside
 it are restored.
 
 The restore is deliberately narrow. It repairs an enumerated path list rather
-than walking the state tree, changes no ownership, skips symlinks instead of
-following them, leaves paths owned by another UID alone, and leaves any path
+than walking the state tree — a store whose owner mints its name is found
+through that owner's id pattern — changes no ownership, skips symlinks instead
+of following them, leaves paths owned by another UID alone, and leaves any path
 carrying world permission bits for its owner to refuse, because `fsGroup` never
 sets those. Every downstream admission check stays as strict as before:
 membership in the volume's group still does not grant private credential
 authority.
+
+The minted-name search also stops when `<stateDir>/credentials` or
+`<stateDir>/credentials/github` is itself a symbolic link, so a linked tree
+outside the state directory is never repaired through this path.
 
 Two cases still need the storage owner.
 
@@ -193,7 +201,10 @@ Gateway stopped and have the storage owner inspect the state directory, its
 `client/credentials.sqlite` store, and the sibling `<stateDir>.update-captures`
 directory. Credential directories and files must remain private to the Gateway
 UID (`0700` and `0600`, respectively). Recovery storage also needs trusted
-ancestors that prevent other users from replacing its directories.
+ancestors that prevent other users from replacing its directories. A GitHub
+identity or Codex worker that still reports an unavailable credential or an
+unsafe configuration directory needs the same inspection of its own store under
+`<stateDir>/credentials/github` or `<stateDir>/codex-runtime`.
 
 The shipped PVC mount covers `/home/node/.openclaw`, while retained update
 captures resolve to `/home/node/.openclaw.update-captures`. That sibling needs a

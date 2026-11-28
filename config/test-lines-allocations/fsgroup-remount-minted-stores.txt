@@ -1,0 +1,15 @@
+191
+# PR #196394: 191 net regression lines for fsGroup PVC remount repairs.
+# fsGroup PVC remount regressions for the stores restorePrivateStateStoreModes
+# repairs whose names the installation mints at runtime: one managed GitHub
+# identity generation per scope (system, personal, and agents/<hashed id>) and
+# the enrolled Codex worker's codex-runtime bundle, plus the refused symlinked
+# scope root above them and the two refused ancestor aliases
+# (credentials and credentials/github). Folded into the existing remount and symlink cases --
+# the fixture lays the stores out through the profile owner's resolver and two
+# tree helpers replace the per-path chmod/assert loops that the new stores would
+# otherwise repeat -- so only the new store families and their refusal path add
+# lines. Capture I/O is isolated; filesystem repair and the runtime bundle are
+# real. Closes the gap left by #194307, which enumerated the SQLite stores only.
+# Two minimal layouts (capture root only, minted stores only) prove each store
+# repairs independently instead of waiting for an unrelated store to exist.
