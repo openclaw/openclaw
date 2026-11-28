@@ -10,6 +10,7 @@ import type { CompactionRequestBudget } from "../../agents/sessions/compaction/p
 import { resolveGroupSessionKey } from "../../config/sessions.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { logVerbose } from "../../globals.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "../../sessions/session-controller.js";
 import {
@@ -129,6 +130,7 @@ export async function runEmbeddedFallbackCandidate(
     });
     let eventHandler: ReturnType<typeof createAgentRunEventHandler> | undefined;
     const result = await params.timing.measure("embedded_run", () => {
+      let toolResultChain: Promise<void> = Promise.resolve();
       const embeddedRunParams: RunEmbeddedAgentInternalParams = {
         ...runBaseParams,
         beforeRecoveryCompaction: async (recovery) => {
@@ -262,7 +264,13 @@ export async function runEmbeddedFallbackCandidate(
         blockReplyBreak: turn.resolvedBlockStreamingBreak,
         blockReplyChunking: turn.blockReplyChunking,
         // Subscriber callbacks are detached. Stage channel presentation before typing I/O.
-        onPartialReply: (payload) => params.presentation.presentPartialReply(payload, "embedded"),
+        onPartialReply: async (payload) => {
+          if (params.preserveProgressCallbackStartOrder && turn.pendingToolTasks.size > 0) {
+            // Earlier tool callbacks may still be waiting to enter the reply dispatcher.
+            await racePromiseWithAbortSignal(toolResultChain, params.runAbortSignal);
+          }
+          return params.presentation.presentPartialReply(payload, "embedded");
+        },
         onAssistantMessageStart: async () => {
           await params.presentation.presentWithTyping(turn.typingSignals.signalMessageStart(), () =>
             turn.opts?.onAssistantMessageStart?.(),
@@ -327,32 +335,29 @@ export async function runEmbeddedFallbackCandidate(
         shouldEmitToolResult: turn.shouldEmitToolResult,
         shouldEmitToolOutput: turn.shouldEmitToolOutput,
         onToolResult: turn.opts?.onToolResult
-          ? (() => {
+          ? (payload: ReplyPayload) => {
               // Serialized delivery preserves tool result order across detached callbacks.
-              let toolResultChain: Promise<void> = Promise.resolve();
-              return (payload: ReplyPayload) => {
-                const delivery = toolResultChain.then(async () => {
-                  turn.replyOperation?.recordActivity();
-                  const { text, skip } = params.presentation.normalizeStreamingText(payload);
-                  if (skip) {
-                    return;
-                  }
-                  if (text !== undefined) {
-                    await turn.typingSignals.signalTextDelta(text);
-                  }
-                  await turn.opts?.onToolResult?.({ ...payload, text });
-                });
-                // Keep later results best-effort while exposing this delivery to awaiting owners.
-                toolResultChain = delivery.catch((err: unknown) => {
-                  logVerbose(`tool result delivery failed: ${String(err)}`);
-                });
-                const task = toolResultChain.finally(() => {
-                  turn.pendingToolTasks.delete(task);
-                });
-                turn.pendingToolTasks.add(task);
-                return delivery;
-              };
-            })()
+              const delivery = toolResultChain.then(async () => {
+                turn.replyOperation?.recordActivity();
+                const { text, skip } = params.presentation.normalizeStreamingText(payload);
+                if (skip) {
+                  return;
+                }
+                if (text !== undefined) {
+                  await turn.typingSignals.signalTextDelta(text);
+                }
+                await turn.opts?.onToolResult?.({ ...payload, text });
+              });
+              // Keep later results best-effort while exposing this delivery to awaiting owners.
+              toolResultChain = delivery.catch((err: unknown) => {
+                logVerbose(`tool result delivery failed: ${String(err)}`);
+              });
+              const task = toolResultChain.finally(() => {
+                turn.pendingToolTasks.delete(task);
+              });
+              turn.pendingToolTasks.add(task);
+              return delivery;
+            }
           : undefined,
       };
       embeddedRunParams.onSuccessfulAuthProfile = (profileId) => {
