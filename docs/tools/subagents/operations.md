@@ -150,8 +150,12 @@ that was still running in the previous Gateway is recorded as failed with an
 interruption error, and its requester receives that failure through the normal
 completion path, so a waiting parent wakes instead of waiting indefinitely.
 The terminal notice waits for fresh requester authority after startup; it cannot
-use the previous Gateway's retired custody. Inspect their saved work
-before sending a fresh instruction to the same retained child session. A stopped
+use the previous Gateway's retired custody.
+
+An external worker can keep running or finish while the Gateway is down.
+In the parent chat, check `/subagents info <runId>` and
+`/subagents log <runId> 20`. If the result is missing, check the original
+worker and any changes it made before repeating the task. A stopped
 execution is not a yielded pause, and a replacement does not inherit workspace or
 publication ownership. If the root cannot resume, send a new message to continue.
 Reversible suspension does not mark or cancel children.

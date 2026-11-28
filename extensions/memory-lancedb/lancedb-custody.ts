@@ -10,12 +10,13 @@ const lockOptions: FileLockOptions = {
   staleRecovery: "remove-if-definitely-stale",
 };
 
+/** Local directory of a plain path or `file:` URL; null for a remote URI. */
+export function resolveLocalTablePath(dbPath: string): string | null {
+  return /^file:/i.test(dbPath) ? fileURLToPath(dbPath) : dbPath.includes("://") ? null : dbPath;
+}
+
 async function custodyDirectory(dbPath: string): Promise<string | null> {
-  const localPath = /^file:/i.test(dbPath)
-    ? fileURLToPath(dbPath)
-    : dbPath.includes("://")
-      ? null
-      : dbPath;
+  const localPath = resolveLocalTablePath(dbPath);
   if (localPath === null) {
     return null;
   }
@@ -25,21 +26,14 @@ async function custodyDirectory(dbPath: string): Promise<string | null> {
   return directory;
 }
 
-// Shared usage leases preserve concurrent readers/writers. The admission gate
-// prevents a new handle from opening between maintenance's census and compaction.
-export async function acquireMemoryTableUsage(
-  dbPath: string,
-  fileLock?: Pick<
-    typeof import("openclaw/plugin-sdk/file-lock"),
-    "acquireFileLock" | "withFileLock"
-  >,
-): Promise<FileLockHandle | null> {
+// Usage leases are held by table handles that may write. The admission gate prevents a
+// new handle from opening between maintenance's census and compaction.
+export async function acquireMemoryTableUsage(dbPath: string): Promise<FileLockHandle | null> {
   const directory = await custodyDirectory(dbPath);
   if (directory === null) {
     return null;
   }
-  const { acquireFileLock, withFileLock } =
-    fileLock ?? (await import("openclaw/plugin-sdk/file-lock"));
+  const { acquireFileLock, withFileLock } = await import("openclaw/plugin-sdk/file-lock");
   return await withFileLock(
     path.join(directory, "admission"),
     {

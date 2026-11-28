@@ -136,9 +136,9 @@ export async function beginCronPreparationEffect(params: {
       storeScope: cronSession.storePath,
       sessionKey: runSessionKey,
       incarnation: cronSession.sessionEntry.sessionId,
+      // The previous run can still own its session ID after the job starts a new one.
       aliases: [
         agentSessionKey,
-        initialSessionEntry?.sessionId,
         resolveCronLifecycleRevisionIdentity(cronSession.lifecycleRevision),
       ],
     }),

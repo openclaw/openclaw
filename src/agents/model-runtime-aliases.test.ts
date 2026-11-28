@@ -302,6 +302,7 @@ describe("areRuntimeModelRefsEquivalent", () => {
   it("does not load setup runtime aliases for already-identical refs", () => {
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupRegistry: unexpectedMetadata,
+      resolvePluginSetupCliBackend: unexpectedMetadata,
       resolveRuntimeCliBackends: () => [],
     });
 

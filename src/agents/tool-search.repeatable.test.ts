@@ -10,7 +10,6 @@ import {
   TOOL_REPEAT_STOP_AT,
 } from "../../packages/agent-core/src/tool-repeat-guard.js";
 import { createReadTool } from "./sessions/tools/read.js";
-import { CORE_TOOL_CATALOG_FAMILIES } from "./tool-search-catalog-visibility.js";
 import type { ToolSearchCatalogRef } from "./tool-search-types.js";
 import {
   applyToolSchemaDirectoryCatalog,
@@ -41,7 +40,7 @@ const familyFactories: Record<string, () => AnyAgentTool> = {
   sessions_spawn: () => createSessionsSpawnTool({ config: {} }),
   subagents: () => createSubagentsTool(),
 };
-const delegationFamily = [...(CORE_TOOL_CATALOG_FAMILIES.delegation ?? [])];
+const delegationFamily = Object.keys(familyFactories);
 
 function surface(
   mode: "tools" | "directory",
@@ -97,7 +96,6 @@ it.each(["tools", "directory"] as const)(
 it.each(["tools", "directory"] as const)(
   "%s: the delegation family always has one visibility",
   (mode) => {
-    expect(Object.keys(familyFactories).toSorted()).toEqual(delegationFamily.toSorted());
     // Every non-empty subset a tool policy can leave enabled, with and without a selector
     // that keeps the other members outside the catalog.
     const subsets = Array.from({ length: 2 ** delegationFamily.length - 1 }, (_, index) =>

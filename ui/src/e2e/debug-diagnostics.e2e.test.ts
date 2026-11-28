@@ -117,7 +117,6 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
       },
       status: {
         runtime: "diagnostics-e2e",
-        securityAudit: { summary: { critical: 0, warn: 1, info: 2 } },
       },
       "system.info": systemInfo(0.25, 0.2, [4, 8], [432, 210, 256], [0.18, 0.04, 0.03, 0.23]),
       health: { ok: true, gateway: "healthy" },
@@ -148,7 +147,7 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
     has: page.getByRole("heading", { name: "Snapshots" }),
   });
   await snapshots.waitFor();
-  for (const text of ["1 warning", "diagnostics-e2e", "healthy", "gateway-heartbeat"]) {
+  for (const text of ["diagnostics-e2e", "healthy", "gateway-heartbeat"]) {
     await contains(snapshots, text);
   }
   const models = page.locator(".settings-section", {

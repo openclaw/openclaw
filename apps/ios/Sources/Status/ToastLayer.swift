@@ -245,6 +245,7 @@ struct ToastContent: View {
             }
             Text(verbatim: self.entry.toast.text)
                 .font(OpenClawType.subheadMedium)
+                .foregroundStyle(self.entry.toast.action == nil ? Color.primary : OpenClawBrand.text)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
@@ -253,8 +254,7 @@ struct ToastContent: View {
             if let action = self.entry.toast.action {
                 Button(action: self.onAction) {
                     Text(verbatim: action.title)
-                        .font(OpenClawType.subheadSemiBold)
-                        .underline()
+                        .font(OpenClawType.subheadBold)
                         .lineLimit(1)
                         .padding(.horizontal, 12)
                         .frame(minHeight: 44)
