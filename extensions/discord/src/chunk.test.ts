@@ -200,3 +200,14 @@ describe("chunkDiscordText", () => {
     }
   });
 });
+
+describe("chunkDiscordText line boundaries", () => {
+  it("starts a line that fits an empty message as its own chunk", () => {
+    const first = "a".repeat(40);
+    const second = "b".repeat(25);
+
+    const chunks = split(`${first}\n${second}`, { maxChars: 60, maxLines: 50 });
+
+    expect(chunks).toEqual([first, second]);
+  });
+});
