@@ -140,6 +140,34 @@ export function buildSidebarInboxEntries(params: {
   });
 }
 
+export function inboxEntryIdentity(
+  entry: SidebarInboxEntry,
+  connectionRevision: number,
+  recoveryScope: string | undefined,
+): string {
+  switch (entry.type) {
+    case "approval":
+      return JSON.stringify([entry.type, entry.approval.id]);
+    case "mention":
+      return JSON.stringify([entry.type, entry.mention.id]);
+    case "attention":
+      return JSON.stringify([entry.type, entry.kind, entry.signature]);
+    case "outbox":
+      return JSON.stringify([
+        entry.type,
+        entry.id,
+        entry.sessionKey,
+        entry.agentId,
+        connectionRevision,
+        recoveryScope,
+      ]);
+    case "scopeUpgrade":
+    case "update":
+      return entry.type;
+  }
+  return entry satisfies never;
+}
+
 export function sidebarInboxEntryMatchesTab(entry: SidebarInboxEntry, tab: IssueTab): boolean {
   return tab === "all" || entry.category === tab;
 }
