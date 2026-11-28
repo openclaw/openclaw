@@ -325,6 +325,28 @@ it("keeps the original reader target when another projection commits before rest
   expect(measureRows).toHaveBeenCalledTimes(2);
 });
 
+it("restores the saved search position after the empty viewport resets its offset", () => {
+  const { scroller, bubble, instance, anchor } = fixture();
+  scroller.scrollTop = 200;
+  bubble.getBoundingClientRect = () => rect(290 - scroller.scrollTop, 180);
+  anchor.commitRows(new Map([["visible", "row"]]));
+  anchor.project(
+    messages(),
+    { messages: [], showToolCalls: false, search: { query: "missing", empty: true } },
+    scroller,
+    false,
+  );
+  anchor.project(messages("visible"), undefined, null, false);
+  anchor.commitSearchReturn(vi.fn());
+
+  // Replacing the search results resets the viewport before the saved row is restored.
+  scroller.scrollTop = 0;
+  anchor.moveWithReader(-200);
+  anchor.update(instance, measuredRows);
+  expect(scroller.scrollTop).toBe(200);
+  expect(bubble.getBoundingClientRect().top).toBe(90);
+});
+
 const wheelOrderings = ["event-first", "capture-first", "move-first", "idle-first"] as const;
 it.each(wheelOrderings)("keeps wheel movement (%s)", (order) => {
   const syncFirst = order !== "event-first";

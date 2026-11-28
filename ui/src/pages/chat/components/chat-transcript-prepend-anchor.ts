@@ -22,7 +22,11 @@ export class TranscriptPrependAnchor {
   private source?: TranscriptProjectionSource;
   private firstSourceMessage: unknown;
   private pending:
-    | (ChatTranscriptPrependAnchor & { measured: boolean; prepended: boolean })
+    | (ChatTranscriptPrependAnchor & {
+        measured: boolean;
+        prepended: boolean;
+        movesWithReader: boolean;
+      })
     | null = null;
 
   constructor(
@@ -99,7 +103,8 @@ export class TranscriptPrependAnchor {
       if (position === "end") {
         this.searchPlacement = "end";
       } else if (position && this.messageKeys.has(position.messageKey)) {
-        this.pending = { ...position, measured: false, prepended: false };
+        // The saved target belongs to the restored projection, not the empty viewport.
+        this.pending = { ...position, measured: false, prepended: false, movesWithReader: false };
         this.searchPlacement = "reader";
       }
     }
@@ -159,6 +164,7 @@ export class TranscriptPrependAnchor {
         ...anchor,
         measured: false,
         prepended: this.hasPrepend || retained?.prepended === true,
+        movesWithReader: retained?.movesWithReader ?? true,
       };
       return true;
     }
@@ -206,7 +212,7 @@ export class TranscriptPrependAnchor {
 
   /** Carry the viewport target with native reader movement, not layout growth. */
   moveWithReader(delta: number): void {
-    if (this.pending) {
+    if (this.pending?.movesWithReader) {
       this.pending.top -= delta;
     }
   }
