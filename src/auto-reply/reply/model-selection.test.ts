@@ -167,7 +167,10 @@ function selectSession(
 describe("catalog and thinking selection", () => {
   it("chooses the first allowed catalog row when the configured default is unavailable", async () => {
     const state = await createInitialState(
-      selectionConfig({ model: "custom/blocked", modelPolicy: { allow: ["remote/*"] } }),
+      selectionConfig({
+        model: { primary: "custom/blocked", fallbacks: ["remote/z-first"] },
+        modelPolicy: { allow: ["remote/*"] },
+      }),
       "custom",
       "blocked",
       {

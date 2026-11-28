@@ -218,6 +218,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     setupFallback();
     const cfg = makeReasoningModelConfig({
       defaults: {
+        model: { primary: "openai/gpt-5.5", fallbacks: ["anthropic/fallback-model"] },
         models: { "openai/gpt-5.5": { params: { thinking: "high" } } },
         modelPolicy: { allow: ["anthropic/*"] },
       },

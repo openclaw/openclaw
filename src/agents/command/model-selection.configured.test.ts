@@ -473,6 +473,7 @@ describe("command selection with configured model facts", () => {
     };
     fixture.store[sessionKey] = sessionEntry();
     if (mode === "wildcard") {
+      fixture.defaults.model = { primary: "custom/base", fallbacks: ["remote/z-first"] };
       fixture.defaults.modelPolicy = { allow: ["remote/*"] };
       fixture.inventory.mockReturnValue([
         catalogEntry("remote", "z-first"),
@@ -508,6 +509,7 @@ describe("command selection with configured model facts", () => {
     try {
       const fixture = createFixture();
       fixture.store[sessionKey] = sessionEntry();
+      fixture.defaults.model = { primary: "custom/base", fallbacks: ["remote/z-first"] };
       fixture.defaults.modelPolicy = { allow: ["remote/*"] };
       fixture.inventory.mockReturnValue([
         catalogEntry("remote", "z-first"),
