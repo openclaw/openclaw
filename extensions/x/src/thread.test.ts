@@ -15,6 +15,18 @@ describe("X thread context", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("keeps an emoji whole when a thread label hits the cap", async () => {
+    const text = `${"t".repeat(79)}😀ZZEND`;
+    const mention: XPost = { ...trigger, text };
+    const context = await assembleXThread({
+      api: createContextApi(vi.fn(), 0),
+      mention,
+    });
+    expect(context.label).toBe(`@7: ${"t".repeat(79)}`);
+    expect(context.label).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    expect(context.label).not.toContain("ZZEND");
+  });
+
   it("stops searching once the configured number of posts is held", async () => {
     let searches = 0;
     const api = createContextApi(async () => {
