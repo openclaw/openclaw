@@ -752,6 +752,11 @@ final class TalkModeManager {
         let bypassRealtime = self.bypassRealtimeOnNextStart
         self.bypassRealtimeOnNextStart = false
         if self.runtimeRoute.usesRealtime, !bypassRealtime {
+            // A native turn that was running when the route switched leaves its silence monitor
+            // behind. Realtime callbacks would feed it and submit each utterance as a chat turn.
+            // A failed realtime start falls through to native startup, which restarts the monitor.
+            self.silenceTask?.cancel()
+            self.silenceTask = nil
             let realtimeStart = self.runtimeRoute == .realtimeRelay
                 ? await self.startRealtimeRelayIfAvailable(attemptID: attemptID)
                 : await self.startRealtimeIfAvailable(attemptID: attemptID)
@@ -4463,6 +4468,10 @@ extension TalkModeManager {
 
     func _test_hasRecognitionRequest() -> Bool {
         self.recognitionRequest != nil
+    }
+
+    func _test_hasSilenceMonitor() -> Bool {
+        self.silenceTask != nil
     }
 
     func _test_activePushToTalkCaptureId() -> String? {
