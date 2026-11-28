@@ -37,6 +37,10 @@ OpenClaw:
   skills remain explicit opt-ins. After the choice is handled, the agent
   acknowledges the stored offer so it never asks again.
 - Deletes `BOOTSTRAP.md` once the workspace looks configured, so the ritual only runs once.
+- Keeps housekeeping out of the chat: saving identity, reading stored
+  recommendations, and removing `BOOTSTRAP.md` happen without narration or a
+  setup-complete message. You still see your choices, your own requests, and
+  anything that failed, and the tool details stay available in the chat.
 
 With the stock `BOOTSTRAP.md`, a workspace counts as configured once `SOUL.md`,
 `IDENTITY.md`, or `USER.md` has diverged from its starter template, or a `memory/`
