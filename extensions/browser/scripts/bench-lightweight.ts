@@ -194,6 +194,8 @@ async function main() {
     await fs.writeFile(process.env.OPENCLAW_CONFIG_PATH, "{}");
     const {
       resolveBrowserConfig,
+      resolveCdpControlPolicy,
+      diagnoseChromeCdp,
       createBrowserRouteContext,
       createBrowserRouteDispatcher,
       closePlaywrightBrowserConnection,
@@ -535,6 +537,19 @@ async function main() {
             assert.equal((await dispatch("POST", route, { targetId })).status, 501);
           }
           checks.unsupportedCapabilities = true;
+        }
+        if ("endpoint" in spec && engine === "chromium") {
+          // Version discovery is best effort and must not warm up the measured attachment.
+          const diagnostic = await diagnoseChromeCdp(
+            cdpUrl,
+            undefined,
+            undefined,
+            resolveCdpControlPolicy(ctx.forProfile().profile, resolved.ssrfPolicy),
+            cancellation.signal,
+          );
+          if (diagnostic.ok) {
+            engineVersion = diagnostic.browser ?? null;
+          }
         }
         const sorted = tasks.map((item) => item.durationMs).toSorted((a, b) => a - b);
         return {
