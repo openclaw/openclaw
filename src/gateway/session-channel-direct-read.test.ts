@@ -1,7 +1,8 @@
 import { beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ list: vi.fn(), authority: vi.fn() }));
-vi.mock("../state/user-channel-identity-operations.js", () => ({
+vi.mock("../state/user-channel-identity-operations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-channel-identity-operations.js")>()),
   listCanonicalUserChannelIdentities: mocks.list,
   prepareUserChannelIdentityAuthority: mocks.authority,
 }));

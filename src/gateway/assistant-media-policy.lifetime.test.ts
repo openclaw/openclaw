@@ -5,6 +5,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { appendPreparedTranscriptEvent } from "../config/sessions/session-transcript-event.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
@@ -176,7 +177,7 @@ it("allows a linked group media reader while retaining private ACL and witness r
           },
         },
       },
-    };
+    } satisfies OpenClawConfig;
     await state.writeConfig(config);
     setRuntimeConfigSnapshot(config);
     const reader = ensureProfileForEmail("linked-media-reader@example.test");
@@ -201,7 +202,7 @@ it("allows a linked group media reader while retaining private ACL and witness r
       sessionKey,
       requestAuth: {
         authMethod: "token" as const,
-        operatorScopes: ["operator.read"],
+        operatorScopes: ["operator.read" as const],
         operatorRolePolicy: config.gateway.roles.definitions.reader,
         authenticatedUserProfile: gatewayProfile(reader.id),
       },

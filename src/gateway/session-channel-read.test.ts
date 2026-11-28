@@ -10,10 +10,12 @@ const mocks = vi.hoisted(() => ({
   prepareMemberships: vi.fn(),
   prepareMembership: vi.fn(),
 }));
-vi.mock("../state/user-channel-identity-operations.js", () => ({
+vi.mock("../state/user-channel-identity-operations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-channel-identity-operations.js")>()),
   prepareUserProfileRoleAuthority: mocks.prepareRoleAuthority,
 }));
-vi.mock("./session-channel-membership.js", () => ({
+vi.mock("./session-channel-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-channel-membership.js")>()),
   prepareTelegramGroupMemberships: mocks.prepareMemberships,
   prepareTelegramGroupMembership: mocks.prepareMembership,
 }));
@@ -418,6 +420,8 @@ it("binds an HTTP group fact to the profile, route, current config and witness",
   const key = sessionKey(group);
   const entry = sessionEntry(group);
   mocks.prepareMembership.mockResolvedValue({ isCurrent: () => current });
+  const timeoutController = new AbortController();
+  const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
   const canRead = await prepareTelegramSessionEntryRead({
     cfg,
     getConfig: () => currentConfig,
@@ -425,12 +429,18 @@ it("binds an HTTP group fact to the profile, route, current config and witness",
     key,
     entry,
   });
-  expect(mocks.prepareMembership).toHaveBeenCalledWith({
+  const prepared = mocks.prepareMembership.mock.calls[0]?.[0] as
+    | ({ signal?: AbortSignal } & Record<string, unknown>)
+    | undefined;
+  expect(prepared).toMatchObject({
     cfg,
     profileId: "profile",
     ...group,
-    signal: undefined,
   });
+  expect(prepared?.signal).toBeInstanceOf(AbortSignal);
+  expect(prepared?.signal?.aborted).toBe(false);
+  expect(timeoutSpy).toHaveBeenCalledWith(5_000);
+  expect(prepared?.signal).toBe(timeoutController.signal);
   expect(canRead(key, entry)).toBe(true);
   expect(canRead(sessionKey({ ...group, groupId: "-124" }), entry)).toBe(false);
   current = false;
@@ -438,4 +448,31 @@ it("binds an HTTP group fact to the profile, route, current config and witness",
   current = true;
   currentConfig = config();
   expect(canRead(key, entry)).toBe(false);
+  timeoutController.abort();
+  expect(prepared?.signal?.aborted).toBe(true);
+});
+
+it("combines HTTP cancellation with the bounded group membership read", async () => {
+  const cfg = config();
+  const group = { accountId: "default", groupId: "-123" };
+  const key = sessionKey(group);
+  const controller = new AbortController();
+  mocks.prepareMembership.mockResolvedValue(makeFact());
+
+  await prepareTelegramSessionEntryRead({
+    cfg,
+    getConfig: () => cfg,
+    profileId: "profile",
+    key,
+    entry: sessionEntry(group),
+    signal: controller.signal,
+  });
+
+  const prepared = mocks.prepareMembership.mock.calls[0]?.[0] as
+    | ({ signal?: AbortSignal } & Record<string, unknown>)
+    | undefined;
+  expect(prepared?.signal).toBeInstanceOf(AbortSignal);
+  expect(prepared?.signal?.aborted).toBe(false);
+  controller.abort();
+  expect(prepared?.signal?.aborted).toBe(true);
 });

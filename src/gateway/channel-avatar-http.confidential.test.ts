@@ -215,7 +215,7 @@ it.each([false, true])(
   },
 );
 it.each(["audience", "membership"] as const)(
-  "refuses avatar bytes when %s is revoked during the awaited load",
+  "finishes an admitted avatar read and applies %s revocation to the next request",
   async (revocation) => {
     const { scope, request } = await fixture(revocation === "membership");
     const entered = createDeferredCore();
@@ -250,10 +250,14 @@ it.each(["audience", "membership"] as const)(
       }
       release.resolve();
       const response = await pending;
-      expect(response.status).toBe(403);
-      expect(response.headers.get("content-type")).not.toBe("image/png");
-      expect(response.headers.get("etag")).toBeNull();
-      expect(await response.text()).not.toContain(bytes.toString("base64"));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("image/png");
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+      expect(media.read).toHaveBeenCalledTimes(1);
+
+      const denied = await request("selected");
+      expect(denied.status).toBe(403);
+      expect(media.read).toHaveBeenCalledTimes(1);
     } finally {
       release.resolve();
       await pending;
@@ -378,7 +382,7 @@ it.each([
   ["workspace icon", true],
   ["workspace icon", false],
 ] as const)(
-  "refuses config-only source revocation during %s read with live getter=%s",
+  "applies config-only source revocation at the %s admission boundary with live getter=%s",
   async (consumer, suppliedGetter) => {
     useLiveGetter = suppliedGetter;
     const { scope, request } = await sourceFixture(consumer);
@@ -437,11 +441,17 @@ it.each([
         storedAccess: "source",
       });
       release.resolve();
-      const denied = await pending;
-      expect(denied.response.status).toBe(consumer === "avatar" ? 403 : 503);
-      expect(denied.response.headers.get("content-type") ?? "").not.toMatch(/^image\//);
-      expect(denied.response.headers.get("etag")).toBeNull();
-      expect(denied.body.includes(bytes)).toBe(false);
+      const result = await pending;
+      if (consumer === "avatar") {
+        expect(result.response.status).toBe(200);
+        expect(result.response.headers.get("content-type")).toBe("image/png");
+        expect(result.body).toEqual(bytes);
+      } else {
+        expect(result.response.status).toBe(503);
+        expect(result.response.headers.get("content-type") ?? "").not.toMatch(/^image\//);
+        expect(result.response.headers.get("etag")).toBeNull();
+        expect(result.body.includes(bytes)).toBe(false);
+      }
       expect((await request("selected")).response.status).toBe(403);
       const creator = await request("creator");
       expect(creator.response.status, creator.body.toString()).toBe(200);

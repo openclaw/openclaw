@@ -6,7 +6,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SessionSchema } from "../config/zod-schema.session-config.js";
 
 const owner = vi.hoisted(() => ({ list: vi.fn(), authority: vi.fn(), role: vi.fn() }));
-vi.mock("../state/user-channel-identity-operations.js", () => ({
+vi.mock("../state/user-channel-identity-operations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-channel-identity-operations.js")>()),
   listCanonicalUserChannelIdentities: owner.list,
   prepareUserChannelIdentityAuthority: owner.authority,
   prepareUserProfileRoleAuthority: owner.role,

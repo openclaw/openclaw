@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { getRuntimeConfig } from "../config/io.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
+import { createHttpRequestAbortSignal } from "../infra/http-request-lifecycle.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { resolveInboundMediaReference } from "../media/media-reference.js";
 import { readMediaBuffer } from "../media/store.js";
@@ -123,6 +124,8 @@ export async function handleChannelAvatarHttpRequest(
     respondNotFound(res);
     return true;
   }
+  const requestAbort = createHttpRequestAbortSignal(req, res);
+  using _requestAbort = { [Symbol.dispose]: requestAbort.cleanup };
 
   const profileId = requestAuth.authenticatedUserProfile?.profileId;
   let channelRead: Parameters<typeof canReadChannelSession>[0]["channelRead"] | undefined;
@@ -139,7 +142,9 @@ export async function handleChannelAvatarHttpRequest(
       profileId,
       key: sessionKey,
       entry,
+      signal: requestAbort.signal,
     });
+    requestAbort.signal.throwIfAborted();
     requestAuth.assertCurrent();
   };
   const canReadEntry = (
@@ -163,16 +168,8 @@ export async function handleChannelAvatarHttpRequest(
       }),
     );
 
-  const serve = async (
-    reference: string | undefined,
-    assertCurrent: () => void,
-    canRead: () => boolean = () => true,
-  ) => {
+  const serve = async (reference: string | undefined, assertCurrent: () => void) => {
     assertCurrent();
-    if (!canRead()) {
-      sendSessionReadForbidden(res);
-      return true;
-    }
     if (!reference) {
       res.setHeader("cache-control", "no-store");
       respondNotFound(res);
@@ -186,10 +183,6 @@ export async function handleChannelAvatarHttpRequest(
       // The media may have expired or been pruned after the session row was written.
     }
     assertCurrent();
-    if (!canRead()) {
-      sendSessionReadForbidden(res);
-      return true;
-    }
     if (!image) {
       res.setHeader("cache-control", "no-store");
       respondNotFound(res);
@@ -199,10 +192,11 @@ export async function handleChannelAvatarHttpRequest(
     return true;
   };
   if (source) {
-    const entry = source.readCurrent();
-    if (entry) {
-      await prepareChannelRead(entry);
+    const preparedEntry = source.readCurrent();
+    if (preparedEntry) {
+      await prepareChannelRead(preparedEntry);
     }
+    const entry = source.readCurrent();
     if (entry && !canReadEntry(entry)) {
       sendSessionReadForbidden(res);
       return true;
@@ -223,10 +217,6 @@ export async function handleChannelAvatarHttpRequest(
     return serve(
       matchesChannelAvatarSender(requestUrl.searchParams, origin) ? reference : undefined,
       assertCurrent,
-      () => {
-        const current = source.readCurrent();
-        return !current || canReadEntry(current);
-      },
     );
   }
   let sharing: SessionFactsRead<PreparedSessionSourceFacts>;
@@ -256,11 +246,8 @@ export async function handleChannelAvatarHttpRequest(
     if (entry) {
       await prepareChannelRead(entry);
     }
-    const canRead = () => {
-      const current = sharing.readCurrent(getRuntimeConfig());
-      return !current.target || canReadEntry(current.target.entry, current.membership);
-    };
-    if (!canRead()) {
+    const admitted = sharing.readCurrent(getRuntimeConfig());
+    if (admitted.target && !canReadEntry(admitted.target.entry, admitted.membership)) {
       sendSessionReadForbidden(res);
       return true;
     }
@@ -278,7 +265,7 @@ export async function handleChannelAvatarHttpRequest(
         throw new Error("Channel avatar session authority changed");
       }
     };
-    return await serve(reference, assertCurrent, canRead);
+    return await serve(reference, assertCurrent);
   } finally {
     sharing.release();
   }

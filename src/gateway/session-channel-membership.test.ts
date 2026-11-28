@@ -12,10 +12,12 @@ const mocks = vi.hoisted(() => {
     authority: vi.fn(),
   };
 });
-vi.mock("../channels/plugins/registry.js", () => ({
+vi.mock("../channels/plugins/registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/plugins/registry.js")>()),
   resolveChannelPluginRegistration: mocks.registration,
 }));
-vi.mock("../state/user-channel-identity-operations.js", () => ({
+vi.mock("../state/user-channel-identity-operations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-channel-identity-operations.js")>()),
   listCanonicalUserChannelIdentities: mocks.list,
   prepareUserChannelIdentityAuthority: mocks.authority,
 }));

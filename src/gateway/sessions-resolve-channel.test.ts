@@ -36,7 +36,8 @@ vi.mock("../state/user-channel-identity-operations.js", async (importOriginal) =
     prepareUserChannelIdentityAuthority: authority.linked,
   };
 });
-vi.mock("./session-channel-membership.js", () => ({
+vi.mock("./session-channel-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-channel-membership.js")>()),
   prepareTelegramGroupMemberships: authority.prepare,
   prepareTelegramGroupMembership: authority.check,
 }));
@@ -79,7 +80,11 @@ const entry = {
     kind: "external" as const,
     route: { channel: "telegram", accountId: "default", target: { to: "telegram:-123456" } },
     context: {},
-    origin: { provider: "telegram", chatType: "group", nativeChannelId: "-123456" },
+    origin: {
+      provider: "telegram" as const,
+      chatType: "group" as const,
+      nativeChannelId: "-123456",
+    },
   },
 };
 

@@ -13,12 +13,28 @@ import { bindHttpResponseAuthority } from "./http-request-authority.js";
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
+  captureSource: vi.fn(),
   loadEntry: vi.fn(),
   resolveReference: vi.fn(),
   readMedia: vi.fn(),
   readSharing: vi.fn(),
   channelRead: vi.fn(),
+  prepareChannelRead: vi.fn(),
 }));
+
+vi.mock("../config/sessions/session-entry-source-authority.js", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("../config/sessions/session-entry-source-authority.js")>();
+  return {
+    ...original,
+    captureSessionEntryMetadataRead: (
+      ...args: Parameters<typeof original.captureSessionEntryMetadataRead>
+    ) =>
+      mocks.captureSource.getMockImplementation()
+        ? mocks.captureSource(...args)
+        : original.captureSessionEntryMetadataRead(...args),
+  };
+});
 
 vi.mock("./http-utils.js", () => ({
   authorizeControlUiSessionOwnerReadRequestOrReply: (...args: unknown[]) =>
@@ -50,7 +66,7 @@ vi.mock("./session-sharing-preparation.js", () => ({
 
 vi.mock("./session-channel-read.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-channel-read.js")>()),
-  prepareTelegramSessionEntryRead: async () => mocks.channelRead,
+  prepareTelegramSessionEntryRead: (...args: unknown[]) => mocks.prepareChannelRead(...args),
 }));
 
 const { handleChannelAvatarHttpRequest } = await import("./channel-avatar-http.js");
@@ -109,11 +125,14 @@ describe("handleChannelAvatarHttpRequest", () => {
   beforeEach(() => {
     authorityCurrent = true;
     sessionVisible = true;
+    mocks.captureSource.mockReset();
     mocks.channelRead.mockReset().mockReturnValue(false);
+    mocks.prepareChannelRead.mockReset().mockResolvedValue(mocks.channelRead);
     mocks.authorize.mockReset().mockImplementation(({ res }: { res: ServerResponse }) =>
       bindHttpResponseAuthority(
         {
           authMethod: "token",
+          authenticatedUserProfile: { profileId: "profile" },
           operatorScopes: ["operator.admin", "operator.read"],
           canReadSession: () => sessionVisible,
         },
@@ -259,6 +278,41 @@ describe("handleChannelAvatarHttpRequest", () => {
     expect((await fetch(url)).status).toBe(200);
   });
 
+  it("cancels channel membership preparation when the HTTP request closes", async () => {
+    sessionVisible = false;
+    mocks.channelRead.mockReturnValue(true);
+    const entered = createDeferredCore();
+    let membershipSignal: AbortSignal | undefined;
+    mocks.prepareChannelRead.mockImplementationOnce(async (params: { signal?: AbortSignal }) => {
+      membershipSignal = params.signal;
+      entered.resolve();
+      if (!params.signal) {
+        throw new Error("missing HTTP request signal");
+      }
+      await new Promise<void>((resolve) => {
+        if (params.signal?.aborted) {
+          resolve();
+          return;
+        }
+        params.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return mocks.channelRead;
+    });
+    const controller = new AbortController();
+    const pending = fetch(avatarRoute("agent:main:cancelled-membership"), {
+      signal: controller.signal,
+    });
+
+    await entered.promise;
+    expect(membershipSignal).toBeInstanceOf(AbortSignal);
+    expect(membershipSignal?.aborted).toBe(false);
+    controller.abort();
+
+    await expect(pending).rejects.toThrow();
+    await vi.waitFor(() => expect(membershipSignal?.aborted).toBe(true));
+    expect(mocks.readMedia).not.toHaveBeenCalled();
+  });
+
   it("serves linked group avatars but denies private ACL and revoked membership", async () => {
     const key = "agent:main:telegram:group:-123456";
     const entry = {
@@ -309,6 +363,49 @@ describe("handleChannelAvatarHttpRequest", () => {
     mocks.channelRead.mockReturnValue(true);
     current.entry = { ...entry, access: { mode: "creator" } } as typeof entry;
     expect((await fetch(url)).status).toBe(403);
+  });
+
+  it("authorizes a source avatar against the current entry after membership preparation", async () => {
+    const key = "agent:main:telegram:group:-123456";
+    const entry = {
+      sessionId: "source-avatar-admission",
+      lifecycleRevision: 1,
+      updatedAt: 1,
+      createdVia: "channel" as const,
+      createdActor: { type: "human" as const, source: "channel" as const, id: "777" },
+      delivery: {
+        kind: "external" as const,
+        route: { channel: "telegram", accountId: "default", target: { to: "telegram:-123456" } },
+        context: {},
+        origin: {
+          provider: "telegram",
+          chatType: "group" as const,
+          nativeChannelId: "-123456",
+          avatar: AVATAR_REFERENCE,
+        },
+      },
+    };
+    let current: typeof entry & { access?: { mode: "creator" } } = entry;
+    mocks.captureSource.mockReturnValue({ readCurrent: () => current });
+    sessionVisible = false;
+    mocks.channelRead.mockImplementation((_key, candidate) => candidate === entry);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    mocks.prepareChannelRead.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return mocks.channelRead;
+    });
+    const url = new URL(avatarRoute(key));
+    url.searchParams.set("v", channelAvatarRevision(AVATAR_REFERENCE));
+    const pending = fetch(url);
+
+    await entered.promise;
+    current = { ...entry, access: { mode: "creator" as const } };
+    release.resolve();
+
+    expect((await pending).status).toBe(403);
+    expect(mocks.readMedia).not.toHaveBeenCalled();
   });
 
   it("rejects revoked authority while channel avatar bytes are loading", async () => {

@@ -28,11 +28,13 @@ vi.mock("../../state/user-channel-identity-operations.js", async (original) => (
     isCurrent: () => mocks.linked,
   }),
 }));
-vi.mock("../session-channel-membership.js", () => ({
+vi.mock("../session-channel-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-channel-membership.js")>()),
   prepareTelegramGroupMemberships: async () =>
     new Map([[JSON.stringify(["default", "-123"]), { isCurrent: () => mocks.linked }]]),
 }));
-vi.mock("./chat-history-handler.js", () => ({
+vi.mock("./chat-history-handler.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./chat-history-handler.js")>()),
   handleChatHistoryRequest: async ({ respond }: { respond: RespondFn }) => {
     mocks.onHistory();
     respond(true, { messages: [] }, undefined);
