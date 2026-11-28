@@ -57,7 +57,6 @@ it("shows a cron system notice once when the owner conversation's model cannot r
     enabled: true,
     schedule: { kind: "every", everyMs: 3_600_000 },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "Check the dashboard." },
     delivery: { mode: "none" },
     owner: { agentId: "main", sessionKey: SESSION },
