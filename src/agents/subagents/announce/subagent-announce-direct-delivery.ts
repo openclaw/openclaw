@@ -48,6 +48,7 @@ import {
 import {
   getSubagentRequesterSessionActivity as resolveRequesterSessionActivity,
   loadRequesterSessionEntry,
+  withSubagentRequesterDelivery,
 } from "./subagent-announce-delivery.runtime.js";
 import {
   createDirectAnnounceResponseClassifier,
@@ -72,8 +73,13 @@ function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
 export async function sendSubagentAnnounceDirectly(
   params: SubagentAnnounceDirectParams,
 ): Promise<SubagentAnnounceDeliveryResult> {
-  // deliverSubagentAnnouncement already retains the requester for either transport.
-  return runOutsideAdmittedTurnScopes(() => sendSubagentAnnounceDirectlyBound(params));
+  return runOutsideAdmittedTurnScopes(() =>
+    withSubagentRequesterDelivery(
+      params.targetRequesterSessionKey,
+      params,
+      sendSubagentAnnounceDirectlyBound,
+    ),
+  );
 }
 
 async function sendSubagentAnnounceDirectlyBound(
