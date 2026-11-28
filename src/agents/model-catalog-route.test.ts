@@ -41,7 +41,7 @@ const chatGPTEntry: ModelCatalogEntry = {
   api: chatGPTRoute.api,
   baseUrl: chatGPTRoute.baseUrl,
 };
-const project = (params: Partial<Parameters<typeof projectModelCatalogEntryForRoute>[0]> = {}) =>
+const project = (params: Partial<Parameters<typeof projectModelCatalogEntryForRoute>[0]>) =>
   projectModelCatalogEntryForRoute({
     entry: platformEntry,
     projection: { kind: "selected", route: chatGPTRoute },
