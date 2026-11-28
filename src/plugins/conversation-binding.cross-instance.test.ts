@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, expect, it, onTestFinished, vi } from "vitest";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -193,4 +194,262 @@ it("rejects a queued Telegram write when its registry owner is retired", async (
 
   await expect(request).rejects.toThrow('Plugin "telegram" runtime is no longer active.');
   expect(await fixture.read()).toEqual(fixture.snapshot);
+});
+
+type StoredDiscordBinding = {
+  targetSessionKey: string;
+  idleTimeoutMs?: number;
+  metadata?: Record<string, unknown>;
+};
+
+type DiscordBindingManager = {
+  getByThreadId: (threadId: string) => StoredDiscordBinding | undefined;
+};
+
+type DiscordThreadBindingTestHarness = {
+  createTestThreadBindingManager: (params: {
+    accountId?: string;
+    persist?: boolean;
+  }) => Promise<DiscordBindingManager>;
+  installThreadBindingLifecycleTestHooks: () => void;
+};
+
+const { loadDiscordThreadBindingTestHarness, resetThreadBindingsForTests } =
+  await loadBundledPluginFacade<{
+    loadDiscordThreadBindingTestHarness: () => Promise<DiscordThreadBindingTestHarness>;
+    resetThreadBindingsForTests: () => Promise<void>;
+  }>({ pluginId: "discord", artifactBasename: "test-api.js" });
+const {
+  setDiscordRuntime,
+  setThreadBindingIdleTimeoutBySessionKey,
+  unbindThreadBindingsBySessionKey,
+} = await loadBundledPluginFacade<{
+  setDiscordRuntime: (runtime: PluginRuntime) => void;
+  setThreadBindingIdleTimeoutBySessionKey: (params: {
+    targetSessionKey: string;
+    idleTimeoutMs: number;
+  }) => unknown[];
+  unbindThreadBindingsBySessionKey: (params: {
+    targetSessionKey: string;
+    reason?: string;
+  }) => unknown[];
+}>({ pluginId: "discord", artifactBasename: "runtime-api.js" });
+const { createTestThreadBindingManager, installThreadBindingLifecycleTestHooks } =
+  await loadDiscordThreadBindingTestHarness();
+
+const discordIdentity = {
+  pluginId: "codex",
+  pluginName: "Codex",
+  pluginRoot: "/plugins/codex-a",
+};
+// A Discord DM binds the user conversation itself; no thread/channel lookup is needed.
+const discordConversation = {
+  channel: "discord",
+  accountId: "default",
+  conversationId: "user:123",
+};
+const discordStoreOptions = { namespace: "thread-bindings", maxEntries: 10_000 };
+const discordStoreAuthority = { assertCurrent() {} };
+
+describe("Discord thread binding ownership across plugin instances", () => {
+  installThreadBindingLifecycleTestHooks();
+
+  async function setupDiscordBinding() {
+    const state = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-discord-binding-runtime-owner-",
+    });
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
+    const foreign = new PluginInstance("codex");
+    const owners: Array<{ retire: () => void; dispose: () => Promise<unknown> }> = [];
+    onTestFinished(async () => {
+      await resetThreadBindingsForTests();
+      for (const owner of owners) {
+        owner.retire();
+        await owner.dispose();
+      }
+      await foreign.dispose();
+      sessionBindingTesting.resetSessionBindingAdaptersForTests();
+      resetPluginStateStoreForTests();
+      await state.cleanup();
+    });
+
+    // The manager is created by Discord's plugin instance, as channel startup does.
+    const { createPluginRuntime } = await import("./runtime/index.js");
+    const builder = createTestPluginRegistry(createPluginRuntime());
+    const record = createPluginRecord({ id: "discord", origin: "bundled" });
+    const api = builder.createApi(record, {
+      config: { channels: { discord: {} } },
+      registrationMode: "full",
+    });
+    const discord = expectDefined(getPluginInstance(record), "registered Discord instance");
+    builder.registry.plugins.push(record);
+    markPluginRegistryActive(builder.registry);
+    let retired = false;
+    const retire = () => {
+      if (!retired) {
+        retired = true;
+        markPluginRegistryRetired(builder.registry);
+      }
+    };
+    owners.push({
+      retire,
+      dispose: () => discord.dispose(),
+    });
+    discord.run(() => setDiscordRuntime(api.runtime));
+
+    const manager = await discord.run(() =>
+      createTestThreadBindingManager({ accountId: "default", persist: true }),
+    );
+    await discord.run(() =>
+      bindConversationNow({
+        identity: discordIdentity,
+        conversation: discordConversation,
+        summary: "original",
+      }),
+    );
+
+    const observer = createPluginStateKeyedStoreV2ForTests<StoredDiscordBinding>(
+      "discord",
+      discordStoreOptions,
+      discordStoreAuthority,
+    );
+    const stored = () => observer.entries();
+    expect(await stored()).toMatchObject([
+      { key: "default:user:123", value: { metadata: { summary: "original" } } },
+    ]);
+
+    const restart = async () => {
+      // A Gateway restart drops process memory; the state store keeps the durable rows.
+      await resetThreadBindingsForTests();
+      return await discord.run(() =>
+        createTestThreadBindingManager({ accountId: "default", persist: true }),
+      );
+    };
+    const resolveBinding = () =>
+      getSessionBindingService().resolveByConversationAsync(discordConversation);
+    return { discord, foreign, manager, restart, resolveBinding, stored, retire };
+  }
+
+  it("persists a foreign-instance detach and keeps it gone after a restart", async () => {
+    const { foreign, manager, restart, resolveBinding, stored } = await setupDiscordBinding();
+
+    const detached = await foreign.run(() =>
+      detachPluginConversationBinding({
+        pluginRoot: discordIdentity.pluginRoot,
+        conversation: discordConversation,
+      }),
+    );
+
+    expect(detached).toEqual({ removed: true });
+    expect(manager.getByThreadId("user:123")).toBeUndefined();
+    expect(await stored()).toEqual([]);
+
+    const restarted = await restart();
+    expect(restarted.getByThreadId("user:123")).toBeUndefined();
+    expect(await resolveBinding()).toBeNull();
+  });
+
+  it("persists a foreign-instance rebind and restores the new binding after a restart", async () => {
+    const { foreign, restart, resolveBinding, stored } = await setupDiscordBinding();
+
+    const rebound = await foreign.run(() =>
+      requestPluginConversationBinding({
+        ...discordIdentity,
+        conversation: discordConversation,
+        binding: { summary: "refreshed" },
+      }),
+    );
+
+    expect(rebound).toMatchObject({ status: "bound" });
+    expect(await stored()).toMatchObject([
+      { key: "default:user:123", value: { metadata: { summary: "refreshed" } } },
+    ]);
+
+    const restarted = await restart();
+    expect(restarted.getByThreadId("user:123")?.metadata).toMatchObject({
+      summary: "refreshed",
+    });
+    expect((await resolveBinding())?.metadata).toMatchObject({ summary: "refreshed" });
+  });
+
+  it("keeps a channel-owned binding written after a foreign-instance change", async () => {
+    const { discord, foreign, restart, stored } = await setupDiscordBinding();
+
+    await foreign.run(() =>
+      detachPluginConversationBinding({
+        pluginRoot: discordIdentity.pluginRoot,
+        conversation: discordConversation,
+      }),
+    );
+    await discord.run(() =>
+      bindConversationNow({
+        identity: discordIdentity,
+        conversation: { ...discordConversation, conversationId: "user:456" },
+        summary: "second",
+      }),
+    );
+
+    expect(await stored()).toMatchObject([
+      { key: "default:user:456", value: { metadata: { summary: "second" } } },
+    ]);
+    const restarted = await restart();
+    expect(restarted.getByThreadId("user:456")?.metadata).toMatchObject({ summary: "second" });
+    expect(restarted.getByThreadId("user:123")).toBeUndefined();
+  });
+
+  it("refuses a retired Discord owner without publishing memory or changing rows", async () => {
+    const { foreign, manager, retire, stored } = await setupDiscordBinding();
+    retire();
+
+    await expect(
+      foreign.run(() =>
+        detachPluginConversationBinding({
+          pluginRoot: discordIdentity.pluginRoot,
+          conversation: discordConversation,
+        }),
+      ),
+    ).rejects.toThrow(/no longer active/);
+
+    expect(manager.getByThreadId("user:123")?.metadata).toMatchObject({ summary: "original" });
+    expect(await stored()).toMatchObject([
+      { key: "default:user:123", value: { metadata: { summary: "original" } } },
+    ]);
+  });
+
+  it("refuses a retired owner through the synchronous compatibility path", async () => {
+    const { manager, retire, stored } = await setupDiscordBinding();
+    const binding = expectDefined(manager.getByThreadId("user:123"), "created Discord binding");
+    retire();
+
+    expect(() =>
+      unbindThreadBindingsBySessionKey({
+        targetSessionKey: binding.targetSessionKey,
+        reason: "plugin-detach",
+      }),
+    ).toThrow(/no longer active/);
+
+    expect(manager.getByThreadId("user:123")?.metadata).toMatchObject({ summary: "original" });
+    expect(await stored()).toMatchObject([
+      { key: "default:user:123", value: { metadata: { summary: "original" } } },
+    ]);
+  });
+
+  it("refuses a retired owner through the synchronous session idle-timeout path", async () => {
+    const { manager, retire, stored } = await setupDiscordBinding();
+    const binding = expectDefined(manager.getByThreadId("user:123"), "created Discord binding");
+    const originalIdleTimeoutMs = binding.idleTimeoutMs;
+    const originalRows = await stored();
+    retire();
+
+    expect(() =>
+      setThreadBindingIdleTimeoutBySessionKey({
+        targetSessionKey: binding.targetSessionKey,
+        idleTimeoutMs: (originalIdleTimeoutMs ?? 0) + 1,
+      }),
+    ).toThrow(/no longer active/);
+
+    expect(manager.getByThreadId("user:123")?.idleTimeoutMs).toBe(originalIdleTimeoutMs);
+    expect(await stored()).toEqual(originalRows);
+  });
 });

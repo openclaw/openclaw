@@ -32,6 +32,7 @@ import {
   ensureBindingsLoaded,
   ensureBindingsLoadedAsync,
   MANAGERS_BY_ACCOUNT_ID,
+  getThreadBindingRuntime,
   getThreadBindingToken,
   refreshUnboundThreadWebhookIdentity,
 } from "./thread-bindings.state.js";
@@ -199,7 +200,7 @@ export function unbindThreadBindingsBySessionKey(params: {
     if (manager?.isStopping()) {
       throw new Error("Discord thread binding manager is stopping");
     }
-    const unbound = removeBindingRecordSync(bindingKey);
+    const unbound = removeBindingRecordSync(bindingKey, getThreadBindingRuntime(manager));
     if (unbound) {
       if (manager) {
         manager.notifyUnbound(unbound, params);

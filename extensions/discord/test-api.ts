@@ -19,3 +19,7 @@ export const loadDiscordReadinessFixture = () => import("./src/monitor/readiness
 
 export const loadDiscordQueuedAdmissionFixture = () =>
   import("./src/monitor/message-handler.admission.test-support.js");
+
+export const loadDiscordThreadBindingTestHarness = () =>
+  import("./src/monitor/thread-bindings.lifecycle.test-support.js");
+export { resetThreadBindingsForTests } from "./src/monitor/thread-bindings.test-support.js";
