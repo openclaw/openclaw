@@ -39,7 +39,7 @@ function activeState(
 ) {
   return resolveActiveFallbackState({ selectedModelRef, activeModelRef, state, config: {} });
 }
-function transition(overrides: Partial<Parameters<typeof resolveFallbackTransition>[0]> = {}) {
+function transition(overrides: Partial<Parameters<typeof resolveFallbackTransition>[0]>) {
   return resolveFallbackTransition({
     ...pair("primary", "a", "fallback", "b"),
     attempts: [attempt],

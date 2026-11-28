@@ -17,7 +17,7 @@ import { initSessionState } from "./reply/session.js";
 import { applyTemplate, type MsgContext, type TemplateContext } from "./templating.js";
 
 const normalTurn = { kind: "normal", source: "message", authorized: false } as const;
-const inboundMessage = (overrides: Partial<MsgContext> = {}): MsgContext => ({
+const inboundMessage = (overrides: Partial<MsgContext>): MsgContext => ({
   Provider: "whatsapp",
   OriginatingChannel: "whatsapp",
   OriginatingTo: "whatsapp:+1555",

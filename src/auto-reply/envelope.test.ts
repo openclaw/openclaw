@@ -10,11 +10,11 @@ const timestamp = Date.UTC(2025, 0, 2, 3, 4, 5);
 const optionsFor = (userTimezone: string) =>
   resolveEnvelopeFormatOptions({ agents: { defaults: { userTimezone } } });
 type AgentOptions = Partial<Parameters<typeof formatAgentEnvelope>[0]>;
-function agentEnvelope(options: AgentOptions = {}) {
+function agentEnvelope(options: AgentOptions) {
   return formatAgentEnvelope({ channel: "WebChat", body: "hello", timestamp, ...options });
 }
 type InboundOptions = Partial<Parameters<typeof formatInboundEnvelope>[0]>;
-function inboundEnvelope(options: InboundOptions = {}) {
+function inboundEnvelope(options: InboundOptions) {
   return formatInboundEnvelope({
     channel: "Telegram",
     from: "Alice",

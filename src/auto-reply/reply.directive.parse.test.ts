@@ -163,7 +163,7 @@ function resolveModel(
     aliasIndex?: ModelAliasIndex;
     defaultProvider?: string;
     defaultModel?: string;
-  } = {},
+  },
 ) {
   return withPluginMetadataSnapshotScope(metadataSnapshot, () =>
     resolveModelDirectiveSelection({
