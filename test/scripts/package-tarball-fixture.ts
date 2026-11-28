@@ -20,6 +20,7 @@ export const AI_RUNTIME_PACKAGE_JSON = JSON.stringify({
     "./transports": { import: "./dist/transports.mjs" },
     "./internal/*": { import: "./dist/internal/*.mjs" },
     "./internal/tool-schema": { import: "./dist/internal/tool-schema.mjs" },
+    "./internal/env-api-keys": { import: "./dist/internal/env-api-keys.mjs" },
   },
 });
 export const AI_RUNTIME_FILES = {
@@ -31,6 +32,7 @@ export const AI_RUNTIME_FILES = {
   "node_modules/@openclaw/ai/dist/internal/openai-responses-payload-policy.mjs": "export {};\n",
   "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
   "node_modules/@openclaw/ai/dist/internal/tool-schema.mjs": "export {};\n",
+  "node_modules/@openclaw/ai/dist/internal/env-api-keys.mjs": "export {};\n",
 };
 export const BUNDLED_AI_PACKAGE_OPTIONS = {
   packageJson: {

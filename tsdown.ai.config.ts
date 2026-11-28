@@ -38,6 +38,7 @@ const config = {
     "provider-types": "packages/ai/src/provider-types.ts",
     validation: "packages/ai/src/validation.ts",
     "internal/anthropic": "packages/ai/src/internal/anthropic.ts",
+    "internal/env-api-keys": "packages/ai/src/internal/env-api-keys.ts",
     "internal/google": "packages/ai/src/internal/google.ts",
     "internal/google-model-family": "packages/ai/src/internal/google-model-family.ts",
     "internal/model-request-body": "packages/ai/src/transports/model-request-body.ts",

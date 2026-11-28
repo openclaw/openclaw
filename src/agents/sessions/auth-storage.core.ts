@@ -6,7 +6,7 @@
  * projects provider-default profiles into it.
  */
 
-import { findEnvKeys, getEnvApiKey } from "@openclaw/ai/internal/runtime";
+import { findEnvKeys, getEnvApiKey } from "@openclaw/ai/internal/env-api-keys";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import type { OAuthLoginCallbacks, OAuthProviderId } from "../../llm/utils/oauth/types.js";

@@ -1,5 +1,5 @@
 import { cancel, type CANCEL_SYMBOL, multiselect as clackMultiselect } from "@clack/prompts";
-import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
+import { getEnvApiKey } from "@openclaw/ai/internal/env-api-keys";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-select-styled-params.js";
 import { stylePromptTitle } from "../../../packages/terminal-core/src/prompt-style.js";
