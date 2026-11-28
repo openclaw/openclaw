@@ -94,6 +94,8 @@ export function captureSetupInferenceFileUndo(
       writeOptions: copyRuntimeConfigWriteApplication(writeOptions, {
         ...writeOptions,
         expectedConfigPath: snapshot.path,
+        // The conditional inverse removes only this setup's own changes.
+        allowConfigSizeDrop: true,
       }),
       transform: (config) => ({
         nextConfig: restoreSetupInferenceConfig(config, snapshot.sourceConfig, candidate).config,
@@ -225,7 +227,7 @@ export async function commitSetupInferenceActivation(params: {
         }
         if (status !== "applied") {
           throw new Error(
-            `The Gateway did not complete activation (${status}). Resolve the reported problem, then retry the saved sign-in.`,
+            `The Gateway did not complete activation (${typeof status === "object" ? status.status : status}). Resolve the reported problem, then retry the saved sign-in.`,
           );
         }
       } else {

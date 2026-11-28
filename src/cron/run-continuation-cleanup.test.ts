@@ -16,10 +16,13 @@ import {
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import * as queue from "../infra/session-delivery-queue-storage.js";
 import { SessionDeliveryDeadLetteredError } from "../infra/session-delivery-queue.records.js";
+import { enqueueUnclaimedSessionDeliveryFixture } from "../infra/session-delivery-queue.test-helpers.js";
 import * as lifecycle from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { setCanonicalUserPreferences } from "../state/user-preferences.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { removeCronRunContinuationSessionIfIdle as removeIdle } from "./run-continuation-cleanup.js";
 
@@ -30,15 +33,14 @@ type QueueContext = ReturnType<typeof captureOpenClawStateWorkerContext>;
 const writers = ["ordinary", "claimed"] as const;
 const enqueue = async (context: QueueContext, writer: (typeof writers)[number]) =>
   writer === "ordinary"
-    ? queue.enqueueSessionDelivery(payload, context)
+    ? enqueueUnclaimedSessionDeliveryFixture(payload, context)
     : (await queue.enqueueClaimedSessionDelivery(payload, 1_000, context)).id;
 
 async function seedContinuation() {
   setRuntimeConfigSnapshot({});
   await upsertSessionEntryCore(base, { sessionId: "run-123", updatedAt: 1 });
   await upsertSessionEntryCore(exact, {
-    sessionId: "run-123",
-    updatedAt: 1,
+    ...loadSessionEntry(base)!,
     cronRunContinuation: { lifecycleRevision: "fixture", phase: "ready", basePersisted: true },
   });
   return captureOpenClawStateWorkerContext();
@@ -46,6 +48,21 @@ async function seedContinuation() {
 
 const withContinuation = (run: (context: QueueContext) => Promise<void>) =>
   withOpenClawTestState({ scenario: "minimal" }, async () => run(await seedContinuation()));
+
+it("does not grant a private navigation reference authority over exact continuation cleanup", () =>
+  withContinuation(async (context) => {
+    const profile = ensureProfileForEmail("continuation@pins.test");
+    expect(
+      (
+        await setCanonicalUserPreferences(profile.id, {
+          "ui.railShortcuts": [`session:${exact.sessionKey}`],
+        })
+      )?.ok,
+    ).toBe(true);
+    await removeIdle(exact.sessionKey, undefined, context);
+    expect(loadSessionEntry(exact)).toBeUndefined();
+    expect(loadSessionEntry(base)?.sessionId).toBe("run-123");
+  }));
 
 function pauseAdmission() {
   const entered = createDeferredCore();
@@ -70,7 +87,7 @@ function createCorrelatedRun() {
     requesterAgentId: "main",
     expectsCompletionMessage: true,
     completion: { required: true, resultText: "done", capturedAt: now },
-    delivery: { status: "pending", disposition: "retryable" },
+    delivery: { status: "pending" },
     createdAt: now - 1,
     endedAt: now,
     outcome: { status: "ok" },
@@ -85,6 +102,7 @@ afterEach(() => {
 it.each(writers)(
   "retains the alias through %s admission until its own delivery settles",
   async (writer) => {
+    const retained = writer === "claimed";
     await withContinuation(async (context) => {
       const admission = pauseAdmission();
       const enqueueing = enqueue(context, writer);
@@ -99,11 +117,11 @@ it.each(writers)(
       expect(await queue.loadPendingSessionDeliveries(context)).toMatchObject([
         { id: await enqueueing, sessionKey: exact.sessionKey },
       ]);
-      expect(loadSessionEntry(base)?.sessionId).toBe("run-123");
+      await upsertSessionEntryCore(exact, { pinnedAt: retained ? 0 : undefined });
       await removeIdle(exact.sessionKey, undefined, context);
       expect(loadSessionEntry(exact)?.sessionId).toBe("run-123");
       await removeIdle(exact.sessionKey, await enqueueing, context);
-      expect(loadSessionEntry(exact)).toBeUndefined();
+      expect(loadSessionEntry(exact)?.sessionId).toBe(retained ? "run-123" : undefined);
       expect(loadSessionEntry(base)?.sessionId).toBe("run-123");
     });
   },
@@ -238,7 +256,11 @@ it("refuses correlated announcement publication when its source retires during s
       expect.soft(await queue.loadPendingSessionDeliveries(context)).toEqual([]);
       expect.soft(subagentRuns.get(run.runId)).toEqual(sourceBefore);
       expect.soft(readSubagentRun(database, run.runId)).toEqual(persistedBefore);
-      expect(outcome).toMatchObject({ delivered: false, disposition: "permanent_failure" });
+      expect(outcome).toMatchObject({
+        delivered: false,
+        path: "none",
+        reason: "completion_handoff_unavailable",
+      });
     } finally {
       admission.resume();
       await publication;

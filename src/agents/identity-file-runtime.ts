@@ -88,10 +88,10 @@ export function prepareCachedIdentityRead<
         IdentityReadWorkers[Worker]["snapshot"]
       >({
         workerUrl: resolveRuntimeProcessEntrypointUrl(params.worker),
+        // Bounded file reads must not wait behind unrelated CPU work while serving the UI.
         workerClass: "file-reader",
         // Identity and avatar refreshes can be several minutes apart.
         idleTimeoutMs: 10 * 60_000,
-        sharedCompute: true,
         maxPendingTasks: 256,
         maxPendingBytes: 1024 * 1024,
       }));

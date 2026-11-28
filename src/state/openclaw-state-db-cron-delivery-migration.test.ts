@@ -25,6 +25,7 @@ import {
 } from "./openclaw-state-db.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 
@@ -54,6 +55,7 @@ function legacyReceiptDatabase() {
   const databasePath = database.path;
   closeState();
   const legacy = new DatabaseSync(databasePath);
+  restorePreTemplateStateIdentifiersForTest(legacy);
   addPreCutoverClientCredentialTablesForTest(legacy);
   legacy.exec(`
     ALTER TABLE cron_run_receipts DROP COLUMN delivery_attempt_state;
@@ -96,7 +98,7 @@ it.each(["managed transaction", "implicit snapshot"] as const)(
                     "PRAGMA schema_version",
                     "PRAGMA user_version",
                     "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'view', 'index', 'trigger')",
-                    'select "value_json" from "config_machine_state" where "state_key" = ?',
+                    'select * from "config_machine_state" where "state_key" = ?',
                   ]
                 : [];
             expect(queries).toEqual(qualificationQueries);

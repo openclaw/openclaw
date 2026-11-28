@@ -7,12 +7,14 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isModelThinkingFormat, type ModelCompatConfig } from "../config/types.models.js";
+import { isModelThinkingFormat } from "../config/types.models.js";
+import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 import type { Model } from "../llm/types.js";
 import {
   resolveProviderModelCatalogId,
   resolveProviderModelPolicySurface,
 } from "../plugins/provider-model-routes.js";
+import { indexFirstByKey } from "../shared/dedupe-by-key.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -157,6 +159,23 @@ export function modelSupportsInput(
   return entry?.input?.includes(input) ?? false;
 }
 
+/** Reuse the publication's first-wins index when the caller has already projected the captured rows. */
+export function createCapturedModelLookup(
+  source?: readonly ModelCatalogEntry[] | ReadonlyMap<string, ModelCatalogEntry>,
+) {
+  const keyOf = createModelCatalogIdentityKeyResolver();
+  const byIdentity =
+    source && "get" in source
+      ? source
+      : source?.length
+        ? indexFirstByKey(source, keyOf)
+        : undefined;
+  if (!byIdentity?.size) {
+    return undefined;
+  }
+  return (provider: string, id: string) => byIdentity.get(keyOf({ provider, id }));
+}
+
 /** Prefers canonical identity; the shipped SDK's case-insensitive fallback must be unique. */
 export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" | "id">>(
   catalog: readonly T[],
@@ -165,6 +184,10 @@ export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" 
 ): T | undefined {
   const normalizedProvider = normalizeProviderId(provider);
   const trimmedModelId = modelId.trim();
+  // A session with no model has nothing to look up, and no provider policy to load.
+  if (!normalizedProvider || !trimmedModelId) {
+    return undefined;
+  }
   const providerCatalog: T[] = [];
   let literal: T | undefined;
   catalog.some((entry) => {
@@ -201,6 +224,26 @@ export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" 
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+/**
+ * Finds the row a CLI-native selector (for example Claude Code's `fable`)
+ * resolves to, as published by the CLI's own model menu in `params.nativeModelAliases`.
+ */
+export function findModelByNativeAlias<
+  T extends Pick<ModelCatalogEntry, "provider" | "id" | "params">,
+>(catalog: readonly T[], provider: string, alias: string): T | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  const trimmed = alias.trim();
+  const matches = catalog.filter((entry) => {
+    const aliases = entry.params?.nativeModelAliases;
+    return (
+      normalizeProviderId(entry.provider) === normalizedProvider &&
+      Array.isArray(aliases) &&
+      aliases.includes(trimmed)
+    );
+  });
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 /** Finds a model entry, requiring uniqueness when provider is omitted. */
 export function findModelCatalogEntry(
   catalog: ModelCatalogEntry[],
@@ -225,4 +268,11 @@ export function findModelCatalogEntry(
     ? exact
     : catalog.filter((entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId);
   return matches.length === 1 ? matches[0] : undefined;
+}
+
+/**
+ * Check if a model supports image input based on its catalog entry.
+ */
+export function modelSupportsVision(entry: ModelCatalogEntry | undefined): boolean {
+  return modelSupportsInput(entry, "image");
 }

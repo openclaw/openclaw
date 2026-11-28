@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { prepareAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import { presentExecutionDecisionReceiptsInDatabase } from "../audit/execution-decision-receipts.js";
 import {
   configureExecutionIdentityAdmissionSink,
@@ -7,6 +8,7 @@ import {
 } from "../audit/execution-identity-admission.js";
 import { processExecutionIdentityAdmissionWorkInDatabase } from "../audit/execution-identity-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -39,7 +41,10 @@ it.each([
       return true;
     });
     const clock = { now: Date.now() };
+    const peerDeletionChecks: boolean[] = [];
     const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async (params) => {
+      await readAgentDeletionJournalStatusInWorker("peer");
+      const peerDeleted = prepareAgentDeletionBlocked("peer");
       for (const stage of ["trigger", "payload"]) {
         const admission = prepareCronRunAdmission({
           scheduledExecution: TEST_SCHEDULED_EXECUTION,
@@ -54,6 +59,8 @@ it.each([
         try {
           const first = await admission.preparedRunAdmission.admit("embedded");
           expect(await admission.preparedRunAdmission.admit("plugin-harness")).toBe(first);
+          peerDeletionChecks.push(peerDeleted());
+          expect(peerDeletionChecks.at(-1)).toBe(false);
         } finally {
           await admission.finish();
         }
@@ -78,6 +85,7 @@ it.each([
     const job = await cron.add(cronTestInput({ delivery: { mode: "none" } }));
     clock.now = job.state.nextRunAtMs!;
     await onTimer(service.state);
+    expect(peerDeletionChecks).toEqual([false, false]);
     expect((await cron.readJob(job.id))?.state.lastRunStatus).toBe("ok");
 
     const database = openOpenClawStateDatabase();

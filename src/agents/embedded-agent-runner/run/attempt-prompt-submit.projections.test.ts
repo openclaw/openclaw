@@ -6,10 +6,7 @@ import { buildOpenAIResponsesParams } from "../../../../packages/ai/src/transpor
 import { createSolidPngBuffer } from "../../../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
-import {
-  loadTranscriptEventsSync,
-  upsertSessionEntryCore,
-} from "../../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { createSessionActorFactory } from "../../../config/sessions/session-actor-durable.js";
 import * as messageRewrite from "../../../config/sessions/session-message-rewrite-domain.js";
@@ -19,10 +16,8 @@ import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-ident
 import type { Context } from "../../../llm/types.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
-import {
-  createUserTurnTranscriptRecorder,
-  type UserTurnInput,
-} from "../../../sessions/user-turn-transcript.js";
+import type { UserTurnInput } from "../../../sessions/user-turn-input.types.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import {
   isUserMessage,
   readModelPromptProjection,
@@ -269,10 +264,10 @@ describe("durable model prompt projection at provider dispatch", () => {
     });
   });
 
-  it("preserves image-bearing request prefixes across retries, later turns, and reopen", async () => {
+  it("preserves resized image request prefixes after an aborted turn, retries, and reopen", async () => {
     await withOpenClawTestState({ label: "model-prompt-projection" }, async (state) => {
       const imagePath = path.join(state.workspaceDir, "prompt-image.png");
-      const imageBuffer = createSolidPngBuffer(1, 1, { r: 12, g: 34, b: 56 });
+      const imageBuffer = createSolidPngBuffer(3064, 2228, { r: 12, g: 34, b: 56 });
       await fs.writeFile(imagePath, imageBuffer);
       const target = await prepareTarget(state, "model-prompt-projection");
       const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
@@ -296,6 +291,7 @@ describe("durable model prompt projection at provider dispatch", () => {
                 workspaceDir: state.workspaceDir,
                 model: { input: ["text", "image"] },
                 workspaceOnly: true,
+                imageSessionKey: state.workspaceDir,
               },
             ),
           );
@@ -305,10 +301,7 @@ describe("durable model prompt projection at provider dispatch", () => {
         requests.push(structuredClone(buildOpenAIResponsesParams(model, context, undefined)));
         return createAssistantResultStream(
           requests.length === 1
-            ? {
-                ...createAssistant(model, [{ type: "text", text: "Partial answer" }], "error"),
-                errorMessage: "HTTP 503 interrupted response",
-              }
+            ? createAssistant(model, "Partial answer", "aborted")
             : createAssistant(model, [{ type: "text", text: "done" }]),
         );
       });
@@ -366,7 +359,7 @@ describe("durable model prompt projection at provider dispatch", () => {
       await send(reopened, 3);
       expect(requests).toHaveLength(4);
       for (const request of requests) {
-        expect(JSON.stringify(request).match(/"type":"input_image"/g)).toHaveLength(1);
+        expect(JSON.stringify(request).match(/"type":"input_image"/g) ?? []).toHaveLength(1);
       }
       for (let index = 1; index < requests.length; index++) {
         const previous = requests[index - 1]!;
@@ -660,7 +653,7 @@ describe("durable model prompt projection at provider dispatch", () => {
     },
   );
 
-  it("does not transfer a compacted keyless user's projection to the retained turn", async () => {
+  it("freezes a compacted keyless turn before dispatch without transferring it to the retained turn", async () => {
     await withOpenClawTestState({ label: "compacted-model-prompt-projection" }, async (state) => {
       const target = {
         ...(await prepareTarget(state, "compacted-model-prompt-projection")),
@@ -707,9 +700,14 @@ describe("durable model prompt projection at provider dispatch", () => {
       expect(JSON.stringify(requests[0])).toContain("Earlier turn was summarized.");
       expect(JSON.stringify(requests[0])).not.toContain("enriched compacted turn");
       expect(JSON.stringify(requests[0])).not.toContain("unrelated hook");
-      expect(JSON.stringify(loadTranscriptEventsSync(target))).not.toContain(
-        "modelPromptProjection",
+      // The turn left the request, so it freezes as its own transcript text, never the hook text.
+      expect(readModelPromptProjection(recorder.getPersistedMessage!())).toBe(
+        "original compacted turn",
       );
+      const retainedRow = (await readTranscriptMessages(target)).find(
+        (message) => message.role === "user" && message.content === "retained turn",
+      );
+      expect(readModelPromptProjection(retainedRow)).toBeUndefined();
     });
   });
 
@@ -806,15 +804,51 @@ describe("durable model prompt projection at provider dispatch", () => {
             JSON.stringify(requests[0]).split(RESTART_RECOVERY_INTERRUPTION_NOTE),
           ).toHaveLength(2);
           expect(JSON.stringify(requests[1])).not.toContain(RESTART_RECOVERY_INTERRUPTION_NOTE);
-          expect(readModelPromptProjection(recorder.getPersistedMessage!())).toBe(annotated);
-        } else {
-          expect(JSON.stringify(loadTranscriptEventsSync(target))).not.toContain(
-            "modelPromptProjection",
-          );
         }
+        // The embedded harness freezes the dispatched envelope, so no fallback can re-capture it.
+        expect(readModelPromptProjection(recorder.getPersistedMessage!())).toBe(annotated);
       });
     },
   );
+
+  // An external harness (its runtime builds the prompt) sent the turn without a projection,
+  // then failed; an embedded fallback keeps the transcript text instead of failing the turn.
+  it("sends the transcript text when an earlier candidate dispatched without a projection", async () => {
+    await withOpenClawTestState({ label: "dispatched-fallback-projection" }, async (state) => {
+      const target = {
+        ...(await prepareTarget(state, "dispatched-fallback-projection")),
+        sessionEntry: { sessionId, updatedAt: 1 },
+      };
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "original request", timestamp: 1, idempotencyKey: "dispatched:user" },
+        target,
+      });
+      await recorder.persistApproved();
+      recorder.markSentToProvider?.();
+      const manager = await SessionManager.openAsync(target, state.workspaceDir);
+      const { session } = await createTestSession({ sessionManager: manager });
+      normalizeSession(session);
+      const requests = captureRequests();
+
+      await submit(session, {
+        attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+        transcriptPrompt: "original request",
+        modelPrompt: undefined,
+        prependContext: "fallback hook context",
+        appendContext: undefined,
+        getUserTranscriptContexts: () => [],
+        withTranscriptWrite: (write) => write(),
+        promptActiveSession: async (_prompt, options) => {
+          options?.preflightResult?.(true);
+          await session.agent.continue();
+        },
+      });
+
+      expect(requests).toHaveLength(1);
+      expect(JSON.stringify(requests[0])).toContain("original request");
+      expect(JSON.stringify(requests[0])).not.toContain("fallback hook context");
+    });
+  });
 });
 
 describe("tool-result projection persistence at dispatch", () => {

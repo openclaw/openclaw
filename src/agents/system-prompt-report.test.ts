@@ -1,24 +1,18 @@
 import { createHash } from "node:crypto";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
-import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { formatSkillsForPromptCore } from "../skills/loading/skill-contract.js";
+import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-function makeTool(name: string): AnyAgentTool {
-  return {
-    name,
-    label: name,
-    description: name,
-    parameters: Type.Object({ value: Type.String() }),
-    execute: async () => ({ content: [], details: {} }),
-  };
-}
+const makeTool = (name: string) => fakeTool(name, name);
 
 const makeReport = (overrides: Partial<Parameters<typeof buildSystemPromptReport>[0]> = {}) =>
   buildSystemPromptReport({
@@ -215,7 +209,8 @@ describe("buildSystemPromptReport", () => {
 describe("rendered skills diagnostics", () => {
   it.each<[Partial<Parameters<typeof buildAgentSystemPrompt>[0]>, boolean, boolean?]>([
     [{ toolNames: ["skills_read"] }, true],
-    [{ codeModeActive: true, toolNames: ["exec"] }, true],
+    [{ codeModeActive: true, toolNames: ["exec"] }, false],
+    [{ codeModeActive: true, toolNames: ["exec"], capabilityToolNames: ["skills_read"] }, true],
     [{ promptSurface: "cli_backend" }, true],
     [{ promptMode: "minimal", toolNames: ["read"] }, true],
     [{ promptMode: "none", toolNames: ["read"] }, false],
@@ -244,5 +239,45 @@ describe("rendered skills diagnostics", () => {
     });
     expect(systemPrompt.includes(catalog)).toBe(included || workspaceCopy);
     expectSkills(systemPrompt, included ? catalog : "", skillsPrompt);
+  });
+
+  it("keeps exact skill identities in the compact skills_read catalog and its report", () => {
+    const names = ["release  notes", "team:deploy", "deploy (prod)", "deploy (stage)", 'say "hi"'];
+    const skills = names.map((name) => createFixtureSkillEntry(name).skill);
+    // A description quoting catalog XML must not be mistaken for catalog structure.
+    skills[1] = {
+      ...skills[1]!,
+      description: "Explain <skill><name>example</name></skill> elements",
+    };
+    const stored = formatSkillsForPromptCore(skills);
+    let rendered = "";
+    const systemPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/workspace",
+      toolNames: ["skills_read"],
+      skillsPrompt: stored,
+      onRenderedSkillsPrompt: (prompt) => (rendered = prompt),
+    });
+    expect(systemPrompt).toContain('- "release  notes": release notes description');
+    expect(systemPrompt).toContain('- "deploy (prod)": deploy (prod) description');
+    expect(systemPrompt).toContain(
+      '- "team:deploy": Explain <skill><name>example</name></skill> elements',
+    );
+    expect(systemPrompt).not.toContain("<location>");
+    // Embedded runs report the rendered catalog; /context and CLI backends pass the stored one.
+    for (const skillsPrompt of [rendered, stored]) {
+      const report = makeReport({ systemPrompt, skillsPrompt }).skills;
+      expect(report.entries.map(({ name }) => name)).toEqual(names);
+      expect(report.promptChars).toBe(rendered.length);
+    }
+    // With skills_search usable the catalog renders names only and the report still finds it.
+    const namesOnly = buildAgentSystemPrompt({
+      workspaceDir: "/workspace",
+      toolNames: ["skills_read", "skills_search"],
+      skillsPrompt: stored,
+    });
+    expect(namesOnly).toContain('- "say \\"hi\\""\n</available_skills>');
+    expect(namesOnly).not.toContain("release notes description");
+    const report = makeReport({ systemPrompt: namesOnly, skillsPrompt: stored }).skills;
+    expect(report.entries.map(({ name }) => name)).toEqual(names);
   });
 });

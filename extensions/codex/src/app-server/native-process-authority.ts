@@ -249,6 +249,15 @@ export class CodexNativeProcessClient {
     this.forgetSettled(command);
   }
 
+  /** Steering can retain earlier sources' processes in the same selected native turn. */
+  cancelTurn(threadId: string, turnId: string): Promise<void> {
+    return terminateCommands(
+      [...(this.threads.get(threadId)?.values() ?? [])].filter(
+        (command) => command.turnId === turnId,
+      ),
+    );
+  }
+
   private forgetSettled(command: CommandAdmission): void {
     if (command.accepting || command.background || command.processes.size > 0) {
       return;
@@ -439,7 +448,7 @@ export class CodexNativeProcessAuthority {
 
   cancelTurn(client: CodexAppServerClient, threadId: string, turnId: string): Promise<void> {
     const owner = getCodexNativeProcessClient(client);
-    return this.terminate(
+    return terminateCommands(
       [...this.commands].filter(
         (command) =>
           command.client === owner &&
@@ -450,7 +459,7 @@ export class CodexNativeProcessAuthority {
   }
 
   cancelClient(client: CodexNativeProcessClient): void {
-    void this.terminate([...this.commands].filter((command) => command.client === client)).catch(
+    void terminateCommands([...this.commands].filter((command) => command.client === client)).catch(
       this.onCleanupFailure,
     );
   }
@@ -466,25 +475,25 @@ export class CodexNativeProcessAuthority {
 
   private cancel(): Promise<void> {
     this.cancelled = true;
-    return (this.cancellation ??= this.terminate([...this.commands]));
+    return (this.cancellation ??= terminateCommands([...this.commands]));
   }
+}
 
-  private async terminate(commands: CommandAdmission[]): Promise<void> {
-    const processes = commands.flatMap((command) => {
-      command.background = undefined;
-      command.client.closeAdmission(command);
-      return [...command.processes];
-    });
-    // These closures own concrete children. Native numeric process IDs may already belong to a successor.
-    const results = await Promise.allSettled(processes.map((process) => process.terminate()));
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
+async function terminateCommands(commands: CommandAdmission[]): Promise<void> {
+  const processes = commands.flatMap((command) => {
+    command.background = undefined;
+    command.client.closeAdmission(command);
+    return [...command.processes];
+  });
+  // These closures own concrete children. Native numeric process IDs may already belong to a successor.
+  const results = await Promise.allSettled(processes.map((process) => process.terminate()));
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      "Codex native process cleanup failed; background work remains unsettled",
     );
-    if (failures.length > 0) {
-      throw new AggregateError(
-        failures,
-        "Codex native process cleanup failed; background work remains unsettled",
-      );
-    }
   }
 }

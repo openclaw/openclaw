@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { withinTest } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { admitModelTurn, completionConfig } from "../agents/bash-tools.lifecycle.test-support.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import type { SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
@@ -15,10 +15,10 @@ import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
-import type { CronServiceDeps } from "./service/state.js";
 
 // mock-isolation: Only model output is synthetic; fallback admission and session execution are real.
-vi.mock("../agents/embedded-agent-runner/run.js", () => ({
+vi.mock("../agents/embedded-agent-runner/run.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent-runner/run.js")>()),
   runEmbeddedAgent: vi.fn(),
 }));
 const runEmbeddedAgentMock = vi.mocked(runEmbeddedAgent);
@@ -34,13 +34,18 @@ const otherConversation = "agent:ops:discord:channel:other";
 const deliveryContext: DeliveryContext = { channel: "telegram", to: "-10042", threadId: 77 };
 
 it.for([
-  ["persistent target", `session:${target}`, otherConversation, "now", true],
-  ["targeted next-heartbeat", "isolated", target, "next-heartbeat", true],
-  ["default owner", "isolated", undefined, "now", false],
-  ["deferred default owner", "isolated", undefined, "next-heartbeat", false],
+  ["persistent target", `session:${target}`, otherConversation, "now", true, false],
+  ["targeted next-heartbeat", "isolated", target, "next-heartbeat", true, false],
+  ["default owner", "isolated", undefined, "now", false, false],
+  ["deferred default owner", "isolated", undefined, "next-heartbeat", false, false],
+  // Owner alerts resolve like the job's own delivery; their fallback never borrows the last route.
+  ["owner-targeted session", "isolated", target, "now", true, true],
 ] as const)(
   "routes a rejected failure alert to %s with scheduling disabled",
-  async ([_name, sessionTarget, creationSessionKey, wakeMode, carriesOrigin], { signal }) => {
+  async (
+    [_name, sessionTarget, creationSessionKey, wakeMode, carriesOrigin, ownerTarget],
+    { signal },
+  ) => {
     await withOpenClawTestState(
       { label: "cron-failure-notification", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
@@ -61,12 +66,14 @@ it.for([
           },
         );
         const receipts: SessionEventReceipt[] = [];
+        const notification = createDeferred();
         const enqueue = sessionEvents.enqueueSessionEventForHost;
         const observer = vi
           .spyOn(sessionEvents, "enqueueSessionEventForHost")
           .mockImplementation((...args) => {
             const receipt = enqueue(...args);
             receipts.push(receipt);
+            notification.resolve();
             return receipt;
           });
         runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
@@ -75,20 +82,11 @@ it.for([
         });
         const logger = createNoopLogger();
         const adapter = createGatewayCronTargetResolver(state.env, logger);
-        const sendCronFailureAlert: NonNullable<CronServiceDeps["sendCronFailureAlert"]> = async (
-          params,
-        ) => {
-          await params.onDeliverySettled({
-            delivered: false,
-            status: "not-delivered",
-            error: "failure alert channel unavailable",
-          });
-          throw new Error("failure alert channel unavailable");
-        };
         const failRun = async () => ({
           status: "error" as const,
           error: "temporary upstream error",
         });
+        let alertTarget: string | undefined;
         const deps = cronTestDeps({
           storePath: state.statePath("cron", "jobs.json"),
           cronEnabled: false,
@@ -97,7 +95,15 @@ it.for([
           log: logger,
           resolveOriginDeliveryContext: async () => deliveryContext,
           enqueueSessionEvent: adapter.enqueueSessionEvent,
-          sendCronFailureAlert,
+          sendCronFailureAlert: async (params) => {
+            alertTarget = params.target;
+            await params.onDeliverySettled({
+              delivered: false,
+              status: "not-delivered",
+              error: "failure alert channel unavailable",
+            });
+            throw new Error("failure alert channel unavailable");
+          },
           runIsolatedAgentJob: failRun,
           runSessionEvent: failRun,
         });
@@ -110,9 +116,11 @@ it.for([
             sessionTarget,
             sessionKey: creationSessionKey,
             wakeMode,
+            ...(ownerTarget ? { delivery: { mode: "announce", target: "owner" } } : {}),
           });
 
           await cron.run(job.id, "force");
+          await withinTest(notification.promise, signal);
           expect(receipts).toHaveLength(1);
           await expect(withinTest(receipts[0]!.accepted, signal)).resolves.toEqual({ ok: true });
           await expect(withinTest(receipts[0]!.settled, signal)).resolves.toMatchObject({
@@ -125,9 +133,11 @@ it.for([
             sessionKey: expectedSessionKey,
             trigger: "event",
           });
-          expect(turn.prompt).toContain('Automation "Important report" failed 1 times');
-          expect(turn.messageTo).toBe(carriesOrigin ? deliveryContext.to : undefined);
-          expect(turn.messageThreadId).toBe(carriesOrigin ? deliveryContext.threadId : undefined);
+          expect(turn.prompt).toContain('Automation "Important report" failed');
+          const fallbackOrigin = carriesOrigin && !ownerTarget;
+          expect(alertTarget).toBe(ownerTarget ? "owner" : undefined);
+          expect(turn.messageTo).toBe(fallbackOrigin ? deliveryContext.to : undefined);
+          expect(turn.messageThreadId).toBe(fallbackOrigin ? deliveryContext.threadId : undefined);
           expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
           expect(peekSystemEventEntries(expectedSessionKey)).toEqual([]);
         } finally {

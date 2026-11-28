@@ -1,7 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -9,7 +8,7 @@ import {
   type OpenClawConfig,
 } from "../../../config/config.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../../config/sessions/types.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
@@ -39,8 +38,7 @@ import {
 } from "../../internal-runtime-context.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { testing as deliveryTesting } from "./subagent-announce-delivery.test-support.js";
-import { testing as outputTesting } from "./subagent-announce-output.test-support.js";
-import { announceTesting } from "./subagent-announce-overrides.test-support.js";
+import { announceTesting, outputTesting } from "./subagent-announce-overrides.test-support.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 import {
   visibleAgentResponse,
@@ -105,7 +103,7 @@ const { registry } = vi.hoisted(() => ({
     shouldIgnorePostCompletionAnnounceForSession: vi.fn(
       (_sessionKey: string, _childAgentId?: string) => false,
     ),
-    countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
+    countPendingDescendantRuns: vi.fn((_key: string, _assert?: unknown, _options?: unknown) => 0),
     listSubagentRunsForRequester: vi.fn(
       (_sessionKey: string, _scope?: { requesterRunId?: string }): MockSubagentRun[] => [],
     ),
@@ -141,7 +139,9 @@ function assistantEvent(runId: string, text: string, final?: boolean) {
   };
 }
 
-const sessionConfig = { store: "/tmp/sessions.json" };
+const tempDirs = createTempDirTracker();
+const sessionRoot = tempDirs.make("announce-format-");
+const sessionConfig = { store: path.join(sessionRoot, "sessions.json") };
 let configOverride: OpenClawConfig = { session: sessionConfig };
 const defaultOutcomeAnnounce = {
   childRunId: "run-default",
@@ -378,12 +378,14 @@ describe("subagent announce formatting", () => {
     });
   }
 
-  afterAll(() => {
+  afterAll(async () => {
     announceTesting.setDepsForTest();
     outputTesting.setDepsForTest();
     deliveryTesting.setDepsForTest();
     clearRuntimeConfigSnapshot();
     subagentRuns.clear();
+    await closeOpenClawAgentDatabasesAsync(sessionRoot);
+    tempDirs.cleanup();
   });
 
   beforeEach(() => {
@@ -417,7 +419,7 @@ describe("subagent announce formatting", () => {
       },
       ...gatewayDeps,
       readSubagentSessionEntry: (_storePath, sessionKey) => readSessionFixture(sessionKey),
-      resolveSessionStorePathCore: () => "/tmp/sessions.json",
+      resolveSessionStorePathCore: () => sessionConfig.store,
     });
     getGlobalHookRunnerSpy
       .mockReset()
@@ -490,9 +492,7 @@ describe("subagent announce formatting", () => {
     expected: string,
     excluded: string,
   ): Promise<void> {
-    const root = await fs.realpath(
-      await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "announce-real-store-")),
-    );
+    const root = tempDirs.make("announce-real-store-");
     const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
     try {
       await patchSessionEntryCore(
@@ -512,17 +512,28 @@ describe("subagent announce formatting", () => {
         ...gatewayDeps,
         resolveSessionStorePathCore: () => storePath,
       });
-      await announceWithDefaults();
+      await announceWithDefaults({ startedAt: undefined, endedAt: undefined });
+      expect(getAgentCall().params?.internalEvents?.[0]).toMatchObject({
+        statsLine: `Stats: runtime n/a • ${expected}`,
+      });
       expectText(getAgentCallContext(), ["Stats:", expected], [excluded]);
     } finally {
       await closeOpenClawAgentDatabasesAsync(root);
-      await fs.rm(root, { recursive: true, force: true });
     }
   }
 
   it.each([
     [{}, "tokens unknown", "tokens 0 (in 0 / out 0)"],
     [{ inputTokens: 0, outputTokens: 0 }, "tokens 0 (in 0 / out 0)", "tokens unknown"],
+    [
+      {
+        totalTokens: 500,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      },
+      "tokens 500 context",
+      "tokens 0 (in 0 / out 0)",
+    ],
   ] as const)("announces real session-store usage %j", expectRealStoreUsage);
 
   it.each([true, false])("replays durable silence (completion required=%s)", async (required) => {
@@ -562,7 +573,7 @@ describe("subagent announce formatting", () => {
       outputTokens: 1000,
       totalTokens: 197000,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     });
     const call = await deliverCompletion({
       childRunId: "run-direct-completion",
@@ -584,9 +595,7 @@ describe("subagent announce formatting", () => {
       taskLabel: "do thing",
       statusLabel: "failed: boom",
       result: findings,
-      statsLine: expect.stringMatching(
-        /tokens 1\.0k \(in 12 \/ out 1\.0k\).*prompt\/cache 197\.0k/,
-      ),
+      statsLine: expect.stringMatching(/tokens 1\.0k \(in 12 \/ out 1\.0k\).*context 197\.0k/),
     });
     expectInputProvenance(call.params, childKey);
     expectText(
@@ -640,18 +649,6 @@ describe("subagent announce formatting", () => {
         .map(([call]) => call.params?.to)
         .toSorted((left, right) => String(left).localeCompare(String(right))),
     ).toEqual(["channel:thread-child-a", "channel:thread-child-b"]);
-  });
-
-  it.each([
-    [{ status: "timeout" }, "timed out"],
-    [
-      { status: "timeout", error: "child run failed before completing" },
-      "timed out: child run failed before completing",
-    ],
-  ] as const)("includes completion status details: %s", async (outcome, expectedStatus) => {
-    setCompletionSessions();
-    await deliverCompletion({ roundOneReply: "child details", outcome });
-    expectText(getAgentCallContext(), [expectedStatus, "child details"], ["✅ Subagent"]);
   });
 
   const telegramRoute = { channel: "telegram", to: "telegram:123" };
@@ -771,7 +768,7 @@ describe("subagent announce formatting", () => {
       sessionStore = { [childKey]: session("child-session-1", minimalUsage) };
       expect(
         await announceWithDefaults({ timeoutMs: 1000, expectsCompletionMessage: !settled }),
-      ).toBe(settled ? "delivered" : "retryable");
+      ).toBe(settled ? "delivered" : "undelivered");
       if (settled) {
         expect(waitForEmbeddedAgentRunEndSpy).toHaveBeenCalledWith("child-session-1", 1000);
         expectText(getAgentCallContext(), ["raw subagent reply"], ["(no output)"]);
@@ -799,8 +796,8 @@ describe("subagent announce formatting", () => {
       transcriptEvents.push(assistantEvent("new-a", "late-progress", false));
       agentSpy.mockResolvedValueOnce(visibleAgentResponse("run-parent-phase-2:wake"));
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      registry.countPendingDescendantRuns.mockReturnValueOnce(1);
-      expect(await announceWake(parentKey, parentRunId)).toBe("retryable");
+      registry.countPendingDescendantRuns.mockReturnValueOnce(1).mockReturnValueOnce(1);
+      expect(await announceWake(parentKey, parentRunId)).toBe("undelivered");
       expect(agentSpy).not.toHaveBeenCalled();
       const didAnnounce = await announceWake(parentKey, parentRunId, {
         runTimeoutSeconds,
@@ -863,7 +860,7 @@ describe("subagent announce formatting", () => {
     registry.shouldIgnorePostCompletionAnnounceForSession.mockReturnValue(
       mode === "completed parent",
     );
-    registry.countPendingDescendantRuns.mockReturnValue(mode === "completed parent" ? 2 : 0);
+    registry.countPendingDescendantRuns.mockImplementation((_k, _a, opts) => (opts ? 0 : 1));
     if (destination) {
       registry.resolveRequesterForChildSession.mockReturnValue({
         requesterSessionKey: destination,
@@ -874,9 +871,10 @@ describe("subagent announce formatting", () => {
       await announceWithDefaults({
         childRunId: mode,
         requesterSessionKey: parentKey,
-        cleanup: mode === "missing fallback" ? "delete" : "keep",
+        cleanup: "delete",
       }),
-    ).toBe(mode === "missing fallback" ? "retryable" : "delivered");
+    ).toBe(mode === "missing fallback" ? "undelivered" : "delivered");
+    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
     if (destination) {
       expectAgentCallFields(getAgentCall(), { sessionKey: destination, deliver: false });
       expect(getAgentCall().params?.channel).toBe(
@@ -885,7 +883,6 @@ describe("subagent announce formatting", () => {
     } else {
       expect(agentSpy).not.toHaveBeenCalled();
       expect(sendSpy).not.toHaveBeenCalled();
-      expect(sessionsDeleteSpy).not.toHaveBeenCalled();
     }
   });
 });

@@ -19,6 +19,7 @@ import { withNativeSubagentRuntimeGuard } from "../../../plugins/runtime/native-
 import type { NativeSubagentRuntime } from "../../../plugins/runtime/types-native-subagent.js";
 import type { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spawn.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "../../agent-scope.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
@@ -27,6 +28,7 @@ import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { activateSubagentRegistry } from "../registry/subagent-registry.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
@@ -72,7 +74,10 @@ export function nativeRequestSource(
       ...overrides,
     },
     operatorAuthority: source.authority,
-    assertCurrent: source.authority.assertCurrent,
+    assertCurrent: expectDefined(
+      resolveAdmittedRunActiveAssertion(bound.admitted, bound.parent.controller.signal),
+      "native requester run",
+    ),
     async prepareSpawn(assertCurrent) {
       assertCurrent();
       return bound.admitted;
@@ -119,15 +124,21 @@ export function nativeReplyFixture(
           sessionKey: bound.parentSessionKey,
           sessionStoreEntry: { sessionKey: bound.parentSessionKey, entry },
           getPreDispatchAbortSignal: () => undefined,
-          assertProgressCurrent: source.authority.assertCurrent,
+          assertProgressCurrent: () => bound.parent.controller.signal.throwIfAborted(),
           assertCurrentBindingRoute: async () => {
-            source.authority.assertCurrent();
+            bound.parent.controller.signal.throwIfAborted();
           },
-          turnAdoption: { assertCurrent: source.authority.assertCurrent, adopt },
+          turnAdoption: {
+            assertCurrent: () => bound.parent.controller.signal.throwIfAborted(),
+            adopt,
+          },
         },
         () =>
           withNativeSubagentRuntimeGuard(
-            { pluginId: "native-test", assertCurrent: source.authority.assertCurrent },
+            {
+              pluginId: "native-test",
+              assertCurrent: () => bound.parent.controller.signal.throwIfAborted(),
+            },
             run,
           ),
       ),
@@ -149,6 +160,7 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
       native: NativeSubagentRuntime;
       ordinary: AnyAgentTool;
       bound: BoundParent;
+      runtime: Awaited<ReturnType<NativePluginSpawnTestOptions["createBoundGateway"]>>["runtime"];
       modelsStarted: Promise<void>;
       makeNative: (
         parent: BoundParent,
@@ -185,7 +197,7 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
           ) =>
             createRequestNativeSubagentRuntime(nativeRequestSource(parent, owner), {
               pluginId: "native-test",
-              assertCurrent: owner.authority.assertCurrent,
+              assertCurrent: () => parent.parent.controller.signal.throwIfAborted(),
             });
           const [ordinary] = finalizeAgentTools({
             tools: [
@@ -210,6 +222,7 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
             makeNative,
             ordinary: expectDefined(ordinary, "ordinary spawn"),
             bound,
+            runtime,
             modelsStarted: modelsStarted.promise,
           });
         },
@@ -418,7 +431,9 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
   });
 
   it("native plugin permits task rewrites and nested ordinary noncollector calls", async () => {
-    await withRewriteFixture(async ({ native, ordinary, bound, modelsStarted }) => {
+    await withRewriteFixture(async ({ native, ordinary, bound, runtime, modelsStarted }) => {
+      vi.mocked(runtime.lifecycle.waitForAgent).mockRestore();
+      await activateSubagentRegistry(bound.resolveGatewayContext);
       let ordinaryRunId: string | undefined;
       const hook = vi.fn(async (event: { toolName: string; params: Record<string, unknown> }) => {
         if (event.toolName !== "sessions_spawn") {
@@ -479,6 +494,7 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
         completed: [{ runId: accepted.runId, status: "done", result: "rewrite child complete" }],
         pending: [],
       });
+      await bound.execution.runWhenIdle(() => {});
       await settleRootWork(true);
       expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
     });

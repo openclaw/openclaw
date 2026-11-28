@@ -11,19 +11,18 @@ const NVIDIA_MODELS_URL = "https://integrate.api.nvidia.com/v1/models";
 
 const ssrfRuntimeMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
-  ssrfPolicyFromHttpBaseUrlAllowedHostname: vi.fn((baseUrl: string) => ({
-    allowedHostnames: [new URL(baseUrl).hostname],
-  })),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ssrfRuntimeMocks);
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  ...ssrfRuntimeMocks,
+}));
 
 const catalogResponses = new Map<string, Response[]>();
 
 afterEach(() => {
   clearLiveCatalogCacheForTests();
   ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
-  ssrfRuntimeMocks.ssrfPolicyFromHttpBaseUrlAllowedHostname.mockClear();
   catalogResponses.clear();
 });
 

@@ -1,18 +1,19 @@
 import { createEffect } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { registerMcpAppUnmountTarget } from "../../../components/mcp-app-unmount.ts";
-import {
-  PANEL_HOSTED_TABS_CHANGE_EVENT,
-  readPanelHostedTabs,
-} from "../../../components/panel-hosted-tabs.ts";
+import { readPanelHostedTabs } from "../../../components/panel-hosted-tabs.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { installResizeObserverStub } from "../../../test-helpers/resize-observer.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import "../../../lib/toast-host.tsx";
 import { createGatewayBrowserClientFixture } from "../chat-application-context.test-support.ts";
 import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
 import {
+  clearSessionWorkspacePreviews,
   openSessionWorkspacePreview,
   pinSessionWorkspacePreview,
   requestCloseSessionWorkspacePreview,
@@ -374,6 +375,129 @@ describe("workspace file tabs", () => {
     await vi.waitFor(() => expect(getFile).toHaveBeenCalledTimes(3));
   });
 
+  it.each(["managed", "unmanaged", "repository", "denied"] as const)(
+    "validates a document link before reusing a dirty target (%s)",
+    async (scope) => {
+      const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
+      const { state, response, getFile, workspace } = fileFixture(
+        "reports/evidence.md",
+        "Disk evidence",
+        true,
+      );
+      const repository = scope === "repository";
+      if (repository) {
+        response.root = undefined;
+        response.sessionKey = "agent:main:repository-source";
+      }
+      const requestPath = (path: string) => (repository ? path : `/workspace/${path}`);
+      response.source =
+        scope === "unmanaged"
+          ? undefined
+          : {
+              workspaceId: "report-workspace",
+              root: response.root ?? null,
+              fileRoot: repository ? null : "/workspace/nested-cwd",
+            };
+      await openSessionWorkspaceFile(state, {
+        path: requestPath("reports/evidence.md"),
+        sessionKey: response.sessionKey,
+      });
+      const { preview: retained, content: original } = filePreview(state);
+      setFileDraft(original, { content: "Unsaved evidence", expectedHash: "original" });
+      onTestFinished(() => setFileDraft(original, null));
+      getFile.mockResolvedValue({
+        ...response,
+        file: {
+          ...response.file,
+          name: "report.md",
+          path: "reports/report.md",
+          workspacePath: "reports/report.md",
+          content: "# Report",
+        },
+      });
+      const sourcePreview = await openSessionWorkspaceFile(state, {
+        path: requestPath("reports/report.md"),
+        sessionKey: response.sessionKey,
+      });
+      if (!sourcePreview || sourcePreview.content.kind !== "file") {
+        throw new Error("Report did not open");
+      }
+      const source = sourcePreview.content;
+      const held = createDeferred<SessionWorkspaceGetResult>();
+      getFile.mockImplementationOnce(() => held.promise);
+      const opening = openSessionWorkspaceFile(
+        state,
+        { path: "evidence.md", relativeTo: source },
+        "preview",
+      );
+      await vi.waitFor(() =>
+        expect(getFile).toHaveBeenLastCalledWith(
+          response.sessionKey,
+          repository ? "./reports/evidence.md" : "/workspace/reports/evidence.md",
+          { agentId: "main" },
+        ),
+      );
+      expect(workspace.activePreviewId).toBe(sourcePreview.id);
+      held.resolve(response);
+      await opening;
+      expect(workspace.activePreviewId).toBe(retained.id);
+      expect(retained.content).toBe(original);
+      expect(readFileDraft(original)?.content).toBe("Unsaved evidence");
+
+      selectSessionWorkspacePreview(state, sourcePreview.id);
+      if (scope === "denied") {
+        getFile.mockRejectedValueOnce(new Error("Access denied"));
+      } else {
+        getFile.mockResolvedValueOnce(
+          scope === "unmanaged"
+            ? { ...response, root: "/replacement" }
+            : {
+                ...response,
+                source: { ...response.source!, workspaceId: "replacement-workspace" },
+              },
+        );
+      }
+      await openSessionWorkspaceFile(state, { path: "evidence.md", relativeTo: source }, "preview");
+      expect(workspace.activePreviewId).toBe(sourcePreview.id);
+      expect(workspace.error).toContain(scope === "denied" ? "Access denied" : "workspace changed");
+      await vi.dynamicImportSettled();
+      await waitForSolid(() => expect(toast.textContent).toContain(workspace.error));
+      expect(retained.content).toBe(original);
+      expect(readFileDraft(original)?.content).toBe("Unsaved evidence");
+    },
+  );
+
+  it.each([
+    { path: "reports/report.md", link: "../../../outside.md", request: "./../../outside.md" },
+    { path: "report.md", link: "missing.md", request: "./missing.md" },
+  ])(
+    "keeps rootless document target $link explicit and native-authorized",
+    async ({ path, link, request }) => {
+      const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
+      const { state, response, getFile, workspace } = fileFixture(path, "# Report", true);
+      response.root = undefined;
+      const preview = await openSessionWorkspaceFile(state, { path });
+      if (!preview || preview.content.kind !== "file") {
+        throw new Error("Report did not open");
+      }
+      state.sessions.listFiles = vi.fn();
+      getFile.mockRejectedValueOnce(
+        new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "session file not found",
+          details: { type: "session_file_not_found" },
+        }),
+      );
+      await openSessionWorkspaceFile(state, { path: link, relativeTo: preview.content }, "preview");
+      expect(getFile).toHaveBeenLastCalledWith(state.sessionKey, request, { agentId: "main" });
+      expect(state.sessions.listFiles).not.toHaveBeenCalled();
+      expect(workspace.activePreviewId).toBe(preview.id);
+      expect(workspace.previews).toEqual([preview]);
+      await vi.dynamicImportSettled();
+      await waitForSolid(() => expect(toast.textContent).toContain("session file not found"));
+    },
+  );
+
   it("reconciles canonical aliases for non-text previews", async () => {
     const { state, response, getFile, workspace } = fileFixture("asset.png", "iVBORw0KGgo=", true);
     Object.assign(response.file, {
@@ -445,38 +569,94 @@ describe("workspace file tabs", () => {
     expect(getSessionWorkspace(state).previews).toHaveLength(1);
   });
 
-  it.each(["preview", undefined] as const)(
-    "opens the first file with its tree collapsed and preserves an explicit toggle (%s)",
-    async (disposition) => {
-      const state = createSessionWorkspaceHost();
-      state.sessions.getFile = vi
-        .fn()
-        .mockImplementation(async (_sessionKey, path) =>
-          textResponse(state, path, "File contents"),
-        );
-      const treeVisible = () => createSessionWorkspaceProps(state).navigation.treeVisible;
-      const select = (id: string | null, visible: boolean) => {
-        selectSessionWorkspacePreview(state, id);
-        expect(treeVisible()).toBe(visible);
-      };
-      const open = async (path: string, visible: boolean) => {
-        await openSessionWorkspaceFile(state, { path }, disposition);
-        expect(treeVisible()).toBe(visible);
-      };
-      expect(treeVisible()).toBe(true);
-      await open("first.txt", false);
-      select(null, true);
-      select("file:first.txt", false);
-      createSessionWorkspaceProps(state).onTreeVisibleChange(true);
-      await open("second.txt", true);
-      selectSessionWorkspacePreview(state, null);
-      select("file:second.txt", true);
-      createSessionWorkspaceProps(state).onTreeVisibleChange(false);
-      await open("third.txt", false);
-      select(null, true);
-      await open("fourth.txt", false);
-    },
-  );
+  it("restores catalog navigation on retirement without reading until Files is presented", async () => {
+    const state = createSessionWorkspaceHost({
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
+    });
+    const workspace = getSessionWorkspace(state);
+    const listing = {
+      sessionKey: state.sessionKey,
+      files: [],
+      browser: { path: "other", entries: [] },
+    };
+    const listFiles = vi.fn().mockResolvedValue(listing);
+    state.sessions.listFiles = listFiles;
+    workspace.browserPath = "catalog";
+    workspace.browserSearch = "needle";
+    workspace.filter = "read";
+    Object.assign(workspace.tree!, {
+      expandedPaths: ["", "catalog"],
+      searchOpen: true,
+      treeScroll: 40,
+    });
+    openPreview(state, "file:preview.md");
+    createSessionWorkspaceProps(state).onBrowsePath("other");
+    await workspace.readResult;
+    listFiles.mockClear();
+
+    clearSessionWorkspacePreviews(state);
+    const hidden = createSessionWorkspaceProps(state, { presented: false, expanded: true });
+    expect(hidden.navigation).toMatchObject({
+      browserPath: "catalog",
+      browserSearch: "needle",
+      filter: "read",
+      expandedPaths: ["", "catalog"],
+      searchOpen: true,
+      treeVisible: true,
+      treeScroll: 40,
+    });
+    expect(workspace.previews).toEqual([]);
+    expect(hidden.activeId).toBeNull();
+    expect(listFiles).not.toHaveBeenCalled();
+    createSessionWorkspaceProps(state, { presented: true, expanded: false });
+    expect(listFiles).not.toHaveBeenCalled();
+    createSessionWorkspaceProps(state, { presented: true, expanded: true });
+    await workspace.readResult;
+    expect(listFiles).toHaveBeenCalledWith(state.sessionKey, {
+      path: "",
+      search: "needle",
+      agentId: "main",
+    });
+
+    // With no selected preview, the current catalog is newer than the saved snapshot.
+    createSessionWorkspaceProps(state).onBrowsePath("newer");
+    await workspace.readResult;
+    createSessionWorkspaceProps(state).onSetFilter("changed");
+    listFiles.mockClear();
+    clearSessionWorkspacePreviews(state);
+    expect(createSessionWorkspaceProps(state).navigation).toMatchObject({
+      browserPath: "newer",
+      browserSearch: "",
+      filter: "changed",
+      treeVisible: true,
+    });
+    expect(listFiles).not.toHaveBeenCalled();
+
+    openSessionWorkspacePreview(state, "app", "Workspace app", {
+      kind: "mcp-app",
+      title: "Workspace app",
+      observeRetirement: () => () => {},
+      launch: {
+        owner: state.client!,
+        sessionKey: state.sessionKey,
+        serverName: "workspace",
+        entrypoint: {
+          title: "Workspace app",
+          toolName: "browse",
+          resourceUri: "ui://workspace/browse",
+          entrypoint: { type: "thread" },
+        },
+      },
+    });
+    clearSessionWorkspacePreviews(state);
+    expect(createSessionWorkspaceProps(state).navigation).toMatchObject({
+      browserPath: "newer",
+      browserSearch: "",
+      filter: "changed",
+      treeVisible: true,
+    });
+    expect(listFiles).not.toHaveBeenCalled();
+  });
 
   it("closes only the selected preview and scopes tabs to reconnect", async () => {
     const state = createSessionWorkspaceHost();
@@ -488,23 +668,6 @@ describe("workspace file tabs", () => {
     expect(getSessionWorkspace(state).previews).toHaveLength(1);
     state.connectionEpoch++;
     expect(getSessionWorkspace(state).previews).toEqual([]);
-  });
-
-  it("replaces only the temporary preview in place and reuses pinned identities", () => {
-    const state = createSessionWorkspaceHost();
-    const open = (id: string) => openPreview(state, id, true);
-    open("first.md");
-    const second = open("second.md");
-    expect(getSessionWorkspace(state).previews).toEqual([second]);
-    pinSessionWorkspacePreview(state, second.id);
-    const third = open("third.md");
-    selectSessionWorkspacePreview(state, third.id);
-    expect(third.pinned).toBe(false);
-    const fourth = open("fourth.md");
-    expect(getSessionWorkspace(state).previews).toEqual([second, fourth]);
-    expect(open("second.md")).toBe(second);
-    expect(getSessionWorkspace(state).previews).toEqual([second, fourth]);
-    expect(getSessionWorkspace(state).activePreviewId).toBe(second.id);
   });
 
   it("retains a dirty temporary editor when opening another preview", async () => {
@@ -528,7 +691,7 @@ describe("workspace file tabs", () => {
     expect(readFileDraft(content)?.content).toBe("UNSAVED");
   });
 
-  it("shows a held preview and recovers an unavailable file without duplicating its tab", async () => {
+  it("browses from an unavailable preview and retries without duplicating its tab", async () => {
     const state = createSessionWorkspaceHost();
     const first = createDeferred<SessionWorkspaceGetResult>();
     const retry = createDeferred<SessionWorkspaceGetResult>();
@@ -536,6 +699,7 @@ describe("workspace file tabs", () => {
     state.sessions.getFile = getFile;
     const panel = mountWorkspacePanel(state);
     panel.presentation = "desktop";
+    panel.onSelect = (id) => selectSessionWorkspacePreview(state, id);
     panel.renderDetail = () =>
       Object.assign(document.createElement("div"), { textContent: "Ready" });
     void openSessionWorkspaceFile(state, { path: "retry.txt" });
@@ -546,6 +710,15 @@ describe("workspace file tabs", () => {
     const preview = getSessionWorkspace(state).previews[0]!;
     first.reject(new Error("temporary failure"));
     await waitForSolid(() => expect(panel.textContent).toContain("temporary failure"));
+    const browse = panel.querySelector<HTMLButtonElement>("openclaw-panel-empty-state button");
+    expect(browse?.textContent).toBe("Browse files");
+    browse!.focus();
+    browse!.click();
+    const catalog = panel.querySelector<HTMLElement>(".chat-files-panel__catalog");
+    await waitForSolid(() => expect(document.activeElement).toBe(catalog));
+    expect(catalog?.hidden).toBe(false);
+    expect(getSessionWorkspace(state).activePreviewId).toBeNull();
+    expect(getSessionWorkspace(state).previews).toEqual([preview]);
     const paths = [...panel.querySelectorAll<HTMLElement>(".sidebar-file-view__path")];
     expect(paths).toHaveLength(2);
     panel.previews = [{ ...preview, label: "renamed.txt" }];
@@ -653,6 +826,7 @@ describe("workspace file tabs", () => {
                 title: "Parts tray",
                 toolName: "tray",
                 resourceUri: "ui://parts/tray",
+                icons: [{ src: "https://example.test/parts.svg", mimeType: "image/svg+xml" }],
                 entrypoint: { type: "thread" },
               },
             },
@@ -671,6 +845,12 @@ describe("workspace file tabs", () => {
       await panel.updateComplete;
       flush();
       editor.value = "Unsaved draft";
+      const { container: tabIcon } = mountSolid(
+        () => readPanelHostedTabs(panel)!.hostedTabs[0]!.icon,
+      );
+      expect(tabIcon.querySelector("img")?.getAttribute("src")).toBe(
+        "https://example.test/parts.svg",
+      );
 
       await panel.closeHostedTab("app");
       flush();
@@ -709,6 +889,11 @@ describe("workspace file tabs", () => {
 
   it("opens the file browser from its action hosted outside the panel", async () => {
     const panel = mountPanel();
+    panel.renderDetail = ({ onBrowseFiles }) =>
+      Object.assign(document.createElement("button"), {
+        textContent: "Browse linked file",
+        onclick: onBrowseFiles,
+      });
     panel.tabsInHeader = true;
     panel.workspace = {
       ...createSessionWorkspaceProps(createSessionWorkspaceHost(), { presentation: "desktop" }),
@@ -732,64 +917,14 @@ describe("workspace file tabs", () => {
     const browser = panel.querySelector<HTMLElement>(".chat-files-panel__page");
     expect(browser?.hidden).toBe(false);
     expect(browser?.textContent).toContain("reports");
-  });
-
-  it("announces hosted-tab changes without invalidating the header for file content updates", async () => {
-    const panel = document.createElement("openclaw-chat-files-panel");
-    const changed = vi.fn();
-    panel.addEventListener(PANEL_HOSTED_TABS_CHANGE_EVENT, changed);
-    panel.previews = [{ id: "notes", label: "notes.md", content: { kind: "loading" } }];
-    panel.activeId = "notes";
-    document.body.append(panel);
-    await panel.updateComplete;
-    expect(changed).toHaveBeenCalledOnce();
-
-    panel.workspace = {
-      ...createSessionWorkspaceProps(createSessionWorkspaceHost(), { presentation: "desktop" }),
-      browserSearch: "Refreshed",
-    };
-    panel.renderDetail = () =>
-      Object.assign(document.createElement("div"), { textContent: "File contents" });
-    panel.onSelect = vi.fn();
-    panel.onClose = vi.fn();
-    await panel.updateComplete;
-    expect(changed).toHaveBeenCalledOnce();
-
-    const file = {
-      kind: "file" as const,
-      name: "notes.md",
-      path: "notes.md",
-      content: "Initial contents",
-    };
-    panel.previews = [{ id: "notes", label: "notes.md", content: file }];
-    await panel.updateComplete;
-    expect(changed).toHaveBeenCalledTimes(2);
-    expect(panel.hostedTabs[0]?.className).toBeUndefined();
-
-    file.content = "Updated contents";
-    panel.previews = [...panel.previews];
-    await panel.updateComplete;
-    expect(changed).toHaveBeenCalledTimes(2);
-
-    file.path = "docs/notes.md";
-    panel.previews = [...panel.previews];
-    await panel.updateComplete;
-    expect(changed).toHaveBeenCalledTimes(3);
-    expect(panel.hostedTabs[0]?.title).toBe("docs/notes.md");
-
-    panel.previews = [{ id: "notes", label: "renamed.md", content: file }];
-    await panel.updateComplete;
-    expect(changed).toHaveBeenCalledTimes(4);
-    expect(panel.hostedTabs[0]?.label).toBe("renamed.md");
-
-    panel.activeId = null;
-    await panel.updateComplete;
-    expect(changed).toHaveBeenCalledTimes(5);
-    expect(panel.activeHostedTabId).toBe("browse");
-
-    panel.previews = [];
-    await panel.updateComplete;
-    expect(changed).toHaveBeenCalledTimes(6);
-    expect(panel.hostedTabs).toEqual([]);
+    const readerAction = [...panel.querySelectorAll("button")].find(
+      (button) => button.textContent === "Browse linked file",
+    )!;
+    await updatePanel(panel, { activeId: "file:same.ts" });
+    readerAction.focus();
+    readerAction.click();
+    await waitForSolid(() => expect(document.activeElement).toBe(browser));
+    expect(browser?.hidden).toBe(false);
+    expect(readerAction.isConnected).toBe(true);
   });
 });

@@ -23,7 +23,7 @@ import {
 import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
 import { prepareAuthChoiceLoadedPluginProvider } from "./provider-auth-choice.js";
 import { detectAvailableSetupProviderIds } from "./provider-setup-availability.js";
-import { resolvePluginSetupRegistry } from "./setup-registry.js";
+import { resolvePluginSetupRegistry, resolvePluginSetupRegistryAsync } from "./setup-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -147,32 +147,48 @@ describe("plugin setup registry artifact lifecycle", () => {
     cleanupTrackedTempDirs(tempDirs);
   });
 
-  it("records setup load failures with inaccessible error messages after native evaluation", async () => {
-    const event = "setup-display-load";
-    const before = process.listenerCount(event);
-    const failure = `
-        process.on(${JSON.stringify(event)}, () => {});
-        const error = new Error("hidden message", { cause: new Error("setup failure detail") });
-        Object.defineProperty(error, "message", { get() { throw new Error("display failed"); } });
-        throw error;
-      `;
-    const manifestRegistry = registry(writeSetupLifecycleFixture("setup-display", failure));
-    const cache = createPluginCache();
-    try {
-      const result = resolveSetup(cache, manifestRegistry);
-      expect(result.providers).toEqual([]);
-      expect(result.diagnostics).toMatchObject([
-        {
-          pluginId: "setup-display",
-          code: "setup-entry-load-failed",
-          message: expect.stringContaining("setup failure detail"),
-        },
-      ]);
-      expect(process.listenerCount(event)).toBe(before + 1);
-    } finally {
-      await retirePluginCache(cache).finally(() => process.removeAllListeners(event));
-    }
-  });
+  it.each(["missing", "invalid", "dependency", "metadata", "syntax"] as const)(
+    "keeps a healthy setup sibling after a %s source fails preparation without retrying",
+    async (failure) => {
+      const broken = writeSetupLifecycleFixture("broken", "module.exports = {};");
+      const healthy = writeSetupLifecycleFixture(
+        "healthy",
+        'module.exports={register(api){api.registerProvider({id:"healthy",label:"Healthy",auth:[]});}};',
+      );
+      if (failure === "missing") {
+        fs.rmSync(broken.rootDir, { recursive: true });
+      } else if (failure === "invalid") {
+        fs.symlinkSync("loop", path.join(broken.rootDir, "loop"));
+      } else if (failure === "syntax") {
+        fs.writeFileSync(broken.source, "module.exports = ;");
+      } else {
+        fs.writeFileSync(
+          path.join(broken.rootDir, "package.json"),
+          failure === "metadata"
+            ? "{"
+            : JSON.stringify({ dependencies: { "missing-required": "*" } }),
+        );
+      }
+      const cache = createPluginCache();
+      try {
+        await withPluginCache(cache, async () => {
+          const params = { manifestRegistry: registry(broken, healthy) };
+          const result = await resolvePluginSetupRegistryAsync(params);
+          expect(result.providers.map(({ provider }) => provider.id)).toEqual(["healthy"]);
+          expect(result.diagnostics).toMatchObject([
+            { pluginId: "broken", code: "setup-entry-load-failed" },
+          ]);
+          fs.mkdirSync(broken.rootDir, { recursive: true });
+          fs.rmSync(path.join(broken.rootDir, "loop"), { force: true });
+          fs.rmSync(path.join(broken.rootDir, "package.json"), { force: true });
+          fs.writeFileSync(broken.source, 'throw new Error("failed capture retried");');
+          expect(await resolvePluginSetupRegistryAsync(params)).toEqual(result);
+        });
+      } finally {
+        await retirePluginCache(cache);
+      }
+    },
+  );
 
   it("retires a failed setup registration without retiring successful owners in its cache", async () => {
     const ids = ["live-setup", "failed-setup"] as const;

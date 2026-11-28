@@ -35,13 +35,16 @@ export function isThreadBackgroundOnly(
 }
 
 /**
- * Exact lifecycle inputs a live ephemeral thread was told. The generic policy is
- * creation-owned and cannot be refreshed or cold-resumed; skills, persona, and memory
- * share one refreshable section recording what was last delivered to the thread.
+ * Exact lifecycle inputs a live thread was told. Skills, persona, and memory share one
+ * refreshable section recording what was last delivered to the thread. Ephemeral threads
+ * also record their creation-owned generic policy, which cannot be refreshed or
+ * cold-resumed; persistent threads fingerprint it instead and omit it here.
  */
 export type CodexEphemeralThreadPolicy = {
   autoCompactTokenLimit?: number;
   autoCompactTokenLimitScope?: string;
+  /** OpenClaw's rendered base, in the base or developer carrier. */
+  baseInstructions?: string;
   developerInstructions?: string;
   refreshableInstructions?: string;
   /**
@@ -51,6 +54,18 @@ export type CodexEphemeralThreadPolicy = {
    */
   nativeRefreshableInstructions?: string;
 };
+
+/** Only ephemeral records carry generic policy; their history has no resume source. */
+export function isEphemeralThreadPolicy(policy: CodexEphemeralThreadPolicy | undefined): boolean {
+  return policy?.developerInstructions !== undefined;
+}
+
+/** A persistent thread's record: the section its native configuration now carries. */
+export function createCodexPersistentThreadPolicy(
+  refreshableInstructions: string | undefined,
+): CodexEphemeralThreadPolicy {
+  return { refreshableInstructions, nativeRefreshableInstructions: refreshableInstructions };
+}
 
 export type RetainedLiveThread = {
   ownerToken?: ThreadOwnerToken;
@@ -78,6 +93,7 @@ export type CodexAppServerLiveThreadOwnership = {
 
 export type ThreadOwnershipState = {
   closed: boolean;
+  threadOwnershipListeners?: Set<() => void>;
   retainedThreads: Map<string, RetainedLiveThread>;
   claimedThreads: Map<string, ThreadOwnerToken>;
   releasingThreads: Map<string, ThreadReleaseTransition>;
@@ -109,10 +125,21 @@ export function createThreadOwnerToken(
   return owner;
 }
 
+/** Idle subscriptions, claims, releases, and protected work pin their physical client. */
 export function hasThreadOwnership(
   runtime: ThreadOwnershipState | undefined,
-  threadId: string,
+  threadId?: string,
 ): boolean {
+  if (threadId === undefined) {
+    return Boolean(
+      runtime &&
+      !runtime.closed &&
+      (runtime.retainedThreads.size > 0 ||
+        runtime.claimedThreads.size > 0 ||
+        runtime.releasingThreads.size > 0 ||
+        runtime.protectedThreads.size > 0),
+    );
+  }
   return (
     runtime !== undefined &&
     !runtime.closed &&
@@ -135,7 +162,7 @@ export function hasSiblingThreadWork(
   }
   // Ephemeral history exists only on this process, even after its turn settles.
   for (const [retainedThreadId, retained] of runtime.retainedThreads) {
-    if (retainedThreadId !== threadId && retained.ephemeralPolicy !== undefined) {
+    if (retainedThreadId !== threadId && isEphemeralThreadPolicy(retained.ephemeralPolicy)) {
       return true;
     }
   }
@@ -188,9 +215,12 @@ export function forgetThreadOwnership(
 
 /** Compaction discards client-authored instruction refreshes, not creation policy. */
 export function revertRetainedThreadInstructions(
-  runtime: ThreadOwnershipState,
+  runtime: ThreadOwnershipState | undefined,
   threadId: string,
 ): void {
+  if (!runtime || runtime.closed) {
+    return;
+  }
   const retained = runtime.retainedThreads.get(threadId);
   if (retained?.ephemeralPolicy) {
     retained.ephemeralPolicy = {
@@ -202,10 +232,14 @@ export function revertRetainedThreadInstructions(
 
 export function createCodexEphemeralThreadPolicy(
   {
+    baseInstructions,
     developerInstructions,
     refreshableInstructions,
     config,
-  }: Pick<CodexEphemeralThreadPolicy, "developerInstructions" | "refreshableInstructions"> & {
+  }: Pick<
+    CodexEphemeralThreadPolicy,
+    "baseInstructions" | "developerInstructions" | "refreshableInstructions"
+  > & {
     config?: {
       model_auto_compact_token_limit?: unknown;
       model_auto_compact_token_limit_scope?: unknown;
@@ -222,6 +256,7 @@ export function createCodexEphemeralThreadPolicy(
   return {
     ...(typeof limit === "number" ? { autoCompactTokenLimit: limit } : {}),
     ...(typeof scope === "string" ? { autoCompactTokenLimitScope: scope } : {}),
+    baseInstructions,
     developerInstructions,
     refreshableInstructions,
     nativeRefreshableInstructions: refreshableInstructions,
@@ -250,4 +285,41 @@ export function releaseThreadProtection(runtime: ThreadOwnershipState, threadId:
     });
   }
   return true;
+}
+
+/** Observe cleanup without releasing another owner's protection or admitting a new turn. */
+export async function waitForThreadBackgroundCleanup(
+  runtime: ThreadOwnershipState | undefined,
+  threadId: string,
+  signal: AbortSignal,
+): Promise<void> {
+  signal.throwIfAborted();
+  if (!runtime || runtime.closed || !isThreadBackgroundOnly(runtime, threadId)) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const listeners = (runtime.threadOwnershipListeners ??= new Set());
+    const cleanup = () => {
+      listeners.delete(check);
+      signal.removeEventListener("abort", abort);
+    };
+    const check = () => {
+      // A new foreground claim must return to the caller's admission guard too.
+      if (runtime.closed || !isThreadBackgroundOnly(runtime, threadId)) {
+        cleanup();
+        resolve();
+      }
+    };
+    const abort = () => {
+      cleanup();
+      reject(
+        signal.reason instanceof Error
+          ? signal.reason
+          : new Error("Codex background cleanup wait aborted"),
+      );
+    };
+    listeners.add(check);
+    signal.addEventListener("abort", abort, { once: true });
+    check();
+  });
 }

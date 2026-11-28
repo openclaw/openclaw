@@ -264,6 +264,7 @@ Operational notes:
 
 - Use `MODE=json-rpc` for receiving. `MODE=normal` can make `/v1/about` look healthy, but `/v1/receive/{account}` will not WebSocket-upgrade, so container receive streaming will fail its check.
 - Set `kind: "container"` for the bbernhard REST API and `kind: "external-native"` for native `signal-cli` JSON-RPC/SSE.
+- The receive WebSocket sends standard ping frames. When the container stops answering them (for example after a network drop that never closed the connection), OpenClaw drops the socket and reconnects. A quiet account alone never triggers a reconnect.
 - Container attachment downloads honor the same media byte limits as native mode. Oversized responses are rejected before being fully buffered when the server sends `Content-Length`, and while streaming otherwise.
 - Health and missing-attachment results do not wait for an unused response body's cancellation to finish.
 
@@ -331,6 +332,7 @@ Groups:
 - Use `channels.signal.accounts.<id>.groups` for per-account overrides in multi-account setups.
 - Allowlisting a Signal group through `groupAllowFrom` does not disable mention gating by itself. A specifically configured `channels.signal.groups["<group-id>"]` entry processes every group message unless `requireMention=true` is set.
 - With `requireMention=true`, Signal native @mentions are matched from structured mention metadata against the bot account phone or `accountUuid`. Plain-text matching uses `agents.entries.*.groupChat.mentionPatterns`, then `messages.groupChat.mentionPatterns`; when neither is set, it derives patterns from the routed agent's `identity.name` and `identity.emoji`. An explicit `mentionPatterns: []` at the selected level disables this text fallback without disabling native @mentions.
+- Quote-only replies stay quiet in mention-gated groups by default. To let an allowed sender's native reply to an OpenClaw message count as a mention, set `channels.signal.implicitMentions.quotedBot: true` for the `default` account or `channels.signal.accounts.<id>.implicitMentions.quotedBot: true` for a named account. OpenClaw must have a record of sending the quoted message from that account in the same group. Use an explicit @mention when quoting a human message from a shared account or when the send record is unavailable, for example after it expires. Setting `channels.defaults.implicitMentions.quotedBot: false` disables this trigger for all Signal accounts.
 - Runtime note: if `channels.signal` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
 Mention-gated group with bounded context:
@@ -357,7 +359,11 @@ Mention-gated group with bounded context:
 }
 ```
 
-Allowed group messages that do not mention the bot stay silent and are kept only in the bounded pending history window. When a later native @mention or fallback text mention triggers the bot, OpenClaw includes that recent context and replies to the same group. Skipped attachment bodies are not downloaded; they may appear only as compact media placeholders in the pending context.
+Allowed group messages that do not address the bot stay silent and are kept in the bounded pending history window. A later native @mention, fallback text mention, or opted-in native reply to a verified OpenClaw message can include recent photos from the sender. A message that mentions the bot and replies to a photo can also include that photo if it is still available in the same window.
+
+To include other members' photos in an unquoted mention, set `includeOtherMembersHistoryImages: true` on that specific group. For example, set `channels.signal.groups["<signal-group-id>"]` to `{ requireMention: true, includeOtherMembersHistoryImages: true }` for a mention-gated group. Named accounts can configure this under `channels.signal.accounts.<id>.groups`. The setting defaults to off and only exact group entries can enable it.
+
+OpenClaw reads up to four photos when it handles the mention. It prioritizes the photo being replied to and looks back up to 30 minutes for unquoted photos. It applies the account's [context visibility policy](/channels/groups#context-visibility-and-allowlists), `ignoreAttachments`, and the media size limit. View-once and disappearing images are excluded. Attachments that cannot be retrieved remain as media placeholders.
 
 ## How it works (behavior)
 
@@ -419,9 +425,16 @@ Config:
 
 Signal exec and plugin approval prompts use the top-level `approvals.exec` and `approvals.plugin` routing blocks. Signal has no `channels.signal.execApprovals` block.
 
+Use forwarding mode `session` or `both` for native reaction prompts. Keep the configured agent/session filters and explicit approver allowlists in place.
+
 - `👍` approves once.
 - `👎` denies.
 - Use `/approve <id> allow-always` when a request offers persistent approval.
+
+Approval responses and supported inspection/interrupt commands can be handled while
+an earlier turn is waiting. Ordinary messages and session-mutating commands keep
+their conversation order. Approval decisions still require the configured sender
+and approval authorization.
 
 Approval reaction resolution requires explicit Signal approvers from `channels.signal.allowFrom`, `channels.signal.defaultTo`, or the matching account-level fields. Direct same-chat exec approval prompts can still suppress the duplicate local `/approve` fallback without explicit approvers; no-approver group approvals keep the local fallback visible.
 
@@ -561,6 +574,7 @@ Provider options:
 - `channels.signal.groups`: per-group overrides keyed by Signal group ID (or `"*"`). Supported fields: `requireMention`, `tools`, `toolsBySender`.
 - `channels.signal.accounts.<id>.groups`: per-account version of `channels.signal.groups` for multi-account setups.
 - `channels.signal.accounts.<id>.aliases`: per-account aliases, merged with top-level aliases.
+- `channels.signal.implicitMentions.quotedBot`, `channels.signal.accounts.<id>.implicitMentions.quotedBot`: opt in to quote-reply activation for the `default` or named Signal account (default: disabled).
 - `channels.signal.replyToMode`: native reply quote mode, `off | first | all | batched` (default: `all`).
 - `channels.signal.replyToModeByChatType.direct`, `channels.signal.replyToModeByChatType.group`: per-chat-type native reply quote overrides.
 - `channels.signal.accounts.<id>.replyToMode`, `channels.signal.accounts.<id>.replyToModeByChatType.direct`, `channels.signal.accounts.<id>.replyToModeByChatType.group`: per-account reply quote overrides.

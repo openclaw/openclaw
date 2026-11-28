@@ -2,12 +2,33 @@
 
 import type { JSX } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { t } from "../../i18n/index.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
+import { createChatErrorState, EXPECTED_CHAT_REFUSAL } from "./chat-error-state.ts";
 import { renderChatComposerNotices, renderChatTopbarNotices } from "./chat-view-notices.tsx";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
+import {
+  renderChatInto,
+  renderChatView,
+  requireElement,
+  waitForElement,
+} from "./chat-view.test-helpers.ts";
 import { ChatConversationMobile } from "./components/chat-conversation-presentation.ts";
+import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+} from "./components/chat-transcript.test-support.ts";
+import {
+  workspaceConflictPathForDisplay,
+  workspaceResultConflictFromTranscript,
+} from "./workspace-conflict.ts";
 
 const model = "<img src=x onerror=alert(1)>";
 type ComposerProps = Parameters<typeof renderChatComposerNotices>[0];
@@ -37,11 +58,52 @@ function publishHistory(
       messages,
       runError: initial.runError && { ...initial.runError },
       placementStartup: initial.placementStartup && { ...initial.placementStartup },
+      providerPolicyNotice: initial.providerPolicyNotice && { ...initial.providerPolicyNotice },
     });
     flush();
     check();
   }
 }
+
+it.each([false, true])(
+  "replaces the full reply error without disclosure (mobile=%s)",
+  async (mobile) => {
+    const { container, publish } = publishedComposer(
+      { runError: { summary: "First diagnostic\nAdditional detail" } },
+      mobile,
+    );
+    const message = await waitForElement(container, ".app-toast__message", "first diagnostic");
+    expect(message.textContent).toBe("First diagnostic\nAdditional detail");
+    publish({ messages: [], runError: { summary: "Second diagnostic\nReplacement detail" } });
+    await waitForSolid(() => {
+      expect(message.textContent).toBe("Second diagnostic\nReplacement detail");
+      expect(container.querySelector("details, [aria-expanded], .report-issue-link")).toBeNull();
+    });
+  },
+);
+it("preserves caller-owned recovery instructions in request notices", async () => {
+  const error = "Session is busy; wait for the current run to finish.";
+  const { container } = publishedNotices<TopbarProps>(renderChatTopbarNotices, { error });
+  await waitForSolid(() => {
+    expect(container.querySelector(".chat-error .app-toast__message")?.textContent).toBe(error);
+    expect(container.querySelector("details")).toBeNull();
+  });
+});
+it("keeps multiline request diagnostics behind a first-line summary", async () => {
+  const message = "Worker enrollment failed\n  at enroll (worker.ts:42:1)";
+  const state = createChatErrorState();
+  state.setRecoverableChatError(message, new GatewayRequestError({ code: "UNAVAILABLE", message }));
+  const { container } = publishedNotices<TopbarProps>(renderChatTopbarNotices, {
+    error: state.lastError,
+    errorDetail: state.lastErrorDetail,
+  });
+  await waitForSolid(() => expect(container.querySelector(".chat-error")).not.toBeNull());
+  expect(container.querySelector(".app-toast__message")?.textContent).toBe(
+    "Worker enrollment failed",
+  );
+  expect(container.querySelector("details")?.open).toBe(false);
+  expect(container.querySelector(".lazy-view-error__detail")?.textContent).toBe(message);
+});
 const failedPlacement = (error: string) => ({
   sessionKey: "agent:main:failed-start",
   phase: "failed" as const,
@@ -52,14 +114,14 @@ const failedPlacement = (error: string) => ({
 
 afterEach(() => document.body.replaceChildren());
 
-it.each(["transferring", "installing"] as const)("shows %s worker progress", (phase) => {
+it.each(["transferring", "installing"] as const)("shows %s worker progress", async (phase) => {
   const installing = phase === "installing";
   const title = installing
-    ? "Installing worker runtime"
-    : "Updating worker runtime · 25 MB of 100 MB (25%)";
+    ? "Preparing this device…"
+    : "Preparing this device · 25 MB of 100 MB (25%)";
   const body = installing
-    ? "Installing the new worker runtime on this device."
-    : "Transferring the new worker runtime to this device: 25 MB of 100 MB (25%). The next turn starts when it finishes.";
+    ? "Installing the update on this device."
+    : "Transferring the update to this device: 25 MB of 100 MB (25%). The next reply starts when it finishes.";
   const { container, publish } = publishedNotices<TopbarProps>(renderChatTopbarNotices, {
     workerRuntimeInstall: {
       phase,
@@ -69,6 +131,9 @@ it.each(["transferring", "installing"] as const)("shows %s worker progress", (ph
       updatedAtMs: 2,
     },
   });
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-worker-runtime-install-notice")).not.toBeNull(),
+  );
   const notice = container.querySelector(".chat-worker-runtime-install-notice");
   expect(notice?.getAttribute("role")).toBe("status");
   expect(notice?.querySelector("strong")).toMatchObject({ textContent: title });
@@ -85,12 +150,15 @@ it.each([
   ["fallback", "status", `OpenAI routed this response to ${model}.`],
   ["escalated", "status", `OpenAI declined this request; retried on ${model}.`],
   ["unavailable", "alert", `OpenAI declined this request; ${model} is not authorized.`],
-] as const)("renders %s provider notice as plain text", (state, role, copy) => {
+] as const)("renders %s provider notice as plain text", async (state, role, copy) => {
   const initial = {
     messages: [],
     providerPolicyNotice: { runId: "r", seq: 1, state, model: "m", fallbackModel: model },
   };
   const { container, publish } = publishedComposer(initial);
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-provider-policy-notice")).not.toBeNull(),
+  );
   const notice = container.querySelector(".chat-provider-policy-notice");
   expect(notice?.getAttribute("role")).toBe(role);
   expect(notice?.textContent).toContain(copy);
@@ -104,16 +172,17 @@ it.each([
   expect(container.querySelector(".chat-provider-policy-notice")).toBeNull();
 });
 
-it("offers an explicit discard action with the full warning when unsaved starts block recovery", () => {
+it("offers an explicit discard action with the full warning when unsaved starts block recovery", async () => {
   const discardAndReload = vi.fn();
   const retry = vi.fn();
   const { container } = publishedComposer({
     placementStartup: {
-      ...failedPlacement(t("newSession.placementReloadBlocked")),
+      ...failedPlacement("Recovery needs a reload. Unsaved starts will be lost."),
       discardAndReload,
     },
     onRetrySessionPlacementStartup: retry,
   });
+  await waitForSolid(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
   const alert = container.querySelector('[role="alert"]');
   expect(alert?.querySelector("details")).toBeNull();
   expect(alert?.textContent).toContain("Recovery needs a reload. Unsaved starts will be lost.");
@@ -132,7 +201,7 @@ it.each([
   [false, false],
   [true, true],
   [true, false],
-])("refreshes without retrying (contention=%s, connected=%s)", (contention, connected) => {
+])("refreshes without retrying (contention=%s, connected=%s)", async (contention, connected) => {
   const onRefresh = vi.fn(),
     onRetrySessionPlacementStartup = vi.fn();
   const diagnostic = contention ? `Busy\n${model}` : "The conversation changed.";
@@ -145,17 +214,16 @@ it.each([
     onRefresh,
     ...(contention ? { onRetrySessionPlacementStartup } : {}),
   });
+  await waitForSolid(() => expect(container.querySelector(".chat-error")).not.toBeNull());
   const notice = container.querySelector(".chat-error");
   if (contention) {
-    expect(notice?.classList.contains("chat-composer-neighbor-card--warn")).toBe(true);
-    expect(notice?.classList.contains("chat-composer-neighbor-card--danger")).toBe(false);
-    expect(notice?.getAttribute("role")).toBe("status");
-    const details = notice?.querySelector("details");
-    expect(details).toMatchObject({ open: false });
-    expect(details?.querySelector("strong")?.textContent).toBe(
-      "OpenClaw is busy. Check status before trying again.",
-    );
-    expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
+    expect(notice?.classList.contains("chat-error--reply")).toBe(true);
+    expect(notice?.classList.contains("app-toast")).toBe(false);
+    expect(notice?.querySelector(".app-toast__message")?.getAttribute("role")).toBe("status");
+    expect(notice?.querySelector(".app-toast__message")?.textContent).toBe(diagnostic);
+    expect(notice?.querySelector("details, [aria-expanded], .lazy-view-error__detail")).toBeNull();
+    expect(notice?.querySelector(".app-toast__description")).toBeNull();
+    expect(notice?.querySelector(".report-issue-link")).toBeNull();
     expect(notice?.querySelector("img")).toBeNull();
   }
   const action = notice?.querySelector<HTMLButtonElement>(".chat-error__refresh");
@@ -168,35 +236,32 @@ it.each([
   }
 });
 
-it.each([
-  ["run", false],
-  ["run", true],
-  ["placement", false],
-] as const)("preserves expanded diagnostics and focus (%s, mobile=%s)", (kind, mobile) => {
+it("preserves expanded startup diagnostics and focus", async () => {
   const diagnostic = "Synthetic failure\n  at workspace/session.ts:42";
   const initial: ComposerProps = {
     messages: [],
-    runError: kind === "run" ? { summary: diagnostic } : undefined,
-    placementStartup: kind === "placement" ? failedPlacement(diagnostic) : undefined,
+    placementStartup: failedPlacement(diagnostic),
   };
-  const { container, publish } = publishedComposer(initial, mobile);
+  const { container, publish } = publishedComposer(initial);
+  await waitForSolid(() => expect(container.querySelector("details")).not.toBeNull());
   const details = container.querySelector("details")!;
-  const summary = details.querySelector("summary")!;
-  details.open = true;
+  const summary = container.querySelector("summary")!;
+  summary.click();
+  flush();
   summary.focus();
   publishHistory(publish, initial, () => {
     expect(container.querySelector("details")).toBe(details);
     expect(details.open).toBe(true);
     expect(document.activeElement).toBe(summary);
-    expect(details.querySelector("pre")?.textContent).toBe(
-      kind === "run" ? diagnostic : t("newSession.placementStartFailed", { error: diagnostic }),
+    expect(details.querySelector(".lazy-view-error__detail")?.textContent).toBe(
+      t("newSession.placementStartFailed", { error: diagnostic }),
     );
   });
 });
 
 it.each(["chatgpt_business_usage_limit", "chatgpt_consumer_usage_limit"] as const)(
   "keeps %s recovery beside a transcript error and resets dismissal for a new run",
-  (kind) => {
+  async (kind) => {
     const restoreDialog = installDialogPolyfill();
     const initial: ComposerProps = {
       sessionKey: "agent:main:business-limit",
@@ -209,16 +274,14 @@ it.each(["chatgpt_business_usage_limit", "chatgpt_consumer_usage_limit"] as cons
     };
     const view = publishedNotices(renderChatComposerNotices, initial);
     try {
-      flush();
-      expect(view.container.querySelector("dialog")?.open).toBe(true);
+      await waitForSolid(() => expect(view.container.querySelector("dialog")?.open).toBe(true));
       view.getByRole("button", { name: "Close" }).click();
       flush();
       publishHistory(view.publish, initial, () => {
         expect(view.container.querySelector("dialog")?.open).toBe(false);
       });
       view.publish({ ...initial, runError: { ...initial.runError!, runId: "run-2" } });
-      flush();
-      expect(view.container.querySelector("dialog")?.open).toBe(true);
+      await waitForSolid(() => expect(view.container.querySelector("dialog")?.open).toBe(true));
       view.publish({ messages: [] });
       flush();
       expect(view.container.querySelector("dialog")).toBeNull();
@@ -231,7 +294,7 @@ it.each(["chatgpt_business_usage_limit", "chatgpt_consumer_usage_limit"] as cons
 
 it.each(["refresh", "details", "message"] as const)(
   "keeps available mobile error actions and diagnostics (%s)",
-  (variant) => {
+  async (variant) => {
     const onRefresh = vi.fn();
     const diagnostic =
       variant === "message" ? "Stopped." : "Request interrupted.\nPlease check the conversation.";
@@ -243,24 +306,24 @@ it.each(["refresh", "details", "message"] as const)(
       },
       true,
     );
+    await waitForSolid(() => expect(container.querySelector(".chat-error")).not.toBeNull());
     const notice = container.querySelector(".chat-error")!;
     expect(notice.textContent).toContain(
       diagnostic === "Stopped." ? diagnostic : "Request interrupted.",
     );
-    expect(notice.querySelector(".chat-error__dismiss")).toBeNull();
+    expect(notice.querySelector(".app-toast__dismiss")).toBeNull();
     const details = notice.querySelector("details");
     if (variant === "message") {
       expect(details).toBeNull();
-      expect(notice.querySelector("button")).toBeNull();
-      return;
+    } else {
+      expect(details?.open).toBe(false);
+      expect(details?.querySelector("summary .chat-copy-btn")).toBeNull();
+      details!.open = true;
+      expect(details?.querySelector(".lazy-view-error__detail")?.textContent).toBe(diagnostic);
+      expect(details?.querySelector(".chat-copy-btn")?.getAttribute("aria-label")).toBe(
+        t("chat.copyError"),
+      );
     }
-    expect(details?.open).toBe(false);
-    expect(details?.querySelector("summary .chat-copy-btn")).toBeNull();
-    details!.open = true;
-    expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
-    expect(details?.querySelector(".chat-copy-btn")?.getAttribute("aria-label")).toBe(
-      t("chat.copyError"),
-    );
     const refresh = notice.querySelector<HTMLButtonElement>(".chat-error__refresh");
     if (variant === "refresh") {
       refresh!.click();
@@ -271,3 +334,329 @@ it.each(["refresh", "details", "message"] as const)(
     }
   },
 );
+
+describe("chat view notice integration", () => {
+  beforeEach(async () => {
+    onTestFinished(installChatComposerPickerDismissal(document));
+    installTranscriptDomMocks();
+    // These assertions cover presentation; await the lazy module as fixture setup.
+    await import("./chat-view-notices-content.tsx");
+  });
+
+  afterEach(() => {
+    resetChatViewState();
+    resetTranscriptTestDom();
+  });
+
+  describe("chat run error", () => {
+    it.each([false, true])(
+      "keeps the full redacted reply error and recovery focus (mobile=%s)",
+      async (mobile) => {
+        const diagnostic =
+          "⚠️ 🛠️ Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\npassword=synthetic-secret\nFinal diagnostic line  ";
+        const renderedDiagnostic =
+          "Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\npassword=[redacted]\nFinal diagnostic line";
+        const onRefresh = vi.fn();
+        const onDismissRunError = vi.fn();
+        const initial: ComposerProps = {
+          connected: true,
+          messages: [],
+          runError: { summary: diagnostic },
+          onRefresh,
+          onDismissRunError,
+        };
+        const { container, publish } = publishedComposer(initial, mobile);
+        const notice = await waitForElement(container, ".chat-error.chat-error--reply");
+        const message = requireElement(notice, ".app-toast__message", "reply diagnostic");
+        expect(notice.classList.contains("app-toast")).toBe(false);
+        expect(message.getAttribute("role")).toBe("alert");
+        expect(message.textContent).toBe(renderedDiagnostic);
+        expect(notice.textContent).not.toContain("synthetic-secret");
+        expect(
+          notice.querySelector(
+            "img, details, summary, [aria-expanded], .lazy-view-error__chevron, .lazy-view-error__detail, .report-issue-link",
+          ),
+        ).toBeNull();
+        expect(notice.querySelectorAll("button")).toHaveLength(2);
+        const refresh = notice.querySelector<HTMLButtonElement>(".chat-error__refresh")!;
+        const dismiss = notice.querySelector<HTMLButtonElement>(
+          ".chat-error__dismiss.app-toast__dismiss",
+        )!;
+        expect(refresh.textContent).toBe("Refresh");
+        expect(dismiss.getAttribute("aria-label")).toBe("Dismiss error");
+        refresh.focus();
+        publishHistory(publish, initial, () => {
+          expect(container.querySelector(".chat-error--reply")).toBe(notice);
+          expect(message.textContent).toBe(renderedDiagnostic);
+          expect(document.activeElement).toBe(refresh);
+        });
+        refresh.click();
+        expect(onRefresh).toHaveBeenCalledOnce();
+        expect(onDismissRunError).not.toHaveBeenCalled();
+        dismiss.click();
+        expect(onDismissRunError).toHaveBeenCalledOnce();
+      },
+    );
+
+    it("keeps request errors in the shared toast with raw diagnostic copy", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const diagnostic =
+        "⚠️ 🛠️ Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\nFinal diagnostic line  ";
+      const renderedDiagnostic =
+        "  Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\nFinal diagnostic line  ";
+      const onDismissError = vi.fn();
+      const onRetrySessionPlacementStartup = vi.fn();
+      const container = renderChatView({
+        error: diagnostic,
+        onDismissError,
+        onRetrySessionPlacementStartup,
+      });
+      const alert = await waitForElement(container, ".chat-error.app-toast");
+      expect(alert.getAttribute("role")).toBe("alert");
+      const details = requireElement(alert, "details", "request disclosure");
+      expect(details.hasAttribute("open")).toBe(false);
+      const fullDiagnostic = requireElement(
+        details,
+        ".lazy-view-error__detail",
+        "request diagnostic",
+      );
+      expect(fullDiagnostic.textContent).toBe(renderedDiagnostic);
+      expect(fullDiagnostic.getAttribute("aria-label")).toBe("Error details");
+      expect(alert.textContent).not.toMatch(/[⚠🛠]/u);
+      expect(alert.querySelector("img")).toBeNull();
+      const summary = requireElement(details, "summary", "request header");
+      assert(summary instanceof HTMLElement);
+      expect(summary.textContent).toContain("Show details");
+      expect(alert.querySelectorAll(".chat-copy-btn")).toHaveLength(1);
+      const copy = details.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')!;
+      for (const open of [false, true]) {
+        if (open) {
+          summary.click();
+          flush();
+        }
+        copy.click();
+        await waitForFast(() => expect(copy.disabled).toBe(false));
+        await waitForFast(() => expect(writeText).toHaveBeenCalledTimes(open ? 2 : 1));
+        expect(writeText).toHaveBeenLastCalledWith(diagnostic);
+        expect(details.hasAttribute("open")).toBe(open);
+      }
+      summary.click();
+      expect(onDismissError).not.toHaveBeenCalled();
+      expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
+      expect(alert.closest(".chat-topbar-notices")).not.toBeNull();
+      alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')!.click();
+      expect(onDismissError).toHaveBeenCalledOnce();
+    });
+
+    it.each([true])("keeps startup Retry owned by retryable=%s", async (retryable) => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const onRetrySessionPlacementStartup = vi.fn();
+      const container = renderChatView({
+        placementStartup: {
+          sessionKey: "agent:main:startup",
+          targetKind: "profile",
+          phase: "failed",
+          startedAt: 1,
+          error: "⚠️ Provisioning failed\n  Final diagnostic line  ",
+          retryable,
+        },
+        onRetrySessionPlacementStartup,
+      });
+      const alert = await waitForElement(container, ".chat-error", "startup error");
+      expect(
+        requireElement(alert, ".lazy-view-error__detail", "startup diagnostic").textContent,
+      ).toBe(
+        "Couldn’t start this session. Retry setup.  Provisioning failed\n  Final diagnostic line  ",
+      );
+      expect(alert.textContent).not.toContain("⚠");
+      const details = requireElement(alert, "details", "startup disclosure");
+      expect(requireElement(details, "summary", "startup header").textContent).toContain(
+        "Show details",
+      );
+      expect(
+        requireElement(details, ".lazy-view-error__detail", "startup diagnostic").getAttribute(
+          "aria-label",
+        ),
+      ).toBe("Error details");
+      const copy = details.querySelector<HTMLButtonElement>('[aria-label="Copy error"]');
+      expect(copy).not.toBeNull();
+      copy?.click();
+      await waitForFast(() =>
+        expect(writeText).toHaveBeenCalledWith(
+          "Couldn’t start this session. Retry setup. ⚠️ Provisioning failed\n  Final diagnostic line  ",
+        ),
+      );
+      expect(details.hasAttribute("open")).toBe(false);
+      alert.querySelector<HTMLElement>("summary")?.click();
+      expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
+      const retry = Array.from(alert.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Retry",
+      );
+      expect(Boolean(retry)).toBe(retryable);
+      retry?.click();
+      expect(onRetrySessionPlacementStartup).toHaveBeenCalledTimes(retryable ? 1 : 0);
+    });
+  });
+
+  describe("cloud workspace conflict notice", () => {
+    const conflict = {
+      paths: [
+        "src/[path]-1.ts",
+        "src/path-2.ts",
+        "src/path-3.ts",
+        "src/path-4.ts",
+        "src/path-5.ts",
+        "src/path-6.ts",
+      ],
+      stagedResultRef: "refs/openclaw/worker-results/claim-123",
+      totalCount: 9,
+    };
+
+    it("bounds conflict guidance and copies the selected path recovery command", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const onDismissWorkspaceConflict = vi.fn();
+      const container = renderChatView({
+        workspaceConflict: conflict,
+        onDismissWorkspaceConflict,
+      });
+
+      const notice = await waitForElement(container, ".chat-workspace-conflict-notice");
+      expect(notice.closest(".agent-chat__composer-notices")).not.toBeNull();
+      expect(notice.textContent).toContain("9 cloud workspace conflicts");
+      expect(notice.querySelectorAll(".chat-workspace-conflict-paths li")).toHaveLength(5);
+      expect(notice.textContent).toContain("+4 more paths");
+      expect(notice.textContent).toContain(conflict.stagedResultRef);
+      expect(notice.textContent).toContain("Git Bash on Windows");
+      expect(notice.textContent).toContain("file/directory conflict");
+      expect(notice.textContent).toContain("cloud deleted it");
+      expect(notice.textContent).toContain("staged ref is missing");
+
+      const commands = [...notice.querySelectorAll(".chat-workspace-conflict-commands code")].map(
+        (element) => element.textContent,
+      );
+      expect(commands).toEqual([
+        "git show 'refs/openclaw/worker-results/claim-123:src/[path]-1.ts'",
+        "git checkout 'refs/openclaw/worker-results/claim-123' -- ':(top,literal)src/[path]-1.ts'",
+      ]);
+      expect(
+        notice.querySelector<HTMLButtonElement>('[aria-label="Copy cloud inspect command"]'),
+      ).toBeInstanceOf(HTMLButtonElement);
+      expect(
+        notice.querySelector<HTMLButtonElement>('[aria-label="Copy take-cloud command"]'),
+      ).toBeInstanceOf(HTMLButtonElement);
+
+      const rows = notice.querySelectorAll(".chat-workspace-conflict-paths li");
+      rows[1]?.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
+      await Promise.resolve();
+      expect(writeText).toHaveBeenCalledWith(
+        "git checkout 'refs/openclaw/worker-results/claim-123' -- ':(top,literal)src/path-2.ts'",
+      );
+
+      notice
+        .querySelector<HTMLButtonElement>('[aria-label="Dismiss workspace conflict notice"]')!
+        .click();
+      expect(onDismissWorkspaceConflict).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["\u0085"])(
+      "keeps terminal-control paths visible without building copyable commands (%j)",
+      async (controlSequence) => {
+        const entryPath = `src/${controlSequence}unsafe.ts`;
+        const normalizedConflict = workspaceResultConflictFromTranscript({
+          role: "custom",
+          customType: "cloud-workspace-conflict",
+          details: {
+            paths: [entryPath],
+            stagedResultRef: "refs/openclaw/worker-results/claim-unsafe",
+          },
+        });
+        expect(normalizedConflict).toBeDefined();
+        const container = renderChatView({ workspaceConflict: normalizedConflict });
+        await waitForSolid(() =>
+          expect(container.querySelector(".chat-workspace-conflict-paths code")?.textContent).toBe(
+            workspaceConflictPathForDisplay(entryPath),
+          ),
+        );
+        expect(container.querySelector(".chat-workspace-conflict-commands")).toBeNull();
+        expect(container.textContent).toContain("will not build a copyable shell command");
+      },
+    );
+  });
+
+  describe("cloud worker disk-space notice", () => {
+    it("updates persistent disk guidance and clears it after recovery", async () => {
+      const container = createComposerContainer();
+      renderChatInto(container, {
+        diskSpace: { status: "warning", availableBytes: 400, totalBytes: 1_000, observedAtMs: 1 },
+      });
+      await waitForElement(container, ".chat-cloud-disk-space-notice", "disk-space notice");
+      renderChatInto(container, {
+        diskSpace: {
+          status: "critical",
+          availableBytes: 50 * 1024 * 1024,
+          totalBytes: 10 * 1024 * 1024 * 1024,
+          observedAtMs: 1_000,
+        },
+      });
+      const notice = requireElement(
+        container,
+        ".chat-cloud-disk-space-notice",
+        "disk-space notice",
+      );
+      expect(notice.getAttribute("role")).toBe("alert");
+      expect(notice.textContent).toContain("Cloud session disk space is critically low");
+      expect(notice.textContent).toContain("New writes may fail and stop the agent.");
+      expect(notice.querySelector("svg")).not.toBeNull();
+      expect(notice.querySelector("button")).toBeNull();
+      expect(notice.closest(".chat-topbar-notices")).not.toBeNull();
+      renderChatInto(container, {
+        diskSpace: { status: "ok", availableBytes: 800, totalBytes: 1_000, observedAtMs: 2 },
+      });
+      expect(container.querySelector(".chat-cloud-disk-space-notice")).toBeNull();
+    });
+  });
+});
+
+it("offers a static issue form without including error text or diagnostics", async () => {
+  const { container, publish } = publishedNotices<TopbarProps>(renderChatTopbarNotices, {
+    error: "Synthetic private error ws://private.invalid/?token=secret session:private",
+    errorDetail: { message: "Synthetic diagnostic", credential: "never-share-this" },
+  });
+  await waitForSolid(() => {
+    const link = container.querySelector<HTMLAnchorElement>("a.report-issue-link");
+    expect(link?.textContent).toBe("Report a bug");
+    const url = new URL(link!.href);
+    expect(url.origin + url.pathname).toBe("https://github.com/openclaw/openclaw/issues/new");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      template: "bug_report.yml",
+      title: "[Bug]: Control UI: ",
+    });
+    expect(link?.rel).toBe("noopener noreferrer");
+    expect(link?.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(link?.target).toBe("_blank");
+  });
+  const destination = container.querySelector<HTMLAnchorElement>("a.report-issue-link")!.href;
+  publish({ error: "Another synthetic error with private user content", errorDetail: undefined });
+  await waitForSolid(() => {
+    expect(container.querySelector<HTMLAnchorElement>("a.report-issue-link")?.href).toBe(
+      destination,
+    );
+  });
+});
+
+it.each([
+  "Remove attachments before submitting a text suggestion.",
+  "You need an invitation to participate in this session.",
+  "This action requires operator.sessions.write access.",
+])("does not offer bug reporting for an expected refusal: %s", async (error) => {
+  const { container } = publishedNotices<TopbarProps>(renderChatTopbarNotices, {
+    error,
+    errorDetail: EXPECTED_CHAT_REFUSAL,
+  });
+  await waitForSolid(() => expect(container.querySelector(".chat-error")).not.toBeNull());
+  expect(container.textContent).toContain(error);
+  expect(container.querySelector("a.report-issue-link")).toBeNull();
+});

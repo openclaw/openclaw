@@ -1,13 +1,14 @@
 /** DOM builders and display formatters shared by the Knowledge page views. */
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
+import { t } from "./i18n/index.js";
 import { formatSourceDate } from "./temporal.js";
 import { icon, type IconName } from "./ui-icons.js";
 
-export type Summary = FeatureOutput<typeof contract, "records">["records"][number];
+export type Summary = FeatureOutput<FullOutputContract, "records_detail">["records"][number];
 export const isFullSummary = (r: { id: string }): r is Summary =>
   "path" in r && "revision" in r && "lifecycle" in r && "valid" in r;
-export type Detail = FeatureOutput<typeof contract, "record">;
+export type Detail = FeatureOutput<FullOutputContract, "record_detail">;
 export type RecordDetail = NonNullable<Detail["record"]>;
 export type ClaimPresentation = {
   record: Omit<NonNullable<Detail["record"]>, "metadata"> & {
@@ -86,10 +87,10 @@ export const dayHeading = (text: string) => {
     yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
   if (day.toDateString() === today.toDateString()) {
-    return "Today";
+    return t("knowledge.dom.today");
   }
   if (day.toDateString() === yesterday.toDateString()) {
-    return "Yesterday";
+    return t("knowledge.dom.yesterday");
   }
   return day.toLocaleDateString(undefined, {
     weekday: "short",
@@ -108,7 +109,7 @@ export const identificationDetails = (
     return undefined;
   }
   const details = el("details", undefined, "knowledge-identification"),
-    summary = el("summary", "How this was identified");
+    summary = el("summary", t("knowledge.dom.howIdentified"));
   summary.append(icon("chevronDown", 12));
   details.append(summary);
   if (context) {
@@ -116,7 +117,13 @@ export const identificationDetails = (
   }
   if (confidence) {
     details.append(
-      el("p", `Speaker attribution confidence: ${confidence.level}. ${confidence.basis}`),
+      el(
+        "p",
+        t("knowledge.dom.speakerConfidence", {
+          level: confidence.level,
+          basis: confidence.basis,
+        }),
+      ),
     );
   }
   return details;
@@ -153,7 +160,7 @@ export const plainLinks = (text: string) =>
 /** Short file kind for a retained original, from its recorded media type or extension. */
 export const fileKind = (e: { mediaType?: string; filename?: string; path: string }) => {
   const kinds: Record<string, string> = {
-    "text/plain": "Text",
+    "text/plain": t("knowledge.dom.fileKindText"),
     "text/markdown": "Markdown",
     "application/json": "JSON",
     "application/pdf": "PDF",
@@ -162,7 +169,9 @@ export const fileKind = (e: { mediaType?: string; filename?: string; path: strin
   };
   const media = e.mediaType?.split(";")[0]!.trim().toLowerCase();
   return (
-    (media && kinds[media]) ?? (e.filename ?? e.path).split(".").at(-1)?.toUpperCase() ?? "File"
+    (media && kinds[media]) ??
+    (e.filename ?? e.path).split(".").at(-1)?.toUpperCase() ??
+    t("knowledge.dom.fileKindOther")
   );
 };
 /** Human-scale byte count, e.g. "49 KB". */

@@ -1,4 +1,5 @@
 import { runOutsideOperatorToolGatewayAuthority } from "../gateway/operator-tool-gateway-authority.js";
+import { runOutsidePluginSessionWorkAuthority } from "../gateway/plugin-session-work-authority.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
@@ -27,28 +28,39 @@ export function createPluginServiceSchedulerRunner(owner: {
         inheritRequestScope: false,
       });
   const runScheduled = createScheduledGatewayRunner(resolveGatewayContext);
+  const authority =
+    owner.instance?.owner?.record.generationOverlap === true
+      ? owner.instance.retainOwnerWork()
+      : undefined;
+  if (authority) {
+    owner.lease.retain(authority.release);
+  }
   return (work: () => void | Promise<unknown>) =>
     runOutsideOperatorToolGatewayAuthority(() =>
-      runScheduled(async () =>
-        pluginInstanceInvocation.exit(() => {
-          const registry = owner.record
-            ? getPluginRecordRegistry(owner.registry, owner.record)
-            : owner.registry;
-          const run = () => withPluginHttpRouteRegistry(registry, work, owner.lease);
-          // The lifecycle owner joins scheduled work before disposal can finish.
-          const invoke = () =>
-            owner.instance
-              ? owner.instance.runInRegistry(registry, run, { joinDisposal: false })
-              : run();
-          return withPluginRuntimeGatewayContextResolver(
-            resolveGatewayContext,
-            () => {
-              resourceHost?.assertOpen();
-              return resourceHost ? resourceHost.run(invoke) : invoke();
-            },
-            { inheritRequestScope: false },
-          );
-        }),
+      runOutsidePluginSessionWorkAuthority(() =>
+        runScheduled(async () =>
+          pluginInstanceInvocation.exit(() => {
+            const registry = owner.record
+              ? getPluginRecordRegistry(owner.registry, owner.record)
+              : owner.registry;
+            const run = () => withPluginHttpRouteRegistry(registry, work, owner.lease);
+            // The lifecycle owner joins scheduled work before disposal can finish.
+            const invoke = () =>
+              authority
+                ? authority.run(run)
+                : owner.instance
+                  ? owner.instance.runInRegistry(registry, run, { joinDisposal: false })
+                  : run();
+            return withPluginRuntimeGatewayContextResolver(
+              resolveGatewayContext,
+              () => {
+                resourceHost?.assertOpen();
+                return resourceHost ? resourceHost.run(invoke) : invoke();
+              },
+              { inheritRequestScope: false },
+            );
+          }),
+        ),
       ),
     );
 }

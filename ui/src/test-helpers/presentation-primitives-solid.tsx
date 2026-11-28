@@ -1,5 +1,6 @@
 import { render, type JSX } from "@solidjs/web";
 import { createSignal, For } from "solid-js";
+import { CloudProfileIcon } from "../components/solid/cloud-profile-icon.tsx";
 import { CopyButton } from "../components/solid/copy-button.tsx";
 import { BrandIcon, Icon } from "../components/solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "../components/solid/kbd.tsx";
@@ -13,14 +14,11 @@ import {
   type PanelLoadingSkeletonVariant,
 } from "../components/solid/panel-loading-skeleton.tsx";
 import { PanelRefreshStatus } from "../components/solid/panel-refresh-status.tsx";
-import {
-  CloudProfileIcon,
-  ProviderBrandIcon,
-  ProviderFallbackIcon,
-} from "../components/solid/provider-icon.tsx";
+import { ProviderBrandIcon, ProviderFallbackIcon } from "../components/solid/provider-icon.tsx";
 import type { SettingsSegmentedProps } from "../components/solid/settings-ui.tsx";
 import * as settings from "../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../components/solid/settings-workspace.tsx";
+import { Switch } from "../components/solid/switch.tsx";
 import { finishFixture, group, recordAction, root } from "./presentation-primitives-fixture.ts";
 
 const options = [
@@ -157,7 +155,7 @@ function Controls() {
         <settings.SettingsRow
           title="Rejected toggle"
           control={
-            <settings.SettingsToggle
+            <Switch
               ariaLabel="Rejected toggle"
               checked={false}
               onChange={() => {
@@ -196,13 +194,7 @@ function Controls() {
           disabled
           onChange={() => recordAction("unexpected")}
         />
-        <ChoiceRow
-          title="Button choices"
-          value={segment()}
-          mode="buttons"
-          variant="accent"
-          onChange={setSegment}
-        />
+        <ChoiceRow title="Button choices" value={segment()} mode="buttons" onChange={setSegment} />
         <settings.SettingsRow
           title="Secret"
           control={
@@ -210,8 +202,6 @@ function Controls() {
               ariaLabel="Secret"
               value={secret()}
               visible={visible()}
-              showLabel="Show secret"
-              hideLabel="Hide secret"
               toggleLabel="Toggle secret"
               onInput={setSecret}
               onToggle={() => setVisible(!visible())}

@@ -10,7 +10,7 @@ import {
 } from "../sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../sqlite-post-commit.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
-import { beginUpdatePostgresMigration } from "../update-doctor-migration-attribution.js";
+import { beginUpdatePostgresMigration } from "../update-doctor-migration-context.js";
 import { databaseEngineAdapters } from "./adapters.js";
 import type { AdmittedStore, EngineConnection, StoreSchema } from "./contract.js";
 import { observeConnection } from "./observation.js";
@@ -110,7 +110,10 @@ export function openEngineStore(ref: {
       `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing ${familySetting(schema)}.`,
     );
   }
-  ref.prepareAnchor();
+  const readOnly = ref.input?.readOnly === true;
+  if (!readOnly) {
+    ref.prepareAnchor();
+  }
   const readOrCreateAnchor = () => {
     const inspection = ref.inspectSqlite();
     if (inspection.hasExistingData) {
@@ -118,7 +121,7 @@ export function openEngineStore(ref: {
         `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing ${familySetting(schema)}.`,
       );
     }
-    if (!inspection.hasEngineAnchor && ref.existingOnly) {
+    if (!inspection.hasEngineAnchor && (ref.existingOnly || readOnly)) {
       throw new Error(
         "Missing PostgreSQL anchor; restore the matching PostgreSQL schema and anchor.",
       );
@@ -158,13 +161,13 @@ export function openEngineStore(ref: {
   const identity =
     known?.engine === "postgres"
       ? known
-      : ref.existingOnly
+      : ref.existingOnly || readOnly
         ? readOrCreateAnchor()
         : runSqliteImmediateTransactionSync(anchor, readOrCreateAnchor);
   const store: AdmittedStore = { ...ref, input: ref.input, ...identity };
   const adapter = databaseEngineAdapters.postgres;
   const db = adapter.openConnection(store);
-  const admit = (fresh: boolean) => {
+  const admit = (fresh: boolean) =>
     admitPostgresPhysicalFacts({
       db,
       namespace: identity.namespace,
@@ -174,9 +177,9 @@ export function openEngineStore(ref: {
       schema,
       recordSchema: fresh,
       preserveSchemaSeal: ref.existingVersion,
+      requireSealedSchema: readOnly,
     });
-    ref.admitPostgres?.(db, fresh);
-  };
+  let admittedVersion = schema.version;
   try {
     const publishSearch = schema.search
       ? admitPostgresSearch(
@@ -186,7 +189,17 @@ export function openEngineStore(ref: {
           ref.existingVersion ? 1 : schema.postgresVectorSearchVersion,
         )
       : undefined;
-    if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
+    if (readOnly) {
+      // Standby reads verify the current schema without creating or migrating either store.
+      db.runTransaction(
+        () => {
+          admittedVersion = admit(false).version;
+          ref.admitPostgres?.(db, false);
+        },
+        undefined,
+        true,
+      );
+    } else if (!known || (known.engine === "postgres" && known.version < schema.version)) {
       admitPostgresCapabilities(db);
       // Bootstrap borrows opening custody; ordinary writes still require domain admission.
       // Existing-only forbids creation; an unsealed port still needs writable schema admission.
@@ -225,7 +238,7 @@ export function openEngineStore(ref: {
                 `PostgreSQL database identity mismatch: expected ${identity.storeId}, found ${String(meta.store_id)}. Restore the matching anchor and PostgreSQL backup.`,
               );
             }
-            if (meta.version !== schema.version) {
+            if (Number(meta.version) < schema.version) {
               if (ref.existingVersion) {
                 const source = schema.postgresMigrations?.find(
                   (step) => step.version === Number(meta.version) + 1,
@@ -238,6 +251,7 @@ export function openEngineStore(ref: {
                   ...source,
                   postgresVectorDecoderVersion: source.postgresVectorDecoderVersion,
                   postgresVectorSearchVersion: source.postgresVectorSearchVersion,
+                  postgresTextSearchVersion: source.postgresTextSearchVersion,
                   version: Number(meta.version),
                 };
               } else {
@@ -260,9 +274,11 @@ export function openEngineStore(ref: {
               }
             }
           }
-          admit(!meta);
+          admittedVersion = admit(!meta).version;
+          ref.admitPostgres?.(db, !meta);
         },
         {
+          maintenance: true,
           withCommit(commit) {
             assertMigrationCurrent?.();
             migration?.beforeCommit();
@@ -273,13 +289,14 @@ export function openEngineStore(ref: {
       );
       migration?.committed();
     } else {
-      admit(false);
+      admittedVersion = admit(false).version;
+      ref.admitPostgres?.(db, false);
     }
-    if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
+    if (!known || (known.engine === "postgres" && known.version < schema.version)) {
       publishSqliteDatabaseAdmission(anchor, admissionKey, {
         engine: "postgres",
         ...identity,
-        version: schema.version,
+        version: admittedVersion,
       });
     }
     // Publish against the committed schema revision, after bootstrap/migration settles.

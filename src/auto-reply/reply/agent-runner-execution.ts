@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
@@ -16,6 +17,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { leaseMcpAppModelContextForSessionTurn } from "../../agents/mcp-ui-resource.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
+import { prepareChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -163,6 +165,10 @@ async function executeAgentTurnInternalLoop(
         ? { projectSessionActive: false, projectSessionLifecycle: false }
         : {}),
       completionSource: params.completionSource,
+      ...(params.opts?.onRestartResumeSaved &&
+      params.opts.sourceReplyDeliveryMode !== "message_tool_only"
+        ? { onRestartResumeSaved: AsyncLocalStorage.bind(params.opts.onRestartResumeSaved) }
+        : {}),
       sessionEventDelivery: resolveReplySessionEventDelivery(params.opts, params.followupRun.run),
     });
     bindAgentRunTerminalWriteSettlement(preparedRunAdmission.operationalRunInstance);
@@ -316,6 +322,10 @@ async function executeAgentTurnInternalLoop(
       ) {
         params.mcpAppContextLease?.commit();
       }
+      if (info.phase === "before_agent_reply") {
+        // A dispatched hook can accept external work even when it declines the reply.
+        params.followupRun.run.internalEventExecution?.onStarted(runId);
+      }
       const isUserVisibleExecutionActivity =
         info.phase === "turn_accepted" ||
         info.phase === "process_spawned" ||
@@ -381,6 +391,8 @@ async function executeAgentTurnInternalLoop(
   let subagentContinuationPrepared = false;
   while (true) {
     try {
+      // Settle a memoized preflight refusal here, before continuation or model work.
+      await prepareChildSessionPublication(params.followupRun.run);
       if (!subagentContinuationPrepared) {
         await prepareReplySubagentContinuation(params, runId, runtimeConfig, preparedRunAdmission);
         subagentContinuationPrepared = true;
@@ -564,24 +576,21 @@ async function executeAgentTurnOutcome(
   const requester = executionParams.followupRun.operatorAuthority;
   if (requester) {
     assertAdmittedRunOperatorAuthority(requester);
-    requester.assertCurrent();
   }
   let modelContextLease: AppContextTurnParams["mcpAppContextLease"];
   const prepareMcpAppModelContext = async () => {
-    requester?.assertCurrent();
     modelContextLease = await leaseMcpAppModelContextForSessionTurn({
       agentId: executionParams.followupRun.run.agentId,
       sessionId: executionParams.followupRun.run.sessionId,
       sessionKey: executionParams.sessionKey ?? executionParams.followupRun.run.sessionKey,
       requesterId: requester?.profileId,
     });
-    requester?.assertCurrent();
     return modelContextLease;
   };
   // Keep committed facts outside cleanup so a restart cannot erase them.
   const compaction: AgentTurnCompaction = { count: 0, durable: [] };
   const completedCompaction = () =>
-    compaction.count > 0
+    compaction.count > 0 || compaction.durable.length > 0
       ? { compaction: { count: compaction.count, durable: [...compaction.durable] } }
       : {};
   let terminalOutcomeCommitted = false;
@@ -597,7 +606,7 @@ async function executeAgentTurnOutcome(
   try {
     const internal = await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
       try {
-        const execution = prepareReplyTurnExecution(executionParams, runId);
+        const execution = await prepareReplyTurnExecution(executionParams, runId);
         let scheduledInference: CronRunInference | undefined;
         let workspaceLease: CronWorkspaceLease | undefined;
         try {
@@ -620,9 +629,11 @@ async function executeAgentTurnOutcome(
             run.workspaceDir = workspace.workspaceDir;
             run.cwd = workspace.cwd;
           }
-          const binding = run.scheduledAutomation?.job.inferenceBinding;
-          if (binding) {
+          const scheduledJob = run.scheduledAutomation?.job;
+          const binding = scheduledJob?.inferenceBinding;
+          if (scheduledJob && binding) {
             scheduledInference = await prepareCronRunInference({
+              job: scheduledJob,
               binding,
               cfg: selectLiveRuntimeConfig(executionParams.followupRun.run.config),
               agentDir: executionParams.followupRun.run.agentDir,

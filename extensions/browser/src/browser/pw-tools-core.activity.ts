@@ -1,4 +1,4 @@
-import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateUtf16Safe, withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS, DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type {
   BrowserConsoleMessage,
@@ -6,6 +6,7 @@ import type {
   BrowserPageError,
 } from "./pw-session.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
+import { withSnapshotFrameGuard } from "./pw-snapshot-page.js";
 import { awaitActionWithAbort } from "./pw-tools-core.interactions.navigation.js";
 
 /** Returns visible page text without evaluating caller-provided JavaScript. */
@@ -21,7 +22,7 @@ export async function getPageTextViaPlaywright(opts: {
     DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   );
   const timeout = DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
-  const deadline = Date.now() + timeout;
+  const deadline = performance.now() + timeout;
   const controller = new AbortController();
   const signal = opts.signal
     ? AbortSignal.any([opts.signal, controller.signal])
@@ -29,21 +30,33 @@ export async function getPageTextViaPlaywright(opts: {
   const read = async () => {
     signal.throwIfAborted();
     const page = await getPageForTargetId(opts);
-    signal.throwIfAborted();
-    let locator = page.locator(opts.selector ?? "body").first();
-    if (!opts.selector) {
-      for (const selector of ["article", "main"]) {
-        const candidate = page.locator(selector).first();
-        const count = await candidate.count();
-        signal.throwIfAborted();
-        if (count) {
-          locator = candidate;
-          break;
+    // Locators re-resolve after a navigation, so text read across one belongs to another document.
+    return await withSnapshotFrameGuard({
+      page,
+      frame: page.mainFrame(),
+      signal,
+      run: async (assertCurrent) => {
+        let locator = page.locator(opts.selector ?? "body").first();
+        if (!opts.selector) {
+          for (const selector of ["article", "main"]) {
+            const candidate = page.locator(selector).first();
+            const count = await candidate.count();
+            signal.throwIfAborted();
+            if (count) {
+              locator = candidate;
+              break;
+            }
+          }
         }
-      }
-    }
-    // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- This action reads rendered text, not hidden DOM text.
-    return await locator.innerText({ timeout: Math.max(1, deadline - Date.now()), signal });
+        // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- This action reads rendered text, not hidden DOM text.
+        const text = await locator.innerText({
+          timeout: Math.max(1, deadline - performance.now()),
+          signal,
+        });
+        assertCurrent();
+        return text;
+      },
+    });
   };
   const text = await withTimeout(awaitActionWithAbort(read(), signal), timeout, {
     createError: () => {
@@ -52,7 +65,7 @@ export async function getPageTextViaPlaywright(opts: {
       return error;
     },
   });
-  return { text: text.slice(0, maxChars), truncated: text.length > maxChars };
+  return { text: truncateUtf16Safe(text, maxChars), truncated: text.length > maxChars };
 }
 
 export async function getPageErrorsViaPlaywright(opts: {
@@ -77,15 +90,11 @@ export async function getNetworkRequestsViaPlaywright(opts: {
 }): Promise<{ requests: BrowserNetworkRequest[] }> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
-  const raw = [...state.requests.values()];
+  const raw = state.readNetworkRequests?.(opts.clear) ?? [];
   const filter = opts.filter?.trim();
   const requests = filter
     ? raw.filter((r) => r.url.includes(filter) || r.resourceType?.includes(filter))
     : raw;
-  if (opts.clear) {
-    state.requests.clear();
-    state.requestIds = new WeakMap();
-  }
   return { requests };
 }
 

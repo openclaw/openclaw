@@ -11,6 +11,7 @@ import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import type { CronService } from "./service.js";
 import {
   createCronServiceWithStateForTest,
+  mockCronAvailableMemory,
   setupCronServiceSuite,
 } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
@@ -52,6 +53,8 @@ function createCron(params: Partial<CronServiceDeps>) {
 }
 
 function createQueueBlocker() {
+  // The scheduler captures this reader on first use, before the blockers run.
+  mockCronAvailableMemory(0);
   const started = createDeferred();
   const release = createDeferred();
   let active = 0;
@@ -419,6 +422,10 @@ it.each([
         expect(ack).toMatchObject({ ok: true, enqueued: true });
       }
       await payload.started.promise;
+      const receipt = expectDefined(
+        inspectActiveCronRunReceipt({ storePath, jobId: original.id }),
+        "original run receipt",
+      );
 
       await expect(cron.remove(original.id)).resolves.toEqual({
         ok: true,
@@ -460,9 +467,11 @@ it.each([
       expect(finishedEvents).toMatchObject([
         { ...removed, job: { name: "removed original one-shot" } },
       ]);
-      expect(historyFor(original.id)).toMatchObject([
-        { ...removed, runId: finishedEvents[0]?.runId },
-      ]);
+      // Direct runs have no public request ID; history still identifies the canceled run.
+      const runId =
+        finishedEvents[0]?.runId ??
+        `cron:${original.id}:${receipt.startedAtMs}:${receipt.receiptId}`;
+      expect(historyFor(original.id)).toMatchObject([{ ...removed, runId }]);
       const receipts = openOpenClawStateDatabase()
         .db.prepare(
           "SELECT status, error_text AS error FROM cron_run_receipts WHERE store_key = ? AND job_id = ?",

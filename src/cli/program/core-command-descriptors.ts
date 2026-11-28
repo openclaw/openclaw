@@ -32,7 +32,7 @@ export const CORE_CLI_COMMAND_DESCRIPTORS: readonly NamedCommandDescriptor[] = [
     true,
     { machineOutput: ({ argv }) => isConfigMachineOutput(argv) },
   ),
-  command("claws", "Author and add OpenClaw Claws", true, {
+  command("templates", "Author and add OpenClaw Templates", true, {
     parentDefaultHelp: true,
   }),
   command("backup", "Create, verify, and restore backup archives and SQLite snapshots", true),

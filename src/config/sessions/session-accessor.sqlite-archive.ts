@@ -2,7 +2,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId, type Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { DEFAULT_WORKER_PENDING_TASKS, WorkerTaskError } from "@openclaw/worker-runtime";
+import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { getDatabaseEngineSelection } from "../../infra/database-engine/context.js";
 import { captureStateDatabaseAccess } from "../../infra/gateway-state-owner.js";
 import {
@@ -15,14 +15,14 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { trackSqliteDatabaseAdmissionWorker } from "../../infra/sqlite-database-admission.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
-import { createCpuTrackedWorker } from "../../infra/worker-cpu.js";
+import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "../../infra/worker-cpu.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { resolveQuarantineStorePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive-queue.js";
 import {
   runScopedSqliteArchiveOperation,
   runScopedSqliteArchiveMutation,
@@ -30,7 +30,7 @@ import {
 } from "./session-accessor.sqlite-archive-session.js";
 import type {
   MaterializedSessionStateDeletePlan,
-  SessionColdBatchInput,
+  SqliteArchiveOperation,
   SessionHistoryEvictionArchivePlan,
   SessionStateDeletePlan,
   SqliteArchiveOneShotWorkerData,
@@ -60,6 +60,8 @@ import {
 import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
+export { runExclusiveSqliteTranscriptArchiveWorker };
+
 export function createSqliteTranscriptArchiveWorker(
   workerData: object,
   nativeLocations: readonly string[] = [],
@@ -74,10 +76,13 @@ export function createSqliteTranscriptArchiveWorker(
   const releaseService = retainSqliteWriteAdmissionService(nativeLocations, () =>
     admission.service(),
   );
-  const finish = () => {
+  const finish = async () => {
     active = false;
-    admission.finish();
-    releaseService();
+    try {
+      await admission.finish();
+    } finally {
+      releaseService();
+    }
   };
   let worker: Worker;
   const postgresPool = createPostgresPoolEndpoints();
@@ -94,12 +99,25 @@ export function createSqliteTranscriptArchiveWorker(
       execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
     });
   } catch (error) {
-    finish();
+    active = false;
+    try {
+      try {
+        admission.abortConstruction();
+      } finally {
+        releaseService();
+      }
+    } catch (cleanupError) {
+      throw createSqliteLifecycleAggregateError(
+        [error, cleanupError],
+        "SQLite archive worker construction cleanup failed",
+        error,
+      );
+    }
     throw error;
   }
-  trackSqliteArchiveWorkerCleanup(worker);
+  trackSqliteArchiveWorkerCleanup(worker, finish);
   trackSqliteDatabaseAdmissionWorker(worker);
-  worker.once("exit", finish);
+  worker.on("message", (message: unknown) => receiveWorkerMemoryPort(worker, message));
   return worker;
 }
 
@@ -285,69 +303,6 @@ function runSqliteColdMutation<Result>(
   );
 }
 
-// Serialize lifecycle archive Workers so this path cannot multiply
-// whole-buffer usage across several Worker heaps at once.
-const sqliteTranscriptArchiveWorkerQueue = resolveGlobalSingleton(
-  Symbol.for("openclaw.sqliteTranscriptArchiveWorkerQueue"),
-  () => ({ queue: new KeyedAsyncQueue(), pending: 0 }),
-);
-const SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY = "lifecycle-archive";
-
-export function runExclusiveSqliteTranscriptArchiveWorker<T>(
-  run: () => Promise<T>,
-  signal?: AbortSignal,
-): Promise<T> {
-  if (signal?.aborted) {
-    return Promise.reject(toStringifiedError(signal.reason));
-  }
-  if (sqliteTranscriptArchiveWorkerQueue.pending >= DEFAULT_WORKER_PENDING_TASKS) {
-    return Promise.reject(
-      new WorkerTaskError(
-        "Session archiving is busy. Wait for pending archive operations to finish, then retry.",
-        "overloaded",
-      ),
-    );
-  }
-  sqliteTranscriptArchiveWorkerQueue.pending++;
-  const hooks = {
-    onSettle: () => {
-      sqliteTranscriptArchiveWorkerQueue.pending--;
-    },
-  };
-  if (!signal) {
-    return sqliteTranscriptArchiveWorkerQueue.queue.enqueue(
-      SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
-      run,
-      hooks,
-    );
-  }
-  return new Promise<T>((resolve, reject) => {
-    let pending: (() => Promise<T>) | undefined = run;
-    const cancel = () => {
-      // Drop execution before releasing the caller's claim; its FIFO slot remains inert.
-      pending = undefined;
-      reject(toStringifiedError(signal.reason));
-    };
-    signal.addEventListener("abort", cancel, { once: true });
-    void sqliteTranscriptArchiveWorkerQueue.queue
-      .enqueue(
-        SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
-        () => {
-          signal.removeEventListener("abort", cancel);
-          const admitted = pending;
-          pending = undefined;
-          if (!admitted) {
-            throw toStringifiedError(signal.reason);
-          }
-          // Once admitted, even a revoked request must join its physical settlement.
-          return admitted();
-        },
-        hooks,
-      )
-      .then(resolve, reject);
-  });
-}
-
 export function runSqliteTranscriptArchiveWorkerOperation<Result>(
   params: TranscriptArchiveWorkerOperation<Result>,
 ): Promise<Result[]> {
@@ -361,7 +316,7 @@ export function runSqliteTranscriptArchiveWorkerOperation<Result>(
 }
 
 export function prepareSqliteColdArchiveBatch(
-  input: SessionColdBatchInput,
+  input: Extract<SqliteArchiveOperation, { operation: "cold-prepare" }>["input"],
   assertCurrent: () => void,
   signal: AbortSignal,
 ) {

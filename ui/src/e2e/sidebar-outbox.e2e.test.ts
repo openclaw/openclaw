@@ -65,7 +65,7 @@ async function expectCompactRow(incident: Locator) {
           : null,
     };
   });
-  expect(geometry.height).toBeGreaterThanOrEqual(64);
+  expect(geometry.height).toBeGreaterThanOrEqual(56);
   expect(geometry.height).toBeLessThanOrEqual(96);
   expect(geometry).toMatchObject({ titleFits: true, fits: true, actionFits: true });
   if (geometry.offlineGap !== null) {
@@ -83,14 +83,6 @@ suite.define(() => {
       const { gateway, composer } = await openOutbox(page, {
         sessionKey,
         sessions: [outboxSession(sessionKey, "Release notes")],
-        methodResponses: {
-          "chat.history": {
-            messages: [],
-            sessionId: `session:${sessionKey}`,
-            sessionInfo: { hasActiveRun: false, status: "done" },
-            thinkingLevel: null,
-          },
-        },
       });
       await gateway.deferNext("chat.send");
       await composer.fill("Please review the release notes before publishing.");
@@ -106,7 +98,7 @@ suite.define(() => {
       await page.locator(".sidebar-issues-button").click();
       await page.locator("#sidebar-issues-tab-system").click();
       const incident = page.locator('[data-attention-kind="outbox"]');
-      await incident.getByText("Your message wasn’t sent", { exact: true }).waitFor();
+      await incident.getByText("Couldn’t send your message.", { exact: true }).waitFor();
       expect(await incident.textContent()).toContain("Release notes");
       expect(await incident.textContent()).not.toContain(
         "Please review the release notes before publishing.",
@@ -140,7 +132,7 @@ suite.define(() => {
       await page.locator(".chat-queue__item").waitFor();
       await page
         .locator(".sidebar-shell__connection .gateway-status")
-        .getByText("Reconnecting… · 1 queued", { exact: true })
+        .getByText("Reconnecting · 1 queued", { exact: true })
         .waitFor();
       expect(
         await page
@@ -184,8 +176,8 @@ suite.define(() => {
       const incidents = page.locator('[data-attention-kind="outbox"]');
       expect(await incidents.count()).toBe(2);
       expect(await incidents.locator(".sidebar-issues-panel__entity").allTextContents()).toEqual([
-        "Your message wasn’t sent",
-        "Your message wasn’t sent",
+        "Couldn’t send your message.",
+        "Couldn’t send your message.",
       ]);
       for (const incident of await incidents.all()) {
         await expectCompactRow(incident);

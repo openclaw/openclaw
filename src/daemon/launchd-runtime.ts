@@ -1,10 +1,8 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import {
-  parseStrictInteger,
-  parseStrictPositiveInteger,
-} from "@openclaw/normalization-core/number-coercion";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isStringArray, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { throwCollectedErrors } from "../infra/error-graph-internal.js";
@@ -17,6 +15,7 @@ import {
 import { sleep } from "../utils.js";
 import { GATEWAY_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
+import { parseLaunchctlJob, type LaunchctlPrintInfo } from "./launchctl-job.js";
 import {
   execLaunchctl,
   formatLaunchctlResultDetail,
@@ -45,6 +44,7 @@ import {
   ServiceInspectionError,
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
+import { resolveServiceManagerEnv } from "./service-process-env.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -67,51 +67,40 @@ export type LoadedLaunchAgentState = GatewayServiceState & {
   };
 };
 
-/** Parse only the selected job's root fields; nested jobs and environments are not its identity. */
-export function parseLaunchctlJob(output: string, serviceTarget: string) {
-  if (!output.startsWith(`${serviceTarget} = {\n`)) {
-    throw new Error(`Cannot parse launchd job ${serviceTarget}`);
-  }
-  const fields = new Map<string, string>();
-  for (const [, name, value] of output.matchAll(/^\t([^\t\n=]+) = (.+)$/gm)) {
-    if (fields.has(name!)) {
-      throw new Error(`Duplicate launchd job field ${name}`);
-    }
-    fields.set(name!, value!);
-  }
-  const block = (name: string) =>
-    output.match(new RegExp(`^\\t${name} = \\{\\n([\\s\\S]*?)^\\t\\}`, "m"))?.[1];
-  const runtime: LaunchctlPrintInfo = {};
-  const state = fields.get("state")?.trim();
-  if (state) {
-    runtime.state = state;
-  }
-  const pid = parseStrictPositiveInteger(fields.get("pid"));
-  if (pid !== undefined) {
-    runtime.pid = pid;
-  }
-  const status = parseStrictInteger(fields.get("last exit status"));
-  if (status !== undefined) {
-    runtime.lastExitStatus = status;
-  }
-  const exitReason = fields.get("last exit reason")?.trim();
-  if (exitReason) {
-    runtime.lastExitReason = exitReason;
-  }
-  return {
-    fields,
-    runtime,
-    arguments: block("arguments")
-      ?.split("\n")
-      .filter((line) => line.startsWith("\t\t"))
-      .map((line) => line.slice(2)),
-    environment: block("environment") ?? "",
-    environmentBlocks: [
-      ...output.matchAll(/^\t(?:inherited |default )?environment = \{\n([\s\S]*?)^\t\}/gm),
-    ]
-      .map((match) => match[1] ?? "")
-      .join("\n"),
+/** kickstart retains the loaded command, so staged plists need a bootstrap on restart. */
+export function launchAgentNeedsReloadSync(env: GatewayServiceEnv, timeoutMs = 2_000): boolean {
+  const target = `${resolveLaunchAgentGuiDomain()}/${resolveLaunchAgentLabel(env)}`;
+  const options = {
+    env: resolveServiceManagerEnv(),
+    encoding: "utf8" as const,
+    timeout: Math.max(1, Math.min(timeoutMs, 2_000)),
   };
+  const loaded = spawnSync("launchctl", ["print", target], options);
+  const plist =
+    loaded.status === 0 && !loaded.error
+      ? spawnSync(
+          "/usr/bin/plutil",
+          ["-convert", "json", "-o", "-", "--", resolveLaunchAgentPlistPath(env)],
+          options,
+        )
+      : undefined;
+  if (!plist || plist.error || plist.status !== 0) {
+    return false;
+  }
+  try {
+    const job = parseLaunchctlJob(loaded.stdout, target);
+    const args = safeParseJsonRecord(plist.stdout)?.ProgramArguments;
+    // Only a known difference reloads; otherwise kickstart, which needs no readable plist.
+    // Raw, operator-issued launchctl kickstart still uses launchd's cached definition.
+    return (
+      isStringArray(args) &&
+      args.length > 0 &&
+      Boolean(job.arguments?.length) &&
+      !isDeepStrictEqual(args, job.arguments)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Observe the discovered job's loaded command and runtime without granting lifecycle authority. */
@@ -443,12 +432,6 @@ export async function bootstrapLaunchAgentOrThrow(params: {
     );
   }
 }
-type LaunchctlPrintInfo = {
-  state?: string;
-  pid?: number;
-  lastExitStatus?: number;
-  lastExitReason?: string;
-};
 
 export function parseLaunchAgentEnabled(output: string, label: string): boolean {
   const labelPrefix = `"${label}"`;

@@ -1,10 +1,7 @@
 package ai.openclaw.app.voice
 
-import ai.openclaw.app.i18n.NativeText
-import ai.openclaw.app.i18n.nativeText
-import ai.openclaw.app.isAndroidRealtimeRelayModelSupported
-import ai.openclaw.app.node.asObjectOrNull
-import ai.openclaw.app.node.asStringOrNull
+import ai.openclaw.app.asObjectOrNull
+import ai.openclaw.app.asStringOrNull
 import ai.openclaw.app.normalizeMainKey
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -17,16 +14,6 @@ internal enum class TalkModeRoute {
   NativeConfigured,
   NativeAndroidFallback,
   NativeGatewayFallback,
-  ;
-
-  val description: NativeText?
-    get() =
-      when (this) {
-        RealtimeRelay -> null
-        NativeConfigured -> nativeText("Native Talk: using device speech recognition and configured Talk voice.")
-        NativeAndroidFallback -> nativeText("Native Talk: Gateway did not advertise GPT-Live relay support; using device speech recognition and configured Talk voice.")
-        NativeGatewayFallback -> nativeText("Native Talk: Gateway relay is unavailable for this configuration; using device speech recognition and configured Talk voice.")
-      }
 }
 
 internal data class TalkModeGatewayConfigState(
@@ -96,6 +83,13 @@ internal object TalkModeGatewayConfigParser {
     }
     return timeout.toLong()
   }
+}
+
+private fun isAndroidRealtimeRelayModelSupported(model: String?): Boolean {
+  val normalized = model?.trim()?.lowercase() ?: return true
+  // Older Gateways omit relay capability hints. Keep their native fallback;
+  // a positive Gateway hint overrides this legacy model check.
+  return normalized != "gpt-live" && !normalized.startsWith("gpt-live-")
 }
 
 private fun JsonElement?.asBooleanOrNull(): Boolean? = (this as? JsonPrimitive)?.booleanOrNull

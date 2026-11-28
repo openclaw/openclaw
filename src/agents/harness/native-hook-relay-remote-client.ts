@@ -1,6 +1,5 @@
-import { constants } from "node:fs";
-import { open } from "node:fs/promises";
-import { request } from "node:https";
+import { Agent, request } from "node:https";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import type {
   InvokeNativeHookRelayParams,
   NativeHookRelayProcessResponse,
@@ -15,25 +14,15 @@ export async function invokeRemoteNativeHookRelay(
   params: InvokeNativeHookRelayParams,
   signal: AbortSignal,
 ): Promise<NativeHookRelayProcessResponse> {
-  const file = await open(credentialPath, constants.O_RDONLY | constants.O_NOFOLLOW);
   let credential: { url: string; token: string };
   try {
-    const stat = await file.stat();
-    if (!stat.isFile() || stat.size > MAX_CREDENTIAL_BYTES) {
-      throw new Error("Invalid native hook callback credential");
-    }
-    const buffer = Buffer.alloc(MAX_CREDENTIAL_BYTES + 1);
-    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
-    if (bytesRead > MAX_CREDENTIAL_BYTES) {
-      throw new Error("Invalid native hook callback credential");
-    }
-    try {
-      credential = JSON.parse(buffer.subarray(0, bytesRead).toString("utf8"));
-    } catch {
-      throw new Error("Invalid native hook callback credential");
-    }
-  } finally {
-    await file.close();
+    const { buffer } = await readRegularFile({
+      filePath: credentialPath,
+      maxBytes: MAX_CREDENTIAL_BYTES,
+    });
+    credential = JSON.parse(buffer.toString("utf8"));
+  } catch {
+    throw new Error("Invalid native hook callback credential");
   }
   if (
     !credential ||
@@ -54,6 +43,13 @@ export async function invokeRemoteNativeHookRelay(
   }
   signal.throwIfAborted();
   const body = JSON.stringify(params);
+  // Node applies NODE_USE_ENV_PROXY to its global agent only, and `agent: false` bypasses it.
+  // In a sandbox whose only egress is an explicit proxy, honor the switch on a fresh agent that
+  // never pools, so the relay still owns its one socket. TLS stays end to end through CONNECT.
+  const agent =
+    process.env.NODE_USE_ENV_PROXY === "1"
+      ? new Agent({ keepAlive: false, maxSockets: 1, proxyEnv: process.env })
+      : false;
   return await new Promise((resolve, reject) => {
     let outcome:
       | { ok: true; value: NativeHookRelayProcessResponse }
@@ -70,7 +66,7 @@ export async function invokeRemoteNativeHookRelay(
       {
         method: "POST",
         // The cold relay owns this socket through close, never an idle pooled connection.
-        agent: false,
+        agent,
         signal,
         headers: {
           authorization: `Bearer ${credential.token}`,
@@ -118,6 +114,9 @@ export async function invokeRemoteNativeHookRelay(
     req.on("error", () => fail("Native hook callback connection failed"));
     // An error or response end does not yet prove the owned socket closed.
     req.once("close", () => {
+      if (agent) {
+        agent.destroy();
+      }
       if (outcome?.ok) {
         resolve(outcome.value);
       } else {

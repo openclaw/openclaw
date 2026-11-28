@@ -292,10 +292,30 @@ run_prepared_correction_review() (
     return 1
   fi
   validate_review_artifact_data || return 1
-  node "$(dirname "$(review_artifacts_helper_path)")/correction-review.mjs" \
+  local acceptance=.local/pending-proof-acceptance.json
+  if { [ "$command" = validate ] || [ "$command" = validate-preflight ]; } &&
+    { [ -e "$acceptance" ] || [ -L "$acceptance" ]; }; then
+    local PUSH_PREP_HEAD_SHA="" PUSH_LOCAL_PREP_HEAD_SHA="" PUSH_PURPOSE=""
+    local PR_HEAD_SHA_AFTER_PUSH="" PUSHED_FROM_SHA="" PUSH_REPLACED_HOSTED_ANCESTRY=""
+    local PUSH_REVIEW_OID="" PUSH_PENDING_FINDINGS=""
+    if [ ! -f "$acceptance" ] || [ -L "$acceptance" ] ||
+      ! read_prep_publication_result .local/prepare-push-result.env ||
+      [ "$PUSH_PURPOSE" != proof ] || [ "$PUSH_PREP_HEAD_SHA" != "$head" ]; then
+      echo "Pending proof acceptance requires a regular acceptance file and the exact native proof publication receipt." >&2
+      return 1
+    fi
+    set -- "$pr" "$command" "${PR_WORKFLOW_SOURCE_REVISION:-}" "${PR_WORKFLOW_BINDING_OID:-}" \
+      "$PUSH_REVIEW_OID" "$PUSH_PENDING_FINDINGS"
+  fi
+  OPENCLAW_PR_CAPTURED_MAIN="${PR_MAIN_SHA:-}" node "$(dirname "$(review_artifacts_helper_path)")/correction-review.mjs" \
     "$command" "$pr" "$PR_HEAD_SHA_BEFORE" "$head" \
-    "$PREP_INCOMING_JSON_OID" "$PREP_BASELINE_REFRESH_HEAD" "$PREP_BASELINE_REFRESH_OID"
+    "$PREP_INCOMING_JSON_OID" "$PREP_BASELINE_REFRESH_HEAD" "$PREP_BASELINE_REFRESH_OID" "${@:3}"
 )
+
+require_proof_publication_review() {
+  run_prepared_correction_review "$1" "${2:-proof-publication}" \
+    "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID"
+}
 
 require_prepared_review() {
   local pr="$1" mode=ready
@@ -330,17 +350,22 @@ read_prepared_ci_failure() (
 # Normal READY preparation keeps its existing contract; the nonempty snapshot
 # also detects loss of correction mode during an operation.
 correction_review_snapshot() (
-  local pr="$1" PREP_REVIEW_MODE=""
+  local pr="$1" purpose="${2:-qualified}" PREP_REVIEW_MODE=""
   [ -s .local/prep-context.env ] || return 0
   source .local/prep-context.env || return 1
   [ "$PREP_REVIEW_MODE" = correction ] || return 0
-  require_prepared_review "$pr" >/dev/null || return 1
+  case "$purpose" in
+    qualified) require_prepared_review "$pr" >/dev/null || return 1 ;;
+    proof) require_proof_publication_review "$pr" >/dev/null || return 1 ;;
+    *) return 1 ;;
+  esac
   local receipt oid
   for receipt in \
     .local/prep-context.env .local/pr-meta.json .local/pr-meta.env \
     .local/review.json \
     .local/correction-review.json \
     .local/correction-incoming-review.json \
+    .local/pending-proof-acceptance.json \
     .local/prepare-baseline.json \
     .local/prep.env .local/prepare-push-result.env .local/prepare-sync-result.env; do
     oid=absent
@@ -349,12 +374,67 @@ correction_review_snapshot() (
       oid=$(pr_git hash-object --no-filters -- "$receipt") || return 1
     else
       case "$receipt" in
+        # Preserve the fixed snapshot inventory for ordinary baseline admission.
+        .local/pending-proof-acceptance.json) continue ;;
         .local/prep.env|.local/prepare-push-result.env|.local/prepare-sync-result.env|.local/prepare-baseline.json) ;;
         *) return 1 ;;
       esac
     fi
     printf '%s %s\n' "$receipt" "$oid"
   done
+)
+
+# Incoming succession validates retained review bytes without review_guard:
+# that guard can recover a journal or change the checkout through enter_worktree.
+incoming_workflow_review_snapshot() (
+  local pr="$1" head="$2" tree="$3" review="$4" snapshot
+  local PR_NUMBER="" PR_HEAD_SHA="" REVIEW_MODE=""
+  snapshot=$(pr_batch_wrapper_git workflow-ready-snapshot "$canonical_repo_root" "$pr" "$PWD" "$head" "$tree" "$review" incoming) || return 1
+  source .local/pr-meta.env || return 1
+  source .local/review-mode.env || return 1
+  [ "$PR_NUMBER" = "$pr" ] && [ "$PR_HEAD_SHA" = "$head" ] && [ "$REVIEW_MODE" = pr ] || {
+    echo "Incoming workflow succession requires the exact ordinary PR review." >&2; return 1;
+  }
+  validate_review_artifact_data && require_ready_review_recommendation || return 1
+  printf '%s\n' "$snapshot"
+)
+
+# READY succession is deliberately narrower than ordinary preparation: no
+# incoming-only review, local/hosted alias, correction or pending-proof authority.
+ready_workflow_review_snapshot() (
+  local pr="$1" head="$2" tree="$3" review="$4"
+  local PR_NUMBER="" PR_HEAD="" PR_HEAD_SHA_BEFORE="" PREP_BRANCH="" PREP_REVIEW_MODE=""
+  local PREP_INCOMING_JSON_OID="" PREP_BASELINE_REFRESH_HEAD="" PREP_BASELINE_REFRESH_OID=""
+  local REVIEW_MODE="" PR_HEAD_SHA="" prepared_branch
+  for receipt in prep-context.env pr-meta.env review-mode.env prep.env; do
+    [ -f ".local/$receipt" ] && [ ! -L ".local/$receipt" ] || return 1
+  done
+  source .local/prep-context.env || return 1
+  [ "$PR_NUMBER" = "$pr" ] && [ "$PREP_REVIEW_MODE" = ready ] &&
+    [ "$PR_HEAD_SHA_BEFORE" = "$head" ] &&
+    [ -z "$PREP_INCOMING_JSON_OID$PREP_BASELINE_REFRESH_HEAD$PREP_BASELINE_REFRESH_OID" ] || {
+    echo "READY workflow succession requires exact ordinary preparation identity." >&2; return 1;
+  }
+  prepared_branch="$PR_HEAD"
+  PR_NUMBER="" PR_HEAD=""
+  source .local/pr-meta.env || return 1
+  source .local/review-mode.env || return 1
+  [ "$PR_NUMBER" = "$pr" ] && [ "$PR_HEAD_SHA" = "$head" ] &&
+    [ "$PR_HEAD" = "$prepared_branch" ] && [ "$REVIEW_MODE" = pr ] &&
+    [ "$(pr_git rev-parse HEAD)" = "$head" ] &&
+    [ "$(pr_git branch --show-current)" = "$PREP_BRANCH" ] || {
+    echo "READY workflow succession requires the same reviewed, prepared and hosted candidate." >&2; return 1;
+  }
+  pr_git verify-commit "$head" >/dev/null 2>&1 || return 1
+  (
+    local PR_NUMBER="" PR_HEAD="" PR_HEAD_SHA_BEFORE="" PREP_HEAD_SHA="" LOCAL_PREP_HEAD_SHA=""
+    source .local/prep.env || return 1
+    [ "$PR_NUMBER" = "$pr" ] && [ "$PR_HEAD" = "$prepared_branch" ] &&
+      [ "$PR_HEAD_SHA_BEFORE" = "$head" ] && [ "$PREP_HEAD_SHA" = "$head" ] &&
+      [ "$LOCAL_PREP_HEAD_SHA" = "$head" ]
+  ) || { echo "READY succession requires exact completed preparation, without commit aliases." >&2; return 1; }
+  validate_review_artifact_data && require_ready_review_recommendation || return 1
+  pr_batch_wrapper_git workflow-ready-snapshot "$canonical_repo_root" "$pr" "$PWD" "$head" "$tree" "$review"
 )
 
 correction_review_snapshot_with_publication() {
@@ -378,7 +458,7 @@ correction_review_snapshot_with_publication() {
 verify_correction_review_snapshot() {
   local pr="$1" expected="$2" current
   [ -n "$expected" ] || return 0
-  current=$(correction_review_snapshot "$pr") || return 1
+  current=$(correction_review_snapshot "$pr" "${3:-qualified}") || return 1
   if [ "$expected" != "$current" ]; then
     echo "Correction review authority changed during admission; no publication or merge is authorized." >&2
     return 1
@@ -411,7 +491,7 @@ review_artifact_preflight() (
       # Ordinary READY remains sufficient. A truthful incoming NEEDS WORK may
       # reach merge only through the exact correction owner's local validation.
       if ! jq -e '.recommendation == "READY FOR /prepare-pr"' .local/review.json >/dev/null; then
-        run_prepared_correction_review "$pr" validate >/dev/null || return 1
+        run_prepared_correction_review "$pr" validate-preflight >/dev/null || return 1
       fi
       ;;
   esac

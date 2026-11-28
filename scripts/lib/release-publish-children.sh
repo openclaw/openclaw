@@ -14,6 +14,12 @@ fi
 # Read-only gh calls retry transient API failures; mutations never retry here.
 gh_read() {
   local attempt output status stderr_file
+  local retryable='HTTP[^0-9]*(5[0-9]{2}|429)|rate limit|timeout|timed out|connection|EOF|TLS'
+  if [[ "$1" == --accepted-run ]]; then
+    # GitHub can return 404 just after returning the exact run ID from dispatch.
+    retryable+='|HTTP[^0-9]*404'
+    shift
+  fi
   # Child watchers run concurrently; each read owns its diagnostic file.
   stderr_file="$(mktemp "${RUNNER_TEMP:-/tmp}/gh-read-stderr.XXXXXX")" || return 1
   for attempt in 1 2 3 4; do
@@ -24,7 +30,7 @@ gh_read() {
     else
       status=$?
     fi
-    if [[ "$attempt" == 4 ]] || ! grep -Eiq 'HTTP[^0-9]*(5[0-9]{2}|429)|rate limit|timeout|timed out|connection|EOF|TLS' "$stderr_file"; then
+    if [[ "$attempt" == 4 ]] || ! grep -Eiq "$retryable" "$stderr_file"; then
       cat "$stderr_file" >&2
       rm -f "$stderr_file"
       return "$status"
@@ -49,6 +55,7 @@ print_release_resume_command() {
   inputs_json="$(jq -ce '.inputs | select(type == "object")' "$GITHUB_EVENT_PATH")" || return 1
   printf -v command 'printf %%s %q | gh workflow run openclaw-release-publish.yml --repo %q --ref %q --json' \
     "$inputs_json" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
+  printf 'Release recovery command:\n%s\n' "$command"
   {
     printf '\n### Resume publication\n\n'
     printf 'Prepared button releases recover through a new Release Button run with the same prepared artifact. For direct publication, reconcile failed stages, then resume with these frozen inputs; the original successful npm publisher is recovered automatically.\n\n'
@@ -113,10 +120,13 @@ verify_child_run_sha() {
 
 cleanup_clawhub_children() {
   local run_id run_json failed=0
-  for run_id in "${RELEASE_CLAWHUB_RUN_ID:-${CHILD_PLUGIN_CLAWHUB_RUN_ID:-}}" "${RELEASE_CLAWHUB_BOOTSTRAP_RUN_ID:-${CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID:-}}"; do
+  for run_id in "${RELEASE_CLAWHUB_RUN_ID:-${CHILD_PLUGIN_CLAWHUB_RUN_ID:-}}" "${RELEASE_CLAWHUB_BOOTSTRAP_RUN_ID:-${CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID:-}}" "${CHILD_CLAWHUB_RECOVERY_RUN_ID:-}"; do
     [[ -n "$run_id" ]] || continue
     run_json="$(gh_read api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")" || { failed=1; continue; }
     [[ "$(jq -r '.status' <<< "$run_json")" != completed ]] || continue
+    # A cancel request does not end a job waiting on an environment gate
+    # (Plugin ClawHub New's clawhub-plugin-bootstrap); reject it first.
+    reject_pending_deployments "$run_id"
     if ! gh run cancel --repo "$GITHUB_REPOSITORY" "$run_id"; then
       echo "::warning::Could not cancel ClawHub child ${run_id}; inspect https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}." >&2
       failed=1
@@ -171,11 +181,17 @@ sweep_superseded_children() {
   release_active_children=""
   if [[ "$workflow" == plugin-npm-release.yml ]]; then
     # Plugin npm titles carry no parent tuple. Reclaim them only while no other
-    # publish parent is live, so a waiting child's owner is necessarily terminal.
+    # core publish parent is live, so a waiting child's owner is necessarily terminal.
+    # The protected workflow names detached ClawHub runs explicitly; they never
+    # own npm children and must not prevent reclamation of an old npm slot.
     for run_state in requested action_required waiting pending queued in_progress; do
       runs="$(gh_read run list --repo "$GITHUB_REPOSITORY" --workflow openclaw-release-publish.yml \
-        --status "$run_state" --limit 1000 --json databaseId)" || return 1
-      if jq -e --arg id "$GITHUB_RUN_ID" 'length >= 1000 or any(.[]; (.databaseId | tostring) != $id)' <<< "$runs" >/dev/null; then
+        --status "$run_state" --limit 1000 --json databaseId,displayTitle,headBranch)" || return 1
+      if jq -e --arg id "$GITHUB_RUN_ID" '
+        length >= 1000 or any(.[]; (.databaseId | tostring) != $id and
+          (((.displayTitle // "") | startswith("ClawHub registry update [")) and
+           ((.headBranch // "") | test("^release-publish/[a-f0-9]{12}-[1-9][0-9]*$")) | not))
+      ' <<< "$runs" >/dev/null; then
         echo "Another publish parent is live; leaving waiting plugin npm children to it." >&2
         return 0
       fi
@@ -276,6 +292,13 @@ require_clawhub_dispatch_available() {
   done <<< "$release_active_children"
 }
 
+report_child_dispatch_unknown() {
+  local workflow="$1" workflow_ref="$2" reason="$3" message
+  message="Child dispatch acceptance unknown (${reason}): parent=${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}, parent_workflow=openclaw-release-publish.yml, parent_ref=${GITHUB_REF}, workflow=${workflow}, ref=${workflow_ref}. Hold publication and manually reconcile the original parent attempt and workflow dispatch before any retry; do not blindly redispatch."
+  echo "::error::${message}" >&2
+  echo "- ${message}" >> "$GITHUB_STEP_SUMMARY"
+}
+
 dispatch_workflow_at_ref() {
   local workflow_ref="$1"
   local expected_sha="$2"
@@ -315,6 +338,18 @@ dispatch_workflow_at_ref() {
       '$inputs + {($key): $value}')"
   done
 
+  # Carry the exact reviewed exception through the existing publication dispatch owner.
+  case "$workflow" in
+    openclaw-release-publish.yml|openclaw-npm-release.yml|plugin-npm-release.yml|plugin-clawhub-release.yml|plugin-clawhub-new.yml|plugin-clawhub-recovery.yml)
+      if [[ -n "${FAST_TRACK_REQUEST_JSON:-}" ]]; then
+        inputs_json="$(jq -ce --arg approval "$FAST_TRACK_REQUEST_JSON" '
+          if has("fast_track_request") and .fast_track_request != $approval then
+            error("Child fast-track request differs from the parent")
+          else . + {fast_track_request: $approval} end' <<< "$inputs_json")" || return 1
+      fi
+      ;;
+  esac
+
   dispatch_body="$(jq -cn \
     --arg ref "$workflow_ref" \
     --argjson inputs "$inputs_json" \
@@ -327,23 +362,52 @@ dispatch_workflow_at_ref() {
   fi
   # API 2026-03-10 removed return_run_details and always returns the
   # workflow_run_id, API run_url, and browser html_url in a 200 response.
+  if [[ "$workflow" == plugin-npm-release.yml && "$(jq -r '.prepared_artifact // ""' <<< "$inputs_json")" != "" ]]; then
+    # Reauthenticate Q after all ref/field work, at the existing dispatch owner.
+    PREPARED_NPM_ARTIFACT="$(jq -r '.prepared_artifact' <<< "$inputs_json")" \
+      PREPARED_NPM_FRV_RUN_ID="$(jq -r '.full_release_validation_run_id // ""' <<< "$inputs_json")" \
+      PREPARED_NPM_FRV_RUN_ATTEMPT="$(jq -r '.full_release_validation_run_attempt // ""' <<< "$inputs_json")" \
+      PREPARED_NPM_SELECTION_MODE="$(jq -r '.publish_scope' <<< "$inputs_json")" \
+      PREPARED_NPM_PLUGINS="$(jq -r '.plugins // ""' <<< "$inputs_json")" \
+      PREPARED_NPM_DIST_TAG="$(jq -r '.npm_dist_tag // "default"' <<< "$inputs_json")" \
+      node "${BASH_SOURCE[0]%/*}/../plugin-npm-prepared-release.mjs" authorize \
+        --source-sha "$(jq -r '.ref' <<< "$inputs_json")" || return 1
+  fi
   dispatch_response="$(printf '%s' "$dispatch_body" | gh api \
     --method POST \
     -H "Accept: application/vnd.github+json" \
     -H "X-GitHub-Api-Version: 2026-03-10" \
     "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/dispatches" \
-    --input -)" || return 1
-  run_id="$(printf '%s' "$dispatch_response" | jq -er '.workflow_run_id | tostring | select(test("^[1-9][0-9]*$"))')" || return 1
-  run_url="$(printf '%s' "$dispatch_response" | jq -er '.html_url | select(type == "string" and length > 0)')" || return 1
-  verify_child_run_sha "$workflow" "$run_id" "$expected_sha" || return 1
-  # Persist each child before the next dispatch can fail. Step outputs written
-  # only after the whole batch leave partially dispatched children unowned.
-  if [[ -n "${GITHUB_ENV:-}" ]]; then
-    case "$workflow" in
-      plugin-clawhub-release.yml) echo "RELEASE_CLAWHUB_RUN_ID=${run_id}" >> "$GITHUB_ENV" ;;
-      plugin-clawhub-new.yml) echo "RELEASE_CLAWHUB_BOOTSTRAP_RUN_ID=${run_id}" >> "$GITHUB_ENV" ;;
-    esac
+    --input -)" || {
+      report_child_dispatch_unknown "$workflow" "$workflow_ref" "POST failed"
+      return 1
+    }
+  run_id="$(printf '%s' "$dispatch_response" | jq -er '.workflow_run_id | tostring | select(test("^[1-9][0-9]*$"))')" || {
+    report_child_dispatch_unknown "$workflow" "$workflow_ref" "response has no valid workflow_run_id"
+    return 1
+  }
+  # Record acceptance before optional metadata or awaited verification can fail.
+  # This observation is not approval authority; SHA verification still gates use.
+  local output_key="" env_key=""
+  case "$workflow" in
+    openclaw-release-publish.yml) output_key=detached_clawhub_run_id; env_key=RELEASE_DETACHED_CLAWHUB_RUN_ID ;;
+    plugin-npm-release.yml) output_key=plugin_npm_run_id; env_key=CHILD_PLUGIN_NPM_RUN_ID ;;
+    plugin-clawhub-release.yml) output_key=plugin_clawhub_run_id; env_key=RELEASE_CLAWHUB_RUN_ID ;;
+    plugin-clawhub-recovery.yml) output_key=clawhub_recovery_run_id; env_key=CHILD_CLAWHUB_RECOVERY_RUN_ID ;;
+    plugin-clawhub-new.yml) output_key=plugin_clawhub_bootstrap_run_id; env_key=RELEASE_CLAWHUB_BOOTSTRAP_RUN_ID ;;
+    openclaw-npm-release.yml) output_key=openclaw_npm_run_id; env_key=CHILD_OPENCLAW_NPM_RUN_ID ;;
+  esac
+  if [[ -n "$output_key" && -n "${GITHUB_OUTPUT:-}" ]]; then
+    echo "${output_key}=${run_id}" >> "$GITHUB_OUTPUT" || return 1
   fi
+  if [[ -n "$env_key" && -n "${GITHUB_ENV:-}" ]]; then
+    echo "${env_key}=${run_id}" >> "$GITHUB_ENV" || return 1
+  fi
+  run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+  echo "- ${workflow}: accepted run \`${run_id}\` from \`${workflow_ref}\` (${run_url}); workflow SHA verification pending" >> "$GITHUB_STEP_SUMMARY" || return 1
+  run_url="$(printf '%s' "$dispatch_response" | jq -r '.html_url | select(type == "string" and length > 0)' 2>/dev/null)" || run_url=""
+  run_url="${run_url:-https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}}"
+  verify_child_run_sha "$workflow" "$run_id" "$expected_sha" || return 1
 
   echo "Dispatched ${workflow} from ${workflow_ref} at ${expected_sha}: ${run_url}" >&2
   {
@@ -544,7 +608,9 @@ wait_for_run() {
     CREATED_AT="${created_at}" UPDATED_AT="${updated_at}" node --input-type=module -e '
       const created = Date.parse(process.env.CREATED_AT ?? "");
       const updated = Date.parse(process.env.UPDATED_AT ?? "");
-      console.log(Number.isFinite(created) && Number.isFinite(updated) ? Math.max(0, Math.round((updated - created) / 1000)) : "");
+      const seconds = Number.isFinite(created) && Number.isFinite(updated)
+        ? Math.max(0, Math.round((updated - created) / 1000)) : "";
+      process.stdout.write(String(seconds) + "\n");
     '
   )"
   if [[ -n "${duration_seconds}" ]]; then
@@ -726,34 +792,45 @@ append_clawhub_dispatch_args() {
   done < <(jq -r --arg target "${target}" '.[$target].inputs | to_entries[] | [.key, .value] | @tsv' "${clawhub_plan_path}")
 }
 
-write_clawhub_runtime_state() {
-  local output_path="$1"
-  local force_skip_clawhub=false
-  # Verification and release notes project the same joined child outcomes.
-  if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" || "${clawhub_failed}" != "0" ]]; then
-    force_skip_clawhub=true
+# Rendering and canonical readback must use the same frozen notice context.
+run_github_release_notes() {
+  local regular_stable_version="" notice_body_file="" release_json
+  local -a render_args=(
+    --root "${GITHUB_WORKSPACE}" --ref "${TARGET_SHA}"
+    --tag "${RELEASE_TAG}" --repository "${GITHUB_REPOSITORY}"
+    "$@"
+  )
+  if [[ "${RELEASE_NPM_DIST_TAG:-}" == "extended-stable" ]]; then
+    render_args+=(--main-package-version "$(jq -er '.version | strings' "${GITHUB_WORKSPACE}/.release-harness/package.json")")
+    if [[ -f "${RUNNER_TEMP}/release-notes.md" ]]; then
+      # Preparation already froze Latest. Reuse it across later workflow steps.
+      notice_body_file="${RUNNER_TEMP}/release-notes.md"
+    elif release_json="$(gh_read release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft,body 2>/dev/null)" &&
+      [[ "$(printf '%s' "${release_json}" | jq -r .isDraft)" == false ]]; then
+      # A fresh recovery keeps the public notice even after Latest has advanced.
+      notice_body_file="${RUNNER_TEMP}/existing-public-release-body.md"
+      printf '%s' "${release_json}" | jq -er '.body | strings' > "${notice_body_file}" || return 1
+      assert_initial_release_body "$(cat "${notice_body_file}")" || return 1
+    fi
+    if [[ -n "${notice_body_file}" ]]; then
+      render_args+=(--notice-body "${notice_body_file}")
+    else
+      regular_stable_version="$(gh_read api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)" || return 1
+      render_args+=(--regular-stable-version "${regular_stable_version#v}")
+    fi
+    if [[ -n "${RETIRED_LINE_PUBLICATION_REASON:-}" ]]; then
+      render_args+=(--retired-line-reason "${RETIRED_LINE_PUBLICATION_REASON}")
+    fi
   fi
-  node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" \
-    "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-release-clawhub-runtime-state.ts" \
-    --repository "${GITHUB_REPOSITORY}" \
-    --wait-for-clawhub "${WAIT_FOR_CLAWHUB}" \
-    --force-skip-clawhub "${force_skip_clawhub}" \
-    --normal-run-id "${plugin_clawhub_run_id:-}" \
-    --normal-publication-staged "${clawhub_authorized}" \
-    --bootstrap-run-id "${plugin_clawhub_bootstrap_run_id:-}" \
-    --bootstrap-completed "${plugin_clawhub_bootstrap_completed:-false}" > "${output_path}"
+  node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts" \
+    "${render_args[@]}"
 }
 
 render_github_release_notes() {
   local output_file="$1"
   local verification_file="${2:-}"
   local metadata_file="${3:-}"
-  local regular_stable_version=""
   local -a render_args=(
-    node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts"
-    --root "${GITHUB_WORKSPACE}" --ref "${TARGET_SHA}"
-    --tag "${RELEASE_TAG}"
-    --repository "${GITHUB_REPOSITORY}"
     --output "${output_file}"
   )
 
@@ -766,11 +843,7 @@ render_github_release_notes() {
   if [[ -n "${metadata_file}" ]]; then
     render_args+=(--metadata-output "${metadata_file}")
   fi
-  if [[ "${RELEASE_NPM_DIST_TAG:-}" == "extended-stable" ]]; then
-    regular_stable_version="$(jq -er '.version | strings' "${GITHUB_WORKSPACE}/.release-harness/package.json")"
-    render_args+=(--regular-stable-version "${regular_stable_version}")
-  fi
-  "${render_args[@]}"
+  run_github_release_notes "${render_args[@]}"
 }
 
 verify_release_tag_target() {
@@ -800,14 +873,12 @@ verify_release_tag_target() {
 canonical_release_body_matches() {
   local body_file="$1"
   local -a verify_args=(
-    --root "$GITHUB_WORKSPACE" --ref "$TARGET_SHA"
-    --tag "$RELEASE_TAG" --repository "$GITHUB_REPOSITORY" --verify-body "$body_file"
+    --verify-body "$body_file"
   )
   if [[ "${RELEASE_EVIDENCE_MODE}" != "authorized-beta-focused-v1" && -f "${FULL_RELEASE_VALIDATION_MANIFEST_DIR:-}/full-release-validation-manifest.json" ]] && grep -q '^### Release verification$' "$body_file"; then
     verify_args+=(--validation-manifest "${FULL_RELEASE_VALIDATION_MANIFEST_DIR}/full-release-validation-manifest.json")
   fi
-  node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts" \
-    "${verify_args[@]}"
+  run_github_release_notes "${verify_args[@]}"
 }
 
 assert_initial_release_body() {
@@ -849,11 +920,13 @@ create_or_update_github_release() {
       return 1
     fi
     # Latest promotion is invalid while this existing release remains a draft.
+    verify_release_tag_target || return 1
     gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
       --title "${title}" \
       --notes-file "${prepared_release_notes_file}" \
       "${prerelease_arg}"
   else
+    verify_release_tag_target || return 1
     gh release create "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
       --verify-tag \
       --draft \
@@ -1016,6 +1089,8 @@ promote_windows_release_assets() {
     return 1
   fi
   windows_node_run_id="$(dispatch_workflow windows-node-release.yml \
+    -f release_publish_run_id="${RELEASE_PUBLISH_RUN_ID}" \
+    -f release_publish_run_attempt="${RELEASE_PUBLISH_RUN_ATTEMPT}" \
     -f tag="${RELEASE_TAG}" \
     -f windows_node_tag="${WINDOWS_NODE_TAG}" \
     -f expected_installer_digests="${WINDOWS_NODE_INSTALLER_DIGESTS}")" || return 1
@@ -1065,6 +1140,30 @@ upload_dependency_evidence_release_asset() {
     --name "${artifact_name}" \
     --dir "${download_dir}"
 
+  if [[ ! -d "${download_dir}/dependency-evidence" ]] &&
+    [[ "$(jq -r '.version' "${download_dir}/preflight-manifest.json")" == "4" ]]; then
+    # Reauthenticate the exact approved build-only artifact, not just packet presence.
+    BUILD_ONLY_NPM_DIR="$download_dir" node --input-type=module <<'NODE' || return 1
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { isBuildOnlyNpmPreflight, SEALED_NPM_PREFLIGHT_SCHEMA } from './.release-harness/scripts/npm-prepared-bundle.mjs';
+import { verifyNpmPreflightPublicationLineage } from './.release-harness/scripts/npm-preflight-tooling-identity.mjs';
+const env = process.env;
+const manifest = JSON.parse(readFileSync(`${env.FULL_RELEASE_VALIDATION_MANIFEST_DIR}/full-release-validation-manifest.json`, 'utf8'));
+const bytes = readFileSync(`${env.BUILD_ONLY_NPM_DIR}/preflight-manifest.json`);
+const npm = JSON.parse(bytes);
+const descriptor = manifest.publicationArtifacts?.npmPreflight;
+if (!isBuildOnlyNpmPreflight(npm) || descriptor?.schema !== SEALED_NPM_PREFLIGHT_SCHEMA ||
+    createHash('sha256').update(bytes).digest('hex') !== descriptor.manifestSha256 ||
+    npm.npmDistTag !== env.RELEASE_NPM_DIST_TAG) throw new Error('Invalid build-only dependency-evidence exemption.');
+await verifyNpmPreflightPublicationLineage({ manifest, fastTrackRequest: env.FAST_TRACK_REQUEST_JSON,
+  repository: env.GITHUB_REPOSITORY, sourceSha: env.TARGET_SHA, toolingSha: npm.producer.workflowSha,
+  publisherSha: env.PARENT_WORKFLOW_SHA, publisherFullRef: env.PARENT_WORKFLOW_FULL_REF,
+  producerRunId: npm.producer.runId, producerRunAttempt: npm.producer.runAttempt });
+NODE
+    echo "- Dependency validation evidence: skipped by the exact approved build-only release" >> "$GITHUB_STEP_SUMMARY"
+    return 0
+  fi
   if [[ ! -d "${download_dir}/dependency-evidence" ]]; then
     echo "Dependency evidence is missing from OpenClaw npm preflight artifact." >&2
     find "${download_dir}" -maxdepth 2 -type f -print >&2 || true
@@ -1120,6 +1219,7 @@ attach_or_verify_release_asset() {
     exit 1
   fi
 
+  verify_release_tag_target || return 1
   gh release upload "${RELEASE_TAG}" "${source_path}#${asset_name}" --repo "${GITHUB_REPOSITORY}"
 }
 
@@ -1129,6 +1229,7 @@ replace_release_asset() {
   # Postpublish evidence embeds this run's id, so resumable retries
   # regenerate it; the newest verification replaces the asset while
   # prior copies persist as workflow artifacts.
+  verify_release_tag_target || return 1
   gh release upload "${RELEASE_TAG}" "${source_path}#${asset_name}" \
     --repo "${GITHUB_REPOSITORY}" --clobber
 }
@@ -1155,6 +1256,14 @@ upload_release_evidence_assets() {
     exit 1
   fi
 
+  if [[ -n "${FAST_TRACK_REQUEST_JSON:-}" ]]; then
+    local approval_asset="openclaw-${release_version}-fast-track-approval.json"
+    printf '%s\n' "$FAST_TRACK_REQUEST_JSON" > "${RUNNER_TEMP}/${approval_asset}"
+    (cd "${RUNNER_TEMP}" && sha256sum "$approval_asset" > "${approval_asset}.sha256")
+    attach_or_verify_release_asset "${RUNNER_TEMP}/${approval_asset}" "$approval_asset"
+    attach_or_verify_release_asset "${RUNNER_TEMP}/${approval_asset}.sha256" "${approval_asset}.sha256"
+  fi
+
   cp "${manifest_path}" "${RUNNER_TEMP}/${manifest_asset}"
   cp "${evidence_path}" "${RUNNER_TEMP}/${evidence_asset}"
   (
@@ -1179,7 +1288,7 @@ upload_release_evidence_assets() {
 
 wait_for_core_npm_visibility() {
   local version="${RELEASE_TAG#v}" selector="${RELEASE_NPM_DIST_TAG}" started=$SECONDS
-  local deadline=$((SECONDS + ${RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS:-1800})) document state last_state=""
+  local deadline=$((SECONDS + ${RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS:-3600})) document state last_state=""
   while true; do
     state="registry unavailable"
     if document="$(curl -fsSL --connect-timeout 10 --max-time 60 \
@@ -1215,12 +1324,14 @@ sync_npm_beta_floor() {
     if response="$(GH_TOKEN="$RELEASE_LEDGER_TOKEN" gh api --method POST \
       -H 'X-GitHub-Api-Version: 2026-03-10' "repos/${repo}/actions/workflows/openclaw-npm-dist-tags.yml/dispatches" \
       --input - <<< '{"ref":"main","inputs":{"mode":"sync_beta_to_stable"}}')" &&
-      run_id="$(jq -er '.workflow_run_id | tostring | select(test("^[1-9][0-9]*$"))' <<< "$response")" &&
-      run_url="$(jq -er '.html_url | strings | select(length > 0)' <<< "$response")"; then
+      run_id="$(jq -er '.workflow_run_id | tostring | select(test("^[1-9][0-9]*$"))' <<< "$response")"; then
+      run_url="https://github.com/${repo}/actions/runs/${run_id}"
       while true; do
-        if ! response="$(GH_TOKEN="$RELEASE_LEDGER_TOKEN" gh_read api "repos/${repo}/actions/runs/${run_id}")"; then
-          reason="sync read failed (${run_url})"
-          break
+        if ! response="$(GH_TOKEN="$RELEASE_LEDGER_TOKEN" gh_read --accepted-run api "repos/${repo}/actions/runs/${run_id}")"; then
+          reason="could not confirm the accepted sync run's status (${run_url}); inspect that run before resuming publication"
+          echo "::error::npm beta floor: ${reason}" >&2
+          echo "- npm beta floor: ${reason}" >> "$GITHUB_STEP_SUMMARY"
+          return 1
         fi
         status="$(jq -r '.status' <<< "$response")"
         if [[ "$status" != "$last_status" ]] || (( SECONDS - last_progress >= 300 )); then
@@ -1250,7 +1361,7 @@ sync_npm_beta_floor() {
 }
 
 verify_published_release() {
-  local release_version evidence_path canonical_evidence_path clawhub_runtime_state_path bootstrap_run_arg_present
+  local release_version evidence_path canonical_evidence_path
   local expected_attempt expected_id run_attempt run_id run_label run_url target_sha
   local validation_file workflow_ref verifier
   local -a verify_args
@@ -1271,7 +1382,7 @@ verify_published_release() {
     --repo "${GITHUB_REPOSITORY}"
     --release-sha "${TARGET_SHA}"
     --workflow-ref "${CHILD_WORKFLOW_REF}"
-    --clawhub-workflow-ref "${clawhub_workflow_ref}"
+    --skip-clawhub
     --plugin-npm-run "${plugin_npm_run_id}"
     --evidence-out "${evidence_path}"
     --skip-github-release
@@ -1281,24 +1392,15 @@ verify_published_release() {
   if [[ -n "${openclaw_npm_run_id// }" ]]; then
     verify_args+=(--openclaw-npm-run "${openclaw_npm_run_id}")
   fi
-  clawhub_runtime_state_path="${RUNNER_TEMP}/openclaw-release-clawhub-runtime-state-verify.json"
-  write_clawhub_runtime_state "${clawhub_runtime_state_path}"
-  while IFS= read -r arg; do
-    verify_args+=("${arg}")
-  done < <(jq -r '.verifierArgs[]' "${clawhub_runtime_state_path}")
-  bootstrap_run_arg_present="$(
-    jq -r \
-      '.verifierArgs | index("--plugin-clawhub-bootstrap-run") != null' \
-      "${clawhub_runtime_state_path}"
-  )"
   if [[ -n "${PLUGINS// }" ]]; then
     verify_args+=(--plugins "${PLUGINS}")
   fi
-  if [[ -n "${bootstrap_plugins// }" && "${bootstrap_run_arg_present}" == "true" ]]; then
-    verify_args+=(--clawhub-bootstrap-plugins "${bootstrap_plugins}")
-  fi
   if [[ -n "${NPM_TELEGRAM_RUN_ID// }" ]]; then
     verify_args+=(--npm-telegram-run "${NPM_TELEGRAM_RUN_ID}")
+  fi
+
+  if [[ -n "${FAST_TRACK_REQUEST_JSON:-}" ]]; then
+    verify_args+=(--full-release-validation-run "$FULL_RELEASE_VALIDATION_RUN_ID")
   fi
 
   verifier="release-verify-beta.ts"
@@ -1352,15 +1454,16 @@ verify_published_release() {
     --arg validation_target_sha "${target_sha}" \
     --arg validation_url "${run_url}" \
     --arg validation_workflow_ref "${workflow_ref}" '
+      ([.workflowRuns[]? | select(.label == $validation_label)] | first // {}) as $validation |
       .releasePublishRunId = $release_publish_run_id |
-      .workflowRuns += [{
+      .workflowRuns = ((.workflowRuns // []) | map(select(.label != $validation_label))) + [{
         id: $validation_run_id,
         label: $validation_label,
         runAttempt: $validation_run_attempt,
         targetSha: $validation_target_sha,
         url: $validation_url,
         workflowRef: $validation_workflow_ref
-      }]
+      } + ($validation | {conclusion} | with_entries(select(.value != null)))]
     ' \
     "${evidence_path}" > "${evidence_path}.next"
   # Expose a success receipt only after both verifier and parent binding pass.
@@ -1375,7 +1478,7 @@ verify_published_release() {
 }
 
 append_release_proof_to_github_release() {
-  local release_version proof_file notes_file metadata_file evidence_path tarball integrity telegram_line clawhub_line clawhub_bootstrap_line clawhub_runtime_state_path android_line
+  local release_version proof_file notes_file metadata_file evidence_path tarball integrity telegram_line clawhub_line android_line
   local current_body
   current_body="$(gh_read release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json body --jq '.body')" || return 1
   assert_initial_release_body "${current_body}" || return 1
@@ -1393,10 +1496,10 @@ append_release_proof_to_github_release() {
   else
     telegram_line="- npm Telegram beta E2E: not supplied"
   fi
-  clawhub_runtime_state_path="${RUNNER_TEMP}/openclaw-release-clawhub-runtime-state-proof.json"
-  write_clawhub_runtime_state "${clawhub_runtime_state_path}"
-  clawhub_line="$(jq -r '.proofLines.normal' "${clawhub_runtime_state_path}")"
-  clawhub_bootstrap_line="$(jq -r '.proofLines.bootstrap' "${clawhub_runtime_state_path}")"
+  clawhub_line="- ClawHub registry update: independent publication; see the release publish run summary for its status."
+  if [[ "$RELEASE_NPM_DIST_TAG" == extended-stable ]]; then
+    clawhub_line="- ClawHub: not published for extended-stable releases."
+  fi
   android_line="${android_release_note}"
   proof_label="full release validation"
   proof_run_id="${FULL_RELEASE_VALIDATION_RUN_ID}"
@@ -1420,7 +1523,6 @@ append_release_proof_to_github_release() {
     OPENCLAW_NPM_RUN_ID="${openclaw_npm_run_id}" \
     OPENCLAW_NPM_RUN_ATTEMPT="${openclaw_npm_run_attempt}" \
     CLAWHUB_LINE="${clawhub_line}" \
-    CLAWHUB_BOOTSTRAP_LINE="${clawhub_bootstrap_line}" \
     TELEGRAM_LINE="${telegram_line}" \
     ANDROID_LINE="${android_line}" \
     node --input-type=module <<'NODE'
@@ -1444,7 +1546,6 @@ const section = [
   `- ${process.env.RELEASE_VALIDATION_LABEL}: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_VALIDATION_RUN_ID}`,
   `- plugin npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PLUGIN_NPM_RUN_ID}`,
   process.env.CLAWHUB_LINE,
-  process.env.CLAWHUB_BOOTSTRAP_LINE,
   // Resumed publishes cite the original npm publisher.
   ...(process.env.OPENCLAW_NPM_RUN_ID
     ? [
@@ -1463,6 +1564,7 @@ NODE
   # may have completed since the initial publication/resume guard ran.
   current_body="$(gh_read release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json body --jq '.body')" || return 1
   assert_initial_release_body "${current_body}" || return 1
+  verify_release_tag_target || return 1
   gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --notes-file "${notes_file}"
   if jq -e '.verificationIncluded == true' "${metadata_file}" >/dev/null; then
     echo "- Release proof: appended to GitHub release" >> "$GITHUB_STEP_SUMMARY"

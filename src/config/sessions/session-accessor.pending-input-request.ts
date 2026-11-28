@@ -2,15 +2,15 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
-import { readSessionSendDelivery } from "../../gateway/session-send-delivery.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import {
   prepareUserTurnTranscriptAnnotation,
   readUserTurnTranscriptAnnotation,
 } from "../../sessions/user-turn-transcript-annotation-message.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionPendingInputRow } from "./session-accessor.sqlite-pending-inputs.js";
 import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { readOwedKind } from "./session-pending-input-value.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
 function resolvePendingInputRequestHash(
@@ -105,8 +105,15 @@ export function preparePendingInputRequest(params: PendingInputRequest) {
 /** Reconcile saved input variations only against their complete accepted hash. */
 export function resolvePendingInputReplayRequest(
   prepared: ReturnType<typeof preparePendingInputRequest>,
-  accepted?: Pick<SessionPendingInputRow, "request_hash" | "run_id">,
-) {
+  accepted?: Pick<SessionPendingInputRow, "request_hash" | "run_id"> &
+    Partial<Pick<SessionPendingInputRow, "message_json" | "state">>,
+): {
+  message: PersistedUserTurnMessage;
+  stableMessage: Omit<PersistedUserTurnMessage, "timestamp">;
+  requestHash: string;
+  /** The turn adopts a queued owed row; its stored bytes are the input. */
+  owed?: true;
+} {
   const { message, replaySourceSessionKeys } = prepared;
   const original = {
     message,
@@ -114,6 +121,14 @@ export function resolvePendingInputReplayRequest(
     requestHash: prepared.requestHash,
   };
   if (!replaySourceSessionKeys) {
+    // A turn of the owed kind adopts the queued owed row that carries its key.
+    const owedKind =
+      accepted?.state === "queued" && accepted.message_json
+        ? readOwedKind(accepted.message_json)
+        : undefined;
+    if (accepted && owedKind && owedKind === message.provenance?.sourceTool) {
+      return { ...original, requestHash: accepted.request_hash, owed: true };
+    }
     if (
       accepted?.run_id === prepared.runId &&
       accepted.request_hash !== prepared.requestHash &&
@@ -122,27 +137,6 @@ export function resolvePendingInputReplayRequest(
       const request = matchAcceptedPendingInputMessage(message, accepted.request_hash);
       if (request) {
         return { message, ...request };
-      }
-      const delivery = readSessionSendDelivery(message);
-      if (!delivery) {
-        return original;
-      }
-      // Older peer admission hashed explicit undefined revisions, which JSON storage omits.
-      // Reconstruct only those fields; changed content or identity must still conflict.
-      const candidate = {
-        ...message,
-        __openclaw: {
-          ...message["__openclaw"],
-          sessionSendDelivery: {
-            ...asOptionalRecord(message["__openclaw"]?.sessionSendDelivery),
-            source: { ...delivery.source, lifecycleRevision: delivery.source.lifecycleRevision },
-            target: { ...delivery.target, lifecycleRevision: delivery.target.lifecycleRevision },
-          },
-        },
-      };
-      const legacyRequest = matchAcceptedPendingInputMessage(candidate, accepted.request_hash);
-      if (legacyRequest) {
-        return { ...original, requestHash: legacyRequest.requestHash };
       }
     }
     return original;

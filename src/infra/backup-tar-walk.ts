@@ -1,13 +1,15 @@
+import { createHash } from "node:crypto";
 import { constants, type BigIntStats, type Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
-import type { HeaderData } from "tar";
+import type { HeaderData } from "tar/raw";
 import { ignoreMissingPath } from "./errno.js";
+import { assertExpectedContent, type SqliteFileContent } from "./sqlite-snapshot-file.js";
 
 /** Open sources before emitting headers so a vanished name cannot leave a partial entry. */
 export async function* walkBackupTar(params: {
-  tar: Pick<typeof import("tar"), "Header" | "Pax">;
+  tar: Pick<typeof import("tar/raw"), "Header" | "Pax">;
   paths: readonly string[];
   signal?: AbortSignal;
   skip: (sourcePath: string) => boolean;
@@ -15,8 +17,11 @@ export async function* walkBackupTar(params: {
   onEntry: (sourcePath: string, header: HeaderData) => void;
   onVanished: (sourcePath: string) => void;
   onProgress: (sourcePath: string, bytes?: number) => void;
+  contentChecks?: ReadonlyMap<string, SqliteFileContent>;
+  onContentVerified?: (sourcePath: string) => void;
 }): AsyncGenerator<Buffer> {
   const noFollow = process.platform === "win32" ? 0 : constants.O_NOFOLLOW;
+  const nonBlocking = process.platform === "win32" ? 0 : constants.O_NONBLOCK;
   type Directory = { sourcePath: string; identity: BigIntStats };
   const assertDirectory = async ({ sourcePath, identity }: Directory) => {
     const current = await fs.lstat(sourcePath, { bigint: true });
@@ -55,7 +60,9 @@ export async function* walkBackupTar(params: {
             linkpath = linkpath.replaceAll("\\", "/");
           }
         } else if (stat.isFile()) {
-          handle = await fs.open(sourcePath, constants.O_RDONLY | noFollow);
+          // A regular source can become a FIFO after lstat. Open without waiting
+          // for a writer so the descriptor check below can reject that change.
+          handle = await fs.open(sourcePath, constants.O_RDONLY | noFollow | nonBlocking);
           const openedIdentity = await handle.stat({ bigint: true });
           const opened = await handle.stat();
           if (!opened.isFile()) {
@@ -112,6 +119,9 @@ export async function* walkBackupTar(params: {
       }
       yield block;
       if (handle) {
+        const resolvedPath = path.resolve(sourcePath);
+        const expected = params.contentChecks?.get(resolvedPath);
+        const hash = expected ? createHash("sha256") : undefined;
         let position = 0;
         while (position < stat.size) {
           params.signal?.throwIfAborted();
@@ -126,7 +136,17 @@ export async function* walkBackupTar(params: {
           }
           position += bytesRead;
           params.onProgress(sourcePath, bytesRead);
+          hash?.update(buffer.subarray(0, bytesRead));
           yield buffer.subarray(0, bytesRead);
+        }
+        params.signal?.throwIfAborted();
+        if (expected && hash) {
+          assertExpectedContent(
+            { sha256: hash.digest("hex"), sizeBytes: position },
+            expected,
+            sourcePath,
+          );
+          params.onContentVerified?.(resolvedPath);
         }
         const padding = (512 - (stat.size % 512)) % 512;
         if (padding) {

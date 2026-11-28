@@ -21,6 +21,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { WorkerEnvironmentRecord } from "../../src/gateway/worker-environments/environment-record.js";
 import type { PlacementRecoveryDeps } from "../../src/gateway/worker-environments/placement-recovery-contract.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -121,6 +122,8 @@ try {
       profileSnapshot: { settings: {}, executionMode: "remote-exec" },
       preparation: null,
       provisionOperationId: `synthetic-provision-${index}`,
+      resourceReceipt: null,
+      retention: null,
       nodeSetupId: null,
       nodeDeviceId: null,
       sharedHost: false,
@@ -173,12 +176,13 @@ try {
       get: (id) => environments.get(id),
       reconcileOnce: async () => {},
       reconcileEnvironment: unexpected,
+      ensureRetainedRunning: unexpected,
+      fenceWorkerTurnForRecovery: unexpected,
       supportsProviderExecutionMode: (_providerId, mode) => mode === "remote-exec",
       startTunnel: unexpected,
       stopTunnel: unexpected,
       destroy: unexpected,
       reclaim: unexpected,
-      fenceWorkerTurnForRecovery: unexpected,
     },
     failure: {
       failActive: unexpected,
@@ -213,12 +217,7 @@ try {
   const memoryBefore = process.memoryUsage();
   const loadBefore = loadavg();
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const mainCpuBefore = process.threadCpuUsage();
   const processCpuBefore = process.cpuUsage();

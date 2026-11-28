@@ -24,6 +24,20 @@ describe("selected request Fast applicability", () => {
     { name: "OAuth", context: { authMode: "oauth" }, expected: false },
     { name: "unknown auth", context: { authMode: undefined }, expected: undefined },
     { name: "unclassified token", context: { authMode: "token" }, expected: undefined },
+    {
+      name: "Claude Code menu with Fast",
+      context: {
+        runtimeId: "claude-cli",
+        authMode: "oauth",
+        modelParams: { claudeCodeFastMode: true },
+      },
+      expected: true,
+    },
+    {
+      name: "Claude Code menu without Fast",
+      context: { runtimeId: "claude-cli" },
+      expected: false,
+    },
     { name: "unknown API", context: { api: undefined }, expected: undefined },
     {
       name: "native runtime",

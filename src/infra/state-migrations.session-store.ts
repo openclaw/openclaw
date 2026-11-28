@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import { normalizePersistedSessionEntryShape } from "../commands/doctor/shared/session-entry-shape.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -13,11 +12,8 @@ import { assertSupportedSessionStoreEntry } from "../config/sessions/supported-s
 import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  collectRelevantDoctorPluginIds,
-  isPluginDoctorMigrationDeferred,
-  listPluginDoctorSessionStoreAgentIds,
-} from "../plugins/doctor-contract-registry.js";
+import { preparePluginDoctorSessionStoreAgentIds } from "../plugins/doctor-contract-preparation.js";
+import { collectRelevantDoctorPluginIds } from "../plugins/doctor-contract-registry.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
@@ -31,24 +27,13 @@ import {
   withOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
 import { readDeferredPluginMigrations } from "./deferred-plugin-migrations.js";
-import {
-  deferredPluginSessionStoreIds,
-  prepareDeferredPluginSessionImportReader,
-  preserveDeferredPluginSessionSource,
-  resolveDeferredPluginSessionStoreSource,
-} from "./deferred-plugin-session-sources.js";
+import { preserveDeferredPluginSessionSource } from "./deferred-plugin-session-sources.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { readDirectoryEntriesSync } from "./path-existence.js";
 import { safeStatSync } from "./path-guards.js";
-import { importLegacyAcpSessionMetadata } from "./state-migrations.acp-session-metadata.js";
-import {
-  parseSessionStoreJson5,
-  readSessionStoreJson5,
-  type SessionEntryLike,
-} from "./state-migrations.fs.js";
+import { parseSessionStoreJson5, type SessionEntryLike } from "./state-migrations.fs.js";
 import { saveLegacySessionStore } from "./state-migrations.legacy-session-store.js";
 import {
-  resolveLegacyAcpMetadataSessionStoreTargets,
   resolveSessionStoreAliasPlan,
   sessionStorePathsMatch,
 } from "./state-migrations.session-store-paths.js";
@@ -70,7 +55,7 @@ type SessionKeyCanonicalizationOptions = {
   legacySessionSurfaces?: PreparedLegacySessionSurfaces["surfaces"];
 };
 
-function canonicalizeSessionKeyForAgent(
+export function canonicalizeLegacySessionKeyForAgent(
   params: SessionKeyCanonicalizationOptions & {
     key: string;
     skipCrossAgentRemap?: boolean;
@@ -228,7 +213,7 @@ export function canonicalizeSessionStore({
     if (!entry || typeof entry !== "object") {
       continue;
     }
-    const canonicalKey = canonicalizeSessionKeyForAgent({
+    const canonicalKey = canonicalizeLegacySessionKeyForAgent({
       ...options,
       key,
       skipCrossAgentRemap: options.preserveAmbiguousKeys,
@@ -345,7 +330,7 @@ export function listLegacySessionKeys({
 }): string[] {
   return Object.keys(store).filter(
     (key) =>
-      canonicalizeSessionKeyForAgent({
+      canonicalizeLegacySessionKeyForAgent({
         ...options,
         key,
         skipCrossAgentRemap: options.preserveAmbiguousKeys,
@@ -365,15 +350,52 @@ export function removeDirIfEmpty(dir: string) {
   }
 }
 
-export async function migrateOrphanedSessionKeys(params: {
+type OrphanedSessionKeyParams = {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   additionalAgentIds?: readonly string[];
   legacySessionSurfaces: PreparedLegacySessionSurfaces | (() => PreparedLegacySessionSurfaces);
-}): Promise<MigrationMessages> {
+};
+
+/** Deferred plugin session migrations, read live inside a Doctor pending check. */
+export function readPendingPluginSessionMigrations(env: NodeJS.ProcessEnv) {
+  return withArtifactPreservingStateReads(() =>
+    withOpenClawStateDatabaseReadSnapshot(async () => readDeferredPluginMigrations({ env }), {
+      env,
+    }),
+  );
+}
+
+/**
+ * Whether orphaned session keys need canonicalizing, by the migration's own pass without its
+ * write. Anything the pass would only warn about is undecidable, since skipping it would drop
+ * the warning.
+ */
+export async function checkOrphanedSessionKeysPending(
+  params: OrphanedSessionKeyParams,
+): Promise<"work" | "none" | "undecidable"> {
+  const pass = await canonicalizeOrphanedSessionKeys(params);
+  return pass.legacyStores > 0 ? "work" : pass.warnings.length > 0 ? "undecidable" : "none";
+}
+
+export async function migrateOrphanedSessionKeys(
+  params: OrphanedSessionKeyParams,
+): Promise<MigrationMessages> {
+  const { legacyStores: _legacyStores, ...result } = await canonicalizeOrphanedSessionKeys(
+    params,
+    saveSessionStoreStrict,
+  );
+  return result;
+}
+
+async function canonicalizeOrphanedSessionKeys(
+  params: OrphanedSessionKeyParams,
+  save?: (storePath: string, store: Record<string, SessionEntry>) => Promise<void>,
+): Promise<MigrationMessages & { legacyStores: number }> {
   const changes: string[] = [];
   const warnings: string[] = [];
   const recoverableWarnings: string[] = [];
+  let legacyStores = 0;
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
   let preparedLegacySessionSurfaces: PreparedLegacySessionSurfaces | undefined;
   const resolveLegacySessionSurfaces = () =>
@@ -386,11 +408,6 @@ export async function migrateOrphanedSessionKeys(params: {
   const scope = params.cfg.session?.scope as SessionScope | undefined;
   const storeConfig = params.cfg.session?.store;
   const persistedStoreOwner = resolvePersistedSessionStoreOwner(params.cfg);
-  const pendingPluginMigrations = await withArtifactPreservingStateReads(() =>
-    withOpenClawStateDatabaseReadSnapshot(async () => readDeferredPluginMigrations({ env }), {
-      env,
-    }),
-  );
   const persistedStoreAgentId =
     persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined;
   const persistedStorePath =
@@ -399,11 +416,11 @@ export async function migrateOrphanedSessionKeys(params: {
       : undefined;
   const pluginAgentIds =
     params.additionalAgentIds ??
-    listPluginDoctorSessionStoreAgentIds({
+    (await preparePluginDoctorSessionStoreAgentIds({
       config: params.cfg,
       env,
       pluginIds: collectRelevantDoctorPluginIds(params.cfg),
-    });
+    }));
   const pluginAgentIdSet = new Set(pluginAgentIds.map((id) => normalizeAgentId(id)));
 
   // Fixed session.store paths can be shared by several agent owners.
@@ -457,6 +474,9 @@ export async function migrateOrphanedSessionKeys(params: {
       }
     }
   }
+  // Read first: the deferred plugin migrations are read only once a legacy store exists.
+  const pendingPluginMigrations =
+    storeMap.size > 0 ? await readPendingPluginSessionMigrations(env) : [];
 
   for (const [mappedStorePath, storeAgentIds] of storeMap) {
     if (
@@ -510,6 +530,7 @@ export async function migrateOrphanedSessionKeys(params: {
       return {
         changes,
         warnings: [...warnings, ...recoverableWarnings, ...legacySessionSurfaces.failures],
+        legacyStores,
       };
     }
     // A physical store can have several owners. Canonicalize valid scoped rows
@@ -572,6 +593,10 @@ export async function migrateOrphanedSessionKeys(params: {
     if (totalLegacy === 0) {
       continue;
     }
+    legacyStores += 1;
+    if (!save) {
+      continue;
+    }
     const normalized = Object.create(null) as Record<string, SessionEntry>;
     for (const [key, entry] of Object.entries(working)) {
       const ne = normalizeSessionEntry(entry, key);
@@ -580,7 +605,7 @@ export async function migrateOrphanedSessionKeys(params: {
       }
     }
     try {
-      await saveSessionStoreStrict(storePath, normalized);
+      await save(storePath, normalized);
       changes.push(`Canonicalized ${totalLegacy} orphaned session key(s) in ${storePath}`);
     } catch (err) {
       warnings.push(`Failed to write canonicalized store ${storePath}: ${String(err)}`);
@@ -593,239 +618,11 @@ export async function migrateOrphanedSessionKeys(params: {
     ...(warnings.length === 0 && recoverableWarnings.length > 0
       ? { warningDisposition: "recoverable" as const }
       : {}),
+    legacyStores,
   };
 }
 
-export async function migrateLegacyAcpSessionMetadata(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  now?: () => number;
-  pluginSessionStoreAgentIds?: readonly string[];
-  legacySessionSurfaces: PreparedLegacySessionSurfaces;
-}): Promise<{ changes: string[]; warnings: string[] }> {
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
-  if (params.legacySessionSurfaces.failures.length > 0) {
-    return {
-      changes,
-      warnings: [...params.legacySessionSurfaces.failures],
-    };
-  }
-  const now = params.now ?? (() => Date.now());
-  const pending = await withArtifactPreservingStateReads(() =>
-    withOpenClawStateDatabaseReadSnapshot(async () => readDeferredPluginMigrations({ env }), {
-      env,
-    }),
-  );
-  const stateDir = resolveStateDir(env);
-  const storeConfig = params.cfg.session?.store;
-  const pluginAgentIds =
-    params.pluginSessionStoreAgentIds ??
-    listPluginDoctorSessionStoreAgentIds({
-      config: params.cfg,
-      env,
-      pluginIds: collectRelevantDoctorPluginIds(params.cfg),
-    });
-  const normalizedPluginAgentIds = new Set(pluginAgentIds.map((id) => normalizeAgentId(id)));
-  const declaredAgentIds = new Set([
-    ...listConfiguredSessionStoreAgentIds(params.cfg).map((id) => normalizeAgentId(id)),
-    ...normalizedPluginAgentIds,
-  ]);
-  const declaredTargets = [...declaredAgentIds].map((agentId) => ({
-    agentId,
-    storePath: storeConfig
-      ? resolveStorePathFromTemplate(storeConfig, agentId, env)
-      : path.join(stateDir, "agents", agentId, "sessions", "sessions.json"),
-  }));
-  const pluginTargets = declaredTargets.filter(
-    ({ agentId }) => agentId !== DEFAULT_AGENT_ID && normalizedPluginAgentIds.has(agentId),
-  );
-  const configuredAgents = listAgentEntries(params.cfg);
-  const configuredAgentIds = new Set(
-    configuredAgents.flatMap((entry) => (entry?.id ? [normalizeAgentId(entry.id)] : [])),
-  );
-  const discoveryCfg = [...declaredAgentIds].some((agentId) => !configuredAgentIds.has(agentId))
-    ? {
-        ...params.cfg,
-        agents: {
-          ...params.cfg.agents,
-          entries: toAgentEntriesRecord([
-            ...configuredAgents,
-            ...[...declaredAgentIds]
-              .filter((agentId) => !configuredAgentIds.has(agentId))
-              .map((id) => ({ id })),
-          ]),
-        },
-      }
-    : params.cfg;
-  // Reuse the validated resolver for every declared owner. Owner multiplicity
-  // is restored below as metadata without re-adding rejected raw paths.
-  const targets = resolveLegacyAcpMetadataSessionStoreTargets(discoveryCfg, env);
-  const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
-  const scope = params.cfg.session?.scope as SessionScope | undefined;
-  const storeGroups: Array<{
-    target: (typeof targets)[number];
-    sourcePath: string;
-    agentIds: Set<string>;
-    aliasCandidates: Set<string>;
-  }> = [];
-
-  for (const target of targets) {
-    // Core import may archive the index while its ACP metadata still awaits the plugin.
-    const sourcePath = safeStatSync(target.storePath)?.isFile()
-      ? target.storePath
-      : resolveDeferredPluginSessionStoreSource({ target, env });
-    if (!sourcePath) {
-      continue;
-    }
-    let group = storeGroups.find(({ target: existing }) =>
-      sessionStorePathsMatch(existing.storePath, target.storePath),
-    );
-    const matchingDeclaredTargets = declaredTargets.filter((declaredTarget) =>
-      sessionStorePathsMatch(target.storePath, declaredTarget.storePath),
-    );
-    if (!group) {
-      group = { target, sourcePath, agentIds: new Set(), aliasCandidates: new Set() };
-      storeGroups.push(group);
-    }
-    group.agentIds.add(normalizeAgentId(target.agentId));
-    group.aliasCandidates.add(target.storePath);
-    for (const declaredTarget of matchingDeclaredTargets) {
-      group.agentIds.add(declaredTarget.agentId);
-      group.aliasCandidates.add(declaredTarget.storePath);
-    }
-  }
-
-  for (const { target, sourcePath, agentIds, aliasCandidates } of storeGroups) {
-    const storePath = target.storePath;
-    if (deferredPluginSessionStoreIds({ target, pending }).some(isPluginDoctorMigrationDeferred)) {
-      continue;
-    }
-    // An archived index is read-only evidence; consumption is recorded, never rewritten.
-    const preserveSource =
-      sourcePath !== storePath ||
-      preserveDeferredPluginSessionSource({ cfg: params.cfg, env, target, pending });
-    const storeAliases = resolveSessionStoreAliasPlan(storePath, aliasCandidates);
-    const pluginForeignMainAliasRisk = pluginTargets.some((pluginTarget) =>
-      sessionStorePathsMatch(storePath, pluginTarget.storePath),
-    );
-    const parsed = readSessionStoreJson5(sourcePath);
-    if (!parsed.ok) {
-      continue;
-    }
-    const ambiguousKeyCount = Object.keys(parsed.store).filter(
-      (key) =>
-        isAmbiguousSharedStoreKey(key, mainKey, scope) ||
-        (pluginForeignMainAliasRisk && isLegacyDefaultMainAliasKey(key, mainKey)),
-    ).length;
-    const hasLegacyAcpMetadata = Object.entries(parsed.store).some(
-      ([sessionKey, entry]) => normalizeSessionEntry(entry, sessionKey)?.acp !== undefined,
-    );
-    if (hasLegacyAcpMetadata && storeAliases.hasUnresolvedIdentity) {
-      warnings.push(unresolvedSessionStoreIdentityWarning("ACP metadata migration", storePath));
-      continue;
-    }
-    if (hasLegacyAcpMetadata && storeAliases.hasFinalSymlink) {
-      warnings.push(
-        `Deferred ACP metadata migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
-      );
-      continue;
-    }
-    if (hasLegacyAcpMetadata && storeAliases.hasDistinctAliases) {
-      // Removing ACP metadata rewrites the store and would split its aliases.
-      warnings.push(
-        ambiguousKeyCount > 0
-          ? aliasedSessionStoreMigrationWarning({
-              subject: "ACP metadata migration for",
-              count: ambiguousKeyCount,
-              storePath,
-            })
-          : distinctSessionStoreAliasWarning("ACP metadata migration", storePath),
-      );
-      continue;
-    }
-
-    const readVerifiedCoreImport = prepareDeferredPluginSessionImportReader({
-      target,
-      env,
-    });
-    const normalized = Object.create(null) as Record<string, SessionEntry>;
-    let migrated = 0;
-    let consumed = 0;
-    let preserved = 0;
-    for (const [sessionKey, entry] of Object.entries(parsed.store)) {
-      const normalizedEntry = normalizeSessionEntry(entry, sessionKey);
-      if (!normalizedEntry) {
-        continue;
-      }
-      if (normalizedEntry.acp) {
-        const ambiguousSharedStoreKey = isAmbiguousSharedStoreKey(sessionKey, mainKey, scope);
-        const ambiguousMultiOwnerKey = agentIds.size > 1 && ambiguousSharedStoreKey;
-        const foreignMainAlias =
-          pluginForeignMainAliasRisk && isLegacyDefaultMainAliasKey(sessionKey, mainKey);
-        if (ambiguousMultiOwnerKey || foreignMainAlias) {
-          preserved++;
-          normalized[sessionKey] = normalizedEntry;
-          continue;
-        }
-        const rowAgentId = resolveCanonicalAgentSessionOwner(sessionKey) ?? target.agentId;
-        const canonicalSessionKey = canonicalizeSessionKeyForAgent({
-          key: sessionKey,
-          agentId: rowAgentId,
-          mainKey,
-          scope,
-          skipCrossAgentRemap: true,
-          legacySessionSurfaces: params.legacySessionSurfaces.surfaces,
-        });
-        const imported = importLegacyAcpSessionMetadata({
-          sourcePath: storePath,
-          sourceSessionKey: sessionKey,
-          preserveSource,
-          cfg: params.cfg,
-          agentId: rowAgentId,
-          readVerifiedCoreImport,
-          sessionKey: canonicalSessionKey,
-          sessionId: normalizedEntry.sessionId,
-          lifecycleRevision: normalizedEntry.lifecycleRevision,
-          meta: normalizedEntry.acp,
-          env,
-          now,
-        });
-        delete normalizedEntry.acp;
-        consumed++;
-        if (imported) {
-          migrated++;
-        }
-      }
-      normalized[sessionKey] = normalizedEntry;
-    }
-    if (preserved > 0) {
-      warnings.push(
-        `Preserved ACP metadata for ${preserved} ambiguous session key(s) in potentially shared store ${storePath}`,
-      );
-    }
-    if (consumed === 0 || (preserveSource && migrated === 0)) {
-      continue;
-    }
-    try {
-      if (!preserveSource) {
-        await saveSessionStoreStrict(storePath, normalized);
-      }
-      changes.push(
-        migrated > 0
-          ? `Migrated ${migrated} ACP session metadata ${migrated === 1 ? "row" : "rows"} → shared SQLite state`
-          : `Removed previously imported ACP metadata from ${storePath}`,
-      );
-    } catch (err) {
-      warnings.push(`Failed to write ACP metadata migration source ${storePath}: ${String(err)}`);
-    }
-  }
-
-  return { changes, warnings };
-}
-
-function resolveStorePathFromTemplate(
+export function resolveStorePathFromTemplate(
   template: string,
   agentId: string,
   env: NodeJS.ProcessEnv,
@@ -907,4 +704,3 @@ export function resolveSessionStoreOwnership(params: {
   const targetStoreAliases = resolveSessionStoreAliasPlan(targetStorePath, candidateStorePaths);
   return { preserveAmbiguousKeys, preserveForeignMainAliases, targetStoreAliases };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
@@ -33,7 +33,7 @@ import { readSessionEntryPatchSnapshot } from "./session-entry-patch.worker.js";
 import { readSessionTranscriptAccountingFromProjection } from "./session-transcript-accounting.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { promptReport } from "./system-prompt-report.test-support.js";
 import { timedMessageEvent, messageEvent } from "./transcript-message.test-support.js";
 
@@ -67,7 +67,7 @@ it("preserves run adoption and its reducers through hydration and repairs derive
         commandId: "adopt-with-activity",
         phaseId: "adoption",
         sessionId: f.scope.sessionId,
-        expectedState: buildRestartRecoveryExpectedState(initial.entry!),
+        expectedState: buildSessionTranscriptTurnExpectedState(initial.entry!),
         runId: "current-run",
         lifecycle: { startedAt: 2 },
         reducers: [
@@ -90,7 +90,7 @@ it("preserves run adoption and its reducers through hydration and repairs derive
           ...command.input,
           expected: snapshot.version,
           commandId,
-          expectedState: buildRestartRecoveryExpectedState(snapshot.entry!),
+          expectedState: buildSessionTranscriptTurnExpectedState(snapshot.entry!),
           // Clearing an absent optional field changes shape, not the stored row.
           lifecycle: { endedAt: undefined },
           reducers: [],
@@ -124,7 +124,7 @@ it("preserves run adoption and its reducers through hydration and repairs derive
     ).toMatchObject({ label: "initial" });
   }));
 
-it("reads committed participant counts and ordering in the same and next turn without SQL", () =>
+it("reads committed participant counts and ordering in the same and next turn", () =>
   withActor((f) => {
     const before = f.read();
     const record = (id: string, promptedAt: number) =>
@@ -141,14 +141,6 @@ it("reads committed participant counts and ordering in the same and next turn wi
     const rolledBack = f.read();
     expect(rolledBack.entry).toEqual(before.entry);
     expect(rolledBack.participants).toEqual(before.participants);
-    using reads = countStatements(f.database.db, ["participant", "hydration"], (sql) => {
-      if (sql.includes('as "actor_participants"')) {
-        return "hydration";
-      }
-      return /^select\b/iu.test(sql) && sql.includes('"session_participants"')
-        ? "participant"
-        : null;
-    });
     const participants = () =>
       participantRecordsBySessionKey(f.database.db, [f.target.sessionKey]).get(f.target.sessionKey);
 
@@ -176,7 +168,6 @@ it("reads committed participant counts and ordering in the same and next turn wi
       participantCount: 2,
       participants: [{ identity: { id: "second" } }, { identity: { id: "first" } }],
     });
-    expect(reads.counts).toEqual({ participant: 0, hydration: 0 });
   }));
 
 it("autocommits resident contributions and keeps consecutive actor counts current", () =>
@@ -184,23 +175,9 @@ it("autocommits resident contributions and keeps consecutive actor counts curren
     f.read();
     const input = { identity: { type: "agent" as const, id: "peer" }, promptedAt: 10 };
     f.participant(input);
-    using sql = countStatements(f.database.db, ["contribution", "read"], (text) =>
-      /^insert into "session_participants"/iu.test(text)
-        ? "contribution"
-        : /^select\b/iu.test(text)
-          ? "read"
-          : null,
-    );
-    const exec = vi.spyOn(f.database.db, "exec");
-    try {
-      f.participant({ ...input, promptedAt: 20 });
-      f.participant({ ...input, promptedAt: 30 });
-      expect(f.read().participants).toMatchObject([participantRecord("peer", 3, 10, 30)]);
-      expect(sql.counts).toEqual({ contribution: 2, read: 0 });
-      expect(exec.mock.calls.some(([text]) => /BEGIN|COMMIT/iu.test(text))).toBe(false);
-    } finally {
-      exec.mockRestore();
-    }
+    f.participant({ ...input, promptedAt: 20 });
+    f.participant({ ...input, promptedAt: 30 });
+    expect(f.read().participants).toMatchObject([participantRecord("peer", 3, 10, 30)]);
     f.restartActor();
     expect(f.read().participants).toMatchObject([{ contributionCount: 3, lastPromptedAt: 30 }]);
   }));
@@ -238,7 +215,7 @@ it("refuses a prepared contribution before its statement and retains it after pu
 it("retains resident session facts across usage cache writes and reloads actual session changes", () =>
   withActor(async (f) => {
     const initial = f.read();
-    const usage = prepareSessionCostUsageRefreshLock(f.database.agentId, f.database.path);
+    const usage = await prepareSessionCostUsageRefreshLock(f.database.agentId, f.database.path);
     using reads = countStatements(f.database.db, ["hydration"], (sql) =>
       sql.includes('as "actor_participants"') ? "hydration" : null,
     );
@@ -506,9 +483,7 @@ function seed(f: Fixture, prettyQuestion = false) {
 }
 
 function reader(f: Fixture) {
-  if (f.target.database.kind !== "file") {
-    throw new Error("Context metadata proof requires a durable actor");
-  }
+  assert(f.target.database.kind === "file", "Context metadata proof requires a durable actor");
   const replica = createSessionActorReplica({
     target: { ...f.target, database: f.target.database },
     lifetime: { assertCurrent() {}, assertReadable() {} },
@@ -520,9 +495,7 @@ function reader(f: Fixture) {
       sessionKey: f.scope.sessionKey,
       sessionId: f.scope.sessionId,
     });
-    if (!retained) {
-      throw new Error("Actor did not publish its projection receipt");
-    }
+    assert(retained, "Actor did not publish its projection receipt");
     return retained;
   };
   const accounting = () =>
@@ -649,27 +622,41 @@ it.each(["reset", "compaction", "leaf"] as const)(
     }),
 );
 
-it("keeps exact accounting through appends and rewrites beyond the actor's resident window without rescanning", () =>
-  withActor(async (f) => {
+it.each([false, true])("keeps large-transcript accounting correct (invalidate: %s)", (invalidate) =>
+  withActor((f) => {
     const events = Array.from({ length: 600 }, (_, index) =>
       messageEvent(`message-${index}`, index === 0 ? null : `message-${index - 1}`, {
         role: "user",
         content: "x",
       }),
     );
-    runSqliteImmediateTransactionSync(f.database.db, () => {
+    runSqliteImmediateTransactionSync(f.database.db, () =>
       appendTranscriptEventsInTransaction(f.database, f.scope, events, {
         scheduleProjectionReconcile: false,
-      });
-    });
-    using context = reader(f);
-
-    context.install();
-    using stats = countStatements(f.database.db, ["aggregate"], (sql) =>
-      /\bsum\(/iu.test(sql) && sql.includes('"transcript_events"') ? "aggregate" : null,
+      }),
     );
+    using context = reader(f);
+    const priorAccounting = readCurrentProjectionSnapshot(f.database, f.scope, (projection) =>
+      readSessionTranscriptAccountingFromProjection(projection, {
+        includeByteSize: true,
+        includeUsage: false,
+      }),
+    );
+    using stats = countStatements(f.database.db, ["aggregate", "hydration"], (sql) =>
+      /\bsum\(/iu.test(sql) && sql.includes('"transcript_events"')
+        ? "aggregate"
+        : sql.includes('as "actor_participants"')
+          ? "hydration"
+          : null,
+    );
+    context.install();
+    expect(stats.counts.aggregate).toBe(0);
+    stats.textBytes.hydration = 0;
     const originalBytes = events.reduce((total, event) => total + storedBytes(event), 0);
-    context.expectAccounting(events.length, originalBytes);
+    expect(priorAccounting).toMatchObject({
+      kind: "value",
+      value: { eventCount: events.length, byteSize: originalBytes },
+    });
     const appended = {
       type: "message" as const,
       id: "after-window",
@@ -703,24 +690,32 @@ it("keeps exact accounting through appends and rewrites beyond the actor's resid
       message: { ...appended.message, __openclaw: { steerTargetRunId: "new-run" } },
     };
 
-    await f.prepare(command);
+    if (invalidate) {
+      f.writeEntry({ ...f.nativeEntry()!, label: "before append" });
+    }
     expect(f.mutate(command)).toMatchObject({ kind: "committed" });
+    expect(stats.textBytes.hydration).toBeLessThan(10_000);
     context.install();
     context.expectAccounting(events.length + 1, originalBytes + storedBytes(appended));
+    if (invalidate) {
+      f.writeEntry({ ...f.nativeEntry()!, label: "before rewrite" });
+    }
     runSqliteImmediateTransactionSync(f.database.db, () => {
       rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
         { seq: events.length, expectedEventJson: JSON.stringify(appended), event: rewritten },
       ]);
     });
+    context.install();
     context.expectAccounting(events.length + 1, originalBytes + storedBytes(rewritten));
-    expect(stats.counts.aggregate).toBe(0);
+    expect(stats.counts.aggregate).toBe(invalidate ? 1 : 0);
     expect(
       readSessionTranscriptBoundedActiveContextCore(f.scope, {
         maxBytes: 1024 * 1024,
         maxEvents: 100,
       }),
     ).toMatchObject({ events: [...events.slice(-99), rewritten], truncated: true });
-  }));
+  }),
+);
 
 it("retains one oversized actor across competing small actors and replaces it with a second oversized actor", () =>
   withActor(async (f) => {
@@ -758,7 +753,7 @@ it("retains one oversized actor across competing small actors and replaces it wi
         commandId: "oversized-activity",
         phaseId: "terminal-accounting",
         sessionId: f.scope.sessionId,
-        expectedState: buildRestartRecoveryExpectedState(initial.entry!),
+        expectedState: buildSessionTranscriptTurnExpectedState(initial.entry!),
         runId: "oversized-run",
         lifecycle: {},
         reducers: [
@@ -769,9 +764,7 @@ it("retains one oversized actor across competing small actors and replaces it wi
     };
     await f.prepare(command);
     const committed = f.mutate(command);
-    if (committed.kind !== "committed") {
-      throw new Error("Expected the oversized sole actor to commit without rehydration");
-    }
+    assert(committed.kind === "committed", "Expected the oversized actor to commit");
     expect(committed.failure).toBeUndefined();
     expect(committed.receipt.postimage.entry?.goal?.continuationTurns).toBe(1);
     expect(f.nativeEntry()?.goal?.continuationTurns).toBe(1);

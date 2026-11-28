@@ -54,27 +54,27 @@ struct OnboardingWizardView: View {
     @FocusState private var focusedField: OnboardingFocusedField?
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
+    @State private var showNewUserGuide: Bool = false
     let allowSkip: Bool
+    let offersNewUserGuide: Bool
     let onRequestLocalNetworkAccess: (String) -> Void
     let onClose: () -> Void
     let onComplete: () -> Void
 
     init(
         allowSkip: Bool,
+        offersNewUserGuide: Bool,
         onRequestLocalNetworkAccess: @escaping (String) -> Void,
         onClose: @escaping () -> Void,
         onComplete: @escaping () -> Void)
     {
         self.allowSkip = allowSkip
+        self.offersNewUserGuide = offersNewUserGuide
         self.onRequestLocalNetworkAccess = onRequestLocalNetworkAccess
         self.onClose = onClose
         self.onComplete = onComplete
         _step = State(
             initialValue: OnboardingStateStore.shouldPresentFirstRunIntro() ? .intro : .welcome)
-    }
-
-    private var isFullScreenStep: Bool {
-        self.step == .intro || self.step == .welcome || self.step == .success
     }
 
     private var currentProblem: GatewayConnectionProblem? {
@@ -134,68 +134,46 @@ struct OnboardingWizardView: View {
     }
 
     private var lifecycleContent: some View {
-        NavigationStack {
+        NavigationStack(path: self.pushedSteps) {
             Group {
                 switch self.step {
                 case .intro:
                     OnboardingIntroStep(onContinue: self.advanceFromIntro)
-                case .welcome:
-                    self.welcomeStep
                 case .success:
                     self.successStep
                 default:
-                    Form {
-                        if self.dynamicTypeSize.isAccessibilitySize {
-                            Section {
-                                self.stepHeading
-                                    .frame(maxWidth: .infinity)
-                                    .multilineTextAlignment(.center)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .listRowBackground(Color.clear)
-                            }
-                        }
-                        switch self.step {
-                        case .mode:
-                            self.modeStep
-                        case .connect:
-                            self.connectStep
-                        case .auth:
-                            self.authStep
-                        default:
-                            EmptyView()
-                        }
-                    }
-                    .formStyle(.grouped)
-                    .scrollContentBackground(.hidden)
-                    .background(Color(uiColor: .systemGroupedBackground))
-                    .scrollDismissesKeyboard(.interactively)
+                    // Also under the manual steps: a back swipe reveals it.
+                    self.welcomeStep
                 }
             }
-            .navigationTitle(self.isFullScreenStep || self.dynamicTypeSize.isAccessibilitySize ? "" : self.step.title)
-            .navigationBarTitleDisplayMode(.inline)
             .tint(OpenClawBrand.activationPrimaryAction)
-            .toolbar {
-                if !self.isFullScreenStep, self.dynamicTypeSize.isAccessibilitySize {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Back", systemImage: "chevron.left", action: self.navigateBack)
-                            .labelStyle(.iconOnly)
-                    }
-                }
-                if !self.isFullScreenStep, !self.dynamicTypeSize.isAccessibilitySize {
-                    ToolbarItem(placement: .principal) {
-                        self.stepHeading
-                    }
-                }
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(for: OnboardingStep.self) { step in
+                self.manualStep(step)
             }
         }
         .safeAreaInset(edge: .bottom, alignment: .trailing, spacing: 0) {
             self.keyboardDismissControl
         }
-        .overlay(alignment: .topLeading) {
-            if self.isFullScreenStep || !self.dynamicTypeSize.isAccessibilitySize {
-                self.leadingChromeButton
-                    .padding(.leading, 16)
-                    .padding(.top, 10)
+        // A toolbar item would give these screens a navigation bar and push the hero down; the
+        // overlay sits where a sheet's close button does.
+        .overlay(alignment: .topTrailing) {
+            if self.allowSkip, self.step.pushedSteps.isEmpty {
+                Button {
+                    self.invalidateSetupAttempt()
+                    self.onClose()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 18, weight: .medium))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.primary)
+                .glassEffect(.regular.interactive(), in: Circle())
+                .accessibilityLabel("Close")
+                .padding(.trailing, 16)
             }
         }
         .gatewayTrustPromptAlert()
@@ -220,6 +198,9 @@ struct OnboardingWizardView: View {
             content: {
                 self.qrScannerSheet
             })
+        .sheet(isPresented: self.$showNewUserGuide) {
+            OnboardingNewUserGuideSheet()
+        }
         .sheet(isPresented: self.$showGatewayProblemDetails) {
             if let currentProblem = self.currentProblem {
                 GatewayProblemDetailsSheet(
@@ -270,9 +251,9 @@ struct OnboardingWizardView: View {
             self.clearStagedGatewaySetupLink()
         }
         .onChange(of: self.appModel.lastGatewayProblem) { _, newValue in
-            self.updateConnectionIssue(problem: newValue, statusText: self.appModel.gatewayStatusText)
+            self.updateConnectionIssue(problem: newValue, statusText: self.appModel.gatewayDisplayStatusText)
         }
-        .onChange(of: self.appModel.gatewayStatusText) { _, newValue in
+        .onChange(of: self.appModel.gatewayDisplayStatusText) { _, newValue in
             self.updateConnectionIssue(problem: self.appModel.lastGatewayProblem, statusText: newValue)
         }
         .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
@@ -367,26 +348,52 @@ struct OnboardingWizardView: View {
         }
     }
 
-    @ViewBuilder
-    private var leadingChromeButton: some View {
-        if self.step.canGoBack {
-            Button {
-                self.navigateBack()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(OpenClawType.subheadSemiBold)
-                    .accessibilityLabel("Back")
+    /// The path is derived from `step`. Only the system back button and the back swipe write
+    /// it, and they pop one step at a time.
+    private var pushedSteps: Binding<[OnboardingStep]> {
+        Binding(
+            get: { self.step.pushedSteps },
+            set: { path in
+                guard path.count < self.step.pushedSteps.count else { return }
+                self.navigateBack(to: path.last ?? .welcome)
+            })
+    }
+
+    private func manualStep(_ step: OnboardingStep) -> some View {
+        Form {
+            if self.dynamicTypeSize.isAccessibilitySize {
+                Section {
+                    self.stepHeading(step)
+                        .frame(maxWidth: .infinity)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .listRowBackground(Color.clear)
+                }
             }
-            .buttonStyle(OpenClawCloseButtonStyle())
-        } else if self.allowSkip {
-            Button {
-                self.invalidateSetupAttempt()
-                self.onClose()
-            } label: {
-                Text("Close")
-                    .font(OpenClawType.subheadSemiBold)
+            switch step {
+            case .mode:
+                self.modeStep
+            case .connect:
+                self.connectStep
+            case .auth:
+                self.authStep
+            default:
+                EmptyView()
             }
-            .buttonStyle(OpenClawCloseButtonStyle())
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .background(Color(uiColor: .systemGroupedBackground))
+        .scrollDismissesKeyboard(.interactively)
+        .tint(OpenClawBrand.activationPrimaryAction)
+        .navigationTitle(self.dynamicTypeSize.isAccessibilitySize ? "" : step.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !self.dynamicTypeSize.isAccessibilitySize {
+                ToolbarItem(placement: .principal) {
+                    self.stepHeading(step)
+                }
+            }
         }
     }
 
@@ -402,7 +409,7 @@ struct OnboardingWizardView: View {
                     .contentShape(Capsule(style: .continuous))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(OpenClawBrand.activationPrimaryAction)
+            .foregroundStyle(.primary)
             .background(.ultraThinMaterial, in: Capsule(style: .continuous))
             .overlay {
                 Capsule(style: .continuous)
@@ -428,7 +435,8 @@ struct OnboardingWizardView: View {
                 self.invalidateSetupAttempt()
                 self.statusLine = ""
                 self.navigate(to: .mode)
-            })
+            },
+            onShowNewUserGuide: self.offersNewUserGuide ? { self.showNewUserGuide = true } : nil)
     }
 
     @ViewBuilder
@@ -667,12 +675,12 @@ extension OnboardingWizardView {
         return "Gateway Status"
     }
 
-    private var stepHeading: some View {
+    private func stepHeading(_ step: OnboardingStep) -> some View {
         VStack(spacing: 2) {
-            Text(self.step.title)
+            Text(step.title)
                 .font(OpenClawType.headline)
                 .accessibilityAddTraits(.isHeader)
-            Text(self.step.manualProgressTitle)
+            Text(step.manualProgressTitle)
                 .font(OpenClawType.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -710,7 +718,7 @@ extension OnboardingWizardView {
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
                 .controlSize(.regular)
-                .tint(OpenClawBrand.activationPrimaryAction)
+                .tint(.primary)
                 .disabled(!self.canApplySetupCode)
             }
             .frame(minHeight: 50)
@@ -806,8 +814,7 @@ extension OnboardingWizardView {
             "",
             text: text,
             prompt: Text(placeholder)
-                .font(OpenClawType.subhead)
-                .foregroundStyle(.tertiary))
+                .font(OpenClawType.subhead))
             .font(OpenClawType.subhead)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
@@ -906,6 +913,8 @@ extension OnboardingWizardView {
                 self.handleScannedLink(link)
             case let .setupCode(code):
                 self.handleScannedSetupCode(code)
+            case .espDevice:
+                return
             }
         }
         if delivery == nil {
@@ -1051,7 +1060,8 @@ extension OnboardingWizardView {
         self.pendingTargetSuppression.releaseAutoConnect(.qrScanner, controller: self.gatewayController)
     }
 
-    private func openQRScannerFromOnboarding(status: String = "Opening QR scanner…") {
+    private func openQRScannerFromOnboarding(status: String = "") {
+        // The scanner sheet provides opening feedback; keep the parent neutral when it is canceled.
         // Stop active reconnect loops before scanning new credentials.
         self.qrCodeCompletion.cancel()
         self.invalidateSetupAttempt()
@@ -1070,9 +1080,8 @@ extension OnboardingWizardView {
 
     private func resumeAfterPairingApproval(silent: Bool = false) {
         // We intentionally stop reconnect churn while unpaired to avoid generating multiple pending requests.
-        self.appModel.gatewayAutoReconnectEnabled = true
-        self.appModel.gatewayPairingPaused = false
-        self.appModel.gatewayPairingRequestId = nil
+        // The forced reconnect below leaves the pause and allows reconnects when it commits; resuming
+        // here too would let the waiting loops attempt first and send a second pairing request.
         // Pairing state is sticky to prevent UI flip-flop during reconnect churn.
         // Once the user explicitly resumes after approving, clear the sticky issue
         // so new status/auth errors can surface instead of being masked as pairing.
@@ -1089,6 +1098,9 @@ extension OnboardingWizardView {
         guard self.step == .auth else { return }
         guard self.issue.needsPairing else { return }
         guard self.connectingGateway == nil else { return }
+        // The view's pairing issue is sticky; retry automatically only while every live pause is a
+        // pairing approval, never alongside a rate limit or rejected credential.
+        guard self.appModel.connection.isPausedOnlyForPairing else { return }
 
         let now = Date()
         if let last = lastPairingAutoResumeAttemptAt, now.timeIntervalSince(last) < 6 {
@@ -1101,23 +1113,22 @@ extension OnboardingWizardView {
     private func updateConnectionIssue(problem: GatewayConnectionProblem?, statusText: String) {
         let wasOnAuthStep = self.step == .auth
         let next = GatewayConnectionIssue.detect(problem: problem)
-        let fallback = next == .none ? GatewayConnectionIssue.detect(from: statusText) : next
 
         // Avoid "flip-flopping" the UI by clearing actionable issues when the underlying connection
         // transitions through intermediate statuses (e.g. Offline/Connecting while reconnect churns).
-        if self.issue.needsPairing, fallback.needsPairing {
-            let mergedRequestId = fallback.requestId ?? self.issue.requestId ?? self.pairingRequestId
+        if self.issue.needsPairing, next.needsPairing {
+            let mergedRequestId = next.requestId ?? self.issue.requestId ?? self.pairingRequestId
             self.issue = .pairingRequired(requestId: mergedRequestId)
-        } else if self.issue.needsPairing, !fallback.needsPairing {
+        } else if self.issue.needsPairing, !next.needsPairing {
             // Ignore non-pairing statuses until the user explicitly retries/scans again, or we connect.
-        } else if self.issue.needsAuthCredentials, !fallback.needsAuthCredentials, !fallback.needsPairing {
+        } else if self.issue.needsAuthCredentials, !next.needsAuthCredentials, !next.needsPairing {
             // Same idea for auth: once we learn credentials are missing/rejected, keep that sticky until
             // the user retries/scans again or we successfully connect.
         } else {
-            self.issue = fallback
+            self.issue = next
         }
 
-        if let requestId = problem?.requestId ?? fallback.requestId, !requestId.isEmpty {
+        if let requestId = problem?.requestId ?? next.requestId, !requestId.isEmpty {
             self.pairingRequestId = requestId
         }
 
@@ -1163,8 +1174,7 @@ extension OnboardingWizardView {
         self.onRequestLocalNetworkAccess(reason)
     }
 
-    private func navigateBack() {
-        guard let target = step.previous else { return }
+    private func navigateBack(to target: OnboardingStep) {
         self.invalidateSetupAttempt()
         self.qrCodeCompletion.cancel()
         self.localConnectionFailure = nil
@@ -1190,7 +1200,14 @@ extension OnboardingWizardView {
 
     private func navigate(to target: OnboardingStep) {
         self.focusedField = nil
-        self.step = target
+        guard target == .success else {
+            self.step = target
+            return
+        }
+        // Success replaces the manual steps; popping them animated would read as going back.
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { self.step = target }
     }
 
     private func beginSetupAttempt() -> GatewaySetupAttempt? {
@@ -1506,7 +1523,7 @@ extension OnboardingWizardView {
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
         }
-        if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem) {
+        if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem, toasts: self.appModel.toasts) {
             return
         }
         guard problem.retryable else { return }

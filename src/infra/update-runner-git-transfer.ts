@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { bindCommandStdinFile } from "../process/command-stdin-file.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { tryReadDiskSpace } from "./disk-space.js";
 import { ignoreMissingPath } from "./errno.js";
 import { openLocalFileSafely, type OpenResult } from "./fs-safe.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
+import { resolveGitNoLazyFetchArgs } from "./update-runner-git-commands.js";
 import { classifyPartialCloneGitFailure } from "./update-runner-git-target.js";
 import type { RunStepOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -119,19 +121,13 @@ export async function prepareGitCandidateTransfer(params: {
   const retained = new Set<string>();
   // Capability probing is read-only. Older Git safely transfers the full
   // candidate instead of risking a lazy fetch while checking installed objects.
-  const probe = beforeSha
-    ? await step.runCommand(["git", "--no-lazy-fetch", "version"], {
+  const noLazyFetchArgs = beforeSha
+    ? await resolveGitNoLazyFetchArgs(step.runCommand, {
         cwd: installedRoot,
         timeoutMs: params.probeTimeoutMs,
       })
-    : undefined;
-  if (
-    probe?.code === 0 &&
-    probe.stdout.startsWith("git version ") &&
-    !probe.killed &&
-    !probe.signal &&
-    (!probe.termination || probe.termination === "exit")
-  ) {
+    : [];
+  if (noLazyFetchArgs.length) {
     const beforeTree = await runGit("git-retained-tree", [
       "rev-list",
       "--objects",
@@ -143,7 +139,7 @@ export async function prepareGitCandidateTransfer(params: {
     }
     const local = await runGit(
       "git-retained-object-availability",
-      ["--no-lazy-fetch", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
+      [...noLazyFetchArgs, "cat-file", "--batch-check=%(objectname) %(objecttype)"],
       `${beforeTree}\n`,
       installedRoot,
     );
@@ -270,7 +266,7 @@ export async function prepareGitCandidateTransfer(params: {
         // pack until activation/rollback finishes, including source publication.
         argv: ["git", "-C", target.cwd, "index-pack", "--stdin", `--keep=${keepMessage}`],
         runCommand: (argv, options) =>
-          target.runCommand(argv, { ...options, stdinFileDescriptor: pack.handle.fd }),
+          target.runCommand(argv, { ...options, stdinFile: bindCommandStdinFile(pack) }),
       });
       if (isFailedUpdateStep(imported)) {
         return false;

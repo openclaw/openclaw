@@ -132,6 +132,14 @@ JavaScript-only host export; its declarations are excluded from the package.
     });
     ```
 
+    For a long-lived audio receiver, load `createAudioInputBudgetReader` from
+    `openclaw/plugin-sdk/media-understanding-runtime` during setup and pass the
+    runtime config reader. Call the returned function synchronously when admitting
+    each new stream. Keep that result for the stream's lifetime so a reload can
+    change the next stream's chunk size. Transcription applies the current provider
+    limits when it processes each chunk. A tighter limit can exclude an earlier
+    chunk that was already buffered.
+
     Returns `{ text: undefined }` when no output is produced (e.g. skipped input).
 
     `describeImageFileWithModel(...)` describes an already-known image through a specific provider/model, bypassing the default active-model resolution that `describeImageFile(...)` uses.
@@ -195,6 +203,13 @@ JavaScript-only host export; its declarations are excluded from the package.
     context's `assertCurrent` before each external side effect, after awaited
     preparation. The callback belongs to the caller and expires when the search
     finishes; providers must not replace it or treat its absence as permission.
+
+    Host callers can also pass `modelSelection: { provider, model, authProfileId? }`.
+    This is selection data, not an authorization grant. Model-backed search providers
+    preserve a matching provider's model/profile through their native transport;
+    unrelated search providers keep their own configured selection. An explicit
+    matching credential prevents automatic fallback to another search provider.
+    The agent tool carries this context separately from model-authored arguments.
 
   </Accordion>
   <Accordion title="api.runtime.media">

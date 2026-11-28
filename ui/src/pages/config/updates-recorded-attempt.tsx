@@ -1,4 +1,5 @@
 import { action, createOptimistic, For, Show } from "solid-js";
+import { projectUpdateRunHistory } from "../../../../src/infra/update-run-history-projection.ts";
 import { isAcknowledgedAbandonedUpdateRun } from "../../../../src/infra/update-run-record.ts";
 import {
   classifyUpdateOutcome,
@@ -33,18 +34,31 @@ export function RecordedAttempt(
     return presentReport(view, pending);
   };
   const run = () => props.update.updateRun;
+  const serving = () =>
+    props.connected ? { version: props.gatewayVersion, buildId: props.gatewayBuildId } : undefined;
   const failed = () => {
     const currentRun = run();
     return currentRun
-      ? !isAcknowledgedAbandonedUpdateRun(currentRun) && isReportableUpdateRun(currentRun)
+      ? !projectUpdateRunHistory(currentRun, serving()) &&
+          !isAcknowledgedAbandonedUpdateRun(currentRun) &&
+          isReportableUpdateRun(currentRun)
       : !props.update.recordedUpdateAttempt ||
           classifyUpdateOutcome(props.update.recordedUpdateAttempt) !== "noop";
   };
-  const canRetry = () =>
-    !props.confirming &&
-    props.canUpdate &&
-    !props.updateBusy &&
-    !props.update.updateStatusRefreshing;
+  const retryDisabledReason = () => {
+    if (!props.canUpdate) {
+      return !props.canAdmin
+        ? t("updates.adminRequiredTooltip")
+        : t(props.connected ? "updates.page.statusUnavailable" : "updates.dialog.reconnecting");
+    }
+    if (props.confirming) {
+      return t("updates.reviewUpdate");
+    }
+    if (props.updateBusy) {
+      return t("updates.sidebar.updating");
+    }
+    return props.update.updateStatusRefreshing ? t("updates.page.checking") : null;
+  };
   return (
     <Show when={run() || props.update.updateStatusBanner}>
       <SettingsSection title={t("updates.page.latestAttempt")}>
@@ -66,18 +80,19 @@ export function RecordedAttempt(
           }
         >
           <div class="settings-row settings-row--stacked">
-            <UpdateRunView run={run()} connected={props.connected} />
+            <UpdateRunView run={run()} connected={props.connected} serving={serving()} />
           </div>
         </Show>
         <Show when={failed() || props.update.updateStatusBanner?.source === "read"}>
           <SettingsRow
             title={t("updates.page.recoveryActions")}
+            stackedOnNarrow
             control={
-              <div class="updates-status-control">
+              <div class="updates-status-control updates-recovery-actions">
                 <button
                   class="btn btn--sm"
                   type="button"
-                  title={props.canCheckStatus ? "" : t("updates.adminRequired")}
+                  title={props.canCheckStatus ? "" : t("updates.adminRequiredTooltip")}
                   disabled={
                     !props.canCheckStatus ||
                     props.updateBusy ||
@@ -92,7 +107,7 @@ export function RecordedAttempt(
                   <button
                     class="btn btn--sm"
                     type="button"
-                    title={props.canDiagnose ? "" : t("updates.adminRequired")}
+                    title={props.canDiagnose ? "" : t("updates.adminRequiredTooltip")}
                     disabled={
                       reporting() ||
                       !props.canDiagnose ||
@@ -111,8 +126,8 @@ export function RecordedAttempt(
                   <button
                     class="btn btn--sm primary"
                     type="button"
-                    title={canRetry() ? "" : t("updates.adminRequired")}
-                    disabled={!canRetry()}
+                    title={retryDisabledReason() ?? ""}
+                    disabled={retryDisabledReason() !== null}
                     onClick={() => void props.onUpdateNow()}
                   >
                     {t("updates.page.retryUpdate")}
@@ -140,7 +155,17 @@ export function RecordedAttempt(
               </div>
             }
           />
-          <Show when={failed() && run()?.target.installationMethod !== "ocm"}>
+          <Show
+            when={
+              failed() &&
+              run()?.target.installationMethod !== "ocm" &&
+              !(
+                run()?.verification.rollbackOutcome?.status === "succeeded" &&
+                run()?.verification.serviceRunning &&
+                run()?.verification.coreReady
+              )
+            }
+          >
             <SettingsRow
               title={t("updates.page.cliFallback")}
               description={t("updates.triage.hostHint")}

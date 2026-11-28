@@ -28,6 +28,8 @@ const PUBLIC_CODES = new Set<string>([
   PLUGIN_CAPABILITY_CONSENT_REQUIRED,
   ...updateRecoverySchema.options[1].shape.reason.options,
   ...GATEWAY_RESTART_WAIT_OUTCOMES,
+  // Recorded by updaters before plugin load errors became notices.
+  "plugin-errors",
   ...CANARY_CHECKS.map((phase) => `candidate-${phase}-failed`),
   "candidate-readiness-probe-failed",
   "Error",
@@ -48,6 +50,8 @@ const PUBLIC_CODES = new Set<string>([
   "unexpected-error",
   "host-owned-plugin-link",
   "update-failed",
+  "file_lock_timeout",
+  "file_lock_stale",
   "repair-failed",
   "update-recovery-pending",
   "update-executor-settlement-failed",
@@ -74,6 +78,8 @@ const PUBLIC_CODES = new Set<string>([
   "preflight-worktree-failed",
   "preflight-node-runtime-incompatible",
   "preflight-no-good-commit",
+  "preflight-local-replay-conflict",
+  "git-version-unsupported",
   "reference-source-not-fast-forward",
   "reference-source-pnpm-unavailable",
   "preferred-manager-unavailable",
@@ -97,6 +103,7 @@ const PUBLIC_CODES = new Set<string>([
   "verification-result-missing",
   "finalization-timeout",
   "finalization-failed",
+  "ancestry-unverified",
   "no-output-timeout",
   "output-limit",
   "signal",
@@ -132,6 +139,7 @@ const PUBLIC_CODES = new Set<string>([
   "config-conflict",
   "config-input-changed",
   "requester-revoked",
+  "interrupted",
   "repair-requires-config-change",
 ]);
 

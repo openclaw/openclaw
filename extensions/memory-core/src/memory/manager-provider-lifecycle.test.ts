@@ -4,10 +4,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
-import type { EmbeddingProvider } from "./embeddings.js";
 import {
   createManagerIndexFixture,
   holdMemoryTestOperation as hold,
@@ -15,12 +15,12 @@ import {
 import type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 
 type LifecycleFields = {
-  provider: EmbeddingProvider | null;
+  provider: MemoryEmbeddingProvider | null;
   providerKey: string;
   computeProviderKey: () => string;
   ensureProviderInitialized: () => Promise<void>;
   resetProviderInitializationForRetry: () => void;
-  markLocalEmbeddingProviderDegraded: (error: unknown) => void;
+  markEmbeddingProviderFailure: (error: unknown) => void;
   activateFallbackProvider: (reason: string) => Promise<boolean>;
   withTimeout: <T>(promise: Promise<T>, timeoutMs: number, message: string) => Promise<T>;
   indexFile: (entry: MemoryIndexWorkItem["entry"], source: "memory") => Promise<void>;
@@ -57,6 +57,33 @@ describe("memory index", () => {
   }
   const providersSince = (index: number) =>
     providerFixture.providerCalls.slice(index).map((call) => call.provider);
+
+  it("indexes and searches NoNe without an embedding provider", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "NoNe", minScore: 0 }));
+    await manager.sync({ reason: "test" });
+
+    expect(await manager.search("zebra")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+    );
+    expect(await manager.statusAsync({ includeCounts: false })).toMatchObject({
+      provider: "none",
+      custom: { searchMode: "fts-only" },
+    });
+    expect(providerFixture.providerCalls).toEqual([]);
+  });
+
+  it("keeps keyword recall available when Auto cannot initialize embeddings", async () => {
+    const indexed = await getPersistentManager(createCfg({ provider: "none" }));
+    await indexed.sync({ reason: "test" });
+    await indexed.close();
+    providerFixture.providerCreationFailure = "openai";
+
+    const manager = await getFreshManager(createCfg({ provider: "Auto" }));
+    expect(await manager.search("zebra")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+    );
+    expect(providersSince(0)).toEqual(["openai"]);
+  });
 
   it.each([false, true])(
     "drains startup transcript discovery before closing (scan failure: %s)",
@@ -130,24 +157,24 @@ describe("memory index", () => {
     trackManager(second);
 
     const cachedBeforeProbe = second.getCachedEmbeddingAvailability?.();
+    const checkedAtMs = cachedBeforeProbe?.checkedAtMs ?? 0;
+    // Reported timestamps stay wall-clock epochs even though expiry uses elapsed time.
+    expect(Math.abs(Date.now() - checkedAtMs)).toBeLessThan(5_000);
     expect(cachedBeforeProbe).toMatchObject({
       ok: true,
       checked: true,
       cached: true,
-      checkedAtMs: expect.any(Number),
-      cacheExpiresAtMs: expect.any(Number),
+      cacheExpiresAtMs: checkedAtMs + 30_000,
     });
-    expect((cachedBeforeProbe?.cacheExpiresAtMs ?? 0) - (cachedBeforeProbe?.checkedAtMs ?? 0)).toBe(
-      30_000,
-    );
-    await expect(second.probeEmbeddingAvailability()).resolves.toStrictEqual({
-      ok: true,
-      checked: true,
-      cached: true,
-      checkedAtMs: cachedBeforeProbe?.checkedAtMs,
-      cacheExpiresAtMs: cachedBeforeProbe?.cacheExpiresAtMs,
-    });
+    await expect(second.probeEmbeddingAvailability()).resolves.toStrictEqual(cachedBeforeProbe);
     expect(providerFixture.embedQueryCalls).toBe(1);
+
+    // A wall-clock step back must not keep the probe cached past 30 elapsed seconds.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() - 3_600_000);
+    vi.spyOn(performance, "now").mockReturnValue(performance.now() + 30_000);
+    const afterClockStep = second.getCachedEmbeddingAvailability?.();
+    vi.restoreAllMocks();
+    expect(afterClockStep).toBeNull();
   });
 
   it("clears cached embedding probe readiness when local embeddings degrade", async () => {
@@ -164,7 +191,7 @@ describe("memory index", () => {
       close: async () => {},
     };
 
-    fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
+    fields.markEmbeddingProviderFailure(providerFixture.createLocalWorkerExitError());
 
     expect(manager.getCachedEmbeddingAvailability()).toBeNull();
     await expect(manager.probeEmbeddingAvailability()).resolves.toMatchObject({
@@ -185,7 +212,7 @@ describe("memory index", () => {
       } else {
         assert.ok(fields.provider, "Expected a test embedding provider");
         fields.provider.id = "local";
-        fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
+        fields.markEmbeddingProviderFailure(providerFixture.createLocalWorkerExitError());
       }
       await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(1));
       const callsBefore = providerFixture.providerCalls.length;
@@ -307,7 +334,6 @@ describe("memory index", () => {
           mtimeMs: Date.now(),
           size: Buffer.byteLength(content),
           hash: hashText(content),
-          content,
         },
         "memory",
       );
@@ -317,7 +343,7 @@ describe("memory index", () => {
     try {
       const embeddingsStarted = Promise.all([firstEmbedding.entered, secondEmbedding.entered]);
       await fields.withTimeout(embeddingsStarted, 5_000, "concurrent embeddings did not start");
-      fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
+      fields.markEmbeddingProviderFailure(providerFixture.createLocalWorkerExitError());
       await vi.waitFor(() => expect(fields.provider).toBeNull());
       fallbackPromise = fields.activateFallbackProvider("local worker exited");
       firstEmbedding.release();

@@ -1,8 +1,11 @@
 import type { SessionPublicShareSetResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type { SessionMemberPermissionLevel } from "../../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type { GatewaySessionRow, SessionVisibility } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionSharingEnglish } from "../../i18n/locales/en-chat-session-sharing.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { ChatPaneConnectionScope } from "./chat-pane-shared.ts";
@@ -10,6 +13,8 @@ import type {
   ChatSessionSharingOutcome,
   ChatSessionSharingState,
 } from "./components/chat-session-sharing-shared.tsx";
+
+registerEnglishCatalog(registerChatSessionSharingEnglish);
 
 export async function setSessionPublicShare(
   scope: ChatPaneConnectionScope,
@@ -63,10 +68,14 @@ export async function setSessionPublicShare(
   callbacks.setState({
     loading: false,
     ...(previous?.result
-      ? { result: { ...previous.result, publicShare: result.publicShare } }
+      ? {
+          sessionId: previous.sessionId,
+          result: { ...previous.result, publicShare: result.publicShare },
+        }
       : {}),
   });
   showToast({
+    severity: "success",
     message: t(
       enabled ? "chat.sessionSharing.publicEnabled" : "chat.sessionSharing.publicDisabled",
     ),
@@ -84,6 +93,7 @@ export async function mutateSessionSharing(
     agentId?: string;
     visibility?: SessionVisibility;
     identityId?: string;
+    access?: SessionMemberPermissionLevel;
   },
   callbacks: {
     agentId: string | undefined;

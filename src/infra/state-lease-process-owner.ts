@@ -10,8 +10,8 @@ import {
   MachineIdentitySchema,
   type LockPayload,
 } from "./gateway-lock-payload.js";
+import { managedHandoffBootSchema } from "./update-managed-service-handoff-boot-schema.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
-import { managedHandoffBootSchema } from "./update-managed-service-handoff-schema.js";
 
 export type StateLeaseProcessOwner = {
   pid: number;
@@ -46,7 +46,12 @@ function parseNamespace(value: string | null) {
     ) {
       return null;
     }
-    return { ...boot.data, identity: boot.data.identity.toLowerCase(), machineIdentity };
+    return {
+      ...boot.data,
+      identity: boot.data.identity.toLowerCase(),
+      pidNamespace: typeof pidNamespace === "string" ? pidNamespace : null,
+      machineIdentity,
+    };
   } catch {
     return null;
   }
@@ -58,8 +63,8 @@ export function captureNamespacedStateLeaseProcessOwner(): NamespacedStateLeaseP
   if (namespace === null) {
     try {
       const boot = createManagedHandoffBootIdentityReader(process.env)();
-      const pidNamespace = process.platform === "linux" ? readlinkSync("/proc/self/ns/pid") : null;
-      if (boot.identity && (process.platform !== "linux" || pidNamespace)) {
+      const pidNamespace = boot.platform === "linux" ? readlinkSync("/proc/self/ns/pid") : null;
+      if (boot.identity && (boot.platform !== "linux" || pidNamespace)) {
         namespace = JSON.stringify([
           boot.platform,
           boot.identity,
@@ -139,7 +144,7 @@ export function parseStateLeaseProcessOwner(
 
 export function readStateLeaseProcessOwnerStatus(
   owner: StateLeaseProcessOwner | null,
-  _heartbeatAt?: number,
+  gatewayHeartbeatAt?: number,
 ): "live" | "dead" | "unknown" {
   if (!owner) {
     return "unknown";
@@ -147,6 +152,7 @@ export function readStateLeaseProcessOwnerStatus(
   const namespace = classifyGatewayOwnerProcessNamespace(owner.processNamespace, {
     ownerHost: owner.host,
     machineIdentity: owner.machineIdentity,
+    readGatewayHeartbeat: gatewayHeartbeatAt === undefined ? undefined : () => gatewayHeartbeatAt,
   });
   if (namespace !== "same") {
     return namespace;
@@ -154,8 +160,9 @@ export function readStateLeaseProcessOwnerStatus(
   return readSameNamespaceProcessOwnerStatus(owner);
 }
 
-function readSameNamespaceProcessOwnerStatus(
-  owner: StateLeaseProcessOwner,
+/** The caller has already established that local PID observations apply to this owner. */
+export function readSameNamespaceProcessOwnerStatus(
+  owner: Pick<StateLeaseProcessOwner, "pid" | "startedAt">,
 ): "live" | "dead" | "unknown" {
   if (isPidDefinitelyDead(owner.pid)) {
     return "dead";

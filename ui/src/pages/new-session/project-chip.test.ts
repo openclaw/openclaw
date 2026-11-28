@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { pathDisplayName } from "../../lib/path-display.ts";
 import { projectCloneInput, resolveProjectChip } from "./project-chip.ts";
 
 const projects = [
   {
     id: "openclaw",
     displayName: "OpenClaw",
+    repositoryIdentity: "acme-labs/console",
     repoRoot: "/workspace/openclaw",
     source: "registered" as const,
   },
@@ -38,6 +40,23 @@ describe("What chip state", () => {
     expect(state.showWorkspace).toBe(showWorkspace);
   });
 
+  it("matches canonically equivalent Unicode in the workspace row", () => {
+    // Stored NFD path segment; user types NFC (precomposed é).
+    const nfcQuery = "Caf\u00e9";
+    const nfdWorkspace = "/workspace/Cafe\u0301";
+    expect(pathDisplayName(nfdWorkspace)).not.toBe(nfcQuery);
+    const state = resolveProjectChip({
+      folder: "",
+      workspace: nfdWorkspace,
+      projectId: "",
+      selectedRemoteProject: null,
+      projects,
+      recents: [],
+      projectQuery: nfcQuery,
+    });
+    expect(state.showWorkspace).toBe(true);
+  });
+
   it("omits project recents already shown in the project list", () => {
     const folderRecent = {
       kind: "folder" as const,
@@ -52,7 +71,7 @@ describe("What chip state", () => {
     const state = resolveProjectChip({
       folder: "",
       workspace: "/workspace",
-      projectId: "",
+      projectId: "openclaw",
       selectedRemoteProject: null,
       projects,
       recents: [
@@ -64,6 +83,28 @@ describe("What chip state", () => {
     });
 
     expect(state.recents).toEqual([folderRecent, repositoryRecent]);
+    expect(state.label).toBe("acme-labs/console");
+  });
+
+  it.each([
+    { name: "beside the workspace row", workspace: "/workspace", expected: 4 },
+    { name: "without a workspace row", workspace: "", expected: 5 },
+  ])("keeps Recent to five rows $name", ({ workspace, expected }) => {
+    const recents = Array.from({ length: 8 }, (_, index) => ({
+      kind: "folder" as const,
+      folder: `/work/folder-${index}`,
+      displayName: `folder-${index}`,
+    }));
+    const state = resolveProjectChip({
+      folder: "",
+      workspace,
+      projectId: "",
+      selectedRemoteProject: null,
+      projects,
+      recents,
+      projectQuery: "",
+    });
+    expect(state.recents).toEqual(recents.slice(0, expected));
   });
 
   it.each([

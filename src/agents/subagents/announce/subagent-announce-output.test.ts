@@ -2,14 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
 import {
-  testing,
-  buildCompactAnnounceStatsLine,
-  buildChildCompletionFindings,
   dedupeLatestChildCompletionRows,
   readSubagentOutput,
   captureSubagentCompletionReply,
   readLatestSubagentOutputWithRetry,
-} from "./subagent-announce-output.test-support.js";
+} from "./subagent-announce-output.js";
+import { outputTesting as testing } from "./subagent-announce-overrides.test-support.js";
+import { buildChildCompletionFindings } from "./subagent-announce-result.js";
 import type { ChildCompletionRow } from "./subagent-announce-result.js";
 
 describe("captureSubagentCompletionReply", () => {
@@ -172,27 +171,6 @@ describe("dedupeLatestChildCompletionRows", () => {
       "main-run",
       "research-run",
     ]);
-  });
-});
-
-describe("buildCompactAnnounceStatsLine", () => {
-  it("reports fresh totals without inventing directional counts", async () => {
-    const readEntry = vi.fn(() => ({
-      sessionId: "child-session",
-      updatedAt: 0,
-      totalTokens: 500,
-      totalTokensFresh: true,
-      totalTokensVersion: 1 as const,
-    }));
-    testing.setDepsForTest({
-      getRuntimeConfig: () => ({ session: { store: "memory" } }),
-      readSubagentSessionEntry: readEntry,
-      resolveSessionStorePathCore: () => "/tmp/openclaw-session-store",
-    });
-    await expect(buildCompactAnnounceStatsLine({ sessionKey: childKey })).resolves.toBe(
-      "Stats: runtime n/a • tokens 500 prompt/cache",
-    );
-    expect(readEntry).toHaveBeenCalledOnce();
   });
 });
 

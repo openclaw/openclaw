@@ -113,11 +113,18 @@ it.each([
   { body: "![diagram](https://example.com/diagram.png)", enabled: false },
   { body: "![nested [diagram]][figure]", enabled: true },
   { body: "![nested [diagram]][figure]", enabled: false },
+  { body: "ordinary message" },
   { body: "hello ! poll" },
   { body: "explain !poll" },
   { body: "! printf fixture", authorized: false },
   { body: "! printf fixture", literal: true },
 ])("keeps non-command or gated input out of the shell: $body", async ({ body, ...options }) => {
-  expect(await handleInlineActions(bashInput(body, options))).toMatchObject({ kind: "continue" });
+  const params = bashInput(body, options);
+  const thinkingCatalog = vi.fn(() => []);
+  Object.defineProperty(params, "thinkingCatalog", { enumerable: true, get: thinkingCatalog });
+  expect(await handleInlineActions(params)).toMatchObject({ kind: "continue" });
+  if (body === "ordinary message") {
+    expect(thinkingCatalog).not.toHaveBeenCalled();
+  }
   expect(execute).not.toHaveBeenCalled();
 });

@@ -4,7 +4,7 @@ import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-pr
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
 import type { ConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
-import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
+import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { classifyPortListener } from "../../infra/ports-format.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import type { PortUsage } from "../../infra/ports-types.js";
@@ -12,7 +12,6 @@ import {
   hasCommandProcessCleanupError,
   ignoreNonCleanupCommandError,
 } from "../../process/exec-result.js";
-import type { OpenClawStateSchemaReadAdmission } from "../../state/openclaw-state-db-contract.js";
 import type { GatewayRestartDeadline } from "./restart-health-deadline.js";
 import {
   confirmGatewayReachable,
@@ -29,9 +28,9 @@ export async function inspectGatewayRestart(params: {
   env?: NodeJS.ProcessEnv;
   expectedVersion?: string | null;
   expectedBuildId?: string | null;
-  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
-  requirePluginHealth?: boolean;
   requireChannelHealth?: boolean;
+  /** Probe only a listener the service runtime owns, even without an expected version. */
+  requireOwnedListener?: boolean;
   /** Diagnostic-only; protocol reachability never establishes process ownership. */
   allowUnattributedDiagnosticProbe?: boolean;
   probeContext?: GatewayRestartProbeContext;
@@ -80,7 +79,7 @@ export async function inspectGatewayRestart(params: {
   const expectedBuildId = normalizeOptionalString(params.expectedBuildId);
   const requiresGatewayProbe =
     Boolean(expectedVersion || expectedBuildId) ||
-    params.requirePluginHealth === false ||
+    params.requireOwnedListener === true ||
     params.requireChannelHealth === false;
   let reachability: GatewayReachability | null = null;
   const loadReachability = () =>
@@ -91,10 +90,7 @@ export async function inspectGatewayRestart(params: {
         ...params.probeContext,
         ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
         env,
-        allowHttpVerification:
-          Boolean(expectedVersion) &&
-          params.requirePluginHealth === false &&
-          params.requireChannelHealth === false,
+        allowHttpVerification: Boolean(expectedVersion) && params.requireChannelHealth === false,
         timeoutMs: remainingTimeoutMs(params.probeTimeoutMs),
         ...(signal ? { signal } : {}),
       }),
@@ -120,6 +116,7 @@ export async function inspectGatewayRestart(params: {
     portUsage = await read("port-inspection", () =>
       inspectPortUsage(params.port, {
         probeHosts,
+        knownRuntimePid: runtime.status === "running" ? runtime.pid : undefined,
         ...(signal ? { signal } : {}),
       }),
     );
@@ -139,7 +136,7 @@ export async function inspectGatewayRestart(params: {
 
   signal?.throwIfAborted();
   const configuredProbe = params.configuredProbe;
-  const startupPhase =
+  let startupPhase =
     portUsage.status === "busy" && configuredProbe
       ? await read("startup-health", () =>
           readGatewayStartupPhase({
@@ -151,7 +148,7 @@ export async function inspectGatewayRestart(params: {
         )
       : undefined;
   if (startupPhase && (expectedVersion || expectedBuildId)) {
-    // Startup cannot conceal a previous install or a definitive plugin/channel failure.
+    // Startup cannot conceal a previous install or a definitive channel failure.
     reachability = await loadReachability();
   }
   const gatewayListeners =
@@ -172,7 +169,6 @@ export async function inspectGatewayRestart(params: {
     params.allowUnattributedDiagnosticProbe === true &&
     process.platform === "win32" &&
     running &&
-    params.requirePluginHealth === false &&
     runtimePid == null &&
     portUsage.listeners.length > 0 &&
     portUsage.listeners.every(
@@ -190,22 +186,47 @@ export async function inspectGatewayRestart(params: {
       reachable.reachable &&
       (!canProbeUnattributedListener || Boolean(normalizeOptionalString(reachable.gatewayVersion)));
   }
-  // Read after probes: an owner can acquire the coordinator while health is unavailable.
+  // Custody is a file contract. Observers must not open a migrating store to
+  // find its owner, including before that owner can bind an HTTP listener.
   const unmanagedHealthy = healthy && !running;
-  const owner =
-    !unmanagedHealthy && portUsage.status === "busy"
-      ? readGatewayOwnerLease({
-          env,
-          port: params.port,
-          ...(params.openStateSchemaReadAdmission
-            ? { openStateSchemaReadAdmission: params.openStateSchemaReadAdmission }
-            : {}),
-        })
-      : undefined;
-  // A recorded owner is never stale by PID inference; other listeners are foreign.
-  // 2026.9.3 Gateways have no row and retain the installed-runtime ownership path.
+  let hasOwner = false;
+  let fileOwnerPid: number | undefined;
+  try {
+    const identity = await read("state-owner", () =>
+      readActiveGatewayLockIdentity({
+        env,
+        includeEmbedded: true,
+        requireInspection: true,
+        timeoutMs: remainingTimeoutMs(),
+        signal,
+      }),
+    );
+    if (identity && (identity.port === undefined || identity.port === params.port)) {
+      hasOwner = true;
+      fileOwnerPid = identity.pid;
+      if (portUsage.status === "free") {
+        startupPhase ??= "startup migration";
+      }
+    }
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    signal?.throwIfAborted();
+    startupPhase ??= "waiting for Gateway state ownership";
+  }
+  // A stale-install refusal can outlive its native service. The profile-bound
+  // listener remains available to its recovery owner; other live owners stay protected.
+  const stoppedStaleOwner =
+    runtime.status === "stopped" &&
+    !runtime.inspectionFailure &&
+    !runtime.inspectionReason &&
+    Boolean(reachability?.staleConnection) &&
+    fileOwnerPid !== undefined &&
+    gatewayListeners.length > 0 &&
+    portUsage.listeners.every((listener) => listener.pid === fileOwnerPid);
   const staleGatewayPids =
-    unmanagedHealthy || owner
+    unmanagedHealthy || (hasOwner && !stoppedStaleOwner)
       ? []
       : Array.from(
           new Set(
@@ -226,6 +247,7 @@ export async function inspectGatewayRestart(params: {
     gatewayBuildId,
     probeError,
     authenticationError,
+    operatorScopeWarning,
     protocolMismatch,
     staleConnection,
     activatedPluginErrors,
@@ -245,6 +267,7 @@ export async function inspectGatewayRestart(params: {
     ...(startupPhase ? { startupPhase } : {}),
     ...(probeError ? { probeError } : {}),
     ...(authenticationError ? { authenticationError } : {}),
+    ...(operatorScopeWarning ? { operatorScopeWarning } : {}),
     ...(protocolMismatch ? { protocolMismatch } : {}),
     ...(staleConnection ? { staleConnection } : {}),
     ...(activatedPluginErrors?.length ? { activatedPluginErrors } : {}),
@@ -277,10 +300,8 @@ export async function inspectGatewayRestart(params: {
       }
     }
   }
-  if (
-    (params.requirePluginHealth !== false && snapshot.activatedPluginErrors?.length) ||
-    (params.requireChannelHealth !== false && snapshot.channelProbeErrors?.length)
-  ) {
+  // Plugin load errors are notices: the plugin stays unloaded and the Gateway serves.
+  if (params.requireChannelHealth !== false && snapshot.channelProbeErrors?.length) {
     snapshot.healthy = false;
   }
   return snapshot;

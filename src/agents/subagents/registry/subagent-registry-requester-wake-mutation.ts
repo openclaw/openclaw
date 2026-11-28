@@ -1,3 +1,4 @@
+import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
@@ -6,10 +7,13 @@ import type {
   RequesterWakeCommittedWrite,
   RequesterWakeMutation,
 } from "../completion/subagent-completion-mutation.types.js";
+import { captureSubagentControllerInputRetirement } from "./subagent-controller-inputs.js";
+import { resolveRequesterDeliveryOutcome } from "./subagent-delivery-state.js";
 import type { SubagentLifecycleWakeContext } from "./subagent-registry-lifecycle-context.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
+import { sameRequesterSettleRunIdentity } from "./subagent-requester-settle-identity.js";
+import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export type RequesterWakeMutationReceipt = { committed?: RequesterWakeCommittedWrite };
 
@@ -26,6 +30,7 @@ export function isRetainedRequesterSettleWakeMember(
   }
   return (
     isSameSubagentRunOwner(current, entry) &&
+    sameRequesterSettleRunIdentity(current, entry) &&
     ((current.requesterSettleWake !== undefined &&
       current.requesterSettleWake.rearmGeneration === rearmGeneration) ||
       (receipt.committed !== undefined && current.requesterSettleWake === undefined))
@@ -99,21 +104,150 @@ export async function mutateRequesterSettleWakeBatch(
   return result.applied === true && result.publication === "published";
 }
 
-/** Records one observed outcome, or retires a wake that owes no delivery. */
-export function settleRequesterSettleWakeBatch(
+// Observed outcomes belong to the run owner, not the transient evaluation. Weak keys release
+// retired owners; the scope keeps a later yield generation from consuming an older receipt.
+export const pendingRequesterSettlements = new WeakMap<
+  object,
+  {
+    scope: string;
+    rearmGeneration: number | undefined;
+    receipt: RequesterWakeMutationReceipt;
+    stateContext: OpenClawStateWorkerContext;
+    settle: () => Promise<void>;
+  }
+>();
+export function hasPendingRequesterSettlement(
   context: SubagentLifecycleWakeContext,
-  batch: readonly SubagentRunRecord[],
-  rearmGeneration: number | undefined,
-  outcome: SubagentAnnounceDeliveryResult | undefined,
-  stateContext: OpenClawStateWorkerContext,
-  receipt: RequesterWakeMutationReceipt = {},
-): Promise<boolean> {
-  return mutateRequesterSettleWakeBatch(
+  entry: SubagentRunRecord,
+): boolean {
+  const pending = pendingRequesterSettlements.get(getSubagentRunRuntimeKey(entry));
+  if (!pending) {
+    return false;
+  }
+  try {
+    assertSubagentRegistryWriteSourceCurrent(pending.stateContext);
+  } catch {
+    return false;
+  }
+  return isRetainedRequesterSettleWakeMember(
     context,
+    entry,
+    pending.rearmGeneration,
+    pending.receipt,
+  );
+}
+
+/** Retain the observed outcome until its commit and requester lifecycle effect settle. */
+export function createRequesterWakeSettlement(params: {
+  context: SubagentLifecycleWakeContext;
+  scope: string;
+  batch: readonly SubagentRunRecord[];
+  rearmGeneration: number | undefined;
+  outcome: SubagentAnnounceDeliveryResult | undefined;
+  onCommitted?: () => void | Promise<void>;
+  stateContext: OpenClawStateWorkerContext;
+  admittedWake: RequesterSettleWakeState | undefined;
+  release: (members: readonly SubagentRunRecord[]) => void;
+}): () => Promise<void> {
+  const {
+    context,
+    scope,
     batch,
     rearmGeneration,
-    outcome ? { kind: "settle", outcome } : { kind: "complete" },
+    outcome: observedOutcome,
+    onCommitted,
     stateContext,
+    admittedWake,
+    release,
+  } = params;
+  let outcome = observedOutcome;
+  // Retry bookkeeping with the observed outcome, never by replaying delivery or inventing failure.
+  const receipt: RequesterWakeMutationReceipt = {};
+  const retireInputs = batch.map(captureSubagentControllerInputRetirement);
+  const settlement = {
+    scope,
+    rearmGeneration,
     receipt,
-  );
+    stateContext,
+    settle: async (): Promise<void> => {
+      const members = batch.filter(
+        (member) =>
+          pendingRequesterSettlements.get(getSubagentRunRuntimeKey(member)) === settlement &&
+          isRetainedRequesterSettleWakeMember(context, member, rearmGeneration, receipt),
+      );
+      // A quiet decision needs its whole cohort; a recorded outcome stays with surviving peers.
+      const settlesMembers =
+        members.length > 0 &&
+        (outcome !== undefined ||
+          receipt.committed !== undefined ||
+          members.length === batch.length);
+      if (settlesMembers && outcome && !receipt.committed) {
+        outcome = resolveRequesterDeliveryOutcome(
+          members.map((member) => context.options.runs.get(member.runId) ?? member),
+          outcome,
+        );
+      }
+      if (
+        settlesMembers &&
+        !(await mutateRequesterSettleWakeBatch(
+          context,
+          members,
+          rearmGeneration,
+          outcome ? { kind: "settle", outcome } : { kind: "complete" },
+          stateContext,
+          receipt,
+        ))
+      ) {
+        return;
+      }
+      if (settlesMembers) {
+        const requester = batch[0];
+        // A yielded request whose wake never ran ends as an ordinary run; the children's
+        // status is already in its history.
+        const runId = admittedWake?.requesterRunId;
+        if (
+          !admittedWake?.pauseNotice &&
+          admittedWake?.requesterYieldBatch &&
+          requester?.completionRequesterSessionId &&
+          runId &&
+          outcome?.delivered !== true
+        ) {
+          // A newer turn, reset, or Stop cannot inherit this batch's terminal.
+          await persistGatewaySessionLifecycleEvent({
+            sessionKey: requester.requesterSessionKey,
+            agentId: requester.requesterAgentId,
+            expectedWriter: {
+              runId,
+              sessionId: requester.completionRequesterSessionId,
+              lifecycleRevision: requester.completionRequesterLifecycleRevision,
+              requireYielded: true,
+            },
+            event: {
+              runId,
+              sessionId: requester.completionRequesterSessionId,
+              ts: Date.now(),
+              data: { phase: "end" },
+            },
+          });
+        }
+        for (const retire of retireInputs) {
+          retire();
+        }
+        await onCommitted?.();
+      }
+      for (const member of batch) {
+        const key = getSubagentRunRuntimeKey(member);
+        if (pendingRequesterSettlements.get(key) === settlement) {
+          pendingRequesterSettlements.delete(key);
+        }
+      }
+      if (settlesMembers) {
+        release(members);
+      }
+    },
+  };
+  for (const member of batch) {
+    pendingRequesterSettlements.set(getSubagentRunRuntimeKey(member), settlement);
+  }
+  return settlement.settle;
 }

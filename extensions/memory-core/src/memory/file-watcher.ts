@@ -1,4 +1,5 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import {
   watch,
   resolveFsObservationMode,
@@ -243,6 +244,7 @@ export class MemoryFileWatcher {
   private watchTimer?: ReturnType<typeof setTimeout>;
   private retryTimer?: ReturnType<typeof setTimeout>;
   private pendingChange = false;
+  private pendingSettledInvalidation = false;
   private revision = 0;
 
   constructor(private readonly options: MemoryFileWatcherOptions) {
@@ -422,6 +424,7 @@ export class MemoryFileWatcher {
 
   private dirty(group: MemoryObservation, hint: WatchInvalidation): void {
     if (!hint.changes) {
+      this.pendingSettledInvalidation ||= hint.reason === "overflow";
       this.markDirty();
       void this.refresh();
       return;
@@ -490,8 +493,8 @@ export class MemoryFileWatcher {
       capacityCode
         ? "memory watcher capacity exhausted (" +
             capacityCode +
-            "); watching disabled, memory will refresh on search"
-        : "memory watcher unavailable; memory will refresh on search: " + String(error),
+            "); watching disabled, periodic memory recovery remains active"
+        : "memory watcher unavailable; periodic memory recovery remains active: " + String(error),
     );
     const retirement = this.retire([...this.observations.values()]);
     this.recovering = retirement.finally(() => {
@@ -524,6 +527,7 @@ export class MemoryFileWatcher {
       if (result.status !== "rejected") {
         continue;
       }
+      materializeErrorStack(result.reason);
       this.closeErrors.push(result.reason);
       if (!this.closed) {
         this.options.onUnavailable();
@@ -541,6 +545,7 @@ export class MemoryFileWatcher {
     this.revision++;
     this.pendingChange = true;
     if (file) {
+      this.pendingSettledInvalidation = true;
       recordMemoryWatchEventPath(this.pendingPaths, file);
     }
     this.options.onDirty?.();
@@ -570,10 +575,21 @@ export class MemoryFileWatcher {
               return;
             }
             this.pendingChange = this.revision !== revision;
-            await this.options.runInBackgroundContext(() => this.options.onChange());
+            const invalidate = this.pendingSettledInvalidation;
+            this.pendingSettledInvalidation = false;
+            await this.options.runInBackgroundContext(() => {
+              // A foreground scan may have consumed the initial dirty while a selected
+              // file was still changing. Overflow retains this follow-up even without
+              // path details; an undetailed baseline alone needs no second invalidation.
+              if (invalidate) {
+                this.options.onDirty?.();
+              }
+              return this.options.onChange();
+            });
           })
           .catch((error: unknown) => {
             if (error instanceof ObservationSampleCloseError) {
+              materializeErrorStack(error.cause);
               this.closeErrors.push(error.cause);
               this.unavailable(error);
             }
@@ -615,7 +631,9 @@ export class MemoryFileWatcher {
       this.pendingPaths.clear();
       this.publishState();
       if (this.closeErrors.length) {
-        throw new AggregateError(this.closeErrors, "Memory watcher cleanup failed");
+        const failure = new AggregateError(this.closeErrors, "Memory watcher cleanup failed");
+        materializeErrorStack(failure);
+        throw failure;
       }
     });
     return this.closing;

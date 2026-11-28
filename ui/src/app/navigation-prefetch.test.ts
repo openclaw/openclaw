@@ -20,13 +20,16 @@ const idleCallbacks: Array<() => void> = [];
 const connection = { saveData: false };
 const manifest = {
   "new-session": ["assets/new-1234abcd.js", "assets/new-1234abcd.css"],
-  claws: ["assets/claws-1234abcd.js"],
+  templates: ["assets/templates-1234abcd.js"],
   palette: ["assets/palette-1234abcd.js"],
   "model-picker": ["assets/model-picker-1234abcd.js"],
+  "chat-next": ["assets/chat-controls-1234abcd.js"],
+  "chat-session-menu": ["assets/chat-session-menu-1234abcd.js"],
+  "sidebar-menus": ["assets/sidebar-menus-1234abcd.js"],
   appearance: ["assets/appearance-1234abcd.js"],
   debug: ["assets/debug-1234abcd.js"],
   "advanced-next": ["assets/security-1234abcd.js", "assets/security-1234abcd.css"],
-  "claws-next": ["assets/claws-next-1234abcd.js"],
+  "templates-next": ["assets/templates-next-1234abcd.js"],
   "roster-next": ["assets/chat-1234abcd.js", "assets/chat-1234abcd.css"],
 };
 
@@ -59,7 +62,7 @@ afterEach(() => {
 });
 
 function setup(
-  routeId?: "advanced" | "dashboard" | "workboard" | "new-session",
+  routeId?: "advanced" | "chat" | "dashboard" | "workboard" | "new-session",
   sidebarAgentsMode?: "chip" | "roster",
 ) {
   const currentLocation = {
@@ -212,15 +215,15 @@ it("warms New Session after presentation and leaves other routes for intent", as
   fixture.notify();
   await idle();
   expect(hints()).toHaveLength(2);
-  const claws = fixture.shell.appendChild(document.createElement("a"));
-  claws.className = "nav-item";
-  claws.href = "/control/claws";
-  claws.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+  const templates = fixture.shell.appendChild(document.createElement("a"));
+  templates.className = "nav-item";
+  templates.href = "/control/templates";
+  templates.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
   await vi.advanceTimersByTimeAsync(50);
   expect(hints().map((link) => link.href)).toContain(
-    new URL("/control/assets/claws-1234abcd.js", location.origin).href,
+    new URL("/control/assets/templates-1234abcd.js", location.origin).href,
   );
-  expect(fixture.preloadRoute).toHaveBeenCalledExactlyOnceWith("claws");
+  expect(fixture.preloadRoute).toHaveBeenCalledExactlyOnceWith("templates");
   fixture.stop();
   await idle();
   expect(hints()).toHaveLength(0);
@@ -246,11 +249,11 @@ it("keeps declared next interactions as the route's only automatic idle work", a
   hints().forEach((link) => link.dispatchEvent(new Event("load")));
   await idle();
   expect(hints()).toHaveLength(2);
-  const nextLocation = { pathname: "/control/claws", search: "", hash: "" };
+  const nextLocation = { pathname: "/control/templates", search: "", hash: "" };
   fixture.state.location = nextLocation;
   fixture.state.resolvedLocation = nextLocation;
   fixture.state.matches = [
-    { ...fixture.state.matches[0]!, id: "claws", routeId: "claws", location: nextLocation },
+    { ...fixture.state.matches[0]!, id: "templates", routeId: "templates", location: nextLocation },
   ];
   fixture.state.status = "success";
   fixture.notify();
@@ -258,7 +261,7 @@ it("keeps declared next interactions as the route's only automatic idle work", a
   expect(hints().map((link) => link.href)).toEqual([
     new URL("/control/assets/security-1234abcd.js", location.origin).href,
     new URL("/control/assets/security-1234abcd.css", location.origin).href,
-    new URL("/control/assets/claws-next-1234abcd.js", location.origin).href,
+    new URL("/control/assets/templates-next-1234abcd.js", location.origin).href,
   ]);
   hints().forEach((link) => link.dispatchEvent(new Event("load")));
   await idle();
@@ -274,10 +277,45 @@ it("keeps declared next interactions as the route's only automatic idle work", a
   expect(hints().map((link) => link.href)).toEqual([
     new URL("/control/assets/security-1234abcd.js", location.origin).href,
     new URL("/control/assets/security-1234abcd.css", location.origin).href,
-    new URL("/control/assets/claws-next-1234abcd.js", location.origin).href,
+    new URL("/control/assets/templates-next-1234abcd.js", location.origin).href,
     new URL("/control/assets/new-1234abcd.js", location.origin).href,
     new URL("/control/assets/new-1234abcd.css", location.origin).href,
   ]);
+  expect(fixture.preloadRoute).not.toHaveBeenCalled();
+});
+
+it("warms Chat controls once after the composer is ready, leaving other menus for intent", async () => {
+  const fixture = setup("chat");
+  fixture.outlet.presentationSettled = true;
+  fixture.transcript.ready = true;
+  fixture.paneState.composerReady = false;
+  await idle();
+  expect(fetch).not.toHaveBeenCalled();
+
+  fixture.paneState.composerReady = true;
+  await idle();
+  const warmed = () => hints().map((link) => new URL(link.href).pathname.split("/").at(-1));
+  expect(warmed()).toEqual(["chat-controls-1234abcd.js"]);
+  hints()[0]!.dispatchEvent(new Event("load"));
+  await idle();
+  expect(warmed()).toEqual(["chat-controls-1234abcd.js", "new-1234abcd.js", "new-1234abcd.css"]);
+  hints().forEach((link) => link.dispatchEvent(new Event("load")));
+  await idle();
+  expect(warmed()).toHaveLength(3);
+
+  const trigger = fixture.shell.appendChild(document.createElement("button"));
+  trigger.className = "chat-header-session-menu__trigger";
+  trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(hints().at(-1)).toMatchObject({ rel: "preload", as: "script" });
+  expect(warmed().at(-1)).toBe("chat-session-menu-1234abcd.js");
+  hints().forEach((link) => link.dispatchEvent(new Event("load")));
+  await vi.advanceTimersByTimeAsync(0);
+
+  trigger.className = "sidebar-identity-card";
+  trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(warmed()).toContain("sidebar-menus-1234abcd.js");
   expect(fixture.preloadRoute).not.toHaveBeenCalled();
 });
 

@@ -4,6 +4,7 @@ import type {
   SessionsAssignOwnerResult,
   SessionsPatchManyParams,
   SessionsPatchManyResult,
+  SessionsSetInvolvementParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
@@ -17,6 +18,7 @@ import type {
 import { mapSessionResultRows } from "./reconcile.ts";
 import { createSessionArchiveState } from "./session-archive-state.ts";
 import { createOptimisticArchivePatches, deferSessionPatch } from "./session-deferred-patch.ts";
+import { createHiddenRunReads } from "./session-hidden-run-reads.ts";
 import { createSessionModelOverrides } from "./session-model-overrides.ts";
 import { withSessionMutationOperations } from "./session-mutation-operations.ts";
 import type { SessionMutationsHost } from "./session-mutations-host.ts";
@@ -39,6 +41,9 @@ import type {
   SessionResetOptions,
   SessionResetResult,
 } from "./session-types.ts";
+
+type SessionInvolvementWrite =
+  typeof import("./session-involvement-write.runtime.ts").setSessionInvolvement;
 
 export function createSessionMutations(host: SessionMutationsHost) {
   const reportError = (scope: SessionConnectionScope, error: unknown) => {
@@ -63,7 +68,10 @@ export function createSessionMutations(host: SessionMutationsHost) {
     color: createOptimisticRowField(host, "color"),
     category: optimisticCategories,
   };
+  const optimisticSnooze = createOptimisticRowField(host, "snoozedUntil");
+  const involvement = createOptimisticRowField(host, "hiddenFromInvolvingMe");
   const optimisticUnread = createOptimisticRowField(host, "unread");
+  const acknowledgeHiddenRuns = createHiddenRunReads(host, optimisticUnread);
   const optimisticArchive = createOptimisticArchivePatches(host);
   const settingsPatches = createOptimisticSettingsPatches(host);
   const rowPatches: Array<
@@ -73,7 +81,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
     >
   > = [
     optimisticPins,
+    involvement,
     optimisticUnread,
+    optimisticSnooze,
     optimisticArchive,
     ...Object.values(metadataFields),
     ...settingsPatches.owners,
@@ -158,6 +168,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       patchParams.icon !== undefined ||
       patchParams.color !== undefined ||
       patchParams.category !== undefined ||
+      patchParams.snoozedUntil !== undefined ||
       patchParams.pinned !== undefined ||
       patchParams.unread === false ||
       patchParams.archived !== undefined ||
@@ -188,6 +199,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     const modelPatch = modelOverrides.preparePatch(key, patchParams, options, scope);
     const nextPinned = patchParams.pinned === true;
     let pinPatchToken: symbol | null = null;
+    let snoozePatchToken: symbol | null = null;
     let unreadPatchToken: symbol | null = null;
     let categoryPatchToken: symbol | null = null;
     const displayClaims: Array<readonly [typeof optimisticCategories, symbol | null]> = [];
@@ -207,6 +219,11 @@ export function createSessionMutations(host: SessionMutationsHost) {
         categoryPatchToken = optimisticCategories.prepare(
           () => patchParams.category?.trim() || undefined,
         )(pendingTarget);
+      }
+      if (patchParams.snoozedUntil !== undefined && !snoozePatchToken && pendingTarget) {
+        snoozePatchToken = optimisticSnooze.prepare(() => patchParams.snoozedUntil ?? undefined)(
+          pendingTarget,
+        );
       }
       modelPatch.start();
       // Sidebar rows read `pinned` straight off the snapshot, so a pin/unpin has
@@ -241,6 +258,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
           [
             [optimisticPins, pinPatchToken],
             [optimisticUnread, unreadPatchToken],
+            [optimisticSnooze, snoozePatchToken],
             [optimisticCategories, categoryPatchToken],
             ...displayClaims,
           ],
@@ -452,7 +470,10 @@ export function createSessionMutations(host: SessionMutationsHost) {
       const conversation = resolvePendingConversation(host.snapshot(), key, agentId);
       return conversation ? settingsPatches.read(conversation.identity) : undefined;
     },
+    setInvolvement: (params: SessionsSetInvolvementParams, write: SessionInvolvementWrite) =>
+      write(host, involvement, params),
     patchMany,
+    acknowledgeHiddenRuns,
     assignOwner,
     patchRowLocal,
     /** Confirmed archive facts precede in-flight row intents on every presentation. */

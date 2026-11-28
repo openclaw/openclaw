@@ -140,9 +140,24 @@ it.each([
     if (change === "profile after custody") {
       const transcript = loadTranscriptEventsSync(fixture.scope);
       expect(transcript).toHaveLength(fixture.activeTranscript.length + 1);
-      expect(transcript.at(-1)).toMatchObject({ message: { role: "user", content: text } });
+      expect(transcript.at(-1)).toMatchObject({
+        message: {
+          role: "user",
+          content: text,
+          __openclaw: {
+            senderIdentity: { type: "profile", id: profile.id },
+            requesterOrigin: { operatorProfileId: profile.id },
+          },
+        },
+      });
       expect(recorder.getAdmissionReceipt()).toBeDefined();
       expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+      const refused = await resolveSuggestion();
+      expect(refused.mock.calls[0]).toMatchObject([
+        false,
+        undefined,
+        { details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "not_started" } },
+      ]);
       const retry = await resolveSuggestion(mergedProfile.id);
       expect(retry.mock.calls[0]).toMatchObject([
         false,
@@ -166,13 +181,15 @@ it.each([
       );
       expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
         total: 1,
-        items: [{ id: pending.items[0]?.id, state: "interrupted", message: { content: text } }],
+        items: [{ id: pending.items[0]?.id, state: "cancelled", message: { content: text } }],
       });
       expect(fixture.context.dedupe.get(`chat:${runId}`)).toMatchObject({
         ok: false,
         payload: { runId, status: "error" },
         error: {
-          message: expect.stringContaining("Message injection authority is no longer current"),
+          message: expect.stringContaining(
+            "The message input is no longer available. Start a new turn to retry.",
+          ),
         },
       });
     }

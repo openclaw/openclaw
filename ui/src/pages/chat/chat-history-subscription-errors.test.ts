@@ -72,14 +72,13 @@ function createSubscriptionState(options?: {
   const unsubscribeMessages =
     options?.unsubscribeMessages ?? vi.fn<Unsubscribe>(async () => undefined);
   const host = makeChatHost({ requestHandlers: {}, sessionKey: selected.key });
-  const state = {
-    ...host,
+  const state = Object.assign(host, {
     connectionEpoch: 1,
     chatError: null as string | null,
     chatSessionMessageSubscriptionRequestedKey: options?.previous?.key ?? null,
     chatSessionMessageSubscription: options?.previous ?? null,
     sessions: { ...host.sessions, subscribeMessages, unsubscribeMessages },
-  } satisfies Parameters<typeof syncSubscription>[0];
+  }) satisfies Parameters<typeof syncSubscription>[0];
   onTestFinished(
     createRoot((stop) => {
       projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory"]);
@@ -90,24 +89,44 @@ function createSubscriptionState(options?: {
   return { selected, state, subscribeMessages, unsubscribeMessages, publishedLoads };
 }
 
-it("makes the new subscription ready before the old unsubscribe settles", async () => {
-  const release = createDeferred();
-  const { state, selected, unsubscribeMessages } = createSubscriptionState({
-    previous: previousSubscription,
-    unsubscribeMessages: vi.fn(() => release.promise),
-  });
-  const sync = syncSubscription(state);
-  await Promise.resolve();
-  expect(unsubscribeMessages).toHaveBeenCalledOnce();
-  try {
-    await vi.waitFor(() => expect(state.chatSessionMessageSubscription).toEqual(selected));
-    await expect(sync).resolves.toBe(true);
-    await expect(chatHistoryRequests(state).subscriptionReady).resolves.toBe(true);
-  } finally {
-    release.resolve();
-    await sync;
-  }
+it("retains the same-session observer until forced replacement succeeds", async () => {
+  const previous = { key: "agent:main:selected", agentId: null } satisfies Subscription;
+  const h = createSubscriptionState({ previous });
+  h.subscribeMessages.mockRejectedValueOnce(new Error("Replacement admission failed"));
+  await expect(syncSubscription(h.state, { force: true })).resolves.toBe(false);
+  expect(h.state.chatSessionMessageSubscription).toBe(previous);
+  expect(h.unsubscribeMessages).not.toHaveBeenCalled();
+  h.subscribeMessages.mockResolvedValueOnce(h.selected);
+  await expect(syncSubscription(h.state, { force: true })).resolves.toBe(true);
+  expect(h.state.chatSessionMessageSubscription).toEqual(h.selected);
+  expect(h.unsubscribeMessages).toHaveBeenCalledExactlyOnceWith(previous);
 });
+
+it.each([0, 120_000])(
+  "makes the new subscription ready before old release (clock step %s)",
+  async (step) => {
+    useFakeClock();
+    const release = createDeferred();
+    const { state, selected, subscribeMessages, unsubscribeMessages } = createSubscriptionState({
+      previous: previousSubscription,
+      unsubscribeMessages: vi.fn(() => release.promise),
+    });
+    subscribeMessages.mockRejectedValueOnce(sessionChanged());
+    const sync = syncSubscription(state);
+    await Promise.resolve();
+    vi.setSystemTime(Date.now() + step);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(unsubscribeMessages).toHaveBeenCalledOnce();
+    try {
+      await vi.waitFor(() => expect(state.chatSessionMessageSubscription).toEqual(selected));
+      await expect(sync).resolves.toBe(true);
+      await expect(chatHistoryRequests(state).subscriptionReady).resolves.toBe(true);
+    } finally {
+      release.resolve();
+      await sync;
+    }
+  },
+);
 
 it("releases an active message subscription when its pane is disposed", () => {
   const { state, selected, unsubscribeMessages } = createSubscriptionState();
@@ -184,7 +203,12 @@ it.each(["dispose", "selection", "capability", "deadline"] as const)(
     if (change === "deadline") {
       expect(subscribeMessages.mock.calls.length).toBeGreaterThan(1);
       expect(subscribeMessages.mock.calls.length).toBeLessThan(20);
-      expect(historyLoad(state)).toMatchObject({ phase: "failed", retryable: true });
+      expect(historyLoad(state)).toMatchObject({
+        phase: "failed",
+        message:
+          "This session changed before OpenClaw could finish checking for updates. Try again.",
+        retryable: true,
+      });
       expect(state.sessionsError).toBeNull();
     } else {
       expect(subscribeMessages).toHaveBeenCalledTimes(1);
@@ -208,7 +232,11 @@ it.each([
   const { state } = createSubscriptionState({ subscribeMessages });
   await expect(syncSubscription(state)).resolves.toBe(false);
   expect(subscribeMessages).toHaveBeenCalledOnce();
-  expect(historyLoad(state)).toMatchObject({ phase: "failed", retryable: false });
+  expect(historyLoad(state)).toMatchObject({
+    phase: "failed",
+    retryable: false,
+    message: error.message,
+  });
 });
 
 it("keeps a successful replacement and warns when the previous release fails", async () => {

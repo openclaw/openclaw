@@ -1,18 +1,17 @@
 import {
   findConfiguredProviderModel,
-  resolveMergedModelProviderEntry,
+  resolveMergedModelProviderConfig,
 } from "../config/model-provider-config.js";
 import { requiredWorkerHelperError } from "../config/required-worker-profile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { supportsDecisionInput } from "../decisions/capabilities.js";
+import type { DecisionEvaluateOptionsV2 } from "../decisions/execution-types.js";
+import type { PreparedDecisionBillingFacts } from "../decisions/host-billing.js";
 import type { DecisionProviderContextV2 } from "../decisions/provider-context.js";
-import type { PreparedDecisionBilling } from "../decisions/provider-host.js";
-import type {
-  DecisionBatchV2,
-  DecisionEvaluateOptionsV2,
-  DecisionProviderV2,
-  ProviderDecisionOutcomeV2,
-} from "../decisions/types-v2.js";
-import { validateDecisionResultV2 } from "../decisions/validation-v2.js";
+import { evaluatePreparedDecisionProvider } from "../decisions/provider-execution.js";
+import type { ProviderDecisionOutcomeV2 } from "../decisions/provider-outcomes.js";
+import type { DecisionProviderV2 } from "../decisions/provider-types.js";
+import type { DecisionBatchV2 } from "../decisions/types-v2.js";
 import {
   assertProviderAuthAuthority,
   attachProviderAuthAuthority,
@@ -36,7 +35,6 @@ import { applyLocalNoAuthHeaders } from "./model-auth-markers.js";
 import { resolveApiKeyForProviderCore } from "./model-auth-provider.js";
 import { isProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { applyAuthHeaderOverride, applySecretRefHeaderSentinels } from "./model-auth.js";
-import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { withPreparedModelInference } from "./prepared-model-inference.js";
@@ -53,76 +51,6 @@ import {
   unwrapModelHeaderSentinelsForProviderEgress,
 } from "./provider-secret-egress.js";
 
-function supportsInput(
-  model: ModelCatalogEntry,
-  batch: DecisionBatchV2,
-  reasoning: DecisionEvaluateOptionsV2["reasoning"],
-): boolean {
-  const capability = model.inference?.decision;
-  if (
-    !capability ||
-    !capability.input.includes(batch.state.type === "image" ? "image" : "text") ||
-    (reasoning !== undefined && !capability.reasoning?.modes.includes(reasoning)) ||
-    (capability.limits?.maxQuestions !== undefined &&
-      Object.keys(batch.questions).length > capability.limits.maxQuestions)
-  ) {
-    return false;
-  }
-  if (batch.state.type === "image" && capability.limits?.image) {
-    const image = capability.limits.image;
-    const [prefix, payload = ""] = batch.state.dataUri.split(",", 2);
-    const mime = prefix?.slice(5).split(";", 1)[0];
-    if (
-      !image.mimeTypes.some((allowed) => allowed === mime) ||
-      Buffer.byteLength(payload, "base64") > image.maxBytes
-    ) {
-      return false;
-    }
-  }
-  for (const question of Object.values(batch.questions)) {
-    if (
-      reasoning === "on" &&
-      capability.reasoning?.questionTypes &&
-      !capability.reasoning.questionTypes.includes(question.type)
-    ) {
-      return false;
-    }
-    const kind = capability.questions?.[question.type];
-    if (!kind) {
-      if (capability.questions) {
-        return false;
-      }
-      continue;
-    }
-    if (
-      question.type === "boolean" &&
-      kind.requiresCriteria &&
-      (question.criteria?.true == null || question.criteria.false == null)
-    ) {
-      return false;
-    }
-    const count =
-      question.type === "choice" || question.type === "tags"
-        ? Object.keys(question.criteria).length
-        : question.type === "score"
-          ? question.criteria.length
-          : question.type === "sort" && batch.state.type === "list"
-            ? batch.state.items.length
-            : undefined;
-    if (
-      count !== undefined &&
-      ((kind.minOptions !== undefined && count < kind.minOptions) ||
-        (kind.maxOptions !== undefined && count > kind.maxOptions) ||
-        (batch.state.type === "image" &&
-          kind.maxImageOptions !== undefined &&
-          count > kind.maxImageOptions))
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
 /** Decision SDK dispatch uses the existing prepared generation and credential owner, without a fake chat Model. */
 export async function executePreparedDecision(params: {
   provider: DecisionProviderV2;
@@ -134,7 +62,7 @@ export async function executePreparedDecision(params: {
   signal: AbortSignal;
   deadlineMonotonicMs: number;
   isAdmissible: () => boolean;
-  onPreparedBilling?: (facts: PreparedDecisionBilling) => void;
+  onPreparedBilling?: (facts: PreparedDecisionBillingFacts) => void;
 }): Promise<ProviderDecisionOutcomeV2> {
   const assertCurrent = () => {
     params.signal.throwIfAborted();
@@ -175,11 +103,24 @@ export async function executePreparedDecision(params: {
       ) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
+      const provider = canonical.provider.id;
+      const providerConfig = resolveMergedModelProviderConfig(prepared.config, provider);
       let row = prepared.modelCatalog.entries.find(
-        (entry) => entry.provider === canonical.provider.id && entry.id === modelId,
+        (entry) => entry.provider === provider && entry.id === modelId,
       );
       if (!row) {
-        return { status: "unavailable", reason: "unsupported-input" };
+        if (!providerConfig?.baseUrl) {
+          return { status: "unavailable", reason: "unsupported-input" };
+        }
+        // An explicitly configured endpoint may serve IDs absent from the catalog.
+        // Seed only route identity; the provider must supply decision capabilities.
+        row = {
+          provider,
+          id: modelId,
+          name: modelId,
+          api: providerConfig.api,
+          baseUrl: providerConfig.baseUrl,
+        };
       }
       const route = resolveProviderModelRoutes({
         provider: row.provider,
@@ -224,7 +165,7 @@ export async function executePreparedDecision(params: {
           supplemental?.find((entry) => entry.provider === row?.provider && entry.id === modelId) ??
           row;
       }
-      if (!supportsInput(row, params.batch, params.options.reasoning)) {
+      if (!supportsDecisionInput(row.inference?.decision, params.batch, params.options.reasoning)) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
       const normalized = route
@@ -248,10 +189,6 @@ export async function executePreparedDecision(params: {
         api: normalizeResolvedTransportApi(normalized?.api) ?? row.api,
         ...(normalized?.baseUrl ? { baseUrl: normalized.baseUrl } : {}),
       };
-      const providerConfig = resolveMergedModelProviderEntry(
-        prepared.config,
-        row.provider,
-      )?.providerConfig;
       if (providerConfig) {
         const configuredModel = findConfiguredProviderModel(
           providerConfig,
@@ -408,25 +345,14 @@ export async function executePreparedDecision(params: {
         model: model.id,
         billing: model.inference?.decision?.billing,
       });
-      const result = await params.provider.evaluate(params.batch, providerContext);
-      if (!assertPrepared()) {
-        return { status: "unavailable", reason: "unsupported-input" };
-      }
-      const status = result.status;
-      if (status === "ok") {
-        const value = result.result;
-        if (!validateDecisionResultV2(offered, value, model.inference?.decision)) {
-          return { status: "unavailable", reason: "invalid-response" };
-        }
-        assertPrepared();
-        return { status, result: value };
-      }
-      if (status !== "unavailable") {
-        throw new Error("Invalid decision provider outcome");
-      }
-      const { reason, retryAfterMs } = result;
-      assertPrepared();
-      return { status, reason, ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) };
+      return evaluatePreparedDecisionProvider({
+        provider: params.provider,
+        batch: params.batch,
+        offered,
+        context: providerContext,
+        capabilities: model.inference?.decision,
+        isAdmissible: assertPrepared,
+      });
     },
   ).catch((error: unknown): ProviderDecisionOutcomeV2 => {
     // Caller, cancellation and generation checks run before the credential fence.

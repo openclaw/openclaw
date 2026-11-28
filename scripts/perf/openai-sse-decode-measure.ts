@@ -6,15 +6,24 @@
  * Use --large-frame to record a 1 MiB output-item snapshot instead of 3,000 deltas.
  * Use --mixed for alternating text/tool-argument deltas and mixed CR/LF framing.
  * The first run records <output>.sse. Reuse those exact bytes for both revisions.
+ * Team-shaped replay: --mixed --events 10000 --snapshot-every 2500 (64 KiB snapshots).
+ * --frames-only measures the public framing adapter, including one-read-per-event
+ * behavior with --chunk-size 128. Its --owner must name transport-stream-shared.ts.
  * Run timing/allocation separately in alternating order; hashes are outside measurement.
+ * Allocation mode writes <output>.heapprofile with collected objects and deep stacks.
+ * --attribution profiles named parse/slice/join/decode probes in temporary owner copies
+ * beside --output, without modifying native prototypes or production source files.
+ * Start Node with --no-turbo-inlining for attribution so the named probe frames survive.
+ * --counters counts promises in a separate diagnostic pass. Do not compare instrumented timings.
  */
 import assert from "node:assert/strict";
+import { createHook } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import OpenAI from "openai";
 import type { Model } from "../../packages/ai/src/types.js";
@@ -24,6 +33,12 @@ const { values } = parseArgs({
     mode: { type: "string", default: "timing" },
     turns: { type: "string", default: "20" },
     owner: { type: "string" },
+    events: { type: "string", default: "3000" },
+    "snapshot-every": { type: "string", default: "0" },
+    "chunk-size": { type: "string", default: "1024" },
+    "frames-only": { type: "boolean", default: false },
+    attribution: { type: "boolean", default: false },
+    counters: { type: "boolean", default: false },
     fixture: { type: "string" },
     mixed: { type: "boolean", default: false },
     "large-frame": { type: "boolean", default: false },
@@ -34,12 +49,95 @@ assert(values.output, "--output is required");
 assert(values.mode === "timing" || values.mode === "allocation");
 const turns = Number(values.turns);
 assert(Number.isSafeInteger(turns) && turns > 0);
+const eventCount = Number(values.events);
+const snapshotEvery = Number(values["snapshot-every"]);
+const chunkSize = Number(values["chunk-size"]);
+assert(Number.isSafeInteger(eventCount) && eventCount > 0);
+assert(Number.isSafeInteger(snapshotEvery) && snapshotEvery >= 0);
+assert(Number.isSafeInteger(chunkSize) && chunkSize > 0);
+let probeDirectory: string | undefined;
+let probeOperations: Record<string, number> | undefined;
+let responseOwner = values.owner;
+if (values.attribution) {
+  assert(!values["frames-only"], "--attribution requires the raw Responses owner");
+  assert(
+    process.execArgv.includes("--no-turbo-inlining"),
+    "Use node --no-turbo-inlining for attribution",
+  );
+  const sourceDirectory = fileURLToPath(
+    new URL("../../packages/ai/src/transports/", import.meta.url),
+  );
+  const directory = await mkdtemp(
+    path.join(path.dirname(path.resolve(values.output)), "sse-probe-"),
+  );
+  probeDirectory = directory;
+  const probeFile = path.join(probeDirectory, "probes.mjs");
+  await writeFile(
+    probeFile,
+    `
+export const operations = { parse: 0, slices: 0, joins: 0, decodes: 0, decodedBytes: 0, decodedChars: 0 };
+export function profileJsonParse(text) { operations.parse++; return JSON.parse(text); }
+export function profileStringSlice(text, start, end) { operations.slices++; return text.slice(start, end); }
+export function profileArrayJoin(parts, separator) { operations.joins++; return parts.join(separator); }
+export function profileDecode(decoder, bytes, options) {
+  operations.decodes++; operations.decodedBytes += bytes?.byteLength ?? 0;
+  const text = decoder.decode(bytes, options); operations.decodedChars += text.length; return text;
+}
+`,
+  );
+  for (const name of ["transport-stream-shared", "openai-responses-replay-internal"]) {
+    let source = await readFile(
+      name === "openai-responses-replay-internal" && values.owner
+        ? values.owner
+        : path.join(sourceDirectory, `${name}.ts`),
+      "utf8",
+    );
+    source = source.replace(/from "([^"]+)"/g, (match, specifier: string) => {
+      if (!specifier.startsWith(".") && !path.isAbsolute(specifier)) {
+        return match;
+      }
+      const target = /\/transport-stream-shared\.[jt]s$/.test(specifier)
+        ? path.join(directory, "transport-stream-shared.ts")
+        : path.resolve(sourceDirectory, specifier.replace(/\.js$/, ".ts"));
+      return `from ${JSON.stringify(pathToFileURL(target).href)}`;
+    });
+    const replacements =
+      name === "transport-stream-shared"
+        ? [
+            ["buffer.slice(", "profileStringSlice(buffer, "],
+            ["parts.join(", "profileArrayJoin(parts, "],
+            ["decoder.decode(", "profileDecode(decoder, "],
+          ]
+        : [
+            ["frame.slice(", "profileStringSlice(frame, "],
+            ["JSON.parse(", "profileJsonParse("],
+          ];
+    for (const [before, after] of replacements) {
+      assert(before && after && source.includes(before), `Missing attribution site: ${before}`);
+      source = source.replaceAll(before, after);
+    }
+    source = `import { profileJsonParse, profileStringSlice, profileArrayJoin, profileDecode } from ${JSON.stringify(pathToFileURL(probeFile).href)};\n${source}`;
+    await writeFile(path.join(probeDirectory, `${name}.ts`), source);
+  }
+  const probes: { operations: Record<string, number> } = await import(
+    pathToFileURL(probeFile).href
+  );
+  probeOperations = probes.operations;
+  responseOwner = path.join(probeDirectory, "openai-responses-replay-internal.ts");
+}
+const {
+  iterateSseFrames,
+}: typeof import("../../packages/ai/src/transports/transport-stream-shared.js") = await import(
+  values["frames-only"] && values.owner
+    ? pathToFileURL(path.resolve(values.owner)).href
+    : "../../packages/ai/src/transports/transport-stream-shared.js"
+);
 const {
   createResponsesStreamWithRecovery,
 }: typeof import("../../packages/ai/src/transports/openai-responses-replay-internal.js") =
   await import(
-    values.owner
-      ? pathToFileURL(path.resolve(values.owner)).href
+    !values["frames-only"] && responseOwner
+      ? pathToFileURL(path.resolve(responseOwner)).href
       : "../../packages/ai/src/transports/openai-responses-replay-internal.js"
   );
 const fixtureEvents = values["large-frame"]
@@ -53,16 +151,27 @@ const fixtureEvents = values["large-frame"]
         },
       },
     ]
-  : Array.from({ length: 3000 }, (_, index) => ({
-      type:
-        values.mixed && index % 2
-          ? "response.function_call_arguments.delta"
-          : "response.output_text.delta",
-      item_id: "msg_fixture",
-      output_index: 0,
-      content_index: 0,
-      delta: `Synthetic café 🦞 delta ${index}. `,
-    }));
+  : Array.from({ length: eventCount }, (_, index) =>
+      snapshotEvery && (index + 1) % snapshotEvery === 0
+        ? {
+            type: "response.output_item.done",
+            item: {
+              id: `msg_${index}`,
+              type: "message",
+              content: [{ type: "output_text", text: "x".repeat(64 * 1024) }],
+            },
+          }
+        : {
+            type:
+              values.mixed && index % 2
+                ? "response.function_call_arguments.delta"
+                : "response.output_text.delta",
+            item_id: "msg_fixture",
+            output_index: 0,
+            content_index: 0,
+            delta: `Synthetic café 🦞 delta ${index}. `,
+          },
+    );
 const fixture = values.fixture
   ? await readFile(values.fixture)
   : Buffer.from(
@@ -74,8 +183,8 @@ const fixture = values.fixture
         .join("") + "data: [DONE]\n\n",
     );
 await writeFile(`${values.output}.sse`, fixture);
-const chunks = Array.from({ length: Math.ceil(fixture.length / 1024) }, (_, index) =>
-  fixture.subarray(index * 1024, (index + 1) * 1024),
+const chunks = Array.from({ length: Math.ceil(fixture.length / chunkSize) }, (_, index) =>
+  fixture.subarray(index * chunkSize, (index + 1) * chunkSize),
 );
 const client = new OpenAI({
   apiKey: "synthetic-fixture-key",
@@ -118,13 +227,21 @@ const request = {
   input: [{ role: "user", content: "fixture" }],
 } satisfies Parameters<typeof createResponsesStreamWithRecovery>[0]["request"];
 const run = async (hash?: ReturnType<typeof createHash>) => {
-  const { stream } = await createResponsesStreamWithRecovery({
-    client,
-    model,
-    request,
-    requestOptions: undefined,
-    buildFullHistoryRequest: () => request,
-  });
+  let offset = 0;
+  const { stream } = values["frames-only"]
+    ? {
+        stream: iterateSseFrames(async () => {
+          const value = chunks[offset++];
+          return value === undefined ? { done: true, value: undefined } : { done: false, value };
+        }),
+      }
+    : await createResponsesStreamWithRecovery({
+        client,
+        model,
+        request,
+        requestOptions: undefined,
+        buildFullHistoryRequest: () => request,
+      });
   let count = 0;
   for await (const event of stream) {
     count++;
@@ -140,11 +257,28 @@ for (let index = 0; index < 5; index++) {
   await run();
 }
 const inspector = new Session();
+const operations = { promises: 0 };
+const hook = createHook({
+  init(_id, type) {
+    if (type === "PROMISE") {
+      operations.promises++;
+    }
+  },
+});
 try {
+  if (probeOperations) {
+    for (const key of Object.keys(probeOperations)) {
+      probeOperations[key] = 0;
+    }
+  }
+  if (values.counters) {
+    hook.enable();
+  }
   if (values.mode === "allocation") {
     inspector.connect();
     await inspector.post("HeapProfiler.startSampling", {
       samplingInterval: 32768,
+      stackDepth: 128,
       includeObjectsCollectedByMajorGC: true,
       includeObjectsCollectedByMinorGC: true,
     });
@@ -162,9 +296,11 @@ try {
   if (values.mode === "allocation") {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
     sampledBytes = profile.samples.reduce((sum, sample) => sum + sample.size, 0);
+    await writeFile(`${values.output}.heapprofile`, JSON.stringify(profile));
   }
   const result = {
     mode: values.mode,
+    framesOnly: values["frames-only"],
     turns,
     events,
     bytes: fixture.byteLength * turns,
@@ -180,9 +316,15 @@ try {
       sampledBytes === undefined ? undefined : sampledBytes / (fixture.byteLength * turns),
     hostLoad,
     memory: process.memoryUsage(),
+    operations:
+      values.attribution || values.counters ? { ...probeOperations, ...operations } : undefined,
   };
   await writeFile(values.output, `${JSON.stringify(result, null, 2)}\n`);
   console.log(JSON.stringify(result));
 } finally {
+  hook.disable();
   inspector.disconnect();
+  if (probeDirectory) {
+    await rm(probeDirectory, { recursive: true, force: true });
+  }
 }

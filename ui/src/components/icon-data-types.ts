@@ -1,6 +1,8 @@
 export type IconAttributes = Readonly<{
   viewBox?: string;
   fill?: string;
+  "fill-rule"?: "nonzero" | "evenodd";
+  mask?: string;
   stroke?: string;
   "stroke-width"?: string | number;
   "stroke-linecap"?: "butt" | "round" | "square" | "inherit";
@@ -36,6 +38,8 @@ export type IconNode = readonly [
     | "line"
     | "polyline"
     | "polygon"
+    | "g"
+    | "mask"
     | "defs"
     | "linearGradient"
     | "stop",

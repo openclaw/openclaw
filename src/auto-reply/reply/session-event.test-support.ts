@@ -6,10 +6,11 @@ import {
 } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { buildEmbeddedAttemptToolRunContext } from "../../agents/embedded-agent-runner/run/attempt-tool-run-context.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
-import type { AgentHarnessHostCapabilities } from "../../agents/harness/host-capability-types.js";
-import type { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
+import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
+import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { recordSessionStateEventAsync } from "../../sessions/session-state-events.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   withOpenClawTestState,
@@ -36,6 +37,23 @@ export async function configureEventState(
   return config;
 }
 
+export async function recordWatchEvents(child: string, sessionId: string) {
+  const input = {
+    sessionKey: child,
+    sessionId,
+    agentId: "main",
+    kind: "human_direct_message" as const,
+    actorType: "human" as const,
+    summary: "Other actor changed the watched session",
+    watcherSessionKeys: [],
+  };
+  return {
+    child,
+    frozen: expectDefined(await recordSessionStateEventAsync(input), "frozen event"),
+    newer: expectDefined(await recordSessionStateEventAsync(input), "newer event"),
+  };
+}
+
 export async function startEmbeddedTurn(params: RunEmbeddedAgentParams, label: string) {
   const admission = expectDefined(params.preparedRunAdmission, label);
   const context = await admission.admit("gateway", params.runId);
@@ -58,11 +76,47 @@ export function runEventFixture(
   return work;
 }
 
-export function createEventManagedTools(
+/** Admits an event turn and opens its real managed tool host; only the model is synthetic. */
+export async function openEventToolHost(
   params: RunEmbeddedAgentParams,
-  workspace: Awaited<ReturnType<typeof resolveAttemptWorkspaceSandbox>>,
-  createToolSurface: NonNullable<AgentHarnessHostCapabilities["createToolSurface"]>,
+  label: string,
+  options: { includeOpenClawTools?: boolean } = {},
 ) {
+  const admittedRunContext = await startEmbeddedTurn(params, label);
+  const workspace = await resolveAttemptWorkspaceSandbox({ ...params, admittedRunContext });
+  const host = createAgentHarnessHostCapabilities({
+    attempt: {
+      admittedRunContext,
+      runId: params.runId,
+      abortSignal: params.abortSignal,
+      config: params.config,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
+      permissionMode: params.permissionMode,
+      requireWorkspaceOnly: params.requireWorkspaceOnly,
+      sessionRoot: workspace.sessionPermissionRoot,
+      workspaceDir: params.workspaceDir,
+      bootstrapWorkspaceDir: params.bootstrapWorkspaceDir,
+      cwd: params.cwd,
+      sandboxAgentId: params.sandboxAgentId,
+      skillsSnapshot: params.skillsSnapshot,
+      toolExecutionAllow: params.toolExecutionAllow,
+      toolsAllow: params.toolsAllow,
+      runtimePluginToolGrant: params.runtimePluginToolGrant,
+      trigger: params.trigger,
+      senderIsOwner: params.senderIsOwner,
+      messageChannel: params.messageChannel,
+      messageProvider: params.messageProvider,
+      agentAccountId: params.agentAccountId,
+    },
+    pluginId: "openclaw",
+  });
+  const createToolSurface = expectDefined(
+    host.capabilities.createToolSurface,
+    "managed tool surface",
+  );
   const toolRunContext = buildEmbeddedAttemptToolRunContext({
     ...params,
     model:
@@ -71,7 +125,7 @@ export function createEventManagedTools(
   const construction = resolveEmbeddedAttemptToolConstructionPlan({
     toolsAllow: toolRunContext.runtimeToolAllowlist,
   });
-  return applyEmbeddedAttemptToolsAllow(
+  const tools = applyEmbeddedAttemptToolsAllow(
     createToolSurface({
       ...toolRunContext,
       config: params.config,
@@ -85,10 +139,11 @@ export function createEventManagedTools(
         ...construction.codingToolConstructionPlan,
         includeShellTools: false,
         includeChannelTools: false,
-        includeOpenClawTools: false,
+        includeOpenClawTools: options.includeOpenClawTools === true,
         includePluginTools: false,
       },
     }),
     construction.runtimeToolAllowlist,
   );
+  return { admittedRunContext, tools, close: () => host.close() };
 }

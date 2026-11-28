@@ -31,7 +31,8 @@ import {
 import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 
-type PlacementRow = Selectable<WorkerSessionPlacements>;
+// The v42 recovery field is reserved; existing placement reads and writes do not consume it.
+type PlacementRow = Omit<Selectable<WorkerSessionPlacements>, "confirmed_loss_recovery_json">;
 type PlacementDatabase = Pick<
   StateDatabase,
   | "worker_environments"
@@ -212,6 +213,18 @@ export function readWorkerPlacementsInDatabase(
     select = select.where("session_id", "in", sqliteStringSet(sessionIds));
   }
   return executeSqliteQuerySync(db, select.orderBy("session_id")).rows.map(fromRow);
+}
+
+export function readWorkerPlacementIdentitiesInDatabase(
+  db: EngineConnection,
+): WorkerSessionPlacementIdentity[] {
+  return executeSqliteQuerySync(
+    db,
+    query(db)
+      .selectFrom("worker_session_placements")
+      .select(["session_id as sessionId", "agent_id as agentId", "session_key as sessionKey"])
+      .orderBy("session_id"),
+  ).rows;
 }
 
 export function readWorkerPlacementChangeSnapshotInDatabase(

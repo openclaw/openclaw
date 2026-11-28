@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { constants, DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { expect } from "vitest";
 import { restoreDoctorMigrationBackup } from "../commands/doctor-migration-backup-restore.js";
@@ -10,6 +9,7 @@ import {
   ensureOpenClawAgentDatabaseSchema,
   ensureOpenClawAgentSchema,
 } from "./openclaw-agent-db-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_V27_SQL } from "./openclaw-agent-schema-v25.test-support.js";
 import { captureOpenClawMigrationWitness } from "./openclaw-migration-witness.js";
 import { resolveSchemaMigrationBackupTables } from "./schema-migration-backup-scope.js";
 import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
@@ -34,10 +34,7 @@ export function seedVersion(db: DatabaseSync, version: number) {
 }
 
 // Frozen v27 plus published v28–30 DDL, independent of the candidate migration.
-const schemaV27 = fs.readFileSync(
-  new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v27.sql", import.meta.url),
-  "utf8",
-);
+const schemaV27 = OPENCLAW_AGENT_SCHEMA_V27_SQL;
 
 export function seedAgentV30Schema(database: DatabaseSync, version: number): void {
   database.exec(schemaV27);
@@ -61,6 +58,29 @@ export function seedAgentV30Schema(database: DatabaseSync, version: number): voi
     CREATE INDEX idx_agent_trajectory_runtime_run
       ON trajectory_runtime_events(session_id, run_id, created_at,
         COALESCE(event_utf8_bytes, octet_length(event_json)));
+  `);
+}
+
+/** Frozen v27 plus released v28–37 DDL, independent of the schema-39 payload constraint. */
+export function seedAgentV38Schema(database: DatabaseSync): void {
+  seedAgentV30Schema(database, 38);
+  database.exec(`
+    DROP TRIGGER memory_index_sources_revision_after_insert;
+    DROP TRIGGER memory_index_sources_revision_after_update;
+    DROP TRIGGER memory_index_sources_revision_after_delete;
+    DROP TRIGGER memory_index_chunks_revision_after_insert;
+    DROP TRIGGER memory_index_chunks_revision_after_update;
+    DROP TRIGGER memory_index_chunks_revision_after_delete;
+    CREATE TABLE session_transcript_cold_archive_chunks (
+      session_id TEXT NOT NULL, chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+      archive_name TEXT NOT NULL UNIQUE, archive_sha256 TEXT NOT NULL CHECK (length(archive_sha256) = 64),
+      first_seq INTEGER NOT NULL, last_seq INTEGER NOT NULL CHECK (last_seq >= first_seq),
+      event_count INTEGER NOT NULL CHECK (event_count >= 1), raw_bytes INTEGER NOT NULL CHECK (raw_bytes >= 0),
+      archive_bytes INTEGER NOT NULL CHECK (archive_bytes >= 0), archive_blob BLOB,
+      PRIMARY KEY (session_id, chunk_index),
+      FOREIGN KEY (session_id) REFERENCES session_transcript_cold_archives(session_id) ON DELETE CASCADE,
+      CHECK (length(archive_name) > 0 AND archive_name NOT IN ('.', '..') AND archive_name NOT LIKE '%/%' AND archive_name NOT LIKE '%\\%')
+    ) STRICT, WITHOUT ROWID;
   `);
 }
 

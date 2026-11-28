@@ -98,10 +98,30 @@ const WikiApplySchema = Type.Object(
     title: Type.Optional(Type.String({ minLength: 1 })),
     body: Type.Optional(Type.String({ minLength: 1 })),
     lookup: Type.Optional(Type.String({ minLength: 1 })),
-    sourceIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-    claims: Type.Optional(Type.Array(WikiClaimSchema)),
-    contradictions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-    questions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+    sourceIds: Type.Optional(
+      Type.Array(Type.String({ minLength: 1 }), {
+        description:
+          "For update_metadata, supply the complete replacement list, not additions. Omit to preserve existing values; [] clears the list.",
+      }),
+    ),
+    claims: Type.Optional(
+      Type.Array(WikiClaimSchema, {
+        description:
+          "For update_metadata, supply the complete replacement list, not additions. Omit to preserve existing values; [] clears the list.",
+      }),
+    ),
+    contradictions: Type.Optional(
+      Type.Array(Type.String({ minLength: 1 }), {
+        description:
+          "For update_metadata, supply the complete replacement list, not additions. Omit to preserve existing values; [] clears the list.",
+      }),
+    ),
+    questions: Type.Optional(
+      Type.Array(Type.String({ minLength: 1 }), {
+        description:
+          "For update_metadata, supply the complete replacement list, not additions. Omit to preserve existing values; [] clears the list.",
+      }),
+    ),
     confidence: Type.Optional(Type.Union([Type.Number({ minimum: 0, maximum: 1 }), Type.Null()])),
     status: Type.Optional(Type.String({ minLength: 1 })),
   },
@@ -115,6 +135,8 @@ type WikiToolMemoryContext = {
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   signal?: AbortSignal;
   memoryContext?: MemoryCallerContext;
+  /** Present while the service runs; it owns import and compile after the search. */
+  refreshSources?: () => void;
 };
 
 export function createWikiStatusTool(
@@ -169,8 +191,16 @@ export function createWikiSearchTool(
       try {
         return await racePromiseWithAbortSignal(
           async () => {
-            await syncMemoryWikiImportedSources({ config, appConfig, signal });
+            if (!memoryContext.refreshSources) {
+              // One-shot callers have no service to own background work.
+              await syncMemoryWikiImportedSources({
+                config,
+                appConfig,
+                signal: memoryContext.signal ?? signal,
+              });
+            }
             signal.throwIfAborted();
+            // Refresh after the search: a cold read owner activates through the vault queue.
             const results = await searchMemoryWiki({
               config,
               appConfig,
@@ -184,7 +214,7 @@ export function createWikiSearchTool(
               ...(params.backend ? { searchBackend: params.backend } : {}),
               ...(params.corpus ? { searchCorpus: params.corpus } : {}),
               ...(params.mode ? { mode: params.mode } : {}),
-            });
+            }).finally(() => memoryContext.refreshSources?.());
             signal.throwIfAborted();
             return textResult(renderWikiSearchResults(results), { results });
           },

@@ -54,6 +54,7 @@ export function createTelegramTextSender(config: {
   ) => Promise<void>;
   singleUseReplyTo: boolean;
   buildThreadParams: (includeReplyTo: boolean) => Record<string, unknown>;
+  pendingMessageEffectParams: () => Record<string, unknown> | undefined;
   sender: TelegramPreparedSender;
   textMode: "markdown" | "html";
   tableMode: MarkdownTableMode;
@@ -71,14 +72,15 @@ export function createTelegramTextSender(config: {
     recordDeliveredPromptContext,
     singleUseReplyTo,
     buildThreadParams,
+    pendingMessageEffectParams,
     sender,
     textMode,
     tableMode,
     useRichMessages,
   } = config;
 
-  const linkPreviewOptions =
-    account.config.linkPreview === false ? { is_disabled: true } : undefined;
+  const linkPreview = opts.linkPreview ?? account.config.linkPreview;
+  const linkPreviewOptions = linkPreview === false ? { is_disabled: true } : undefined;
 
   return async (
     rawText: string,
@@ -95,7 +97,6 @@ export function createTelegramTextSender(config: {
     };
 
     const start = sender.parts.length;
-    let acceptedReplyToMessageId: number | undefined;
     const deliveryResults: TelegramSendResult[] = [];
     const buildReceipt = () => {
       if (deliveryResults.length < 2) {
@@ -104,12 +105,12 @@ export function createTelegramTextSender(config: {
       const receipt = createMessageReceiptFromOutboundResults({
         results: deliveryResults,
         kind: "text",
-        ...(typeof acceptedReplyToMessageId === "number"
-          ? { replyToId: String(acceptedReplyToMessageId) }
-          : {}),
       });
       receipt.parts.forEach((part, index) => {
         part.index = index;
+        if (part.replyToId) {
+          receipt.replyToId ??= part.replyToId;
+        }
       });
       return receipt;
     };
@@ -161,7 +162,6 @@ export function createTelegramTextSender(config: {
 
     const record = async (params: Omit<PendingChunk, "reportChatId">) => {
       const { messageId } = params;
-      acceptedReplyToMessageId ??= resolveAcceptedReplyToMessageId(params.acceptedParams);
       if (sender.parts.length === start + 1) {
         await options.beforeFirstAccepted?.();
       }
@@ -171,6 +171,7 @@ export function createTelegramTextSender(config: {
       });
       await reportDelivery({
         messageId,
+        acceptedReplyToMessageId: resolveAcceptedReplyToMessageId(params.acceptedParams) ?? null,
         fallbackChatId: params.result?.chat?.id ?? chatId,
         message: params.result,
         meta: {
@@ -223,7 +224,7 @@ export function createTelegramTextSender(config: {
       tableMode,
       chunkMode: opts.chunkMode ?? resolveChunkMode(cfg, "telegram", account.accountId),
       richMessages: useRichMessages,
-      skipEntityDetection: account.config.linkPreview === false,
+      skipEntityDetection: linkPreview === false,
       ...(textMode === "html" ? { textMode: "html" as const } : {}),
       warn: (message) => sendLogger.warn(message),
     });
@@ -242,6 +243,7 @@ export function createTelegramTextSender(config: {
               index === pages.length - 1 && (!fallback || fallback.index === fallback.count - 1);
             return {
               ...buildThreadParams(includeReply),
+              ...pendingMessageEffectParams(),
               ...(finalPart && replyMarkup ? { reply_markup: replyMarkup } : {}),
               ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
               ...(opts.silent === true ? { disable_notification: true } : {}),

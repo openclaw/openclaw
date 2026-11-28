@@ -1,40 +1,59 @@
-import type { JSX } from "@solidjs/web";
+import { createSignal, lazy } from "solid-js";
+import type { MenuHandle } from "../../../components/solid/menu.tsx";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
-import "../../../styles/chat/details-desktop.css";
+import { loadChatDetailsDesktopComposition } from "./chat-details-desktop-loader.ts";
+import { ChatDetailsDesktopLoading } from "./chat-details-loading.tsx";
+import type { ChatDetailsProps } from "./chat-details-types.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import "../../../styles/chat/details-desktop-body.css";
 
-/** One scroll owner around Session and Progress; mounted only by the desktop host. */
-export function ChatDetailsDesktopBody(props: {
+const ChatDetailsDesktopComposition = lazy(loadChatDetailsDesktopComposition, {
+  export: "ChatDetailsDesktopComposition",
+});
+
+export function ChatDetailsDesktopContent(props: {
+  chat?: ChatDetailsProps;
   presented: boolean;
-  children: JSX.Element;
-  onScrollPortRef?: (element: HTMLDivElement) => void;
+  dismissed: boolean;
+  cachedReady: boolean;
+  progressMenuRef: (menu: MenuHandle | undefined) => void;
+  onHideProgress: () => void;
 }) {
+  const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
   let scroll!: HTMLDivElement;
   let content!: HTMLDivElement;
-  const measure = () => {
-    // Overlay scrollbars reserve no width; classic scrollbars reserve both gutters.
-    const reserve = Math.max(0, (scroll.offsetWidth - scroll.clientWidth) / 2);
-    const fadeTop = scroll.scrollTop > 1;
-    const fadeBottom = scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop > 1;
-    return () => {
-      scroll.style.setProperty("--details-scrollbar-reserve", `${reserve}px`);
-      scroll.toggleAttribute("data-fade-top", fadeTop);
-      scroll.toggleAttribute("data-fade-bottom", fadeBottom);
-    };
-  };
-  const update = createLayoutMeasurement(() => props.presented, measure, {
-    targets: () => [scroll, content],
-  });
+  const update = createLayoutMeasurement(
+    () => props.presented,
+    () => {
+      const fadeTop = scroll.scrollTop > 1;
+      const fadeBottom = scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop > 1;
+      return () => {
+        scroll.toggleAttribute("data-fade-top", fadeTop);
+        scroll.toggleAttribute("data-fade-bottom", fadeBottom);
+      };
+    },
+    { targets: () => [scroll, content] },
+  );
   return (
     <div
       ref={(element) => {
         scroll = element;
-        props.onScrollPortRef?.(element);
+        setScrollport(element);
       }}
       class="chat-details-desktop-body"
       onScroll={update}
     >
       <div ref={(element) => (content = element)} class="chat-details-desktop-body__content">
-        {props.children}
+        <ChatLazyBoundary fallback={!props.cachedReady && <ChatDetailsDesktopLoading />}>
+          <ChatDetailsDesktopComposition
+            scrollport={scrollport()}
+            props={props.chat}
+            presented={props.presented}
+            dismissed={props.dismissed}
+            progressMenuRef={props.progressMenuRef}
+            onHideProgress={props.onHideProgress}
+          />
+        </ChatLazyBoundary>
       </div>
     </div>
   );

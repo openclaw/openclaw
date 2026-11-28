@@ -109,7 +109,7 @@ export function createRelayAgentRunRegistration(
       session.context.resolveGatewayContext,
       controllerTarget,
     );
-    const chatSessionId = chat && getRpcSourceIdentity(chat).sessionId;
+    let chatSessionId = chat && getRpcSourceIdentity(chat).sessionId;
     const chatGeneration = chat && getRpcSourceLifecycleGeneration(chat);
     let installed = false;
     let transcriptSession: { sessionId: string; lifecycleRevision?: string } | undefined;
@@ -155,6 +155,30 @@ export function createRelayAgentRunRegistration(
     };
     const registration: RelayAgentRunRegistration = {
       run,
+      onSessionIdChanged(sessionId) {
+        // Only the exact retained source may carry a committed successor.
+        if (
+          !chat ||
+          !ownsSlot() ||
+          session.activeAgentRuns.get(params.runId) !== run ||
+          getRpcSourceForGateway(
+            params.runId,
+            session.context.resolveGatewayContext,
+            controllerTarget,
+          ) !== chat ||
+          !isTalkConsultSourceCurrent({
+            entry: chat,
+            connectionId: params.connId,
+            sessionId,
+            sessionKey: params.sessionKey,
+            lifecycleGeneration: chatGeneration,
+            phase: "active",
+          })
+        ) {
+          throw new Error("Realtime relay successor registration is no longer current");
+        }
+        chatSessionId = sessionId;
+      },
       prepareTranscript(message, sourceText) {
         if (run.detached) {
           return message;

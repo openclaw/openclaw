@@ -43,14 +43,11 @@ function decodeSessionEntryCurrentFacts(
       subagentControlScope: value.subagentControlScope,
       inheritedToolPolicyVersion: value.inheritedToolPolicyVersion,
       inheritedToolPolicySource: value.inheritedToolPolicySource,
+      delegatedOperatorSource: value.delegatedOperatorSource,
       inheritedToolAllow: value.inheritedToolAllow,
       inheritedToolDeny: value.inheritedToolDeny,
       delegatedToolPolicy: value.delegatedToolPolicy,
     };
-  }
-  const recovery = value.subagentRecovery;
-  if (recovery !== undefined && !isRecord(recovery)) {
-    throw new Error("Session currency facts have an invalid recovery projection");
   }
   return {
     ...(deviceFolder ? { deviceFolder } : {}),
@@ -67,14 +64,6 @@ function decodeSessionEntryCurrentFacts(
     activeWriterRunId: value.activeWriterRunId,
     skillLibrarySelections: value.skillLibrarySelections,
     executionPolicy: value.executionPolicy,
-    ...(recovery
-      ? {
-          subagentRecovery: {
-            lastRunId: recovery.lastRunId,
-            sessionLifecycleRunId: recovery.sessionLifecycleRunId,
-          },
-        }
-      : {}),
   };
 }
 

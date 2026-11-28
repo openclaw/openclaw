@@ -591,49 +591,6 @@ async function historicalFixture(command: "rem-harness" | "rem-backfill") {
   };
 }
 
-it("prints vector status when available", async () => {
-  const probeVectorAvailability = vi.fn(async () => true);
-  mockStatus(
-    {
-      files: 2,
-      chunks: 5,
-      extraPaths: [{ path: "notes", pattern: "runbooks/**/*.md" }],
-      sourceCounts: [{ source: "memory", files: 2, chunks: 5, chunkBytes: 2048 }],
-      storage: {
-        databaseBytes: 1048576,
-        walBytes: 2048,
-        reusableBytes: 524288,
-        embeddingCacheBytes: 4096,
-        embeddingCacheEntries: 123,
-      },
-      cache: { enabled: true, entries: 123, maxEntries: 50000 },
-      fts: { enabled: true, available: true },
-      vector: {
-        enabled: true,
-        storeAvailable: true,
-        semanticAvailable: true,
-        available: true,
-        extensionPath: "/opt/sqlite-vec.dylib",
-        dims: 1024,
-      },
-    },
-    { probeVectorAvailability },
-  );
-  const log = spyRuntimeLogs(defaultRuntime);
-  await run("status");
-  expect(probeVectorAvailability).not.toHaveBeenCalled();
-  expectLogged(log, "Memory Search (main)", "Indexed: 2/? files · 5 chunks");
-  expectNotLogged(log, "consolidation sidecar");
-  expectLogged(
-    log,
-    "Vector store: ready",
-    "Semantic vectors: ready",
-    "Extra paths: /tmp/openclaw/notes (pattern: runbooks/**/*.md)",
-    "FTS: ready",
-    "Agent database: 1.0 MiB · WAL 2.0 KiB · reusable 512.0 KiB",
-  );
-});
-
 it.each([true, false])(
   "handles degraded secrets according to memory ownership (own=%s)",
   async (own) => {
@@ -1071,38 +1028,34 @@ it.each([
   },
 );
 
-it("fails index --force when the memory index has orphaned provenance", async () => {
-  const args = ["index", "--force"];
+it("fails index --force after full verification records orphaned provenance", async () => {
   const stateDir = path.join(fixtureRoot, `corrupt-state-${workspaceCaseId++}`);
   const workspaceDir = path.join(fixtureRoot, `corrupt-workspace-${workspaceCaseId++}`);
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const databasePath = await seedMemoryIndexWithOrphanedProvenance(env);
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const databasePath = await seedMemoryIndexWithOrphanedProvenance();
   const cfg = indexConfig(workspaceDir, {
     model: "",
     rememberAcrossConversations: false,
     cache: { enabled: false },
     query: { hybrid: { enabled: true } },
   });
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   getRuntimeConfig.mockReturnValue(cfg);
   await useRealManager();
   const error = spyRuntimeErrors(defaultRuntime);
-  await run(args);
-  expect(resolveOpenClawAgentSqlitePath({ agentId: "main", env })).toBe(databasePath);
+  const log = spyRuntimeLogs(defaultRuntime);
+  await run(["index", "--force"]);
+  expect(resolveOpenClawAgentSqlitePath({ agentId: "main" })).toBe(databasePath);
   expect(process.exitCode).toBe(1);
   expect(error).toHaveBeenCalledWith(expect.stringContaining("SQLite foreign_key_check failed"));
-});
-
-it("rejects an empty --query override before acquisition", async () => {
-  const writeJson = spyRuntimeJson(defaultRuntime);
-  await expect(run(["search", "positional", "--query", "", "--json"])).rejects.toThrow(
-    "Missing search query. Provide a positional query or use --query <text>.",
-  );
-  expect(getMemorySearchManager).not.toHaveBeenCalled();
-  expect(writeJson).not.toHaveBeenCalled();
+  expectNotLogged(log, "Memory index updated");
 });
 
 it.each([
+  [
+    ["search", "positional", "--query", ""],
+    false,
+    "Missing search query. Provide a positional query or use --query <text>.",
+  ],
   [["forget", "--dry-run"], false, "Memory forget requires --session"],
   [["promote-explain", "   "], false, "Memory promote-explain requires a non-empty selector."],
   [
@@ -1180,31 +1133,27 @@ it("qualifies json search results when the index remains stale", async () => {
   });
 });
 
-it("prints no candidates when promote has no short-term recall data", async () => {
+it.each(["München", "Mu\u0308nchen"])("promote-explain finds %s", async (title) => {
   const workspaceDir = await createWorkspace();
-  mockWorkspace(workspaceDir);
+  getMemorySearchManager.mockResolvedValue({ manager: workspaceManager(workspaceDir) });
   const log = spyRuntimeLogs(defaultRuntime);
   await run("promote");
   expect(log).toHaveBeenCalledWith("No short-term recall candidates.");
   expect(process.exitCode).toBe(0);
-});
-
-it("explains a specific promote candidate as json", async () => {
-  const workspaceDir = await createWorkspace();
   await recordRecall(
     workspaceDir,
     "router notes",
-    recallResult("memory/2026-04-03.md", "Configured VLAN 10 for IoT on router", {
+    recallResult("memory/2026-04-03.md", `Configured VLAN 10 for IoT in ${title}`, {
       startLine: 4,
       endLine: 8,
       score: 0.86,
     }),
   );
-  mockWorkspace(workspaceDir);
   const writeJson = spyRuntimeJson(defaultRuntime);
-  await run(["promote-explain", "  router  ", "--json", "--include-promoted"]);
+  const query = title === "München" ? "Mu\u0308nchen" : "München";
+  await run(["promote-explain", `  ${query}  `, "--json", "--include-promoted"]);
   expect(jsonValue(writeJson)).toMatchObject({
-    candidate: { snippet: expect.stringContaining("Configured VLAN 10") },
+    candidate: { snippet: `Configured VLAN 10 for IoT in ${title}` },
   });
 });
 

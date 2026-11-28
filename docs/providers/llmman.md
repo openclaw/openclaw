@@ -928,7 +928,9 @@ container, or service account.
     }
     ```
 
-    Embedding models are capped to their trained context regardless of `LLMMAN_CONTEXT_LENGTH`. See [Memory config](/reference/memory-config#remote-endpoint-config) for the remaining fields.
+    An embedding model's context is `LLMMAN_CONTEXT_LENGTH` capped to its trained context, and its batch size matches, so memory grows with it. Qwen3-Embedding-0.6B (Q8_0, llmman 0.1.661, CPU) used 3.6 GiB at its 32,768-token trained context, 956 MiB at `LLMMAN_CONTEXT_LENGTH=8192`, and 283 MiB at `2048`. On a small host, run a separate embedding daemon (own `LLMMAN_HOST` port) with a lower value. See [Memory config](/reference/memory-config#remote-endpoint-config) for the remaining fields.
+
+    On a small host, set `LLMMAN_NUM_PARALLEL=1` in the daemon's environment: llmman 0.1.564 starts four slots for an embedding model by default, which took EmbeddingGemma from 501 MiB to 1.77 GiB at the same batch speed.
 
   </Accordion>
 

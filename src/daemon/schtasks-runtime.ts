@@ -1,7 +1,8 @@
 import { spawnSync, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import { hasErrnoCode } from "../infra/errno.js";
-import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
+import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
+import { findVerifiedGatewayListenerPidsOnPort } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import {
@@ -42,7 +43,6 @@ import {
   probeProcessState,
   resolveGatewayListenerPids,
   readBoundedScheduledTaskProcess,
-  resolveListenerBackedScheduledTaskRuntime,
   resolveScheduledTaskCommandPort,
   shouldManageGatewayListenerPort,
   terminateGatewayProcessTree,
@@ -283,11 +283,17 @@ export async function readStartupEntryState(
 ): Promise<GatewayServiceState> {
   const deadline = args.timeoutMs === undefined ? undefined : performance.now() + args.timeoutMs;
   let command: GatewayServiceCommandConfig | null = null;
+  let effectiveExecutable: string | undefined;
   let env = args.env ?? process.env;
   let runtime: GatewayServiceRuntime;
   let loadState: GatewayServiceState["loadState"] = { status: "loaded" };
   try {
-    command = await readStartupEntryCommand(startupEntryPath, { deadline });
+    command = await readStartupEntryCommand(startupEntryPath, {
+      deadline,
+      onEffectiveExecutable: (executable) => {
+        effectiveExecutable = executable;
+      },
+    });
     env = mergeGatewayServiceEnv(env, command);
     args.validateEnvBeforeStatusRead?.(env);
     runtime = await resolveFallbackRuntime(env, command, "control", deadline).catch(
@@ -314,6 +320,9 @@ export async function readStartupEntryState(
     env,
     command,
     runtime,
+    ...(command && runtime.status !== "unknown" && effectiveExecutable
+      ? { effectiveExecutable }
+      : {}),
     ...(runtime.inspectionReason ? { inspectionReason: runtime.inspectionReason } : {}),
   };
 }
@@ -426,9 +435,11 @@ export async function resolveFallbackRuntime(
   }
   const matchedGatewayPids = resolveGatewayListenerPids(diagnostics.listeners);
   const scopedListenerPids = new Set(diagnostics.listeners.map((listener) => listener.pid));
-  const verifiedGatewayPids = findVerifiedGatewayListenerPidsOnPortSync(port, {
-    env: mergeGatewayServiceEnv(env, command),
-  }).filter((pid) => scopedListenerPids.has(pid));
+  const verifiedGatewayPids = (
+    await findVerifiedGatewayListenerPidsOnPort(port, {
+      env: mergeGatewayServiceEnv(env, command),
+    })
+  ).filter((pid) => scopedListenerPids.has(pid));
   const ownedGatewayPids = matchedGatewayPids.length > 0 ? matchedGatewayPids : verifiedGatewayPids;
   if (ownedGatewayPids.length > 0) {
     return requireCommandOwnership
@@ -530,7 +541,7 @@ export async function stopStartupEntry(
 export async function terminateInstalledStartupRuntime(
   env: GatewayServiceEnv,
   assertCurrent?: () => void,
-  beforeMutation?: () => Promise<void>,
+  beforeMutation?: () => void | Promise<void>,
 ): Promise<void> {
   if (!(await isStartupEntryInstalled(env))) {
     return;
@@ -585,6 +596,53 @@ export async function isScheduledTaskInstalled(args: GatewayServiceEnvArgs): Pro
     probe.status === "found" ||
     (await isStartupEntryInstalled(effectiveEnv, deadlineMs, args.requireEffective))
   );
+}
+
+async function resolveListenerBackedScheduledTaskRuntime(
+  env: GatewayServiceEnv,
+  deadlineMs?: number,
+  installedCommand?: GatewayServiceCommandConfig | null,
+): Promise<Pick<GatewayServiceRuntime, "status" | "pid" | "detail"> | null> {
+  // Only matching process evidence attests the installed command.
+  const inspectionDeadlineMs =
+    deadlineMs ?? performance.now() + WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS;
+  const observed = await readBoundedScheduledTaskProcess(
+    env,
+    inspectionDeadlineMs,
+    installedCommand,
+  );
+  if (!observed) {
+    return {
+      status: "unknown",
+      detail: "Scheduled Task process inspection could not verify its current command.",
+    };
+  }
+  if (observed.pid) {
+    return {
+      status: "running",
+      pid: observed.pid,
+      detail: `Matching installed process detected for gateway port ${observed.port}.`,
+    };
+  }
+  const timeoutMs = Math.max(1, Math.ceil(inspectionDeadlineMs - performance.now()));
+  const owner = await readActiveGatewayLockIdentity({
+    env: mergeGatewayServiceEnv(env, observed.command),
+    includeEmbedded: true,
+    requireInspection: true,
+    timeoutMs,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (performance.now() >= inspectionDeadlineMs) {
+    throw new Error("Scheduled Task inspection deadline expired.");
+  }
+  // Live file custody prevents a stopped claim, but does not attest Scheduler ownership.
+  // Embedded/startup owners may not have published their listener port yet.
+  return owner && (owner.port === undefined || owner.port === observed.port)
+    ? {
+        status: "unknown",
+        detail: "The previous Gateway owner has not been verified stopped.",
+      }
+    : null;
 }
 
 export async function readScheduledTaskRuntime(

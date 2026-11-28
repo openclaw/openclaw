@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { postgresPhysicalFactsKey } from "./database-engine/physical-facts-contract.js";
 import { getPostgresPhysicalFacts } from "./database-engine/physical-facts.js";
 import { registerNodeSqliteDisposeCallback } from "./kysely-sync-cache-state.js";
 import type { EngineConnection, PostgresSqlConnection } from "./sql-connection.js";
@@ -17,6 +17,7 @@ import {
   publishSqliteDatabaseSchemaChange,
   readSqliteDatabaseWriteRevision,
   suspendSqliteDatabaseAdmission,
+  settleSqliteDatabaseAdmissionPublication,
 } from "./sqlite-database-admission.js";
 import {
   observeSqliteNativeClose,
@@ -35,7 +36,9 @@ import { observeSchemaLifetime } from "./sqlite-schema-lifetime.js";
 import { canPreserveTransactionSnapshot } from "./sqlite-schema-mutation.js";
 import {
   finishSqliteReadScope,
+  postgresReadSnapshots,
   observeSqliteTransactionState as observeTransactionState,
+  sqliteSchemaOwners as owners,
   type SqliteSchemaOwner as SchemaOwner,
   type SchemaMutationListener,
   type SqliteReadOperationRevision,
@@ -53,17 +56,7 @@ export type {
   SqliteReadScopeRevision,
 } from "./sqlite-schema-scope.js";
 
-const owners = resolveGlobalSingleton(
-  Symbol.for("openclaw.sqliteSchemaFacts"),
-  () => new WeakMap<DatabaseSync, SchemaOwner>(),
-);
-
-const postgresReadSnapshots = resolveGlobalSingleton(
-  Symbol.for("openclaw.postgresReadSnapshots"),
-  () => new WeakMap<PostgresSqlConnection, PostgresReadSnapshotRevision>(),
-);
-
-/** The transaction owner supplies one admitted lifetime immediately after read-only BEGIN. */
+/** Retain admitted schema before BEGIN can overlap a sibling's schema publication. */
 export function beginPostgresReadSnapshotScope(database: PostgresSqlConnection): () => void {
   const schema = getPostgresPhysicalFacts(database);
   // These readers declare no key dependencies, so capture the whole-store receipt.
@@ -83,7 +76,7 @@ function isPostgresReadReceiptCurrent(
   database: PostgresSqlConnection,
   revision: PostgresReadSnapshotRevision,
 ): boolean {
-  const schema = getPostgresPhysicalFacts(database);
+  const schema = getSqliteDatabaseAdmission(database, postgresPhysicalFactsKey);
   return (
     database.isOpen &&
     schema?.namespace === revision.schema.namespace &&
@@ -606,6 +599,7 @@ export function trackSqliteSchema(
   if (!owners.has(database)) {
     const owner: SchemaOwner = {
       admitted: false,
+      publicationReady: false,
       revision: 0,
       readDepth: 0,
       mutationRevision: 0,
@@ -655,7 +649,17 @@ export function admitSqliteSchema(
     throw new Error("SQLite schema admission requires a connection tracked from native open");
   }
   owner.admitted = true;
-  getAdmittedSqliteSchemaFacts(database, validateUserVersion);
+  const facts = getAdmittedSqliteSchemaFacts(database, validateUserVersion);
+  // A captured or inherited catalog is not proof that its first publication settled.
+  // Only initial readiness waits; later refreshes must keep lease workers independent.
+  if (
+    !owner.publicationReady &&
+    facts &&
+    owner.unmanagedSnapshots.size === 0 &&
+    !getSqlitePinnedReadSnapshot(database)
+  ) {
+    owner.publicationReady = settleSqliteDatabaseAdmissionPublication(database);
+  }
 }
 
 /** Match transferred proof against the schema owner's current admitted catalog. */

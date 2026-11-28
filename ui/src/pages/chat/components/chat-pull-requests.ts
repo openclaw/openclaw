@@ -3,6 +3,7 @@ import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
 } from "../../../../../src/gateway/control-ui-contract.js";
+import { parseGitHubItemPath } from "../../../components/github-link-target.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
@@ -12,7 +13,9 @@ const DISMISSED_STORAGE_KEY = "openclaw.chat.dismissedPullRequests";
 // once this many sessions have dismissed chips.
 const DISMISSED_SESSION_LIMIT = 20;
 
-export function chatPullRequestId(pullRequest: ControlUiSessionPullRequest): string {
+export function chatPullRequestId(
+  pullRequest: Pick<ControlUiSessionPullRequest, "owner" | "repo" | "number">,
+): string {
   return `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.number}`.toLowerCase();
 }
 
@@ -28,6 +31,27 @@ export function retainedPublication(publication: GitHubPublicationView | undefin
     publication?.locked ||
     (publication?.error && !publication.optionsUnavailable)
   );
+}
+
+/** The pull request a published receipt names. */
+export function publicationPullRequestTarget(publication: GitHubPublicationView | undefined) {
+  const result = publication?.result;
+  const url = result?.status === "published" ? URL.parse(result.url) : null;
+  const target = url ? parseGitHubItemPath(url) : null;
+  return target?.kind === "pull" ? target : undefined;
+}
+
+/**
+ * The listed PR that now carries a publication's lifecycle. A failed verification
+ * is still the publication's own recovery state, so it never folds into the PR.
+ */
+export function publicationPullRequest(
+  publication: GitHubPublicationView | undefined,
+  pullRequests: readonly ControlUiSessionPullRequest[],
+): ControlUiSessionPullRequest | undefined {
+  const target = publication?.error ? undefined : publicationPullRequestTarget(publication);
+  const id = target && chatPullRequestId(target);
+  return id ? pullRequests.find((pr) => chatPullRequestId(pr) === id) : undefined;
 }
 
 export function showWorkRow(props: ChatPullRequestsProps): boolean {

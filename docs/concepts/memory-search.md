@@ -11,8 +11,8 @@ read_when:
 wording differs from the original text. It chunks memory into small pieces and
 searches them with embeddings, keywords, or both.
 
-The built-in index supports SQLite and PostgreSQL agent databases. The PostgreSQL
-engine remains experimental. Search uses engine-local text ranking, so scores and ordering
+The built-in index supports SQLite and [qualified PostgreSQL runtimes](/gateway/postgresql#support-matrix).
+Search uses engine-local text ranking, so scores and ordering
 can differ from SQLite. It requires `unaccent` for text search, `pg_trgm` for the
 trigram tokenizer, and `vector` for semantic search. Explicit
 `memory.search.provider: "none"` enables keyword-only search without `vector`;
@@ -24,8 +24,9 @@ for extension setup.
 On PostgreSQL, both body keywords and filename/path lookup use the admitted
 index. Source and selected-agent scope restrict candidates before the result
 limit; semantic retrieval also filters the embedding model. Text uses native
-full-text ranking; semantic retrieval uses exact
-cosine distance over a derived float32 vector projection. Hybrid search keeps
+full-text ranking; semantic retrieval preselects candidates with binary sketches,
+then reranks them by exact cosine distance over a derived float32 vector projection.
+Small candidate-ID scopes use exact search. Hybrid search keeps
 the same vector/text weights, but PostgreSQL text scores are not SQLite BM25
 scores. A phrase with nearby terms can rank above scattered terms without
 promising identical ordering across engines.
@@ -81,21 +82,32 @@ explicit API use the generic OpenAI-compatible bridge. For ClawRouter, see
 [Text embeddings for memory](/providers/clawrouter#text-embeddings-for-memory)
 for the `/v1` base URL, explicit router credential binding, and qualified model id.
 
-For local embeddings with no API key, install and configure the official
-llama.cpp provider, then set `provider: "local"`:
+When `memory.search.provider` is unset or `"auto"`, embeddings go to the OpenAI
+provider's endpoint, which can be a custom `models.providers.openai.baseUrl`.
+If that endpoint answers its first embedding request with 404, 405, or 501, it
+has no embeddings route: OpenClaw records that for this endpoint and model, logs
+one warning, and searches by keyword with no further embedding requests, also in
+later processes. `openclaw memory status` shows the reason on its `Embeddings`
+line. The record clears when the endpoint or model changes, or when
+`openclaw memory status --index` re-checks the endpoint and it now serves
+embeddings. `openclaw memory status --deep` and **Memory → Overview → Test** in the
+Control UI report the recorded refusal. A 401, 403, 429, or 5xx answer is not recorded; search is
+keyword-only until the next readiness check. With `memory.search.fallback` set, nothing is
+recorded: each process tries the endpoint and hands off to the fallback. An explicitly
+configured provider is always used.
 
-```bash
-openclaw plugins install @openclaw/llama-cpp-provider
-```
+For local embeddings with no API key, configure the bundled llama.cpp
+provider, then set `provider: "local"`.
 
 Choose llama.cpp once in interactive setup. OpenClaw installs a verified
 `llama-server`, downloads the embedding GGUF, and writes its managed service
 configuration.
 
-Managed `local` and Ollama embeddings index one file at a time when batch
-indexing is disabled. This bounds background embedding requests during a full
-rebuild; large indexes can take longer on hosts that previously ran several
-local jobs in parallel.
+Managed `local`, Ollama, and OpenAI-compatible endpoints on loopback addresses
+(`localhost`, `127.0.0.0/8`, `::1`) index one file at a time when batch indexing
+is disabled. This limits the backlog that interactive searches share with
+background indexing. Other endpoints default to four indexing jobs. Serial
+indexing can make large rebuilds slower on servers with spare parallel capacity.
 
 EmbeddingGemma uses its trained task prefixes automatically for queries and
 indexed documents, including through Ollama, LM Studio, and OpenAI-compatible
@@ -290,11 +302,13 @@ run the hybrid MMR pass.
 
 ## Multimodal memory
 
-With `gemini-embedding-2`, you can index images and audio alongside
-Markdown. This only applies to files under `memory.search.extraPaths`; default
-memory roots (`MEMORY.md`, `memory/*.md`) stay Markdown-only. Search queries
+With an embedding model that embeds media, such as `gemini-embedding-2`, you
+can index images and audio alongside Markdown. The model must support every
+configured modality unless you opt in to partial indexing. This only applies to
+files under `memory.search.extraPaths`; default memory roots (`MEMORY.md`,
+`memory/*.md`) stay Markdown-only. Search queries
 remain text, but they match against visual and audio content. See
-[Memory configuration reference](/reference/memory-config#multimodal-memory-gemini)
+[Memory configuration reference](/reference/memory-config#multimodal-memory)
 for setup.
 
 ## Session memory search

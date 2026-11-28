@@ -12,7 +12,7 @@ import { expectRecordFields, requireValue } from "./agent.test-harness.js";
 
 export function registerPluginSubagentRequesterLineageCase() {
   it("registers host-owned requester lineage for plugin subagent completion", async () => {
-    await withPluginSubagentTestState("openclaw-gateway-plugin-subagent-requester-", async () => {
+    await withPluginSubagentTestState("openclaw-plugin-subagent-requester-", async (state) => {
       const childSessionKey = "agent:work:subagent:plugin-completion";
       const requester = {
         sessionKey: "agent:main:telegram:direct:123",
@@ -36,6 +36,8 @@ export function registerPluginSubagentRequesterLineageCase() {
         runId: "plugin-subagent-current-requester",
         childSessionKey,
         childAgentId: "work",
+        agentDir: state.agentDir("work"),
+        workspaceDir: state.workspaceDir,
         task: "background plugin subagent task",
         requester,
         pluginId: "memory-core",
@@ -63,7 +65,7 @@ export function registerPluginSubagentFollowupAdoptionCase() {
   it("still adopts the paused owner for a default follow-up after a requester-bound sibling", async () => {
     await withPluginSubagentTestState(
       "openclaw-gateway-plugin-subagent-mixed-delivery-",
-      async () => {
+      async (state) => {
         const childSessionKey = "agent:work:subagent:plugin-yield-mixed-delivery";
         const sessionEntry = { sessionId: "plugin-yield-session", updatedAt: 1 };
         const originalRequester = "agent:main:telegram:direct:777";
@@ -93,6 +95,8 @@ export function registerPluginSubagentFollowupAdoptionCase() {
           childSessionKey,
           childAgentId: "work",
           task: "deliver to me instead",
+          agentDir: state.agentDir("work"),
+          workspaceDir: state.workspaceDir,
           requester: {
             sessionKey: "agent:main:telegram:direct:555",
             origin: { channel: "telegram", to: "telegram:555", accountId: "work" },
@@ -107,6 +111,8 @@ export function registerPluginSubagentFollowupAdoptionCase() {
           childSessionKey,
           childAgentId: "work",
           task: "the remote job finished",
+          agentDir: state.agentDir("work"),
+          workspaceDir: state.workspaceDir,
           pluginId: "memory-core",
         });
 

@@ -350,10 +350,11 @@ function assertMigratedHeartbeat(fixture, row, receipt) {
     grant_definition_revision: revision,
     grant_definition_generation: before.grant_definition_generation + 1,
   });
-  assert.deepEqual(receipt, {
+  assert.partialDeepStrictEqual(receipt, {
     jobId: before.job_id,
     provisionedAtMs: row.updated_at,
     phase: "complete",
+    heartbeatEnabled: original.enabled,
   });
 }
 
@@ -540,24 +541,37 @@ function assertUpdated(artifacts, observations, packageRoot, candidateTarball) {
   const current = snapshot(fixture);
   assert.deepEqual(current, doctor.after, "Cron changed after updater Doctor exited");
   const added = current.backups.filter(
-    (entry) => !fixture.before.backups.some((before) => before.name === entry.name),
+    (entry) => !doctor.before.backups.some((before) => before.name === entry.name),
   );
-  assert.equal(added.length, 1, "Repair must retain exactly one new cron backup");
-  const backupPath = path.join(path.dirname(fixture.databasePath), added[0].name);
-  readDatabase(backupPath, (backup) => {
+  const heartbeatId = fixture.baselineRows[0].job_id;
+  const migratedHeartbeat = current.rows.find((row) => row.job_id === heartbeatId);
+  const backups = added.map((entry) => {
+    const file = path.join(path.dirname(fixture.databasePath), entry.name);
+    readDatabase(file, (db) => {
+      assert.deepEqual(
+        db
+          .prepare("PRAGMA integrity_check")
+          .all()
+          .map((row) => row.integrity_check),
+        ["ok"],
+      );
+      assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+    });
+    const { contentVersion } = inspectSharedSchema(file);
+    const beforeCronRepair = contentVersion === sharedSchemaAfter.contentVersion;
     assert.deepEqual(
-      backup
-        .prepare("PRAGMA integrity_check")
-        .all()
-        .map((row) => row.integrity_check),
-      ["ok"],
+      inspectRows(file),
+      fixture.before.rows.map((row) =>
+        beforeCronRepair && row.job_id === heartbeatId ? migratedHeartbeat : row,
+      ),
+      `Backup ${entry.name} did not preserve the pre-repair jobs`,
     );
-    assert.deepEqual(backup.prepare("PRAGMA foreign_key_check").all(), []);
+    return { name: entry.name, sha256: entry.sha256, contentVersion };
   });
   assert.deepEqual(
-    inspectRows(backupPath),
-    fixture.before.rows,
-    "Verified backup did not preserve the pre-repair jobs",
+    backups.map((entry) => entry.contentVersion).toSorted((a, b) => a - b),
+    [fixture.sharedSchemaBefore.contentVersion, sharedSchemaAfter.contentVersion],
+    "Expected the pre-upgrade and pre-cron-repair snapshots",
   );
   writeJson(path.join(artifacts, "dreaming-cron-updated.json"), current);
   writeJson(path.join(artifacts, "dreaming-cron-proof.json"), {
@@ -577,8 +591,8 @@ function assertUpdated(artifacts, observations, packageRoot, candidateTarball) {
     updaterPid: updater.pid,
     doctorPid: doctor.pid,
     doctorTransport: doctor.transport,
-    backup: added[0],
-    baselineHeartbeatId: fixture.baselineRows[0].job_id,
+    backups,
+    baselineHeartbeatId: heartbeatId,
     survivors: current.rows.map((row) => ({
       id: row.job_id,
       storeKey: row.store_key,
@@ -597,18 +611,21 @@ async function prepareRuntime(artifacts, packageRoot) {
     readJson(path.join(artifacts, "dreaming-cron-candidate-package.json")),
   );
   const loadOwner = async (prefix, symbol) => {
-    const matches = Object.keys(identity.files).flatMap((relative) => {
+    const owners = new Set();
+    for (const relative of Object.keys(identity.files)) {
       if (!relative.startsWith(`dist/${prefix}-`) || !relative.endsWith(".mjs")) {
-        return [];
+        continue;
       }
       const file = path.join(packageRoot, relative);
       const exported = resolveWorkerCellExport(fs.readFileSync(file, "utf8"), symbol);
-      return exported ? [{ file, exported }] : [];
-    });
-    assert.equal(matches.length, 1, `Expected one installed ${symbol} owner`);
-    const owner = await import(pathToFileURL(matches[0].file).href);
-    assert.equal(typeof owner[matches[0].exported], "function");
-    return owner[matches[0].exported];
+      if (exported) {
+        owners.add((await import(pathToFileURL(file).href))[exported]);
+      }
+    }
+    assert.equal(owners.size, 1, `Expected one installed ${symbol} owner`);
+    const [owner] = owners;
+    assert.equal(typeof owner, "function");
+    return owner;
   };
   const [CronService, { GatewayScheduler }, closeOpenClawStateDatabaseAsync] = await Promise.all([
     loadOwner("service", "CronService"),
@@ -693,9 +710,24 @@ async function prepareRuntime(artifacts, packageRoot) {
   const frequency = `17 12 ${scheduled.getUTCDate()} ${scheduled.getUTCMonth() + 1} *`;
   // Only this post-Doctor runtime fixture runs the scheduler. Keep model work dormant.
   config.cron.enabled = true;
-  config.skills ??= {};
-  config.skills.workshop ??= {};
-  config.skills.workshop.autonomous = { mode: "off" };
+  // Newer candidates validate Workshop settings in the plugin config; older ones
+  // still read skills.workshop. The candidate's own manifest says which applies.
+  const workshopManifest = path.join(
+    packageRoot,
+    "dist/extensions/skill-workshop/openclaw.plugin.json",
+  );
+  const pluginOwnsWorkshopSettings =
+    fs.existsSync(workshopManifest) &&
+    readJson(workshopManifest).configSchema?.properties?.autonomous !== undefined;
+  if (pluginOwnsWorkshopSettings) {
+    const entry = (config.plugins.entries["skill-workshop"] ??= {});
+    entry.config ??= {};
+    entry.config.autonomous = { ...entry.config.autonomous, mode: "off" };
+  } else {
+    config.skills ??= {};
+    config.skills.workshop ??= {};
+    config.skills.workshop.autonomous = { mode: "off" };
+  }
   const dreaming = config.plugins.entries["memory-core"].config.dreaming;
   dreaming.frequency = frequency;
   dreaming.timezone = "UTC";
@@ -704,7 +736,6 @@ async function prepareRuntime(artifacts, packageRoot) {
     before,
     startedAtMs: Date.now(),
     frequency,
-    nextRunAtMs: scheduled.getTime(),
     storeKey: fixture.baselineRows[0].store_key,
     jobId: "dreaming-active-declared",
   });
@@ -720,10 +751,10 @@ function assertRuntimeCanonical(row, runtime) {
     assert.equal(row[field], before[field], `Runtime changed canonical ${field}`);
   }
   assert.equal(row.declaration_key, declarationKey);
-  assert.equal(row.enabled, 1);
+  assert.equal(row.enabled, 0);
   const definition = JSON.parse(row.job_json);
   assert.equal(definition.name, dreamingName);
-  assert.equal(definition.enabled, true);
+  assert.equal(definition.enabled, false);
   assert.equal(definition.schedule.kind, "cron");
   assert.equal(definition.schedule.expr, runtime.frequency);
   assert.equal(definition.schedule.tz, "UTC");
@@ -735,11 +766,7 @@ function assertRuntimeCanonical(row, runtime) {
   assert.equal(definition.delivery.mode, "none");
   const state = JSON.parse(row.state_json);
   assert.equal(state.lastRunAtMs, JSON.parse(before.state_json).lastRunAtMs);
-  assert.equal(state.nextRunAtMs, runtime.nextRunAtMs);
-  assert(
-    state.nextRunAtMs > Date.now() + 24 * 60 * 60_000,
-    "Dreaming must stay scheduled in the future",
-  );
+  assert.equal(state.nextRunAtMs, undefined, "Paused dreaming must have no scheduled run");
 }
 
 async function waitRuntime(artifacts) {
@@ -750,7 +777,7 @@ async function waitRuntime(artifacts) {
   // Plugin services start after HTTP readiness; the committed cron row is the barrier.
   while (Date.now() < deadline) {
     const row = inspectRows(fixture.databasePath).find((entry) => entry.job_id === runtime.jobId);
-    if (row?.enabled === 1) {
+    if (row && JSON.parse(row.job_json).schedule.expr === runtime.frequency) {
       assertRuntimeCanonical(row, runtime);
       writeJson(path.join(artifacts, "dreaming-cron-runtime-converged.json"), row);
       return;
@@ -822,16 +849,12 @@ export function assertRuntimePersistence(runtime, rows) {
     assert.deepEqual(definition, {
       ...JSON.parse(before.job_json),
       description: row.description,
-      enabled: true,
       schedule: { kind: "cron", expr: runtime.frequency, tz: "UTC" },
       wakeMode: "now",
     });
     assert.deepEqual(state, {
       ...JSON.parse(before.state_json),
-      consecutiveErrors: 0,
-      scheduleErrorCount: 0,
       scheduleActivatedAtMs: state.scheduleActivatedAtMs,
-      nextRunAtMs: state.nextRunAtMs,
     });
   }
 }
@@ -845,8 +868,10 @@ function assertRuntime(artifacts, gatewayLog) {
   );
   const reload = JSON.parse(reloadText.slice(reloadText.indexOf("{")));
   assert.equal(reload.ok, true);
-  assert.equal(reload.restartRequired, false);
+  assert.equal(reload.restartRequired, true);
   assert.deepEqual(reload.pluginIds, ["memory-core"]);
+  assert.deepEqual(reload.runtime.pluginIds, reload.pluginIds);
+  assert(Number.isSafeInteger(reload.runtime.generation) && reload.runtime.generation > 0);
   const current = snapshot(fixture);
   writeJson(path.join(artifacts, "dreaming-cron-runtime-after.json"), current);
   process.stdout.write(
@@ -903,6 +928,8 @@ function assertRuntime(artifacts, gatewayLog) {
     inactiveRowsUnchanged: true,
     doctorBackupUnchanged: true,
     settledPluginReloadNoop: true,
+    paused: managed[0].enabled === 0,
+    restartRequired: reload.restartRequired,
     pluginGeneration: reload.runtime.generation,
   };
   writeJson(path.join(artifacts, "dreaming-cron-runtime-proof.json"), proof);

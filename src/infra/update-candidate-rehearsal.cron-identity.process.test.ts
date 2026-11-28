@@ -1,12 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
-import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
+import {
+  materializeUpdateCandidateStateWorker,
+  runUpdateCandidateSnapshotWorker,
+} from "./update-candidate-state.test-support.js";
+import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -95,7 +100,7 @@ async function cleanupFixture(fixture: Awaited<ReturnType<typeof prepareFixture>
   const privateRoot = fixture.rehearsal.stateDir;
   await fixture.rehearsal.cleanup();
   await expect(fs.stat(privateRoot)).rejects.toMatchObject({ code: "ENOENT" });
-  expect(await fs.readFile(fixture.source.databasePath)).toEqual(fixture.sourceBytes);
+  expectBytesEqual(await fs.readFile(fixture.source.databasePath), fixture.sourceBytes, "source");
 }
 
 it.each(["default-state", "explicit-state", "custom-config"] as const)(
@@ -114,15 +119,40 @@ it.each(["default-state", "explicit-state", "custom-config"] as const)(
   },
 );
 
-it("does not bind an unmatched original identity to a retained sibling", async () => {
+it("binds a sole retained sibling when the original identity is unmatched", async () => {
   const fixture = await prepareFixture("custom-config", ({ sibling }) => [sibling]);
   try {
     const result = await runFirstPrivateAdmission(fixture.rehearsal.env);
     expect(result.initializationCronDefaultStoreKey).toBe(
       path.join(fixture.rehearsal.stateDir, "cron", "jobs.json"),
     );
-    expect(result.boundStoreKey).toBeUndefined();
+    expect(result.boundStoreKey).toBe(fixture.sibling);
   } finally {
     await cleanupFixture(fixture);
   }
+});
+
+it("leaves selector-less published requests unresolved through first private admission", async () => {
+  const root = tempDirs.make("rehearsal-missing-selector-");
+  const stateDir = path.join(root, "source-state");
+  const source = await prepareSource(root, [
+    path.join(stateDir, "cron", "jobs.json"),
+    path.join(root, "external-config", "cron", "jobs.json"),
+  ]);
+  const sourceBytes = await fs.readFile(source.databasePath);
+  const targetStateDir = path.join(root, "private");
+  await runUpdateCandidateSnapshotWorker({
+    stateDir,
+    targetStateDir,
+    candidateRoot: root,
+    config: {},
+    // Published drivers sent neither selector, even for an external config.
+    env: { HOME: root },
+  });
+  const result = await runFirstPrivateAdmission({
+    ...process.env,
+    ...buildUpdateRehearsalPathEnv(targetStateDir),
+  });
+  expect(result.boundStoreKey).toBeUndefined();
+  expectBytesEqual(await fs.readFile(source.databasePath), sourceBytes, "source");
 });

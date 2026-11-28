@@ -53,9 +53,10 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { shellEscapeBackslash as shellEscapeSingleArg } from "../../shared/shell-quote.js";
+import { readAgentConfigEntry } from "../agent-scope-config.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { auditSandboxToolPolicyBlock, escapeControlCharsVisible } from "../tool-policy-audit.js";
-import { resolveSandboxConfigForAgent } from "./config.js";
+import { resolveSandboxRuntimeSettings } from "./config.js";
 import {
   classifyToolAgainstSandboxToolPolicy,
   resolveSandboxToolPolicyForAgent,
@@ -115,6 +116,23 @@ export function resolvePreparedSandboxRuntimeStatus(
   params: SandboxRuntimeStatusParams & { preparedSessionEntry: SandboxSessionEntry | null },
 ) {
   return resolveSandboxRuntimeStatusForClassification(params);
+}
+
+/** Projection owns this row; workspace classification does not need a tool policy. */
+export function isOwnedSessionSandboxed(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  preparedSessionEntry: SandboxSessionEntry;
+}) {
+  return isSandboxed(
+    resolveOwnedSandboxClassification({
+      ...params,
+      classificationAgentId: params.agentId,
+      classificationSessionKey: params.sessionKey,
+    }),
+    params.preparedSessionEntry,
+  );
 }
 
 export function resolveSandboxRuntimeStatusAsync(params: SandboxRuntimeStatusParams) {
@@ -471,8 +489,27 @@ function resolveSandboxClassification(params: SandboxRuntimeStatusParams) {
     // Reuse the owner only for this session; independent targets still need their own identity.
     fallbackAgentId: classificationSessionKey === sessionKey ? agentId : undefined,
   });
-  const cfg = params.cfg;
-  const sandboxCfg = resolveSandboxConfigForAgent(cfg, classificationAgentId);
+  return resolveOwnedSandboxClassification({
+    cfg: params.cfg,
+    sessionKey,
+    agentId,
+    classificationSessionKey,
+    classificationAgentId,
+  });
+}
+
+function resolveOwnedSandboxClassification(params: {
+  cfg?: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+  classificationSessionKey: string;
+  classificationAgentId: string;
+}) {
+  const { cfg, sessionKey, agentId, classificationSessionKey, classificationAgentId } = params;
+  const sandboxCfg = resolveSandboxRuntimeSettings(
+    cfg?.agents?.defaults?.sandbox,
+    cfg ? readAgentConfigEntry(cfg, classificationAgentId)?.sandbox : undefined,
+  );
   const mainSessionKey =
     cfg?.session?.scope === "global"
       ? "global"
@@ -571,12 +608,6 @@ function resolveSandboxRuntimeStatusForClassification(
         workspaceAccess: sandboxCfg.workspaceAccess === "rw" ? "ro" : sandboxCfg.workspaceAccess,
       }
     : { sandboxRequired: false };
-  const sandboxed =
-    Boolean(classificationSessionKey) &&
-    (sandboxRequired ||
-      (session?.existing?.sandboxMode !== "off" &&
-        sandboxCfg.mode !== "off" &&
-        (sandboxCfg.mode === "all" || comparableSessionKey.trim() !== mainSessionKey.trim())));
   return {
     agentId,
     sessionKey,
@@ -585,9 +616,27 @@ function resolveSandboxRuntimeStatusForClassification(
     mainSessionKey,
     mode: sandboxCfg.mode,
     ...isolation,
-    sandboxed,
+    sandboxed: isSandboxed(classification, session?.existing),
     toolPolicy: resolveSandboxToolPolicyForAgent(cfg, classificationAgentId),
   };
+}
+
+function isSandboxed(
+  {
+    classificationSessionKey,
+    comparableSessionKey,
+    mainSessionKey,
+    sandboxCfg,
+  }: ReturnType<typeof resolveSandboxClassification>,
+  entry: SandboxSessionEntry | undefined,
+): boolean {
+  return (
+    Boolean(classificationSessionKey) &&
+    (entry?.sandbox === "required" ||
+      (entry?.sandboxMode !== "off" &&
+        sandboxCfg.mode !== "off" &&
+        (sandboxCfg.mode === "all" || comparableSessionKey.trim() !== mainSessionKey.trim())))
+  );
 }
 
 function redactSessionKey(value: string): string {

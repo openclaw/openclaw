@@ -1,19 +1,19 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createBaselineFixture } from "./pr-baseline-native.test-support.js";
+import { describe, expect, it } from "vitest";
+import { createBaselineFixture, reuseBaselineFixture } from "./pr-baseline-native.test-support.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterAll);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
-const fixture = () => createBaselineFixture(dirs.make("openclaw-pr-successor-"), 2);
+const fixture = reuseBaselineFixture((root) => {
+  const f = createBaselineFixture(root, 2);
+  f.writeLocal("gates-build.log", "original proof bytes\n");
+  f.pass("prepare-baseline-refresh", f.manifest(f.advanceMain("initial upstream")));
+  return f;
+});
 
 describePosix("native successor source admission entry", () => {
   it("admits two reviewed successors while preserving signed ancestry, resolutions and proof", () => {
     const f = fixture();
-    f.writeLocal("gates-build.log", "original proof bytes\n");
-    const initial = f.advanceMain("initial upstream");
-    f.pass("prepare-baseline-refresh", f.manifest(initial));
     const initialHead = f.prepGit("rev-parse", "HEAD");
     const retained = f.snapshot(
       readdirSync(join(f.worktree, ".local"))
@@ -51,7 +51,6 @@ describePosix("native successor source admission entry", () => {
     "preserves transition custody when %s authority changes during replay",
     (scenario) => {
       const f = fixture();
-      f.pass("prepare-baseline-refresh", f.manifest(f.advanceMain("initial upstream")));
       f.approve();
       const source = f.prepGit("rev-parse", "HEAD");
       const before = f.snapshot([

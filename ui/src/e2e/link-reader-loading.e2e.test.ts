@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
+import { openChatPanels } from "../test-helpers/chat-layout-menu.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import {
   readerUrl as url,
@@ -37,21 +38,51 @@ it("makes the overview readable before extras and retains visible content throug
     async ({ page, gateway, panel, content, button }) => {
       await panel.locator(".lr-skeleton").waitFor();
       await gateway.waitForRequest("forge.detail", { match: { section: "overview" } });
+      const original = panel.getByRole("link", { name: "Open on Forge", exact: true });
+      expect(await original.getAttribute("href", { timeout: 2000 })).toBe(url);
+      expect(await original.isVisible()).toBe(true);
       await gateway.resolveDeferred("forge.detail", overview, { match: { section: "overview" } });
       await panel.getByRole("heading", { name: overview.title, exact: true }).waitFor();
       await gateway.waitForRequest("forge.detail", { match: { section: "checks" } });
       await gateway.waitForRequest("forge.detail", { match: { section: "discussion" } });
       expect((await gateway.getRequests("forge.detail", { section: "files" })).length).toBe(0);
       expect(await panel.getByText("Loading Checks…", { exact: true }).count()).toBe(1);
-      await page.setViewportSize({ width: 390, height: 844 });
-      expect(await content.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
-      await page.setViewportSize({ width: 1280, height: 900 });
+      // Late checks never move what the reader is already looking at.
+      const geometry = () =>
+        content.evaluate((node) => ({
+          description: node.querySelector(".lr-description")!.getBoundingClientRect().top,
+          tabs: [...node.querySelectorAll(".lr-section-nav button")].map(
+            (tab) => tab.getBoundingClientRect().left,
+          ),
+        }));
+      const waiting = await geometry();
       await gateway.rejectDeferred(
         "forge.detail",
         { code: "UNAVAILABLE", message: "Temporarily unavailable", retryable: true },
         { match: { section: "checks" } },
       );
-      await panel.getByText("Could not load Checks.", { exact: true }).waitFor();
+      await panel.getByText("Couldn’t load Checks. Try again.", { exact: true }).waitFor();
+      expect(await geometry()).toEqual(waiting);
+      await panel.locator(".lr-checks .lr-retry").click();
+      await gateway.waitForRequest("forge.detail", { after: 1, match: { section: "checks" } });
+      await gateway.resolveDeferred(
+        "forge.detail",
+        {
+          ...overview,
+          checks: {
+            state: "failure",
+            summary: "5 failed · 80 passed",
+            total: 85,
+            items: Array.from({ length: 85 }, (_, index) => ({
+              name: "check with a long descriptive name " + index,
+              state: index < 5 ? "failure" : "success",
+            })),
+          },
+        },
+        { match: { section: "checks" } },
+      );
+      await panel.locator(".lr-checks--failure").waitFor();
+      expect(await geometry()).toEqual(waiting);
       await gateway.resolveDeferred(
         "forge.detail",
         {
@@ -64,6 +95,20 @@ it("makes the overview readable before extras and retains visible content throug
       expect(await panel.getByRole("heading", { name: overview.title, exact: true }).count()).toBe(
         1,
       );
+      const initialDocument = await panel.locator(".lr-document").elementHandle();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openChatPanels(page, "mobile");
+      await content.waitFor({ state: "visible" });
+      expect(await initialDocument!.evaluate((node) => node.isConnected)).toBe(true);
+      expect(
+        await panel
+          .locator(".lr-document")
+          .evaluate((node, priorDocument) => node === priorDocument, initialDocument),
+      ).toBe(true);
+      expect(await content.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await content.waitFor({ state: "visible" });
+      expect(await initialDocument!.evaluate((node) => node.isConnected)).toBe(true);
       await button("Files 13").click();
       await gateway.waitForRequest("forge.detail", { match: { section: "files" } });
       await gateway.resolveDeferred(
@@ -85,8 +130,9 @@ it("makes the overview readable before extras and retains visible content throug
       ).toBe(0);
       const top = await content.evaluate((node) => node.scrollTop);
       const document = await panel.locator(".lr-document").elementHandle();
-      await button("Refresh item").click();
-      await panel.getByText("Showing previous details · refreshing…", { exact: true }).waitFor();
+      // Refresh sits in the document header; a pointer click would scroll back to it first.
+      await button("Refresh item").dispatchEvent("click");
+      await expect.poll(() => button("Refresh item").getAttribute("aria-busy")).toBe("true");
       expect(await content.evaluate((node) => node.scrollTop)).toBe(top);
       expect(await document!.evaluate((node) => node.isConnected)).toBe(true);
       await gateway.waitForRequest("forge.detail", { after: 1, match: { section: "overview" } });

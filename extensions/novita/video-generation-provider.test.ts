@@ -102,6 +102,32 @@ it.each<[string, Partial<Video.VideoGenerationRequest>, unknown]>([
   expect(result).toMatchObject({ model: route, videos: [video], metadata: { taskId: "task-1" } });
 });
 
+it("waits through queued and processing tasks before downloading", async () => {
+  for (const status of ["TASK_STATUS_QUEUED", "TASK_STATUS_PROCESSING"]) {
+    fetchWithTimeoutMock.mockResolvedValueOnce(Response.json({ task: { status } }));
+  }
+  mockTask();
+  vi.useFakeTimers();
+  try {
+    const pending = generateVideo();
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await pending;
+
+    expect(result.videos).toMatchObject([video]);
+    const pollUrl = `${baseUrl}/v3/async/task-result?task_id=task-1`;
+    expect(fetchWithTimeoutMock.mock.calls.map(([url]) => url)).toEqual([
+      pollUrl,
+      pollUrl,
+      pollUrl,
+      "https://example.com/out.mp4",
+    ]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it.each<[Partial<Video.VideoGenerationRequest>, string]>([
   [{ model: "wan2.6-i2v" }, "requires one input image"],
   [
@@ -128,9 +154,14 @@ it.each<[Partial<Video.VideoGenerationRequest>, string]>([
 
 it.each<[unknown, string]>([
   [
-    { task: { status: "TASK_STATUS_FAILED", reason: "content rejected" } },
+    { task: { status: "TASK_STATUS_FAILED", reason: "  content rejected  " } },
     "Novita video generation failed: content rejected",
   ],
+  [
+    { task: { status: "TASK_STATUS_FAILED", reason: " \t " } },
+    "Novita video generation failed: task failed",
+  ],
+  [{ task: null }, "Novita video status response missing task."],
   [{ task: { status: "TASK_STATUS_SUCCEED" }, videos: [] }, "completed without a video URL"],
   [{ task: { status: "unknown" } }, "unknown task status"],
 ])("reports unsuccessful task responses: %j (%s)", async (payload, error) => {

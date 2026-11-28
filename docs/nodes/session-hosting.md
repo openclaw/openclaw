@@ -187,6 +187,20 @@ Hosted turns honor global and agent-specific `tools.fs.workspaceOnly`,
 same session permission-mode precedence as local turns. Workspace containment
 uses the assigned node workspace. Model read budgets and image sanitization also
 come from the Gateway; the worker does not reconstruct them from an empty config.
+The Gateway also sends the Agent's configured exec timeout, background delay,
+and cleanup interval to workers that support these settings.
+
+A dedicated, ephemeral node launcher can set `OPENCLAW_NODE_WORKER_EXECUTION`
+before starting the node. This JSON object applies to process workers on that
+node. Its optional `pathPrepend` lists absolute tool directories the node
+admits for the Agent's configured search path. Its optional `gitConfigFile`
+selects a node-owned, read-only Git system configuration file. Its optional
+`toolData` contains named public strings for installed tools. Local exec receives
+them as JSON in `OPENCLAW_WORKER_TOOL_DATA`. Every command admitted to local
+exec can read those strings. Keep issuer tokens and other secrets in their
+credential provider. Use this setting only on nodes dedicated to workloads
+that share the selected tool configuration.
+
 The Gateway includes this tool catalog and policy in each turn's worker admission
 response, including when a warm worker process is reused. A retained process receives
 the current turn's catalog and generation, so a turn does not need a separate
@@ -373,6 +387,33 @@ turns or workspace writes.
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
 
+### Writable volume ancestors
+
+Startup rejects a group- or world-writable ancestor of the node's private state
+unless its existing sticky-directory rules permit it. For a dedicated node whose
+storage is isolated from other writers, the operator can trust specific ancestors:
+
+```bash
+OPENCLAW_NODE_TRUSTED_WRITABLE_ANCESTORS='["/sandbox"]' openclaw node run --session-host
+```
+
+Set this in the node service or container environment and restart the node.
+Use canonical absolute paths: entries match only the named directory, not its
+descendants. The default remains strict. An empty array grants no exceptions.
+Node admission, workspace transfers, and node temp-root selection (including
+terminal uploads) use the same captured policy. Importing the shared temp-root
+resolver does not activate it. Subprocesses do not inherit the setting, and
+workspace `.env` files cannot set it.
+
+This relaxes only the writability check for the listed ancestors. Private state
+and temporary directories must remain private and correctly owned; fs-safe's
+ownership, symlink, confinement, and identity checks still apply. Trusting an
+ancestor does not prevent another writer from replacing directories below it.
+Use this only when the deployment prevents untrusted writers, including processes
+sharing the node's UID, from renaming or recreating the trusted ancestry throughout
+the workspace lifetime, and trusts its storage administrators. A dedicated Pod,
+PVC, or `ReadWriteOnce` access mode alone does not establish that isolation.
+
 ### Work in an existing device folder
 
 Session hosting allows existing folders by default. To restrict sessions to specific
@@ -408,12 +449,11 @@ selected folder becomes the session workspace root, so deployments that contain
 `operator.write` sessions with `tools.fs.workspaceOnly` should also set a root list.
 
 For a specific paired device that advertises `workerHost.deviceFolders: true`,
-choose **Existing folder on device** in the workspace picker and enter an
-absolute path on that device. This option is not available for **Auto**, cloud
-workers, runtimes without worker-turn execution, or devices that do not advertise
-the capability. Operators with `operator.admin` can also choose **Browse folders
-on** _device_ to list folders on that device through its `fs.listDir` command.
-The listing is not limited to `folders` roots; the device validates the chosen
+choose **Existing folder on** _device_ in the workspace picker. Operators with
+`operator.admin` then browse folders on that device through its `fs.listDir`
+command; other operators enter an absolute path on that device. This option is
+not available for **Auto**, cloud workers, runtimes without worker-turn
+execution, or devices that do not advertise the capability. The listing is not limited to `folders` roots; the device validates the chosen
 folder when the session is created. The Gateway never browses or resolves this
 path locally.
 
@@ -431,6 +471,39 @@ when you need to upload attachments. The Gateway Files panel and workspace revea
 are unavailable for device-folder sessions; use the agent's file tools on the
 selected device instead. Gateway file operations reject these sessions rather
 than reading or writing a similarly named local workspace.
+
+### Restrict Linux worker filesystem access
+
+Set `nodeHost.workerRuns.isolation` to `"filesystem"` to restrict the worker
+process and its descendants before the worker runtime starts. This mode requires
+Linux with Landlock ABI 3 or later and the packaged native process helpers.
+Missing support or failed setup rejects the launch; it never falls back to
+unrestricted execution. Restart the node host after changing this setting.
+
+The worker can write its admitted workspace, a model HOME below its captured
+execution HOME, and a per-process temporary directory. It can read runtime code,
+system libraries, and captured platform CA files. Writable roots must not overlap
+protected runtime paths or captured trust files. They must not contain the captured
+execution HOME or shared OpenClaw temporary root. Path entries and their targets
+are checked; disjoint projects beneath broad read grants such as `/usr` remain allowed.
+It cannot rename those writable roots through their ungranted parent directories.
+Node-owned commands that inspect the worker repository use the same filesystem
+boundary. Git history export ignores repository-selected commands and accepts
+only the standalone Git storage created for managed workspaces. Ordinary result
+reconciliation keeps verified file changes when history is unavailable and reports
+that commits were not adopted. Moves and forks that require complete history
+preserve the original disk and fail with a retryable explanation instead.
+The existing process owner keeps responsibility for descendants. Normal shutdown
+removes temporary storage after their extinction. An abrupt node-host exit can leave
+temporary directories; remove them only after its worker processes have exited.
+Worker-local inference is supported without a nested container.
+
+This mode restricts filesystem access, not network access, signals, or all file
+metadata operations. It does not revoke inherited file descriptors or confine
+other node processes. Deployments using trusted writable ancestors must still
+exclude other unconfined writers for the workspace lifetime, including writers
+left over from before this mode was enabled. Stop existing workers before enabling
+it. Use existing outer isolation and tool policy for the remaining boundaries.
 
 ### Isolate hosted worker sessions in containers
 
@@ -483,7 +556,7 @@ environment values. Check that operation against the selected daemon before retr
 The default image is `node:24.22.1-slim`; the engine pulls it on first use when it
 is not already present. Set `nodeHost.workerRuns.containerImage` to choose a
 digest-pinned image, a private-registry image, or an image already available
-to the engine. The image must provide a supported Node.js 24.22.1+ or 26.12.1+ runtime on
+to the engine. The image must provide a compatible Node.js 24.16.0+ on 24.x or 26.1.0+ runtime (24.22.1+/26.12.1+ strongly recommended for security) on
 its standard executable search path. If the image cannot be pulled, is
 inaccessible, or does not provide a suitable Node.js runtime, that session
 launch fails visibly; it never retries as a bare host process. Preload the

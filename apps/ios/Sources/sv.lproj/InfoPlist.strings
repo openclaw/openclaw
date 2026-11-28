@@ -1,11 +1,13 @@
+/* OpenClaw source: "OpenClaw uses Bluetooth to securely set up a nearby ESP device when you choose device setup." */
+"NSBluetoothAlwaysUsageDescription" = "OpenClaw använder Bluetooth för att säkert konfigurera en ESP-enhet i närheten när du väljer enhetskonfiguration.";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
 "NSCalendarsFullAccessUsageDescription" = "OpenClaw använder dina kalendrar för att visa händelser och planeringsunderlag när du aktiverar kalenderåtkomst.";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
 "NSCalendarsUsageDescription" = "OpenClaw använder dina kalendrar för att visa händelser och planeringsunderlag när du aktiverar kalenderåtkomst.";
 /* OpenClaw source: "OpenClaw uses your calendars to add events when you enable calendar access." */
 "NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw använder dina kalendrar för att lägga till händelser när du aktiverar kalenderåtkomst.";
-/* OpenClaw source: "OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace." */
-"NSCameraUsageDescription" = "OpenClaw använder kameran när du skannar en QR-kod för att konfigurera Gateway eller ber din parkopplade Gateway eller assistent att ta ett foto eller spela in en kort video med den här iPhone-enheten, till exempel för att ansluta till din Gateway eller visa din assistent ett dokument, en enhetsskärm eller en arbetsyta.";
+/* OpenClaw source: "OpenClaw uses the camera when you scan a Gateway or device setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace." */
+"NSCameraUsageDescription" = "OpenClaw använder kameran när du skannar en QR-kod för att konfigurera en Gateway eller en enhet, eller ber din parkopplade Gateway eller assistent att ta ett foto eller spela in en kort video med denna iPhone, till exempel för att ansluta till din Gateway eller visa assistenten ett dokument, en enhetsskärm eller en arbetsplats.";
 /* OpenClaw source: "OpenClaw uses your contacts so you can search and reference people while using the assistant." */
 "NSContactsUsageDescription" = "OpenClaw använder dina kontakter så att du kan söka efter och hänvisa till personer när du använder assistenten.";
 /* OpenClaw source: "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider." */

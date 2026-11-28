@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import {
   configureExecutionIdentityAdmissionSink,
@@ -27,9 +27,11 @@ import { createOpenClawCodingToolsInternalAsync } from "../../agent-tools.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import { advancePreparedModelRuntimeConfig } from "../../prepared-model-runtime.js";
 import { requesterCreatorProfileId, type RequesterOrigin } from "../../requester-origin.js";
+import { createSessionsCreateTool } from "../../tools/sessions-create-tool.js";
 import { createSessionsSendTool } from "../../tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
+import { activateSubagentRegistry } from "../registry/subagent-registry.js";
 import { closeSwarmScheduler, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { sessionReader } from "./subagent-spawn.fixtures.test-support.js";
 import {
@@ -79,12 +81,13 @@ export function registerParticipantSpawnCases(
       conversationId: parentSessionKey,
     });
   it.each([
-    { visible: false, queued: false },
-    { visible: true, queued: false },
-    { visible: false, queued: true },
+    { visible: false, queued: false, independent: false },
+    { visible: true, queued: false, independent: false },
+    { visible: false, queued: true, independent: false },
+    { visible: true, queued: false, independent: true },
   ])(
-    "delegates participant custody (visible=$visible, queued=$queued)",
-    async ({ visible, queued }) => {
+    "delegates participant custody (visible=$visible, queued=$queued, independent=$independent)",
+    async ({ visible, queued, independent }) => {
       const envelopes: ExecutionIdentityAdmissionEnvelope[] = [];
       onTestFinished(
         configureExecutionIdentityAdmissionSink((work) => {
@@ -115,6 +118,8 @@ export function registerParticipantSpawnCases(
         bound.cfg.tools = { ...bound.cfg.tools, sessions: { visibility: "all" } };
       }
       const { context, runtime } = await createBoundGateway(bound);
+      vi.mocked(runtime.lifecycle.waitForAgent).mockRestore();
+      await activateSubagentRegistry(bound.resolveGatewayContext);
       let currentConfig = bound.cfg;
       const groupId = "participant-queued";
       if (queued) {
@@ -136,7 +141,8 @@ export function registerParticipantSpawnCases(
             preparedRunAdmission: params.preparedRunAdmission,
           });
           if (visible) {
-            expect(params.userTurnTranscriptRecorder?.getPendingInputMessage?.()).toMatchObject({
+            expect(params.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
+            expect(params.userTurnTranscriptRecorder?.getPersistedMessage?.()).toMatchObject({
               __openclaw: { senderId: "agent:main" },
               provenance: {
                 kind: "inter_session",
@@ -185,7 +191,7 @@ export function registerParticipantSpawnCases(
       }
       const tool =
         !queued &&
-        createSessionsSpawnTool({
+        (independent ? createSessionsCreateTool : createSessionsSpawnTool)({
           config: bound.cfg,
           agentSessionKey: parentSessionKey,
           requesterRunId: parentRunId,
@@ -194,9 +200,9 @@ export function registerParticipantSpawnCases(
       const invoke = (user?: string) =>
         tool
           ? tool.execute!("participant-spawn", {
-              task: "Bounded participant child",
-              visible,
-              context: "isolated",
+              ...(independent
+                ? { message: "Bounded independent participant work" }
+                : { task: "Bounded participant child", visible, context: "isolated" }),
               user,
             })
           : createBoundSpawnInvocation(bound, {
@@ -231,11 +237,18 @@ export function registerParticipantSpawnCases(
               const spawn = async (user: string | undefined, profileId: string) => {
                 entered = createDeferred<ChildExecution>();
                 const result = await invoke(user);
-                expect(result.details).toMatchObject({ status: "accepted" });
-                const details = result.details as {
+                expect(result.details).toMatchObject(
+                  independent ? { runStarted: true } : { status: "accepted" },
+                );
+                const receipt = result.details as {
                   childSessionKey: string;
+                  sessionKey: string;
                   runId: string;
                   owner?: { type: string; id: string };
+                };
+                const details = {
+                  ...receipt,
+                  childSessionKey: independent ? receipt.sessionKey : receipt.childSessionKey,
                 };
                 const entry = queued
                   ? undefined
@@ -312,12 +325,12 @@ export function registerParticipantSpawnCases(
                   });
                   expect(parentEnvelope).toEqual(originalParentEnvelope);
                   if (visible) {
-                    const owner =
-                      profileId === "alice"
-                        ? { type: "human", id: "alice" }
-                        : { type: "agent", id: "main" };
+                    // Alice remains the initiator when Bob is selected for execution.
+                    const owner = { type: "human", id: "alice" };
                     expect(entry?.owner?.actor).toMatchObject(owner);
-                    expect(details.owner).toMatchObject(owner);
+                    if (!independent) {
+                      expect(details.owner).toMatchObject(owner);
+                    }
                   }
                 }
                 return { ...child, authority };
@@ -376,18 +389,19 @@ export function registerParticipantSpawnCases(
               }
               const bobChild = await spawn("bob", "bob");
               const aliceChild = queued ? undefined : await spawn(undefined, "alice");
+              if (independent) {
+                // Selection is per call, not whichever participant most recently spoke.
+                await spawn("alice", "alice");
+                return;
+              }
               if (!queued) {
                 await closeTurn(turn);
               }
-              expect(() => bobChild.authority.assertCurrent()).not.toThrow();
               if (!queued) {
                 expect(getAdmittedRunDelegatedAuthority(bobChild.admitted)).toBeDefined();
               }
-              bobSource.revoke();
-              expect(() => bobChild.authority.assertCurrent()).toThrow("operator source revoked");
-              expect(bobChild.signal.aborted).toBe(true);
+              expect(bobChild.signal.aborted).toBe(false);
               if (aliceChild) {
-                expect(() => aliceChild.authority.assertCurrent()).not.toThrow();
                 expect(aliceChild.signal.aborted).toBe(false);
               }
             },

@@ -257,9 +257,45 @@ it("wizard recovery restores serialized model defaults after provider canonicali
     ...providerConfig("example", provider),
   });
   const failure = new Error("activation refused");
-  const target = createWizardInferenceConfigTarget(writeWizardConfigFile);
+  // The real wizard commits only changes from its captured runtime merge base.
+  const mergeBase = materializeRuntimeConfig(before);
+  const target = createWizardInferenceConfigTarget(async (next, options) => {
+    const committed = await writeWizardConfigFile(next, { ...options, mergeBase });
+    const persisted = (await readSetupConfigFileSnapshot()).sourceConfig;
+    expect(persisted.security).toBeUndefined();
+    expect(persisted.tools).toBeUndefined();
+    expect(persisted.messages?.queue).toBeUndefined();
+    return committed;
+  });
   await expect(rejectActivation(target, candidate, failure)).rejects.toBe(failure);
   expect((await target.read()).config.models?.providers).toEqual(before.models?.providers);
+});
+
+it("wizard recovery restores a size-dropping provider write", async () => {
+  state = await createOpenClawTestState({ label: "wizard-size-drop-recovery" });
+  const before: OpenClawConfig = { gateway: { mode: "local" } };
+  await state.writeConfig(before);
+  const candidate = {
+    ...before,
+    ...providerConfig("example", {
+      baseUrl: "https://fixture.invalid/v1",
+      api: "openai-completions",
+      models: [modelDefinition("fixture", { name: "Fixture" })],
+    }),
+  };
+  let candidateBytes = 0;
+  const target = createWizardInferenceConfigTarget(async (config, options) => {
+    const committed = await writeWizardConfigFile(config, options);
+    candidateBytes = Buffer.byteLength((await readSetupConfigFileSnapshot()).raw ?? "");
+    return committed;
+  });
+  await expect(rejectActivation(target, candidate, new Error("promotion refused"))).rejects.toThrow(
+    "promotion refused",
+  );
+  const restored = await readSetupConfigFileSnapshot();
+  expect(candidateBytes).toBeGreaterThanOrEqual(512);
+  expect(Buffer.byteLength(restored.raw ?? "")).toBeLessThan(Math.floor(candidateBytes / 2));
+  expect(restored.sourceConfig.models).toBeUndefined();
 });
 
 it.each([

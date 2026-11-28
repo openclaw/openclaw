@@ -106,7 +106,7 @@ const mocks = vi.hoisted(() => ({
   prepareAgentOnboarding: vi.fn(),
   completeAgentOnboarding: vi.fn(),
   startAgentOnboardingConversation: vi.fn(),
-  captureGatewayOperatorRunAuthority: vi.fn(),
+  prepareGatewayOperatorRunAuthority: vi.fn(),
   runAgentDatabaseCleanup: vi.fn(
     async (_target: unknown, run: () => Promise<unknown>) => await run(),
   ),
@@ -232,7 +232,7 @@ vi.mock("../../commands/agents.config.js", () => ({
 
 vi.mock("../operator-run-authority.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../operator-run-authority.js")>()),
-  captureGatewayOperatorRunAuthority: mocks.captureGatewayOperatorRunAuthority,
+  prepareGatewayOperatorRunAuthority: mocks.prepareGatewayOperatorRunAuthority,
 }));
 
 vi.mock("../../agents/auth-profiles/path-resolve.js", async (importOriginal) => ({
@@ -348,7 +348,7 @@ vi.mock("../../state/agent-deletion-journal.js", () => ({
   readAgentDeletionJournalAsync: async () => mocks.readAgentDeletionJournal(),
   listPendingAgentDeletionJournalsAsync: async () => ({
     entries: mocks.listPendingAgentDeletionJournals(),
-    manualClawAgentIds: [],
+    manualTemplateAgentIds: [],
   }),
 }));
 

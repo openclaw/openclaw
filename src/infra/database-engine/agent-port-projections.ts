@@ -4,17 +4,22 @@ import {
   MEMORY_INDEX_META_TABLE,
 } from "../../../packages/memory-host-sdk/src/host/memory-schema-base.js";
 import {
-  appendPreparedSessionTranscriptProjectionChunkInTransaction,
+  compilePostgresSessionTranscriptFtsBatch,
+  createSessionTranscriptFtsInserter,
+} from "../../config/sessions/session-transcript-fts.js";
+import type { TranscriptIndexEntry } from "../../config/sessions/session-transcript-projection-append.js";
+import {
   prepareProjectionSource,
   prepareSessionTranscriptProjection,
 } from "../../config/sessions/session-transcript-projection-rebuild.js";
+import { TRANSCRIPT_INSERT_BATCH_SIZE } from "../../config/sessions/transcript-payload.js";
 import type { PortEndpoint } from "./port-types.js";
 
 export const AGENT_PORT_PROJECTION_TABLES = [
-  "session_transcript_active_events",
+  // Payload encoding and predicate materialization change across engines; absence keeps fallback exact.
+  "session_transcript_active_event_facts",
   "session_transcript_fts_rows",
   "session_transcript_fts",
-  "session_transcript_index_state",
   "standing_intents_fts",
   // Keep chunk vectors and their identity in the verified copy, even when the cache evicted them.
   ...MEMORY_INDEX_DERIVED_TABLES.filter(
@@ -25,12 +30,16 @@ export const AGENT_PORT_PROJECTION_TABLES = [
   ),
 ] as const;
 
-/** Reuse the transcript owner's branch and eligibility policy on the private port target. */
+/** Navigation rows stay exact; hot search is rebuilt and active facts remain unknown. */
 export async function rebuildAgentPortProjections(target: PortEndpoint): Promise<void> {
   const sessions =
     target.engine === "sqlite"
       ? // sqlite-allow-raw -- Offline port enumeration; the transcript owner prepares each projection.
-        target.db.prepare("SELECT session_id FROM session_windows ORDER BY session_id").all()
+        target.db
+          .prepare(`SELECT session_id FROM session_windows AS session
+          WHERE NOT EXISTS (SELECT 1 FROM session_transcript_cold_archives AS archive
+            WHERE archive.session_id = session.session_id) ORDER BY session_id`)
+          .all()
       : (
           await target.db.query<{
             session_id: string;
@@ -38,7 +47,9 @@ export async function rebuildAgentPortProjections(target: PortEndpoint): Promise
             transcript_updated_at: string | null;
           }>(`SELECT session.session_id, session.transcript_updated_at, rewrite.generation
             FROM session_windows AS session LEFT JOIN transcript_rewrite_watermarks AS rewrite
-              ON rewrite.session_id = session.session_id ORDER BY session.session_id`)
+              ON rewrite.session_id = session.session_id
+            WHERE NOT EXISTS (SELECT 1 FROM session_transcript_cold_archives AS archive
+              WHERE archive.session_id = session.session_id) ORDER BY session.session_id`)
         ).rows;
   for (const session of sessions) {
     const sessionId = String(session.session_id);
@@ -70,43 +81,28 @@ export async function rebuildAgentPortProjections(target: PortEndpoint): Promise
       continue;
     }
     if (target.engine === "sqlite") {
-      appendPreparedSessionTranscriptProjectionChunkInTransaction(target.db, plan);
-    } else {
-      for (const row of plan.activeRows) {
-        await target.db.query(
-          `INSERT INTO session_transcript_active_events
-            (session_id, active_position, event_seq, message_position, context_eligible)
-            VALUES ($1, $2, $3, $4, $5)`,
-          [sessionId, row.activePosition, row.eventSeq, row.messagePosition, row.contextEligible],
-        );
-      }
+      const insertFts = createSessionTranscriptFtsInserter(target.db, sessionId);
       for (const row of plan.ftsRows) {
-        await target.db.query(
-          `WITH inserted AS (
-            INSERT INTO session_transcript_fts_rows (session_id, message_id) VALUES ($1, $2)
-            RETURNING id
-          ) INSERT INTO session_transcript_fts ("rowid", text, session_id, message_id, role, timestamp)
-            SELECT id, $3, $1, $2, $4, $5 FROM inserted`,
-          [sessionId, row.messageId, row.text, row.role, row.timestamp],
-        );
+        insertFts([row]);
       }
-    }
-    const values = [
-      sessionId,
-      plan.sourceIndexedSeq,
-      plan.leafEventId,
-      plan.activeEventCount,
-      plan.activeMessageCount,
-      Date.now(),
-    ];
-    const sql = `INSERT INTO session_transcript_index_state
-      (session_id, indexed_seq, leaf_event_id, needs_rebuild, active_event_count, active_message_count, updated_at)
-      VALUES ($1, $2, $3, 0, $4, $5, $6)`;
-    if (target.engine === "sqlite") {
-      // sqlite-allow-raw -- Offline projection publication has no concurrent writer or claim.
-      target.db.prepare(sql.replace(/\$\d+/g, "?")).run(...values);
     } else {
-      await target.db.query(sql, values);
+      // The port runs over the network, so each bounded batch costs one round trip, not one per row.
+      let batch: TranscriptIndexEntry[] = [];
+      const flush = async () => {
+        if (batch.length === 0) {
+          return;
+        }
+        const write = compilePostgresSessionTranscriptFtsBatch(sessionId, batch);
+        batch = [];
+        await target.db.query(write.sql, [...write.parameters]);
+      };
+      for (const row of plan.ftsRows) {
+        batch.push(row);
+        if (batch.length === TRANSCRIPT_INSERT_BATCH_SIZE) {
+          await flush();
+        }
+      }
+      await flush();
     }
   }
   // The command invokes the selected memory owner after publishing and releasing port custody.

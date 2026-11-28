@@ -11,11 +11,6 @@ import { prepareReplyConversation } from "../../auto-reply/reply/prompt-session-
 import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
-import {
-  buildRestartRecoveryClaimCleanupPatch,
-  isMainRestartRecoveryCandidate,
-  normalizeMainSessionRecoveryRunFences,
-} from "../../config/sessions/restart-recovery-state.js";
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -32,130 +27,14 @@ import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
 import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
-import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import { isInternalMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
-import {
-  buildCurrentRunRestartRecoveryClaim,
-  canReplaceTerminalCommandRecoveryClaim,
-  prepareCommandHarnessCompletionRecovery,
-} from "../agent-command-restart-recovery.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
-import { createRestartRecoveryOperatorSource } from "../operator-run-recovery-source.js";
 import { isSyntheticSourceReplyTurn } from "../reply-completion.js";
-import { createRestartRecoveryRequesterSource } from "../requester-run-recovery-source.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
-
-export function prepareCommandSessionRecoveryEntry(
-  params: Omit<
-    Parameters<typeof prepareCommandHarnessCompletionRecovery>[0],
-    "hasDeliveryContext"
-  > & {
-    deliveryContext?: DeliveryContext;
-    now: number;
-    lifecycleGeneration: string;
-    isSessionRollover: boolean;
-  },
-) {
-  const { sessionId, runId, opts, now, isSessionRollover } = params;
-  const entry = canReplaceTerminalCommandRecoveryClaim(params.entry, runId)
-    ? {
-        ...params.entry,
-        ...buildRestartRecoveryClaimCleanupPatch({
-          entry: params.entry,
-          recordTerminalSource: false,
-        }),
-      }
-    : params.entry;
-  const { harnessCompletion, guardedHarnessCompletion, sourceOptions, isCompletionCurrent } =
-    prepareCommandHarnessCompletionRecovery({
-      ...params,
-      entry,
-      hasDeliveryContext: Boolean(params.deliveryContext),
-    });
-  const operatorSource =
-    entry.restartRecoveryDeliveryRunId !== runId
-      ? createRestartRecoveryOperatorSource({
-          authority: opts.operatorAuthority,
-          entry: { ...entry, sessionId },
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          sourceRunId: sourceOptions.sourceRunId ?? runId,
-          inputProvenance: opts.inputProvenance,
-          requesterOrigin: opts.requesterOrigin,
-        })
-      : undefined;
-  const requesterSource =
-    entry.restartRecoveryDeliveryRunId !== runId
-      ? createRestartRecoveryRequesterSource({
-          requesterOrigin: opts.requesterOrigin,
-          entry: { ...entry, sessionId },
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          sourceRunId: sourceOptions.sourceRunId ?? runId,
-        })
-      : undefined;
-  const sourceIngress =
-    sourceOptions.sourceIngress ??
-    (opts.inputProvenance && opts.inputProvenance.kind !== "external_user"
-      ? ("internal" as const)
-      : (operatorSource?.snapshot.sourceIngress ??
-        (requesterSource?.requesterOrigin.messageProvider &&
-        !isInternalMessageChannel(requesterSource.requesterOrigin.messageProvider)
-          ? ("channel" as const)
-          : ("internal" as const))));
-  return {
-    guardedHarnessCompletion,
-    isCompletionCurrent,
-    nextEntry: {
-      ...entry,
-      sessionId,
-      updatedAt: now,
-      status: undefined,
-      abortedLastRun: false,
-      endedAt: undefined,
-      lastRunError: undefined,
-      restartRecoveryRuns: isMainRestartRecoveryCandidate(entry, params.sessionKey)
-        ? normalizeMainSessionRecoveryRunFences([
-            ...(entry.restartRecoveryRuns ?? []),
-            { runId, lifecycleGeneration: params.lifecycleGeneration },
-          ])
-        : entry.restartRecoveryRuns,
-      sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
-      lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
-      ...buildCurrentRunRestartRecoveryClaim({
-        deliveryContext: params.deliveryContext,
-        disableMessageTool: opts.disableMessageTool,
-        entry,
-        forceRestartSafeTools: opts.forceRestartSafeTools,
-        runId,
-        harnessCompletion,
-        sourceMessageChannel:
-          resolveMessageChannel(
-            opts.runContext?.messageChannel ?? opts.messageChannel,
-            opts.replyChannel ?? opts.channel,
-          ) ?? null,
-        ...sourceOptions,
-        ...(requesterSource
-          ? {
-              requesterSource,
-              sourceRunId: requesterSource.sourceRunId,
-              sourceIngress,
-            }
-          : {}),
-        ...(operatorSource
-          ? {
-              operatorSource,
-              sourceRunId: operatorSource.sourceRunId,
-              sourceIngress,
-            }
-          : {}),
-      }),
-    },
-  };
-}
 
 export async function prepareCommandSessionDiffBaseline(
   params: Parameters<typeof ensureSessionDiffBaseline>[0] & {
@@ -207,7 +86,10 @@ export async function prepareEmbeddedSessionState(params: {
   const requestedThinkLevel = params.thinkOnce ?? params.thinkOverride ?? params.persistedThinking;
   const resolvedVerboseLevel =
     params.verboseOverride ?? params.persistedVerbose ?? params.verboseDefault;
-  const coordination = isSubagentCoordinationInputProvenance(params.opts.inputProvenance);
+  // Matches Gateway admission so re-registration cannot publish private intake.
+  const privateConversationWork =
+    params.opts.privateCompletion === true ||
+    isSubagentCoordinationInputProvenance(params.opts.inputProvenance);
 
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
   if (params.sessionKey || params.suppressVisibleSessionEffects) {
@@ -216,10 +98,10 @@ export async function prepareEmbeddedSessionState(params: {
       agentId: params.sessionAgentId,
       lifecycleGeneration: params.lifecycleGeneration,
       verboseLevel: resolvedVerboseLevel,
-      isControlUiVisible: !params.suppressVisibleSessionEffects && !coordination,
-      ...(coordination ? { projectSessionMessages: false } : {}),
+      isControlUiVisible: !params.suppressVisibleSessionEffects && !privateConversationWork,
+      ...(privateConversationWork ? { projectSessionMessages: false } : {}),
       // Node and local command ingress may not have a separate chat activity owner.
-      projectSessionActive: !params.suppressVisibleSessionEffects && !coordination,
+      projectSessionActive: !params.suppressVisibleSessionEffects && !privateConversationWork,
     });
   }
 
@@ -238,10 +120,7 @@ export async function prepareEmbeddedSessionState(params: {
   });
   const skillSnapshotState = await resolveReusableWorkspaceSkillSnapshot({
     workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.sessionAgentId),
-    ...resolveSessionSkillExecutionWorkspace(
-      sessionEntry?.worktree?.canonicalWorkspaceDir,
-      params.executionWorkspaceDir,
-    ),
+    ...resolveSessionSkillExecutionWorkspace(sessionEntry, params.executionWorkspaceDir),
     config: params.cfg,
     agentId: params.sessionAgentId,
     existingSnapshot: params.isNewSession ? undefined : currentSkillsSnapshot,
@@ -320,7 +199,6 @@ export async function prepareEmbeddedSessionState(params: {
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       params.opts.abortSignal?.throwIfAborted();
       params.opts.assertSourceCurrent?.();
-      params.opts.operatorAuthority?.assertCurrent();
     };
     await recordSessionHumanDirectMessage(
       {
@@ -370,34 +248,47 @@ export async function prepareEmbeddedSessionState(params: {
       runContext.currentChannelId = trimmedTo;
     }
   }
+  const conversationTurn =
+    !isSubagentSessionKey(sessionKey) &&
+    !isCronSessionKey(sessionKey) &&
+    isSyntheticSourceReplyTurn(opts);
+  const delivering = opts.deliver === true || opts.sourceReplyDeliveryMode === "message_tool_only";
+  // sessions_send and subagent completions run on the internal channel, which has no route, or
+  // keep their reply private. Like other lifecycle turns, their prompt describes the session's
+  // own conversation so a resumed session keeps its system prompt; this turn's routing stays in
+  // runContext.
+  const storedRoute =
+    conversationTurn &&
+    (!delivering || isInternalMessageChannel(opts.replyChannel ?? runContext.messageChannel))
+      ? deliveryContextFromSession(sessionEntry)
+      : undefined;
   const deliveryFormat =
-    (opts.deliver === true || opts.sourceReplyDeliveryMode === "message_tool_only") &&
+    (delivering || storedRoute !== undefined) &&
     buildDeliveryFormatPrompt({
       cfg,
-      channel: opts.replyChannel ?? runContext.messageChannel,
-      accountId: opts.replyAccountId ?? runContext.accountId,
+      channel: storedRoute ? storedRoute.channel : (opts.replyChannel ?? runContext.messageChannel),
+      accountId: storedRoute
+        ? storedRoute.accountId
+        : (opts.replyAccountId ?? runContext.accountId),
       agentId: sessionAgentId,
       allowBootstrap: true,
     });
   let conversationPrompt: string | undefined;
   // Reuse conversation guidance without borrowing the originating sender's authority.
-  if (
-    sessionEntry &&
-    !isSubagentSessionKey(sessionKey) &&
-    !isCronSessionKey(sessionKey) &&
-    isSyntheticSourceReplyTurn(opts)
-  ) {
+  if (sessionEntry && conversationTurn) {
+    // With no current route, the stored conversation fills every field.
+    const currentRoute = storedRoute ? undefined : runContext;
     const conversation = prepareReplyConversation({
       sessionEntry,
       ctx: {
         InternalTurnSource: "event",
-        Provider: runContext.messageChannel,
-        Surface: runContext.messageChannel,
+        Provider: currentRoute?.messageChannel,
+        Surface: currentRoute?.messageChannel,
         ChatType: sessionEntry.delivery?.kind === "internal" ? sessionEntry.chatType : undefined,
-        OriginatingChannel: runContext.messageChannel,
-        OriginatingTo: runContext.currentChannelId,
-        AccountId: runContext.accountId,
-        MessageThreadId: runContext.currentThreadTs,
+        OriginatingChannel: currentRoute?.messageChannel,
+        OriginatingTo: currentRoute?.currentChannelId,
+        AccountId: currentRoute?.accountId,
+        MessageThreadId: currentRoute?.currentThreadTs,
       },
     });
     const ctx = { ...conversation.fields, CommandAuthorized: false };
@@ -430,25 +321,37 @@ export async function prepareEmbeddedSessionState(params: {
         .join("\n\n");
     }
   }
-  const preparedOpts =
-    conversationPrompt || deliveryFormat
-      ? {
-          ...opts,
-          extraSystemPrompt: [
-            conversationPrompt,
-            opts.extraSystemPrompt,
-            !conversationPrompt && deliveryFormat,
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-          ...(conversationPrompt ? { silentReplyPromptMode: "none" as const } : {}),
-          extraSystemPromptTurnContext: {
-            start:
-              conversationPrompt || !opts.extraSystemPrompt ? 0 : opts.extraSystemPrompt.length + 2,
-            text: conversationPrompt || deliveryFormat || "",
-          },
-        }
-      : opts;
+  // Returned-result intake instructions belong to this turn. Ordinary peer
+  // requests and existing producer-marked policy spans retain their placement.
+  const returnedResultPrompt =
+    !opts.extraSystemPromptTurnContext &&
+    opts.extraSystemPrompt &&
+    (opts.replyExpectation === "optional" || opts.privateCompletion === true) &&
+    opts.inputProvenance?.kind === "inter_session" &&
+    (opts.inputProvenance.sourceTool === "sessions_send" ||
+      opts.inputProvenance.sourceTool === "subagent_announce");
+  let preparedOpts = opts;
+  if (conversationPrompt || deliveryFormat || returnedResultPrompt) {
+    const extraSystemPrompt = [
+      conversationPrompt,
+      opts.extraSystemPrompt,
+      !conversationPrompt && deliveryFormat,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    preparedOpts = {
+      ...opts,
+      extraSystemPrompt,
+      ...(conversationPrompt ? { silentReplyPromptMode: "none" as const } : {}),
+      extraSystemPromptTurnContext: {
+        start:
+          returnedResultPrompt || conversationPrompt || !opts.extraSystemPrompt
+            ? 0
+            : opts.extraSystemPrompt.length + 2,
+        text: returnedResultPrompt ? extraSystemPrompt : conversationPrompt || deliveryFormat || "",
+      },
+    };
+  }
   prepareGoalContinuationContext({ runId: params.runId, sessionKey, sessionEntry });
   return {
     sessionEntry,

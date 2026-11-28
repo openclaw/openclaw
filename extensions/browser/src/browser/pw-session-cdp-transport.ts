@@ -1,10 +1,13 @@
 import type { lookup as dnsLookupCb } from "node:dns";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
-import { isWebSocketUrl, openCdpWebSocket } from "./cdp.helpers.js";
+import { cdpNetworkLogs, createCdpNetworkLog } from "./cdp-network-log.js";
+import { isLoopbackHost, isWebSocketUrl, openCdpWebSocket } from "./cdp.helpers.js";
 import { resolveBrowserEngine } from "./engines/registry.js";
 import type { BrowserEngineId } from "./engines/types.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
@@ -61,6 +64,8 @@ type CdpTransportOptions = {
   resolveWebSocketUrl?: () => Promise<string | undefined>;
   preparedTransport?: ConnectOverCDPTransport;
   engine?: BrowserEngineId;
+  /** Leave a user's own browser alone: no default color-scheme or focus emulation. */
+  noDefaults?: boolean;
 };
 
 async function openCdpTransportSocket(
@@ -93,12 +98,11 @@ async function openCdpTransportSocket(
     send: (message) => ws.send(JSON.stringify(message)),
     close: () => {
       ws.close();
-      const timer = setTimeout(() => {
+      setTimeout(() => {
         if (ws.readyState !== WebSocket.CLOSED) {
           ws.terminate();
         }
-      }, 100);
-      timer.unref?.();
+      }, 100).unref();
     },
   };
   ws.on("message", (raw) => {
@@ -122,8 +126,13 @@ export async function connectOverCdpTransport(
   connectionUrl: string,
   opts: CdpTransportOptions,
 ): Promise<Browser> {
+  const networkLog = createCdpNetworkLog();
   const normalizer = resolveBrowserEngine(opts.engine).createCdpNormalizer?.();
+  const translateLocalDownloads =
+    !opts.preparedTransport && isWSL2Sync() && isLoopbackHost(new URL(connectionUrl).hostname);
   const wire = opts.preparedTransport ?? (await openCdpTransportSocket(connectionUrl, opts));
+  let versionCommandId: number | undefined;
+  let windowsBrowser = false;
   const pageTargetIdsBySession = new Map<string, string>();
   const pendingTargetCommands = new Map<number, string>();
   let trackInitializationCommands = true;
@@ -142,6 +151,7 @@ export async function connectOverCdpTransport(
         return;
       }
       transportClosed = true;
+      networkLog.clear();
       normalizer?.clear();
       if (onClose) {
         onClose(reason);
@@ -216,6 +226,33 @@ export async function connectOverCdpTransport(
         if (trackInitializationCommands && typeof id === "number" && id > 0 && sessionId) {
           pendingTargetCommands.set(id, sessionId);
         }
+        const method = readStringField(command, "method");
+        if (translateLocalDownloads && method === "Browser.getVersion" && typeof id === "number") {
+          versionCommandId = id;
+        }
+        if (windowsBrowser && method === "Browser.setDownloadBehavior") {
+          const params = asOptionalRecord(command?.params);
+          const downloadPath = readStringField(params, "downloadPath");
+          if (downloadPath) {
+            // Windows Chrome cannot write to a WSL path; Playwright keeps reading and
+            // cleaning up the original directory. Without wslpath, send it unchanged.
+            void runExec("wslpath", ["-w", downloadPath], 1000)
+              .then(
+                ({ stdout }) => ({
+                  ...command,
+                  params: { ...params, downloadPath: stdout.trim() },
+                }),
+                () => message,
+              )
+              .then((next) => {
+                if (!closingReason && !transportClosed) {
+                  wire.send(normalizer?.send(next) ?? next);
+                }
+              })
+              .catch((error: unknown) => closeTransportSocket(formatErrorMessage(error)));
+            return;
+          }
+        }
         try {
           wire.send(normalizer?.send(message) ?? message);
         } catch (error) {
@@ -264,53 +301,58 @@ export async function connectOverCdpTransport(
             closeTransportSocket();
             return;
           }
-          const parsed = normalizer ? normalizer.receive(received) : received;
-          if (!parsed) {
-            return;
-          }
-          const id = parsed.id;
-          if (typeof id === "number" && id <= FIRST_INTERNAL_COMMAND_ID) {
-            const targetSessionId = pendingContextlessTargetResumes.get(id);
-            if (targetSessionId) {
-              pendingContextlessTargetResumes.delete(id);
-              sendInternalCommand("Target.detachFromTarget", { sessionId: targetSessionId });
+          const messages = normalizer ? normalizer.receive(received) : [received];
+          for (const parsed of messages) {
+            const id = parsed.id;
+            if (typeof id === "number" && id <= FIRST_INTERNAL_COMMAND_ID) {
+              const targetSessionId = pendingContextlessTargetResumes.get(id);
+              if (targetSessionId) {
+                pendingContextlessTargetResumes.delete(id);
+                sendInternalCommand("Target.detachFromTarget", { sessionId: targetSessionId });
+              }
+              continue;
             }
-            return;
-          }
-          if (typeof id === "number") {
-            pendingTargetCommands.delete(id);
-          }
-          const method = readStringField(parsed, "method");
-          const params = asOptionalRecord(parsed.params);
-          if (trackInitializationCommands && method === "Target.attachedToTarget") {
-            const sessionId = readStringField(params, "sessionId");
-            const targetInfo = asOptionalRecord(params?.targetInfo);
-            const targetId = readStringField(targetInfo, "targetId");
-            if (
-              sessionId &&
-              targetId &&
-              targetId.length <= MAX_DIAGNOSTIC_TARGET_ID_CHARS &&
-              readStringField(targetInfo, "type") === "page"
-            ) {
-              pageTargetIdsBySession.set(sessionId, targetId);
+            if (versionCommandId !== undefined && id === versionCommandId) {
+              versionCommandId = undefined;
+              const userAgent = readStringField(asOptionalRecord(parsed.result), "userAgent");
+              windowsBrowser = userAgent?.includes("Windows NT") ?? false;
             }
-          } else if (trackInitializationCommands && method === "Target.detachedFromTarget") {
-            const sessionId = readStringField(params, "sessionId");
-            if (sessionId) {
-              pageTargetIdsBySession.delete(sessionId);
-              for (const [commandId, pendingSessionId] of pendingTargetCommands) {
-                if (pendingSessionId === sessionId) {
-                  pendingTargetCommands.delete(commandId);
+            if (typeof id === "number") {
+              pendingTargetCommands.delete(id);
+            }
+            const method = readStringField(parsed, "method");
+            const params = asOptionalRecord(parsed.params);
+            if (trackInitializationCommands && method === "Target.attachedToTarget") {
+              const sessionId = readStringField(params, "sessionId");
+              const targetInfo = asOptionalRecord(params?.targetInfo);
+              const targetId = readStringField(targetInfo, "targetId");
+              if (
+                sessionId &&
+                targetId &&
+                targetId.length <= MAX_DIAGNOSTIC_TARGET_ID_CHARS &&
+                readStringField(targetInfo, "type") === "page"
+              ) {
+                pageTargetIdsBySession.set(sessionId, targetId);
+              }
+            } else if (trackInitializationCommands && method === "Target.detachedFromTarget") {
+              const sessionId = readStringField(params, "sessionId");
+              if (sessionId) {
+                pageTargetIdsBySession.delete(sessionId);
+                for (const [commandId, pendingSessionId] of pendingTargetCommands) {
+                  if (pendingSessionId === sessionId) {
+                    pendingTargetCommands.delete(commandId);
+                  }
                 }
               }
             }
+            const contextlessParams = contextlessTargetParams(parsed);
+            if (contextlessParams) {
+              releaseContextlessTarget(contextlessParams);
+              continue;
+            }
+            networkLog.receive(parsed);
+            scheduleMessage(parsed);
           }
-          const contextlessParams = contextlessTargetParams(parsed);
-          if (contextlessParams) {
-            releaseContextlessTarget(contextlessParams);
-            return;
-          }
-          scheduleMessage(parsed);
         } catch {
           closeTransportSocket();
         }
@@ -320,14 +362,17 @@ export async function connectOverCdpTransport(
     });
     const browser = await getPlaywrightCore().chromium.connectOverCDP(transport, {
       timeout: opts.timeout,
+      noDefaults: opts.noDefaults,
     });
     // Target-command state diagnoses only the cold attach. Stop retaining
     // traffic once Playwright owns a usable browser for the cached session.
+    cdpNetworkLogs.set(browser, networkLog);
     trackInitializationCommands = false;
     pageTargetIdsBySession.clear();
     pendingTargetCommands.clear();
     return browser;
   } catch (error) {
+    networkLog.clear();
     normalizer?.clear();
     wire.close();
     if (isConnectTimeout(error)) {

@@ -30,6 +30,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 
@@ -75,6 +76,7 @@ describe.runIf(process.platform === "win32")("OpenClaw database paths on Windows
       const insert = database.db.prepare("INSERT INTO agent_databases VALUES ('main', ?, ?, ?, ?)");
       insert.run(agentPath, 18, 100, 10);
       insert.run(path.toNamespacedPath(agentPath), 20, 200, 20);
+      restorePreTemplateStateIdentifiersForTest(database.db);
       addPreCutoverClientCredentialTablesForTest(database.db);
       database.db.exec(
         "PRAGMA user_version=8; UPDATE schema_meta SET schema_version=8 WHERE meta_key='primary'",

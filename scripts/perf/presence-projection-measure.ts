@@ -18,6 +18,7 @@ import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
 import type { SessionRowProjection } from "../../src/gateway/session-row-projection.js";
 import type { SystemPresence } from "../../src/infra/system-presence.js";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -132,9 +133,10 @@ function fixture() {
       const target = targets.get(key);
       return target ? { status: "ready", target } : { status: "missing" };
     },
+    hasMembership: () => false,
   } satisfies Pick<
     SessionRowProjection,
-    "getPolicyConfig" | "sharingRevision" | "sharingTargetState"
+    "getPolicyConfig" | "sharingRevision" | "sharingTargetState" | "hasMembership"
   >;
   return {
     clients,
@@ -266,12 +268,7 @@ workload.resetCounts();
 consumedRows = 0;
 const inspector = new Session();
 if (values.allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 const stopDiagnostics = startGatewayBenchDiagnostics();
 const cpu = process.threadCpuUsage();

@@ -6,6 +6,7 @@ import {
   SKILL_LIBRARY_MAX_FILE_BYTES,
   SKILL_LIBRARY_MAX_FILES,
 } from "../../packages/gateway-protocol/src/schema/skill-library.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { SKILL_LIBRARY_MAX_TREE_ENTRIES } from "../skills/library/bundle.js";
 import {
   pluginSkillFileFromBytes,
@@ -33,8 +34,8 @@ export async function fetchClawHubPluginSkill(
   if (params.path !== undefined) {
     validatePluginSkillPath(params.path);
   }
-  const deadline = Date.now() + (params.timeoutMs ?? 30_000);
-  const remainingMs = () => Math.max(1, deadline - Date.now());
+  const deadline = monotonicNow() + (params.timeoutMs ?? 30_000);
+  const remainingMs = () => Math.max(1, deadline - monotonicNow());
   const basePath = `/api/v1/packages/${encodeURIComponent(params.packageName)}`;
   const value = await fetchClawHubJson<unknown>({
     ...params,
@@ -143,7 +144,7 @@ export async function fetchClawHubPluginSkill(
       result.files.push({ path: file.path, sizeBytes: file.size, status: "deferred" });
       continue;
     }
-    if (Date.now() >= deadline) {
+    if (monotonicNow() >= deadline) {
       result.files.push({ path: file.path, sizeBytes: file.size, status: "unavailable" });
       continue;
     }

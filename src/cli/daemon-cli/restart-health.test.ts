@@ -10,9 +10,10 @@ import {
   inspectUnknownListener,
   makeGatewayService,
   monotonicClock,
+  portUsage,
   callGateway,
   gatewayResponseError,
-  readGatewayOwnerLease,
+  readActiveGatewayLockIdentity,
   resetRestartHealthMocks,
   resolveGatewayServiceProbeHosts,
   restoreRestartHealthMocks,
@@ -73,19 +74,14 @@ describe("restart health", () => {
     ];
     const observed: Array<{ at: string; healthy: boolean; staleGatewayPids: number[] }> = [];
     for (const sample of samples) {
-      readGatewayOwnerLease.mockReturnValue(
+      readActiveGatewayLockIdentity.mockResolvedValue(
         sample.ownerPid === undefined
           ? undefined
           : {
-              owner: `owner-${sample.ownerPid}`,
               pid: sample.ownerPid,
-              host: "gateway-test-host",
-              startedAt: sample.ownerPid === 6464 ? 1000 : 2000,
               port: 18789,
-              mode: "supervised",
-              supervisor: { kind: "schtasks", name: "OpenClaw Gateway" },
-              state: "live",
-              expired: false,
+              ownerId: `owner-${sample.ownerPid}`,
+              createdAt: "2026-11-25T00:00:00.000Z",
             },
       );
       if (sample.ready) {
@@ -126,58 +122,35 @@ describe("restart health", () => {
     );
   });
 
-  it.each([{ state: "dead", expired: true }] as const)(
-    "does not classify a $state recorded owner as stale",
-    async ({ state, expired }) => {
-      readGatewayOwnerLease.mockReturnValue({
-        owner: "gateway-owner",
-        pid: 9000,
-        host: "gateway-test-host",
-        startedAt: 1000,
-        port: 18789,
-        mode: "supervised",
-        supervisor: { kind: "schtasks", name: "OpenClaw Gateway" },
-        state,
-        expired,
-      });
+  it.each([
+    { name: "dead owner", pid: 9000, state: "dead", runtime: { status: "stopped" } },
+    {
+      name: "different live owner",
+      pid: 8000,
+      state: "live",
+      runtime: { status: "running", pid: 8000 },
+    },
+  ] as const)(
+    "classifies stale listeners from the verified file owner ($name)",
+    async ({ pid, state, runtime }) => {
+      readActiveGatewayLockIdentity.mockResolvedValue(
+        state === "dead"
+          ? undefined
+          : {
+              pid,
+              port: 18789,
+              ownerId: `owner-${pid}`,
+              createdAt: "2026-11-25T00:00:00.000Z",
+            },
+      );
       const snapshot = await inspectGatewayRestartWithSnapshot({
-        runtime: { status: "stopped" },
-        portUsage: {
-          port: 18789,
-          status: "busy",
-          listeners: [{ pid: 9000, commandLine: "openclaw-gateway" }],
-          hints: [],
-        },
+        runtime,
+        portUsage: portUsage([{ pid: 9000, commandLine: "openclaw-gateway" }]),
       });
       expect(snapshot.healthy).toBe(false);
-      expect(snapshot.staleGatewayPids).toEqual([]);
+      expect(snapshot.staleGatewayPids).toEqual(state === "dead" ? [9000] : []);
     },
   );
-
-  it("does not classify another listener as stale when a different Gateway owns the lifecycle", async () => {
-    readGatewayOwnerLease.mockReturnValue({
-      owner: "gateway-owner",
-      pid: 8000,
-      host: "gateway-test-host",
-      startedAt: 1000,
-      port: 18789,
-      mode: "supervised",
-      supervisor: { kind: "schtasks", name: "OpenClaw Gateway" },
-      state: "live",
-      expired: false,
-    });
-    const snapshot = await inspectGatewayRestartWithSnapshot({
-      runtime: { status: "running", pid: 8000 },
-      portUsage: {
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 9000, commandLine: "openclaw-gateway" }],
-        hints: [],
-      },
-    });
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.staleGatewayPids).toEqual([]);
-  });
 
   it("verifies a healthy gateway listener child pid without marking it stale", async () => {
     callGateway.mockImplementation(gatewayHealthResponse());
@@ -195,6 +168,7 @@ describe("restart health", () => {
     expect(snapshot.staleGatewayPids).toStrictEqual([]);
     expect(inspectPortUsage).toHaveBeenCalledWith(18789, {
       probeHosts: ["127.0.0.1"],
+      knownRuntimePid: 7000,
     });
   });
 

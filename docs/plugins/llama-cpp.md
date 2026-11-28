@@ -14,10 +14,70 @@ The `llama-cpp` plugin provides one `llama-cpp` model provider. OpenClaw can
 manage a local `llama-server` or connect to one that you operate. Both choices
 use `llama-cpp/<model>` references and the OpenAI-compatible transport.
 
+The plugin ships with OpenClaw. Choose llama.cpp in onboarding:
+
 ```bash
-openclaw plugins install @openclaw/llama-cpp-provider
 openclaw onboard
 ```
+
+## Llama.app catalog and inference
+
+The same plugin supplies the separate `llama-app` provider for
+[Llama](https://llama.app). A connection can use its default API endpoint:
+
+```json5
+{
+  models: {
+    providers: {
+      "llama-app": {
+        baseUrl: "http://127.0.0.1:9931/v1",
+        api: "openai-completions",
+        models: [],
+      },
+    },
+  },
+}
+```
+
+The running app supplies its model list. References use
+`llama-app/<server-model-id>`, preserving slashes and quantization suffixes.
+Keyless local servers need no placeholder key in saved configuration.
+`LLAMA_APP_API_KEY` or the provider's normal API-key and header SecretRefs
+support protected endpoints without reusing llama.cpp credentials.
+
+This connection does not replace `models.providers.llama-cpp`, adopt its
+managed process, or change an existing default. Catalog refresh is passive:
+it never downloads, loads, wakes, or unloads models. The app remains responsible
+for the server and inference-triggered model loading. Run it on the Gateway
+host or use an endpoint the Gateway can reach.
+
+### Set up the app connection
+
+Fresh automatic setup prefers a usable model served by the Llama desktop app
+on the Gateway host. A standalone llama-server on the same port keeps its
+llama.cpp identity. For remote, forwarded, or externally managed servers,
+choose **Llama** explicitly to use the app connection. Existing configured models, saved sign-ins and supported
+cloud credentials retain their earlier priority. This preference never installs
+Llama or replaces a configured default.
+
+Choose **Llama** in provider setup. On a fresh machine, first get the app from
+[llama.app](https://llama.app/), choose and download a model inside Llama, and
+keep the app open. OpenClaw's setup explains this handoff; it does not install
+the app, choose a download on your behalf, or adopt the app's cache or process.
+If the server is unavailable or has no usable models, setup stays incomplete
+and names what to do before retrying.
+
+Guided detection is passive and preparation rechecks the exact selected model.
+The app may load a cold model when the subsequent inference probe runs. A
+successful tool-free setup probe does not qualify tools or vision.
+Normal merge-mode setup saves connection facts, not a snapshot of discovered
+model rows; authored overrides survive. Explicit model-catalog replace mode
+continues to seed the catalog through the shared connection policy.
+
+The endpoint must be reachable **from the Gateway**, not just the desktop app.
+In particular, Windows-host loopback and a WSL Gateway's loopback are not the
+same network location. Use an authenticated, reachable endpoint where required;
+setup does not change firewall, proxy, or WSL networking settings.
 
 ## Choose server ownership
 
@@ -64,6 +124,10 @@ If the configured server executable is missing from OpenClaw's current managed
 installation, chat and local embeddings restore the same verified build before
 starting it. Custom server paths and installations from older releases still
 require manual repair or rerunning setup.
+
+On macOS, stopping a chat during orphaned managed-server recovery waits for
+process cleanup. Other pending chats can continue recovery with their own
+requests; cleanup failures still stop preparation and report the error.
 
 Managed local models automatically use structured [Tool Search](/tools/tool-search)
 unless you have explicitly configured it. Optional capabilities remain available.
@@ -218,6 +282,8 @@ Add a model under `models.providers.llama-cpp.models`, select its
 URIs, and HTTPS GGUF URLs that publish a SHA-256 response digest. The default
 cache is `~/.openclaw/models/llama.cpp`. A configured `modelCacheDir` remains
 authoritative for managed setup.
+Concurrent chats share pending GGUF verification or download work. Stopping one
+chat cancels only that chat's wait; the shared work continues for other chats.
 
 Setup resolves model aliases and account-qualified references to the selected
 authored model, and keeps that model even when it is not cached. It shows
@@ -335,6 +401,12 @@ timeout still applies.
 Choose **Existing llama-server** when another terminal, container, service
 manager, or machine owns the process.
 
+Setup and guided detection look for a server at `http://127.0.0.1:9931`.
+Native llama.cpp builds use port 9931 by default starting with `b11521`.
+The official Docker image still listens on port 8080 inside the container.
+When OpenClaw runs on the Docker host, publish `-p 127.0.0.1:9931:8080` for
+automatic detection, or enter `localhost:8080` if you already publish host port 8080.
+
 <Steps>
   <Step title="Start llama-server">
     Give the model a stable alias:
@@ -344,7 +416,7 @@ manager, or machine owns the process.
       --model /path/to/model.gguf \
       --alias my-model \
       --host 127.0.0.1 \
-      --port 8080
+      --port 9931
     ```
 
   </Step>
@@ -354,8 +426,9 @@ manager, or machine owns the process.
     requires it.
 
     The URL prompt accepts HTTP or HTTPS endpoints and host shorthand such as
-    `localhost:8080`. Invalid URLs and embedded credentials are rejected inline
-    so you can correct the endpoint without restarting setup.
+    `localhost:9931`. Invalid URLs and embedded credentials are rejected inline
+    so you can correct the endpoint without restarting setup. For a native build
+    before `b11521`, enter `localhost:8080` if it uses its default port.
 
   </Step>
   <Step title="Select the model">
@@ -379,16 +452,31 @@ Setting it to `false` disables private-network and configured-origin trust
 for both discovery and inference. Discovery has no separate retry or redirect
 exception.
 
-For discovered models, OpenClaw advertises reasoning and effort controls only
-when `/props` sets `chat_template_caps.supports_reasoning_effort` to `true`.
-Missing or false values leave those capabilities unadvertised. Explicit
-configured context and tool values remain authoritative over discovery.
+Reasoning output and reasoning-effort controls are separate capabilities.
+Automatic discovery advertises effort selection only when the server reports
+chat-template support for reasoning effort. A missing or false value does not
+establish that the model cannot produce reasoning output. Automatic
+thinking-control metadata still uses that effort capability; this integration
+does not add independent reasoning detection. Explicit configured reasoning and
+compatibility overrides remain authoritative, without model-name inference.
 
-Setup saves context limits and tool support only when live `/props` verifies
-them. Unloaded router models remain in the configured inventory with those
-fields unset. Runtime discovery uses a 128,000-token context fallback and keeps
-tools disabled while those facts are unknown; it does not save these defaults
-as model overrides. After loading a model yourself, refresh its live facts:
+When both limits are reported, OpenClaw keeps the model's native capacity in
+`contextWindow` and the effective serving limit in `contextTokens`.
+Native capacity comes from the model row's `context_length` or
+`meta.n_ctx_train`; the serving limit comes from generation settings in
+`/props` or the loaded row's `meta.n_ctx`. For example, a model can advertise
+40,960 tokens while its server slot is configured for 4,096. A cold row reporting
+only native capacity does not establish an effective serving limit. Discovered
+output budgets respect an observed serving limit; authored context overrides
+remain authoritative.
+
+Normal merge-mode setup saves the connection and preserves authored model
+overrides; discovered rows stay in the provider-owned runtime catalog. Explicit
+replace mode seeds discovered rows through the shared connection policy,
+leaving unverified context and tool fields unset. Inference preparation can use
+a 128,000-token context fallback and keeps unknown tools disabled, but those
+fallbacks are not advertised as catalog facts or saved as model overrides.
+After loading a model yourself, refresh its live facts:
 
 ```bash
 openclaw models list --provider llama-cpp --refresh
@@ -435,7 +523,7 @@ openclaw onboard \
   --non-interactive \
   --accept-risk \
   --auth-choice llama-cpp-existing-server \
-  --custom-base-url http://127.0.0.1:8080/v1 \
+  --custom-base-url http://127.0.0.1:9931/v1 \
   --custom-model-id my-model
 ```
 
@@ -454,7 +542,7 @@ shape is:
     mode: "merge",
     providers: {
       "llama-cpp": {
-        baseUrl: "http://127.0.0.1:8080/v1",
+        baseUrl: "http://127.0.0.1:9931/v1",
         api: "openai-completions",
         request: { allowPrivateNetwork: true },
         models: [],
@@ -531,6 +619,42 @@ prefixes rebuild once on the next search or sync, without `--force`. Cached raw
 embeddings are not reused, and keyword search remains available during recovery.
 Run `openclaw memory status --index` after intentionally changing the embedding
 model.
+
+## Download access and offline hosts
+
+Local inference does not mean setup is offline. Managed setup downloads separate
+artifacts on the **Gateway host**:
+
+| Stage                                                                          | Source                                                                  | Existing offline alternative                                                                               |
+| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Chat, embeddings, OCR models, and vision projectors                            | Hugging Face model repositories and their download redirects            | Provide local GGUF paths; image models also need their matching local projector                            |
+| Pinned `llama-server` and CUDA libraries                                       | `ggml-org/llama.cpp` GitHub release assets and their download redirects | Install a compatible server and set `models.providers.llama-cpp.localService.command` to its absolute path |
+| Windows Visual C++ runtime, when the installed runtime cannot start the server | Microsoft download service                                              | Install the required runtime on the host or provide a working custom server                                |
+
+Access to a repository page alone does not prove access to its redirected model
+or release download. Check each failing stage from the Gateway host, including
+redirect destinations. Regional availability varies; OpenClaw does not automatically
+select a regional mirror or disable TLS or checksum verification.
+
+For operator-managed routing, use the existing [Network Proxy](/security/network-proxy)
+controls and [proxy validation](/cli/proxy#validate). Configure them for the Gateway
+process, not only the browser or a separate terminal. The managed proxy's default
+loopback policy keeps the local server direct; for environment-only proxy routing,
+keep it in `NO_PROXY` as described above. A Hugging Face route does not replace
+GitHub or Microsoft access.
+
+For a host without download access, transfer models and a working `llama-server`
+from a trusted connected machine, then use the existing local paths or choose
+**Existing llama-server**. Verify the files against their publisher's checksums
+before configuring them. A cache-relative filename is an explicit local path;
+it is not a request to discover a remote model. Recommended model caches retain
+pinned checksums. Custom `hf:` sources still need their upstream integrity
+metadata after a process restart; use explicit local paths when preparing a
+fully offline host.
+
+ONNX model setup has its own artifacts and local export controls; see
+[ONNX](/plugins/onnx). A local GGUF or a working llama.cpp runtime does not satisfy
+an ONNX model download.
 
 ## Troubleshooting
 

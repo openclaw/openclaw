@@ -1,22 +1,24 @@
-import { randomBytes } from "node:crypto";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
 import {
   generatePkceVerifierChallenge,
+  ProviderAuthFailure,
   type OAuthCredential,
+  type ProviderAuthFailureReason,
 } from "openclaw/plugin-sdk/provider-auth";
-import {
-  parseOAuthCallbackInput,
-  waitForLocalOAuthCallback,
-} from "openclaw/plugin-sdk/provider-auth-runtime";
+import { waitForLocalOAuthCallback } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowProviderError,
+  ProviderHttpError,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   buildOAuthRequestSignal,
   createOAuthRefreshError,
   createOAuthRefreshResponseError,
+  generateOAuthState,
+  parseOAuthAuthorizationInput,
   type OAuthCredentials,
   type OAuthPrompt,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
@@ -69,7 +71,25 @@ async function requestChutesTokenGrant(params: {
     // Login keeps its bounded, redacted HTTP diagnostic; refresh needs structured
     // protocol facts before presentation can discard token-consumption evidence.
     if (params.responseLabel === "Chutes token exchange") {
-      await assertOkOrThrowProviderError(response, `${params.responseLabel} failed`);
+      // RFC 6749 section 5.2: 400 is a rejected grant, 401 a rejected client.
+      await assertOkOrThrowProviderError(response, `${params.responseLabel} failed`).catch(
+        (error: unknown) => {
+          if (!(error instanceof ProviderHttpError)) {
+            throw error;
+          }
+          const reason =
+            error.status === 400
+              ? "grant_rejected"
+              : error.status === 401
+                ? "client_misconfigured"
+                : error.status === 429
+                  ? "rate_limited"
+                  : undefined;
+          throw reason
+            ? new ProviderAuthFailure(reason, { retryAfterMs: error.retryAfterMs, cause: error })
+            : error;
+        },
+      );
     }
     const data = await readProviderJsonResponse<{
       error?: unknown;
@@ -148,12 +168,16 @@ export async function refreshChutesOAuthCredential(
 ): Promise<OAuthCredential> {
   const refreshToken = normalizeOptionalString(credential.refresh);
   if (!refreshToken) {
-    throw new Error("Chutes OAuth credential is missing refresh token");
+    throw new ProviderAuthFailure("refresh_rejected", {
+      providerDetail: "This Chutes sign-in has no refresh token.",
+    });
   }
 
   const clientId = normalizeOptionalString(credential.clientId ?? process.env.CHUTES_CLIENT_ID);
   if (!clientId) {
-    throw new Error("Missing CHUTES_CLIENT_ID for Chutes OAuth refresh (set env var or re-auth).");
+    throw new ProviderAuthFailure("client_misconfigured", {
+      providerDetail: "This Chutes sign-in does not record its OAuth client id.",
+    });
   }
   const clientSecret = normalizeOptionalString(process.env.CHUTES_CLIENT_SECRET);
   const body = new URLSearchParams({
@@ -186,11 +210,12 @@ export async function loginChutes(params: {
   manual?: boolean;
   onAuth: (event: { url: string }) => Promise<void>;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
-  onProgress?: (message: string) => void;
+  /** `reason` names a refusal or busy callback port while the sign-in stays open. */
+  onProgress?: (message: string, reason?: ProviderAuthFailureReason) => void;
   signal?: AbortSignal;
 }): Promise<ChutesStoredOAuth> {
   const { verifier, challenge } = generatePkceVerifierChallenge();
-  const state = randomBytes(16).toString("hex");
+  const state = generateOAuthState();
   const query = new URLSearchParams({
     client_id: params.app.clientId,
     redirect_uri: params.app.redirectUri,
@@ -201,27 +226,13 @@ export async function loginChutes(params: {
     code_challenge_method: "S256",
   });
   const url = `${CHUTES_AUTHORIZE_ENDPOINT}?${query}`;
-  const promptForCode = async () => {
-    const parsed = parseOAuthCallbackInput(
-      await params.onPrompt({
-        message: "Paste the redirect URL",
-        placeholder: `${params.app.redirectUri}?code=...&state=...`,
-      }),
-      {
-        invalidInput: "Paste the full redirect URL (must include code + state).",
-        missingState: "Missing 'state' parameter. Paste the full redirect URL.",
-      },
-    );
-    if ("error" in parsed) {
-      throw new Error(parsed.error);
-    }
-    if (parsed.state !== state) {
-      throw new Error("OAuth state mismatch - possible CSRF attack. Please retry login.");
-    }
-    return parsed;
-  };
+  // The shared paste step keeps its field open until the answer fits this sign-in.
+  const promptForCode = async () =>
+    parseOAuthAuthorizationInput(await params.onPrompt({ message: "Paste the redirect URL" }), {
+      state,
+    });
 
-  let codeAndState: { code: string; state: string };
+  let codeAndState: { code: string };
   if (params.manual) {
     await params.onAuth({ url });
     params.onProgress?.("Waiting for redirect URL...");
@@ -229,14 +240,11 @@ export async function loginChutes(params: {
   } else {
     const redirectUri = params.app.redirectUri;
     const redirect = new URL(redirectUri);
-    if (redirect.protocol !== "http:") {
-      throw new Error(`Chutes OAuth redirect URI must be http:// (got ${redirectUri})`);
-    }
     const hostname = redirect.hostname === "[::1]" ? "::1" : redirect.hostname || "127.0.0.1";
-    if (hostname !== "localhost" && hostname !== "127.0.0.1" && hostname !== "::1") {
-      throw new Error(
-        `Chutes OAuth redirect hostname must be loopback (got ${hostname}). Use http://127.0.0.1:<port>/...`,
-      );
+    if (redirect.protocol !== "http:" || !["localhost", "127.0.0.1", "::1"].includes(hostname)) {
+      throw new ProviderAuthFailure("client_misconfigured", {
+        providerDetail: `The Chutes redirect URI must be an http:// loopback address (got ${redirectUri}).`,
+      });
     }
     const port = redirect.port ? Number.parseInt(redirect.port, 10) : 80;
     const pathname = redirect.pathname || "/";
@@ -246,16 +254,28 @@ export async function loginChutes(params: {
       port,
       callbackPath: pathname,
       redirectUri: params.app.redirectUri,
-      successTitle: "Chutes OAuth complete",
+      successTitle: "Chutes authorization received",
       hostname,
       onProgress: params.onProgress,
       ...(params.signal ? { signal: params.signal } : {}),
     }).catch(async (error: unknown) => {
-      if (params.signal?.aborted) {
+      // onProgress keeps the listener open after a refusal; without it the refusal ends sign-in.
+      if (params.signal?.aborted || error instanceof ProviderAuthFailure) {
         throw error;
       }
-      params.onProgress?.("OAuth callback not detected; paste redirect URL...");
-      return await promptForCode();
+      const portBusy = extractErrorCode(error) === "EADDRINUSE";
+      if (!portBusy) {
+        params.onProgress?.("OAuth callback not detected; paste redirect URL...");
+      }
+      const code = promptForCode();
+      // Said once the paste prompt is open, so setup apps show it beside that field.
+      if (portBusy) {
+        params.onProgress?.(
+          new ProviderAuthFailure("callback_port_busy").message,
+          "callback_port_busy",
+        );
+      }
+      return await code;
     });
 
     await params.onAuth({ url });

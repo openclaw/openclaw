@@ -2,12 +2,16 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
 import type { AgentToolResultMiddlewareEvent } from "../../plugins/agent-tool-result-middleware-types.js";
-import { runWithToolExecutionValidation } from "../agent-tools.execution-validation.js";
-import type { AnyAgentTool } from "../agent-tools.types.js";
+import { classifyAgentToolSource } from "../../plugins/tool-metadata.js";
 import {
-  consumeTrustedToolNoStartError,
-  resolveToolResultFailureKind,
-} from "../tool-result-error.js";
+  coerceToolExecutionArguments,
+  runWithToolExecutionValidation,
+} from "../agent-tools.execution-validation.js";
+import type { AnyAgentTool } from "../agent-tools.types.js";
+import { boundToolResult } from "../embedded-agent-runner/tool-result-bound.js";
+import type { PrivateTempFileOptions } from "../sessions/tools/private-temp-file.js";
+import { consumeToolExecutionNotStarted as consumeTrustedToolNoStartError } from "../tool-effect-receipt.js";
+import { resolveToolResultFailureKind } from "../tool-result-error.js";
 import { createAgentHarnessToolExecutionBoundaryRegistry } from "./tool-execution.js";
 import { resolveAgentHarnessToolResultPresentation } from "./tool-result-facts.js";
 
@@ -32,6 +36,15 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
   ) => void;
   snapshotResult?: (result: AgentToolResult<unknown>) => unknown;
   applyMiddleware: (event: AgentToolResultMiddlewareEvent) => Promise<AgentToolResult<unknown>>;
+  /**
+   * Inputs of the one tool-result bound applied after middleware; `spill: false` when the reader
+   * cannot open a Gateway file; `reservedChars` for the text the route's serialization adds.
+   */
+  resultBound?: {
+    contextWindowTokens?: number;
+    spill?: PrivateTempFileOptions | false;
+    reservedChars?: (content: unknown[]) => number;
+  };
   onExecutionResult?: (execution: AgentHarnessToolExecution) => void;
   onResult: (result: AgentHarnessToolPresentation) => TResult | Promise<TResult>;
   onError: (failure: AgentHarnessToolInvocationFailure) => TResult | Promise<TResult>;
@@ -61,6 +74,10 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
     if (params.prepareArguments) {
       const prepared = params.prepareArguments(toolArgs, Boolean(prepare));
       preparedArgs = isPromiseLike(prepared) ? await prepared : prepared;
+    }
+    // MCP servers own their schemas; forward their arguments as the model sent them.
+    if (params.validateArguments && classifyAgentToolSource(tool).source === "openclaw") {
+      preparedArgs = coerceToolExecutionArguments(tool, tool.parameters, preparedArgs);
     }
     const executionArguments = isRecord(preparedArgs) ? preparedArgs : initialArguments;
     // Preparation can mutate in place; otherwise the initial capture is already exact.
@@ -96,7 +113,7 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
       rawFailureKind,
     };
     params.onExecutionResult?.(execution);
-    const result = await params.applyMiddleware({
+    const middlewareResult = await params.applyMiddleware({
       threadId: params.call.threadId,
       turnId: params.call.turnId,
       toolCallId: params.call.toolCallId,
@@ -106,6 +123,12 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
       isError: execution.rawIsError,
       result: rawResult,
     });
+    const result = await boundToolResult(
+      middlewareResult,
+      params.resultBound?.contextWindowTokens,
+      params.resultBound?.spill,
+      params.resultBound?.reservedChars?.(middlewareResult.content),
+    );
     const presentation = resolveAgentHarnessToolResultPresentation({
       result,
       executionIsError: execution.rawIsError,

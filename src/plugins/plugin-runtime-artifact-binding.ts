@@ -108,6 +108,16 @@ export function getPluginRuntimeEntrySource(record: ArtifactBoundRecord): string
   return record[RUNTIME_ARTIFACT_SELECTION]?.runtimeEntry.source;
 }
 
+/** Sidecars share the selected setup/runtime artifact, not the discovery source tree. */
+export function getPluginLoadedEntry(
+  record: ArtifactBoundRecord,
+): PluginRuntimeArtifact | undefined {
+  const selection = record[RUNTIME_ARTIFACT_SELECTION];
+  return selection?.runtimeRegistrationComplete
+    ? selection.runtimeEntry
+    : (selection?.setupEntry ?? selection?.runtimeEntry);
+}
+
 /** Only the loaded runtime owner can authorize the matching UI-origin distribution. */
 export function hasCanonicalPluginDistribution(record: ArtifactBoundRecord): boolean {
   return (
@@ -117,16 +127,16 @@ export function hasCanonicalPluginDistribution(record: ArtifactBoundRecord): boo
 }
 
 /** Acquire recovery custody before shutdown revokes the previous runtime's module loader. */
-export function capturePluginRuntimeRecovery(
+export async function capturePluginRuntimeRecovery(
   record: ArtifactBoundRecord,
-): PluginRuntimeRecovery | undefined {
+): Promise<PluginRuntimeRecovery | undefined> {
   const instance = getPluginInstance(record);
   const selection = record[RUNTIME_ARTIFACT_SELECTION];
   if (!instance || !selection) {
     return undefined;
   }
   return {
-    module: instance.captureModuleLoaderRecovery(),
+    module: await instance.captureModuleLoaderRecovery(),
     runtimeEntry: { ...selection.runtimeEntry },
     ...(selection.setupEntry ? { setupEntry: { ...selection.setupEntry } } : {}),
   };

@@ -34,7 +34,6 @@ import {
   TOOLS,
   TOTAL_FIELDS,
   TOTALS_WIDTH,
-  UNAVAILABLE,
   type UsageCostQuarterBlock,
   type UsageQuarterRange,
 } from "./session-cost-usage-quarters.js";
@@ -45,15 +44,16 @@ import type { SessionUsageRollupData } from "./session-cost-usage-rollup.js";
  * call-wide model id and call-wide tool id, reset per family.
  */
 
-// Per-day vector: totals (12), messages (6), latency count/sum/min/max/p95.
+// The per-day vector matches the packed day row after its date id.
 const DAY_MESSAGES = TOTALS_WIDTH;
 const DAY_LATENCY = DAY_MESSAGES + MESSAGE_FIELDS.length;
-const DAY_WIDTH = DAY_LATENCY + 5;
-// Per-model vector: totals (12) and call count.
+const DAY_WIDTH = ROW.DAY_WIDTH - 1;
+const LATENCY_SUM_FIELDS = [0, 1, 5, 6, 7] as const;
+// Per-model vector: totals and call count.
 const MODEL_COUNT = TOTALS_WIDTH;
 const MODEL_WIDTH = TOTALS_WIDTH + 1;
-// Per day and model: tokens, cost, count, unavailable.
-const DM_WIDTH = 4;
+// Per day and model: tokens, cost, count.
+const DM_WIDTH = 3;
 // Offsets into the hour facet values.
 const HOUR_TOKENS = 0;
 const WEEKDAY_TOKENS = 24;
@@ -255,7 +255,6 @@ export function createUsageOverviewFold(range: UsageQuarterRange) {
     for (const [target, field] of [
       [0, TOKENS],
       [1, COST],
-      [3, UNAVAILABLE],
     ] as const) {
       addColumn(dayModels, DM_WIDTH, target, ownedDaySlot, ownedCount, block, ownedTotals + field);
       if (shared) {
@@ -373,6 +372,7 @@ export function createUsageOverviewFold(range: UsageQuarterRange) {
         const [count, min, max, p95] = [0, 2, 3, 4].map((field, index) =>
           readColumn(block, quarterColumn(Q_LATENCY + field), rows, scratch.columns[index]!),
         );
+        const { timedUsage } = block;
         for (let row = first; row <= last; row += 1) {
           const day = dayOfRow[row]!;
           if (day >= 0 && count![row]! > 0) {
@@ -380,6 +380,12 @@ export function createUsageOverviewFold(range: UsageQuarterRange) {
             days[base + 2] = Math.min(days[base + 2]!, min![row]!);
             days[base + 3] = Math.max(days[base + 3]!, max![row]!);
             days[base + 4] = Math.max(days[base + 4]!, p95![row]!);
+            if (timedUsage) {
+              for (let field = 0; field < 3; field += 1) {
+                const index = base + 5 + field;
+                days[index] = days[index]! + timedUsage[row * 3 + field]!;
+              }
+            }
           }
         }
       }
@@ -423,9 +429,6 @@ export function createUsageOverviewFold(range: UsageQuarterRange) {
       for (const [index, field] of TOTAL_FIELDS.entries()) {
         extraTotals[index] = extraTotals[index]! + rollup.totals[field];
       }
-      if (rollup.totals.usageReport?.state === "unavailable") {
-        extraTotals[UNAVAILABLE] = 1;
-      }
       if (rollup.totals.missingCostByModel) {
         addMissing((missingState().row ??= {}), Object.entries(rollup.totals.missingCostByModel));
       }
@@ -446,9 +449,6 @@ export function createUsageOverviewFold(range: UsageQuarterRange) {
         models[base + MODEL_COUNT] = models[base + MODEL_COUNT]! + entry.count;
         for (const [index, field] of TOTAL_FIELDS.entries()) {
           models[base + index] = models[base + index]! + entry.totals[field];
-        }
-        if (entry.totals.usageReport?.state === "unavailable") {
-          models[base + UNAVAILABLE] = 1;
         }
         if (entry.totals.missingCostByModel) {
           addMissingTo(missingState().models, id, Object.entries(entry.totals.missingCostByModel));
@@ -523,8 +523,10 @@ export function createUsageOverviewFold(range: UsageQuarterRange) {
             values[base + ROW.MESSAGES + field]! + days[offset + DAY_MESSAGES + field]!;
         }
         if (days[offset + DAY_LATENCY]! > 0) {
-          values[latency] = values[latency]! + days[offset + DAY_LATENCY]!;
-          values[latency + 1] = values[latency + 1]! + days[offset + DAY_LATENCY + 1]!;
+          for (const field of LATENCY_SUM_FIELDS) {
+            values[latency + field] =
+              values[latency + field]! + days[offset + DAY_LATENCY + field]!;
+          }
           values[latency + 2] = Math.min(values[latency + 2]!, days[offset + DAY_LATENCY + 2]!);
           values[latency + 3] = Math.max(values[latency + 3]!, days[offset + DAY_LATENCY + 3]!);
           values[latency + 4] = Math.max(values[latency + 4]!, days[offset + DAY_LATENCY + 4]!);
@@ -566,7 +568,6 @@ export function createUsageOverviewFold(range: UsageQuarterRange) {
         values[cursor + 3] = dayModels[offset]!;
         values[cursor + 4] = dayModels[offset + 1]!;
         values[cursor + 5] = dayModels[offset + 2]!;
-        values[cursor + 6] = dayModels[offset + 3]! > 0 ? 1 : 0;
         cursor += ROW.DAY_MODEL_WIDTH;
       }
       if (quarters > 0) {

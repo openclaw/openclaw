@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { formatPortDiagnostics } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
-import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
+import { cleanStaleGatewayProcesses } from "../infra/restart-stale-pids.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { parseLaunchctlJob } from "./launchctl-job.js";
 import { isCurrentProcessInsideLaunchdService } from "./launchd-current-service.js";
 import {
   execLaunchctl,
@@ -15,8 +16,8 @@ import {
   bootstrapLaunchAgentOrThrow,
   isLaunchctlAlreadyLoaded,
   isUnsupportedGuiDomain,
-  parseLaunchctlJob,
   probeLaunchAgentState,
+  launchAgentNeedsReloadSync,
   readLaunchAgentRuntime,
   resolveLaunchAgentGatewayContext,
   resolveLaunchAgentGuiDomain,
@@ -32,6 +33,7 @@ import {
 import { formatLine } from "./output.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
+import { inspectLaunchdProcessMembershipSync } from "./service-process-membership.js";
 import type {
   GatewayServiceControlArgs,
   GatewayServiceEnv,
@@ -352,61 +354,79 @@ export async function restartLaunchAgent(
   const { serviceEnv, label, plistPath, serviceTarget, reportMutation } = activation;
 
   const detached = await isCurrentProcessInsideLaunchdService(label);
-  if (!detached) {
-    const {
-      env: cleanupEnv,
-      port: cleanupPort,
-      probeHosts,
-    } = await resolveLaunchAgentGatewayContext(serviceEnv);
-    if (cleanupPort !== null) {
-      assertGatewayServiceUpdateCurrent();
-      cleanStaleGatewayProcessesSync(cleanupPort, {
+  try {
+    if (!detached) {
+      const {
         env: cleanupEnv,
-        assertCurrent: assertGatewayServiceUpdateCurrent,
-        // Resolve after lsof captures its listener snapshot. A KeepAlive respawn
-        // during enumeration must be protected before candidate filtering/signals.
-        resolveProtectedPid: () => {
-          const pid = readLaunchAgentPidForCleanupSync(serviceTarget);
-          assertGatewayServiceUpdateCurrent();
-          return pid;
-        },
-      });
-      const diagnostics = await inspectPortUsage(cleanupPort, {
+        port: cleanupPort,
         probeHosts,
-      }).catch(() => null);
-      if (diagnostics?.status === "busy") {
-        const runtime = await readLaunchAgentRuntime(serviceEnv, {
-          timeoutMs: params.deadline?.remainingMs(),
+      } = await resolveLaunchAgentGatewayContext(serviceEnv);
+      if (cleanupPort !== null) {
+        assertGatewayServiceUpdateCurrent();
+        await cleanStaleGatewayProcesses(cleanupPort, {
+          env: cleanupEnv,
+          assertCurrent: () => {
+            assertGatewayServiceUpdateCurrent();
+            assertCurrent?.();
+          },
+          // Resolve after lsof captures its listener snapshot. A KeepAlive respawn
+          // during enumeration must be protected before candidate filtering/signals.
+          resolveProtectedPid: () => {
+            const pid = readLaunchAgentPidForCleanupSync(serviceTarget);
+            assertGatewayServiceUpdateCurrent();
+            return pid;
+          },
         });
-        const managedPid = runtime.pid;
-        // Only the current supervised PID may keep the port busy before a
-        // disruptive restart. Re-read after cleanup to close over a concurrent
-        // launchd respawn rather than trusting the protected pre-cleanup PID.
-        const ownedByLaunchAgent =
-          managedPid !== undefined &&
-          diagnostics.listeners.length > 0 &&
-          diagnostics.listeners.every((listener) => listener.pid === managedPid);
-        if (!ownedByLaunchAgent) {
-          throw new Error(
-            [
-              `gateway port ${cleanupPort} is busy but is not verifiably owned by LaunchAgent ${label}`,
-              ...formatPortDiagnostics(diagnostics),
-            ].join("\n"),
-          );
+        const diagnostics = await inspectPortUsage(cleanupPort, {
+          probeHosts,
+        }).catch(() => null);
+        if (diagnostics?.status === "busy") {
+          const runtime = await readLaunchAgentRuntime(serviceEnv, {
+            timeoutMs: params.deadline?.remainingMs(),
+          });
+          const managedPid = runtime.pid;
+          // The resident release launcher supervises a separate Gateway listener.
+          // Re-read the job after cleanup and require native membership for every
+          // listener rather than trusting argv or an inherited service marker.
+          const ownedByLaunchAgent =
+            managedPid !== undefined &&
+            diagnostics.listeners.length > 0 &&
+            [...new Set(diagnostics.listeners.map((listener) => listener.pid))].every(
+              (pid) =>
+                pid === managedPid ||
+                (pid !== undefined &&
+                  inspectLaunchdProcessMembershipSync(pid, managedPid) === "inside"),
+            );
+          if (!ownedByLaunchAgent) {
+            throw new Error(
+              [
+                `gateway port ${cleanupPort} is busy but is not verifiably owned by LaunchAgent ${label}`,
+                ...formatPortDiagnostics(diagnostics),
+              ].join("\n"),
+            );
+          }
         }
       }
     }
+  } catch (error) {
+    // Doctor owns this stop. Keep its job registered even when an unrelated
+    // listener prevents restart; never adopt or signal that listener as recovery.
+    if (preserveDefinition) {
+      await activation.rethrow(error);
+    }
+    throw error;
   }
-  // Preservation permits native activation only, including detached handoffs.
   const plistReloadNeeded =
-    !preserveDefinition &&
-    (await rewriteLaunchAgentPlistForRestart({
-      env: serviceEnv,
-      label,
-      plistPath,
-      stdout,
-      warn,
-    }));
+    (!preserveDefinition &&
+      (await rewriteLaunchAgentPlistForRestart({
+        env: serviceEnv,
+        label,
+        plistPath,
+        stdout,
+        warn,
+      }))) ||
+    launchAgentNeedsReloadSync(serviceEnv, params.deadline?.remainingMs());
+  assertCurrent?.();
   // Restart requests issued from inside the managed gateway process tree need a
   // detached handoff. A direct `kickstart -k` would terminate the caller before
   // it can finish the restart command.

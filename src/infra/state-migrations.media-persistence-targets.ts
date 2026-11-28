@@ -15,6 +15,7 @@ import {
   createOpenClawAgentDatabasePathMatcher,
   isPersistentOpenClawAgentDatabasePath,
 } from "../state/openclaw-agent-db.paths.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
 import { hasErrnoCode } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
@@ -271,9 +272,19 @@ export function discoverAgentDatabaseMigrationTargets(params: {
           failure(pathname, `Could not inspect held database family ${pathname}: ${String(error)}`);
         }
       }
-      discard(candidate, `Removed missing agent database registry entry ${pathname}.`);
+      // A partial upgrade shadow may deliberately omit a registered database.
       if (candidate.source === "registry") {
-        warnings.push(`Skipped missing registered agent database ${pathname}.`);
+        // Only explicit deletion removes the registration (#203130); name it for retired agents.
+        const retirable =
+          !isReservedSystemAgentId(candidate.agentId) &&
+          !params.configuredAgentDatabaseTargets.some(
+            (target) => normalizeAgentId(target.agentId) === normalizeAgentId(candidate.agentId),
+          );
+        warnings.push(
+          retirable
+            ? `Skipped missing registered agent database ${pathname}. If agent "${sanitizeForLog(candidate.agentId)}" is retired, run ${formatCliCommand(`openclaw agents delete ${candidate.agentId}`, params.env)} to remove its registration.`
+            : `Skipped missing registered agent database ${pathname}.`,
+        );
       }
       continue;
     }
@@ -302,7 +313,7 @@ export function discoverAgentDatabaseMigrationTargets(params: {
           unverifiedTargets.push({ ...candidate, realPath });
         } else {
           const target = { ...candidate, agentId: deletion.agentId, realPath };
-          if (!deletion.cleanupCompleted && !deletion.manualClawRemoval) {
+          if (!deletion.cleanupCompleted && !deletion.manualTemplateRemoval) {
             pendingDeletionTargets.push(target);
           } else {
             retainedTargets.push(target);
@@ -311,7 +322,7 @@ export function discoverAgentDatabaseMigrationTargets(params: {
         if (
           typeof deletion === "string" ||
           deletion.cleanupCompleted ||
-          deletion.manualClawRemoval
+          deletion.manualTemplateRemoval
         ) {
           warnings.push(
             `Held agent ${sanitizeForLog(typeof deletion === "string" ? candidate.agentId : deletion.agentId)} database ${sanitizeForLog(pathname)} (${typeof deletion === "string" ? (deletion === "held" ? "deletion journal reconstructed" : "deletion journal unavailable") : "retained-by-deletion"}); run ${formatCliCommand("openclaw doctor --fix", params.env)} to inspect restoration.`,

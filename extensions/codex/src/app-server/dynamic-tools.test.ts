@@ -39,7 +39,6 @@ import {
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { estimateToolResultTextChars } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -372,7 +371,7 @@ describe("createCodexDynamicToolBridge", () => {
     const manyFields = kind === "high-cardinality";
     const { execute, response } = await runSchemaToolCall({
       arguments: manyFields
-        ? Object.fromEntries(propertyNames.map((name) => [name, 47]))
+        ? Object.fromEntries(propertyNames.map((name) => [name, {}]))
         : { [`unexpected_property_${"x".repeat(240)}`]: true },
       callId: "call-bounded-validation",
       name: "bounded_validation_tool",
@@ -532,8 +531,6 @@ describe("createCodexDynamicToolBridge", () => {
     expect(unavailableExecute).not.toHaveBeenCalled();
     expect(onToolOutcome).toHaveBeenLastCalledWith({
       toolName: unavailableToolName,
-      argsHash: "",
-      resultHash: "",
       terminalPresentation: undefined,
       presentationOnly: true,
     });
@@ -656,43 +653,6 @@ describe("createCodexDynamicToolBridge", () => {
     const invalidResult = await callTool(bridge, testCase.name, {}, "call-invalid");
     expect(invalidResult).toMatchObject({ success: false, executionStarted: false });
     expectInputText(invalidResult, `Unknown OpenClaw tool: ${testCase.name}`, false);
-  });
-
-  it("preserves the canonical cap for tiny contexts", async () => {
-    const bridge = createBridgeWithToolResult("large_lookup", textToolResult("x".repeat(70_000)), {
-      contextWindowTokens: 1,
-    });
-    const result = await callTool(bridge, "large_lookup", {}, "call-context-cap");
-    expect(firstInputText(result).length).toBe(1);
-  });
-
-  it("shares weighted budget across mixed text blocks while preserving images", async () => {
-    const bridge = createBridgeWithToolResult(
-      "mixed_lookup",
-      {
-        content: [
-          { type: "text", text: "a".repeat(4_000) },
-          frameImage(COMPUTER_FRAME_IMAGE),
-          { type: "text", text: "你".repeat(9_000) },
-        ],
-        details: {},
-      },
-      { contextWindowTokens: 128_000 },
-    );
-
-    const result = await callTool(bridge, "mixed_lookup", {}, "call-mixed-weighted");
-    const text = result.contentItems
-      .map((item) => (item.type === "inputText" && typeof item.text === "string" ? item.text : ""))
-      .join("");
-
-    expect(result.contentItems.map((item) => item.type)).toEqual([
-      "inputText",
-      "inputImage",
-      "inputText",
-    ]);
-    expect(result.contentItems[0]).toEqual({ type: "inputText", text: "a".repeat(4_000) });
-    expect(estimateToolResultTextChars(text)).toBeLessThanOrEqual(32_000);
-    expect(text).toContain("original 13000 chars, weighted budget 32000");
   });
 
   it.each([
@@ -1533,7 +1493,7 @@ describe("Codex tool operator hints", () => {
       await writeFile(outside, "original\n");
       const tools = createOpenClawCodingTools({
         workspaceDir: root,
-        config: {},
+        config: { tools: { exec: { applyPatch: { workspaceOnly: true } } } },
         toolConstructionPlan: {
           includeBaseCodingTools: false,
           includeShellTools: true,
@@ -1555,10 +1515,8 @@ describe("Codex tool operator hints", () => {
       );
       const response = await bridge.handleToolCall(call, { onAgentToolResult });
       const hint = "workspace-contained by configuration";
-      // Host root escapes carry model-visible cwd rebinding guidance (#184901).
-      const message = `Path escapes sandbox root (${root}): ${outside}. Keep patch paths within the bound root. For an authorized task in another repository, ask the parent to respawn the worker with sessions_spawn and cwd set to that repository. Changing exec workdir does not rebind file tools.`;
-      expect(logError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(hint));
-      expect(JSON.stringify(logError.mock.calls)).not.toContain(outside);
+      // Host root escapes carry model-visible worker binding guidance (#184901).
+      const message = `Path escapes sandbox root (${root}): ${outside}. Keep file paths within the bound root. For an authorized task in another repository, when session and sender policy permit, use a worker bound to that repository; when starting one with sessions_spawn, set cwd to that repository. Changing exec workdir does not rebind file tools.`;
       expect(toCodexDynamicToolProtocolResponse(response)).toEqual({
         contentItems: inputText(message),
         success: false,
@@ -1568,6 +1526,8 @@ describe("Codex tool operator hints", () => {
         result: expect.objectContaining({ content: [{ type: "text", text: message }] }),
         isError: true,
       });
+      expect(logError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(hint));
+      expect(JSON.stringify(logError.mock.calls)).not.toContain(outside);
       expect(JSON.stringify(onAgentToolResult.mock.calls)).not.toContain(hint);
       await expect(readFile(outside, "utf8")).resolves.toBe("original\n");
     });

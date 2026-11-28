@@ -34,7 +34,9 @@ import type { PluginLogger } from "./types.js";
 /** Builds the registry record shape shared by plugin loading, status, and diagnostics. */
 export function createPluginRecord(params: {
   id: string;
+  generationOverlap?: boolean;
   nativeSessionCatalog?: PluginRecord["nativeSessionCatalog"];
+  agentSkillsDir?: string;
   name?: string;
   description?: string;
   packageVersion?: string;
@@ -67,7 +69,9 @@ export function createPluginRecord(params: {
 }): PluginRecord {
   return {
     id: params.id,
+    generationOverlap: params.generationOverlap,
     nativeSessionCatalog: params.nativeSessionCatalog,
+    ...(params.agentSkillsDir ? { agentSkillsDir: params.agentSkillsDir } : {}),
     name: params.name ?? params.id,
     description: params.description,
     packageVersion: params.packageVersion,

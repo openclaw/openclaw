@@ -20,7 +20,6 @@ const tableBlock = {
 };
 const fallbackPayload = {
   text: "Model: anthropic/claude-haiku-4-5\nUptime: 42s\nReference UTC: 12:00",
-  presentation: { title: "Status", blocks: [tableBlock] },
   presentationTextMode: "fallback" as const,
 };
 

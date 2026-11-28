@@ -9,9 +9,11 @@ import {
 import { bindSessionMcpRuntimeTestScheduler } from "./agent-bundle-mcp-manager.test-support.js";
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRequesterScope, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { buildMcpDiagnosticPromptFragments } from "./embedded-agent-runner/run/mcp-diagnostic-prompt.js";
+import { projectRuntimeContextFragments } from "./internal-runtime-context.js";
 import { OpenClawStreamableHTTPClientTransport } from "./mcp-http-transport.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
-import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { operatorMcpOAuthIdentity, requesterMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { saveMcpOAuthAccessTokenForTest } from "./mcp-oauth.test-support.js";
 import * as mcpTransport from "./mcp-transport.js";
 import { acquireNativeMcpServer } from "./native-mcp-runtime.js";
@@ -19,7 +21,10 @@ import { acquireNativeMcpServer } from "./native-mcp-runtime.js";
 const { warn } = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
-vi.mock("../logger.js", () => ({ logWarn: warn }));
+vi.mock("../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logger.js")>()),
+  logWarn: warn,
+}));
 vi.mock("./embedded-agent-mcp.js", () => ({
   loadEmbeddedAgentMcpConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
     mcpServers: cfg.mcp?.servers ?? {},
@@ -35,6 +40,7 @@ let reachable = false;
 let invalidListing = false;
 let listToolsGate: Promise<void> | undefined;
 let oauthRequired = false;
+let oauthRequesterScope: SessionMcpRequesterScope | undefined;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -46,6 +52,7 @@ beforeEach(() => {
   invalidListing = false;
   listToolsGate = undefined;
   oauthRequired = false;
+  oauthRequesterScope = undefined;
   warn.mockClear();
   vi.spyOn(mcpTransport, "resolveMcpTransport").mockImplementation((serverName: string) => {
     const fetchFixture = async (_input: string | URL, init?: RequestInit) => {
@@ -78,6 +85,9 @@ beforeEach(() => {
       if (message.method === "tools/list" && serverName === "remote") {
         await listToolsGate;
       }
+      if (message.method === "tools/call") {
+        return Response.json({ jsonrpc: "2.0", id: message.id, result: { content: [] } });
+      }
       return Response.json({
         jsonrpc: "2.0",
         id: message.id,
@@ -108,9 +118,17 @@ beforeEach(() => {
           ? withMcpOAuthBearer({
               fetchFn: fetchFixture,
               authFetchFn: fetchFixture,
-              identity: operatorMcpOAuthIdentity(serverName, "https://mcp.invalid/mcp", {
-                mcp: { servers: { remote: { url: "https://mcp.invalid/mcp", auth: "oauth" } } },
-              }),
+              identity: oauthRequesterScope
+                ? requesterMcpOAuthIdentity(
+                    serverName,
+                    "https://mcp.invalid/mcp",
+                    oauthRequesterScope,
+                  )
+                : operatorMcpOAuthIdentity(serverName, "https://mcp.invalid/mcp", {
+                    mcp: {
+                      servers: { [serverName]: { url: "https://mcp.invalid/mcp", auth: "oauth" } },
+                    },
+                  }),
             })
           : fetchFixture,
       },
@@ -190,6 +208,56 @@ it.each(["embedded", "native"])(
   },
 );
 
+it.each(["operator", "requester"] as const)(
+  "keeps %s OAuth recovery in initial and backed-off model notices",
+  async (principal) => {
+    await withOpenClawTestState({ prefix: "mcp-long-oauth-" }, async () => {
+      oauthRequired = true;
+      reachable = true;
+      const serverName = "<".repeat(120);
+      const url = "https://mcp.invalid/mcp";
+      const scope = principal === "requester" ? { requesterSenderId: "synthetic" } : undefined;
+      oauthRequesterScope = scope;
+      const identity = scope
+        ? requesterMcpOAuthIdentity(serverName, url, scope)
+        : operatorMcpOAuthIdentity(serverName, url, {
+            mcp: { servers: { [serverName]: { url, auth: "oauth" } } },
+          });
+      const servers = { [serverName]: { url, auth: "oauth" as const } };
+      const first = await makeRuntime(url, scope, servers).getCatalog();
+      const second = await makeRuntime(url, scope, servers).getCatalog();
+      const guidance = scope ? "Reconnect from the channel" : "Sign in from Settings";
+      expect(second.diagnostics?.[0]?.message).toBe(first.diagnostics?.[0]?.message);
+      for (const catalog of [first, second]) {
+        const diagnostic = catalog.diagnostics?.[0];
+        expect(diagnostic?.message).toContain(serverName);
+        expect(diagnostic?.promptMessage).toContain(guidance);
+        expect(diagnostic?.promptMessage).not.toContain(serverName);
+        const fragments = buildMcpDiagnosticPromptFragments(catalog.diagnostics ?? []);
+        const legacy = fragments.map((fragment) => fragment.text).join("\n\n");
+        const escaped = projectRuntimeContextFragments(fragments);
+        expect(legacy).toContain(guidance);
+        expect(escaped).toContain(guidance);
+        if (principal === "operator") {
+          expect(legacy).toContain("ask the agent to connect in a direct chat");
+          expect(escaped).toContain("ask the agent to connect in a direct chat");
+        }
+        expect(legacy.length).toBeLessThanOrEqual(2_000);
+        expect(escaped.length).toBeLessThanOrEqual(2_000);
+      }
+      expect(initializes).toBe(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toContain(
+        `MCP server "${serverName}" requires OAuth authorization.`,
+      );
+      await saveMcpOAuthAccessTokenForTest(identity, "synthetic-token");
+      const recovered = await makeRuntime(url, scope, servers).getCatalog();
+      expect(recovered.diagnostics ?? []).toEqual([]);
+      expect(buildMcpDiagnosticPromptFragments(recovered.diagnostics ?? [])).toEqual([]);
+    });
+  },
+);
+
 afterEach(async () => {
   await Promise.all(runtimes.splice(0).map((runtime) => runtime.dispose()));
   await disposeAllSessionMcpRuntimes();
@@ -244,19 +312,19 @@ it.each(["connection", "listing"] as const)(
     expect(toolNames(failed.catalog)).toEqual(["healthy_tool"]);
     const diagnostics = structuredClone(failed.catalog.diagnostics);
     expect(diagnostics).toEqual([expect.objectContaining({ serverName: "remote" })]);
-    if (failure === "connection") {
-      expect(diagnostics?.[0]?.message).toContain("server unavailable");
-    }
+    vi.setSystemTime(Date.now() + (failure === "connection" ? 600_000 : -600_000));
     expect((await runtime.getCatalog()).diagnostics).toEqual(diagnostics);
 
     reachable = true;
     invalidListing = false;
     const listing = Promise.withResolvers<void>();
     listToolsGate = listing.promise;
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect((await discover(runtime)).waitedMs).toBe(0);
+    expect(initializes).toBe(2);
+    await vi.advanceTimersByTimeAsync(1);
     const turn = await discover(runtime);
     expect(turn).toMatchObject({ waitedMs: 0, catalog: { diagnostics } });
-    expect(toolNames(turn.catalog)).toEqual(["healthy_tool"]);
     listing.resolve();
     await vi.advanceTimersByTimeAsync(0);
     const recovered = await runtime.getCatalog();
@@ -280,7 +348,22 @@ it("refreshes a connected session while a sibling with the same startup key is u
   expect(failed.catalog.diagnostics?.[0]?.message).toContain("server unavailable");
 
   remoteToolName = "replacement";
+  const listing = Promise.withResolvers<void>();
+  listToolsGate = listing.promise;
   transport.onmessage?.({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(toolNames(await healthy.getCatalog())).toEqual(["probe"]);
+  let called = false;
+  const calling = healthy.callTool("remote", "probe", {}).then(() => {
+    called = true;
+  });
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(called).toBe(true);
+  } finally {
+    listing.resolve();
+    await calling;
+  }
   await vi.advanceTimersByTimeAsync(0);
   const refreshed = await healthy.getCatalog();
   expect(toolNames(refreshed)).toEqual(["replacement"]);

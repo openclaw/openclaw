@@ -171,9 +171,9 @@ describe("package scripts", () => {
     );
   });
 
-  it("runs dead-code reports fail-fast", () => {
+  it("runs all dead-code scopes through the shared report entrypoint", () => {
     expect(readPackageJson().scripts["deadcode:report"]).toBe(
-      "pnpm deadcode:full && pnpm deadcode:exports",
+      "node --import ./scripts/tsx.mjs scripts/check-deadcode-exports.mts --all",
     );
   });
 
@@ -288,8 +288,10 @@ describe("package scripts", () => {
   it("keeps required native coverage in Windows CI", () => {
     const requiredTargets = [
       "src/node-host/node-worker-transfer-client.test.ts",
+      "test/scripts/check-deadcode-unused-files.test.ts",
       "test/scripts/format-generated-module.test.ts",
       "test/scripts/direct-run-entrypoints.test.ts",
+      "test/helpers/run-node-script.test.ts",
       "test/scripts/vitest-worker-artifacts.test.ts",
       "test/scripts/vitest-worker-artifacts.transforms.test.ts",
       "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",

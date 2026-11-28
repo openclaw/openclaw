@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -17,8 +18,16 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  changedStoreFiles,
+  listSqliteSidecars,
+  snapshotStoreFiles,
+} from "../test-utils/store-snapshot.test-support.js";
 import { beginDoctorRepair } from "./doctor-maintenance.admission.test-support.js";
-import { maybeRepairLegacyRuntimeFiles } from "./doctor-usage-cost-cache.js";
+import {
+  checkLegacyRuntimeFilesPending,
+  maybeRepairLegacyRuntimeFiles,
+} from "./doctor-usage-cost-cache.js";
 
 const note = vi.hoisted(() => vi.fn());
 
@@ -60,7 +69,12 @@ function seedCacheRows(db: CacheDatabase, unrelated = false) {
   );
   insert.run(USAGE_COST_ROLLUP_SCOPE, "current", current.value_json, current.blob);
   insert.run("session-cost-usage", "refresh-lock", "{}", null);
-  for (const scope of ["session-cost-usage-rollup-v1", "session-cost-usage-rollup-v2"]) {
+  for (const scope of [
+    "session-cost-usage-rollup-v1",
+    "session-cost-usage-rollup-v2",
+    // 2026.10.10 wrote NUL-keyed projection partitions under the retired v1 scope.
+    "session-cost-usage-projection-v1",
+  ]) {
     insert.run(scope, "retired", "{}", null);
   }
   insert.run("session-cost-usage", "cache", "{}", null);
@@ -251,7 +265,13 @@ describe("legacy usage-cost cache cleanup", () => {
     if (operation === "readdir") {
       vi.spyOn(fs, "readdir").mockRejectedValueOnce(error);
     } else {
-      vi.spyOn(fs, "stat").mockRejectedValueOnce(error);
+      const stat = fs.stat;
+      vi.spyOn(fs, "stat").mockImplementation((...args) => {
+        if (args[0] === tempFile) {
+          return Promise.reject(error);
+        }
+        return stat(...args);
+      });
     }
     await maybeRepairLegacyRuntimeFiles(shouldRepair, { OPENCLAW_STATE_DIR: root });
     if (diagnostic) {
@@ -273,6 +293,121 @@ describe("legacy usage-cost cache cleanup", () => {
     }
     noted("Removed 1 rebuildable legacy usage-cost cache file", "Usage cost cache");
     await missing(cacheFile);
+  });
+});
+
+describe("legacy runtime file pending check", () => {
+  const preRedactorAudit = `${JSON.stringify({
+    ts: "2026-05-02T00:03:48.471Z",
+    argv: ["node", "openclaw.mjs", "config", "set", "x", "xoxb-bad-token-1234567890abcdef"],
+    execArgv: [],
+  })}\n`;
+
+  /** A plain connection that holds a store's WAL sidecars, as a serving Gateway does. */
+  const holdStore = (pathname: string) => {
+    const holder = new DatabaseSync(pathname);
+    holder.prepare("SELECT count(*) FROM sqlite_schema").get();
+    return holder;
+  };
+
+  it.each([
+    ["retired usage-cost rows", "rows"],
+    ["a pre-redactor config audit entry", "logs/config-audit.jsonl"],
+    ["a legacy usage-cost sidecar", "agents/main/sessions/.usage-cost-cache.json"],
+    ["legacy skill-upload staging", "tmp/skill-uploads/upload/metadata.json"],
+    ["the obsolete Control UI cache", "cache/control-ui-assets/build/index.js"],
+  ])("reports %s as work without writing, and none once repaired", async (_name, seeded) => {
+    const root = tempDirs.make("openclaw-legacy-runtime-pending-");
+    const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
+    const agent = openOpenClawAgentDatabase({ agentId: "worker", env });
+    seedCacheRows(agent.db, true);
+    await maybeRepairLegacyRuntimeFiles(true, env);
+    await closeOpenClawAgentDatabasesAsync();
+    const cleanHolder = holdStore(agent.path);
+    try {
+      await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("none");
+    } finally {
+      cleanHolder.close();
+    }
+
+    if (seeded === "rows") {
+      openOpenClawAgentDatabase({ agentId: "worker", env })
+        .db.prepare(
+          "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES ('session-cost-usage-rollup-v1', 'retired', '{}', 1)",
+        )
+        .run();
+      await closeOpenClawAgentDatabasesAsync();
+    } else {
+      await fs.mkdir(path.dirname(path.join(root, seeded)), { recursive: true });
+      await fs.writeFile(
+        path.join(root, seeded),
+        seeded.endsWith(".jsonl") ? preRedactorAudit : "x",
+      );
+    }
+    const holder = holdStore(agent.path);
+    try {
+      const before = snapshotStoreFiles(root);
+      await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("work");
+      expect(changedStoreFiles(before, snapshotStoreFiles(root))).toEqual([]);
+
+      await maybeRepairLegacyRuntimeFiles(true, env);
+      await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("none");
+    } finally {
+      holder.close();
+    }
+  });
+
+  it("leaves an agent database no connection holds unopened, and the cleanup still owns it", async () => {
+    const root = tempDirs.make("openclaw-legacy-runtime-unheld-");
+    const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
+    const agent = openOpenClawAgentDatabase({ agentId: "worker", env });
+    seedCacheRows(agent.db, true);
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    expect(listSqliteSidecars(root)).toEqual([]);
+    const before = snapshotStoreFiles(root);
+
+    // A read-only open would create the sidecars, so the check cannot decide.
+    await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("undecidable");
+    expect(changedStoreFiles(before, snapshotStoreFiles(root))).toEqual([]);
+
+    // Registry discovery reads the state database; only the agent database is in question.
+    const agentSidecars = () =>
+      listSqliteSidecars(root).filter((file) => file.startsWith("agents/"));
+    await maybeRepairLegacyRuntimeFiles(true, env);
+    await closeOpenClawAgentDatabasesAsync();
+    // The cleanup used its write connection, which removed the sidecars on close.
+    expect(agentSidecars()).toEqual([]);
+    {
+      // Writable, so its close removes the sidecars this inspection creates.
+      using database = new DatabaseSync(agent.path);
+      expect(cacheRows(database)).toEqual([
+        { scope: "other", key: "keep", value_json: "{}", blob: null },
+        ...retainedRows,
+      ]);
+    }
+    // A clean database: the cleanup leaves no sidecars behind either.
+    expect(agentSidecars()).toEqual([]);
+    await maybeRepairLegacyRuntimeFiles(true, env);
+    await closeOpenClawAgentDatabasesAsync();
+    expect(agentSidecars()).toEqual([]);
+  });
+
+  it("leaves clean agent databases unopened for writing, so a held write lock is not waited on", async () => {
+    const root = tempDirs.make("openclaw-legacy-runtime-locked-");
+    const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
+    const { path: databasePath } = openOpenClawAgentDatabase({ agentId: "main", env });
+    await closeOpenClawAgentDatabasesAsync();
+    const holder = new DatabaseSync(databasePath);
+    holder.exec("BEGIN IMMEDIATE");
+    try {
+      // A write attempt would wait out the SQLite busy timeout and then report the database.
+      await maybeRepairLegacyRuntimeFiles(true, env);
+      expect(note).not.toHaveBeenCalledWith(expect.anything(), "Doctor warnings");
+    } finally {
+      holder.exec("ROLLBACK");
+      holder.close();
+    }
   });
 });
 

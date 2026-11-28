@@ -1,9 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { channel as diagnosticsChannel } from "node:diagnostics_channel";
 import path from "node:path";
 import { MessageChannel, type Worker } from "node:worker_threads";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { createWorkerIdleTimers, WorkerTaskError } from "@openclaw/worker-runtime";
+import {
+  createWorkerIdleTimers,
+  isWorkerIdleForPressure,
+  WorkerTaskError,
+} from "@openclaw/worker-runtime";
 import { markWorkerRetirement } from "../../infra/worker-cpu.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -18,6 +23,7 @@ import {
 } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveStateDir } from "../paths.js";
+import { hasPendingSqliteArchiveWork } from "./session-accessor.sqlite-archive-queue.js";
 import type {
   SqliteArchiveOperation,
   SqliteArchiveSessionRequest,
@@ -44,9 +50,20 @@ type ArchiveConnection = {
   operationId: number;
   idle: ReturnType<typeof createWorkerIdleTimers>;
   idleTimer?: NodeJS.Timeout;
+  onPressure?: (critical: unknown) => void;
   failure?: Error;
   retiring?: Promise<void>;
 };
+
+const memoryPressure = diagnosticsChannel("openclaw.memory.critical");
+
+function clearArchiveIdle(connection: ArchiveConnection) {
+  connection.idle.clear(connection);
+  if (connection.onPressure) {
+    memoryPressure.unsubscribe(connection.onPressure);
+    connection.onPressure = undefined;
+  }
+}
 
 const sessions = resolveGlobalSingleton<{
   context: AsyncLocalStorage<ArchiveSession>;
@@ -206,9 +223,16 @@ class ArchiveSession {
           };
           // The FIFO has one request in flight on this private, paired worker port.
           const receive = (
-            response: SqliteArchiveSessionResponse | { type: "archive-temporary-file" },
+            response:
+              | SqliteArchiveSessionResponse
+              | { type: "archive-temporary-file" }
+              | { status: "memory" },
           ) => {
-            if (response.type === "archive-temporary-file" || connection.failure) {
+            if (
+              "status" in response ||
+              response.type === "archive-temporary-file" ||
+              connection.failure
+            ) {
               return;
             }
             cleanup();
@@ -327,7 +351,7 @@ class ArchiveSession {
     const previous = sessions.warm;
     if (previous && previous !== this) {
       if (previous.connection) {
-        previous.connection.idle.clear(previous.connection);
+        clearArchiveIdle(previous.connection);
       }
       if (
         !previous.revoked &&
@@ -348,7 +372,7 @@ class ArchiveSession {
     }
     this.assertCurrent();
     if (this.connection) {
-      this.connection.idle.clear(this.connection);
+      clearArchiveIdle(this.connection);
     }
     await this.connection?.retiring;
     this.assertCurrent();
@@ -369,15 +393,19 @@ class ArchiveSession {
         this.dispatched = undefined;
       }
       if (!connection.retiring && !connection.didExit && !connection.failure) {
-        connection.idle.arm(connection, 5 * 60_000, () => {
-          // An open scope remains usable after its idle carrier exits.
-          markWorkerRetirement(connection.worker, "idle_timeout");
-          void (this.released ? this.close() : this.retire()).catch((error: unknown) => {
-            process.emitWarning(`SQLite archive worker retirement failed: ${String(error)}`);
-          });
-        });
+        connection.idle.arm(connection, 5 * 60_000, () =>
+          this.retireIdle(connection, "idle_timeout"),
+        );
       }
     }
+  }
+
+  private retireIdle(connection: ArchiveConnection, reason: "idle_timeout" | "memory_pressure") {
+    markWorkerRetirement(connection.worker, reason);
+    // An open scope remains usable after its idle carrier exits.
+    void (this.released ? this.close() : this.retire()).catch((error: unknown) => {
+      process.emitWarning(`SQLite archive worker retirement failed: ${String(error)}`);
+    });
   }
 
   private start(createWorker: (data: object) => Worker): ArchiveConnection {
@@ -402,7 +430,7 @@ class ArchiveSession {
     });
     connection.exited = new Promise((resolve) => {
       worker.once("exit", (code) => {
-        connection.idle.clear(connection);
+        clearArchiveIdle(connection);
         connection.didExit = true;
         if (code !== 0) {
           connection.failure ??= new Error(`SQLite archive Worker exited with code ${code}`);
@@ -418,7 +446,7 @@ class ArchiveSession {
     if (!connection) {
       return Promise.resolve();
     }
-    connection.idle.clear(connection);
+    clearArchiveIdle(connection);
     return (connection.retiring ??= (async () => {
       // Queued requests own no native work and will refuse at FIFO admission.
       await this.dispatched?.catch(() => {});
@@ -453,6 +481,22 @@ class ArchiveSession {
       !connection.didExit &&
       !connection.failure
     ) {
+      const idleSince = performance.now();
+      const onPressure = (critical: unknown) => {
+        // A later scope may already own a FIFO slot before it takes the physical worker.
+        if (
+          connection.onPressure === onPressure &&
+          sessions.warm === this &&
+          !this.revoked &&
+          !connection.failure &&
+          !hasPendingSqliteArchiveWork() &&
+          isWorkerIdleForPressure(idleSince, critical === true)
+        ) {
+          this.retireIdle(connection, "memory_pressure");
+        }
+      };
+      connection.onPressure = onPressure;
+      memoryPressure.subscribe(onPressure);
       connection.worker.unref();
       return;
     }

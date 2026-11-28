@@ -8,6 +8,7 @@ import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import type { DurableComposerDraftScope } from "../../../lib/chat/composer-draft-store.runtime.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../../lib/chat/heartbeat-display.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { showToast } from "../../../lib/toast.ts";
 import {
   isKeyedAssistantStreamFallbackMessage,
@@ -76,7 +77,6 @@ function terminalOutcome(message: unknown): "successful" | "settled" | null {
 function readQuestionHistory(messages: readonly unknown[]) {
   const runs = new Map<string, { first: number; last: number; settled?: number }>();
   const userTurns = new Map<string, number>();
-  const recoveryStarts = new Map<string, number>();
   const questions = new Map<
     string,
     { question: AsyncQuestions; index: number; runId?: string; originRunId?: string }
@@ -100,14 +100,6 @@ function readQuestionHistory(messages: readonly unknown[]) {
       if (runId && !userTurns.has(runId)) {
         userTurns.set(runId, index);
       }
-    }
-    if (
-      identity?.role === "user" &&
-      identity.runId &&
-      provenance?.kind === "internal_system" &&
-      provenance.sourceTool === "main_session_restart_recovery"
-    ) {
-      recoveryStarts.set(identity.runId, index);
     }
     const outcome = terminalOutcome(message);
     if (runId) {
@@ -174,18 +166,13 @@ function readQuestionHistory(messages: readonly unknown[]) {
   // observed row alone does not prove an overlapping run has stopped.
   const laterRun = new Map<number, (typeof terminals)[number]>();
   const laterTurn = new Map<number, (typeof terminals)[number]>();
-  const laterRecovery = new Map<number, (typeof terminals)[number]>();
   for (const terminal of terminals) {
     if (terminal.runId) {
       laterRun.set(runs.get(terminal.runId)!.first, terminal);
-      const recoveryStart = recoveryStarts.get(terminal.runId);
-      if (recoveryStart !== undefined && recoveryStart < terminal.index) {
-        laterRecovery.set(recoveryStart, terminal);
-      }
     }
     laterTurn.set(terminal.turnStart, terminal);
   }
-  for (const lookup of [laterRun, laterTurn, laterRecovery]) {
+  for (const lookup of [laterRun, laterTurn]) {
     let latest: (typeof terminals)[number] | undefined;
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const terminal = lookup.get(index);
@@ -200,24 +187,11 @@ function readQuestionHistory(messages: readonly unknown[]) {
   const history = [...questions.values()].map(({ question, index, runId, originRunId }) => {
     const origin = originRunId ? runs.get(originRunId) : undefined;
     const lookup = runId ? laterRun : laterTurn;
-    let boundary = origin
+    const boundary = origin
       ? origin.settled !== undefined && origin.settled > index
         ? lookup.get(origin.last + 1)
         : undefined
       : lookup.get(index + 1);
-    // Restart recovery records why an origin may have no terminal. Only its
-    // matching successful completion retires older reminders; the marker alone
-    // and unrelated internal inputs do not. Later successors also age reopens.
-    const recovery = laterRecovery.get(index + 1);
-    for (const candidate of [
-      recovery,
-      recovery ? laterRun.get(recovery.index + 1) : undefined,
-      recovery ? laterTurn.get(recovery.index + 1) : undefined,
-    ]) {
-      if (candidate && (!boundary || candidate.index > boundary.index)) {
-        boundary = candidate;
-      }
-    }
     return { question, boundary: boundary?.key };
   });
   return { history, resolved };
@@ -535,6 +509,7 @@ export function createAsyncQuestionPresentation(
         !current.resolved.has(itemId)
       ) {
         showToast({
+          severity: storageError() ? "error" : "success",
           message: storageError() ?? t("chat.asyncQuestions.dismissedNotice"),
           actionLabel: t("common.undo"),
           // History can advance while the toast remains visible. The latest
@@ -648,7 +623,7 @@ export function createAsyncQuestionPanelProps(
         draft.status = "submitted";
       } catch (error) {
         draft.status = undefined;
-        draft.error = error instanceof Error ? error.message : String(error);
+        draft.error = formatUiError(error);
         throw error;
       } finally {
         presentation.onChange();

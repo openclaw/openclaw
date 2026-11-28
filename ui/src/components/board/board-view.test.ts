@@ -10,6 +10,7 @@ import {
   createApplicationContextProvider,
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   expectText,
   mountWidget,
@@ -395,7 +396,7 @@ describe("openclaw-board-view", () => {
     await openBoardMenu(view);
     view.querySelector<HTMLButtonElement>(".board-widget__menu-danger")?.click();
     await vi.waitFor(() => {
-      expectText(view.querySelector(".board-view__error"), "could not be saved");
+      expectText(view.querySelector(".board-view__error"), "Couldn’t save the dashboard change");
       expectText(testId(view, "board-widget-action-error"), "fixture write failed");
     });
     expect(view.querySelector("iframe")).toBe(frame);
@@ -433,7 +434,7 @@ describe("openclaw-board-view", () => {
     await openBoardMenu(view);
     removeButton(view)?.click();
     await vi.waitFor(() =>
-      expectText(view.querySelector(".board-view__error"), "could not be saved"),
+      expectText(view.querySelector(".board-view__error"), "Couldn’t save the dashboard change"),
     );
 
     await openBoardMenu(view);
@@ -616,13 +617,18 @@ describe("openclaw-board-view", () => {
     expect(toastHost.querySelector(".app-toast")).toBeNull();
 
     reject?.click();
-    await vi.waitFor(() => {
-      expectText(testId(view, "board-widget-action-error"), "approval service unavailable");
+    await vi.waitFor(() =>
+      expectText(testId(view, "board-widget-action-error"), "approval service unavailable"),
+    );
+    // Action settlement does not wait for the toast view's first lazy import.
+    await toastHost.updateComplete;
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
       expectText(
-        toastHost.querySelector(".app-toast__message"),
-        "Could not reject widget access. Try again.",
-      );
-    });
+        toastHost.querySelector(".app-toast__body"),
+        "Couldn’t reject widget access. Try again.",
+      ),
+    );
     expect([allow?.disabled, reject?.disabled]).toEqual([false, false]);
 
     view.snapshot = structuredClone({ ...source, revision: source.revision + 1 });
@@ -650,10 +656,10 @@ describe("openclaw-board-view", () => {
     });
 
     expect(view.querySelector("iframe")).toBeNull();
-    expectText(testId(view, "board-widget-error"), "Widget sandbox host is unavailable.");
+    expectText(testId(view, "board-widget-error"), "The widget sandbox is unavailable.");
   });
 
-  it("keeps cell focus order stable and exposes move, resize, and menu labels", async () => {
+  it("keeps cell focus order stable and exposes menu labels", async () => {
     const view = await mount();
     const cells = [...view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')];
     expect(cells.map((cell) => cell.getAttribute("tabindex"))).toEqual(["0", "-1"]);
@@ -667,8 +673,6 @@ describe("openclaw-board-view", () => {
       const drag = cell.querySelector(".board-widget__drag-handle");
       const resize = cell.querySelector(".board-widget__resize-handle");
       const menu = cell.querySelector(".board-widget__menu-trigger");
-      expect(drag?.getAttribute("title")).toMatch(/^Move /u);
-      expect(resize?.getAttribute("title")).toMatch(/^Resize /u);
       expect([drag?.getAttribute("tabindex"), resize?.getAttribute("tabindex")]).toEqual([
         null,
         null,
@@ -682,14 +686,21 @@ describe("openclaw-board-view", () => {
     await vi.waitFor(() => expect(cells[1]?.getAttribute("tabindex")).toBe("0"));
   });
 
-  it("uses Alt+Arrow as the keyboard reorder fallback and announces the move", async () => {
-    const applyOps = vi.fn(async () => undefined);
+  it("navigates the nudged order while saving and announces only after acceptance", async () => {
+    const save = deferred();
+    const applyOps = vi.fn(() => save.promise);
     const view = await mount({ callbacks: callbacks({ applyOps }) });
-    const secondCell = view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')[1];
-    keyDown(secondCell, "ArrowLeft", true);
-    await vi.waitFor(() =>
-      expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_move", name: "beta", position: 0 }]),
-    );
+    const [first, second] = view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]');
+    second!.focus();
+    keyDown(second, "ArrowLeft", true);
+    await settleCells(view);
+    expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_move", name: "beta", position: 0 }]);
+    expect(second!.getAttribute("aria-posinset")).toBe("1");
+    expect(document.activeElement).toBe(second);
+    expect(view.querySelector(".board-announcer")?.textContent).toBe("");
+    keyDown(second, "ArrowRight");
+    await vi.waitFor(() => expect(document.activeElement).toBe(first));
+    save.resolve();
     await vi.waitFor(() => expectText(view.querySelector(".board-announcer"), "Moved Beta chart"));
   });
 

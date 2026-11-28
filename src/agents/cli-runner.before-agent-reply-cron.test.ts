@@ -11,6 +11,7 @@ import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
@@ -127,9 +128,7 @@ async function captureRejectedClaudeRun(
   } catch (caught) {
     error = caught;
   } finally {
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await waitForDiagnosticEventsDrained();
     unsubscribe();
   }
   return { error, events };
@@ -154,6 +153,7 @@ async function makeStubContext(params: Parameters<ProductionRunCliAgent>[0]) {
     authEpochVersion: 0,
     backendResolved: {},
     preparedBackend: { backend: { sessionMode: "none" } },
+    executionTarget: { kind: "process" },
     reusableCliSession: { mode: "none" },
   };
 }
@@ -341,8 +341,8 @@ describe("runCliAgent before_agent_reply seam", () => {
         } else {
           expect((await operation).payloads).toEqual([{ text: "hook result" }]);
           expect(effect).toHaveBeenCalledOnce();
-          expect(heldRequest).toThrow("no longer active");
-          expect(heldClaim).toThrow("no longer active");
+          expect(heldRequest).toThrow("The guarded request ended.");
+          expect(heldClaim).toThrow("The guarded request ended.");
         }
         expect(prepareMock).not.toHaveBeenCalled();
         expect(executeMock).not.toHaveBeenCalled();
@@ -375,9 +375,7 @@ describe("runCliAgent before_agent_reply seam", () => {
         model: "sonnet-4.6",
         runId,
       });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await waitForDiagnosticEventsDrained();
     } finally {
       unsubscribe();
     }
@@ -522,6 +520,29 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(authFailureMock).not.toHaveBeenCalled();
     expect(authSuccessMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["claude-cli", "cron", true, "Not logged in · Please run /login", true],
+    ["claude-cli", "user", true, "Not logged in · Please run /login", false],
+    ["claude-cli", "cron", undefined, "Not logged in · Please run /login", false],
+    ["codex-cli", "cron", true, "Not logged in · Please run /login", false],
+    ["claude-cli", "cron", true, "API key is invalid", true],
+    ["claude-cli", "cron", true, "the external service is not logged in", false],
+  ] as const)(
+    "adds Gateway login guidance only for native-only scheduled Claude failures (%s, %s, %s, %s)",
+    async (provider, trigger, nativeAuthOnly, message, hasHint) => {
+      const error = new Error(message);
+      executeMock.mockRejectedValueOnce(error);
+
+      await expect(runCliAgent({ provider, trigger, nativeAuthOnly })).rejects.toMatchObject({
+        message: hasHint
+          ? `${message}. Log in to Claude on the Gateway host with \`claude /login\` as the OS user running the Gateway, then retry this job.`
+          : message,
+        ...(hasHint ? { reason: "auth", status: 401 } : {}),
+      });
+      expect(error.message).toBe(message);
+    },
+  );
 
   it("does not settle selected-profile health for a pre-provider timeout", async () => {
     const error = new FailoverError("pre-provider timeout", {

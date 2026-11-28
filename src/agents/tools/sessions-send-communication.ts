@@ -12,7 +12,6 @@ import {
 } from "../../gateway/in-process-subagent-resume.js";
 import { requestSessionCommunicationApproval } from "../../gateway/session-communication-approval.js";
 import { withSessionSendDelivery } from "../../gateway/session-send-delivery.js";
-import { assertParentSubagentResumeSuccessorCurrent } from "../../gateway/session-subagent-resume.js";
 import { resolveSessionChildController } from "../../gateway/session-utils-core.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
@@ -30,10 +29,7 @@ import {
 import { registerActiveEmbeddedRunHumanInputWait } from "../embedded-agent-runner/run-state.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   getInProcessGatewayToolContext,
   type AgentToolGatewayRequestCaller,
@@ -51,7 +47,7 @@ import {
 } from "./sessions-send-communication-endpoint.js";
 
 /** A current permission decision rejected delivery, rather than an unavailable dependency. */
-export class SessionCommunicationDeniedError extends Error {}
+class SessionCommunicationDeniedError extends Error {}
 
 /** A host-held return route minted only after the original request was accepted. */
 export type SessionSendReplyAdmission = (
@@ -79,12 +75,16 @@ export async function prepareSessionsSendCommunication(params: {
   /** Creates empty metadata through the caller's existing creation owner, never model input. */
   ensureTarget?: (assertCurrent: () => void) => Promise<CommunicationEndpoint>;
   signal?: AbortSignal;
+  /** A retained send whose target had a task refuses once that task has ended. */
+  expectTask?: boolean;
   /** Recovery cannot ask for fresh consent on behalf of an ended sender turn. */
   allowApproval?: boolean;
   assertSourceCurrent?: () => void;
   assertAccessCurrent?: () => void;
   /** An accepted request's result is not a fresh reverse-direction send. */
   acceptedReply?: SessionSendReplyAdmission;
+  /** Keep host-authored failure notices in the model transcript, out of visible chat/queue. */
+  hideInput?: boolean;
   callGateway: AgentToolGatewayRequestCaller;
 }) {
   const message = params.message;
@@ -94,7 +94,6 @@ export async function prepareSessionsSendCommunication(params: {
   const targetSessionKey = params.target.sessionKey;
   const targetsThread = Boolean(resolveSessionThreadInfo(targetSessionKey).threadId);
   const caller = getGatewayToolCallerIdentity();
-  const assertCaller = captureGatewayToolCallerAssertion();
   const context = getInProcessGatewayToolContext();
   // Never replace the config against which identities and source ceilings were prepared.
   const config = params.config;
@@ -136,7 +135,6 @@ export async function prepareSessionsSendCommunication(params: {
       throw new Error("Session communication admission closed.");
     }
     params.signal?.throwIfAborted();
-    assertCaller?.();
     params.assertSourceCurrent?.();
     params.assertAccessCurrent?.();
     const targetEntry = currentTarget.entry;
@@ -245,20 +243,13 @@ export async function prepareSessionsSendCommunication(params: {
     task.requesterSessionKey === params.source.sessionKey &&
     task.requesterAgentId === params.source.agentId &&
     (!task.controllerSessionKey || task.controllerSessionKey === params.source.sessionKey) &&
-    (!task.execution?.transcriptTarget ||
-      task.execution.transcriptTarget.sessionId === params.target.entry?.sessionId) &&
     params.target.entry?.spawnedBy === params.source.sessionKey &&
-    params.target.entry.parentSessionId === params.source.entry?.sessionId &&
     !task.killIntent &&
     !task.killReconciliation &&
-    !task.terminalOwner &&
     task.cleanupCompletedAt === undefined,
   );
-  const taskRunId = task?.runId;
-  const taskGeneration = task?.generation;
-  let resumedTask:
-    | { resume: NonNullable<ReturnType<typeof readInProcessSubagentResume>>; runId: string }
-    | undefined;
+  // The chat key addresses the task: it continues whichever run is current.
+  // Only an ended or cancelled task, or a new controller, refuses the send.
   const assertTask = () => {
     if (
       params.access?.controllerOnly &&
@@ -268,34 +259,36 @@ export async function prepareSessionsSendCommunication(params: {
     ) {
       throw new SessionCommunicationDeniedError("Child controller access changed before delivery.");
     }
+    if (!ownedTask && !params.expectTask) {
+      return;
+    }
+    const current = getLatestLiveSubagentRunByChildSessionKey(
+      targetSessionKey,
+      undefined,
+      targetAgentId,
+    );
     if (
-      ownedTask &&
-      (getLatestLiveSubagentRunByChildSessionKey(
-        params.target.sessionKey,
-        undefined,
-        params.target.agentId,
-      ) !== task ||
-        task?.runId !== taskRunId ||
-        task?.generation !== taskGeneration ||
-        (task?.controllerSessionKey && task.controllerSessionKey !== params.source.sessionKey) ||
-        task?.killIntent ||
-        task?.killReconciliation ||
-        task?.terminalOwner ||
-        task?.cleanupCompletedAt !== undefined)
+      !current ||
+      current.killIntent ||
+      current.killReconciliation ||
+      (ownedTask && current.cleanupCompletedAt !== undefined)
     ) {
-      if (resumedTask) {
-        assertParentSubagentResumeSuccessorCurrent(resumedTask.resume, resumedTask.runId);
-        return;
-      }
-      throw new Error("Owned task communication authority changed.");
+      throw new Error("The target task ended or was cancelled; no message was sent.");
+    }
+    if (current.controllerSessionKey && current.controllerSessionKey !== params.source.sessionKey) {
+      throw new SessionCommunicationDeniedError(
+        "The target task is controlled by another session.",
+      );
     }
   };
   const close = () => {
     if (!closed) {
       closed = true;
       unsubscribe();
+      params.signal?.removeEventListener("abort", close);
     }
   };
+  params.signal?.addEventListener("abort", close, { once: true });
   try {
     assertSource();
     let source = await readSessionCommunicationLineage(params.source, read, assertSource);
@@ -405,7 +398,7 @@ export async function prepareSessionsSendCommunication(params: {
         );
       }
       await refresh();
-      if (!context || (!assertCaller && !params.assertSourceCurrent)) {
+      if (!context || (!caller?.operationalRunInstance && !params.assertSourceCurrent)) {
         throw new Error("Human communication approval requires a live admitted Gateway caller.");
       }
       await requestSessionCommunicationApproval({
@@ -525,7 +518,6 @@ export async function prepareSessionsSendCommunication(params: {
     await refresh();
     const callGateway = async <T>(
       request: Parameters<AgentToolGatewayRequestCaller>[0],
-      requireDurableDelivery = false,
     ): Promise<T> => {
       if (request.method !== "agent") {
         return params.callGateway<T>(request);
@@ -544,24 +536,9 @@ export async function prepareSessionsSendCommunication(params: {
       const runId = request.params.idempotencyKey;
       const hasRunId = typeof runId === "string";
       const resume = readInProcessSubagentResume(request);
-      if (ownedTask && resume && hasRunId) {
-        if (
-          resume.childSessionKey !== targetSessionKey ||
-          resume.childSessionId !== target[0]!.entry?.sessionId ||
-          resume.previousRunId !== taskRunId ||
-          resume.generation !== taskGeneration
-        ) {
-          throw new Error("Task resume differs from the captured communication owner.");
-        }
-        resumedTask = { resume, runId };
-      }
       const endpoint = target[0]!;
-      if (
-        !endpoint.entry ||
-        (request.params.expectedExistingSessionId !== undefined &&
-          request.params.expectedExistingSessionId !== endpoint.entry.sessionId)
-      ) {
-        throw new Error("Communication target incarnation changed before admission.");
+      if (!endpoint.entry) {
+        throw new Error("The target session was deleted; no message was sent.");
       }
       let input: Record<string, unknown> = {
         ...request.params,
@@ -613,11 +590,11 @@ export async function prepareSessionsSendCommunication(params: {
         return result;
       };
       const sender = source[0]!;
-      // A safely refused volatile steer needs pending-input recovery even for an
-      // owned task. Resume keeps its existing task owner and never uses this path.
+      // Task continuations keep their existing task owner. Ordinary peer input
+      // transfers to the Gateway pending-input owner, independent of the sender turn.
       if (
         context &&
-        (!ownedTask || requireDurableDelivery) &&
+        !ownedTask &&
         !resume &&
         sender.entry &&
         hasRunId &&
@@ -648,15 +625,17 @@ export async function prepareSessionsSendCommunication(params: {
               message: dispatchMessage,
               ...(request.replyExpectation === "optional" &&
               typeof input.extraSystemPrompt === "string"
-                ? { returnedResult: { extraSystemPrompt: input.extraSystemPrompt } }
+                ? {
+                    returnedResult: {
+                      extraSystemPrompt: input.extraSystemPrompt,
+                      ...(params.hideInput ? { hideInput: true } : {}),
+                    },
+                  }
                 : {}),
             },
           },
           dispatch,
         );
-      }
-      if (requireDurableDelivery) {
-        throw new Error("Durable steering fallback requires an in-process delivery owner.");
       }
       return dispatch();
     };
@@ -665,8 +644,6 @@ export async function prepareSessionsSendCommunication(params: {
       assertCurrent,
       refresh,
       callGateway,
-      callDurableGateway: <T>(request: Parameters<AgentToolGatewayRequestCaller>[0]) =>
-        callGateway<T>(request, true),
       ownedTask,
       sourceSandboxed: sandboxed,
       captureReplyAdmission: (runId: string): SessionSendReplyAdmission => {

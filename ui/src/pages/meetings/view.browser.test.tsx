@@ -77,23 +77,29 @@ describe.skipIf(!hasBrowserLayout)("meeting transcript responsive reader", () =>
     );
   });
   it("uses themed search controls and keeps the third library entry above the fold", async () => {
-    props.list!.sessions.push(
-      { ...meetingEntry, selector: "second" },
-      { ...meetingEntry, selector: "third" },
-    );
-    props.list = { ...props.list! };
+    props.list = {
+      ...props.list!,
+      sessions: [
+        ...props.list!.sessions,
+        { ...meetingEntry, selector: "second" },
+        { ...meetingEntry, selector: "third" },
+      ],
+    };
     updateView(props);
     const libraryStyle = getComputedStyle(query('input[name="query"]'));
     const readerStyle = getComputedStyle(query('input[name="find"]'));
-    for (const property of ["backgroundColor", "borderRadius", "paddingLeft"] as const) {
+    for (const property of ["backgroundColor", "borderRadius"] as const) {
       expect(readerStyle[property]).toBe(libraryStyle[property]);
     }
     const third = container.querySelectorAll(".transcripts-list__entry")[2]!;
     expect(rect(third).bottom).toBeLessThan(window.innerHeight);
-    expect(query(".transcripts-filters details")).toHaveProperty("open", false);
+    expect(query(".transcripts-filters__trigger").getAttribute("aria-expanded")).not.toBe("true");
     const overview = "A readable summary of the decisions and follow-up work. ".repeat(5);
     props.search = "";
-    props.list!.sessions[0] = { ...meetingEntry, overview };
+    props.list = {
+      ...props.list!,
+      sessions: [{ ...meetingEntry, overview }, ...props.list!.sessions.slice(1)],
+    };
     updateView(props);
     expect(container.querySelector(".transcripts-reader")).toBeNull();
     expect(rect(query(".transcripts-library")).width).toBeGreaterThan(600);

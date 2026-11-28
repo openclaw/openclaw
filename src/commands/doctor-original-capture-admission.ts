@@ -1,8 +1,10 @@
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { withDoctorProgress } from "../flows/doctor-health-startup.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { formatDoctorProgressPhase } from "../infra/doctor-progress.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
+import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 import type { preserveDoctorOriginalState } from "./doctor-original-capture.js";
 
@@ -10,8 +12,9 @@ import type { preserveDoctorOriginalState } from "./doctor-original-capture.js";
 export function createDoctorOriginalCaptureHook(
   params: Pick<
     Parameters<typeof preserveDoctorOriginalState>[0],
-    "root" | "runtime" | "writeAuthority" | "fullIntegrityCheck"
+    "root" | "writeAuthority" | "fullIntegrityCheck"
   > & {
+    runtime: RuntimeEnv;
     rehearsalRoot?: string;
     json?: boolean;
     reportFindings: (findings: readonly HealthFinding[], warnings?: readonly string[]) => void;
@@ -61,14 +64,20 @@ export function createDoctorOriginalCaptureHook(
         );
       }
     }
+    const { restorePrivateStateStoreModes } =
+      await import("../state/openclaw-state-db-permissions.js");
+    signal.throwIfAborted();
+    scope.assertOwnerCurrent();
+    // Restore remount-broadened stores only after repair admission, but before
+    // recovery capture reads them. Diagnostic startup must not change modes.
+    restorePrivateStateStoreModes(env);
     const { findings, warnings } = await withDoctorProgress(
-      "Preserve original state",
+      formatDoctorProgressPhase("Preserve original state"),
       () =>
         measureGatewayBootstrapStep("doctor.maintenance.preserve-original-state", () =>
           preserveDoctorOriginalState({
             root: params.root,
             env,
-            runtime: params.runtime,
             signal,
             assertCurrent: () => scope.assertOwnerCurrent(),
             writeAuthority: params.writeAuthority,

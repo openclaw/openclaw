@@ -1,18 +1,10 @@
-import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
-import {
-  hashConfigRaw,
-  normalizeConfigIoDeps,
-  resolveConfigForRead,
-  resolveConfigIncludesForRead,
-} from "../../config/io.read-helpers.js";
-import { assertConfigFileWritePathSnapshot } from "../../config/io.write-safety.js";
+import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import { withConfigMutationLock } from "../../config/mutate.js";
-import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import {
@@ -23,7 +15,7 @@ import { withGatewayServiceOperationLock } from "../../daemon/service-operation-
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
-import { readExistingStateRootMode } from "../../infra/private-dir-mode.js";
+import { stateRootDirectoryMode } from "../../infra/private-dir-mode.js";
 import {
   readUpdateStateSchemaVersions,
   type UpdateStateSchemaVersion,
@@ -36,20 +28,22 @@ import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
 import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
-import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { settleUpdatePluginCohortInCandidate } from "./update-command-cohort.js";
 import {
-  readUpdateConfigSnapshot,
+  isUpdateConfigRollbackUnchanged,
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
 import { restoreFailedUpdateDatabases } from "./update-command-database-backup.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
+import { assertUpdateCommandPackageFinalization } from "./update-command-recovery.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import type {
   UpdateServiceDefinitionRecovery,
@@ -127,15 +121,12 @@ export async function rollbackFailedUpdate(params: {
       assertCurrent();
       // A lost live context (including the same run ID) is not permission to
       // fall back to legacy rollback, even when publication removed the main DB.
-      const targetPath = resolveOpenClawStateSqlitePath(env);
-      await assertUpdateRecoveryAdmission({ env, path: targetPath });
+      await assertUpdateCommandPackageFinalization({
+        opts,
+        result: params.result,
+        ownedManagedUpdateEnv: env,
+      });
       assertCurrent();
-      // Service authority and diagnostic history can select distinct state
-      // roots. Neither may contain pending recovery before legacy mutation.
-      if (opts.run && resolveOpenClawStateSqlitePath(opts.run.env) !== targetPath) {
-        await assertUpdateRecoveryAdmission({ env: opts.run.env });
-        assertCurrent();
-      }
     } catch (error) {
       return pendingRecovery(params.result, formatErrorMessage(error));
     }
@@ -162,8 +153,17 @@ export async function rollbackFailedUpdate(params: {
     hash: hashConfigRaw(params.configSnapshot.raw),
   };
   const configFiles = [configSnapshot, ...(params.activationConfig?.includedFiles ?? [])];
+  const cohort = run && loadPluginCohortRecovery(run.runId, { env });
+  const cohortConfigPaths = new Set(
+    cohort?.cohort.publications.flatMap((publication) =>
+      publication.kind === "config" ? [publication.file.filePath] : [],
+    ) ?? [],
+  );
+  let cohortConfigSettled = false;
   const expectedConfigHashes = new Map(configFiles.map((file) => [file.path, file.hash]));
-  const changedConfigFiles = configFiles.filter((file) => file.hash !== hashConfigRaw(file.raw));
+  const changedConfigFiles = configFiles.filter(
+    (file) => !cohortConfigPaths.has(file.path) && file.hash !== hashConfigRaw(file.raw),
+  );
   const recoveryEnv = { ...env, [ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV]: "1" };
   const port = before?.stopped
     ? (before.servicePort ?? (await resolveUpdatedGatewayRestartPort({ config, serviceEnv: env })))
@@ -227,6 +227,7 @@ export async function rollbackFailedUpdate(params: {
         if (params.databaseBackup && run && packageTransaction) {
           return false;
         }
+        dataAtRisk = "rollback-state-unverified";
         throw new Error(
           `Automatic rollback refused: newly created ${kind} database ${entry.path} uses schema ${version}; retained previous package support is ${supported ?? "unknown"}. Keep the update installed.`,
         );
@@ -238,49 +239,23 @@ export async function rollbackFailedUpdate(params: {
   };
   let stoppedForRollback: PreManagedServiceStop | undefined;
   let failureReason = "rollback-state-unverified";
-  let dataAtRisk: "rollback-state-unverified" | "state-migrated-no-rollback" | undefined =
-    "rollback-state-unverified";
+  // A state read that fails before restoration leaves the candidate installed with
+  // nothing restored: that is unverified, not at risk. Risks need evidence: a forward
+  // schema, preserved operator edits, an unknown active root or a partial restoration.
+  let dataAtRisk: "rollback-state-unverified" | "state-migrated-no-rollback" | undefined;
   const assertConfigUnchanged = async () => {
     assertCurrent();
-    let unchanged = configFiles.every((file) => file.doctorOwned !== false);
-    for (const file of configFiles) {
-      if (!unchanged) {
-        break;
-      }
-      try {
-        if (file.pathSnapshot) {
-          assertConfigFileWritePathSnapshot(file.pathSnapshot, fsNode);
-        }
-        unchanged =
-          (await readUpdateConfigSnapshot(file.path)).hash === expectedConfigHashes.get(file.path);
-        if (file.pathSnapshot) {
-          assertConfigFileWritePathSnapshot(file.pathSnapshot, fsNode);
-        }
-      } catch (error) {
-        if (!(error instanceof ConfigMutationConflictError)) {
-          throw error;
-        }
-        unchanged = false;
-      }
-      assertCurrent();
-    }
-    if (
-      unchanged &&
-      params.activationConfig?.includedFiles === undefined &&
-      params.configSnapshot.includedPaths?.length
-    ) {
-      // Older handoffs carry only the root snapshot; keep their include refusal.
-      const deps = normalizeConfigIoDeps({ env: { ...env } });
-      const included = resolveConfigIncludesForRead(
-        params.configSnapshot.parsed,
-        params.configSnapshot.path,
-        deps,
-      );
-      unchanged = isDeepStrictEqual(
-        config,
-        resolveConfigForRead(included, deps.env).resolvedConfigRaw,
-      );
-    }
+    const unchanged = await isUpdateConfigRollbackUnchanged({
+      files: configFiles,
+      expectedHashes: expectedConfigHashes,
+      cohortPaths: cohortConfigPaths,
+      cohortSettled: cohortConfigSettled,
+      legacySnapshot:
+        params.activationConfig?.includedFiles === undefined ? params.configSnapshot : undefined,
+      baseline: config,
+      env,
+      assertCurrent,
+    });
     assertCurrent();
     if (!unchanged) {
       failureReason = "state-migrated-no-rollback";
@@ -348,9 +323,24 @@ export async function rollbackFailedUpdate(params: {
     if (params.definitionRecovery.unverified) {
       return failed("service-definition-rollback-unverified");
     }
-    if (!params.schemaVersions) {
+    if (!result.root) {
+      // Without the active root, no runtime can be named to serve this state.
       return failed("rollback-state-unverified", "rollback-state-unverified");
     }
+    if (!params.schemaVersions) {
+      // PostgreSQL state has no pre-activation baseline; the candidate remains installed.
+      return failed("rollback-state-unverified");
+    }
+    // Restored databases or plugin cohort state are a live mutation; an unreadable recheck
+    // leaves them unverified.
+    let databasesRestored = false;
+    const restoredStateUnchanged = async () => {
+      dataAtRisk =
+        databasesRestored || cohortConfigSettled ? "rollback-state-unverified" : undefined;
+      const unchanged = await stateUnchanged();
+      dataAtRisk = undefined;
+      return unchanged;
+    };
     if (!(await stateUnchanged())) {
       // Compatible databases stay in place: update ledger writes alone must
       // not force snapshot restoration or prevent package-only rollback.
@@ -373,11 +363,14 @@ export async function rollbackFailedUpdate(params: {
           cause,
         });
       }
-      if (!restored || !(await stateUnchanged())) {
+      if (!restored) {
+        return failed("state-migrated-no-rollback", "state-migrated-no-rollback");
+      }
+      databasesRestored = true;
+      if (!(await restoredStateUnchanged())) {
         return failed("state-migrated-no-rollback", "state-migrated-no-rollback");
       }
     }
-    dataAtRisk = undefined;
     await packageTransaction?.assertRollbackSafe?.();
     assertCurrent();
     const definitionBackup = params.definitionRecovery.backup;
@@ -409,14 +402,28 @@ export async function rollbackFailedUpdate(params: {
       }
       assertRestorationCurrent();
       const stopped = before?.stopped ? await stop() : undefined;
+      if (cohort && run && executor) {
+        await settleUpdatePluginCohortInCandidate({
+          root: result.root ?? params.previousRoot,
+          run,
+          env,
+          nodeRunner: params.nodeRunner,
+          timeoutMs: params.timeoutMs,
+          expectedPair: cohort,
+          configRestoration: {
+            files: configFiles,
+            expectedHashes: expectedConfigHashes,
+            assertCurrent: assertRestorationCurrent,
+          },
+        });
+        cohortConfigSettled = true;
+      }
       const restore = async () => {
         // Recheck after stop so a final startup migration cannot race the first read.
         failureReason = "rollback-state-unverified";
-        dataAtRisk = "rollback-state-unverified";
-        if (!(await stateUnchanged())) {
+        if (!(await restoredStateUnchanged())) {
           return failed("state-migrated-no-rollback", "state-migrated-no-rollback");
         }
-        dataAtRisk = undefined;
         failureReason = "source-rollback-failed";
         if (!packageTransaction) {
           throw new Error("The retained package transaction is unavailable.");
@@ -477,10 +484,11 @@ export async function rollbackFailedUpdate(params: {
             await fs.rm(targetPath, { force: true });
           } else {
             await replaceFileAtomic({
+              allowDrvfsRenameRecovery: true,
               filePath: targetPath,
               content: file.raw,
               mode: 0o600,
-              dirMode: readExistingStateRootMode(path.dirname(targetPath), resolveStateDir(env)),
+              dirMode: stateRootDirectoryMode(path.dirname(targetPath), resolveStateDir(env)),
               preserveExistingMode: false,
               beforeRename: async () => {
                 await assertConfigUnchanged();
@@ -585,9 +593,6 @@ export async function rollbackFailedUpdate(params: {
         }
       : stopped;
     failureReason = "service-revalidation-failed";
-    if (stopped.windowsTaskAutoStartRecovery) {
-      params.onGatewayStartAttempted?.();
-    }
     await stopped.windowsTaskAutoStartRecovery?.restore(
       true,
       createWindowsTaskAutoStartGuard({

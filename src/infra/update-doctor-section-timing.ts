@@ -2,6 +2,7 @@
 import { StringDecoder } from "node:string_decoder";
 import type { CommandOutputStream } from "../process/exec-output.js";
 import type { CommandOptions } from "../process/exec.js";
+import { parseDoctorProgressLine, parseDoctorRetirementWideningLine } from "./doctor-progress.js";
 import { isTruthyEnvValue } from "./env.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -11,6 +12,9 @@ const TRACE_MARKER = "[gateway] startup trace: ";
 // measureGatewayBootstrapStep: `<name> <ms>ms total=…`; JSON console style embeds the same text.
 const DOCTOR_TRACE = /\[gateway\] startup trace: doctor\.([^\s"]+) (\d+(?:\.\d+)?)ms(?=[\s"]|$)/u;
 const CONTRIBUTION_PREFIX = "contribution.";
+// `doctor.pending.<step>` records a step's work decision, not its duration. The trace keeps it;
+// counting it here would spend the bounded sections line and phase slots on zero-length entries.
+const PENDING_PREFIX = "pending.";
 const MAX_PENDING_CHARS = 16 * 1024;
 const MAX_PHASES = 256;
 const SLOWEST_CONTRIBUTIONS = 5;
@@ -35,21 +39,27 @@ export type UpdateDoctorSectionTiming = {
 /** Collects bounded diagnostics from the Doctor's existing startup trace. */
 export function createUpdateDoctorSectionTiming(
   parentEnv: NodeJS.ProcessEnv = process.env,
+  onPhase?: (line: string) => void,
 ): UpdateDoctorSectionTiming {
   const operatorTrace = isTruthyEnvValue(parentEnv[TRACE_ENV]);
   const phases = new Map<string, number>();
   const decoder = new StringDecoder("utf8");
   let pending = "";
   let droppingLine = false;
+  const retirementWidenings = new Set<string>();
 
   const observeLine = (line: string) => {
+    const widening = parseDoctorRetirementWideningLine(line);
+    if (widening) {
+      retirementWidenings.add(widening);
+    }
     const match = DOCTOR_TRACE.exec(line);
     if (!match) {
       return;
     }
     const [, name, value] = match;
     const milliseconds = Number(value);
-    if (!name || !Number.isFinite(milliseconds)) {
+    if (!name || name.startsWith(PENDING_PREFIX) || !Number.isFinite(milliseconds)) {
       return;
     }
     const previous = phases.get(name);
@@ -72,6 +82,15 @@ export function createUpdateDoctorSectionTiming(
     pending = lines.pop() ?? "";
     for (const line of lines) {
       observeLine(line);
+      const phase = onPhase && parseDoctorProgressLine(line);
+      if (phase) {
+        try {
+          onPhase?.(phase);
+        } catch {
+          // Advisory display failures must not become child-observer cancellation.
+          // The CLI's existing asynchronous broken-output exit policy still applies.
+        }
+      }
     }
     if (pending.length > MAX_PENDING_CHARS) {
       pending = "";
@@ -141,8 +160,9 @@ export function createUpdateDoctorSectionTiming(
     stripTrace,
     annotate: (step) => {
       const line = diagnostic();
-      if (line) {
-        step.diagnostics = [line, ...(step.diagnostics ?? [])];
+      const diagnostics = [line, ...retirementWidenings].filter((value) => value !== undefined);
+      if (diagnostics.length) {
+        step.diagnostics = [...diagnostics, ...(step.diagnostics ?? [])];
       }
       return step;
     },

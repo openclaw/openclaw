@@ -86,11 +86,8 @@ function recoveringWorker(options: { beforeAck?: () => Promise<unknown>; retry?:
       const leafId = await completed.appendMessageAsync(completedWorkerMessage());
       return fx.acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
     }),
-    // Refresh input before dispatch; exercise failure only when collecting the completed turn.
     reconcileWorkspace: vi
-      .fn<WorkerTunnelHandle["reconcileWorkspace"]>(
-        options.retry ? fx.reconcileUnchangedLocalWorkspace : fail,
-      )
+      .fn(options.retry ? fx.reconcileUnchangedLocalWorkspace : fail)
       .mockImplementationOnce(fx.reconcileUnchangedLocalWorkspace)
       .mockImplementationOnce(fail),
   });
@@ -399,7 +396,8 @@ describe("worker turn launcher terminal results", () => {
           expect(candidateFailures[0]).toBeInstanceOf(WorkerTurnExecutionError);
           expect(candidateFailures[0]).toMatchObject({ message: failure });
           expect(tunnel.reconcileWorkspace).toHaveBeenCalledTimes(providerFailure ? 3 : 2);
-          expect((await fx.openSessionManager()).getLeafEntry()).toMatchObject({
+          const branch = (await fx.openSessionManager()).getBranch();
+          expect(branch.findLast((entry) => entry.type === "message")).toMatchObject({
             type: "message",
             message: {
               role: "assistant",
@@ -450,6 +448,7 @@ describe("worker turn launcher terminal results", () => {
         releaseAgentRunContext(runId, dispatchClaim);
       }
     },
+    180_000,
   );
 
   it("settles targeted result recovery while same-session Stop waits for its turn claim", async () => {

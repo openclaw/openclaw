@@ -74,6 +74,11 @@ openclaw skills workshop archive <name> --reason "Superseded"
 openclaw skills workshop restore <name>
 ```
 
+Read-only browsing (`skills`, `skills list`, `skills check`, and `skills info`)
+remains available with unrelated invalid configuration so you can inspect skills
+while repairing it. These commands do not repair or rewrite the configuration;
+installation and other mutations still require valid configuration.
+
 `search`, `update`, and `verify` use ClawHub directly. `install @owner/<slug>`
 installs a native ClawHub skill. `install skills-sh:<owner>/<repo>/<slug>` asks
 ClawHub to resolve an external listing to its exact synchronized GitHub commit;
@@ -162,6 +167,9 @@ command when one exists; otherwise, change `security.installPolicy` to return
 nor the acknowledgement overrides `block` or a policy failure.
 
 Notes:
+
+Press Ctrl-C to cancel a pending search or Trending request without printing results afterward.
+The same cancellation applies to pending `verify` and `verify --card` reads.
 
 | Flag/behavior                    | Description                                                                                                                                                                                                                                                                                                                       |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -370,9 +378,15 @@ openclaw skills workshop restore release-notes --version <version-id>
 | `restore <name> [--version <id>]`              | Restores the newest saved version, or the named one. The current live copy is saved first, so restore is undoable.               |
 
 Every Workshop command accepts `--agent <id>` and `--json`. `archive` and
-`restore` act as `user` in the change feed. The printed archive Undo command
-includes the archived agent's `--agent <id>`, so it restores that agent even
-when your current directory selects a different agent.
+`restore` act as `user` in the change feed. When an archive returns a saved version, its printed Undo
+command includes `--agent <id>` and `--version <id>`. It restores that snapshot
+even if your current directory selects another agent or the skill has newer
+versions. If the snapshot has expired, the command reports an error. Running
+`restore` without `--version` still selects the newest saved version.
+
+The human-readable `workshop list` root path neutralizes terminal controls and
+shows embedded line breaks and tabs as visible escapes. `--json` retains the
+original path, and the directory used on disk is unchanged.
 
 ## Related
 

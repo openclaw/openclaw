@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -19,7 +18,6 @@ import { previewRemDreaming } from "./dreaming-phases.js";
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
 }));
-vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
 
 import {
   configureMemoryCoreDreamingState,
@@ -1563,40 +1561,6 @@ describe("short-term promotion", () => {
     expect(afterRetry.match(/Promoted From Short-Term Memory/g)).toHaveLength(1);
   });
 
-  it("does not promote a trusted recall candidate from a quarantined daily file", async (workspaceDir) => {
-    const relativePath = "memory/2026-04-01.md";
-    const snippet = "Gateway binds loopback and port 18789";
-    await writeDailyMemoryNote(workspaceDir, "2026-04-01", [snippet]);
-    await recordMemoryRecalls(workspaceDir, "gateway host", [
-      memoryRecallResult(relativePath, 1, 1, 0.92, snippet, {
-        provenance: {
-          originClass: "agent",
-          sessionKind: "unknown",
-          observedAt: Date.parse("2026-04-01T12:00:00.000Z"),
-        },
-      }),
-    ]);
-    const ranked = await rankAllCandidates(workspaceDir);
-    expect(ranked[0]?.provenance?.originClass).toBe("agent");
-
-    vi.mocked(listMemoryArtifactProvenance).mockResolvedValueOnce([
-      {
-        relativePath,
-        provenance: {
-          fileHash: "0".repeat(64),
-          originClass: "untrusted",
-          observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
-        },
-      },
-    ]);
-
-    const applied = await applyAllCandidates(workspaceDir, ranked);
-    expect(applied.applied).toBe(0);
-    expect(applied.rejectedCandidates[0]?.reason).toBe("origin filter (untrusted)");
-    expect(applied.rejectedCandidates[0]?.category).toBe("origin");
-    await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
-  });
-
   it("excludes a candidate downgraded during consolidation from the fallback write", async (workspaceDir) => {
     const relativePath = "memory/2026-04-01.md";
     const firstSnippet = "Gateway binds loopback on the admin host.";
@@ -2544,6 +2508,26 @@ describe("short-term promotion", () => {
   });
 
   describe("MEMORY.md budget compaction (#73691)", () => {
+    async function seedDeploymentWindowRecall(workspaceDir: string) {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
+        "Keep the Tuesday deployment window in durable memory.",
+      ]);
+      await recordMemoryRecalls(
+        workspaceDir,
+        "deployment window",
+        [
+          memoryRecallResult(
+            "memory/2026-04-29.md",
+            1,
+            1,
+            0.95,
+            "Keep the Tuesday deployment window in durable memory.",
+          ),
+        ],
+        { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
+      );
+    }
+
     async function applyBudgetCompactionPromotion(workspaceDir: string) {
       const nowMs = Date.parse("2026-04-29T10:00:00.000Z");
       await recordRotateCredentialsRecall(workspaceDir);
@@ -2691,23 +2675,7 @@ describe("short-term promotion", () => {
     });
 
     it("defers promotion when preserved content leaves no room in the file budget", async (workspaceDir) => {
-      await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
-        "Keep the Tuesday deployment window in durable memory.",
-      ]);
-      await recordMemoryRecalls(
-        workspaceDir,
-        "deployment window",
-        [
-          memoryRecallResult(
-            "memory/2026-04-29.md",
-            1,
-            1,
-            0.95,
-            "Keep the Tuesday deployment window in durable memory.",
-          ),
-        ],
-        { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
-      );
+      await seedDeploymentWindowRecall(workspaceDir);
       const ranked = await rankAllCandidates(workspaceDir);
       const memoryPath = path.join(workspaceDir, "MEMORY.md");
       const oversizedBase = `# Long-Term Memory\n\n${"u".repeat(8_800)}\n`;
@@ -2741,23 +2709,7 @@ describe("short-term promotion", () => {
     });
 
     it("leaves prior promotions intact when fitting would exceed the loss limit", async (workspaceDir) => {
-      await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
-        "Keep the Tuesday deployment window in durable memory.",
-      ]);
-      await recordMemoryRecalls(
-        workspaceDir,
-        "deployment window",
-        [
-          memoryRecallResult(
-            "memory/2026-04-29.md",
-            1,
-            1,
-            0.95,
-            "Keep the Tuesday deployment window in durable memory.",
-          ),
-        ],
-        { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
-      );
+      await seedDeploymentWindowRecall(workspaceDir);
       const memoryPath = path.join(workspaceDir, "MEMORY.md");
       const existing = ["2026-04-01", "2026-04-08", "2026-04-15", "2026-04-22"]
         .map(

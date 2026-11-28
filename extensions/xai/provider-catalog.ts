@@ -131,9 +131,16 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
           ),
         )
       : [];
+  // The account's listed efforts replace the bundled row's profile; the xAI hook builds the
+  // ladder from them.
+  const {
+    thinkingLevels: _levels,
+    defaultThinkingLevel: _default,
+    ...bundledCompat
+  } = fallback?.compat ?? {};
   const compat =
     supportedReasoningEfforts.length > 0
-      ? { ...fallback?.compat, supportedReasoningEfforts }
+      ? { ...bundledCompat, supportedReasoningEfforts }
       : fallback?.compat;
 
   return {

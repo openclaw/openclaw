@@ -18,12 +18,16 @@ export type SessionPatchTargetIdentity = Pick<
   | "key"
 >;
 
-const CONDITIONAL_UNREAD_ACK_ALLOWED_KEYS = new Set([
-  "agentId",
-  "expectedLifecycleRevision",
-  "expectedMarkedUnreadAt",
-  "expectedSessionId",
+export const SESSION_PATCH_ADDRESS_KEYS = [
   "key",
+  "agentId",
+  "expectedSessionId",
+  "expectedLifecycleRevision",
+] as const;
+
+const CONDITIONAL_UNREAD_ACK_ALLOWED_KEYS = new Set([
+  ...SESSION_PATCH_ADDRESS_KEYS,
+  "expectedMarkedUnreadAt",
   "unread",
 ]);
 
@@ -38,10 +42,9 @@ export function isReadMarkerOnly(patch: { unread?: boolean }): boolean {
 
 /**
  * A patch that carries nothing but the read acknowledgement itself (plus its
- * compare-and-swap preconditions). Shared with the patch projection owner, which
- * must not age the session row for a read.
+ * compare-and-swap preconditions).
  */
-export function isSessionUnreadAckOnlyPatch(patch: { unread?: boolean }): boolean {
+function isSessionUnreadAckOnlyPatch(patch: { unread?: boolean }): boolean {
   return patch.unread === false && isReadMarkerOnly(patch);
 }
 

@@ -26,7 +26,11 @@ function fixture() {
   const directory = tempDirs.make("pinned-bun-");
   const repoRoot = path.join(directory, "repo");
   fs.mkdirSync(path.join(repoRoot, "scripts/lib"), { recursive: true });
-  const manifest = { tag: "test-pin", artifacts: { "linux-x64": { executableSha256: digest } } };
+  const manifest = {
+    tag: "test-pin",
+    revision: "test-revision",
+    artifacts: { "linux-x64": { executableSha256: digest } },
+  };
   fs.writeFileSync(path.join(repoRoot, "scripts/lib/openclaw-bun.json"), JSON.stringify(manifest));
   const fsImpl = { ...fs };
   const stage = vi.fn((destination: string) => {
@@ -40,7 +44,7 @@ function fixture() {
   const resolve = (extraEnv: NodeJS.ProcessEnv = {}, extraDeps: Partial<typeof deps> = {}) =>
     resolvePinnedBun({ ...env, ...extraEnv }, { ...deps, ...extraDeps });
   const readStamp = () => JSON.parse(fs.readFileSync(stamp, "utf8"));
-  return { deps, resolve, command, stamp, directory, readStamp, stage, stderr };
+  return { deps, env, resolve, command, stamp, directory, readStamp, stage, stderr };
 }
 
 it("uses an explicit executable in CI without staging", () => {
@@ -184,4 +188,24 @@ it("identifies an unavailable explicit override and preserves local override beh
   );
   expect(resolveVitestTestCommand(["scripts/prepare.mts"], ciEnv).command).toBe(process.execPath);
   expect(execute).not.toHaveBeenCalled();
+});
+
+it.each(["cache", "binding"] as const)("verifies offline %s bytes before execution", (mode) => {
+  const f = fixture();
+  f.resolve();
+  f.stage.mockClear();
+  const execute = vi.spyOn(childProcess, "execFileSync").mockReturnValue("test-revision\n");
+  const env = mode === "binding" ? { ...f.env, CI: "1", OPENCLAW_BUN_PATH: f.command } : f.env;
+  const admit = () => requirePinnedBun(env, { ...f.deps, preparedOnly: true });
+  expect(admit()).toBe(f.command);
+  execute.mockClear();
+  fs.writeFileSync(f.command, "x".repeat(Buffer.byteLength(bytes)));
+  // A forged matching stamp must not authorize executing unverified bytes.
+  fs.writeFileSync(
+    f.stamp,
+    JSON.stringify({ ...f.readStamp(), mtimeMs: fs.statSync(f.command).mtimeMs }),
+  );
+  expect(admit).toThrow(/missing or corrupt|pinned SHA-256/);
+  expect(execute).not.toHaveBeenCalled();
+  expect(f.stage).not.toHaveBeenCalled();
 });

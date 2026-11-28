@@ -1,4 +1,5 @@
 import { createStore } from "solid-js";
+import { findMarkdownCodeRegions } from "../../../../../packages/markdown-core/src/markdown-code-regions.js";
 import { handleComposerMenuKeydown } from "../../../components/composer-menu.ts";
 import {
   getSkillCommandCompletions,
@@ -6,9 +7,18 @@ import {
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
+import {
+  focusComposerInput,
+  readComposerEditor,
+  selectComposerInput,
+} from "../../../lib/composer-input.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 
-const SKILL_MENTION_CHAR = /[-a-zA-Z0-9_:]/u;
+// Display titles may use any script (including NFD combining marks);
+// command tokens stay ASCII after selection.
+const SKILL_MENTION_CHAR = /[\p{L}\p{M}\p{N}_:-]/u;
+// Documented shell variables ($HOME/$PATH/$EDITOR) stay ordinary text.
+const UPPERCASE_SHELL_VARIABLE = /^[A-Z_][A-Z0-9_]*$/;
 
 type SkillMentionTarget = {
   start: number;
@@ -50,9 +60,6 @@ function findSkillMentionTarget(value: string, caret: number): SkillMentionTarge
     return null;
   }
   const dollar = start - 1;
-  if (isEscapedReference(value, dollar)) {
-    return null;
-  }
   let end = safeCaret;
   while (end < value.length && SKILL_MENTION_CHAR.test(value[end] ?? "")) {
     end += 1;
@@ -62,7 +69,20 @@ function findSkillMentionTarget(value: string, caret: number): SkillMentionTarge
     referenceEnd -= 1;
   }
   const query = value.slice(start, referenceEnd);
-  if (query.length > 0 && !/[a-z]/u.test(query)) {
+  if (query.length > 0) {
+    // Preserve literal uppercase ASCII shell variables (skills docs: $HOME, $PATH, $EDITOR).
+    if (UPPERCASE_SHELL_VARIABLE.test(query)) {
+      return null;
+    }
+    // Require a letter so bare "$123"/"$:" do not open the menu on every dollar.
+    if (!/\p{L}/u.test(query)) {
+      return null;
+    }
+  }
+  if (
+    isEscapedReference(value, dollar) ||
+    findMarkdownCodeRegions(value).some((region) => region.start <= dollar && dollar < region.end)
+  ) {
     return null;
   }
   return { start: dollar, end: referenceEnd, query };
@@ -148,7 +168,14 @@ export function createSkillMenu() {
     host: SkillMenuHost,
     opts: { skipRefresh?: boolean } = {},
   ): void {
-    const target = value.trimStart().startsWith("/") ? null : findSkillMentionTarget(value, caret);
+    let target = value.trimStart().startsWith("/") ? null : findSkillMentionTarget(value, caret);
+    // Navigating a selected chip is not editing another $query.
+    if (target) {
+      const textarea = host.getTextarea();
+      if (textarea && readComposerEditor(textarea)?.isAtomicRange(target.start, target.end)) {
+        target = null;
+      }
+    }
     if (!target) {
       if (state.skillMenuTarget !== null) {
         resetSkillMenuState(state);
@@ -194,8 +221,8 @@ export function createSkillMenu() {
       if (!currentTextarea) {
         return;
       }
-      currentTextarea.focus({ preventScroll: true });
-      currentTextarea.setSelectionRange(nextCaret, nextCaret);
+      focusComposerInput(currentTextarea, { preventScroll: true });
+      selectComposerInput(currentTextarea, nextCaret, nextCaret);
     });
   }
 

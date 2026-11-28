@@ -1,20 +1,23 @@
-import { For, Show, action, createMemo, createOptimistic, createSignal, onSettled } from "solid-js";
-import { Icon } from "../../../components/solid/icon.tsx";
-import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
-import { formatCompactTokenCount } from "../../../lib/format.ts";
-import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
-import { createTimeout } from "../../../lib/reactive/timers.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
-import { getContextNoticeViewModel } from "./chat-composer-context-model.ts";
+import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import {
-  buildChatContextCategories,
+  buildContextBudgetCategories,
   buildDeferredContextGroups,
   type ContextCategory,
   type ContextEntry,
   type ContextGroup,
-} from "./chat-context-breakdown-model.ts";
+} from "../../../../../src/shared/context-budget-categories.js";
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
+import { Icon } from "../../../components/solid/icon.tsx";
+import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
+import { formatCompactTokenCount } from "../../../lib/format.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
+import { createTimeout } from "../../../lib/reactive/timers.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import { getContextNoticeViewModel } from "./chat-composer-context-model.ts";
+import { ContextCompactButton, type ContextCompactProps } from "./chat-context-compact.tsx";
 import {
   ChatContextReport,
   contextLabelKeys,
@@ -23,10 +26,13 @@ import {
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import "../../../styles/chat/context-breakdown.css";
 
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
+
 type ContextPageDetails = Pick<
   ChatDetailsProps,
   "selectedSession" | "currentAgentId" | "pullRequestsGateway" | "runActive" | "onCompact"
->;
+> &
+  Pick<ContextCompactProps, "compactionStatus">;
 type Usage = NonNullable<ReturnType<typeof getContextNoticeViewModel>>;
 
 function ContextEmpty(props: { message: string; onRetry?: () => void }) {
@@ -84,7 +90,8 @@ function ContextList(props: {
   let search: HTMLInputElement | undefined;
   const long = () => props.entries.length > 20;
   const groups = createMemo(() => {
-    const needle = long() && all() ? query().trim().toLocaleLowerCase() : "";
+    const needle =
+      long() && all() ? foldSearchCase(query().trim().toLocaleLowerCase()).normalize("NFC") : "";
     let remaining = long() && !all() ? 8 : Infinity;
     return (props.groups ?? [{ key: "", entries: props.entries }])
       .map((group) => {
@@ -92,7 +99,9 @@ function ContextList(props: {
           .filter(
             (entry) =>
               !needle ||
-              (entry.name + " " + (entry.path ?? "")).toLocaleLowerCase().includes(needle),
+              foldSearchCase((entry.name + " " + (entry.path ?? "")).toLocaleLowerCase())
+                .normalize("NFC")
+                .includes(needle),
           )
           .slice(0, remaining);
         remaining -= entries.length;
@@ -173,13 +182,10 @@ function ContextInspector(props: {
   deferred: ContextGroup[];
   loading: boolean;
   refreshing: boolean;
-  runActive: boolean;
   connected: boolean;
-  compacting: boolean;
-  canCompact: boolean;
+  compaction: ContextPageDetails;
   reserve?: number;
   onRefresh: () => void;
-  onCompact: () => void;
   onScrollPortRef?: (element: HTMLElement) => void | (() => void);
 }) {
   const [open, setOpen] = createSignal<string | null>(null);
@@ -267,7 +273,6 @@ function ContextInspector(props: {
             type="button"
             class="chat-context__refresh"
             aria-label={t("common.refresh")}
-            title={t("common.refresh")}
             disabled={!props.connected || props.loading}
             onClick={() => props.onRefresh()}
           >
@@ -276,29 +281,14 @@ function ContextInspector(props: {
               class={props.refreshing ? "chat-context__refreshing" : undefined}
             />
           </button>
-          <Show when={props.canCompact}>
-            <button
-              type="button"
-              class={[
-                "chat-context__compact",
-                {
-                  "chat-context__compact--high": props.usage.warning,
-                },
-              ]}
-              disabled={!props.connected || props.compacting || props.loading || props.runActive}
-              onClick={() => props.onCompact()}
-              title={t("chat.sessionDetails.contextCompactDescription")}
-            >
-              <Show when={props.compacting}>
-                <span class="btn__spinner" aria-hidden="true" />
-              </Show>
-              {t(
-                props.compacting
-                  ? "chat.sessionDetails.contextCompacting"
-                  : "chat.sessionDetails.contextCompactShort",
-              )}
-            </button>
-          </Show>
+          <ContextCompactButton
+            onCompact={props.compaction.onCompact}
+            compactionStatus={props.compaction.compactionStatus}
+            runActive={props.compaction.runActive}
+            connected={props.connected}
+            busy={props.loading}
+            warning={props.usage.warning}
+          />
         </div>
         <div class="chat-context-page__numbers">
           <strong
@@ -458,14 +448,6 @@ function ChatContextPage(props: {
   onScrollPortRef?: (element: HTMLElement) => void | (() => void);
 }) {
   const usage = createMemo(() => getContextNoticeViewModel(props.details.selectedSession));
-  const [compacting, setCompacting] = createOptimistic(false);
-  const compact = action(function* () {
-    if (!props.presented || compacting() || props.details.runActive) {
-      return;
-    }
-    setCompacting(true);
-    yield props.details.onCompact?.();
-  });
   return (
     <Show
       when={usage() && props.details.selectedSession && props.details.pullRequestsGateway}
@@ -487,7 +469,7 @@ function ChatContextPage(props: {
         {(result, refresh) => {
           const categories = createMemo<ContextCategory[]>(() =>
             result().report
-              ? buildChatContextCategories(result().report!, usage()!.used)
+              ? buildContextBudgetCategories(result().report!, usage()!.used)
               : (["messages", "files", "tools", "skills", "system"] as const).map((id) => ({
                   id,
                   tokens: null,
@@ -502,13 +484,16 @@ function ChatContextPage(props: {
               when={result().report || result().loading}
               fallback={
                 <ContextEmpty
-                  message={t(
-                    result().offline
-                      ? "chat.sessionDetails.contextOffline"
-                      : result().failed
-                        ? "chat.sessionDetails.contextError"
-                        : "chat.sessionDetails.contextUnavailable",
-                  )}
+                  message={
+                    result().blockedReason ??
+                    t(
+                      result().offline
+                        ? "chat.sessionDetails.contextOffline"
+                        : result().failed
+                          ? "chat.sessionDetails.contextError"
+                          : "chat.sessionDetails.contextUnavailable",
+                    )
+                  }
                   onRetry={result().failed ? () => void refresh() : undefined}
                 />
               }
@@ -519,12 +504,9 @@ function ChatContextPage(props: {
                 deferred={deferred()}
                 loading={result().loading && !result().report}
                 refreshing={result().loading}
-                runActive={Boolean(props.details.runActive)}
                 connected={props.presented && !result().offline}
-                compacting={compacting()}
-                canCompact={Boolean(props.details.onCompact)}
+                compaction={props.details}
                 reserve={props.details.selectedSession?.contextBudgetStatus?.effectiveReserveTokens}
-                onCompact={() => void compact()}
                 onRefresh={() => void refresh()}
                 onScrollPortRef={props.onScrollPortRef}
               />

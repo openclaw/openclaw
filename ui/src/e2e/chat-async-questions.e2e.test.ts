@@ -11,6 +11,7 @@ import {
   expectRequestCountStable,
   installMockGateway,
   requireRecord,
+  openAiAuthor,
 } from "./chat-flow.test-support.ts";
 import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -146,6 +147,7 @@ suite.define(() => {
       const sessionKey = "agent:main:dashboard:async-question-proof";
       const followUpTitle = "What should I emphasize?";
       const multipleQuestions = {
+        ...(!active ? { ...openAiAuthor, phase: "commentary" } : {}),
         ...questionMessage,
         runId: "working-run",
         __openclaw: { id: "audience-prompt", seq: 2 },
@@ -169,7 +171,7 @@ suite.define(() => {
         sessionKey,
         historyMessages: [replyMessage, multipleQuestions],
         inFlightRun: { runId: "working-run", startedAt: Date.now(), text: "" },
-        sessionInfo: { hasActiveRun: true, activeRunIds: ["working-run"] },
+        sessionInfo: { key: sessionKey, hasActiveRun: true, activeRunIds: ["working-run"] },
       });
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -236,6 +238,7 @@ suite.define(() => {
         if (!active) {
           const finalMessage = {
             role: "assistant",
+            ...openAiAuthor,
             content: "I finished the draft.",
             runId: "working-run",
             phase: "final_answer",
@@ -245,7 +248,7 @@ suite.define(() => {
           };
           await gateway.setMethodResponse("chat.history", {
             messages: [replyMessage, multipleQuestions, finalMessage],
-            sessionInfo: { hasActiveRun: false, activeRunIds: [] },
+            sessionInfo: { key: sessionKey, hasActiveRun: false, activeRunIds: [] },
           });
           await gateway.emitGatewayEvent("chat", {
             sessionKey,
@@ -254,7 +257,7 @@ suite.define(() => {
             message: finalMessage,
           });
           await page
-            .getByRole("button", { name: "Stop generating" })
+            .getByRole("button", { name: "Stop", exact: true })
             .waitFor({ state: "detached" });
           await expect
             .poll(() => page.locator(".chat-work-group button").getAttribute("aria-expanded"))
@@ -400,7 +403,7 @@ suite.define(() => {
       });
       await card.getByText(blockingTitle, { exact: true }).waitFor();
       expect(await card.textContent()).toContain("Waiting for your answer");
-      expect(await composer.count()).toBe(0);
+      await expectBrowser(composer).toBeVisible();
       await card.getByRole("button", { name: "Next", exact: true }).click();
       await card.getByText(title, { exact: true }).waitFor();
       expect(await custom.inputValue()).toBe("Readers new to the project");

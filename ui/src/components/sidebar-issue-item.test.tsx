@@ -24,16 +24,16 @@ import {
 
 const item: SidebarAttentionItem = {
   type: "attention",
-  category: "automations",
+  category: "system",
   dismissal: null,
   requiresAction: true,
-  kind: "cronFailed",
+  kind: "modelAuthExpired",
   severity: "error",
-  icon: "clock",
-  label: "Nightly backup",
-  detail: "Failed now",
-  action: { kind: "navigate", routeId: "cron" },
-  signature: "backup",
+  icon: "plug",
+  label: "OpenAI",
+  detail: "Sign-in required",
+  action: { kind: "navigate", routeId: "model-providers" },
+  signature: "openai",
 };
 
 const container = document.createElement("div");
@@ -66,7 +66,10 @@ it("renders a dismiss control only when the producer supplies the action", () =>
   expect(find(".sidebar-issues-panel__dismiss")).toBeNull();
   const onDismiss = vi.fn();
   render(() => <SidebarIssueItem item={item} handlers={{ ...shared, onDismiss }} />);
-  find(".sidebar-issues-panel__dismiss")?.click();
+  const dismiss = find(".sidebar-issues-panel__dismiss");
+  expect(dismiss?.getAttribute("aria-label")).toBe("Dismiss OpenAI");
+  expect(dismiss?.hasAttribute("title")).toBe(false);
+  dismiss?.click();
   expect(onDismiss).toHaveBeenCalledOnce();
 });
 
@@ -116,8 +119,9 @@ describe("renderSidebarMentionItem", () => {
     const summary = details.querySelector("summary")!;
     const title = summary.querySelector(".sidebar-issues-panel__entity")!;
     expect(title.textContent).toBe("Release notes");
-    expect(title.nextElementSibling?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "Riley mentioned you · 5m ago",
+    expect(title.nextElementSibling?.textContent?.trim()).toBe("5m ago");
+    expect(summary.querySelector(".sidebar-issues-panel__state")?.textContent).toBe(
+      "Riley mentioned you",
     );
     expect(container.querySelectorAll("[data-issue-row-focus]")).toHaveLength(1);
     expect(summary.hasAttribute("data-issue-row-focus")).toBe(true);
@@ -232,7 +236,8 @@ describe("renderSidebarUpdateSurface", () => {
       try {
         await vi.waitFor(() => expect(harness.overlays.snapshot.updateRun?.runId).toBe(run.runId));
         const card = renderUpdate(harness.context);
-        card.querySelector<HTMLButtonElement>(".sidebar-update-card__action")!.click();
+        card.querySelector("summary")!.click();
+        card.querySelector<HTMLButtonElement>(".sidebar-issues-panel__action")!.click();
         const { modal } = await getRenderedModalDialog(document.body);
         render(null);
         expect(card.isConnected).toBe(false);
@@ -254,7 +259,7 @@ describe("renderSidebarUpdateSurface", () => {
         if (revokeAccess) {
           await vi.waitFor(() =>
             expect(modal.textContent).toContain(
-              "Status could not be refreshed. Check your connection and try again.",
+              "Couldn’t refresh update status. Check your connection and try again.",
             ),
           );
           expect(modal.querySelector(".update-confirmation-details")).toBeNull();
@@ -358,4 +363,65 @@ describe("renderSidebarUpdateSurface", () => {
       expect(overlays.snapshot.updateRunAcknowledged).toBe(state === "acknowledged");
     },
   );
+
+  it("leads with the restart that finishes the plugin updates its last run owes", async () => {
+    const now = Date.parse("2026-11-18T12:00:00Z");
+    vi.useFakeTimers({ now, toFake: ["Date"] });
+    // The update.status reply shape a live Gateway sent during an owed-plugin retry countdown
+    // (installed-package owed-plugin-retry Docker cell): the installing run succeeded but owes
+    // plugin convergence, nothing newer is available, and the campaign has no target.
+    const lastRun = createUpdateRunFixture({
+      status: "succeeded",
+      phase: "finished",
+      trigger: "cli",
+      after: { version: "2026.9.2" },
+      steps: [
+        { step: "finished", status: "completed" },
+        { step: "finalize:owed:plugin-convergence", status: "skipped", detail: "unreachable" },
+      ],
+      finishedAtMs: now - 5 * 60_000,
+    });
+    const schedule = {
+      channel: "stable",
+      autoEnabled: true,
+      install: { kind: "package" },
+      campaign: {
+        id: "campaign-owed",
+        state: "countdown",
+        announcedAtMs: now - 15_000,
+        applyAtMs: now + 45_000,
+        forceAtMs: now + 15 * 60_000,
+        updatedAtMs: now - 15_000,
+      },
+    };
+    const { overlays, context } = updateFixture(
+      async () => ({
+        sentinel: null,
+        lastRun,
+        updateAvailable: null,
+        effectiveChannel: "stable",
+        schedule,
+      }),
+      {
+        server: { version: "2026.9.2", bootId: "fixture-boot" },
+        features: { methods: ["update.run", "update.status", "update.hold"] },
+      },
+    );
+    await overlays.refreshUpdateStatus();
+    expect(overlays.snapshot.updateRun?.runId).toBe(lastRun.runId);
+
+    // The run's outcome dismissal would otherwise hide the restart with it.
+    expect(resolveSidebarUpdateAttention(context)?.dismissal).toBeNull();
+    const card = renderUpdate(context);
+    expect(card.querySelector(".sidebar-issues-panel__entity")?.textContent).toBe(
+      "Finishing update",
+    );
+    expect(card.querySelector(".sidebar-issues-panel__state")?.textContent).toBe(
+      "Restarting in 0:45 to finish plugin updates",
+    );
+    expect(card.querySelector(".sidebar-update-card__hold")?.textContent?.trim()).toBe("Hold 1 h");
+    expect(card.querySelector(".sidebar-update-card__title")?.textContent).toBe(
+      "✅ OpenClaw updated to 2026.9.2.",
+    );
+  });
 });

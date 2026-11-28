@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfig } from "../config/io.runtime.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
@@ -17,11 +17,9 @@ import { runWithToolExecutionValidation } from "./agent-tools.execution-validati
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import type { NativeSubagentRequestSource } from "./plugin-native-subagent.types.js";
 import { preparePluginCommandScheduledTurns } from "./plugin-scheduled-command.js";
-import { matchesSubagentRequesterSession } from "./subagents/registry/subagent-registry-queries.js";
 import {
-  getSwarmRunByLaunchReplayKey,
-  initSubagentRegistry,
-  listCollectorRunsForRequesterIncarnation,
+  resolveSwarmLaunchReplay,
+  listCollectorRunsForRequester,
   prepareSubagentRunsByRunIds,
   type SubagentRunRecord,
 } from "./subagents/registry/subagent-registry.js";
@@ -82,7 +80,6 @@ export function createRequestNativeSubagentRuntime(
   const assertCurrent = () => {
     guard.assertCurrent();
     source.assertCurrent();
-    source.operatorAuthority.assertCurrent();
     source.options.abortSignal?.throwIfAborted();
     if (!resolveGatewayContext()) {
       throw new Error("Native subagent Gateway binding is no longer active.");
@@ -106,27 +103,18 @@ export function createRequestNativeSubagentRuntime(
       if (
         !record?.collect ||
         record.childSessionKey !== childSessionKey ||
-        record.requesterSessionKey !== source.options.sessionKey ||
-        !matchesSubagentRequesterSession(record, {
-          sessionId: source.options.sessionId,
-          lifecycleRevision: source.lifecycleRevision,
-        })
+        record.requesterSessionKey !== source.options.sessionKey
       ) {
         return { requested };
       }
       // Optional descriptive reads cannot undo a native acceptance or completion.
       // In particular, neither tool-result hooks nor request echoes establish resolution.
-      let child;
-      try {
-        child = await loadSubagentSessionEntry({
-          childSessionKey,
-          childAgentId: record.childAgentId,
-          cfg: source.options.config,
-          assertCurrent,
-        });
-      } catch {
-        return { requested };
-      }
+      const child = await loadSubagentSessionEntry({
+        childSessionKey,
+        childAgentId: record.childAgentId,
+        cfg: source.options.config,
+        assertCurrent,
+      });
       assertCurrent();
       const identity = record.childSessionIdentity;
       if (
@@ -137,13 +125,13 @@ export function createRequestNativeSubagentRuntime(
       ) {
         return { requested };
       }
-      const resolved: NonNullable<NativeSubagentSelection["resolved"]> = {
-        ...(child.modelProvider && child.model
-          ? { model: `${child.modelProvider}/${child.model}` }
-          : {}),
-        ...(child.thinkingLevel !== undefined ? { thinking: child.thinkingLevel } : {}),
-        ...(child.fastMode !== undefined ? { fastMode: child.fastMode } : {}),
-      };
+      const resolved: NonNullable<NativeSubagentSelection["resolved"]> = omitUndefinedFields({
+        model:
+          child.modelProvider && child.model ? `${child.modelProvider}/${child.model}` : undefined,
+        thinking: child.thinkingLevel,
+        cyberAccessProgram: child.cyberAccessProgram,
+        fastMode: child.fastMode,
+      });
       // Session controls are not provider telemetry: do not infer observed facts.
       return { requested, ...(Object.keys(resolved).length > 0 ? { resolved } : {}) };
     } catch {
@@ -186,7 +174,7 @@ export function createRequestNativeSubagentRuntime(
     assertCurrent();
     const prepare = () =>
       withCaller(async () => {
-        const { createOpenClawCodingToolsInternalAsync } = await import("./agent-tools.js");
+        const { createOpenClawCodingToolsInternalAsync } = await import("./agent-tools.async.js");
         assertCurrent();
         if (
           currentConfig &&
@@ -282,6 +270,9 @@ export function createRequestNativeSubagentRuntime(
         label: params.label,
         model: params.model,
         thinking: params.thinking,
+        ...(params.cyberAccessProgram !== undefined
+          ? { cyberAccessProgram: params.cyberAccessProgram }
+          : {}),
         fastMode: params.fastMode,
         context: params.context,
         // Present only when requested, so existing replay fingerprints stay unchanged.
@@ -292,11 +283,12 @@ export function createRequestNativeSubagentRuntime(
         mode: "run",
         collect: true,
       };
-      const requested: NativeSubagentSelection["requested"] = {
-        ...(args.model !== undefined ? { model: args.model } : {}),
-        ...(args.thinking !== undefined ? { thinking: args.thinking } : {}),
-        ...(args.fastMode !== undefined ? { fastMode: args.fastMode } : {}),
-      };
+      const requested: NativeSubagentSelection["requested"] = omitUndefinedFields({
+        model: args.model,
+        thinking: args.thinking,
+        cyberAccessProgram: args.cyberAccessProgram,
+        fastMode: args.fastMode,
+      });
       const replayKey = createHash("sha256")
         .update(
           JSON.stringify([
@@ -320,44 +312,25 @@ export function createRequestNativeSubagentRuntime(
         return await inFlight.result;
       }
       const result = (async (): Promise<NativeSubagentAccepted> => {
-        let existing = await getSwarmRunByLaunchReplayKey(
+        const replay = await resolveSwarmLaunchReplay(
           replayKey,
+          fingerprint,
           source.options.sessionKey,
           source.options.agentId,
         );
         assertSpawnCurrent();
-        if (existing) {
-          if (
-            !matchesSubagentRequesterSession(existing, {
-              sessionId: source.options.sessionId,
-              lifecycleRevision: source.lifecycleRevision,
-            }) ||
-            existing.swarmLaunchRequestFingerprint !== fingerprint
-          ) {
-            throw new Error("Native subagent replay does not match the admitted request.");
-          }
-          if (existing.swarmLaunchPending) {
-            if (!existing.queuedLaunch) {
-              throw new Error("Native subagent launch reservation cannot be recovered.");
-            }
-            await initSubagentRegistry();
-            assertSpawnCurrent();
-            existing =
-              (await getSwarmRunByLaunchReplayKey(
-                replayKey,
-                source.options.sessionKey,
-                source.options.agentId,
-              )) ?? existing;
-            assertSpawnCurrent();
-            if (existing.swarmLaunchPending && !existing.queuedLaunch) {
-              throw new Error("Native subagent launch reservation cannot be recovered.");
-            }
-          }
+        if (replay.status === "mismatch") {
+          throw new Error("Native subagent replay does not match the admitted request.");
+        }
+        if (replay.status === "inactive") {
+          throw new Error("Native subagent launch is no longer active; start a new request.");
+        }
+        if (replay.status === "accepted") {
           return {
-            runId: existing.swarmRunId ?? existing.runId,
-            childSessionKey: existing.childSessionKey,
+            runId: replay.runId,
+            childSessionKey: replay.childSessionKey,
             completionMode: "collect",
-            selection: await readSelection(existing.runId, existing.childSessionKey, requested),
+            selection: await readSelection(replay.currentRunId, replay.childSessionKey, requested),
           };
         }
         const toolCallId = randomUUID();
@@ -465,11 +438,9 @@ export function createRequestNativeSubagentRuntime(
       if (!isCallableCollectorReader(surface.find((tool) => tool.name === "agents_wait"))) {
         throw new Error("agents_wait is not available to the current requester.");
       }
-      const records = await listCollectorRunsForRequesterIncarnation({
+      const records = await listCollectorRunsForRequester({
         sessionKey: source.options.sessionKey,
         agentId: source.options.agentId,
-        sessionId: source.options.sessionId,
-        lifecycleRevision: source.lifecycleRevision,
       });
       assertPolicyCurrent();
       return records
@@ -481,7 +452,6 @@ export function createRequestNativeSubagentRuntime(
         .flatMap((entry) => {
           const owner = entry.nativePluginOwner;
           if (
-            entry.collect !== true ||
             owner?.version !== 1 ||
             owner.pluginId !== guard.pluginId ||
             owner.requesterProfileId !== source.operatorAuthority.profileId ||
@@ -518,10 +488,6 @@ export function createRequestNativeSubagentRuntime(
             currentSessionKeys: new Set([source.options.sessionKey]),
             currentAgentId: source.options.agentId,
             config: source.options.config,
-            expectedRequester: {
-              sessionId: source.options.sessionId,
-              lifecycleRevision: source.lifecycleRevision,
-            },
             assertCurrent,
           },
           () =>

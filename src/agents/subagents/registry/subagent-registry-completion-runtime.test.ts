@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -54,7 +53,6 @@ function createHarness() {
     resumeRun: vi.fn<() => void>(() => {
       throw resumeError;
     }),
-    scheduleSweep: vi.fn(),
   };
   const warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
   const runtime = createSubagentRegistryCompletionRuntime(dependencies);
@@ -69,7 +67,6 @@ function createHarness() {
   const state = () => ({
     completed: dependencies.completeSubagentRun.mock.calls.length,
     resumes: dependencies.resumeRun.mock.calls.length,
-    sweeps: dependencies.scheduleSweep.mock.calls.length,
     timers: dependencies.retryTimers.size,
     roots: getActiveGatewayRootWorkCount(),
     handled: entry.cleanupHandled,
@@ -83,8 +80,6 @@ function createHarness() {
     request,
     complete: (source: string, overrides: Partial<SubagentCompletionRequest> = {}) =>
       runtime.completeSubagentRunWithRecovery({ ...request, ...overrides }, source),
-    finalize: () =>
-      runtime.finalizeInterruptedSubagentRun({ runId: entry.runId, error: "interrupted" }),
     expectState: (expected: Partial<ReturnType<typeof state>>) =>
       expect(state()).toMatchObject(expected),
   };
@@ -174,13 +169,13 @@ describe("subagent completion rejection ownership", () => {
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       cleanup.release();
       await cleanup.drain();
-      h.expectState({ resumes: 0, sweeps: 0 });
+      h.expectState({ resumes: 0 });
       await rootDrain[Symbol.asyncDispose]();
     },
   );
 
   it.each(["current", "replacement", "generation"] as const)(
-    "defers retired-launch completion during restart and rechecks the %s owner",
+    "defers retired-launch completion during drain and rechecks the %s owner",
     async (change) => {
       const launch = new AsyncWorkScope();
       h.completeSubagentRun.mockResolvedValue(undefined);
@@ -219,25 +214,6 @@ describe("subagent completion rejection ownership", () => {
     expect(h.runs.get(h.entry.runId)?.cleanupHandled).toBe(false);
   });
 
-  it("retries interrupted finalization after restart and retires the fired timer", async () => {
-    markGatewayRestartDraining();
-    await expect(h.finalize()).resolves.toBe(1);
-    expect(h.retryTimers.size).toBe(1);
-    resetGatewayWorkAdmission();
-    await vi.advanceTimersByTimeAsync(1_000);
-    h.expectState({ completed: 3, timers: 0, roots: 0 });
-  });
-
-  it("propagates an unknown SQLite outcome from interrupted finalization during restart drain", async () => {
-    const error = new SqliteWorkerError("completion commit outcome is unknown", "outcome-unknown");
-    h.completeSubagentRun.mockRejectedValueOnce(error);
-    markGatewayRestartDraining();
-
-    await expect(h.finalize()).rejects.toBe(error);
-    h.expectState({ completed: 1, timers: 0, resumes: 0, sweeps: 0 });
-    expect(h.warn).not.toHaveBeenCalled();
-  });
-
   it.each(
     [1, 2].flatMap((attempt) =>
       ["removal", "replacement", "generation"].map((change) => ({ attempt, change })),
@@ -266,7 +242,7 @@ describe("subagent completion rejection ownership", () => {
       }
       gate.release();
       await completion;
-      h.expectState({ completed: attempt, resumes: 0, sweeps: 0, handled: true, retained: true });
+      h.expectState({ completed: attempt, resumes: 0, handled: true, retained: true });
     },
   );
 
@@ -343,13 +319,12 @@ describe("subagent completion rejection ownership", () => {
       h.expectState({
         completed: (retry === "restart" ? 2 : 1) + (change === "unchanged" ? 1 : 0),
         resumes: retry === "restart" ? 1 : 0,
-        sweeps: 0,
       });
     },
   );
 
   it.each(["running", "yielded"] as const)(
-    "preserves %s recovery after both attempts fail",
+    "preserves %s live completion after both attempts fail",
     async (state) => {
       if (state === "running") {
         h.entry.execution = { status: "running", startedAt: 0 };
@@ -359,11 +334,7 @@ describe("subagent completion rejection ownership", () => {
       }
       await h.complete("subagent-wait");
       h.expectState({ completed: 2, resumes: 0, handled: true, retained: true });
-      if (state === "running") {
-        expect(h.scheduleSweep).toHaveBeenCalledExactlyOnceWith({ delayMs: 1_000 });
-      } else {
-        expect(h.scheduleSweep).not.toHaveBeenCalled();
-      }
+      h.expectState({ timers: state === "running" ? 1 : 0 });
     },
   );
 });

@@ -5,19 +5,27 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { resolveServiceTmpDir } from "../daemon/service-tmp-dir.js";
 import {
+  assertManagedUpdateLeaseDatabaseIdentity,
+  prepareManagedHandoffLeaseDatabase,
+  type ManagedUpdateLeaseDatabaseIdentity,
+} from "./update-managed-service-handoff-database.js";
+import {
   prepareManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
 } from "./update-managed-service-handoff-lease.js";
 
 /** Earlier macOS Gateways kept leases under their state's TMPDIR; repair still reads it. */
-export function resolveLegacyGatewayManagedUpdateLeaseDatabasePath(): string | undefined {
+export function resolveLegacyGatewayManagedUpdateLeaseDatabasePath(
+  currentDatabasePath?: string,
+): string | undefined {
   const uid = process.getuid?.();
   const legacy = path.join(
     resolveServiceTmpDir(process.env, "darwin"),
     uid === undefined ? "openclaw" : `openclaw-${uid}`,
     "managed-update-handoffs.sqlite",
   );
-  return process.platform === "darwin" && legacy !== resolveManagedUpdateLeaseDatabasePath()
+  return process.platform === "darwin" &&
+    legacy !== (currentDatabasePath ?? resolveManagedUpdateLeaseDatabasePath())
     ? legacy
     : undefined;
 }
@@ -30,9 +38,19 @@ export function resolveLegacyGatewayManagedUpdateLeaseDatabasePath(): string | u
 export async function fenceLegacyGatewayCustody(
   key: string,
   databasePath: string | undefined,
+  currentIdentity?: ManagedUpdateLeaseDatabaseIdentity,
 ): Promise<{ refusal: string } | { release: () => void }> {
   if (!databasePath || !fs.existsSync(databasePath)) {
     return { release: () => {} };
+  }
+  if (currentIdentity) {
+    const database = await prepareManagedHandoffLeaseDatabase(databasePath);
+    if (database.databasePath === currentIdentity.databasePath) {
+      // Root admits ancestor aliases, never a database-leaf alias. The current
+      // executor will acquire through this exact pin and still refuse other owners.
+      assertManagedUpdateLeaseDatabaseIdentity(currentIdentity);
+      return { release: () => {} };
+    }
   }
   const store = await prepareManagedHandoffLeaseStore({
     databasePath,

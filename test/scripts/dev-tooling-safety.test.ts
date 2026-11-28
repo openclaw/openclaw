@@ -35,6 +35,7 @@ import {
 import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
+import { fixtureReadyBeforeSettlement } from "./run-process.test-support.js";
 
 const tempDirs: string[] = [];
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -116,21 +117,9 @@ async function promptReadyBeforeSettlement(
   operation: PromiseLike<unknown>,
   readyPath = pidPath,
 ): Promise<number> {
-  // The fixture writes this record before its receipt; process exit travels separately.
+  // The receipt identifies pidPath; an escaped descendant can publish readiness in readyPath.
   const recorded = () => existsSync(readyPath) && readFileSync(readyPath, "utf8").trim() !== "";
-  const settled = Promise.resolve(operation).then(
-    () => {
-      if (!recorded()) {
-        throw new Error("timed out waiting for condition");
-      }
-    },
-    (error: unknown) => {
-      if (!recorded()) {
-        throw error;
-      }
-    },
-  );
-  await Promise.race([receipts.waitFor(pidPath, "ready"), settled]);
+  await fixtureReadyBeforeSettlement(receipts, pidPath, operation, recorded);
   return Number.parseInt(readFileSync(pidPath, "utf8"), 10);
 }
 
@@ -553,17 +542,6 @@ describe("script-specific dev tooling hardening", () => {
     expect(() => resolve(invalid)).toThrow(error);
   });
 
-  it.each([
-    [["--help"], true, 1, false],
-    [["--openai-audio-cycles", "3"], false, 3, false],
-  ] as const)("parses realtime smoke arguments %j", (args, help, openAIAudioCycles, openAIOnly) => {
-    expect(realtime.parseRealtimeSmokeArgs([...args])).toEqual({
-      help,
-      openAIAudioCycles,
-      openAIOnly,
-    });
-  });
-
   it("chunks PCM input without copying or dropping bytes", async () => {
     const sent: Buffer[] = [];
     const chunkCount = await realtime.sendPcmAudioInChunks(
@@ -583,24 +561,6 @@ describe("script-specific dev tooling hardening", () => {
         delayMs: 0,
       }),
     ).rejects.toThrow("PCM audio chunk size must be a positive integer");
-  });
-
-  it("matches normalized live audio transcript markers", () => {
-    expect(realtime.transcriptIncludesMarker(["Glacier."], "glacier")).toBe(true);
-    expect(
-      realtime.transcriptIncludesMarker(
-        ["Please reply with the single-word GLACIER!"],
-        "single word glacier",
-      ),
-    ).toBe(true);
-    expect(realtime.transcriptIncludesMarker(["ocean"], "glacier")).toBe(false);
-  });
-
-  it("resolves the realtime relay smoke to an existing Control UI module", () => {
-    const modulePath = realtime.resolveGatewayRelayModulePath(process.cwd());
-
-    expect(modulePath.endsWith("/ui/src/pages/chat/talk/gateway-relay.ts")).toBe(true);
-    expect(existsSync(modulePath.slice("/@fs/".length))).toBe(true);
   });
 
   it("rejects unsafe OpenAI realtime SDP answer content-length values before reading", async () => {

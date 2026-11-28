@@ -37,12 +37,18 @@ import {
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
 
-/** Owns the committed queued intent through descriptor publication and launch settlement. */
+function requiresRegistryRestore(error: unknown): boolean {
+  return (
+    hasSqliteWorkerOutcomeUnknown(error) ||
+    (error instanceof SubagentRegistryWriteError && error.outcome === "committed")
+  );
+}
+
+/** Owns a live queued launch through current claim checks and failure settlement. */
 export function registerRequiredQueuedSubagent(params: {
   entry: SubagentRunRecord;
   context: OpenClawStateWorkerContext;
   manager: Pick<SubagentManagerOptions, "runs" | "getRunsForChildSession" | "getRuntimeConfig">;
-  queuedLaunch: SubagentRunRecord["queuedLaunch"];
   activate: () => void;
   assertCurrent?: () => void;
   retainOwnership?: (scope: SubagentRegistrationScope) => void;
@@ -53,20 +59,16 @@ export function registerRequiredQueuedSubagent(params: {
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const resolver = getGatewayContextResolver(entry);
   const runId = entry.runId;
-  const queuedLaunch = params.queuedLaunch;
-  let persistenceUncertain = false;
   let recoveryPending:
     | { kind: "restore" | "retry-terminal"; error: unknown }
     | { kind: "retired" }
     | undefined;
-  let descriptorCommitted = false;
   let failureFact: { error: unknown; endedAt: number; message: string } | undefined;
   let settlementPending = false;
   let registrationAcknowledged = false;
   let publishedTerminalExecution: SubagentRunRecord["execution"] | undefined;
-  const exactEntry = () => isSameSubagentRunOwner(currentEntry(), entry);
   const ownsSession = () =>
-    (!manager.runs.has(runId) || exactEntry()) &&
+    (!manager.runs.has(runId) || Boolean(currentEntry())) &&
     !Array.from(manager.getRunsForChildSession(entry.childSessionKey, entry.childAgentId)).some(
       (candidate) =>
         !isSameSubagentRunOwner(candidate, entry) &&
@@ -88,6 +90,15 @@ export function registerRequiredQueuedSubagent(params: {
     }
   };
   const registryCurrent = () => assertionSucceeds(assertRegistryCurrent);
+  const queuedEntry = () => {
+    if (!registryCurrent()) {
+      return undefined;
+    }
+    const current = currentEntry();
+    return current?.execution.status === "queued" && !current.killReconciliation
+      ? current
+      : undefined;
+  };
   const confirmedTakeover = () =>
     Boolean(currentEntry()?.killReconciliation) ||
     (currentEntry()?.execution.status !== "queued" &&
@@ -97,7 +108,7 @@ export function registerRequiredQueuedSubagent(params: {
       !currentEntry()?.killIntent);
   const pendingClaim = () =>
     registryCurrent() &&
-    exactEntry() &&
+    Boolean(currentEntry()) &&
     !confirmedTakeover() &&
     Boolean(
       currentEntry()?.killIntent || waitForPendingSubagentKillClaim(entry, context.admission),
@@ -113,7 +124,7 @@ export function registerRequiredQueuedSubagent(params: {
           if (pending) {
             await pending;
             assertRegistryCurrent();
-            if (!exactEntry()) {
+            if (!currentEntry()) {
               return;
             }
             continue;
@@ -130,32 +141,15 @@ export function registerRequiredQueuedSubagent(params: {
       }
     })();
   };
-  const gatewayCurrent = () =>
-    getGatewayContextResolver(currentEntry() ?? entry) === resolver &&
-    (!resolver || Boolean(resolver()));
-  const ownsQueuedIntent = () =>
-    !persistenceUncertain &&
-    !recoveryPending &&
-    !settlementPending &&
-    registryCurrent() &&
-    exactEntry() &&
-    ownsSession() &&
-    currentEntry()?.execution.status === "queued" &&
-    currentEntry()?.execution.endedAt === undefined &&
-    !currentEntry()?.killIntent &&
-    !waitForPendingSubagentKillClaim(entry, context.admission) &&
-    !currentEntry()?.killReconciliation;
-  const assertLaunchCurrent = () => {
-    if (!ownsQueuedIntent()) {
-      throw new Error("Queued registration lost its original run owner");
-    }
-  };
-  const assertRegistrationCurrent = () => {
-    params.assertCurrent?.();
-    if (!gatewayCurrent()) {
-      throw new Error("Queued registration lost its original Gateway owner");
-    }
-    assertLaunchCurrent();
+  const ownsQueuedIntent = () => {
+    const current = !recoveryPending && !settlementPending && queuedEntry();
+    return Boolean(
+      current &&
+      ownsSession() &&
+      current.execution.endedAt === undefined &&
+      !current.killIntent &&
+      !waitForPendingSubagentKillClaim(entry, context.admission),
+    );
   };
   let cancelledLaunch:
     | { error: string; killedAt: number; failure?: Error; published?: true }
@@ -170,7 +164,7 @@ export function registerRequiredQueuedSubagent(params: {
     current.swarmLaunchPending === true &&
     !current.collectorCompletion;
   const publish = async (
-    stage: "recovery intent" | "terminal" | "cancelled launch",
+    stage: "terminal" | "cancelled launch",
     prepare: (current: SubagentRunRecord, ownedSession: boolean) => SubagentRunRecord,
   ): Promise<boolean> => {
     for (;;) {
@@ -233,9 +227,8 @@ export function registerRequiredQueuedSubagent(params: {
     }
     const current = getCurrentSubagentRunOwner(manager.runs, entry);
     if (
-      !(registrationAcknowledged && !persistenceUncertain && !recoveryPending) ||
+      !(registrationAcknowledged && !recoveryPending) ||
       !current ||
-      !isSameSubagentRunOwner(current, entry) ||
       !cancellationCurrent(current)
     ) {
       return false;
@@ -276,32 +269,28 @@ export function registerRequiredQueuedSubagent(params: {
       }
       settlementPending = false;
     } catch (error) {
-      if (
-        hasSqliteWorkerOutcomeUnknown(error) ||
-        (error instanceof SubagentRegistryWriteError && error.outcome === "committed")
-      ) {
+      if (requiresRegistryRestore(error)) {
         prepared.failure = toErrorObject(error, "Cancelled collector launch settlement failed");
       }
       throw error;
     }
   };
+  const canAcceptLaunch = () =>
+    registrationAcknowledged && registryCurrent() && Boolean(currentEntry()) && ownsSession();
   params.retainOwnership?.(
     Object.freeze({
       waitForClaim,
       waitForRetirementPublication: () => waitForSubagentRetirementPublication(entry),
       canLaunch: () => registrationAcknowledged && ownsQueuedIntent(),
       canCleanupSession: () =>
-        !persistenceUncertain &&
         !recoveryPending &&
         !settlementPending &&
         !pendingClaim() &&
         !hasPendingSubagentRetirementPublication(entry) &&
         registryCurrent() &&
         ownsSession(),
-      canAcceptLaunch: () =>
-        registrationAcknowledged && registryCurrent() && exactEntry() && ownsSession(),
-      canAbortAcceptedRun: () =>
-        registrationAcknowledged && registryCurrent() && exactEntry() && ownsSession(),
+      canAcceptLaunch,
+      canAbortAcceptedRun: canAcceptLaunch,
       canRetireReservation: () => ownsSwarmRunReservation(runId, getSubagentRunRuntimeKey(entry)),
       settleFailedLaunch: async (error: string) => {
         for (;;) {
@@ -309,7 +298,7 @@ export function registerRequiredQueuedSubagent(params: {
             !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
             captureOpenClawStateWorkerContext().admission.identity.key !==
               context.admission.identity.key ||
-            !exactEntry()
+            !currentEntry()
           ) {
             return;
           }
@@ -351,44 +340,17 @@ export function registerRequiredQueuedSubagent(params: {
     }),
   );
   const canContinueSettlement = () => {
-    if (
-      !registryCurrent() ||
-      !exactEntry() ||
-      currentEntry()?.execution.status !== "queued" ||
-      currentEntry()?.execution.endedAt !== undefined ||
-      currentEntry()?.killReconciliation
-    ) {
+    const current = queuedEntry();
+    if (!current || current.execution.endedAt !== undefined) {
       recoveryPending = { kind: "retired" };
       settlementPending = false;
       return false;
     }
     return true;
   };
-  const clearDurableLaunchDescriptor = async (): Promise<boolean> => {
-    if (!descriptorCommitted && ownsSession()) {
-      return true;
-    }
-    const published = await publish("recovery intent", (current, ownedSession) => ({
-      ...current,
-      queuedLaunch: undefined,
-      execution: {
-        ...current.execution,
-        ...(!ownedSession ? { suppressSessionEffects: true as const } : {}),
-      },
-    }));
-    if (published) {
-      descriptorCommitted = false;
-    }
-    return published;
-  };
   const failIncompleteRegistration = async (error: unknown): Promise<void> => {
-    if (
-      !registryCurrent() ||
-      !exactEntry() ||
-      currentEntry()?.execution.status !== "queued" ||
-      currentEntry()?.killIntent ||
-      currentEntry()?.killReconciliation
-    ) {
+    const queued = queuedEntry();
+    if (!queued || queued.killIntent) {
       return;
     }
     settlementPending = true;
@@ -399,9 +361,6 @@ export function registerRequiredQueuedSubagent(params: {
     };
     const { endedAt, message, error: cause } = failureFact;
     try {
-      if (!(await clearDurableLaunchDescriptor())) {
-        return;
-      }
       const prepared = await prepareSwarmCollectorCompletion(
         currentEntry() ?? entry,
         manager.getRuntimeConfig(),
@@ -416,23 +375,19 @@ export function registerRequiredQueuedSubagent(params: {
         return;
       }
     } catch (settlementError) {
-      persistenceUncertain =
-        hasSqliteWorkerOutcomeUnknown(settlementError) ||
-        (settlementError instanceof SubagentRegistryWriteError &&
-          settlementError.outcome === "committed");
       const failure = new AggregateError(
         [cause, settlementError],
         "Queued registration failure could not be persisted",
         { cause },
       );
       recoveryPending = {
-        kind: persistenceUncertain ? "restore" : "retry-terminal",
+        kind: requiresRegistryRestore(settlementError) ? "restore" : "retry-terminal",
         error: failure,
       };
       throw failure;
     }
     settlementPending = false;
-    if (registryCurrent() && exactEntry()) {
+    if (registryCurrent() && Boolean(currentEntry())) {
       params.activate();
     }
   };
@@ -441,62 +396,32 @@ export function registerRequiredQueuedSubagent(params: {
       for (let claim = waitForClaim(); claim; claim = waitForClaim()) {
         await claim;
       }
-      if (registryCurrent() && exactEntry() && ownsSession() && confirmedTakeover()) {
+      if (registryCurrent() && Boolean(currentEntry()) && ownsSession() && confirmedTakeover()) {
         params.activate();
         return;
       }
       try {
-        assertRegistrationCurrent();
-        const published = await mutateSubagentRuns(
-          [runId],
-          (rows) => {
-            const current = rows.get(runId);
-            if (!current || !isSameSubagentRunOwner(current, entry) || !ownsSession()) {
-              return { value: "retired" as const };
-            }
-            if (current.killIntent) {
-              return { value: "claim" as const };
-            }
-            if (current.killReconciliation || current.execution.status !== "queued") {
-              return { value: "retired" as const };
-            }
-            return {
-              value: "published" as const,
-              postimages: new Map([[runId, { ...current, queuedLaunch }]]),
-            };
-          },
-          {
-            runs: manager.runs,
-            context,
-            assertCurrent: () => {
-              params.assertCurrent?.();
-              assertRegistryCurrent();
-              if (!gatewayCurrent()) {
-                throw new Error("Queued registration lost its original Gateway owner");
-              }
-            },
-            onPublished: () => {
-              descriptorCommitted = true;
-              registrationAcknowledged = true;
-            },
-          },
-        );
-        if (published !== "published") {
-          continue;
+        params.assertCurrent?.();
+        if (
+          getGatewayContextResolver(currentEntry() ?? entry) !== resolver ||
+          (resolver && !resolver())
+        ) {
+          throw new Error("Queued registration lost its original Gateway owner");
         }
+        if (!ownsQueuedIntent()) {
+          throw new Error("Queued registration lost its original run owner");
+        }
+        registrationAcknowledged = true;
         params.activate();
         return;
       } catch (error) {
-        const refused =
-          !hasSqliteWorkerOutcomeUnknown(error) &&
-          !(error instanceof SubagentRegistryWriteError && error.outcome === "committed");
-        if (refused && registryCurrent() && exactEntry() && pendingClaim()) {
+        const refused = !requiresRegistryRestore(error);
+        if (refused && pendingClaim()) {
           continue;
         }
         if (refused) {
           await failIncompleteRegistration(error);
         } else {
-          persistenceUncertain = true;
           recoveryPending = { kind: "restore", error };
         }
         throw error;

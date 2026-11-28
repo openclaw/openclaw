@@ -4,6 +4,10 @@ import {
   type AttachmentClassification,
 } from "@openclaw/media-core/attachment-classify";
 import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
+import {
+  applyAttachmentMarkerBudget,
+  type AttachmentContextBlock,
+} from "../../packages/media-understanding-common/src/format.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
@@ -24,10 +28,6 @@ import {
   type FileExtractionLimits,
   resolveFileExtractionLimits,
 } from "./file-extraction-limits.js";
-import {
-  applyAttachmentMarkerBudget,
-  type AttachmentContextBlock,
-} from "./media-attachment-outcomes.js";
 import {
   createMediaAttachmentCache,
   createScopedMediaAttachmentCache,
@@ -53,6 +53,7 @@ export async function extractFileContext(params: {
   limits: FileExtractionLimits;
   skipAttachmentIndexes?: Set<number>;
   assertCurrent?: () => void;
+  signal?: AbortSignal;
   selfServePathsEnabled: boolean;
 }) {
   const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
@@ -97,6 +98,7 @@ export async function extractFileContext(params: {
         attachmentIndex: attachment.index,
         maxBytes: limits.maxBytes,
         timeoutMs: limits.timeoutMs,
+        signal: params.signal,
       });
     } catch (err) {
       if (shouldLogVerbose()) {
@@ -188,6 +190,7 @@ export async function extractFileContext(params: {
         config: cfg,
         classification,
         mimeType: attachment.mime,
+        signal: params.signal,
       });
     } catch (err) {
       if (shouldLogVerbose()) {
@@ -275,6 +278,7 @@ export async function prepareFileContextFromMedia(params: {
   accountId?: string;
   maxChars: number;
   assertCurrent: () => void;
+  signal?: AbortSignal;
 }) {
   return await renderInboundDocumentContext({
     ctx: {
@@ -286,6 +290,7 @@ export async function prepareFileContextFromMedia(params: {
     workspaceDir: params.workspaceDir,
     maxChars: params.maxChars,
     assertCurrent: params.assertCurrent,
+    signal: params.signal,
   });
 }
 
@@ -298,6 +303,8 @@ export async function renderInboundDocumentContext(params: {
   workspaceDir?: string;
   maxChars?: number;
   assertCurrent?: () => void;
+  /** Cancels in-flight extraction, such as a worker-owned PDF parse. */
+  signal?: AbortSignal;
 }): Promise<InboundDocumentContext> {
   params.assertCurrent?.();
   const { ctx, cfg } = params;
@@ -315,6 +322,7 @@ export async function renderInboundDocumentContext(params: {
           : { ...limits, maxChars: Math.min(limits.maxChars, params.maxChars) },
       selfServePathsEnabled: false,
       assertCurrent: params.assertCurrent,
+      signal: params.signal,
     });
     params.assertCurrent?.();
     return {

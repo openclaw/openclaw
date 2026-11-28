@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { captureCommandOwnerAssertion } from "../../auto-reply/command-owner-authority.js";
+import { getCommandOwnerAuthority } from "../../auto-reply/command-owner-authority.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { createAdminIngressFixture } from "../../channels/message-access/operator-authority.test-support.js";
 import {
@@ -188,11 +188,11 @@ it.each(
       unlinkUserChannelIdentity(admin.profile.id, admin.identity);
       await activatePolicy({});
     }
-    const assertOwnerCurrent = expectDefined(
-      captureCommandOwnerAssertion(await context(admin.identity.senderId)),
-      "Channel owner assertion was not admitted",
+    const owner = expectDefined(
+      getCommandOwnerAuthority(await context(admin.identity.senderId)),
+      "Channel owner was not admitted",
     );
-    assertOwnerCurrent();
+    expect(owner.isCurrent()).toBe(true);
     // Confirm every database selector before the first session/queue write.
     expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
     const databasePaths: [string, string][] = [
@@ -225,9 +225,8 @@ it.each(
       });
     }
     const marker = await persistMarker(target, entry, payloads, {
-      admittedRecoverySource: undefined,
       deliveryContext: { channel: "matrix", to: "!restart:example" },
-      commandOwnerReference: assertOwnerCurrent.recoveryReference,
+      commandOwnerReference: owner.recoveryReference ?? null,
     });
     expect(marker.pendingFinalDeliveryMarkerPersisted).toBe(true);
     const entered = createDeferred();
@@ -286,7 +285,6 @@ it.each(
       result: { meta: { durationMs: 1 } },
       payloads,
       assertDeliveryCurrent: () => {
-        assertOwnerCurrent();
         if (custodyError) {
           throw custodyError;
         }
@@ -325,7 +323,6 @@ it.each(
         !ownerRevoked;
       if (ownerRevoked) {
         setUserProfileRole(admin.profile.id, "member");
-        expect(assertOwnerCurrent).toThrow("Channel operator authority changed");
       }
       if (boundary === "restart-owner-retired") {
         retire();
@@ -388,7 +385,6 @@ it.each(
       }
       if (lateRevocation) {
         setUserProfileRole(admin.profile.id, "member");
-        expect(assertOwnerCurrent).toThrow("Channel operator authority changed");
       }
       if (boundary.endsWith("reference")) {
         const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
@@ -427,18 +423,17 @@ it.each(
       }
       const mayRecover =
         recoverable &&
-        (!configured || boundary === "restart-configured-allowed") &&
-        (!boundary.startsWith("restart-retained-") || boundary === "restart-retained-lifecycle");
+        (!configured ||
+          boundary === "restart-configured-allowed" ||
+          boundary === "restart-configured-handoff-removed") &&
+        (!boundary.startsWith("restart-retained-") ||
+          boundary === "restart-retained-lifecycle" ||
+          boundary === "restart-retained-grant-handoff-replaced" ||
+          boundary === "restart-retained-recovered-handoff-revoked");
       held = false;
+      // Recovery admits once. Policy changes inside the adapter affect the next
+      // start, not the admitted batch; writer and cancellation fences still apply.
       await recover();
-      if (
-        boundary === "restart-retained-recovered-handoff-revoked" ||
-        boundary === "restart-configured-handoff-removed"
-      ) {
-        expect(writes).toEqual([]);
-        expect(await loadPendingDeliveries(state.stateDir)).toHaveLength(1);
-        await recover();
-      }
       expect(writes).toEqual(mayRecover ? ["Captured final answer", "Final detail"] : []);
       expect(await loadPendingDeliveries(state.stateDir)).toHaveLength(0);
       if (recoverable) {
@@ -447,7 +442,11 @@ it.each(
       }
       if (mayRecover) {
         expect(loadSessionEntry(target)?.pendingFinalDelivery?.deliveries).toEqual([
-          { id: expect.any(String), state: "delivered" },
+          {
+            id: expect.any(String),
+            state: "delivered",
+            receipt: { platformMessageId: "delivered-final-2", resultCount: 2 },
+          },
         ]);
       }
       // Re-enter recovery after settlement; neither success nor revocation may replay.

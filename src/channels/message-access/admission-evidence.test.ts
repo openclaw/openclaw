@@ -111,7 +111,7 @@ function unreadableAfter<T extends object>(target: T, field: PropertyKey, after 
 
 it("keeps Gateway routing instance-bound when audit collection is disabled", async () => {
   const audit = createAudit(false);
-  const gatewayContext = { owner: "gateway-a" } as never;
+  const { gateway: gatewayContext } = createHostIngressFixture("test");
   let live = true;
   const source = await admittedContext(audit, "person:42", ["person:42"], () =>
     live ? gatewayContext : undefined,
@@ -274,7 +274,7 @@ it("bounds aggregate fan-in and participant material", async () => {
   expectUnknown(oversizedParticipant);
 
   const sources = await Promise.all(
-    Array.from({ length: 17 }, (_, index) => evidenceFor(audit, `person-${index}`)),
+    Array.from({ length: 17 }, () => evidenceFor(audit, "person-1")),
   );
   expectUnknown(combineEvidence(sources));
 });

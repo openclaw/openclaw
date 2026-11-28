@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
@@ -71,7 +72,24 @@ function discordTurn(sessionId: string, sessionKey: string) {
   };
 }
 
+function expectDiscordTransportCustody(entry: SessionEntry | undefined) {
+  const marker = expectDefined(entry?.pendingFinalDelivery, "pending transport custody");
+  expect(marker).toEqual({
+    kind: "transport-only",
+    intentId: expect.any(String),
+    deliveries: [{ id: expect.any(String), state: "prepared" }],
+    createdAt: expect.any(Number),
+    context: { channel: "discord", to: "discord:dm:123", accountId: "main" },
+  });
+  expect(marker.intentId).not.toBe("");
+  expect(marker.deliveries?.[0]?.id).not.toBe("");
+  return marker;
+}
+
 type CliCompactionArgs = Parameters<typeof state.runCliTurnCompactionLifecycleMock>;
+type CommandDeliveryParams = Parameters<
+  typeof import("./command/delivery.js").deliverAgentCommandResult
+>[0];
 async function commitCliCompaction([params, host]: CliCompactionArgs, sessionId: string) {
   const currentTarget = {
     agentId: params.sessionAgentId,
@@ -328,30 +346,20 @@ describe("agentCommand compaction transcript rotation", () => {
   });
 
   it.each([
-    [true, "external_user", true],
-    [true, "internal_system", false],
-    [false, "external_user", false],
-  ] as const)(
-    "preserves human transcript ownership for %s/%s",
-    async (senderIsOwner, kind, owner) => {
-      const inputProvenance = { kind, sourceTool: "test" };
-      state.runAgentAttemptMock.mockResolvedValueOnce(
-        makeResult({ sessionId: "owned", text: "ok" }),
-      );
-      await agentCommand({
-        message: "remember",
-        sessionId: "owned",
-        senderIsOwner,
-        inputProvenance,
-      });
-      expect(state.runAgentAttemptMock.mock.calls[0]?.[0]).toMatchObject({
-        opts: { senderIsOwner, inputProvenance },
-        userTurnTranscriptRecorder: {
-          message: { provenance: inputProvenance, __openclaw: { senderIsOwner: owner } },
-        },
-      });
-    },
-  );
+    ["external_user", true],
+    ["internal_system", false],
+  ] as const)("preserves human transcript ownership for %s", async (kind, owner) => {
+    const inputProvenance = { kind, sourceTool: "test" };
+    state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId: "owned", text: "ok" }));
+    await agentCommand({ message: "remember", sessionId: "owned", inputProvenance });
+    // A local run's sender is the local host, the owner.
+    expect(state.runAgentAttemptMock.mock.calls[0]?.[0]).toMatchObject({
+      opts: { senderIsOwner: true, inputProvenance },
+      userTurnTranscriptRecorder: {
+        message: { provenance: inputProvenance, __openclaw: { senderIsOwner: owner } },
+      },
+    });
+  });
 
   it.each([95_000, undefined])(
     "keeps successor context %s from the private ordered fact, not public snapshots",
@@ -563,14 +571,22 @@ describe("agentCommand compaction transcript rotation", () => {
       { config: state.cfg ?? {}, pluginGeneration },
     );
 
-    expect(storedEntryBeforeCompaction).toMatchObject({
-      pendingFinalDelivery: { kind: "replayable", text },
-    });
+    const marker = expectDiscordTransportCustody(storedEntryBeforeCompaction);
     expect(result).toMatchObject({ deliverySucceeded: true });
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
       expect.objectContaining({ payloads: [{ text }] }),
     );
+    const delivery: CommandDeliveryParams = state.deliverAgentCommandResultMock.mock.calls[0]![0];
+    expect(
+      getReplyPayloadMetadata(expectDefined(delivery.payloads?.[0], "delivered final"))
+        ?.pendingFinalDeliveryCompletion,
+    ).toMatchObject({
+      intentId: marker.intentId,
+      deliveryId: marker.deliveries?.[0]?.id,
+      sessionId,
+      sessionKey,
+    });
     expect(readLifecyclePhases()).toContain("end");
     expect(readLifecyclePhases()).not.toContain("error");
     const storedEntryAfterDelivery = findStoredSessionEntry(sessionKey);
@@ -582,7 +598,7 @@ describe("agentCommand compaction transcript rotation", () => {
     const sessionKey = `agent:main:explicit:${sessionId}`;
     const hiddenReasoning = "private chain of thought";
     const visibleFinal = "visible final answer\nMEDIA:/tmp/chart.png";
-    let pendingTextSeenByCompaction: string | undefined;
+    let entrySeenByCompaction: SessionEntry | undefined;
     state.runAgentAttemptMock.mockResolvedValueOnce(
       makeResult({
         sessionId,
@@ -591,19 +607,30 @@ describe("agentCommand compaction transcript rotation", () => {
       }),
     );
     state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
-      pendingTextSeenByCompaction =
-        params.sessionEntry?.pendingFinalDelivery?.kind === "replayable"
-          ? params.sessionEntry.pendingFinalDelivery.text
-          : undefined;
+      entrySeenByCompaction = params.sessionEntry;
       throw new Error(COMPACTION_ERROR);
     });
 
     const result = await agentCommand(discordTurn(sessionId, sessionKey));
 
-    expect(pendingTextSeenByCompaction).toBe(visibleFinal);
-    expect(pendingTextSeenByCompaction).not.toContain(hiddenReasoning);
+    const marker = expectDiscordTransportCustody(entrySeenByCompaction);
+    expect(JSON.stringify(marker)).not.toContain(hiddenReasoning);
+    expect(JSON.stringify(marker)).not.toContain(visibleFinal);
     expect(result).toMatchObject({ deliverySucceeded: true });
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
+    const delivery: CommandDeliveryParams = state.deliverAgentCommandResultMock.mock.calls[0]![0];
+    expect(delivery.payloads).toEqual([
+      { text: hiddenReasoning, isReasoning: true },
+      { text: visibleFinal },
+    ]);
+    expect(
+      getReplyPayloadMetadata(expectDefined(delivery.payloads?.[0], "reasoning payload"))
+        ?.pendingFinalDeliveryCompletion,
+    ).toBeUndefined();
+    expect(
+      getReplyPayloadMetadata(expectDefined(delivery.payloads?.[1], "visible final"))
+        ?.pendingFinalDeliveryCompletion,
+    ).toMatchObject({ intentId: marker.intentId, deliveryId: marker.deliveries?.[0]?.id });
     const storedEntry = findStoredSessionEntry(sessionKey);
     expect(storedEntry?.pendingFinalDelivery).toBeUndefined();
   });
@@ -613,12 +640,14 @@ describe("agentCommand compaction transcript rotation", () => {
     async (completion) => {
       const { sessionId, sessionKey, text } = prepareReply("pre-compaction", "carried reply");
       const successorSessionId = "post-compaction-session";
+      let predecessorMarker: SessionEntry["pendingFinalDelivery"];
       let successorBeforeCleanup: SessionEntry | undefined;
       const controller = new AbortController();
       const aborted = createAgentRunRestartAbortError();
       const onSessionIdChanged = vi.fn();
       state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params, host) => {
         expect(params.sessionEntry).toBeDefined();
+        predecessorMarker = expectDiscordTransportCustody(params.sessionEntry);
         successorBeforeCleanup = await commitCliCompaction([params, host], successorSessionId);
         expect(onSessionIdChanged).not.toHaveBeenCalled();
         if (completion === "maintenance-error") {
@@ -641,38 +670,47 @@ describe("agentCommand compaction transcript rotation", () => {
         await expect(command).rejects.toBe(aborted);
         expect(onSessionIdChanged.mock.calls).toEqual([[successorSessionId]]);
         expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
-        expect(findStoredSessionEntry(sessionKey)).toMatchObject({
-          sessionId: successorSessionId,
-          pendingFinalDelivery: { kind: "replayable", text },
-        });
+        const storedSuccessor = findStoredSessionEntry(sessionKey);
+        expect(storedSuccessor?.sessionId).toBe(successorSessionId);
+        expect(expectDiscordTransportCustody(storedSuccessor)).toEqual(predecessorMarker);
         return;
       }
       const result = await command;
       expect(onSessionIdChanged.mock.calls).toEqual([[successorSessionId]]);
 
-      expect(successorBeforeCleanup).toMatchObject({
-        sessionId: successorSessionId,
-        pendingFinalDelivery: { kind: "replayable", text },
-      });
+      expect(successorBeforeCleanup?.sessionId).toBe(successorSessionId);
+      expect(expectDiscordTransportCustody(successorBeforeCleanup)).toEqual(predecessorMarker);
       expect(result).toMatchObject({ deliverySucceeded: true });
-      expect(state.deliveryFreshEntries.at(-1)).toMatchObject({
+      const freshEntry = state.deliveryFreshEntries.at(-1);
+      expect(freshEntry?.sessionId).toBe(successorSessionId);
+      const marker = expectDiscordTransportCustody(freshEntry);
+      expect(marker).toEqual(predecessorMarker);
+      expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
+      expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+        expect.objectContaining({ payloads: [{ text }] }),
+      );
+      const delivery: CommandDeliveryParams = state.deliverAgentCommandResultMock.mock.calls[0]![0];
+      expect(
+        getReplyPayloadMetadata(expectDefined(delivery.payloads?.[0], "delivered successor final"))
+          ?.pendingFinalDeliveryCompletion,
+      ).toMatchObject({
+        intentId: marker.intentId,
+        deliveryId: marker.deliveries?.[0]?.id,
         sessionId: successorSessionId,
-        pendingFinalDelivery: { kind: "replayable", text },
+        sessionKey,
       });
       const storedSuccessor = findStoredSessionEntry(sessionKey);
       expect(storedSuccessor).toMatchObject({
         sessionId: successorSessionId,
       });
       expect(storedSuccessor?.pendingFinalDelivery).toBeUndefined();
-      expect(storedSuccessor?.restartRecoveryDeliveryContext).toBeUndefined();
-      expect(storedSuccessor?.restartRecoveryDeliveryRunId).toBeUndefined();
     },
   );
 
   it("retains the pending final when delivery fails after compaction failure", async () => {
     const { sessionId, sessionKey, text } = prepareReply(
       "delivery-failure",
-      "reply awaiting recovery",
+      "reply awaiting delivery",
     );
     state.runCliTurnCompactionLifecycleMock.mockRejectedValueOnce(new Error(COMPACTION_ERROR));
     state.deliverAgentCommandResultMock.mockResolvedValueOnce({ deliverySucceeded: false });
@@ -681,17 +719,10 @@ describe("agentCommand compaction transcript rotation", () => {
 
     expect(result).toMatchObject({ deliverySucceeded: false });
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
-    expect(findStoredSessionEntry(sessionKey)).toMatchObject({
-      pendingFinalDelivery: {
-        kind: "replayable",
-        text,
-        context: {
-          channel: "discord",
-          to: "discord:dm:123",
-          accountId: "main",
-        },
-      },
-    });
+    expectDiscordTransportCustody(findStoredSessionEntry(sessionKey));
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ payloads: [{ text }] }),
+    );
   });
 
   it.each([

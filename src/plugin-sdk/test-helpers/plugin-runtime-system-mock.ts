@@ -24,6 +24,12 @@ export function createPluginSystemRuntimeMock(): PluginRuntime["system"] {
         }),
       })),
     enqueueSystemEvent: vi.fn<PluginRuntime["system"]["enqueueSystemEvent"]>(),
+    captureSessionGeneration: vi
+      .fn<PluginRuntime["system"]["captureSessionGeneration"]>()
+      .mockResolvedValue(undefined),
+    postSessionNotice: vi
+      .fn<PluginRuntime["system"]["postSessionNotice"]>()
+      .mockResolvedValue({ status: "posted", delivered: false }),
     runCommandWithTimeout: vi.fn<PluginRuntime["system"]["runCommandWithTimeout"]>(),
     formatNativeDependencyHint: vi.fn<PluginRuntime["system"]["formatNativeDependencyHint"]>(
       () => "",

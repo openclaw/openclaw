@@ -113,13 +113,6 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
     retainAttachmentsOnKeep: true,
     collect: true,
     queued: true,
-    queuedLaunch: {
-      requesterRecovery: {},
-      request: { sessionKey: "agent:main:subagent:synthetic" },
-      timeoutMs: 100,
-      schedulerGroupKey: "group",
-      maxConcurrent: 1,
-    },
   };
   let scope: SubagentRegistrationScope | undefined;
   return {
@@ -134,7 +127,6 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
           createPendingLifecycleScheduler({ runs, completeInBackground: vi.fn() }),
         resumeRequesterSettleWake: vi.fn(),
         adoptPausedSubagentRunIntoSuccessor: async () => false,
-        refreshFrozenResultFromSession: async () => {},
         completeSubagentRunWithRecovery: async () => {},
         ...overrides,
       }),

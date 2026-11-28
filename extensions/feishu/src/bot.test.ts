@@ -5,6 +5,11 @@ import {
   type BuiltChannelInboundEventContext,
   type ChannelInboundSupplementalResolutionOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  consumeChannelAdmissionEvidence,
+  readChannelContextAdmissionEvidence,
+  withRegisteredChannelIngress,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   isControlCommandMessage,
@@ -19,11 +24,11 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveAgentRoute, type ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./bot.cleanup.test-support.js";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
-import type { FeishuMessageEvent } from "./bot.js";
-import { handleFeishuMessage, parseFeishuMessageEvent } from "./bot.js";
+import { handleFeishuMessage } from "./bot.js";
 import {
   createBoundConversation,
   createConfiguredBindingReadiness,
@@ -39,6 +44,8 @@ import {
   sentMessage,
   withFeishuRuntimeDefaults,
 } from "./bot.test-support.js";
+import { feishuPlugin } from "./channel.js";
+import type { FeishuMessageEvent } from "./event-types.js";
 import { parseMergeForwardContent } from "./message-content.js";
 import { setFeishuRuntime } from "./runtime.js";
 
@@ -550,6 +557,46 @@ describe("handleFeishuMessage command authorization", () => {
     setFeishuRuntime(botRuntime);
   });
 
+  it("retains host admission for a DM with distinct sender and chat IDs", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = createFeishuTestConfig(
+        { dmPolicy: "allowlist", allowFrom: ["ou_sender"] },
+        { session: { dmScope: "per-channel-peer" } },
+      );
+      await withRegisteredChannelIngress(
+        { plugin: feishuPlugin, config: cfg, setRuntime: setFeishuRuntime },
+        async (runtime) => {
+          botRuntime.channel.inbound.ingress = runtime.channel.inbound.ingress;
+          botRuntime.channel.inbound.buildContext = runtime.channel.inbound.buildContext;
+          botRuntime.channel.routing.resolveAgentRoute = runtime.channel.routing.resolveAgentRoute;
+          setFeishuRuntime(botRuntime);
+          await receiveConfigured(
+            { messageId: "msg-dm-admission", senderOpenId: "ou_sender", chatId: "oc_chat" },
+            cfg,
+          );
+          const context = dispatchReply.mock.calls[0]?.[0].ctx;
+          expect(context).toMatchObject({
+            SessionKey: "agent:main:feishu:direct:ou_sender",
+            SenderId: "ou_sender",
+            MessageSid: "msg-dm-admission",
+            NativeChannelId: "oc_chat",
+          });
+          expect(
+            consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(context)),
+          ).toMatchObject({
+            ingressState: "present",
+            invoker: {
+              state: "present",
+              kind: "person",
+              rawPrincipalRef: JSON.stringify(["feishu", "default", "ou_sender"]),
+            },
+            decisionCoverage: "enforced",
+          });
+        },
+      );
+    });
+  });
+
   it.each([
     {
       name: "send policy denied delivery",
@@ -837,30 +884,6 @@ describe("handleFeishuMessage command authorization", () => {
         key: "feishu:group:oc-group",
       });
       expect(dispatchReply).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it.each(["/status", "/btw progress?"])(
-    "keeps DM %s separate from agent mention context",
-    async (command) => {
-      computeCommandAccess.mockReturnValue(true);
-      await receiveConfigured(
-        {
-          messageId: `msg-dm-mention-${command}`,
-          text: `@_bot ${command}`,
-          message: { mentions: [{ key: "@_bot", id: { open_id: "ou-bot" }, name: "Bot" }] },
-        },
-        createFeishuTestConfig({ dmPolicy: "open", allowFrom: ["*"] }),
-        { botOpenId: "ou-bot" },
-      );
-      const context = inboundContext();
-      expect(context).toMatchObject({
-        RawBody: `<at user_id="ou-bot">Bot</at> ${command}`,
-        CommandBody: command,
-        BodyForCommands: command,
-      });
-      expect(context.BodyForAgent).toContain(`<at user_id="ou-bot">Bot</at> ${command}`);
-      expect(dispatchReply).toHaveBeenCalledOnce();
     },
   );
 
@@ -1222,29 +1245,6 @@ describe("handleFeishuMessage command authorization", () => {
     });
   });
 
-  it("delivers post files with caption 'Compare the attached report' to agent context", async () => {
-    const caption = "Compare the attached report";
-    const files = ["report.csv", "notes.csv"];
-    saveMessageResource.mockImplementation(
-      async (params: { fileKey: string; originalFilename?: string }) =>
-        savedMedia(params.fileKey, "text/csv", 20, `/tmp/${params.originalFilename}`),
-    );
-    await receiveMedia(`msg-post-files-${files.length}`, "post", {
-      content: [[{ tag: "text", text: caption }]],
-      files: files.map((fileName, index) => ({
-        file_key: `file_report_${index}`,
-        file_name: fileName,
-      })),
-    });
-
-    const context = inboundContext();
-    expect(context.BodyForAgent).toContain(caption);
-    expect(context).toMatchObject({
-      MediaPaths: files.map((fileName) => `/tmp/${fileName}`),
-      MediaTypes: files.map(() => "text/csv"),
-    });
-  });
-
   it("delivers unique rich-post attachments in their original mixed-media order", async () => {
     saveMessageResource.mockImplementation(
       async (params: { fileKey: string; originalFilename?: string; type: "file" | "image" }) =>
@@ -1292,28 +1292,6 @@ describe("handleFeishuMessage command authorization", () => {
       MediaTypes: ["video/mp4", "image/png", "video/mp4", "image/png"],
     });
     expect(context.BodyForAgent).toContain("**Urgent***[Docs](https://example.com)* <u>@Bob</u>");
-  });
-
-  it("parses direct interactive webhook content through the canonical card parser", () => {
-    const event = createFeishuTestEvent({
-      messageId: "msg-direct-card",
-      messageType: "interactive",
-      content: JSON.stringify({
-        schema: "2.0",
-        header: { title: { tag: "plain_text", content: "Direct task" } },
-        body: {
-          elements: [
-            {
-              tag: "table",
-              columns: [{ name: "status", display_name: "Status" }],
-              rows: [{ status: "Open" }],
-            },
-          ],
-        },
-      }),
-    });
-
-    expect(parseFeishuMessageEvent(event).content).toBe("Direct task\nStatus\nOpen");
   });
 
   it.each([

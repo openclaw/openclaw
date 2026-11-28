@@ -92,6 +92,7 @@ private final class UnreadTestTransport: @unchecked Sendable, OpenClawChatTransp
     private let respectsListLimit: Bool
     private let patchDelay: Duration?
     private let patchGate: UnreadPatchGate?
+    private let subscriptionGate: UnreadPatchGate?
 
     init(
         sessions: [OpenClawChatSessionEntry],
@@ -99,15 +100,21 @@ private final class UnreadTestTransport: @unchecked Sendable, OpenClawChatTransp
         patchFailures: Int = 0,
         respectsListLimit: Bool = false,
         patchDelay: Duration? = nil,
-        patchGate: UnreadPatchGate? = nil)
+        patchGate: UnreadPatchGate? = nil,
+        subscriptionGate: UnreadPatchGate? = nil)
     {
         self.sessions = sessions
         self.respectsListLimit = respectsListLimit
         self.patchDelay = patchDelay
         self.patchGate = patchGate
+        self.subscriptionGate = subscriptionGate
         self.state = UnreadTestTransportState(
             historyFailures: historyFailures,
             patchFailures: patchFailures)
+    }
+
+    func setActiveSessionKey(_ sessionKey: String) async throws {
+        await self.subscriptionGate?.wait()
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
@@ -344,6 +351,55 @@ private actor SidebarUnreadReceiptTransport: OpenClawChatTransport {
 @Suite(.serialized)
 @MainActor
 struct ChatViewModelUnreadTests {
+    // Handoff probe: production bootstrap/foreground entry points; fake external I/O only.
+    // The no-overlap argument is a green fixture control, not a second implementation.
+    @Test(arguments: [false, true])
+    func bootstrapCompletesAfterForegroundHistoryWinsDuringSubscribe(overlap: Bool) async {
+        let subscriptionGate = UnreadPatchGate()
+        let transport = UnreadTestTransport(
+            sessions: [self.entry(key: "a", unread: true)],
+            subscriptionGate: subscriptionGate)
+        let suiteName = "PR171950BootstrapValidation.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            Issue.record("Could not create the test-owned defaults suite")
+            return
+        }
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "a",
+            transport: transport,
+            modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer {
+            viewModel.detachTransport()
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        viewModel.load()
+        await subscriptionGate.waitUntilBlocked()
+        #expect(viewModel.isLoading)
+        #expect(await transport.historyCallCount() == 0)
+
+        if overlap {
+            // Bootstrap captured N but has not admitted its wire read.
+            // Complete foreground refresh N+1 while the subscription RPC is suspended.
+            await viewModel.resumeFromForeground().value
+            #expect(viewModel.hasAppliedLiveHistory)
+            #expect(await transport.historyCallCount() == 1)
+        }
+        #expect(await transport.unreadPatchAttempts().isEmpty)
+
+        await subscriptionGate.release()
+        await viewModel.bootstrapTask?.value
+
+        #expect(!viewModel.isLoading)
+        #expect(viewModel.errorText == nil)
+        #expect(viewModel.hasCurrentSessionMetadata)
+        #expect(viewModel.sessionId == "session-a")
+        let attempts = await transport.unreadPatchAttempts()
+        print("PR171950_BOOTSTRAP_RESULT overlap=\(overlap) unreadPatchCount=\(attempts.count)")
+        #expect(attempts.map(\.0) == ["a"], "Successful activation must acknowledge the visible chat")
+        #expect(attempts.map(\.1) == [false], "History supersession must not skip unread=false")
+    }
+
     private let sidebarRoster = Data(#"""
     {"sessions":[{"key":"agent:main:thread","agentId":"main","sessionId":"original",
       "createdAt":1,"updatedAt":10,"unread":true,"markedUnreadAt":5}]}

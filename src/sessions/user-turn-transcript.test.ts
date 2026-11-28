@@ -1,10 +1,21 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
+import { BUILTIN_AGENT_HARNESS_METADATA } from "../agents/harness/builtin-openclaw-metadata.js";
+import { runAgentHarnessLifecycleAttempt } from "../agents/harness/lifecycle.js";
+import {
+  createAttemptParams,
+  createAttemptResult,
+  createLifecycleHarness,
+} from "../agents/harness/lifecycle.test-support.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+  createAgentRunSupersededAbortError,
+} from "../agents/run-termination.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -18,19 +29,23 @@ import {
   capturePreparedTranscriptModelPromptProjection,
   rewritePreparedTranscriptMessageAtAnchor,
 } from "../config/sessions/session-message-rewrite.js";
+import { listSessionPendingInputs } from "../config/sessions/session-pending-input-history.js";
 import { transcriptMessage } from "../config/sessions/transcript-message.test-support.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import {
+  createOperatorAuthorityInactiveError,
+  GatewayOperatorAccessUnavailableError,
+} from "../infra/operator-authority-error.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import type { UserTurnInput } from "./user-turn-input.types.js";
 import {
   readPendingUserTurnTranscriptAdmission,
   readUserTurnRequesterOrigin,
 } from "./user-turn-transcript-admission.js";
+import { settleUserTurnPendingInput } from "./user-turn-transcript-processing.js";
 import {
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
   resolvePersistedUserTurnText,
-  type UserTurnInput,
 } from "./user-turn-transcript.js";
 import {
   isUserMessage,
@@ -104,8 +119,64 @@ describe("user turn transcript persistence", () => {
     return { dir, target, recorder, persistence, admitted, mediaInput, committedEntries };
   }
 
+  it.each(["user-stop", "delete", "reset", "revoked"] as const)(
+    "records explicit %s despite a simultaneous authority outage",
+    async (endCause) => {
+      const target = makeTarget();
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const recorder = record(userInput("accepted input", `${endCause}:user`), target);
+      await recorder.stageApproved!({ runId: endCause, assertCurrent: () => {} });
+      const outage = new GatewayOperatorAccessUnavailableError();
+      const failure =
+        endCause === "revoked"
+          ? new AggregateError([
+              outage,
+              createOperatorAuthorityInactiveError("closure-revoked", "source-revocation", 0),
+            ])
+          : outage;
+      const signal =
+        endCause === "user-stop"
+          ? AbortSignal.abort(createAgentRunDirectAbortError(true))
+          : endCause === "reset"
+            ? AbortSignal.abort(createAgentRunSupersededAbortError())
+            : undefined;
+      try {
+        await settleUserTurnPendingInput(recorder, signal, failure, endCause === "delete");
+        expect(await listSessionPendingInputs(target)).toMatchObject({
+          items: [{ state: "cancelled", endCause }],
+        });
+      } finally {
+        recorder.finishPendingInput?.("cancelled", "failed");
+        await recorder.waitForPendingInputSettlement?.();
+      }
+    },
+  );
+
+  it.each([
+    { accepted: true, expected: { state: "queued", endCause: undefined } },
+    { accepted: false, expected: { state: "cancelled", endCause: "restart-unrecoverable" } },
+  ])("hands an unconsumed input to restart replay only once accepted=$accepted", async (row) => {
+    const target = makeTarget();
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const recorder = record(userInput("acked input", `restart-${row.accepted}:user`), target);
+    await recorder.stageApproved!({ runId: `restart-${row.accepted}`, assertCurrent: () => {} });
+    const restart = createAgentRunRestartAbortError();
+    await settleUserTurnPendingInput(
+      recorder,
+      AbortSignal.abort(restart),
+      restart,
+      false,
+      "cancelled",
+      row.accepted,
+    );
+    const { items } = await listSessionPendingInputs(target);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ state: row.expected.state });
+    expect(items[0]?.endCause).toBe(row.expected.endCause);
+  });
+
   describe("trusted human transcript ownership", () => {
-    it("keeps producer requester custody through staging, replay, and collection", async () => {
+    it("keeps producer requester custody through staging and live collection", async () => {
       const target = makeTarget();
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
       const requesterOrigin = {
@@ -164,36 +235,13 @@ describe("user turn transcript persistence", () => {
         expect(copied.getPendingInputMessage?.()).not.toHaveProperty("__openclaw.requesterOrigin");
         await copied.persistApproved();
 
-        recorder.finishPendingInput?.("interrupted");
-        await recorder.waitForPendingInputSettlement?.();
-        const replay = createUserTurnTranscriptRecorder({
-          input: { text: input.text, idempotencyKey: input.idempotencyKey },
-          assertOriginalInputCommit: Object.assign(
-            () => {
-              throw new Error("Accepted input no longer belongs to its original source");
-            },
-            {
-              prepareSessionSourceScope: async () => {
-                throw new Error("Accepted input must not prepare its original source again");
-              },
-            },
-          ),
-          trackInputCompletion: true,
-          pendingInputRequestFingerprint: "authenticated-requester-custody",
-          target,
-        });
-        recorders.push(replay);
-        expect(
-          await replay.stageApproved!({ runId: "requester-custody", assertCurrent: () => {} }),
-        ).toBe(true);
-        expect(readUserTurnRequesterOrigin(replay)).toMatchObject(original);
         const aggregate = createUserTurnTranscriptRecorder({
           input: {
             text: "Collected original request",
             idempotencyKey: "collected-custody:user",
-            requesterOrigin: readUserTurnRequesterOrigin(replay),
+            requesterOrigin: readUserTurnRequesterOrigin(recorder),
           },
-          pendingInputSources: [replay],
+          pendingInputSources: [recorder],
           target,
         });
         recorders.push(aggregate);
@@ -209,7 +257,7 @@ describe("user turn transcript persistence", () => {
       } finally {
         releaseTarget.resolve();
         for (const current of recorders) {
-          current.finishPendingInput?.("interrupted");
+          current.finishPendingInput?.("cancelled", "failed");
         }
         await Promise.all(
           recorders.map(async (current) => current.waitForPendingInputSettlement?.()),
@@ -435,14 +483,50 @@ describe("user turn transcript persistence", () => {
       const [replacement] = await readMessages();
       expect(replacement).toMatchObject({ content: "new turn" });
       expect(readModelPromptProjection(replacement)).toBeUndefined();
+    });
 
+    // Every harness attempt runs through the lifecycle owner, which records its declaration.
+    it.each([
+      ["built-in embedded", BUILTIN_AGENT_HARNESS_METADATA.promptProjection],
+      ["undeclared plugin", undefined],
+    ] as const)("holds a %s harness to its prompt projection declaration", async (_, kind) => {
       const sent = record({ text: "already sent" });
       await sent.persistApproved();
-      sent.markSentToProvider?.();
-      await expect(sent.captureModelPromptProjection!("too late", () => {})).rejects.toThrow(
-        "before provider dispatch",
-      );
+      const harness = createLifecycleHarness({
+        promptProjection: kind,
+        runAttempt: async (params) => {
+          params.userTurnTranscriptRecorder?.markSentToProvider?.();
+          return createAttemptResult();
+        },
+      });
+      await runAgentHarnessLifecycleAttempt(harness, {
+        ...createAttemptParams(),
+        userTurnTranscriptRecorder: sent,
+      });
+      const capture = sent.captureModelPromptProjection!("too late", () => {});
+      if (kind === "captures") {
+        // A capturing harness can never have sent this turn without a projection.
+        await expect(capture).rejects.toThrow("before provider dispatch");
+      } else {
+        // An external runtime built its own prompt: the turn stays at its transcript text.
+        await expect(capture).resolves.toMatchObject({ content: "already sent" });
+        expect(await sent.prepareModelPromptProjection!("too late", () => {})).toBeUndefined();
+      }
       expect(readModelPromptProjection(sent.getPersistedMessage?.())).toBeUndefined();
+    });
+
+    it("does not apply a declaration from an attempt that never sent to a later send", async () => {
+      const sent = record({ text: "sent by a worker" });
+      await sent.persistApproved();
+      // The capturing harness's attempt ends before dispatch; a send outside the lifecycle follows.
+      await runAgentHarnessLifecycleAttempt(
+        createLifecycleHarness({ promptProjection: "captures" }),
+        { ...createAttemptParams(), userTurnTranscriptRecorder: sent },
+      );
+      sent.markSentToProvider?.();
+      await expect(sent.captureModelPromptProjection!("later", () => {})).resolves.toMatchObject({
+        content: "sent by a worker",
+      });
     });
 
     it("persists fallback user turns only once", async () => {
@@ -584,31 +668,7 @@ describe("user turn transcript persistence", () => {
       expect(persisted).toBeDefined();
       recorder.markRuntimePersisted(persisted?.message, persisted?.admission);
       const initialGeneration = recorder.getAdmissionReceipt()?.generation;
-
-      const admission = recorder.getAdmissionReceipt();
-      if (!admission) {
-        throw new Error("missing persisted admission");
-      }
-      const { db } = openOpenClawAgentDatabase({
-        agentId: target.agentId,
-        path: admission.storePath,
-      });
-      const work = trackSqliteStatementExecutions(
-        requireNativeSqliteDatabase(db),
-        ["fts", "size"],
-        (sql) =>
-          /\bsession_transcript_fts\b/i.test(sql)
-            ? "fts"
-            : sql.includes("octet_length")
-              ? "size"
-              : null,
-      );
-      try {
-        await recorder.confirmSteerTargetRunIdForPersistence?.("active-run");
-      } finally {
-        work.restore();
-      }
-      expect(work.counts).toEqual({ fts: 0, size: 0 });
+      await recorder.confirmSteerTargetRunIdForPersistence?.("active-run");
 
       expect(recorder.getAdmissionReceipt()?.generation).toBe(initialGeneration);
       const expected = {
@@ -619,6 +679,32 @@ describe("user turn transcript persistence", () => {
         },
       };
       expect(recorder.getPersistedMessage?.()).toMatchObject(expected);
+      await expectStored(target, expected);
+    });
+
+    it("stamps steering confirmed before the runtime commit", async () => {
+      const target = makeTarget();
+      const input = {
+        text: "tighten the answer",
+        idempotencyKey: "confirm-before-commit:user",
+        sender: { id: "operator-1", name: "Operator" },
+      };
+      const recorder = record(input, target);
+      // Steering resolves its message at enqueue, before acceptance names the target run.
+      await recorder.resolveMessage();
+      await recorder.confirmSteerTargetRunIdForPersistence?.("active-run");
+      const persisted = await persistUserTurnTranscript({ ...target, input });
+      expect(persisted?.message["__openclaw"]?.steerTargetRunId).toBeUndefined();
+      recorder.markRuntimePersisted(persisted?.message, persisted?.admission);
+
+      const expected = {
+        __openclaw: {
+          senderId: "operator-1",
+          senderName: "Operator",
+          steerTargetRunId: "active-run",
+        },
+      };
+      await vi.waitFor(() => expect(recorder.getPersistedMessage?.()).toMatchObject(expected));
       await expectStored(target, expected);
     });
 

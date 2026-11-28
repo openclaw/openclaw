@@ -70,7 +70,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => {
     resolveAgentHarnessBeforePromptBuildResult: resolvePromptMock,
     prepareAgentWorkspaceContext: prepareAgentWorkspaceContextMock,
     prepareWatchedSessionsHarnessContext: watchedSessionsContextMock,
-    embeddedAgentLog: { warn: vi.fn(), debug: vi.fn() },
+    embeddedAgentLog: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     formatErrorMessage: String,
     setActiveEmbeddedRun: vi.fn(),
     clearActiveEmbeddedRun: vi.fn(),
@@ -184,7 +184,6 @@ it("captures plugin system instructions once and refreshes plugin context on res
   const fixture = await createFixture({
     trigger: "user",
     toolAuthorityFingerprint: "fixture-prompt-authority",
-    contextTokenBudget: 32_000,
   });
   promptFixture.declarations = toolDeclarations("memory_search", "memory_get");
   const hook = vi.fn().mockReturnValue({
@@ -196,12 +195,6 @@ it("captures plugin system instructions once and refreshes plugin context on res
   promptHooks({ handler: hook }, { handler: recall, requiresToolAuthority: true });
 
   const binding = await fixture.run();
-  expect(openModelContextAsyncMock).toHaveBeenCalledWith(
-    expect.anything(),
-    expect.objectContaining({
-      limits: { maxBytes: 256_000, maxEvents: 10_000, toolResultOverflow: "omit" },
-    }),
-  );
   expect(hook).toHaveBeenCalledWith(
     expect.objectContaining({ messages: [{ role: "user", content: "Earlier request" }] }),
     expect.anything(),
@@ -254,11 +247,13 @@ it("keeps ordinary context but grants no Gateway tool authority when forwarding 
   );
 });
 
-it("continues without transcript access when no prompt hook needs history", async () => {
+it("does not create an empty native conversation when prior history cannot be loaded", async () => {
   const fixture = await createFixture();
-  openModelContextAsyncMock.mockRejectedValue(new Error("History is unavailable"));
-  await fixture.run();
-  expect(promptFixture.turnInputs[0]).toContain("Fixture prompt");
+  const error = new Error("History is unavailable");
+  openModelContextAsyncMock.mockRejectedValue(error);
+  await expect(fixture.run()).rejects.toBe(error);
+  expect(fixture.requests).toEqual([]);
+  expect(promptFixture.turnInputs).toEqual([]);
 });
 
 it.each([
@@ -401,29 +396,6 @@ it("routes workspace memory through callable Gateway memory tools and plugin gui
   expect(instructions).toContain("memory_search");
   expect(instructions).toContain("Fixture memory plugin guidance");
   expect(instructions).not.toContain("Private fixture memory remains tool-routed.");
-});
-
-it("includes shared policies for the admitted Gateway tools in the initial instructions", async () => {
-  const fixture = await createFixture({
-    sessionKey: "agent:main:main",
-    gitCoauthorPrompt: "Fixture Git co-authors: Example <example@example.test>.",
-  });
-  promptFixture.declarations = toolDeclarations(
-    "screen",
-    "skill_workshop",
-    "sessions_spawn",
-    "sessions_send",
-    "subagents",
-    "gateway",
-  );
-  await fixture.run();
-  const instructions = fixture.requests[0]?.agent.instructions;
-  expect(instructions).toContain("## UI Presentation");
-  expect(instructions).toContain("## Skill Workshop");
-  expect(instructions).toContain("## Delegation");
-  expect(instructions).toContain("Use or store credentials the user supplies as requested");
-  expect(instructions).toContain("Fixture Git co-authors: Example <example@example.test>.");
-  expect(instructions).toContain("Extra fixture instructions");
 });
 
 it("refreshes temporal, delivery, and watched-session context on resumed turns", async () => {

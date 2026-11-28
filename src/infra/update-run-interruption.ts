@@ -7,8 +7,8 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { inspectUpdateRepairDriverAdmission } from "./update-repair-driver-admission.js";
 import { sendUpdateResultTelemetry } from "./update-result-telemetry.js";
-import { inspectUpdateRepairDriverAdmission } from "./update-run-activity.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
 import type { InterruptedUpdateGatewayObservation } from "./update-run-interruption-health.js";
 import {
@@ -22,8 +22,9 @@ import {
 } from "./update-run-interruption-worker.js";
 import { hasStoredUpdateRecovery, readUpdateRunRecord } from "./update-run-read.kernel.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import { upsertStep } from "./update-run-step-upsert.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
-import { persistRun, updateRunLedgerSchema, upsertStep } from "./update-run-write.js";
+import { persistRun, updateRunLedgerSchema } from "./update-run-write.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 export { readInstalledUpdateCandidate } from "./update-run-interruption-store.js";
 

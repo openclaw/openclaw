@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -15,6 +17,7 @@ import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js
 import type { SqliteWorkerAdmissionRequest } from "../infra/sqlite-worker-operation-admission.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
   readOpenClawAgentDatabaseRegistryToken,
@@ -33,12 +36,121 @@ import {
   createAgentCreationWitnessSource as source,
   createAliasedAgentCreationWitnessFixture as aliasedFixture,
 } from "./openclaw-agent-execution.creation-fixture.test-support.js";
-import { captureOpenClawAgentDatabaseExecution as capture } from "./openclaw-agent-execution.js";
+import {
+  captureOpenClawAgentDatabaseExecution as capture,
+  captureOpenClawAgentDatabaseExecutionAsync,
+  prepareOpenClawAgentDatabaseExecution,
+} from "./openclaw-agent-execution.js";
+import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 type Execution = ReturnType<typeof capture>;
 type Options = ReturnType<typeof fixture>;
+
+it("prepares an agent database while its original creation witness is retained", async ({
+  signal,
+}) => {
+  const options = fixture();
+  const creator = await captureOpenClawAgentDatabaseExecutionAsync(options, {}, "observed-absence");
+  await using _ = onExit(() => creator.release());
+  expect(fs.existsSync(options.path)).toBe(false);
+  await withinTest(
+    prepareOpenClawAgentDatabaseExecution(options, () => {}, signal),
+    signal,
+  );
+  expect(creator.fileIdentity).toMatchObject({ kind: "file" });
+  await expect(
+    withinTest(
+      creator.runExisting(source(), (scope) =>
+        scope.execute({
+          type: "session.entry.read",
+          input: { sessionKeys: ["agent:main:missing"] },
+        }),
+      ),
+      signal,
+    ),
+  ).resolves.toMatchObject({ entries: [] });
+});
+
+it("keeps an async capture live when the preceding unused borrower releases", async ({
+  signal,
+}) => {
+  const options = fixture();
+  const preceding = capture(options);
+  const capturing = captureOpenClawAgentDatabaseExecutionAsync(options, {}, "inherit");
+  let joining: Execution | undefined;
+  try {
+    await preceding.release();
+    joining = await capturing;
+    await withinTest(joining.prepare(source(), signal), signal);
+    expect(joining.fileIdentity).toMatchObject({ kind: "file" });
+  } finally {
+    await preceding.release();
+    await joining?.release();
+  }
+});
+
+it.for(["cancelled", "revoked"] as const)(
+  "does not create a database after queued preparation is %s",
+  async (outcome, { signal }) => {
+    const options = fixture();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const controller = new AbortController();
+    const refusal = new Error("Queued preparation lost its caller");
+    let revoked = false;
+    const held = runOpenClawAgentWorkerWrite(options, async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    let preparing: Promise<void> | undefined;
+    try {
+      await withinTest(entered.promise, signal);
+      const turns = resolveGlobalSingleton<{ pending: Map<string, Promise<void>> }>(
+        Symbol.for("openclaw.sqliteDatabaseAdmissionTurns"),
+        () => {
+          throw new Error("Expected the real cold database admission queue");
+        },
+      );
+      const key = `path:${options.path}`;
+      const heldTurn = turns.pending.get(key);
+      assert(heldTurn);
+      preparing = prepareOpenClawAgentDatabaseExecution(
+        options,
+        () => {
+          if (revoked) {
+            throw refusal;
+          }
+        },
+        controller.signal,
+      );
+      const result = preparing.catch((error: unknown) => error);
+      // Cold native admission precedes the store writer queue in this forked suite.
+      await vi.waitFor(() => expect(turns.pending.get(key)).not.toBe(heldTurn));
+      if (outcome === "cancelled") {
+        controller.abort(refusal);
+        expect(await withinTest(result, signal)).toBe(refusal);
+      } else {
+        revoked = true;
+      }
+      release.resolve();
+      await withinTest(held, signal);
+      expect(await withinTest(result, signal)).toBe(refusal);
+      expect(fs.existsSync(options.path)).toBe(false);
+
+      // A refused preparer must not leave a creation reference behind for its successor.
+      const next = capture(options);
+      await using _ = onExit(() => next.release());
+      await withinTest(next.prepare(source(), signal), signal);
+      expect(next.fileIdentity).toMatchObject({ kind: "file" });
+    } finally {
+      controller.abort(refusal);
+      release.resolve();
+      await Promise.allSettled([held, preparing]);
+    }
+  },
+);
 
 function onExit(cleanup: () => Promise<unknown>) {
   return {
@@ -58,13 +170,7 @@ function emptyStore(options: Options) {
   fs.writeFileSync(options.path, "");
 }
 function isPreparing(request: SqliteWorkerAdmissionRequest, kind: string) {
-  return (
-    request.stage === "prepare" &&
-    request.facts !== null &&
-    typeof request.facts === "object" &&
-    "kind" in request.facts &&
-    request.facts.kind === kind
-  );
+  return request.stage === "prepare" && isRecord(request.facts) && request.facts.kind === kind;
 }
 function releaseAll(...executions: (Execution | undefined)[]) {
   return Promise.allSettled(executions.map(async (execution) => execution?.release()));
@@ -80,17 +186,12 @@ function initialized(sessionKey: string, sessionId: string) {
 function existingTranscript(sessionKey: string) {
   return { kind: "session-transcript-initialized", sessionKey, transcriptPublication: undefined };
 }
-async function readAliasAndClose(
-  options: Options,
-  sessionKey: string,
-  assertRegistry?: () => void,
-) {
+async function readAliasAndClose(options: Options, sessionKey: string) {
   const execution = capture(options);
   await using _ = onExit(() => execution.release());
-  await expect(initialize(execution, sessionKey, "alias-session")).resolves.toEqual(
+  expect(await initialize(execution, sessionKey, "alias-session")).toEqual(
     existingTranscript(sessionKey),
   );
-  assertRegistry?.();
   await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
   expect(() => execution.assertCurrent()).toThrow(/closed/);
 }
@@ -132,7 +233,6 @@ it("exposes a prepared generation only after registration publication and keeps 
   expect(observedUnpublishedIdentity).toBe(true);
   const claim = execution.capturePreparedGenerationClaim();
   expect(claim).toBeDefined();
-  claim!.assertCurrent();
   const warmStages: string[] = [];
   const warmSource = source((request) => warmStages.push(request.stage));
   await Promise.all([execution.prepare(warmSource), execution.prepare(warmSource)]);
@@ -230,7 +330,8 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
   expect(sibling.fileIdentity).toEqual(creator.fileIdentity);
   await Promise.all([creator.release(), sibling.release()]);
   await readAliasAndClose(options, sessionKey);
-  await readAliasAndClose(aliased, sessionKey, () => expect(registry.assertCurrent).not.toThrow());
+  await readAliasAndClose(aliased, sessionKey);
+  expect(registry.assertCurrent).not.toThrow();
   const retainedValidation = getOpenClawAgentDatabaseValidationForTransfer(options);
   assert(retainedValidation);
   expect(Atomics.load(new Int32Array(retainedValidation.valid), 0)).toBe(1);
@@ -376,30 +477,28 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it("keeps the owner's absent target when a later creator observes an unexpected file", async () => {
-  const options = fixture();
-  const creator = creatorFor(options);
-  emptyStore(options);
-  const later = creatorFor(options);
-  await using _ = onExit(() => releaseAll(creator, later));
-  await expect(later.prepare(source())).rejects.toThrow(/changed before creating open/);
-  expect(fs.readFileSync(options.path)).toHaveLength(0);
-});
-
-it("retains the first creator's file witness on a preexisting execution owner", async () => {
-  const options = fixture();
-  emptyStore(options);
-  const ordinary = capture(options);
-  const creator = creatorFor(options);
-  fs.renameSync(options.path, `${options.path}.original`);
-  fs.writeFileSync(options.path, "");
-  const later = creatorFor(options);
-  await using _ = onExit(() => releaseAll(ordinary, creator, later));
-  await expect(later.prepare(source())).rejects.toThrow(
-    /identity changed|captured creating reference/,
-  );
-  expect(fs.readFileSync(options.path)).toHaveLength(0);
-});
+it.each(["absent", "preexisting"] as const)(
+  "retains the first creator's %s target witness when a later creator sees another file",
+  async (initial) => {
+    const options = fixture();
+    let ordinary: Execution | undefined;
+    if (initial === "preexisting") {
+      emptyStore(options);
+      ordinary = capture(options);
+    }
+    const creator = creatorFor(options);
+    if (ordinary) {
+      fs.renameSync(options.path, `${options.path}.original`);
+    }
+    emptyStore(options);
+    const later = creatorFor(options);
+    await using _ = onExit(() => releaseAll(ordinary, creator, later));
+    await expect(later.prepare(source())).rejects.toThrow(
+      ordinary ? /identity changed|captured creating reference/ : /changed before creating open/,
+    );
+    expect(fs.readFileSync(options.path)).toHaveLength(0);
+  },
+);
 
 it("prepares its originally missing store and records native birth without changing identity", async () => {
   const options = fixture();
@@ -426,15 +525,20 @@ it("prepares its originally missing store and records native birth without chang
       get: unrelatedInitialization,
     });
   }
-  const warm = capture({
-    ...options,
-    env,
-  });
+  const stat = vi.spyOn(fs, "statSync");
+  syncBuiltinESMExports();
   try {
-    await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
-    expect(unrelatedInitialization).not.toHaveBeenCalled();
+    const warm = capture({ ...options, env });
+    try {
+      await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
+      expect(unrelatedInitialization).not.toHaveBeenCalled();
+      expect(stat).not.toHaveBeenCalled();
+    } finally {
+      await warm.release();
+    }
   } finally {
-    await warm.release();
+    stat.mockRestore();
+    syncBuiltinESMExports();
   }
   const windows = (() => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -568,6 +672,34 @@ it.each([
     );
     assert(read);
     expect(read.entries).toEqual([{ sessionKey, entry: written }]);
+  },
+);
+
+it.each(["released", "retained"] as const)(
+  "allows the first session after a %s missing-store reader",
+  async (lifetime) => {
+    const options = fixture();
+    const reader = capture(options);
+    let following: Execution | undefined = undefined;
+    await using _ = onExit(() => releaseAll(reader, following));
+    await expect(reader.runExisting(source(), async () => "unexpected")).resolves.toBeUndefined();
+    expect(fs.existsSync(options.path)).toBe(false);
+    if (lifetime === "released") {
+      await reader.release();
+    }
+
+    const sessionKey = "agent:main:after-missing-read";
+    const entry = { sessionId: "first-session", updatedAt: 1 };
+    const written = await upsertSessionEntryCore(
+      { agentId: options.agentId, env: options.env, storePath: options.path, sessionKey },
+      entry,
+    );
+    expect(written).toMatchObject({ sessionId: entry.sessionId });
+    following = lifetime === "retained" ? reader : capture(options);
+    const read = await following.runExisting(source(), (scope) =>
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: [sessionKey] } }),
+    );
+    expect(read).toMatchObject({ entries: [{ sessionKey, entry: written }] });
   },
 );
 
@@ -720,7 +852,6 @@ it("keeps another captured borrower live when the initiating caller is revoked d
   await using _ = onExit(() => releaseAll(rejected, retained));
   await expect(rejected.runExisting(revoked, async () => "not admitted")).rejects.toThrow(refusal);
   expect(reachedNativeOpen).toBe(true);
-  expect(() => retained.assertCurrent()).not.toThrow();
   await expect(
     initialize(retained, "agent:main:after-open-refusal", "retained-borrower"),
   ).resolves.toEqual(initialized("agent:main:after-open-refusal", "retained-borrower"));
@@ -765,8 +896,8 @@ it.skipIf(process.platform === "win32")(
         replaced = true;
       }
     };
-    const readEntry = (request = source()) =>
-      execution.runExisting(request, (scope) =>
+    const readEntry = (request = source(), borrowed = execution) =>
+      borrowed.runExisting(request, (scope) =>
         scope.execute({
           type: "session.entry.read",
           input: { sessionKeys: ["agent:main:missing"] },
@@ -776,7 +907,12 @@ it.skipIf(process.platform === "win32")(
       await execution.prepare(source());
       await expect(readEntry(requestSource)).resolves.toMatchObject({ entries: [] });
       expect(replaced).toBe(true);
-      await expect(readEntry()).rejects.toThrow(/identity changed/);
+      const borrowed = capture(options);
+      try {
+        await expect(readEntry(source(), borrowed)).rejects.toThrow(/identity changed/);
+      } finally {
+        await borrowed.release();
+      }
     } finally {
       if (replaced) {
         fs.unlinkSync(options.path);

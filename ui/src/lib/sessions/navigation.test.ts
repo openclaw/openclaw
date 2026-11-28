@@ -139,6 +139,15 @@ describe("resolveSessionNavigation", () => {
     expect(navigation.selectedSession).toBeUndefined();
   });
 
+  it("waits for a dashboard row before revealing its title", () => {
+    const key = "agent:main:dashboard:creating";
+    expect(navigate([], { sessionKey: key }).visibleSessions[0]?.titlePending).toBe(true);
+    expect(
+      navigate([session("dashboard:creating", { titlePending: false })], { sessionKey: key })
+        .visibleSessions[0]?.titlePending,
+    ).toBe(false);
+  });
+
   it("keeps a deep-linked session ahead of every returned active row", () => {
     const navigation = navigate(roster("recent", 11, 100), { sessionKey: "agent:main:oldest" });
 
@@ -250,8 +259,18 @@ it("keeps a newly created operator-named CLI session visible", () => {
   expect(isSystemCreatedSessionRow(row)).toBe(false);
 });
 
-it("breaks updatedAt ties by key, matching the gateway list order", () => {
-  const rows = ["zeta", "alpha", "mid"].map((name) => session(name, { updatedAt: null }));
+it("preserves metadata pin priority and key ties, matching the gateway list order", () => {
+  const rows = [
+    ...["zeta", "alpha", "mid"].map((name) => session(name, { updatedAt: null })),
+    session("older-pin", { updatedAt: 900, pinned: true, pinnedAt: 10 }),
+    session("newer-pin", { updatedAt: 1, pinned: true, pinnedAt: 20 }),
+  ];
   const sorted = rows.toSorted(compareSessionRowsByUpdatedAt).map((row) => row.key);
-  expect(sorted).toEqual(["agent:main:alpha", "agent:main:mid", "agent:main:zeta"]);
+  expect(sorted).toEqual([
+    "agent:main:newer-pin",
+    "agent:main:older-pin",
+    "agent:main:alpha",
+    "agent:main:mid",
+    "agent:main:zeta",
+  ]);
 });

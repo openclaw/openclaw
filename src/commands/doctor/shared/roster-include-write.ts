@@ -1,5 +1,4 @@
 import { setConfigValueAtPath, unsetConfigValueAtPath } from "../../../config/config-paths.js";
-import { collectChangedConfigPaths } from "../../../config/include-write-boundary.js";
 import type { ConfigWriteOptions } from "../../../config/io.js";
 import { projectWebhookMigrationIncludeWrite } from "../../../config/io.meta.js";
 import { resolveConfigIncludeWriteBoundary } from "../../../config/mutate.js";
@@ -21,42 +20,6 @@ export function prepareDoctorConfigWriteStage(params: {
       persistCanonicalAgentRoster: boolean;
     }
   | undefined {
-  const steeringPath = ["messages", "queue", "allowCollaborativeSteering"];
-  if (
-    params.snapshot.sourceConfig.messages?.queue?.allowCollaborativeSteering === undefined &&
-    params.nextConfig.messages?.queue?.allowCollaborativeSteering === false
-  ) {
-    // A new root default must not block a repair owned by an included file.
-    const withoutDefault = cloneConfigWithResolutionFacts(params.nextConfig);
-    unsetConfigValueAtPath(withoutDefault, steeringPath, params.snapshot.sourceConfig);
-    const priorStage = prepareDoctorConfigWriteStage({ ...params, nextConfig: withoutDefault });
-    if (priorStage) {
-      return { ...priorStage, remainingPaths: [...priorStage.remainingPaths, steeringPath] };
-    }
-    if (resolveConfigIncludeWriteBoundary({ ...params, nextConfig: withoutDefault })) {
-      return {
-        config: withoutDefault,
-        remainingPaths: [steeringPath],
-        persistCanonicalAgentRoster: params.persistCanonicalAgentRoster === true,
-      };
-    }
-    const defaultOnly = cloneConfigWithResolutionFacts(params.snapshot.sourceConfig);
-    setConfigValueAtPath(defaultOnly, steeringPath, false);
-    const remaining = collectChangedConfigPaths(defaultOnly, params.nextConfig);
-    if (
-      remaining.paths.length > 0 &&
-      resolveConfigIncludeWriteBoundary({
-        snapshot: params.snapshot,
-        nextConfig: defaultOnly,
-      })
-    ) {
-      return {
-        config: defaultOnly,
-        remainingPaths: remaining.paths,
-        persistCanonicalAgentRoster: false,
-      };
-    }
-  }
   const webhook = projectWebhookMigrationIncludeWrite(
     params.snapshot.sourceConfig,
     params.nextConfig,

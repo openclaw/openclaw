@@ -1,13 +1,26 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import "../plugins/plugin-source-capture-context.js";
 import type { AgentHarness } from "../agents/harness/types.js";
+import { PREPARED_MODEL_RUNTIME_LIFETIMES_KEY } from "../agents/prepared-model-runtime.types.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { closePostgresPool } from "../infra/postgres-sync/pool-state.js";
+import { NATIVE_WORKER_LIFETIMES_KEY } from "../infra/worker-native-lifecycle.types.js";
+import { createLegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-dispatch.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  resetGlobalSingletonLifecycleState,
+  resolveGlobalSingleton,
+} from "../shared/global-singleton.js";
+import { SKILLS_DISCOVERY_KEY } from "../skills/types.js";
+import { STATE_DATABASE_LIFECYCLE_KEY } from "../state/openclaw-state-db-contract.js";
 import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
-import { installCliSignalExitHandlers, registerSignalExitGate } from "./signal-exit-barrier.js";
+import {
+  installCliSignalExitHandlers,
+  registerSignalExitGate,
+  withGatewayStartupSignalOwner,
+} from "./signal-exit-barrier.js";
 
 export type CliHarnessCleanup = {
   scheduler: GatewayScheduler;
@@ -57,24 +70,20 @@ export async function withCliCommandCleanup<T>(
 ): Promise<T> {
   if (gatewayRun) {
     // Gateway owns its process lifetime; borrowed calls must not inherit CLI ownership.
-    return scope.run(undefined, () => run());
+    // The executable still needs a stop owner until its run loop installs one.
+    const executable = scope.getStore() === "process";
+    return scope.run(undefined, () => (executable ? withGatewayStartupSignalOwner(run) : run()));
   }
   if (scope.getStore() !== "process") {
     return run();
   }
   const { GatewayScheduler } = await import("../infra/gateway-scheduler.js");
-  // A command can replace its own package. Retain cleanup before it can remove
-  // the files; another importer's module cache does not preserve this resolution.
+  // Registered owner callbacks survive package replacement without loading dormant runtimes.
   const { runCliDisposerAfterPending } = await import("./runtime-cleanup.js");
-  const { closeOpenClawStateDatabaseAsync } = await import("../state/openclaw-state-db-cache.js");
-  const { closeDefaultRetainedNativeWorkerSource } =
-    await import("../infra/worker-native-lifecycle.js");
-  const { closePostgresPool } = await import("../infra/postgres-sync/pool.js");
-  const { closeSkillsWatchers } = await import("../skills/runtime/refresh.js");
   const pluginResources = new CliPluginInvocationResources();
   const releaseSignals = installCliSignalExitHandlers();
   pluginResources.adopt({ release: async () => releaseSignals() });
-  const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  const sdkResourceHost = new LegacyPluginSdkResourceHost(createLegacyPluginSdkReplyDispatch());
   const scheduler = new GatewayScheduler();
   sdkResourceHost.bindScheduler(scheduler);
   pluginResources.adopt({ release: () => sdkResourceHost.close() });
@@ -83,13 +92,14 @@ export async function withCliCommandCleanup<T>(
     scheduler,
     harnesses: new Map(),
     registries: new Set(),
-    closeSkillsWatchers,
+    closeSkillsWatchers: () => resetGlobalSingletonLifecycleState(SKILLS_DISCOVERY_KEY),
     pluginResources,
   };
   const finished = createDeferredCore();
-  const releaseExitGate = registerSignalExitGate(finished.promise, (signal) => {
+  const releaseExitGate = registerSignalExitGate(finished.promise, (signal, reason) => {
+    const cause = signal ?? reason;
     pluginResources.beginClose(
-      new DOMException(`CLI stopping${signal ? ` (${signal})` : ""}`, "AbortError"),
+      new DOMException(`CLI stopping${cause ? ` (${cause})` : ""}`, "AbortError"),
     );
     void scheduler.stop();
   });
@@ -99,10 +109,13 @@ export async function withCliCommandCleanup<T>(
         try {
           return await run(cleanup);
         } finally {
-          // Owned shutdown runs before this drain; expired disposers keep their recorded outcome.
+          // Model generations can hold native workers. Let them settle before shared-state cleanup.
+          await runCliDisposerAfterPending("prepared-model-runtime", () =>
+            resetGlobalSingletonLifecycleState(PREPARED_MODEL_RUNTIME_LIFETIMES_KEY),
+          );
           await runCliDisposerAfterPending("shared-state", async () => {
-            await closeOpenClawStateDatabaseAsync();
-            await closeDefaultRetainedNativeWorkerSource();
+            await resetGlobalSingletonLifecycleState(STATE_DATABASE_LIFECYCLE_KEY);
+            await resetGlobalSingletonLifecycleState(NATIVE_WORKER_LIFETIMES_KEY);
             await closePostgresPool();
           });
         }

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { serialize } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -9,7 +10,13 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
 import * as hostTranscriptWriter from "../../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
-import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { readPreparedSessionCompactionInWorker } from "../../config/sessions/session-compaction-prepared.js";
+import { readAgentToolUsageStatus } from "../../config/sessions/tool-usage.js";
+import {
+  getOwnedSessionTranscriptActor,
+  withSessionTranscriptWriteAssertion,
+} from "../../config/sessions/transcript-write-context.js";
 import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -17,12 +24,77 @@ import {
 import { SessionManager } from "../../plugin-sdk/agent-sessions.js";
 import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createRunToolUsageRecorder } from "../tool-usage-recorder.js";
 import { withSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
-import { sessionManagerOpenCompaction } from "./session-manager-core.js";
+import * as actorAppend from "./session-manager-actor-append.js";
 import { sessionScope } from "./session-manager-fixtures.test-support.js";
+import * as persistenceReceipt from "./session-manager-persistence-error.js";
+import { withSelectedTranscriptReader } from "./session-manager-reader.test-support.js";
 import type { SessionEntry } from "./session-manager-types.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("carries admitted usage through manager and direct appends for a logical session-store locator", () =>
+  withOpenClawTestState({ label: "usage-actor-locator", scenario: "minimal" }, async (state) => {
+    const target = {
+      ...sessionScope(state.statePath("agents", "main", "sessions", "sessions.json"), "usage"),
+      env: state.env,
+    };
+    const now = Date.UTC(2026, 10, 1);
+    const toolId = "openclaw:core:read";
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: now });
+    const recorder = expectDefined(
+      createRunToolUsageRecorder({
+        agentId: "main",
+        runId: "synthetic-usage-run",
+        config: { agents: { defaults: { experimental: { usageRankedToolIndex: true } } } },
+        log: {
+          warn: (message) => {
+            throw new Error(message);
+          },
+        },
+        now: () => now,
+      }),
+      "enabled recorder",
+    );
+    try {
+      await withSelectedTranscriptReader(
+        target,
+        async () => {
+          const binding = expectDefined(getOwnedSessionTranscriptActor(target), "admitted actor");
+          expect(binding.database.path).not.toBe(target.storePath);
+          await recorder.bindTranscript(binding.database);
+          binding.toolUsageRecorder = recorder;
+          const manager = await SessionManager.openAsync(target, state.workspaceDir);
+          await manager.appendCustomEntryAsync("usage-admission", {});
+          const options = { agentId: "main", env: state.env, now };
+          expect(await readAgentToolUsageStatus(options)).toMatchObject({
+            liveSince: now,
+            rows: [],
+          });
+          recorder.record(toolId);
+          await manager.appendMessageAsync(makeUserMessage("Synthetic manager append", now));
+          expect((await readAgentToolUsageStatus(options)).rows).toEqual([
+            { toolId, score: 1, updatedAt: now },
+          ]);
+          recorder.record(toolId);
+          await SessionManager.appendMessageToTranscriptAsync(target, {
+            role: "custom",
+            customType: "usage-direct-append",
+            content: "Synthetic direct append",
+            display: true,
+            timestamp: now,
+          });
+          expect((await readAgentToolUsageStatus(options)).rows).toEqual([
+            { toolId, score: 2, updatedAt: now },
+          ]);
+        },
+        true,
+      );
+    } finally {
+      await recorder.settle();
+    }
+  }));
 
 async function withFixture(
   name: string,
@@ -199,6 +271,70 @@ it("awaits leaf, branch, raw persistence, and static transcript operations witho
   });
 });
 
+it.each(["actor", "worker"] as const)(
+  "keeps raw %s persist receipts bounded without rebuilding the caller's retained view",
+  async (backend) => {
+    const receiptBytes: number[] = [];
+    for (const count of [16, 512, 4096]) {
+      await withFixture(
+        `raw-receipt-${count}`,
+        async ({ target, manager: seedManager, reopen }) => {
+          const header = seedManager.getHeader();
+          const history = Array.from({ length: count }, (_, index) => ({
+            ...rawEntry(`history-${index}`, index ? `history-${index - 1}` : ""),
+            parentId: index ? `history-${index - 1}` : null,
+            data: { text: "x".repeat(1024) },
+          }));
+          await replaceTranscriptEvents(target, [header, ...history]);
+          const persist = async () => {
+            const manager = await reopen();
+            const before = manager.getEntries();
+            const entry = rawEntry("raw-append", "history-0");
+            const capture = vi.spyOn(persistenceReceipt, "receiveSessionManagerCommit");
+            const actorCapture = vi.spyOn(actorAppend, "appendSessionManagerActor");
+            try {
+              await expect(
+                manager.persistAsync(entry, { appendIntent: "active-branch" }),
+              ).resolves.toMatchObject({
+                appended: true,
+                effectiveParentId: `history-${count - 1}`,
+              });
+              const value =
+                backend === "actor"
+                  ? (await expectDefined(actorCapture.mock.results.at(-1), "actor reply").value)
+                      .committed.value
+                  : (await expectDefined(capture.mock.results.at(-1), "metadata reply").value)
+                      .value;
+              receiptBytes.push(serialize(value).byteLength);
+            } finally {
+              capture.mockRestore();
+              actorCapture.mockRestore();
+            }
+            // Raw persistence never adopts the returned history; explicit reload owns that change.
+            expect(manager.getEntries()).toEqual(before);
+            expect(manager.getEntry(entry.id)).toBeUndefined();
+            expect(entry.parentId).toBe("history-0");
+            const expected = [...history, { ...entry, parentId: `history-${count - 1}` }];
+            expect((await reopen()).getEntries()).toEqual(expected);
+            await manager.reloadPersistedTranscriptAsync();
+            expect(manager.getEntries()).toEqual(expected);
+          };
+          if (backend === "actor") {
+            await withSelectedTranscriptReader(target, persist, true);
+          } else {
+            await persist();
+          }
+        },
+      );
+    }
+    expect(
+      receiptBytes.every((bytes) => bytes < 4096),
+      JSON.stringify(receiptBytes),
+    ).toBe(true);
+    expect(Math.max(...receiptBytes) - Math.min(...receiptBytes)).toBeLessThan(128);
+  },
+);
+
 it("propagates queued write revocation and user/custom commit failures without publishing or falling back", async () => {
   await withFixture("failure", async ({ target, manager, seed }) => {
     const before = await loadTranscriptEvents(target);
@@ -251,9 +387,9 @@ it("propagates queued write revocation and user/custom commit failures without p
   });
 });
 
-it("prepares current compaction metadata and retained history in one worker read", async () => {
-  await withFixture("compaction-preparation", async ({ target, manager, seed: retained }) => {
-    const opaque = await manager.appendCustomEntryAsync("retained-plugin-data", { value: 42 });
+it("prepares current compaction facts in one native extraction after source custody probes", async () => {
+  await withFixture("compaction-preparation", async ({ target, manager }) => {
+    await manager.appendCustomEntryAsync("retained-plugin-data", { value: 42 });
     await replaceSessionEntry(target, {
       sessionId: target.sessionId,
       updatedAt: 2,
@@ -276,9 +412,13 @@ it("prepares current compaction metadata and retained history in one worker read
     );
     const sql = observeHostDataSql();
     try {
-      const prepared = await SessionManager[sessionManagerOpenCompaction](target);
+      const prepared = await readPreparedSessionCompactionInWorker(target, { kind: "preflight" });
+      if (prepared.status !== "preflight") {
+        throw new Error("expected preflight facts");
+      }
       await waitForDiagnosticEventsDrained();
-      expect(requests).toEqual(["task"]);
+      expect(requests).toEqual(["execute", "execute", "task"]);
+      expect(prepared.reads.extractedRows).toBe(prepared.eventCount + 1); // Includes the session header.
       expect(sql.queries).toEqual([]);
       expect(prepared.sessionTarget).toEqual(target);
       expect(prepared.entry).toMatchObject({
@@ -287,10 +427,8 @@ it("prepares current compaction metadata and retained history in one worker read
         compactionCount: 3,
       });
       expect(prepared.runtimeEntry).toEqual(prepared.entry);
-      expect(prepared.sessionManager.getEntries()).toMatchObject([
-        { id: retained, type: "message", message: { content: "Seed" } },
-        { id: opaque, type: "custom", data: { value: 42 } },
-      ]);
+      expect(prepared).not.toHaveProperty("sessionManager");
+      expect(prepared.eventCount).toBeGreaterThan(0);
     } finally {
       sql.restore();
       unsubscribe();
@@ -315,15 +453,15 @@ it("keeps the requested entry separate from the persisted compaction window owne
     const target = sessionScope(requested.storePath, requested.sessionId);
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(target, state.workspaceDir);
-    const retained = await manager.appendMessageAsync(makeUserMessage("Window-owned content", 1));
-    const prepared = await SessionManager[sessionManagerOpenCompaction](requested);
+    await manager.appendMessageAsync(makeUserMessage("Window-owned content", 1));
+    const prepared = await readPreparedSessionCompactionInWorker(requested, { kind: "preflight" });
+    if (prepared.status !== "preflight") {
+      throw new Error("expected preflight facts");
+    }
     expect(prepared.sessionTarget).toEqual(target);
     expect(prepared.entry).toMatchObject({ label: "Alias metadata" });
     expect(prepared.runtimeEntry?.label).toBeUndefined();
-    expect(prepared.sessionManager.getEntry(retained!)).toMatchObject({
-      type: "message",
-      message: { content: "Window-owned content" },
-    });
+    expect(prepared).not.toHaveProperty("sessionManager");
   });
 });
 

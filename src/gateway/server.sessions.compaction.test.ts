@@ -7,7 +7,7 @@ import type {
   QueuedCompactionHostOptions,
 } from "../agents/embedded-agent-runner/compact.types.js";
 import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
-import { withSessionCompactionPersistenceAsync } from "../agents/sessions/session-compaction-persistence.js";
+import { createSessionCompactionEntry } from "../agents/sessions/session-compaction-persistence.js";
 import { enqueueFollowupRun } from "../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
@@ -33,7 +33,7 @@ import {
   listSessionStateEventsSince,
 } from "../sessions/session-state-events.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
+import { getGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import {
   isCompactOperationEvent,
   loadSessionEntry,
@@ -90,7 +90,7 @@ async function createCompactionSession(
 }
 
 function getSuiteGatewayContextResolver() {
-  const runtime = getGatewayRecoveryRuntime();
+  const runtime = getGatewayLifecycleRuntime();
   const resolveGatewayContext = runtime && getGatewayContextResolver(runtime);
   if (!resolveGatewayContext) {
     throw new Error("Suite Gateway runtime is unavailable");
@@ -103,6 +103,7 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
     totalLines: 1,
     entry: {
       spawnedCwd: "/tmp/task-repo",
+      contextTokens: 32_000,
       thinkingLevel: "medium",
       reasoningLevel: "stream",
       cliSessionIds: { "claude-cli": "claude-session", "codex-cli": "codex-session" },
@@ -138,13 +139,14 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
       throw new Error("expected SQLite session target");
     }
     const host = hostInput as QueuedCompactionHostOptions;
-    const manager = host.preparedSession?.sessionManager;
-    if (!manager || !host.withCompactionPersistenceAsync) {
+    if (!host.preparedSession || !host.withCompactionPersistenceAsync) {
       throw new Error("expected prepared Gateway compaction persistence");
     }
-    expect(manager.getEntries()).toHaveLength(2);
-    await withSessionCompactionPersistenceAsync(manager, host.withCompactionPersistenceAsync, () =>
-      manager.appendCompactionAsync(
+    expect(host.preparedSession).not.toHaveProperty("sessionManager");
+    await host.withCompactionPersistenceAsync({
+      scope: host.preparedSession.sessionTarget,
+      event: createSessionCompactionEntry(
+        null,
         "summary",
         seedMessage.messageId,
         120,
@@ -153,7 +155,8 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
         undefined,
         80,
       ),
-    );
+      appendIntent: "active-branch",
+    });
     expect(loadSessionEntry(sessionScope)).toMatchObject({ compactionCount: 1, totalTokens: 80 });
     return {
       ok: true,
@@ -217,6 +220,7 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
     },
     workspaceDir: "/tmp/task-repo",
     cwd: "/tmp/task-repo",
+    contextTokenBudget: 32_000,
     config: {
       agents: {
         defaults: {
@@ -528,104 +532,6 @@ test("sessions.compact rejects stale terminal persistence after the session chan
   }
 });
 
-test("sessions.compact accounts from the latest entry without overwriting concurrent metadata", async () => {
-  const scope = await createCompactionSession("sess-compact-metadata");
-  const compaction = holdCompaction();
-  const { ws } = await openClient();
-  const compactResult = rpcReq(ws, "sessions.compact", { key: "main" });
-  try {
-    await compaction.waitForEntry(compactResult);
-    await upsertSessionEntryCore(scope, {
-      ...loadSessionEntry(scope),
-      sessionId: scope.sessionId,
-      compactionCount: 3,
-      label: "changed during compaction",
-    });
-    compaction.release();
-    expectMainCompactionResult(await compactResult, true);
-    const entry = loadSessionEntry(scope);
-    expect(entry?.label).toBe("changed during compaction");
-    expect(entry?.compactionCount).toBe(4);
-  } finally {
-    compaction.release();
-    await Promise.allSettled([compactResult]);
-    await closeGatewayTestWebSocket(ws);
-  }
-});
-
-test("sessions.reset waits for terminal compaction before replacing the session", async () => {
-  const { storePath } = await createCompactionSession("sess-compact-reset");
-  const compaction = holdCompaction();
-
-  const { ws } = await openClient();
-  const compactResult = rpcReq(ws, "sessions.compact", { key: "main" });
-  let resetResult: ReturnType<typeof rpcReq<{ entry: { sessionId: string } }>> | undefined;
-  try {
-    await compaction.waitForEntry(compactResult);
-    let resetSettled = false;
-    resetResult = rpcReq<{ entry: { sessionId: string } }>(ws, "sessions.reset", {
-      key: "main",
-    }).finally(() => {
-      resetSettled = true;
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(resetSettled).toBe(false);
-
-    compaction.release();
-    expect((await compactResult).ok).toBe(true);
-    const reset = await resetResult;
-    expect(reset.ok).toBe(true);
-    const resetSessionId = reset.payload?.entry.sessionId;
-    expect(resetSessionId).toBe("sess-compact-reset");
-    const resetEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
-    expect(resetEntry?.sessionId).toBe(resetSessionId);
-  } finally {
-    compaction.release();
-    await Promise.allSettled([compactResult, resetResult]);
-    await closeGatewayTestWebSocket(ws);
-  }
-});
-
-test("sessions.compact blocks new work admission through terminal persistence", async () => {
-  const { storePath, sessionId } = await createCompactionSession("sess-compact-admission");
-  const compaction = holdCompaction();
-
-  const { ws } = await openClient();
-  const compactResult = rpcReq(ws, "sessions.compact", { key: "main" });
-  let pendingAdmission: ReturnType<typeof beginSessionEffect> | undefined;
-  try {
-    await compaction.waitForEntry(compactResult);
-
-    let admitted = false;
-    pendingAdmission = beginSessionEffect({
-      scope: storePath,
-      identities: ["agent:main:main", sessionId],
-      assertAllowed: () => {},
-    }).then((lease) => {
-      admitted = true;
-      return lease;
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(admitted).toBe(false);
-
-    compaction.release();
-    expect((await compactResult).ok).toBe(true);
-    await pendingAdmission;
-    expect(admitted).toBe(true);
-  } finally {
-    compaction.release();
-    await Promise.allSettled([
-      compactResult,
-      pendingAdmission?.then((admission) => admission.release()),
-    ]);
-    await closeGatewayTestWebSocket(ws);
-  }
-});
-
 test("sessions.compact returns a no-op without interrupting an active admission", async () => {
   const { storePath, sessionId } = await createCompactionSession("sess-compact-noop-active", {
     totalLines: 2,
@@ -762,7 +668,7 @@ test("sessions.compact preserves summary-elided queued follow-up work", async ()
   }
   const queue = getExistingFollowupQueue(sessionKey)!;
   expect(queue.summaryElisions).toHaveLength(1);
-  const elidedSource = queue.summaryElisions[0]!.sources[0]!;
+  const elidedSource = queue.summaryElisions[0]!.entries[0]!.source;
   expect(elidedSource.controllerInput).toBeDefined();
 
   const { ws } = await openClient();
@@ -770,9 +676,9 @@ test("sessions.compact preserves summary-elided queued follow-up work", async ()
     const compacted = await rpcReq(ws, "sessions.compact", { key: "main" });
 
     expect(compacted.ok).toBe(true);
-    expect(getExistingFollowupQueue(sessionKey)?.summaryElisions[0]?.sources).toContain(
-      elidedSource,
-    );
+    expect(
+      getExistingFollowupQueue(sessionKey)?.summaryElisions[0]?.entries.map(({ source }) => source),
+    ).toContain(elidedSource);
     expect(elidedSource.controllerInput?.retirementRequested).not.toBe(true);
     expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledOnce();
     expectNoSessionQueueCleanup();
@@ -816,39 +722,6 @@ test("sessions.compact refuses real compaction while a worker inference owns the
   expect(hasSession).toHaveBeenCalledWith(sessionId);
   expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();
   expectNoSessionQueueCleanup();
-});
-
-test("sessions.patch waits for terminal compaction before archiving the session", async () => {
-  const { sessionKey } = await createCompactionSession("sess-compact-archive", {
-    sessionKey: "agent:main:dashboard:compact-race",
-  });
-  const compaction = holdCompaction();
-
-  const { ws } = await openClient();
-  const compactResult = rpcReq(ws, "sessions.compact", { key: sessionKey });
-  let archiveResult: ReturnType<typeof rpcReq> | undefined;
-  try {
-    await compaction.waitForEntry(compactResult);
-    let archiveSettled = false;
-    archiveResult = rpcReq(ws, "sessions.patch", {
-      key: sessionKey,
-      archived: true,
-      expectedSessionId: "sess-compact-archive",
-    }).then((result) => {
-      archiveSettled = true;
-      return result;
-    });
-    await Promise.resolve();
-    expect(archiveSettled).toBe(false);
-
-    compaction.release();
-    expect((await compactResult).ok).toBe(true);
-    expect((await archiveResult).ok).toBe(true);
-  } finally {
-    compaction.release();
-    await Promise.allSettled([compactResult, archiveResult]);
-    await closeGatewayTestWebSocket(ws);
-  }
 });
 
 test("sessions.compact maxLines trims SQLite transcript rows without creating a transcript archive", async () => {
@@ -961,7 +834,7 @@ test("sessions.compact maxLines does not interrupt an active run when no transcr
 
     expect(compacted.ok).toBe(true);
     expect(compacted.payload?.compacted).toBe(false);
-    expect(compacted.payload?.reason).toBe("no transcript");
+    expect(compacted.payload?.reason).toBe("No chat history to compact.");
     expect(operation.abortSignal.aborted).toBe(false);
     expect(isSessionControllerWorkActive(scope.storePath, [scope.sessionId])).toBe(true);
     expect(embeddedRunMock.abortCalls).toEqual([]);

@@ -22,7 +22,6 @@ import {
 } from "./chat-message-render.test-support.tsx";
 import {
   createAssistantMessage,
-  createAttachmentBlock,
   createUserMessage,
   createMediaBlock,
   createAssistantImageMessage,
@@ -266,10 +265,7 @@ describe("grouped chat attachments", () => {
     const container = document.body.appendChild(document.createElement("div"));
     let sidebarContent: unknown;
     renderReactiveAssistant(
-      () =>
-        createAssistantMessage([
-          createAttachmentBlock(source, "audio", "clip.mp3", "audio/mpeg", { artifactId }),
-        ]),
+      () => nativeAudio(source, artifactId),
       {
         resolveArtifactDownload,
         onOpenSidebar: (content) => {
@@ -307,7 +303,7 @@ describe("grouped chat attachments", () => {
 describe("grouped chat images", () => {
   const imageElement = (root: Element = harness.view) =>
     root.querySelector<HTMLImageElement>(".chat-message-image");
-  const thumbnail = (source: string) => `${source.replace(/\/full$/u, "/thumbnail")}?v=4&width=480`;
+  const thumbnail = (source: string) => `${source.replace(/\/full$/u, "/thumbnail")}?v=5&width=480`;
 
   function mountAssistantImage(
     url: string,
@@ -420,7 +416,7 @@ describe("grouped chat images", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(element(".chat-bubble")).toBe(bubble);
     expectAbsent(".chat-message-image");
-    expect(harness.view.textContent).toContain("Pairing QR expired");
+    expect(harness.view.textContent).toContain("Pairing code expired");
   });
 
   it.each([
@@ -468,6 +464,7 @@ describe("grouped chat images", () => {
       createAssistantImageMessage(source, "Generated image body stall", { width: 1, height: 1 }),
     );
 
+    await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(0);
     const [, fetchInit] = requireFetchCallForUrl(fetchMock, thumbnail(source));
     expect(fetchInit?.signal?.aborted).toBe(false);
@@ -478,6 +475,8 @@ describe("grouped chat images", () => {
 
     await vi.advanceTimersByTimeAsync(0);
     expectAbsent(".chat-message-image");
+    // The mounted timestamp owns a clock until its message is removed.
+    harness.render([]);
     expect(vi.getTimerCount()).toBe(0);
   });
 

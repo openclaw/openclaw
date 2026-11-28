@@ -91,6 +91,10 @@ function runCloseout(options: {
   };
   writeFileSync(join(repo, "metadata.json"), JSON.stringify(metadata));
   writeFileSync(
+    join(repo, ".local/prep-context.env"),
+    `PR_NUMBER=42\nPR_HEAD=${metadata.headRefName}\nPR_HEAD_SHA_BEFORE=${metadata.headRefOid}\n`,
+  );
+  writeFileSync(
     join(repo, ".local/gates-hosted-checks.json"),
     JSON.stringify({ headSha: metadata.headRefOid }),
   );
@@ -136,9 +140,10 @@ source "$SCRIPTS/pr-lib/common.sh"
 source "$SCRIPTS/pr-lib/changelog.sh"
 source "$SCRIPTS/pr-lib/gates.sh"
 source "$SCRIPTS/pr-lib/review.sh"
+source "$SCRIPTS/pr-lib/prepare-core.sh"
 enter_worktree() { PR_MAIN_SHA="$MAIN_SHA"; }
 refresh_prep_branch_for_reviewed_head() { :; }
-checkout_prep_branch() { :; }
+checkout_prep_branch() { source .local/prep-context.env; }
 # Review authority is covered by the preparation fixtures; this isolates release classification.
 require_prepared_review() { :; }
 run_quiet_logged() {

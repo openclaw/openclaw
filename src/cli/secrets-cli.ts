@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
@@ -109,7 +110,7 @@ export function registerSecretsCli(program: Command): void {
         const detail = message ? `: ${message}` : "";
         defaultRuntime.error(
           danger(
-            `Could not reload secrets because the Gateway did not respond${detail}. Run \`${formatCliCommand(
+            terminalText`Could not reload secrets because the Gateway did not respond${detail}. Run \`${formatCliCommand(
               "openclaw gateway status --deep",
             )}\` to inspect the active Gateway.`,
           ),
@@ -157,7 +158,7 @@ export function registerSecretsCli(program: Command): void {
         (err) => {
           defaultRuntime.error(
             danger(
-              `Secrets audit failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw doctor")} to inspect config and credential state.`,
+              terminalText`Secrets audit failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw doctor")} to inspect config and credential state.`,
             ),
           );
         },
@@ -166,11 +167,11 @@ export function registerSecretsCli(program: Command): void {
       );
       if (!opts.json) {
         defaultRuntime.log(
-          `Secrets audit: ${report.status}. plaintext=${report.summary.plaintextCount}, unresolved=${report.summary.unresolvedRefCount}, shadowed=${report.summary.shadowedRefCount}, storeResidue=${report.summary.storeResidueCount}, legacy=${report.summary.legacyResidueCount}.`,
+          terminalText`Secrets audit: ${report.status}. plaintext=${report.summary.plaintextCount}, unresolved=${report.summary.unresolvedRefCount}, shadowed=${report.summary.shadowedRefCount}, storeResidue=${report.summary.storeResidueCount}, legacy=${report.summary.legacyResidueCount}.`,
         );
         for (const finding of report.findings.slice(0, 20)) {
           defaultRuntime.log(
-            `- [${finding.code}] ${finding.file}:${finding.jsonPath} ${finding.message}`,
+            terminalText`- [${finding.code}] ${finding.file}:${finding.jsonPath} ${finding.message}`,
           );
         }
         if (report.findings.length > 20) {
@@ -241,8 +242,8 @@ export function registerSecretsCli(program: Command): void {
                 `Preflight: changed=${configured.preflight.changed}, files=${configured.preflight.changedFiles.length}, warnings=${configured.preflight.warningCount}.`,
               );
               if (configured.preflight.warningCount > 0) {
-                for (const warning of configured.preflight.warnings) {
-                  defaultRuntime.log(`- warning: ${warning}`);
+                for (const warning of new Set(configured.preflight.warnings)) {
+                  defaultRuntime.log(terminalText`- warning: ${warning}`);
                 }
               }
               if (
@@ -259,7 +260,7 @@ export function registerSecretsCli(program: Command): void {
                 `Plan: targets=${configured.plan.targets.length}, providerUpserts=${providerUpserts}, providerDeletes=${providerDeletes}.`,
               );
               if (opts.planOut) {
-                defaultRuntime.log(`Plan written to ${opts.planOut}`);
+                defaultRuntime.log(terminalText`Plan written to ${opts.planOut}`);
               }
             }
 
@@ -294,6 +295,11 @@ export function registerSecretsCli(program: Command): void {
                 allowExec: Boolean(opts.allowExec),
               });
               if (!opts.json) {
+                for (const warning of new Set(result.warnings)) {
+                  if (!configured.preflight.warnings.includes(warning)) {
+                    defaultRuntime.log(terminalText`- warning: ${warning}`);
+                  }
+                }
                 defaultRuntime.log(
                   result.changed
                     ? `Secrets applied. Updated ${result.changedFiles.length} file(s).`
@@ -308,7 +314,7 @@ export function registerSecretsCli(program: Command): void {
           (err) => {
             defaultRuntime.error(
               danger(
-                `Secrets configure failed: ${formatErrorMessage(err)}. Re-run ${formatCliCommand("openclaw secrets audit")} before applying changes.`,
+                terminalText`Secrets configure failed: ${formatErrorMessage(err)}. Re-run ${formatCliCommand("openclaw secrets audit")} before applying changes.`,
               ),
             );
           },
@@ -346,7 +352,7 @@ export function registerSecretsCli(program: Command): void {
               err instanceof SecretsPlanFileNotFoundError ? err.message : formatErrorMessage(err);
             defaultRuntime.error(
               danger(
-                `Secrets apply failed: ${message}. Re-run ${formatCliCommand("openclaw secrets apply --from <path> --dry-run")} to inspect the plan without writing.`,
+                terminalText`Secrets apply failed: ${message}. Re-run ${formatCliCommand("openclaw secrets apply --from <path> --dry-run")} to inspect the plan without writing.`,
               ),
             );
           },
@@ -354,6 +360,9 @@ export function registerSecretsCli(program: Command): void {
         );
         if (opts.json) {
           return;
+        }
+        for (const warning of new Set(result.warnings)) {
+          defaultRuntime.log(terminalText`- warning: ${warning}`);
         }
         if (opts.dryRun) {
           defaultRuntime.log(

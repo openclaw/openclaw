@@ -18,35 +18,29 @@ function makeStateWithMocks() {
 }
 
 describe("cron service wake() origin capture", () => {
-  it("forwards sessionKey + agentId so the event lands on the originating session", async () => {
-    const { state, enqueueSessionEvent } = makeStateWithMocks();
-    const result = await wake(state, {
+  for (const { name, mode, text, sessionKey, agentId } of [
+    {
+      name: "forwards sessionKey + agentId so the event lands on the originating session",
       mode: "now",
       text: "follow up on the report",
       sessionKey: "agent:main:telegram:8661849123:topic:4052",
       agentId: "main",
-    });
-    expect(result).toEqual({ ok: true });
-    expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith("follow up on the report", {
-      sessionKey: "agent:main:telegram:8661849123:topic:4052",
-      agentId: "main",
-    });
-  });
-
-  it("immediately admits an explicitly targeted session even with next-heartbeat mode", async () => {
-    const { state, enqueueSessionEvent } = makeStateWithMocks();
-    const result = await wake(state, {
+    },
+    {
+      name: "immediately admits an explicitly targeted session even with next-heartbeat mode",
       mode: "next-heartbeat",
       text: "check the queue",
       sessionKey: "agent:coding:discord:thread123",
       agentId: "coding",
+    },
+  ] as const) {
+    it(name, async () => {
+      const { state, enqueueSessionEvent } = makeStateWithMocks();
+      const result = await wake(state, { mode, text, sessionKey, agentId });
+      expect(result).toEqual({ ok: true });
+      expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(text, { sessionKey, agentId });
     });
-    expect(result).toEqual({ ok: true });
-    expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith("check the queue", {
-      sessionKey: "agent:coding:discord:thread123",
-      agentId: "coding",
-    });
-  });
+  }
 
   it("forwards an agentId-only wake so the event reaches that agent's default lane", async () => {
     // An agent-only origin must not fall back to the global default lane.

@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
@@ -10,7 +11,11 @@ import {
 } from "../../test-helpers/modal-dialog.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
-import { activePlacementSession, createTestChatPane } from "./chat-pane.test-support.ts";
+import {
+  activePlacementSession,
+  createTestChatPane,
+  runPaneHeaderAction,
+} from "./chat-pane.test-support.ts";
 import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 
 let dialogs: ReturnType<typeof createModalDialogTestFixture>;
@@ -73,7 +78,7 @@ function fixture(row: GatewaySessionRow, fallbackAgentId = "main") {
     request,
     reconcileMutation,
     requireProfile,
-    run: () => dialogs.track(pane.handleHeaderSessionAction({ kind: "move-session" }, row)),
+    run: () => dialogs.track(runPaneHeaderAction(pane, { kind: "move-session" }, row)),
   };
 }
 it("waits for workspace settlement before offering a move", async () => {
@@ -83,7 +88,7 @@ it("waits for workspace settlement before offering a move", async () => {
   const blocked = run();
   await blocked;
   expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-  expect(state.lastError).toContain("Finalizing worker workspace");
+  expect(state.lastError).toContain("Saving workspace changes");
   expect(request).not.toHaveBeenCalled();
 
   delete row.placement.workspaceResultReconciling;
@@ -108,7 +113,7 @@ it("rechecks workspace settlement after choosing the destination", async () => {
   submit();
   await moving;
   expect(request).not.toHaveBeenCalledWith("sessions.move", expect.anything());
-  expect(state.lastError).toContain("Finalizing worker workspace");
+  expect(state.lastError).toContain("Saving workspace changes");
 });
 
 it("retains explicit offline-device abandonment with a pending workspace result", async () => {
@@ -167,7 +172,7 @@ it.each(["dispatch", "move"] as const)(
     const gateway = document.querySelector<HTMLButtonElement>('[data-value="gateway"]');
     if (mode === "move") {
       expect(gateway!.disabled).toBe(true);
-      expect(gateway!.getAttribute("aria-pressed")).toBe("false");
+      expect(gateway!.getAttribute("aria-checked")).toBe("false");
     } else {
       expect(gateway).toBeNull();
     }
@@ -229,7 +234,7 @@ it.each(["dispatch", "move", "retry", "stop"] as const)(
       const { pane, run, request, reconcileMutation } = fixture(row, "writer");
       const operation =
         mode === "stop"
-          ? dialogs.track(pane.handleHeaderSessionAction({ kind: "stop-cloud-worker" }, row))
+          ? dialogs.track(runPaneHeaderAction(pane, { kind: "stop-cloud-worker" }, row))
           : run();
       if (mode === "stop") {
         answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");

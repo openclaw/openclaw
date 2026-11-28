@@ -1,13 +1,5 @@
 import type { SkillsWorkshopReadResult } from "@openclaw/gateway-protocol";
-import {
-  action,
-  affects,
-  createMemo,
-  createOptimistic,
-  createSignal,
-  onSettled,
-  refresh,
-} from "solid-js";
+import { createMemo, createSignal, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -24,17 +16,28 @@ import {
 import { generateUUID } from "../../lib/uuid.ts";
 import { buildInitialChatSubmission } from "../chat/user-message-content.ts";
 import { retainRejectedInitialTurn } from "../new-session/rejected-initial-turn.ts";
-import { canRunWorkshopMutation, resolveWorkshopAccess } from "./access.ts";
+import {
+  canRunWorkshopMutation,
+  isSkillWorkshopInstalled,
+  resolveWorkshopAccess,
+} from "./access.ts";
+import { createWorkshopActionPresentation } from "./action-presentation.ts";
 import { loadWorkshopSnapshot, type WorkshopMutation, type WorkshopSnapshot } from "./api.ts";
 import { SKILL_WORKSHOP_LEARNING_PROMPT } from "./learning-prompt.ts";
-import { resolveWorkshopMode, setWorkshopMode, type SkillWorkshopMode } from "./mode.ts";
-import type { WorkshopViewerResult } from "./view-shared.tsx";
 import {
-  archivedWorkshopSkills,
+  arePluginsDisabled,
+  resolveWorkshopMode,
+  setWorkshopMode,
+  type SkillWorkshopMode,
+} from "./mode.ts";
+import { readWorkshopPage, workshopPageSearch } from "./page-location.ts";
+import { WorkshopPluginAvailabilityOwner } from "./plugin-availability.ts";
+import { defaultStartView, type WorkshopViewerResult } from "./view-shared.tsx";
+import {
   SkillWorkshopView,
-  sortWorkshopSkills,
   type WorkshopFilter,
   type WorkshopSort,
+  type WorkshopStartView,
   type WorkshopTab,
   type WorkshopViewer,
   type WorkshopViewerTarget,
@@ -57,26 +60,37 @@ function resolveWorkshopAgentId(context: ApplicationContext): string {
   );
 }
 
-class SkillWorkshopPageState {
+export class SkillWorkshopPageState {
   scope: WorkshopScope | null = null;
   listRequest: { result: Promise<WorkshopSnapshot | null> } | null = null;
   viewerRequest: { result: Promise<WorkshopViewerResult | null> } | null = null;
   private snapshot: WorkshopSnapshot | null = null;
   private viewer: WorkshopViewer | null = null;
   private pendingAction: string | null = null;
+  private membership: {
+    name: string;
+    destination: WorkshopFilter;
+    rollbackFilter: WorkshopFilter | null;
+  } | null = null;
+  // A Retry that started before an accepted move cannot put its old membership back.
+  private membershipRevision = 0;
   private actionError: string | null = null;
   private modeBusy = false;
   private modeError: string | null = null;
   private learningBusy = false;
   private learningError: string | null = null;
+  /** Chosen on the first read of an agent's workshop, then the person's choice. */
+  private startView: WorkshopStartView | null = null;
   private filter: WorkshopFilter = "active";
   private sort: WorkshopSort = "uses";
   private tab: WorkshopTab = "instructions";
+  private readonly plugin: WorkshopPluginAvailabilityOwner;
 
   constructor(
     private readonly context: ApplicationContext,
     private readonly changed: () => void,
   ) {
+    this.plugin = new WorkshopPluginAvailabilityOwner(changed);
     onSettled(() => {
       const sync = () => {
         this.syncScope();
@@ -87,10 +101,16 @@ class SkillWorkshopPageState {
         context.gateway.subscribe(sync),
         // Selection receipts abort prior-agent work before another workshop action starts.
         context.agentSelection.subscribe(sync),
+        // Back, Forward and links change which skill or draft page is open.
+        context.router.subscribe(() => {
+          this.followLocation();
+          changed();
+        }),
       ];
       sync();
       return () => {
         stops.forEach((stop) => stop());
+        this.plugin.dispose();
         this.scope?.abort.abort();
         this.scope?.retire();
         this.scope = null;
@@ -101,7 +121,15 @@ class SkillWorkshopPageState {
   private syncScope() {
     const context = this.context;
     const snapshot = context.gateway.snapshot;
-    const client = snapshot.phase === "connected" ? snapshot.client : null;
+    const connected = snapshot.phase === "connected" ? snapshot.client : null;
+    const installed = isSkillWorkshopInstalled(snapshot);
+    // Without the plugin there is nothing to load; a catalog that gains it reloads here.
+    this.plugin.sync(installed ? null : connected);
+    if (!installed && connected) {
+      // The off panel needs `plugins.enabled` to know whether turning Workshop on can work.
+      void context.runtimeConfig.ensureLoaded();
+    }
+    const client = installed ? connected : null;
     const agentId = client ? resolveWorkshopAgentId(context) : null;
     if (client === (this.scope?.client ?? null) && agentId === (this.scope?.agentId ?? null)) {
       return;
@@ -124,28 +152,45 @@ class SkillWorkshopPageState {
     this.viewerRequest = null;
     this.viewer = null;
     this.pendingAction = null;
+    this.membership = null;
     this.actionError = null;
     this.learningBusy = false;
     this.learningError = null;
     this.modeBusy = false;
     this.modeError = null;
+    // Another agent's workshop opens on what needs the person there.
+    this.startView = null;
+    this.filter = "active";
     if (this.scope) {
       void this.load();
     }
   }
 
-  private load(retry = false): Promise<void> {
+  private load(retry = false, appliedDraft?: { draftId: string; name: string }): Promise<boolean> {
     const scope = this.scope;
     if (!scope) {
-      return Promise.resolve();
+      return Promise.resolve(false);
     }
     // Retry is the user's explicit reread; ensure waits out a recent failed read.
     void (retry ? this.context.runtimeConfig.refresh() : this.context.runtimeConfig.ensureLoaded());
+    const targetAtStart = this.viewer?.target;
+    const membershipRevision = this.membershipRevision;
     const result = loadWorkshopSnapshot(scope.client, scope.agentId).then((snapshot) => {
-      if (this.scope !== scope) {
+      if (this.scope !== scope || this.membershipRevision !== membershipRevision) {
         return null;
       }
+      // The first read for this agent; later reads follow mutations and keep the open page.
+      const first = this.snapshot === null;
       this.snapshot = snapshot;
+      // Retry can refresh the list, but cannot navigate away from a selection made since it began.
+      if (retry && this.viewer?.target !== targetAtStart) {
+        this.changed();
+        return snapshot;
+      }
+      const page = readWorkshopPage(this.context);
+      if (first && this.startView === null) {
+        this.startView = defaultStartView(snapshot);
+      }
       const selected = this.viewer?.target;
       if (
         selected &&
@@ -156,20 +201,40 @@ class SkillWorkshopPageState {
       ) {
         this.viewer = null;
       }
-      // A chat notice links here with ?skill=<name>; open it in whichever list holds it.
-      const requested = this.viewer
-        ? null
-        : new URLSearchParams(this.context.router.getState().location.search).get("skill");
+      // A chat notice links here with ?skill=<name>; a draft page is ?draft=<id>. Open the page
+      // in whichever list holds it.
+      const requested = this.viewer ? null : (page.skill ?? null);
       const requestedLive = snapshot.list.skills.some((skill) => skill.name === requested);
       if (
+        appliedDraft &&
+        page.draft === appliedDraft.draftId &&
+        snapshot.list.skills.some((skill) => skill.name === appliedDraft.name)
+      ) {
+        // Follow a draft page to the live skill before the queue picks its next row.
+        this.filter = "active";
+        this.selectSkill(appliedDraft.name);
+      } else if (
+        !this.viewer &&
+        page.draft &&
+        snapshot.list.drafts?.some((d) => d.id === page.draft)
+      ) {
+        this.startView = "drafts";
+        this.selectDraft(page.draft);
+      } else if (
         requested &&
         (requestedLive || snapshot.list.archived.some((skill) => skill.name === requested))
       ) {
         this.filter = requestedLive ? "active" : "archived";
         this.selectSkill(requested);
       } else if (!this.viewer) {
+        // A page link to a skill or draft this agent does not have opens the list instead.
+        if (first && (page.skill || page.draft)) {
+          this.context.replace("skill-workshop", { search: "" });
+        }
         this.selectFirst();
       }
+      // While a page is open its URL follows the selection (a discarded draft's next one).
+      this.syncLocation();
       this.changed();
       return snapshot;
     });
@@ -177,17 +242,70 @@ class SkillWorkshopPageState {
     this.changed();
     // The rendering read presents rejection; callers only join owner settlement.
     return result.then(
-      () => undefined,
-      () => undefined,
+      () => true,
+      () => false,
     );
   }
+
+  /** While a page is open its URL follows the selection (Apply, Discard, Previous / Next). */
+  private syncLocation() {
+    const page = readWorkshopPage(this.context);
+    if (!this.snapshot || (!page.skill && !page.draft)) {
+      return;
+    }
+    const search = workshopPageSearch(this.viewer?.target);
+    if (search !== this.context.router.getState().location.search) {
+      this.context.replace("skill-workshop", { search });
+    }
+  }
+
+  /** Back and Forward between pages select the skill or draft the URL names. */
+  private followLocation() {
+    const snapshot = this.snapshot;
+    const page = readWorkshopPage(this.context);
+    const target = this.viewer?.target;
+    if (!snapshot || !this.scope) {
+      return;
+    }
+    if (page.draft) {
+      if (!snapshot.list.drafts?.some((draft) => draft.id === page.draft)) {
+        this.context.replace("skill-workshop", { search: "" });
+      } else if (target?.draftId !== page.draft) {
+        this.startView = "drafts";
+        this.selectDraft(page.draft);
+      }
+    } else if (page.skill) {
+      const live = snapshot.list.skills.some((skill) => skill.name === page.skill);
+      if (!live && !snapshot.list.archived.some((skill) => skill.name === page.skill)) {
+        this.context.replace("skill-workshop", { search: "" });
+      } else if (target?.name !== page.skill || target.draftId) {
+        this.filter = live ? "active" : "archived";
+        this.selectSkill(page.skill);
+      }
+    }
+  }
+
+  readonly openPage = () => {
+    const search = workshopPageSearch(this.viewer?.target);
+    if (search) {
+      this.context.navigate("skill-workshop", { search });
+    }
+  };
+
+  readonly closePage = () => {
+    this.context.navigate("skill-workshop", { search: "" });
+  };
 
   private async open(target: WorkshopViewerTarget): Promise<void> {
     const scope = this.scope;
     if (!scope) {
       return;
     }
+    if (this.membership && (target.name !== this.membership.name || target.draftId)) {
+      this.membership.rollbackFilter = null;
+    }
     this.viewer = { target };
+    this.syncLocation();
     const read = (params: Partial<WorkshopViewerTarget>) =>
       scope.client.request<SkillsWorkshopReadResult>("skills.workshop.read", {
         agentId: scope.agentId,
@@ -218,28 +336,16 @@ class SkillWorkshopPageState {
     await pending.catch(() => undefined);
   }
 
-  /** Selects the top row of the current list so the detail pane is never empty. */
+  /** In Drafts the newest draft opens in place; the other views select nothing until a click. */
   private selectFirst() {
     const snapshot = this.snapshot;
     if (!snapshot) {
       return;
     }
-    if (this.filter === "drafts") {
-      // The list shows drafts newest first; select its top row.
-      const draft = snapshot.list.drafts?.at(-1);
-      if (draft) {
-        this.selectDraft(draft.id);
-      } else {
-        this.viewer = null;
-      }
-      return;
-    }
-    const name =
-      this.filter === "active"
-        ? sortWorkshopSkills(snapshot.list.skills, snapshot.changes, this.sort)[0]?.name
-        : archivedWorkshopSkills(snapshot.list)[0]?.name;
-    if (name) {
-      this.selectSkill(name);
+    // The list shows drafts newest first; select its top row.
+    const draft = this.startView === "drafts" ? snapshot.list.drafts?.at(-1) : undefined;
+    if (draft) {
+      this.selectDraft(draft.id);
     } else {
       this.viewer = null;
     }
@@ -266,14 +372,34 @@ class SkillWorkshopPageState {
   };
 
   private readonly setFilter = (filter: WorkshopFilter) => {
-    if (filter === this.filter) {
+    if (this.membership) {
+      this.membership.rollbackFilter = null;
+    } else if (filter === this.filter) {
       return;
     }
     this.filter = filter;
-    this.tab = "instructions";
-    this.selectFirst();
     this.changed();
   };
+
+  private readonly setStartView = (view: WorkshopStartView) => {
+    if (view === this.startView) {
+      return;
+    }
+    this.startView = view;
+    if (view === "drafts" && !this.viewer?.target.draftId) {
+      this.selectFirst();
+    }
+    this.changed();
+  };
+
+  /** Drafts is offered in Propose mode, while drafts wait, or while it is the open view. */
+  private draftsShown() {
+    return (
+      resolveWorkshopMode(this.context.runtimeConfig) === "propose" ||
+      (this.snapshot?.list.drafts?.length ?? 0) > 0 ||
+      this.startView === "drafts"
+    );
+  }
 
   private readonly setTab = (tab: WorkshopTab) => {
     this.tab = tab;
@@ -290,11 +416,19 @@ class SkillWorkshopPageState {
     this.changed();
   };
 
-  readonly mutate = async (mutation: WorkshopMutation, key: string) => {
+  readonly mutate = async (
+    mutation: WorkshopMutation,
+    key: string,
+    destination?: WorkshopFilter,
+  ) => {
     const scope = this.scope;
     const access = resolveWorkshopAccess(this.context.gateway.snapshot);
     if (!scope || !canRunWorkshopMutation(access, mutation.method) || this.pendingAction) {
       return;
+    }
+    if (destination) {
+      this.membership = { name: mutation.name, destination, rollbackFilter: this.filter };
+      this.filter = destination;
     }
     this.pendingAction = key;
     this.actionError = null;
@@ -305,30 +439,62 @@ class SkillWorkshopPageState {
       if (this.scope !== scope) {
         return;
       }
-      await this.load();
-      if (this.scope !== scope) {
-        return;
+      if (destination) {
+        this.membershipRevision++;
+        if (this.membership) {
+          this.membership.rollbackFilter = null;
+        }
       }
-      // The reload already selected the next draft in the discarded one's place.
-      if (mutation.method === "skills.workshop.discardDraft") {
-        return;
-      }
-      // Applying, archiving or restoring moves the skill between lists; follow it there.
-      const live = this.snapshot?.list.skills.some((skill) => skill.name === mutation.name);
+      const appliedDraft = mutation.method === "skills.workshop.applyDraft" ? mutation : undefined;
+      const reload = this.load(false, appliedDraft);
+      const receipt = this.listRequest;
+      const loaded = await reload;
       if (
-        mutation.method === "skills.workshop.applyDraft" ||
-        this.viewer?.target.name === mutation.name ||
-        this.viewer === null
+        this.scope !== scope ||
+        appliedDraft ||
+        mutation.method === "skills.workshop.discardDraft"
       ) {
+        return;
+      }
+      // Archiving or restoring moves the skill between lists; follow it there.
+      const live = this.snapshot?.list.skills.some((skill) => skill.name === mutation.name);
+      if (destination) {
+        // The write was accepted; an unreadable inventory is not a rollback.
+        // Leave the target in the URL so Retry can reopen it from confirmed data.
+        if (!loaded && this.listRequest === receipt) {
+          this.snapshot = null;
+          this.viewer = null;
+          this.viewerRequest = null;
+          return;
+        }
+        const selected = this.viewer?.target;
+        if (
+          readWorkshopPage(this.context).skill === mutation.name &&
+          selected?.name === mutation.name &&
+          !selected.draftId
+        ) {
+          const versionId = live
+            ? undefined
+            : this.snapshot?.list.archived.find((entry) => entry.name === mutation.name)
+                ?.versions[0]?.id;
+          if (live || versionId) {
+            await this.open({ ...selected, versionId });
+          }
+        }
+      } else if (this.viewer?.target.name === mutation.name || this.viewer === null) {
         this.filter = live ? "active" : "archived";
         this.selectSkill(mutation.name);
       }
     } catch (error) {
       if (this.scope === scope) {
+        if (this.membership?.rollbackFilter) {
+          this.filter = this.membership.rollbackFilter;
+        }
         this.actionError = formatUiError(error);
       }
     } finally {
       if (this.scope === scope) {
+        this.membership = null;
         this.pendingAction = null;
         this.changed();
       }
@@ -466,12 +632,29 @@ class SkillWorkshopPageState {
     return {
       context,
       agentId: this.scope?.agentId ?? null,
+      // The sidebar's Show All mode clears the shared agent filter, like Sessions reads it.
+      allAgentsScope: context.agentSelection.state.scopeId === null,
       access: resolveWorkshopAccess(context.gateway.snapshot),
+      plugin: this.plugin.state,
+      onEnablePlugin: () => void this.plugin.enable(),
+      onRetryPlugin: this.plugin.retry,
+      pluginsDisabled: arePluginsDisabled(context.runtimeConfig),
       snapshot: this.snapshot,
       error: context.runtimeConfig.state.configSnapshot
         ? null
         : context.runtimeConfig.state.lastError,
       viewer: this.viewer,
+      pageOpen: (() => {
+        const page = readWorkshopPage(this.context);
+        return Boolean(page.skill || page.draft);
+      })(),
+      onOpenPage: this.openPage,
+      onClosePage: this.closePage,
+      startView:
+        this.startView ?? (this.snapshot ? defaultStartView(this.snapshot) : ("skills" as const)),
+      draftsShown: this.draftsShown(),
+      onStartView: this.setStartView,
+      membership: this.membership,
       filter: this.filter,
       sort: this.sort,
       tab: this.tab,
@@ -528,68 +711,7 @@ export function SkillWorkshopPage() {
   const list = createMemo(() => listRequest()?.result ?? Promise.resolve(null));
   const viewer = createMemo(() => viewerRequest()?.result ?? Promise.resolve(null));
   const mode = createMemo(() => ownerView().mode);
-  const presentation = createMemo(() => {
-    const currentScope = scope();
-    const [pendingAction, setPendingAction] = createOptimistic<string | null>(null);
-    const [modeBusy, setModeBusy] = createOptimistic(false);
-    const [learningBusy, setLearningBusy] = createOptimistic(false);
-    const [expectedMode, setExpectedMode] = createOptimistic(() => mode());
-    return {
-      currentScope,
-      pendingAction,
-      setPendingAction,
-      modeBusy,
-      setModeBusy,
-      learningBusy,
-      setLearningBusy,
-      expectedMode,
-      setExpectedMode,
-    };
-  });
-  const present = action(function* (
-    captured: ReturnType<typeof presentation>,
-    result: Promise<void>,
-    kind: "mutation" | "mode" | "learning",
-    expected?: string,
-  ) {
-    if (state.scope === captured.currentScope) {
-      if (kind === "mutation") {
-        captured.setPendingAction(expected ?? null);
-        affects(list);
-      } else if (kind === "mode") {
-        captured.setModeBusy(true);
-        captured.setExpectedMode(expected === "auto" || expected === "propose" ? expected : "off");
-      } else {
-        captured.setLearningBusy(true);
-      }
-    }
-    yield Promise.race([result, captured.currentScope?.retired ?? Promise.resolve()]);
-    if (state.scope === captured.currentScope) {
-      if (kind === "mutation") {
-        // The owner already reloaded; this only reconciles its read receipt.
-        yield refresh(list).catch(() => undefined);
-      } else if (kind === "mode") {
-        yield refresh(mode);
-      }
-    }
-  });
-  const run = async (
-    kind: "mutation" | "mode" | "learning",
-    operation: () => Promise<void>,
-    expected?: string,
-  ) => {
-    const captured = presentation();
-    const result = operation();
-    // Land synchronous owner admission before joining the presentation transition.
-    await Promise.resolve();
-    try {
-      await present(captured, result, kind, expected);
-    } catch (error) {
-      if (state.scope === captured.currentScope) {
-        state.presentationFailed(kind, error);
-      }
-    }
-  };
+  const { presentation, run } = createWorkshopActionPresentation(state, scope, list, mode);
   const view = createMemo(() => {
     return {
       ...ownerView(),
@@ -605,8 +727,12 @@ export function SkillWorkshopPage() {
       get mode() {
         return presentation().expectedMode();
       },
-      onMutate: (mutation: WorkshopMutation, key: string) =>
-        void run("mutation", () => state.mutate(mutation, key), key),
+      // The membership projection already supplies immediate feedback. Joining the
+      // list's transition here would hold navigation behind an outstanding Retry.
+      onMutate: (mutation: WorkshopMutation, key: string, destination?: WorkshopFilter) =>
+        destination
+          ? void state.mutate(mutation, key, destination)
+          : void run("mutation", () => state.mutate(mutation, key), key),
       onModeChange: (next: SkillWorkshopMode) => void run("mode", () => state.setMode(next), next),
       onLearn: () => void run("learning", state.learn),
     };

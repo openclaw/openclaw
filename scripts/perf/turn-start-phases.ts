@@ -19,6 +19,12 @@
 // among the 40 plugins. Memory search stays disabled; no embedding provider is called.
 // --history-turns overrides the seed length; seeded histories require --cold-rounds 0.
 // Warm-only fixtures omit the local origin clone; they exercise existing session workspaces.
+// --worktree-files and --worktree-file-bytes select a bounded synthetic workspace;
+// an existing --state-dir supplies its recorded shape unless explicitly matched.
+// --workspace-mutations cycles host edits, guest edits and guest deletions before
+// warm rounds, then verifies both workspaces converge after every measured turn.
+// --sandbox-turn-timeout-ms raises the harness deadline for large cold fixtures
+// (default 170000, maximum 600000); it does not change Gateway agent timeouts.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -53,6 +59,10 @@ const { values } = parseArgs({
     "sandbox-image": { type: "string" },
     "cold-rounds": { type: "string" },
     "warm-rounds": { type: "string", default: "10" },
+    "worktree-files": { type: "string" },
+    "worktree-file-bytes": { type: "string" },
+    "workspace-mutations": { type: "boolean", default: false },
+    "sandbox-turn-timeout-ms": { type: "string" },
     "history-turns": { type: "string" },
     "rich-context": { type: "boolean", default: false },
   },
@@ -72,6 +82,24 @@ const historyTurns = Number(values["history-turns"] ?? (values["rich-context"] ?
 const coldRounds = Number(values["cold-rounds"] ?? (historyTurns ? "0" : "10"));
 const warmRounds = Number(values["warm-rounds"]);
 const now = Number(fixtureShape?.now ?? values.now ?? Date.now());
+const worktreeFiles = Number(values["worktree-files"] ?? fixtureShape?.worktreeFiles ?? 3000);
+const worktreeFileBytes = Number(
+  values["worktree-file-bytes"] ?? fixtureShape?.worktreeFileBytes ?? 256,
+);
+if (
+  ![worktreeFiles, worktreeFileBytes].every(Number.isSafeInteger) ||
+  worktreeFiles < 0 ||
+  worktreeFiles > 500_000 ||
+  worktreeFileBytes < 0 ||
+  worktreeFiles * worktreeFileBytes > 2 * 1024 ** 3 ||
+  (fixtureShape &&
+    (fixtureShape.worktreeFiles !== worktreeFiles ||
+      fixtureShape.worktreeFileBytes !== worktreeFileBytes))
+) {
+  throw new Error(
+    "Use a workspace of at most 500000 files and 2 GiB, matching any supplied fixture",
+  );
+}
 const worktreeLocalOrigin = coldRounds > 0;
 const advanceOrigin = worktreeLocalOrigin && !values["unchanged-origin"];
 if (
@@ -113,8 +141,10 @@ const identity = {
       : {}),
     freshRoundGapMs: 31000,
     warmRoundGapMs: 0,
-    files: 3000,
-    fileBytes: 256,
+    files: worktreeFiles,
+    fileBytes: worktreeFileBytes,
+    workspaceMutations: values["workspace-mutations"],
+    sandboxTurnTimeoutMs: Number(values["sandbox-turn-timeout-ms"] ?? 170_000),
     longTranscriptEntries: 2000,
     longTranscriptSessions: 4,
     providerDelayMs: 200,
@@ -172,8 +202,8 @@ if (!values["state-dir"]) {
     port,
     seed: 1823,
     now,
-    worktreeFiles: 3000,
-    worktreeFileBytes: 256,
+    worktreeFiles,
+    worktreeFileBytes,
     worktreeLocalOrigin,
     longTranscriptEntries: 2000,
   }));
@@ -262,6 +292,10 @@ const probeArgs = [
   ...(values["git-trace"] || values["cpu-profile"] ? ["--git-trace"] : []),
   ...(values["start-file"] ? ["--start-file", path.resolve(values["start-file"])] : []),
   ...(values["sandbox-image"] ? ["--sandbox-image", values["sandbox-image"]] : []),
+  ...(values["workspace-mutations"] ? ["--turn-start-workspace-mutations"] : []),
+  ...(values["sandbox-turn-timeout-ms"]
+    ? ["--sandbox-turn-timeout-ms", values["sandbox-turn-timeout-ms"]]
+    : []),
   ...(advanceOrigin ? ["--turn-start-advance-origin"] : []),
   "--scenario",
   "chat.send",

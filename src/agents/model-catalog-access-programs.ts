@@ -70,17 +70,14 @@ export function resolveModelCatalogAccessPrograms(params: {
   return observation ? [...observation.cyber] : undefined;
 }
 
-/** One default selection for catalog presentation and physical runtime requests. */
-export function resolveModelCyberAccessProgramDefault(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
+/** Only OpenAI's official Responses routes and the Codex runtime send an Access program. */
+export function consumesCyberAccessPrograms(params: {
   provider: string;
-  modelId: string;
   runtimeId: string;
   route?: ModelAuthAvailabilityEvaluation["selectedRoute"];
-}): CyberAccessProgram | undefined {
-  const { provider, modelId, runtimeId, route } = params;
-  const consumesAccessPrograms =
+}): boolean {
+  const { provider, runtimeId, route } = params;
+  return (
     normalizeProviderId(provider) === "openai" &&
     (runtimeId === "codex" ||
       (runtimeId === "openclaw" &&
@@ -97,18 +94,97 @@ export function resolveModelCyberAccessProgramDefault(params: {
                 ? "https://api.openai.com/v1"
                 : "https://chatgpt.com/backend-api/codex",
           },
-        })));
-  return consumesAccessPrograms
+        })))
+  );
+}
+
+/**
+ * One default selection for catalog presentation and physical runtime requests. Configuration
+ * wins; otherwise a model whose advertised programs exclude Standard (cyber models advertise
+ * only Daybreak Red) uses its one program, and unknown or Standard-capable models use Standard.
+ */
+export function resolveModelCyberAccessProgramDefault(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  provider: string;
+  modelId: string;
+  runtimeId: string;
+  route?: ModelAuthAvailabilityEvaluation["selectedRoute"];
+  /** The selected account's programs for this model, route, and runtime; undefined when unknown. */
+  advertised?: readonly CyberAccessProgram[];
+}): CyberAccessProgram | undefined {
+  const { advertised } = params;
+  return consumesCyberAccessPrograms(params)
     ? resolveConfiguredCyberAccessProgram(
         {
           config: params.config,
           agentId: params.agentId,
-          provider,
-          modelId,
+          provider: params.provider,
+          modelId: params.modelId,
         },
-        "standard",
+        advertised?.length === 1 ? advertised[0] : "standard",
       )
     : undefined;
+}
+
+// OpenAI models, including the Codex provider ids its plugin owns.
+const OPENAI_ACCESS_PROGRAM_PROVIDERS = new Set(["openai", "openai-codex", "codex", "codex-cli"]);
+
+/**
+ * Daybreak is an OpenAI program. A saved session choice survives model changes so it
+ * applies again on an OpenAI model, but any other provider runs that turn as Standard.
+ * OpenAI routes keep their explicit entitlement and runtime errors.
+ */
+export function resolveCyberAccessProgramForProvider(
+  program: CyberAccessProgram | undefined,
+  provider: string,
+): { program: CyberAccessProgram | undefined; notApplied?: CyberAccessProgram } {
+  return program === undefined ||
+    program === "standard" ||
+    OPENAI_ACCESS_PROGRAM_PROVIDERS.has(normalizeProviderId(provider))
+    ? { program }
+    : { program: "standard", notApplied: program };
+}
+
+const CYBER_ACCESS_PROGRAM_NOTICE_LIMIT = 1_000;
+const claimedCyberAccessProgramNotices = new Set<string>();
+
+/** One notice per scope, program, and model per process; a restart may repeat it once. */
+function claimCyberAccessProgramNotice(key: string): boolean {
+  if (claimedCyberAccessProgramNotices.has(key)) {
+    return false;
+  }
+  if (claimedCyberAccessProgramNotices.size >= CYBER_ACCESS_PROGRAM_NOTICE_LIMIT) {
+    claimedCyberAccessProgramNotices.clear();
+  }
+  claimedCyberAccessProgramNotices.add(key);
+  return true;
+}
+
+/** Applies a turn's Access to its provider and reports a non-OpenAI downgrade once per scope. */
+export function resolveTurnCyberAccessProgram(params: {
+  program: CyberAccessProgram | undefined;
+  provider: string;
+  model: string;
+  noticeScope: string;
+  notify?: (notice: string) => void;
+}): CyberAccessProgram | undefined {
+  const { program, notApplied } = resolveCyberAccessProgramForProvider(
+    params.program,
+    params.provider,
+  );
+  const model = `${params.provider}/${params.model}`;
+  if (
+    notApplied &&
+    params.notify &&
+    claimCyberAccessProgramNotice(`${params.noticeScope}\0${notApplied}\0${model}`)
+  ) {
+    const label = notApplied === "daybreak_red" ? "Daybreak Red" : "Daybreak Blue";
+    params.notify(
+      `${label} applies only to OpenAI models, so ${model} used Standard access. Your ${label} choice is kept for when this chat returns to an OpenAI model.`,
+    );
+  }
+  return program;
 }
 
 /** The application baseline and configured inheritance do not grant Daybreak entitlement. */
@@ -129,6 +205,7 @@ export function projectModelCatalogAccessPrograms(
     modelId: params.entry.id,
     runtimeId: params.runtimeId,
     route: params.evaluation.selectedRoute,
+    advertised: cyber,
   });
   return {
     ...(cyber === undefined ? {} : { availableAccessPrograms: { cyber } }),

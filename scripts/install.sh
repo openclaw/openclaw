@@ -21,6 +21,10 @@ fi
 
 set -euo pipefail
 
+# Distros with user private groups (Ubuntu, Fedora) default to umask 002; the
+# installed runtime must not be group-writable or owned-path checks refuse it.
+umask go-w
+
 # BEGIN GENERATED UPDATE NETWORK BUDGET
 # Source: src/infra/update-network-budget.ts; regenerate: node scripts/generate-update-network-budget.mjs
 UPDATE_NETWORK_TIMEOUT_SECONDS=300
@@ -72,11 +76,12 @@ NODE_BREW_FORMULA="node"
 # Linux package repositories can publish builds ahead of the Node release line.
 # Provision the supported LTS line there so a fresh install never receives a prerelease runtime.
 NODE_LINUX_DEFAULT_MAJOR=24
-NODE_24_MIN_MINOR=22
-NODE_24_MIN_PATCH=1
-NODE_26_MIN_MINOR=12
-NODE_26_MIN_PATCH=1
-NODE_SUPPORTED_VERSION_LABEL="24.22.1+ or 26.12.1+"
+# Compatibility floors mirror node-version.mjs; provisioning still selects patched releases.
+NODE_24_MIN_MINOR=16
+NODE_24_MIN_PATCH=0
+NODE_26_MIN_MINOR=1
+NODE_26_MIN_PATCH=0
+NODE_SUPPORTED_VERSION_LABEL="24.16.0+ on 24.x or 26.1.0+"
 
 ORIGINAL_PATH="${PATH:-}"
 
@@ -226,6 +231,19 @@ has_visible_prompt_output() {
     [[ -t 1 ]]
 }
 
+# Prints the controlling terminal's own device, such as /dev/ttys003, for OpenClaw stdin.
+# macOS resolves /dev/tty against the caller's session on every use, so a detached
+# Node grandchild that inherits it aborts at startup (#200244). The device keeps working.
+controlling_tty_path() {
+    local name=""
+    name="$(ps -o tty= -p $$ 2>/dev/null | tr -d '[:space:]')" || true
+    if [[ -n "$name" && -c "/dev/$name" && -r "/dev/$name" && -w "/dev/$name" ]]; then
+        echo "/dev/$name"
+    else
+        echo "/dev/tty"
+    fi
+}
+
 resolve_subprocess_stdin_path() {
     local prompt_output_visible="${1:-0}"
     if [[ "${NO_PROMPT:-0}" == "1" ]]; then
@@ -236,7 +254,7 @@ resolve_subprocess_stdin_path() {
         return 1
     fi
     if has_controlling_tty && [[ "$prompt_output_visible" == "1" ]]; then
-        echo "/dev/tty"
+        controlling_tty_path
     else
         echo "/dev/null"
     fi
@@ -535,6 +553,7 @@ show_install_plan() {
     fi
     if [[ "$INSTALL_METHOD" == "git" ]]; then
         ui_kv "Git directory" "$GIT_DIR"
+        ui_info "Git installs compile OpenClaw locally. For a prebuilt installation on a small host, use --install-method npm."
         ui_kv "Git update" "$GIT_UPDATE"
     fi
     if [[ -n "$detected_checkout" ]]; then
@@ -626,12 +645,14 @@ run_with_spinner() {
     fi
 }
 
+# Quiet steps hide output, so they never read the terminal. A terminal stdin
+# under sudo-rs use_pty with redirected output stops apt with SIGTTOU (#203460).
 run_quiet_step() {
     local title="$1"
     shift
 
     if [[ "$VERBOSE" == "1" ]]; then
-        run_with_spinner "$title" "$@"
+        run_with_spinner "$title" "$@" < /dev/null
         return $?
     fi
 
@@ -644,18 +665,14 @@ run_quiet_step() {
         local log_quoted=""
         printf -v cmd_quoted '%q ' "$@"
         printf -v log_quoted '%q' "$log"
-        run_with_spinner "$title" bash -c "${cmd_quoted}>${log_quoted} 2>&1" || cmd_exit=$?
+        run_with_spinner "$title" bash -c "${cmd_quoted}</dev/null >${log_quoted} 2>&1" || cmd_exit=$?
         if (( cmd_exit == 0 )); then
             return 0
         fi
     else
         # Keep users informed even when gum spinner cannot run (for example shell functions).
         ui_info "${title}"
-        if needs_stdin_isolation; then
-            "$@" < /dev/null >"$log" 2>&1 || cmd_exit=$?
-        else
-            "$@" >"$log" 2>&1 || cmd_exit=$?
-        fi
+        "$@" < /dev/null >"$log" 2>&1 || cmd_exit=$?
         if (( cmd_exit == 0 )); then
             return 0
         fi
@@ -665,13 +682,7 @@ run_quiet_step() {
     if [[ -s "$log" ]]; then
         tail -n 80 "$log" >&2 || true
     fi
-    # Preserve signal exit codes (130=SIGINT, 143=SIGTERM) so callers
-    # like run_doctor can distinguish user cancellation from normal errors.
-    # Return 1 for all other failures to keep existing caller semantics.
-    if (( cmd_exit > 128 )); then
-        return "$cmd_exit"
-    fi
-    return 1
+    return "$cmd_exit"
 }
 
 run_required_step() {
@@ -975,7 +986,7 @@ run_npm_global_install() {
         local log_quoted=""
         printf -v cmd_quoted '%q ' "${cmd[@]}"
         printf -v log_quoted '%q' "$log"
-        run_with_spinner "Installing OpenClaw package" bash -c "${cmd_quoted}>${log_quoted} 2>&1" || install_status=$?
+        run_with_spinner "Installing OpenClaw package" bash -c "${cmd_quoted}</dev/null >${log_quoted} 2>&1" || install_status=$?
     else
         ui_info "Installing OpenClaw package"
         "${cmd[@]}" < /dev/null >"$log" 2>&1 || install_status=$?
@@ -1275,7 +1286,7 @@ Options:
   --bun-path <absolute path>          Use an existing OpenClaw Bun fork executable
   --beta                               Use beta if available, else latest
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw)
-  --no-git-update                      Skip git pull for existing checkout
+  --no-git-update                     Skip rebasing local main (Git fetches can still occur)
   --no-onboard                          Skip onboarding (non-interactive)
   --no-prompt                           Disable prompts (required in CI/automation)
   --verify                              Run a post-install smoke verify
@@ -1510,7 +1521,8 @@ install_homebrew() {
                 exit 1
             fi
             ui_info "Homebrew not found, installing"
-            run_quiet_step "Installing Homebrew" run_remote_bash "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
+            # Interactive: Homebrew asks for the admin password and confirmation on the terminal.
+            run_with_safe_stdin run_remote_bash "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh" || return $?
 
             # Add Homebrew to PATH for this session
             if [[ -f "/opt/homebrew/bin/brew" ]]; then
@@ -1600,6 +1612,71 @@ node_version_is_supported() {
     node_version_components_are_supported "$major" "$minor" "$patch"
 }
 
+# Unknown package metadata must not trigger a download for a recommendation alone.
+NODE_PACKAGE_ENGINE=">=24.16.0 <25 || >=26.1.0"
+
+node_components_satisfy_package_engine() {
+    local major="$1" minor="$2" patch="$3" range="$4"
+    local clause lower_major lower_minor lower_patch upper_major upper_minor upper_patch matched=1
+    # Match the same >=floor [<ceiling] alternatives as the package preinstall guard.
+    local pattern='^[[:space:]]*>=[[:space:]]*v?([0-9]+)\.([0-9]+)\.([0-9]+)([[:space:]]+<[[:space:]]*v?([0-9]+)(\.([0-9]+)\.([0-9]+))?)?[[:space:]]*$'
+    while :; do
+        clause="${range%%||*}"
+        [[ "$clause" =~ $pattern ]] || return 2
+        lower_major="${BASH_REMATCH[1]}" lower_minor="${BASH_REMATCH[2]}" lower_patch="${BASH_REMATCH[3]}"
+        upper_major="${BASH_REMATCH[5]}" upper_minor="${BASH_REMATCH[7]:-0}" upper_patch="${BASH_REMATCH[8]:-0}"
+        if ((major > lower_major || (major == lower_major && minor > lower_minor) || (major == lower_major && minor == lower_minor && patch >= lower_patch))) &&
+            { [[ -z "$upper_major" ]] || ((major < upper_major || (major == upper_major && minor < upper_minor) || (major == upper_major && minor == upper_minor && patch < upper_patch))); }; then
+            matched=0
+        fi
+        [[ "$range" == *'||'* ]] || break
+        range="${range#*||}"
+    done
+    return "$matched"
+}
+
+resolve_node_package_engine() {
+    local engine="" verdict=0
+    if [[ "$INSTALL_METHOD" == git ]]; then
+        # Read the selected checkout without requiring Node to be installed first.
+        local manifest="" pattern='"engines"[[:space:]]*:[[:space:]]*\{[^}]*"node"[[:space:]]*:[[:space:]]*"([^"]+)"'
+        manifest="$(cat "$1/package.json" 2>/dev/null || true)"
+        if [[ "$manifest" =~ $pattern ]]; then
+            engine="${BASH_REMATCH[1]}"
+        fi
+    else
+        # Missing npm is a bootstrap state, not evidence that the beta tag is absent.
+        if ! command -v npm >/dev/null 2>&1; then
+            return 0
+        fi
+        # Consume --beta here so admission and installation use the same selected target.
+        if [[ "$USE_BETA" == 1 ]]; then
+            OPENCLAW_VERSION="$(bounded_probe_output 'beta tag' resolve_beta_version || true)"
+            if [[ -n "$OPENCLAW_VERSION" ]]; then
+                ui_info "Beta tag detected (${OPENCLAW_VERSION})"
+            else
+                OPENCLAW_VERSION=latest
+                ui_warn "Could not resolve beta tag; using latest"
+            fi
+            USE_BETA=0
+        fi
+        if can_resolve_registry_package_version "$OPENCLAW_VERSION"; then
+            if ! engine="$(bounded_probe_output 'package Node requirement' npm view "openclaw@${OPENCLAW_VERSION}" engines.node --fetch-timeout=5000 --fetch-retries=0)"; then
+                engine=""
+            fi
+        fi
+    fi
+    if [[ -n "$engine" ]]; then
+        node_components_satisfy_package_engine 0 0 0 "$engine" || verdict=$?
+        if [[ "$verdict" != 2 ]]; then
+            NODE_PACKAGE_ENGINE="$engine"
+            NODE_SUPPORTED_VERSION_LABEL="$engine"
+            return 0
+        fi
+    fi
+    ui_warn "Could not resolve target Node requirement; using ${NODE_PACKAGE_ENGINE}"
+}
+
 node_binary_is_supported() {
     local node_bin="$1"
     local version_components major minor patch
@@ -1609,7 +1686,32 @@ node_binary_is_supported() {
         return 1
     fi
     node_version_components_are_supported "$major" "$minor" "$patch" &&
+        node_components_satisfy_package_engine "$major" "$minor" "$patch" "$NODE_PACKAGE_ENGINE" &&
         node_binary_has_safe_sqlite "$node_bin"
+}
+
+ensure_node() {
+    load_nvm_for_node_detection || return 1
+    local phase
+    for phase in bootstrap target; do
+        # Cold npm installs need a conservative runtime before target metadata is available.
+        if [[ "$phase" == bootstrap ]] && { [[ "$INSTALL_METHOD" != npm ]] || command -v npm >/dev/null 2>&1; }; then
+            continue
+        fi
+        resolve_node_package_engine "$@"
+        if ! node_binary_is_supported node; then
+            use_supported_nvm_node || promote_supported_node_binary || true
+        fi
+        if ! check_node; then
+            if [[ "${NVM_DETECTED:-0}" == "1" ]]; then
+                install_node_with_existing_nvm || return 1
+            else
+                install_homebrew || return $?
+                install_node || return 1
+            fi
+        fi
+        ensure_default_node_active_shell || return 1
+    done
 }
 
 prepend_path_dir() {
@@ -1645,17 +1747,18 @@ persist_shell_path_prepend() {
         bash_login_rc="$HOME/.bash_login"
     fi
 
+    local zsh_rc_dir="${ZDOTDIR:-$HOME}"
     local targets=()
     local fish_rc="$HOME/.config/fish/conf.d/openclaw.fish"
     case "$shell_name" in
         bash)
             targets+=("bash:$HOME/.bashrc" "bash:$bash_login_rc")
-            [[ -e "$HOME/.zshrc" || -L "$HOME/.zshrc" ]] && targets+=("zsh:$HOME/.zshrc")
-            [[ -e "$HOME/.zprofile" || -L "$HOME/.zprofile" ]] && targets+=("zsh:$HOME/.zprofile")
+            [[ -e "$zsh_rc_dir/.zshrc" || -L "$zsh_rc_dir/.zshrc" ]] && targets+=("zsh:$zsh_rc_dir/.zshrc")
+            [[ -e "$zsh_rc_dir/.zprofile" || -L "$zsh_rc_dir/.zprofile" ]] && targets+=("zsh:$zsh_rc_dir/.zprofile")
             [[ -e "$fish_rc" || -L "$fish_rc" ]] && targets+=("fish:$fish_rc")
             ;;
         zsh)
-            targets+=("zsh:$HOME/.zshrc" "zsh:$HOME/.zprofile")
+            targets+=("zsh:$zsh_rc_dir/.zshrc" "zsh:$zsh_rc_dir/.zprofile")
             [[ -e "$HOME/.bashrc" || -L "$HOME/.bashrc" ]] && targets+=("bash:$HOME/.bashrc")
             [[ -e "$bash_login_rc" || -L "$bash_login_rc" ]] && targets+=("bash:$bash_login_rc")
             [[ -e "$fish_rc" || -L "$fish_rc" ]] && targets+=("fish:$fish_rc")
@@ -1664,8 +1767,8 @@ persist_shell_path_prepend() {
             targets+=("fish:$fish_rc")
             [[ -e "$HOME/.bashrc" || -L "$HOME/.bashrc" ]] && targets+=("bash:$HOME/.bashrc")
             [[ -e "$bash_login_rc" || -L "$bash_login_rc" ]] && targets+=("bash:$bash_login_rc")
-            [[ -e "$HOME/.zshrc" || -L "$HOME/.zshrc" ]] && targets+=("zsh:$HOME/.zshrc")
-            [[ -e "$HOME/.zprofile" || -L "$HOME/.zprofile" ]] && targets+=("zsh:$HOME/.zprofile")
+            [[ -e "$zsh_rc_dir/.zshrc" || -L "$zsh_rc_dir/.zshrc" ]] && targets+=("zsh:$zsh_rc_dir/.zshrc")
+            [[ -e "$zsh_rc_dir/.zprofile" || -L "$zsh_rc_dir/.zprofile" ]] && targets+=("zsh:$zsh_rc_dir/.zprofile")
             ;;
         *)
             echo ""
@@ -1901,10 +2004,6 @@ ensure_macos_default_node_active() {
         return 0
     fi
 
-    local active_path active_version
-    active_path="$(command -v node 2>/dev/null || echo "not found")"
-    active_version="$(node -v 2>/dev/null || echo "missing")"
-
     if [[ -z "$brew_node_prefix" || ! -x "${brew_node_prefix}/bin/node" ]]; then
         ui_error "Homebrew ${NODE_BREW_FORMULA} is not installed on disk"
         echo "The previous 'brew install' step appears to have failed."
@@ -1912,9 +2011,9 @@ ensure_macos_default_node_active() {
         return 1
     fi
 
-    ui_error "Node.js v${NODE_DEFAULT_MAJOR} was installed but this shell is using ${active_version} (${active_path})"
-    echo "Add this to your shell profile and restart shell:"
-    echo "  export PATH=\"${brew_node_prefix}/bin:\$PATH\""
+    # Homebrew's node is first on PATH here, so a rejected runtime is a stale keg, not a shadowing one.
+    ui_error "Homebrew ${NODE_BREW_FORMULA} $(node -v 2>/dev/null || echo "missing") does not meet OpenClaw's Node.js requirement (${NODE_PACKAGE_ENGINE})"
+    echo "Run 'brew update && brew upgrade ${NODE_BREW_FORMULA}', then rerun the installer."
     return 1
 }
 
@@ -2042,6 +2141,7 @@ check_node() {
         NODE_VERSION="$(node_major_version || true)"
         if node_binary_is_supported node; then
             ui_success "Node.js v$(node -v | cut -d'v' -f2) found"
+            warn_node_security_patch "$(node -v)"
             print_active_node_paths || true
             return 0
         else
@@ -2324,8 +2424,8 @@ fix_npm_permissions() {
     ui_warn "npm global prefix is not writable: ${npm_prefix}"
     ui_warn "The installer will switch npm's user prefix to ${HOME}/.npm-global; npm normally writes that setting to ~/.npmrc."
     ui_info "Configuring npm for user-local installs"
-    mkdir -p "$HOME/.npm-global"
-    npm config set prefix "$HOME/.npm-global" < /dev/null
+    mkdir -p "$HOME/.npm-global" || return 1
+    npm config set prefix "$HOME/.npm-global" < /dev/null || return 1
     ui_warn "Avoid sudo npm i -g for future OpenClaw updates; use npm i -g openclaw@latest so npm keeps using this user prefix instead of a different global prefix."
 
     persist_shell_path_prepend "$HOME/.npm-global/bin" "\$HOME/.npm-global/bin" || true
@@ -2630,12 +2730,13 @@ warn_shell_path_missing_dir() {
         managed_node_bin=""
         managed_node_home_form=""
     fi
-    local shell_name="${SHELL:-}" quoted_dir fish_dir
+    local shell_name="${SHELL:-}" quoted_dir fish_dir quote_escape="'\\''"
     shell_name="${shell_name##*/}"
     # Keep path bytes literal, including history expansion in interactive Bash.
     quoted_dir="${managed_node_bin:-$dir}"
     fish_dir="$quoted_dir"
-    quoted_dir="${quoted_dir//\'/\'\\\'\'}"
+    # Bash 3.2 reinterprets inline quote escapes in pattern replacements.
+    quoted_dir="${quoted_dir//\'/$quote_escape}"
     quoted_dir="'$quoted_dir'"
     fish_dir="${fish_dir//\\/\\\\}"
     fish_dir="${fish_dir//\"/\\\"}"
@@ -2660,8 +2761,9 @@ warn_shell_path_missing_dir() {
     esac
     echo "  For future shells, check your shell startup file."
 
+    local zsh_rc_dir="${ZDOTDIR:-$HOME}"
     local rc
-    for rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.config/fish/conf.d/openclaw.fish"; do
+    for rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$zsh_rc_dir/.zshrc" "$zsh_rc_dir/.zprofile" "$HOME/.config/fish/conf.d/openclaw.fish"; do
         if [[ -f "$rc" ]] && {
             grep -Fq "$dir" "$rc" || grep -Fq "$dir_home_form" "$rc" ||
                 { [[ -n "$managed_node_bin" ]] && { grep -Fq "$managed_node_bin" "$rc" || grep -Fq "$managed_node_home_form" "$rc"; }; }
@@ -2902,6 +3004,12 @@ install_openclaw_from_git() {
         fi
     fi
 
+    ensure_node "$repo_dir" || return $?
+    # Older checkouts own different build budgets and may have no standalone check.
+    local memory_check="$repo_dir/scripts/lib/tsdown-memory-admission.mts"
+    if [[ -f "$memory_check" ]]; then
+        node "$memory_check" || return $?
+    fi
     ensure_pnpm "$repo_dir"
 
     local install_lockfile_flag
@@ -2997,18 +3105,6 @@ resolve_package_install_spec() {
 
 install_openclaw() {
     local package_name="openclaw"
-    if [[ "$USE_BETA" == "1" ]]; then
-        local beta_version=""
-        beta_version="$(resolve_beta_version || true)"
-        if [[ -n "$beta_version" ]]; then
-            OPENCLAW_VERSION="$beta_version"
-            ui_info "Beta tag detected (${beta_version})"
-        else
-            OPENCLAW_VERSION="latest"
-            ui_info "No beta tag found; using latest"
-        fi
-    fi
-
     if [[ -z "${OPENCLAW_VERSION}" ]]; then
         OPENCLAW_VERSION="latest"
     fi
@@ -3303,7 +3399,11 @@ is_installer_git_wrapper() {
     IFS= read -r first < "$wrapper" || return 1
     second="$(sed -n '2p' "$wrapper")"; third="$(sed -n '3p' "$wrapper")"; fourth="$(sed -n '4p' "$wrapper")"
     [[ "$first" == "#!/usr/bin/env bash" && "$second" == "set -euo pipefail" && -z "$fourth" ]] || return 1
-    case "$third" in "exec "*"/dist/entry.js \"\$@\"") return 0 ;; *) return 1 ;; esac
+    # `openclaw update` points a Git install's wrapper at the release launcher.
+    case "$third" in
+        "exec "*"/dist/entry.js \"\$@\"" | "exec "*"/git-install/openclaw-launcher.mjs \"\$@\"") return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 prepare_git_wrapper_backup_for_npm() {
@@ -3331,7 +3431,7 @@ retire_git_wrapper_after_npm_install() {
     ui_success "Previous git wrapper retired"
 }
 
-# These metadata documents contain only objects and unescaped ASCII strings.
+# Metadata uses objects, unescaped ASCII strings, and boolean values.
 # Reject other JSON forms and duplicate keys instead of guessing their meaning.
 bun_metadata_string() {
     LC_ALL=C awk -v wanted="$2" '
@@ -3342,9 +3442,13 @@ bun_metadata_string() {
             if (match(json, /^[ \t\r\n]+/)) { json=substr(json,RLENGTH+1); continue }
             if (done) fail()
             quoted=match(json, /^"[A-Za-z0-9_.+\/-]*"/)
+            boolean=!quoted && match(json, /^(true|false)/)
             token=quoted ? substr(json,2,RLENGTH-2) : substr(json,1,1)
-            json=substr(json,quoted ? RLENGTH+1 : 2)
-            if (quoted) {
+            json=substr(json,(quoted || boolean) ? RLENGTH+1 : 2)
+            if (boolean) {
+                if (!depth || state[depth]!="value") fail()
+                state[depth]="end"
+            } else if (quoted) {
                 if (!depth) fail()
                 if (state[depth]=="first" || state[depth]=="key") {
                     if (token ~ /\// || seen[path[depth] "/" token]++) fail()
@@ -3702,7 +3806,7 @@ install_with_bun() {
         run_quiet_step "Pinning existing Gateway to Bun" "$OPENCLAW_BIN" gateway install --runtime bun --runtime-path "$BUN_PATH" --force
     elif [[ "$NO_ONBOARD" != 1 ]] && ! has_openclaw_config; then
         if is_promptable; then
-            "$OPENCLAW_BIN" onboard --install-daemon --daemon-runtime bun </dev/tty
+            "$OPENCLAW_BIN" onboard --install-daemon --daemon-runtime bun <"$(controlling_tty_path)"
             # Onboarding has no runtime-path option; record the exact fork now.
             "$OPENCLAW_BIN" gateway install --runtime bun --runtime-path "$BUN_PATH" --force
         else
@@ -3794,39 +3898,20 @@ main() {
 
     ui_stage "Preparing environment"
 
-    # Step 1: Node.js. macOS package-manager branches install Homebrew lazily
-    # only when they are about to call brew.
-    load_nvm_for_node_detection || exit 1
-    if ! node_binary_is_supported node; then
-        use_supported_nvm_node || promote_supported_node_binary || true
-    fi
-    if ! check_node; then
-        if [[ "${NVM_DETECTED:-0}" == "1" ]]; then
-            install_node_with_existing_nvm || exit 1
-        else
-            install_homebrew
-            install_node
-        fi
-    fi
-    if ! ensure_default_node_active_shell; then
-        exit 1
+    if [[ "$INSTALL_METHOD" == npm ]]; then
+        ensure_node || return $?
     fi
 
     ui_stage "Installing OpenClaw"
 
     local final_git_dir=""
     if [[ "$INSTALL_METHOD" == "git" ]]; then
-        local had_npm_owner=false
-        if npm list -g openclaw &>/dev/null; then
-            had_npm_owner=true
-        fi
-
         final_git_dir="$GIT_DIR"
         if [[ -z "$GIT_DIR_EXPLICIT" && -n "$detected_checkout" ]]; then
             final_git_dir="$detected_checkout"
         fi
         install_openclaw_from_git "$final_git_dir"
-        if [[ "$had_npm_owner" == "true" ]]; then
+        if npm list -g openclaw &>/dev/null; then
             retire_npm_owner_after_git_install || return $?
         fi
     else
@@ -3861,18 +3946,6 @@ main() {
     OPENCLAW_BIN="$(resolve_installed_openclaw_bin || true)"
     warn_duplicate_openclaw_global_installs || true
 
-    # PATH warning: installs can succeed while the user's login shell still lacks npm's global bin dir.
-    local npm_bin=""
-    npm_bin="$(npm_global_bin_dir || true)"
-    if [[ "$INSTALL_METHOD" == "npm" ]]; then
-        warn_shell_path_missing_dir "$npm_bin" "npm global bin dir"
-    fi
-    if [[ "$INSTALL_METHOD" == "git" ]]; then
-        if [[ -x "$HOME/.local/bin/openclaw" ]]; then
-            warn_shell_path_missing_dir "$HOME/.local/bin" "user-local bin dir (~/.local/bin)"
-        fi
-    fi
-
     local config_present=false defer_success=false
     if has_openclaw_config; then
         config_present=true
@@ -3903,7 +3976,7 @@ main() {
             if [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
                 OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/null || doctor_exit=$?
             else
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/tty || doctor_exit=$?
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" <"$(controlling_tty_path)" || doctor_exit=$?
             fi
             if (( doctor_exit == 130 )); then
                 abort_install_int
@@ -3955,15 +4028,34 @@ main() {
         return 1
     fi
 
+    # Keep caller-shell setup separate from PATH changes in this child process.
+    local shell_bin="" shell_bin_label=""
+    if [[ "$INSTALL_METHOD" == "npm" ]]; then
+        shell_bin="$(npm_global_bin_dir || true)"
+        shell_bin_label="npm global bin dir"
+    elif [[ -x "$HOME/.local/bin/openclaw" ]]; then
+        shell_bin="$HOME/.local/bin"
+        shell_bin_label="user-local bin dir (~/.local/bin)"
+    fi
+    local shell_setup_needed=false
+    if [[ -n "$shell_bin" ]] && ! path_has_dir "$ORIGINAL_PATH" "$shell_bin"; then
+        shell_setup_needed=true
+    fi
+
     local installed_version=""
     installed_version="$(resolve_openclaw_version)"
     echo ""
-    if [[ -n "$installed_version" ]]; then
+    if [[ "$shell_setup_needed" == "true" ]]; then
+        ui_warn "Installed; one shell setup step remains${installed_version:+ (${installed_version})}"
+    elif [[ -n "$installed_version" ]]; then
         ui_celebrate "🦞 OpenClaw installed successfully (${installed_version})!"
     else
         ui_celebrate "🦞 OpenClaw installed successfully!"
     fi
-    if [[ "$is_upgrade" == "true" ]]; then
+    if [[ "$shell_setup_needed" == "true" ]]; then
+        echo "  A piped installer cannot change its parent shell environment."
+        warn_shell_path_missing_dir "$shell_bin" "$shell_bin_label"
+    elif [[ "$is_upgrade" == "true" ]]; then
         ui_info "Upgrade complete"
     else
         local completion_messages=(
@@ -4012,7 +4104,7 @@ main() {
                     warn_openclaw_not_found
                     return 0
                 fi
-                exec </dev/tty
+                exec <"$(controlling_tty_path)"
                 exec "$claw" onboard
             fi
             local user_claw

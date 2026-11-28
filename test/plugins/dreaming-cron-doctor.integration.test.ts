@@ -292,9 +292,9 @@ function afterBackup(callback: () => void) {
 }
 
 async function listBackups(databasePath: string) {
-  const prefix = `${path.basename(databasePath)}.doctor-cron-`;
+  const prefix = `${path.basename(databasePath)}.pre-startup-migration-`;
   return (await fs.readdir(path.dirname(databasePath)))
-    .filter((name) => name.startsWith(prefix))
+    .filter((name) => name.startsWith(prefix) && name.endsWith(".bak"))
     .map((name) => path.join(path.dirname(databasePath), name))
     .toSorted();
 }

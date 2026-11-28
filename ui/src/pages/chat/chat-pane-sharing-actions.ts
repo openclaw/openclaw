@@ -1,4 +1,5 @@
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
+import type { SessionMemberPermissionLevel } from "../../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type { SessionsCompanionResetResult } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type {
@@ -8,6 +9,7 @@ import type {
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { withoutMemberInvitations } from "../../lib/chat/human-mentions.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -17,6 +19,8 @@ import {
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
+import type { ChatHeaderSharingSnapshot } from "./chat-header-viewers-snapshot.ts";
+import { chatHistoryRequests } from "./chat-history-state.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import type { ChatPaneConnectionScope } from "./chat-pane-shared.ts";
 import { ChatPaneSidePanels } from "./chat-pane-side-panels.ts";
@@ -28,6 +32,7 @@ import {
   type ChatSessionSharingProps,
   type ChatSessionSharingState,
 } from "./components/chat-session-sharing-shared.tsx";
+import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 registerChatSessionEnglish();
 
@@ -35,6 +40,44 @@ const SESSION_MEMBERS_LIST_METHOD = "session.members.listEvidence";
 
 export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
   private readonly sessionSharingPropsMemo = new ChatPaneHeaderMemo<PreparedChatSessionSharing>();
+
+  protected headerSharingPlaceholder(
+    row: GatewaySessionRow | undefined,
+    control: ChatSessionSharingProps | undefined,
+  ): ChatHeaderSharingSnapshot | undefined {
+    const state = this.state;
+    if (!state) {
+      return undefined;
+    }
+    const target = { sessionKey: state.sessionKey };
+    const saved = readChatSessionSnapshot(state.chatMessagesBySession, state, target);
+    if (!saved || saved.sessionId !== state.currentSessionId) {
+      return undefined;
+    }
+    if (
+      row &&
+      (control || (row.sharingRole !== undefined && !canManageChatSessionSharing(row))) &&
+      state.connected &&
+      state.client?.recoveryScopeReady &&
+      !chatHistoryRequests(state).initialSnapshotHydration
+    ) {
+      const display =
+        control && canManageChatSessionSharing(row)
+          ? (control.state?.result ? control.state.result.publicShare : control.cachedPublished)
+            ? "public"
+            : (row.visibility ?? "shared")
+          : null;
+      if (saved.headerSharing !== display) {
+        cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
+          ...saved,
+          headerSharing: display,
+        });
+      }
+      return undefined;
+    }
+    // A connected row can precede control admission; retain its geometry until replacement.
+    return saved.headerSharing ?? undefined;
+  }
 
   /** Shared presentation facts; loading and mutations remain with this pane's native owner. */
   protected prepareSessionSharing(
@@ -52,6 +95,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
         "session.visibility.set",
         "session.members.add",
         "session.members.remove",
+        "session.members.setAccess",
         "session.publicShare.set",
       ].some((method) => isGatewayMethodAdvertised(snapshot, method) === true)
     ) {
@@ -68,6 +112,9 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     const visibilityDisabledReason = writeReason("session.visibility.set");
     const memberAddDisabledReason = writeReason("session.members.add");
     const memberRemoveDisabledReason = writeReason("session.members.remove");
+    const memberAccessAvailable =
+      isGatewayMethodAdvertised(snapshot, "session.members.setAccess") === true;
+    const memberAccessDisabledReason = writeReason("session.members.setAccess");
     const publicShareDisabledReason =
       !row.sessionId || isIncognitoSessionKey(row.key)
         ? t("chat.sessionSharing.publicUnavailable")
@@ -76,6 +123,14 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     const openDisabledReason =
       readAccess.allowed || visibilityDisabledReason === undefined ? undefined : readAccess.reason;
     const state = this.collaboration.sharingStates.get(this.sessionSharingCacheKey(row.key));
+    const cached =
+      this.state && !state?.result
+        ? readChatSessionSnapshot(this.state.chatMessagesBySession, this.state, {
+            sessionKey: row.key,
+          })
+        : undefined;
+    const cachedPublished =
+      cached?.headerSharing === "public" && cached.sessionId === row.sessionId;
     const allowedVisibilities = snapshot.hello?.policy?.allowedSessionVisibilities;
     const operationSignal = this.headerSessionMutationAbortController.signal;
     return this.sessionSharingPropsMemo.read(
@@ -83,6 +138,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
         row,
         ...Object.entries(row).flat(),
         state,
+        cachedPublished,
         allowedVisibilities,
         operationSignal,
         readAccess.allowed,
@@ -92,12 +148,15 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
         memberRemoveDisabledReason,
         publicShareDisabledReason,
         presentation.personActivity,
+        memberAccessAvailable,
+        memberAccessDisabledReason,
         presentation.ownerViewing,
         presentation.showOwner,
       ],
       () => ({
         session: row,
         state,
+        cachedPublished,
         allowedVisibilities,
         operationSignal,
         membersAvailable: readAccess.allowed,
@@ -107,10 +166,14 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
         memberRemoveDisabledReason,
         publicShareDisabledReason,
         ...presentation,
+        memberAccessDisabledReason,
         onOpen: () => void this.loadSessionSharing(row),
         onVisibilityChange: (visibility) => this.mutateSessionSharing(row, { visibility }),
         onMemberChange: (identityId, member) =>
           this.mutateSessionSharing(row, { identityId, member }),
+        onMemberAccessChange: memberAccessAvailable
+          ? (identityId, access) => this.mutateSessionSharing(row, { identityId, access })
+          : undefined,
         onPublicShareChange: (enabled) => this.setSessionPublicShare(row, enabled),
         onCopyPublicLink: () => this.copySessionPublicLink(row),
       }),
@@ -152,11 +215,28 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     }
   };
 
+  protected sessionMentionInvitationProps() {
+    return {
+      inviteAccessAvailable:
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.members.setAccess") ===
+        true,
+      members: this.state
+        ? this.collaboration.sharingStates.get(this.sessionSharingCacheKey(this.state.sessionKey))
+            ?.result?.members
+        : undefined,
+    };
+  }
+
   protected setSessionSharingState(cacheKey: string, state: ChatSessionSharingState): void {
     this.collaboration.sharingStates = new Map(this.collaboration.sharingStates).set(
       cacheKey,
       state,
     );
+    if (this.state && cacheKey === this.sessionSharingCacheKey(this.state.sessionKey)) {
+      for (const field of ["chatMentions", "chatMentionsBeforeHistory"] as const) {
+        this.state[field] = withoutMemberInvitations(this.state[field], state.result?.members);
+      }
+    }
   }
 
   protected sessionSharingAgentId(sessionKey: string): string | undefined {
@@ -206,10 +286,12 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       return;
     }
     const cacheKey = this.sessionSharingCacheKey(currentRow.key);
-    const current = this.collaboration.sharingStates.get(cacheKey);
-    if (current?.loading && !force) {
+    const cached = this.collaboration.sharingStates.get(cacheKey);
+    if (cached?.loading && !force) {
       return;
     }
+    // Another session generation under this key never seeds this read.
+    const current = cached?.sessionId === currentRow.sessionId ? cached : undefined;
     // Sharing data (membership + paired identities) is connection-scoped. A
     // gateway/account change bumps the generation and clears this cache, so a
     // request that resolves after the switch must be dropped rather than
@@ -234,6 +316,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
         );
         next = {
           loading: false,
+          sessionId: currentRow.sessionId,
           result,
           ...(result.publicShare ? { publicUrl: this.sessionPublicUrl(scope, currentRow) } : {}),
         };
@@ -382,7 +465,10 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       }
       const copied = await copyToClipboard(url, isCurrent);
       if (isCurrent()) {
-        showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+        showToast({
+          severity: copied ? "success" : "error",
+          message: t(copied ? "common.copied" : "common.copyFailed"),
+        });
         return copied ? { status: "success" } : { status: "failed", error: t("common.copyFailed") };
       }
       return { status: "stale" };
@@ -397,7 +483,10 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
 
   protected async mutateSessionSharing(
     row: GatewaySessionRow,
-    change: { visibility: SessionVisibility } | { identityId: string; member: boolean },
+    change:
+      | { visibility: SessionVisibility }
+      | { identityId: string; member: boolean }
+      | { identityId: string; access: SessionMemberPermissionLevel },
   ): Promise<ChatSessionSharingOutcome> {
     const scope = this.captureConnectionScope();
     const currentRow = scope ? this.currentSessionSharingRow(scope, row) : null;
@@ -412,17 +501,24 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     const method =
       "visibility" in change
         ? "session.visibility.set"
-        : change.member
-          ? "session.members.add"
-          : "session.members.remove";
+        : "access" in change
+          ? "session.members.setAccess"
+          : change.member
+            ? "session.members.add"
+            : "session.members.remove";
     const params = {
       sessionKey: currentRow.key,
       ...("visibility" in change
         ? { visibility: change.visibility }
-        : { identityId: change.identityId }),
+        : {
+            identityId: change.identityId,
+            ...("access" in change ? { access: change.access } : {}),
+          }),
       ...(agentId ? { agentId } : {}),
     };
     if (
+      ("access" in change &&
+        isGatewayMethodAdvertised(scope.context.gateway.snapshot, method) !== true) ||
       !readSessionMethodAccess(scope.context.gateway.snapshot, {
         method,
         requiredScope: "operator.write",

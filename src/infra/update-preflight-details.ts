@@ -25,10 +25,19 @@ export const UPDATE_CANDIDATE_STARTUP_FAILURES = [
   ],
 ] as const;
 
-// Public descriptions are fixed text: registry responses and local paths stay local.
+// Public descriptions contain only platform facts: registry responses and local paths stay local.
 export const UPDATE_PREFLIGHT_DETAILS = {
-  "gateway-stop-unverified":
-    "Gateway service inspection is unavailable; package replacement cannot proceed safely. Stop the Gateway through its service manager, its original terminal, or openclaw gateway stop, then rerun openclaw update. No package replacement was attempted.",
+  get "gateway-stop-unverified"() {
+    const manager =
+      process.platform === "linux"
+        ? "its systemd user/system unit"
+        : process.platform === "darwin"
+          ? "launchd"
+          : process.platform === "win32"
+            ? "Task Scheduler"
+            : "its service manager";
+    return `Gateway service inspection is unavailable; package replacement cannot proceed safely. Stop the Gateway through ${manager}, its original terminal, or openclaw gateway stop, then rerun openclaw update. Run openclaw gateway status --deep --json to inspect the service failure. No package replacement was attempted.`;
+  },
   "windows-task-elevation-required":
     "Windows Task Scheduler requires elevated access for this Gateway task. Rerun openclaw update from an elevated terminal (Run as administrator).",
   "windows-task-inspection-timeout":
@@ -98,6 +107,15 @@ export const UPDATE_PREFLIGHT_DETAILS = {
     "The Gateway process changed during maintenance drain. Run openclaw gateway status --deep to inspect its current service, then retry openclaw update.",
   "task-ownership-unverified":
     "Scheduled Task ownership could not be verified. Inspect the task's autostart state through its service owner, then retry openclaw update.",
+  // Fixed public sentences for causes whose own messages carry paths, owners or plugin IDs.
+  "backup-sqlite-probe-timeout":
+    "Checking backup files for SQLite headers timed out (ETIMEDOUT) before the update. Preserve a verified backup and follow the manual package-manager update: https://docs.openclaw.ai/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun",
+  "backup-sqlite-probe-failed":
+    "Backup files could not be checked for SQLite headers before the update. Check read access to the state directory and close programs using it, then retry.",
+  "plugin-migration-obligations-changed":
+    "Plugin migration obligations changed while Doctor was repairing; retained inputs stay protected. Run openclaw doctor --fix after the other repair finishes.",
+  "update-executor-owned":
+    "Another update executor owns this installation. Run openclaw update status; if no update is running, run openclaw update repair.",
 } as const;
 
 export const UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL =

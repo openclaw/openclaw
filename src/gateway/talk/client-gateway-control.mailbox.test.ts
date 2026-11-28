@@ -1,12 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
-import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
-import { getExistingSessionControllerMailbox } from "../../sessions/session-controller.mailbox.js";
 import { resetSessionControllerStateForTest } from "../../sessions/session-lifecycle-admission.test-support.js";
-import type { AgentInputRecoveryAdmission } from "../../state/agent-input-recovery.types.js";
 import { createChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createControlFixture } from "./client-control-fixture.test-support.js";
@@ -17,6 +13,7 @@ const { config, coreParams, mocks } = await vi.hoisted(
 
 // mock-isolation: Mailbox ordering uses fixture-owned run admission instead of the process-wide model and tool authority context.
 vi.mock("../../agents/admitted-run-context.js", () => ({
+  closeAdmittedRunDelegatedAuthority: vi.fn(),
   createOperationalRunInstanceRef: mocks.createOperationalRunInstanceRef,
   prepareAgentRunAdmission: mocks.prepareAgentRunAdmission,
 }));
@@ -24,9 +21,20 @@ vi.mock("../../agents/admitted-run-context.js", () => ({
 vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: mocks.runEmbeddedAgentCore,
 }));
+// mock-isolation: command-owner stand-in keeps the gated backend in control of mailbox ordering.
+vi.mock("../../agents/agent-command.js", async () => {
+  const { createTalkCommandOwnerStandIn } =
+    await import("./client-agent-runtime.command-owner.test-support.js");
+  return {
+    agentCommandFromGatewayIngress: createTalkCommandOwnerStandIn({
+      run: (params) => mocks.runEmbeddedAgentCore(params),
+      prepareAdmission: (params) => mocks.prepareAgentRunAdmission(params),
+    }),
+  };
+});
 vi.mock("../../talk/agent-consult-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../talk/agent-consult-runtime.js")>()),
-  consultRealtimeVoiceAgent: mocks.consultRealtimeVoiceAgent,
+  consultRealtimeVoiceAgentInSessionRuntime: mocks.consultRealtimeVoiceAgent,
 }));
 
 import { parseRealtimeVoiceAgentConsultArgs } from "../../talk/agent-consult-tool.js";
@@ -67,7 +75,10 @@ function gate(backend = true) {
       { once: true },
     );
     await released.promise;
-    return { payloads: [] };
+    return {
+      payloads: [],
+      meta: { durationMs: 0, terminalReply: { disposition: "visible", text: "done" } },
+    };
   };
   if (backend) {
     mocks.runEmbeddedAgentCore.mockImplementationOnce(run);
@@ -75,38 +86,11 @@ function gate(backend = true) {
   return { started, release: () => released.resolve(), run };
 }
 
-function recoveryGate() {
-  const target = captureSessionTarget({ ...channelTurn, storeScope: sessionTarget.storePath });
-  const recovery = createDeferred();
-  const waiting = createDeferred();
-  let pending = true;
-  const fixture = createOwner(undefined, {
-    isPending: () => pending,
-    waitForAgentInputRecovery: (_agentId, options) => {
-      if (!pending) {
-        return undefined;
-      }
-      waiting.resolve();
-      return racePromiseWithAbortSignal(recovery.promise, options?.signal);
-    },
-  });
-  return {
-    ...fixture,
-    waiting,
-    mailbox: () => getExistingSessionControllerMailbox(sessionTarget.canonicalKey, target),
-    recover: () => {
-      pending = false;
-      recovery.resolve();
-    },
-  };
-}
-
 function createOwner(
   flushTranscript: () => Promise<void> = async () => undefined,
-  inputRecovery?: AgentInputRecoveryAdmission,
   boundGateway = false,
 ) {
-  const context: GatewayRequestContext = Object.assign(controlContext(), { inputRecovery });
+  const context: GatewayRequestContext = controlContext();
   if (boundGateway) {
     context.resolveGatewayContext = () => context;
   }
@@ -160,8 +144,8 @@ let runSequence = 0;
 const startedRunIds: string[] = [];
 
 beforeEach(() => {
-  resetConsultFixture();
   mocks.runEmbeddedAgentCore.mockReset();
+  resetConsultFixture();
   order.length = 0;
   startedRunIds.length = 0;
   mocks.consultRealtimeVoiceAgent.mockImplementation(async (params: ConsultParams) => {
@@ -189,11 +173,18 @@ beforeEach(() => {
 
 afterEach(resetSessionControllerStateForTest);
 
-it("runs a Gateway-bound voice consult outside the request scope", async () => {
-  const { enqueue, owner, expectResults } = createOwner(undefined, undefined, true);
+it("runs a Gateway-bound voice consult outside the request scope", async ({ signal }) => {
+  const { bridge, enqueue, owner, expectResults } = createOwner(undefined, true);
+  const earlyReply = createDeferred<never>();
+  bridge.submitToolResult.mockImplementationOnce(async (...args: unknown[]) => {
+    earlyReply.reject(
+      new Error(`Talk settled before its backend started: ${JSON.stringify(args[1])}`),
+    );
+  });
   const task = enqueue("consult", "configure the Dial");
   try {
-    await vi.waitFor(() => expect(order).toEqual(["configure the Dial"]));
+    await withinTest(Promise.race([task.started.promise, earlyReply.promise]), signal);
+    expect(order).toEqual(["configure the Dial"]);
     task.release();
     await expectResults("configure the Dial");
   } finally {
@@ -229,67 +220,6 @@ it.each([
     await owner.close();
   },
 );
-
-it.each(["recovered", "closed"] as const)(
-  "reserves Talk consults after saved input recovery, preserving arrival order: %s",
-  async (outcome) => {
-    const fixture = recoveryGate();
-    const first = gate();
-    const second = gate();
-    fixture.consult("first", "first");
-    fixture.consult("second", "second");
-    await fixture.waiting.promise;
-    expect(fixture.mailbox()).toBeUndefined();
-    let savedRun: Promise<unknown> | undefined;
-    const saved = gate(false);
-    try {
-      if (outcome === "closed") {
-        await fixture.owner.close();
-        expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
-        expect(fixture.mailbox()).toBeUndefined();
-        return;
-      }
-      savedRun = withSessionTurn(channelTurn, () => saved.run({ prompt: "saved" }));
-      await saved.started.promise;
-      fixture.recover();
-      await vi.waitFor(() => expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledTimes(2));
-      expect(order).toEqual(["saved"]);
-      saved.release();
-      await first.started.promise;
-      expect(order).toEqual(["saved", "first"]);
-      first.release();
-      await second.started.promise;
-      expect(order).toEqual(["saved", "first", "second"]);
-      second.release();
-      await fixture.expectResults("first", "second");
-    } finally {
-      fixture.recover();
-      saved.release();
-      first.release();
-      second.release();
-      await Promise.allSettled([savedRun, fixture.owner.close()]);
-    }
-  },
-);
-
-it("closes a native Talk consultation waiting for saved-input recovery before admission", async () => {
-  const fixture = recoveryGate();
-  const consultation = fixture.owner.runAgentConsult({ prompt: "native consult" });
-  void consultation.catch(() => {});
-  try {
-    await fixture.waiting.promise;
-    expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
-    await fixture.owner.close();
-    await expect(consultation).rejects.toMatchObject({
-      name: "AbortError",
-      cause: fixture.owner.signal.reason,
-    });
-    expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
-  } finally {
-    fixture.recover();
-    await Promise.allSettled([consultation, fixture.owner.close()]);
-  }
-});
 
 it("cancels a running consult through Stop and keeps the session's waiting turn", async () => {
   const hook = vi.fn();

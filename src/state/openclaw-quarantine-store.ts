@@ -1,5 +1,5 @@
 // Dedicated quarantine decisions stay available when primary databases fail.
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -9,6 +9,7 @@ import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
   invalidateSqliteDatabaseCleanClose,
+  prepareSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
@@ -26,6 +27,7 @@ import {
   type OpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-error.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "./openclaw-state-db-contract.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 export const OPENCLAW_QUARANTINE_SCHEMA_VERSION = 2;
@@ -184,9 +186,13 @@ export function ensureOpenClawQuarantineStore(env: NodeJS.ProcessEnv): void {
 /** Runtime guards share the owner's decision; explicit repair may inspect disk. */
 function readOpenClawDatabaseQuarantine(
   pathname: string,
-  options: { env?: NodeJS.ProcessEnv; fresh?: true } = {},
+  options: { env?: NodeJS.ProcessEnv; fresh?: true; refreshIdentity?: true } = {},
 ): OpenClawDatabaseQuarantine | undefined {
   const storePath = resolveQuarantineStorePath(options.env ?? process.env);
+  if (options.refreshIdentity) {
+    // Worker readers refresh the binding before using a retained auxiliary generation.
+    prepareSqliteDatabaseAdmission(storePath);
+  }
   const load = () => readPersistedQuarantineDecision(pathname, storePath, options.fresh) ?? null;
   const decision = options.fresh
     ? load()
@@ -310,7 +316,7 @@ function resolveQuarantineDecision(
 export function readOpenClawDatabaseQuarantineFailure(
   kind: OpenClawDatabaseKind,
   pathname: string,
-  options: { env?: NodeJS.ProcessEnv; fresh?: true } = {},
+  options: { env?: NodeJS.ProcessEnv; fresh?: true; refreshIdentity?: true } = {},
 ): Error | undefined {
   let quarantine: OpenClawDatabaseQuarantine | undefined;
   let cleanupFailure: OpenClawQuarantineReadCleanupError | undefined;
@@ -342,6 +348,83 @@ export function readOpenClawDatabaseQuarantineFailure(
   return failure;
 }
 
+/** A background integrity verdict survives later writes and restarts until Doctor clears it. */
+export function recordOpenClawDatabaseQuarantine(
+  pathname: string,
+  reason: string,
+  options: { env?: NodeJS.ProcessEnv; assertCurrent: () => void },
+): void {
+  const env = options.env ?? process.env;
+  options.assertCurrent();
+  invalidateSqliteDatabaseCleanClose(pathname);
+  withQuarantineWriter(env, (database) =>
+    runSqliteImmediateTransactionSync(
+      database,
+      () => {
+        options.assertCurrent();
+        const decision: QuarantineDecision = {
+          kind: "agent",
+          reason,
+          quarantinedAt: Date.now(),
+          verifiedGenerationJson: null,
+        };
+        database
+          .prepare(`INSERT INTO quarantined_databases
+            (path, kind, reason, quarantined_at, verified_generation)
+            VALUES (?, 'agent', ?, ?, NULL)
+            ON CONFLICT(path) DO UPDATE SET kind=excluded.kind, reason=excluded.reason,
+              quarantined_at=excluded.quarantined_at, verified_generation=NULL`)
+          .run(path.resolve(pathname), reason, decision.quarantinedAt);
+        publishSqliteDatabaseAdmission(database, quarantineDecisionAdmission(pathname), decision);
+      },
+      { databaseLabel: resolveQuarantineStorePath(env), operationLabel: "quarantine.record" },
+    ),
+  );
+}
+
+/**
+ * Read-only: whether {@link clearOpenClawDatabaseQuarantine} for `pathname` would write the
+ * quarantine store or fail: a record to delete, a store its writer must migrate or re-mode,
+ * a missing record table, or one that cannot be read. A missing store has nothing to clear.
+ */
+export function hasOpenClawDatabaseQuarantineClearWork(
+  pathname: string,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const storePath = resolveQuarantineStorePath(env);
+  if (!existsSync(storePath)) {
+    return false;
+  }
+  try {
+    if (
+      (statSync(path.dirname(storePath)).mode & 0o7777) !== OPENCLAW_QUARANTINE_DIR_MODE ||
+      (statSync(storePath).mode & 0o7777) !== OPENCLAW_QUARANTINE_FILE_MODE
+    ) {
+      return true;
+    }
+    // The writer keeps this store in DELETE mode; WAL sidecars mean its writer would convert it.
+    if (existsSync(`${storePath}-wal`) || existsSync(`${storePath}-shm`)) {
+      return true;
+    }
+    const database = openSqliteReadOnlyDatabase(storePath, {
+      timeout: OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS,
+    });
+    try {
+      return (
+        readQuarantineSchemaVersion(database, storePath, true) !==
+          OPENCLAW_QUARANTINE_SCHEMA_VERSION ||
+        !tableExists(database, "quarantined_databases") ||
+        database
+          .prepare("SELECT 1 FROM quarantined_databases WHERE path = ?")
+          .get(path.resolve(pathname)) !== undefined
+      );
+    } finally {
+      database.close();
+    }
+  } catch {
+    return true;
+  }
+}
 export function clearOpenClawDatabaseQuarantine(
   pathname: string,
   options: { env?: NodeJS.ProcessEnv } = {},

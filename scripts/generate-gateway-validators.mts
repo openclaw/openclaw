@@ -260,7 +260,10 @@ const runtime = await compileStandaloneValidators(
 const declarations = bindings
   .map(({ name, module, schema }) => {
     const contract = authoredContracts.get(schema);
-    let source = path.relative(outputRoot, contract?.module ?? module).replace(/\.ts$/, ".js");
+    let source = path
+      .relative(outputRoot, contract?.module ?? module)
+      .replaceAll(path.sep, "/")
+      .replace(/\.ts$/, ".js");
     if (!source.startsWith(".")) {
       source = `./${source}`;
     }

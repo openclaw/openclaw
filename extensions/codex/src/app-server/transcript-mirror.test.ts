@@ -10,7 +10,6 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -20,6 +19,7 @@ import {
   makeAgentUserMessage,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createObservedTranscriptPreparer } from "./assistant-transcript-preparer.test-support.js";
 import * as fixture from "./event-projector.compact.test-support.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
@@ -197,7 +197,7 @@ describe("buildCodexUserPromptMessage", () => {
 
 describe("mirrorTranscript", () => {
   it("hides current memory-maintenance messages without hiding replayed turns", async () => {
-    const prepareAssistantTranscriptMessage = vi.fn((message: AssistantMessage) => message);
+    const { prepareSpy, prepareAssistantTranscriptMessage } = createObservedTranscriptPreparer();
     beforeMessageWrite((event) => {
       const { display: _display, ...message } = (event as { message: Record<string, unknown> })
         .message;
@@ -245,18 +245,16 @@ describe("mirrorTranscript", () => {
     expect(
       persistedMessages.slice(1).every((message) => asOptionalRecord(message)?.display === false),
     ).toBe(true);
-    expect(prepareAssistantTranscriptMessage).not.toHaveBeenCalled();
+    expect(prepareSpy).not.toHaveBeenCalled();
   });
 
-  it("preserves mirror identity across redaction from prompt append through final snapshot", async () => {
-    const target = await createTarget("openclaw-codex-mirror-redacted-identity-");
-    const config = { logging: { redactPatterns: [String.raw`^codex-app-server:.*$`] } };
+  it("preserves mirror identity from prompt append through final snapshot", async () => {
+    const target = await createTarget("openclaw-codex-mirror-identity-");
     const userMessage = mirroredUser("client prompt", "turn-1:prompt", Date.now());
     const assistantMessage = mirroredAssistant("final answer", "turn-1:assistant", Date.now() + 1);
     const mirrorParams = {
       ...target,
       idempotencyScope: "codex-app-server:thread-1",
-      config,
     };
 
     await mirrorTranscript({ ...mirrorParams, messages: [userMessage] });
@@ -279,10 +277,9 @@ describe("mirrorTranscript", () => {
     const target = await createTarget("openclaw-codex-mirror-media-owner-");
     const sourceText = "Artifacts ready\nMEDIA:./artifact.json";
     const rewrittenText = `${sourceText}\nMEDIA:./hook-only.json`;
-    const prepareAssistantTranscriptMessage = vi.fn((message: AssistantMessage) => ({
-      ...message,
-      openclawDelivery: { mediaUrls: ["./artifact.json"] },
-    }));
+    const { prepareSpy, prepareAssistantTranscriptMessage } = createObservedTranscriptPreparer([
+      "./artifact.json",
+    ]);
     const writeHook = vi.fn((input: unknown) => {
       const message = (input as { message: AgentMessage }).message;
       return message.role === "assistant" &&
@@ -330,7 +327,7 @@ describe("mirrorTranscript", () => {
     );
 
     expect(writeHook).toHaveBeenCalledTimes(5);
-    expect(prepareAssistantTranscriptMessage).toHaveBeenCalledExactlyOnceWith(
+    expect(prepareSpy).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ content: [{ type: "text", text: rewrittenText }] }),
       sourceText,
     );
@@ -824,7 +821,7 @@ describe("mirrorTranscript", () => {
         {
           role: "assistant",
           content: [{ type: "thinking", thinking: "checking the answer" }],
-          __openclaw: { mirrorIdentity: "turn-1:reasoning", runId: "run-1" },
+          __openclaw: { mirrorIdentity: "turn-1:reasoning:reason-1", runId: "run-1" },
         },
         {
           role: "assistant",

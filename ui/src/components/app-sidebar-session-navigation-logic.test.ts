@@ -10,15 +10,17 @@ import { createActiveSessionPlacement } from "../test-helpers/session-placement.
 import { collectKnownSessionRows, fetchSessionLineage } from "./app-sidebar-child-session-data.ts";
 import {
   buildReconciledSidebarZone,
-  buildSidebarSessionNavigationState,
   collectSidebarSessionRowsByKey,
   createSidebarSessionRowsComparator,
   resolveSidebarMainSessionKey,
 } from "./app-sidebar-session-navigation-logic.ts";
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
-import type { SidebarRecentSession, SidebarSessionAttention } from "./app-sidebar-session-types.ts";
-import { SidebarSessionRowProjection } from "./sidebar-projection-cache.ts";
+import {
+  SIDEBAR_SESSION_NO_ATTENTION,
+  type SidebarRecentSession,
+  type SidebarSessionAttention,
+} from "./app-sidebar-session-types.ts";
 import { TeamSessionSlots } from "./solid/session-presentation.tsx";
 
 it("does not manufacture personal pins from plugin defaults", () => {
@@ -162,6 +164,55 @@ describe("sidebar session sort modes", () => {
       "updated-new",
       "created-new",
     ]);
+  });
+
+  it("orders Updated mode by activity, ignoring metadata writes and stored pins", () => {
+    const rows = [
+      // Renamed, pinned/unpinned, or marked unread after its last message.
+      { ...row("metadata-touched", 100, 900), lastActivityAt: 200, pinned: true, pinnedAt: 900 },
+      { ...row("replied", 100, 500), lastActivityAt: 400, pinned: true, pinnedAt: 100 },
+      { ...row("tied", 100, 700), lastActivityAt: 400, pinned: true, pinnedAt: 1_000 },
+      // A just-sent message counts before the reply lands.
+      { ...row("sent", 100, 600), lastActivityAt: 100, lastInteractionAt: 600 },
+      // Rows without activity clocks keep their recorded updatedAt.
+      { ...row("legacy", 100, 300), pinned: false, pinnedAt: 2_000 },
+    ];
+    const observed = new Map(rows.map((entry, index) => [entry.key, index]));
+
+    expect(sortSidebarRows(rows, "updated", observed).map((entry) => entry.key)).toEqual([
+      "sent",
+      "replied",
+      "tied",
+      "legacy",
+      "metadata-touched",
+    ]);
+  });
+
+  it("keeps Updated activity ordering within each nested sibling boundary", () => {
+    const parent = { ...row("parent", 100, 1), childSessions: ["older-child", "newer-child"] };
+    const children = [
+      {
+        ...row("older-child", 100, 900),
+        parentSessionKey: "parent",
+        lastActivityAt: 200,
+        pinnedAt: 999,
+      },
+      { ...row("newer-child", 100, 500), parentSessionKey: "parent", lastActivityAt: 400 },
+    ];
+    const tree = projectSessionTree({
+      roots: [parent],
+      rowsByKey: new Map([parent, ...children].map((entry) => [entry.key, entry])),
+      loadingChildKeys: new Set(),
+      compareSessions: createSidebarSessionRowsComparator(() => ({
+        sortMode: "updated",
+        createdOrder: new Map(),
+        owners: [],
+      })),
+      resolveAttention: () => SIDEBAR_SESSION_NO_ATTENTION,
+      toSidebarSession: (entry) => projectSidebarSession(entry),
+    });
+    expect(tree.map((entry) => entry.key)).toEqual(["parent"]);
+    expect(tree[0]?.children.map((entry) => entry.key)).toEqual(["newer-child", "older-child"]);
   });
 
   it("keeps first-facet precedence and row label fallbacks across People projections", () => {
@@ -402,7 +453,6 @@ describe("sidebar navigation lineage ownership", () => {
           isChild,
           attention: { kind: "none" },
           runningChildCount: 0,
-          failedChildCount: 0,
         }) as SidebarRecentSession,
     });
 
@@ -429,29 +479,25 @@ describe("sidebar navigation lineage ownership", () => {
       "archived subagent",
       { status: "running", hasActiveRun: true, hasActiveSubagentRun: true, archived: true },
       0,
-      0,
     ],
-  ] as const)(
-    "counts normalized live runs for a %s",
-    (_name, runState, runningChildCount, failedChildCount) => {
-      const childRow = { ...child, ...runState };
-      const projected = projectSessionTree({
-        roots: [navigationParent],
-        rowsByKey: collectSidebarSessionRowsByKey({
-          rows: [navigationParent, childRow],
-          childRowsByParent: {},
-        }),
-        loadingChildKeys: new Set(),
-        resolveAttention: () => ({ kind: "none" }),
-        toSidebarSession: (row, isChild) => ({
-          ...projectSidebarSession(row),
-          isChild: isChild === true,
-        }),
-      });
+  ] as const)("counts normalized live runs for a %s", (_name, runState, runningChildCount) => {
+    const childRow = { ...child, ...runState };
+    const projected = projectSessionTree({
+      roots: [navigationParent],
+      rowsByKey: collectSidebarSessionRowsByKey({
+        rows: [navigationParent, childRow],
+        childRowsByParent: {},
+      }),
+      loadingChildKeys: new Set(),
+      resolveAttention: () => ({ kind: "none" }),
+      toSidebarSession: (row, isChild) => ({
+        ...projectSidebarSession(row),
+        isChild: isChild === true,
+      }),
+    });
 
-      expect(projected[0]).toMatchObject({ runningChildCount, failedChildCount });
-    },
-  );
+    expect(projected[0]).toMatchObject({ runningChildCount });
+  });
 
   it.each([
     ["unloaded before children", "none", true, "approval", 1, 4_503_599_627_370_497],
@@ -535,16 +581,13 @@ describe("sidebar navigation lineage ownership", () => {
       expect(trees[0]).toMatchObject({
         attention: { kind: expected },
         runningChildCount: 1,
-        failedChildCount: 2,
         containsActiveDescendant: true,
         workspaceConflictCount: expectedConflicts,
       });
       expect(trees[0]?.childSessionKeys).toStrictEqual(["first", "second", "missing"]);
-      expect(
-        trees[0]?.children.map((row) => [row.key, row.runningChildCount, row.failedChildCount]),
-      ).toStrictEqual([
-        ["first", 1, 0],
-        ["second", 0, 0],
+      expect(trees[0]?.children.map((row) => [row.key, row.runningChildCount])).toStrictEqual([
+        ["first", 1],
+        ["second", 0],
       ]);
     },
   );
@@ -607,7 +650,6 @@ describe("sidebar navigation lineage ownership", () => {
       ownAttention: attention.root,
       runningChildCount: 1,
       queuedChildCount: 1,
-      failedChildCount: 1,
       attention: { kind: "approval", requests: [shared, question, later] },
     });
     const container = document.createElement("div");
@@ -668,7 +710,6 @@ describe("sidebar navigation lineage ownership", () => {
           isChild,
           attention: { kind: "none" },
           runningChildCount: 0,
-          failedChildCount: 0,
         }) as SidebarRecentSession,
     });
 
@@ -692,42 +733,16 @@ describe("sidebar navigation lineage ownership", () => {
 });
 
 it("keeps a prepared worktree session in Coding before canonical metadata arrives", () => {
-  const key = "agent:main:new-worktree";
-  const context = {
-    basePath: "",
-    agents: { state: { agentsList: { mainKey: "main" } } },
-    agentSelection: { state: { selectedId: "main" } },
-    gateway: { snapshot: { assistantAgentId: "main", hello: null } },
-    sessions: {
-      isPreparedWorkSession: (candidate: string) => candidate === key,
-      pullRequestSummary: () => undefined,
-      isRunVisuallyActive: () => false,
-    },
-  } as unknown as Parameters<typeof buildSidebarSessionNavigationState>[0]["context"];
-  const navigation = buildSidebarSessionNavigationState({
-    context,
-    routeSessionKey: key,
-    sessionsResult: {
-      ts: 1,
-      path: "(multiple)",
-      count: 1,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [{ key, kind: "direct", updatedAt: 1 }],
-    },
-    sessionsAgentId: null,
-    showCron: false,
-    showSystem: false,
-    statusFilter: "active",
-    compareSessions: () => 0,
-    highlightCurrentSession: true,
-    rowProjection: new SidebarSessionRowProjection(),
-    loadingChildSessionKeys: new Set(),
-    outboxAttentionCountForSessionKey: () => 0,
-    hasSessionDraft: () => false,
-    resolveAttention: () => ({ kind: "none" }),
-    resolveAgentStatusNote: () => undefined,
-  });
+  expect(projectSidebarSession({}, undefined, { preparedWorkSession: true }).workSession).toBe(
+    true,
+  );
+});
 
-  expect(navigation.visibleSessionRows).toHaveLength(1);
-  expect(navigation.toSidebarSession(navigation.visibleSessionRows[0]!).workSession).toBe(true);
+it("hides a main-session alias draft only while viewing that conversation", () => {
+  const options = { highlightCurrentSession: true, hasComposerDraft: true };
+  const project = (extra: Partial<typeof options> & { routeSessionKey?: string } = {}) =>
+    projectSidebarSession({ key: "main" }, undefined, { ...options, ...extra }).hasComposerDraft;
+  expect(project()).toBe(false);
+  expect(project({ routeSessionKey: "agent:main:other" })).toBe(true);
+  expect(project({ highlightCurrentSession: false })).toBe(true);
 });

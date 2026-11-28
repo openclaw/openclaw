@@ -4,6 +4,7 @@ import { retryAfterPluginReplacement } from "../../../plugins/plugin-replacement
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
@@ -36,6 +37,47 @@ import type {
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
+
+type ContextCleanupPhase = "registry" | "resolve" | "authority" | "notify" | "dispose";
+
+async function stampSubagentCleanup(
+  field: "contextEngineCleanupCompletedAt" | "endedHookEmittedAt",
+  context: OpenClawStateWorkerContext,
+  readCurrent: () => SubagentRunRecord,
+): Promise<void> {
+  let entry = readCurrent();
+  const runId = entry.runId;
+  const assertCurrent = () => {
+    entry = readCurrent();
+    if (entry.runId !== runId) {
+      throw new SubagentRegistryMutationRejectedError(
+        "Subagent cleanup address changed before persistence.",
+      );
+    }
+  };
+  await mutateSubagentRuns(
+    [runId],
+    (rows) => {
+      const current = rows.get(runId);
+      // A best-effort ended hook may finish after bookkeeping removes its row.
+      if (!current) {
+        return { value: undefined };
+      }
+      if (!isSameSubagentRunOwner(current, entry)) {
+        throw new SubagentRegistryMutationRejectedError("Subagent cleanup execution changed.");
+      }
+      if (field === "contextEngineCleanupCompletedAt" && current[field] !== undefined) {
+        return { value: undefined };
+      }
+      return {
+        value: undefined,
+        postimages: new Map([[runId, { ...current, [field]: Date.now() }]]),
+      };
+    },
+    { context, assertCurrent },
+  );
+}
 
 export function createSubagentRegistryContextCleanup(config: {
   isEndedHookOwnerCurrent: (entry: SubagentRunRecord) => boolean;
@@ -47,14 +89,19 @@ export function createSubagentRegistryContextCleanup(config: {
   function runContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
     options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
+    onPhase?: (phase: ContextCleanupPhase) => void,
   ): Promise<void> {
-    return retryAfterPluginReplacement(() => deliverContextEngineSubagentEnded(params, options));
+    return retryAfterPluginReplacement(() =>
+      deliverContextEngineSubagentEnded(params, options, onPhase),
+    );
   }
 
   async function deliverContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
     options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
+    onPhase?: (phase: ContextCleanupPhase) => void,
   ): Promise<void> {
+    onPhase?.("registry");
     const cfg = getRuntimeConfig();
     const registry = await loadSubagentRegistryPluginRuntimeHandle({
       config: cfg,
@@ -64,19 +111,25 @@ export function createSubagentRegistryContextCleanup(config: {
       allowGatewaySubagentBinding: true,
     });
     await withPluginRuntimeRegistryScope(registry, async () => {
+      onPhase?.("resolve");
       const engine = await resolveSubagentRegistryContextEngine(cfg, {
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
       });
       let failure: { error: unknown } | undefined;
       try {
+        onPhase?.("authority");
         if ((await options?.prepareCurrent?.()) !== false && options?.isCurrent?.() !== false) {
+          onPhase?.("notify");
           await engine.onSubagentEnded?.(params);
         }
       } catch (error) {
         failure = { error };
       }
       try {
+        if (!failure) {
+          onPhase?.("dispose");
+        }
         await engine.dispose?.();
       } catch (error) {
         failure ??= { error };
@@ -92,12 +145,16 @@ export function createSubagentRegistryContextCleanup(config: {
     warning: string,
     options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
   ): Promise<boolean> {
+    let phase: ContextCleanupPhase = "registry";
     try {
-      await runContextEngineSubagentEnded(params, options);
+      await runContextEngineSubagentEnded(params, options, (current) => {
+        phase = current;
+      });
       return true;
     } catch (err) {
       log.warn(warning, {
         error: buildSafeLifecycleErrorMeta(err),
+        phase,
         childSessionKey: params.childSessionKey,
         reason: params.reason,
       });
@@ -149,50 +206,27 @@ export function createSubagentRegistryContextCleanup(config: {
     if (!isCurrent()) {
       return false;
     }
-    const contextEnded = contextAlreadyEnded
-      ? true
-      : await tryContextEngineSubagentEnded(
-          {
-            childSessionKey: entry.childSessionKey,
-            reason: "deleted",
-            agentDir: entry.agentDir,
-            workspaceDir: entry.workspaceDir,
-          },
-          "context-engine collector cleanup failed",
-          { isCurrent },
-        );
-    if (!contextAlreadyEnded && contextEnded && isCurrent()) {
-      const runId = entry.runId;
-      const assertCurrent = () => {
-        if (!isCurrent() || entry.runId !== runId) {
-          throw new SubagentRegistryMutationRejectedError(
-            "Collector cleanup address changed before persistence.",
+    const isContextCurrent = () => isCurrent() && !shouldSuppressSubagentSessionEffects(entry);
+    const contextEnded =
+      contextAlreadyEnded || !isContextCurrent()
+        ? true
+        : await tryContextEngineSubagentEnded(
+            {
+              childSessionKey: entry.childSessionKey,
+              reason: "deleted",
+              agentDir: entry.agentDir,
+              workspaceDir: entry.workspaceDir,
+            },
+            "context-engine collector cleanup failed",
+            { isCurrent: isContextCurrent },
           );
+    if (!contextAlreadyEnded && contextEnded && isContextCurrent()) {
+      await stampSubagentCleanup("contextEngineCleanupCompletedAt", stateContext, () => {
+        if (!isContextCurrent()) {
+          throw new SubagentRegistryMutationRejectedError("Collector cleanup execution changed.");
         }
-      };
-      await mutateSubagentRuns(
-        [runId],
-        (rows) => {
-          assertCurrent();
-          const current = rows.get(runId);
-          if (!current || !isSameSubagentRunOwner(current, entry) || !isCurrent()) {
-            throw new SubagentRegistryMutationRejectedError("Collector cleanup execution changed.");
-          }
-          if (current.contextEngineCleanupCompletedAt !== undefined) {
-            return { value: undefined };
-          }
-          return {
-            value: undefined,
-            postimages: new Map([
-              [runId, { ...current, contextEngineCleanupCompletedAt: Date.now() }],
-            ]),
-          };
-        },
-        {
-          context: stateContext,
-          assertCurrent,
-        },
-      );
+        return entry;
+      });
     }
     return internalEffectsRemoved && attachmentsRemoved && contextEnded && isCurrent();
   }
@@ -269,37 +303,10 @@ export function createSubagentRegistryContextCleanup(config: {
           inFlightOwners: endedHookInFlightOwners,
           recordEmitted: async () => {
             endedHookEmittedOwners.add(identity);
-            assertCurrent();
-            const runId = entry.runId;
-            const assertStampCurrent = () => {
+            await stampSubagentCleanup("endedHookEmittedAt", stateContext, () => {
               assertCurrent();
-              if (entry.runId !== runId) {
-                throw new SubagentRegistryMutationRejectedError(
-                  "Subagent ended hook address changed before persistence.",
-                );
-              }
-            };
-            await mutateSubagentRuns(
-              [runId],
-              (rows) => {
-                assertStampCurrent();
-                const current = rows.get(runId);
-                // Bookkeeping can retire this execution before its best-effort hook runs.
-                if (!current) {
-                  return { value: undefined };
-                }
-                if (!isSameSubagentRunOwner(current, entry)) {
-                  throw new SubagentRegistryMutationRejectedError(
-                    "Subagent ended hook execution changed.",
-                  );
-                }
-                return {
-                  value: undefined,
-                  postimages: new Map([[runId, { ...current, endedHookEmittedAt: Date.now() }]]),
-                };
-              },
-              { context: stateContext, assertCurrent: assertStampCurrent },
-            );
+              return entry;
+            });
           },
         });
       });

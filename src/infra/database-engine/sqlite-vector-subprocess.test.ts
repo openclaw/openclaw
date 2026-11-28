@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
+import { runWithSpawnBroker } from "../../process/spawn-broker/context.js";
+import { createSpawnBrokerHost } from "../../process/spawn-broker/host.js";
 import { ensureSqliteLibrarySelected } from "../bun-sqlite-library.js";
 import { readChildRuntimeViability } from "../child-runtime-viability.js";
 import { runVectorKnnInSubprocess } from "./sqlite-vector-subprocess.js";
@@ -109,40 +111,55 @@ it("forwards a discovered SQLite library through stdin without inheriting its en
   }
 });
 
-it("budgets the page cache on the child's per-request read-only connection", async () => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-vector-knn-"));
-  const databasePath = path.join(directory, "memory.sqlite");
-  await fs.writeFile(databasePath, "");
-  const rowShape = { cache_size: "number" } as const;
-  try {
-    // The child runs the plan's statement verbatim, so the statement can read back the
-    // pragma that connection applied before the KNN query.
-    await expect(
-      runVectorKnnInSubprocess({
-        databasePath,
-        request: {
-          query: { sql: "SELECT cache_size FROM pragma_cache_size WHERE ? > 0", parameters: [0] },
-          scopeCount: { sql: "SELECT 0 AS count", parameters: [] },
-          vectorTable: "memory_index_chunks_vec",
-          limit: 1,
-          candidateParameter: 0,
-          rowShape,
-        },
-        isRow: (row): row is { cache_size: number } => matchesVectorRow(row, rowShape),
-      }),
-    ).resolves.toEqual({ rows: [{ cache_size: -65536 }], fallbackScanRequired: false });
-  } finally {
-    for (const result of vi.mocked(childProcess.spawn).mock.results) {
-      if (result.type !== "return") {
-        continue;
+it.each(process.platform === "win32" || process.versions.bun ? [false] : [false, true])(
+  "budgets the page cache without host forks when brokered=%s",
+  async (brokered) => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-vector-knn-"));
+    const databasePath = path.join(directory, "memory.sqlite");
+    await fs.writeFile(databasePath, "");
+    const rowShape = { cache_size: "number" } as const;
+    const broker = brokered ? createSpawnBrokerHost() : undefined;
+    try {
+      await broker?.ready();
+      const nativeLaunches = vi.mocked(childProcess.spawn).mock.calls.length;
+      // The child runs the plan's statement verbatim, so the statement can read back the
+      // pragma that connection applied before the KNN query.
+      await expect(
+        runWithSpawnBroker(broker, () =>
+          runVectorKnnInSubprocess({
+            databasePath,
+            request: {
+              query: {
+                sql: "SELECT cache_size FROM pragma_cache_size WHERE ? > 0",
+                parameters: [0],
+              },
+              scopeCount: { sql: "SELECT 0 AS count", parameters: [] },
+              vectorTable: "memory_index_chunks_vec",
+              limit: 1,
+              candidateParameter: 0,
+              rowShape,
+            },
+            isRow: (row): row is { cache_size: number } => matchesVectorRow(row, rowShape),
+          }),
+        ),
+      ).resolves.toEqual({ rows: [{ cache_size: -65536 }], fallbackScanRequired: false });
+      expect(vi.mocked(childProcess.spawn).mock.calls.length - nativeLaunches).toBe(
+        brokered ? 0 : 1,
+      );
+    } finally {
+      await broker?.close();
+      for (const result of vi.mocked(childProcess.spawn).mock.results) {
+        if (result.type !== "return") {
+          continue;
+        }
+        const child = result.value;
+        if (child.exitCode === null && child.signalCode === null) {
+          const closed = once(child, "close");
+          child.kill("SIGKILL");
+          await closed;
+        }
       }
-      const child = result.value;
-      if (child.exitCode === null && child.signalCode === null) {
-        const closed = once(child, "close");
-        child.kill("SIGKILL");
-        await closed;
-      }
+      await fs.rm(directory, { force: true, recursive: true });
     }
-    await fs.rm(directory, { force: true, recursive: true });
-  }
-});
+  },
+);

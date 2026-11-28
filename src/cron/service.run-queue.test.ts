@@ -1,5 +1,5 @@
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { observeCronJobCommits } from "../../test/helpers/cron/runtime-mutation.js";
 import { createDueIsolatedJob } from "../../test/helpers/cron/service-regression-fixtures.js";
 import {
@@ -30,6 +30,7 @@ import { CronService } from "./service.js";
 import {
   createFinishedBarrier,
   createCronServiceWithStateForTest,
+  mockCronAvailableMemory,
   setupCronServiceSuite,
 } from "./service.test-harness.js";
 import {
@@ -46,6 +47,11 @@ import { loadCronStore, saveCronStore } from "./store.js";
 import { createCronScheduledRunId } from "./store/run-request-id.js";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
 import type { CronJob } from "./types.js";
+
+// Capacity cases fill the default run slots; no spare memory admits an extra run.
+beforeEach(() => {
+  mockCronAvailableMemory(0);
+});
 
 const NOW = Date.parse("2026-10-01T12:00:00.000Z");
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -328,8 +334,9 @@ it.for([
         () => ownsPreparation,
       );
       const observed = createDeferred();
-      const waitForPreparation = admission.waitForAgentPreparation.bind(admission);
-      vi.spyOn(admission, "waitForAgentPreparation").mockImplementation((id, options) => {
+      const observer = admission.observation;
+      const waitForPreparation = observer.waitForAgentPreparation;
+      vi.spyOn(observer, "waitForAgentPreparation").mockImplementation((id, options) => {
         const waiting = waitForPreparation(id, options);
         observed.resolve();
         return waiting;
@@ -350,7 +357,9 @@ it.for([
         await withinTest(observed.promise, signal);
         // A foreground request expires, while the same startup owner keeps preparing.
         const foreground = waitForPreparation(job.agentId, { env, forWrite: true });
-        const timedOut = expect(foreground).rejects.toThrow("still preparing");
+        const timedOut = expect(foreground).rejects.toThrow(
+          "Agent database verification and preparation in progress. Retry the request shortly.",
+        );
         await vi.advanceTimersByTimeAsync(360_001);
         await timedOut;
         vi.useRealTimers();

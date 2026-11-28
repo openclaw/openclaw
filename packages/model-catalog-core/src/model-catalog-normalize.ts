@@ -281,6 +281,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "supportsReasoningEffort",
     "supportsTemperature",
     "supportsInstructions",
+    "cachesInstructions",
     "supportsUsageInStreaming",
     "supportsTools",
     "supportsStrictMode",
@@ -298,6 +299,13 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "supportsLongCacheRetention",
     "supportsResponsesContinuation",
     "requiresOpenAiAnthropicToolPayload",
+    "adaptiveThinking",
+    "thinkingRequired",
+    "emitsDsmlToolCalls",
+    "requiresTypedUnionBranches",
+    "requiresNonEmptyUserOrAssistantMessage",
+    "cacheControlSystemOnly",
+    "cacheControlSharedSystem",
   ] as const;
   for (const field of booleanFields) {
     if (typeof value[field] === "boolean") {
@@ -306,7 +314,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
   }
 
   normalizeCatalogFields(
-    ["toolSchemaProfile", "toolCallArgumentsEncoding"],
+    ["toolSchemaProfile", "toolCallArgumentsEncoding", "defaultThinkingLevel"],
     (field) => normalizeOptionalString(value[field]),
     compat,
   );
@@ -315,6 +323,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "visibleReasoningDetailTypes",
     "supportedReasoningEfforts",
     "unsupportedToolSchemaKeywords",
+    "thinkingLevels",
   ] as const;
   for (const field of stringListFields) {
     const normalized = normalizeTrimmedStringList(value[field]);
@@ -339,6 +348,17 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     }
   }
 
+  if (isRecord(value.thinkingLevelLabels)) {
+    const labels = Object.fromEntries(
+      Object.entries(value.thinkingLevelLabels).flatMap(([level, label]) =>
+        typeof label === "string" && label.trim() ? [[level.trim(), label.trim()]] : [],
+      ),
+    );
+    if (Object.keys(labels).length > 0) {
+      compat.thinkingLevelLabels = labels;
+    }
+  }
+
   const codeMode = normalizeOptionalString(value.codeMode) ?? "";
   if (codeMode === "preferred" || codeMode === "capable") {
     compat.codeMode = codeMode;
@@ -347,6 +367,9 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
   const maxTokensField = normalizeOptionalString(value.maxTokensField) ?? "";
   if (maxTokensField === "max_completion_tokens" || maxTokensField === "max_tokens") {
     compat.maxTokensField = maxTokensField;
+  }
+  if (value.seedField === "seed" || value.seedField === "random_seed") {
+    compat.seedField = value.seedField;
   }
 
   const thinkingFormat = normalizeOptionalString(value.thinkingFormat) ?? "";
@@ -502,6 +525,15 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   const headers = normalizeStringMap(value.headers);
   const defaultModel = normalizeOptionalString(value.defaultModel) ?? "";
   const defaultUtilityModel = normalizeOptionalString(value.defaultUtilityModel) ?? "";
+  // Keyed by the vendor prefix of a routed model id; lookups lowercase that prefix.
+  const defaultUtilityModels = normalizeCatalogRecords(
+    value.defaultUtilityModels,
+    (vendor, modelId) => {
+      const id = normalizeOptionalString(modelId) ?? "";
+      return vendor && !isBlockedObjectKey(vendor) && id ? id : undefined;
+    },
+    (vendor) => normalizeOptionalString(vendor)?.toLowerCase() ?? "",
+  );
   const family = normalizeModelFamily(value.family);
   return {
     ...(authScope ? { authScope } : {}),
@@ -511,6 +543,7 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
     ...(family ? { family } : {}),
     ...(defaultModel ? { defaultModel } : {}),
     ...(defaultUtilityModel ? { defaultUtilityModel } : {}),
+    ...(defaultUtilityModels ? { defaultUtilityModels } : {}),
     models,
   };
 }

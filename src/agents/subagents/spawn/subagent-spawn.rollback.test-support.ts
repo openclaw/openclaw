@@ -161,9 +161,9 @@ export function registerOperatorSpawnRollbackCases(
       preserveSession ? "unknown" : "not-committed",
       new Error("fixture registry write failed"),
     );
-    const dispatchSessionMethod = runtime.recovery.dispatchSessionMethod;
+    const dispatchSessionMethod = runtime.lifecycle.dispatchSessionMethod;
     const cleanupDispatch = preserveSession
-      ? vi.spyOn(runtime.recovery, "dispatchSessionMethod").mockImplementation(async (...args) => {
+      ? vi.spyOn(runtime.lifecycle, "dispatchSessionMethod").mockImplementation(async (...args) => {
           if (cancelFails) {
             if (args[0] !== "chat.abort") {
               return await dispatchSessionMethod(...args);
@@ -245,7 +245,6 @@ export function registerOperatorSpawnRollbackCases(
               const childKey = expectDefined(childSessionKey, "registered child session");
               const runId = expectDefined(childRunId, "registered child run");
               const dispatch = expectDefined(cleanupDispatch, "bound cleanup dispatch observer");
-              expectDefined(source, "operator source").authority.assertCurrent();
               expect(
                 expectDefined(childExecution?.state.signal, "accepted child abort signal").aborted,
               ).toBe(true);
@@ -308,13 +307,6 @@ export function registerOperatorSpawnRollbackCases(
         runtime.close();
         await prepareGatewayRunShutdown({
           resolveGatewayContext: bound.resolveGatewayContext,
-          chatRunState: context.chatRunState,
-          removeChatRun: context.removeChatRun,
-          agentRunSeq: context.agentRunSeq,
-          broadcast: context.broadcast,
-          nodeSendToSession: context.nodeSendToSession,
-          getPendingReplyCount: () => 0,
-          timeoutMs: 0,
           warnings: [],
         });
         await AsyncWorkScope.runWhenAllIdle(

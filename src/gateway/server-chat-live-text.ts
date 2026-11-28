@@ -5,7 +5,7 @@ import {
   type ChatEvent,
   type ChatStatusEvent,
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { TOOL_CALL_RAW_TOOL_NAME } from "../agents/tool-search-types.js";
+import { TOOL_CALL_RAW_TOOL_NAME } from "../agents/tool-search-protocol.js";
 import type { AgentEventPayload, AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
@@ -205,6 +205,17 @@ export function prepareAgentWirePayload(
         data: { ...event.data, result: { ...result, details: liveDetails } },
       };
     }
+  }
+  if (event.stream === "tool" && event.data.phase === "start" && event.data.followsAssistantText) {
+    const { followsAssistantText: _, ...data } = event.data;
+    const buffer = state.resolveBuffer(clientRunId);
+    payload = {
+      ...payload,
+      data:
+        !buffer.suppress && buffer.text
+          ? { ...data, textLengthBeforeTool: buffer.text.length }
+          : data,
+    };
   }
   if (event.stream === "tool" && event.data.phase === "result") {
     const result = readRecord(payload.data.result);

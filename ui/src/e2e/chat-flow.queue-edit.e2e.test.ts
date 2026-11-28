@@ -22,7 +22,7 @@ async function offlineQueue() {
   await page.goto(`${suite.server.baseUrl}chat`);
   const composer = page.locator(".agent-chat__composer-combobox textarea");
   await composer.waitFor({ state: "visible", timeout: 15_000 });
-  await page.locator(".agent-chat__welcome").waitFor({ state: "visible" });
+  await page.locator(".agent-chat__empty").waitFor({ state: "visible" });
   await gateway.setOnline(false);
   await gateway.closeLatest();
   await queueMessages(page);
@@ -121,16 +121,7 @@ suite.define(() => {
 
   it("keeps edit, remove, and reorder outcomes exact through reconnect", async () => {
     const page = await newChatPage(suite);
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "chat.history": {
-          messages: [],
-          sessionId: "session:agent:main:main",
-          sessionInfo: { hasActiveRun: false, status: "done" },
-          thinkingLevel: null,
-        },
-      },
-    });
+    const gateway = await installMockGateway(page);
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
@@ -142,7 +133,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Send message" }).click();
       const active = requireRecord((await gateway.waitForRequest("chat.send")).params);
       const activeRunId = requireString(active.idempotencyKey, "active run idempotency key");
-      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ timeout: 10_000 });
 
       // The active seed turn is delivered; only the four later turns are queued.
       const acceptedSession = {
@@ -227,7 +218,8 @@ suite.define(() => {
 
       await page
         .getByRole("alert")
-        .getByText("Could not store this message for reconnect.", { exact: false })
+        .filter({ hasText: "Couldn’t confirm that your browser removed this message." })
+        .getByText("If Remove is still available, try it again.", { exact: true })
         .waitFor({ timeout: 10_000 });
       await row.waitFor();
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);

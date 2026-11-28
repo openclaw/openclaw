@@ -1,12 +1,10 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
-import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { formatErrorMessage } from "./errors.js";
 import {
@@ -18,13 +16,16 @@ import type {
   UpdateDatabaseWriteReceipt,
 } from "./update-database-generations.js";
 import {
+  getUpdateDoctorConfigCapture,
+  runWithUpdateDoctorConfigCapture,
+} from "./update-doctor-config-capture.js";
+import {
   UpdateDoctorConfigChangeSchema,
+  UpdateDoctorConfigFileWriteSchema,
+  UpdateDoctorConfigHashSchema,
   UpdateDoctorConfigWriteRefusalSchema,
 } from "./update-doctor-config-schema.js";
-import type {
-  UpdateDoctorConfigChange,
-  UpdateDoctorConfigWriteRefusal,
-} from "./update-doctor-config.js";
+import type { DoctorConfigCapture, DoctorConfigWriteAuthority } from "./update-doctor-config.js";
 import { UpdateDoctorLintFindingSchema } from "./update-doctor-lint-schema.js";
 import { runWithUpdateDoctorMigrationCapture } from "./update-doctor-migration-attribution.js";
 import {
@@ -33,6 +34,16 @@ import {
 } from "./update-doctor-scan-receipts.js";
 import { normalizeUpdateFailureFacts, type UpdateFailureFact } from "./update-failure-facts.js";
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
+
+export type { DoctorConfigCapture } from "./update-doctor-config.js";
+
+export {
+  getUpdateDoctorConfigCapture,
+  getUpdateDoctorConfigWriteAuthority,
+  recordUpdateDoctorConfigMigration,
+  recordUpdateDoctorConfigWriteRefusal,
+  runUpdateDoctorIncludeWrite,
+} from "./update-doctor-config-capture.js";
 
 // IPC contract between package update parents and the post-install doctor child.
 export const UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV =
@@ -52,11 +63,6 @@ export const PACKAGE_POST_INSTALL_DOCTOR_ADVISORY: PackageUpdateStepAdvisory = {
     "Post-install doctor reported a recoverable update-time repair warning after the package install was verified; continuing with post-core plugin convergence.",
 };
 
-const configHashSchema = z.string().regex(/^[0-9a-f]{64}$/u);
-const configFileWriteSchema = z.object({
-  inputHash: configHashSchema.optional(),
-  hash: configHashSchema,
-});
 export const UpdateDoctorDeferredInspectionCheckIdsSchema = z
   .array(UpdateDoctorLintFindingSchema.shape.checkId.max(256))
   .max(128);
@@ -78,12 +84,12 @@ const DoctorMaintenanceRefusalSchema = z.discriminatedUnion("kind", [
 export type DoctorMaintenanceRefusal = z.infer<typeof DoctorMaintenanceRefusalSchema>;
 
 const doctorResultEvidence = {
-  configHash: z.union([z.literal("unchanged"), configHashSchema]).optional(),
-  configInputHash: configHashSchema.optional(),
+  configHash: z.union([z.literal("unchanged"), UpdateDoctorConfigHashSchema]).optional(),
+  configInputHash: UpdateDoctorConfigHashSchema.optional(),
   configFileWrites: z
     .record(
       z.string().refine((filePath) => path.isAbsolute(filePath)),
-      configFileWriteSchema,
+      UpdateDoctorConfigFileWriteSchema,
     )
     .optional()
     .catch(undefined),
@@ -166,6 +172,7 @@ export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly stri
           const prefix = value.slice(0, 498);
           const complete =
             prefix.match(/^[\s\S]*(?:[.!?](?=\s)|\r?\n)/u)?.[0] ??
+            prefix.match(/^[^\r\n]+:\s+\[[^\]\r\n]+\]/u)?.[0] ??
             prefix.match(/^[^\r\n]+:(?=\s)/u)?.[0];
           return complete
             ? `${complete.trimEnd()} …`
@@ -176,23 +183,19 @@ export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly stri
   ].slice(0, 32);
 }
 
-export type DoctorConfigCapture = {
-  path: string;
-  hash: string;
-  inputHash?: string;
-  fileWrites?: Record<string, z.infer<typeof configFileWriteSchema>>;
-  configChanges: UpdateDoctorConfigChange[];
-  configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
-  deferredInspectionCheckIds?: string[];
-};
-export type UpdateDoctorWriteAuthority = {
+/** Runs a policy check under Doctor's held maintenance owner and its open scope. */
+type DoctorPolicyCustodyOwner = { assertCurrent(policy: () => void): void };
+export type UpdateDoctorWriteAuthority = DoctorConfigWriteAuthority & {
+  /** An optional work profile; config preparation still proves eligibility. */
+  retirementOnly?: true;
   /** Parent Doctor phase deadline for nested managed-service inspection. */
   serviceInspectionDeadlineAtMs?: number;
-  inputHash: string;
-  assertCurrent: () => void;
+  /** Doctor lends its held maintenance owner to `assertCurrent`; see doctor-policy-custody. */
+  lendPolicyCustody?: (owner: DoctorPolicyCustodyOwner | undefined) => void;
   commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
   databaseGenerations?: UpdateDatabaseGenerations;
+  databaseWriteCapture?: ReturnType<typeof createUpdateDoctorDatabaseWriteCapture>;
   databasePluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
   originalRecoveryCapture?: {
     runId: string;
@@ -222,6 +225,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
   let admitted = false;
   let unchanged = true;
   let receipt: UpdateDatabaseWriteReceipt | undefined;
+  let rebuiltIndexes: Record<string, string> = {};
   const openedSqlitePaths = new Set<string>();
   const historicalScans = createUpdateDoctorHistoricalScanCapture(options);
   const read = async () => {
@@ -251,7 +255,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
     options.assertCurrent?.();
     return observation;
   };
-  const acceptEmptyReaderTransitions = (
+  const acceptNoWriteTransitions = (
     observation: import("./update-database-generations.js").UpdateDatabaseGenerationPair,
   ) => {
     // Share migration admission's no-write equivalence, from this same observation.
@@ -259,6 +263,25 @@ export function createUpdateDoctorDatabaseWriteCapture(
       const alternate = observation.emptyReaderAlternates[pathname];
       if (alternate !== undefined && expectedGenerations?.[pathname] === alternate) {
         expectedGenerations[pathname] = generation;
+      }
+    }
+    // A rebuilt index carries no alternate of its own; accept the one remembered from
+    // the previous admission before this observation is compared and rebound.
+    for (const [pathname, alternate] of Object.entries(rebuiltIndexes)) {
+      if (expectedGenerations && observation.committed[pathname] === alternate) {
+        expectedGenerations[pathname] = alternate;
+      }
+    }
+  };
+  // Outside readers can rebuild a retained index after this observation; only an index
+  // over the same frames, content, and file identity stays equivalent to it.
+  const bindRebuiltIndexes = (
+    observation: import("./update-database-generations.js").UpdateDatabaseGenerationPair,
+  ) => {
+    rebuiltIndexes = {};
+    for (const [pathname, alternate] of Object.entries(observation.rebuiltIndexAlternates)) {
+      if (expectedGenerations?.[pathname] === observation.committed[pathname]) {
+        rebuiltIndexes[pathname] = alternate;
       }
     }
   };
@@ -271,6 +294,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
         {
           openedSqlitePaths,
           expected: (pathname) => expectedGenerations?.[pathname],
+          rebuiltIndex: (pathname) => rebuiltIndexes[pathname],
           assertCurrent: () => options.assertCurrent?.(),
           accept(pathname, before, after) {
             options.assertCurrent?.();
@@ -295,7 +319,14 @@ export function createUpdateDoctorDatabaseWriteCapture(
         () => historicalScans.run(operation),
       );
     },
-    async admit() {
+    async admit(interval?: "predecessor-stop") {
+      if (interval === "predecessor-stop") {
+        const maintenance = getOpenClawDatabaseMaintenanceScope();
+        if (!maintenance?.ownsSchemaMaintenance) {
+          throw new Error("Predecessor stop admission requires schema maintenance custody.");
+        }
+        maintenance.assertAdmission();
+      }
       receipt = undefined;
       historicalScans.observe(Object.keys(expectedGenerations ?? {}));
       const observation = await read();
@@ -310,15 +341,31 @@ export function createUpdateDoctorDatabaseWriteCapture(
           physical = true;
           expectedGenerations = observation.committed;
         }
+        const first = !admitted;
         admitted = true;
         const generations = observation.committed;
         historicalScans.admit(generations);
         const incoming = physical ? observation.physical : { ...expectedGenerations };
-        acceptEmptyReaderTransitions(observation);
+        acceptNoWriteTransitions(observation);
         const matches = isDeepStrictEqual(generations, expectedGenerations);
         fromGenerations ??= matches ? incoming : generations;
-        // Earlier receipts or another process's writes must never become our baseline.
+        // A changed rollback baseline stays ineligible after forward admission.
         unchanged &&= matches;
+        if (!matches && (first || interval === "predecessor-stop")) {
+          // A stale rollback baseline does not make the current state unmigratable.
+          // Keep unchanged=false so the parent cannot restore over newer data, while
+          // Doctor attributes its own writes from this admission's observed state.
+          // Accepted edge: foreign writes before predecessor-stop custody also
+          // continue forward, but can never make the stale backup restorable.
+          // Changes after this admission still fail the existing migration checks.
+          expectedGenerations = { ...generations };
+          options.warn(
+            interval === "predecessor-stop"
+              ? "Captured SQLite databases changed while stopping the predecessor Gateway before maintenance custody; continuing Doctor with current state, but automatic database restoration is unavailable for this update."
+              : "Databases changed after the updater captured them; continuing Doctor with current state, but automatic database restoration is unavailable for this update.",
+          );
+        }
+        bindRebuiltIndexes(observation);
       }
     },
     async settle() {
@@ -339,7 +386,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
             expectedGenerations[pathname] = generation;
           }
         }
-        acceptEmptyReaderTransitions(observation!);
+        acceptNoWriteTransitions(observation!);
         unchanged &&= isDeepStrictEqual(generations, expectedGenerations);
         receipt = {
           unchanged,
@@ -352,164 +399,29 @@ export function createUpdateDoctorDatabaseWriteCapture(
   };
 }
 
-const doctorConfigWrites = new AsyncLocalStorage<{
-  capture: DoctorConfigCapture;
-  authority?: UpdateDoctorWriteAuthority;
-}>();
+export function captureUpdateDoctorConfigWrites<T>(
+  configPath: string,
+  run: (capture: DoctorConfigCapture) => Promise<T>,
+  authority?: UpdateDoctorWriteAuthority,
+): Promise<T> {
+  return runWithUpdateDoctorConfigCapture(
+    { path: path.resolve(configPath), hash: "unchanged", configChanges: [] },
+    run,
+    authority,
+  );
+}
 
 /** Deferral requires an owned result channel, not just an inherited marker. */
 export function recordUpdateDoctorDeferredInspectionChecks(
   checkIds: string[],
 ): string[] | undefined {
-  const capture = doctorConfigWrites.getStore()?.capture;
+  const capture = getUpdateDoctorConfigCapture();
   if (!capture) {
     return undefined;
   }
   return (capture.deferredInspectionCheckIds = UpdateDoctorDeferredInspectionCheckIdsSchema.parse([
     ...new Set([...(capture.deferredInspectionCheckIds ?? []), ...checkIds]),
   ]));
-}
-
-export function captureUpdateDoctorConfigWrites<T>(
-  configPath: string,
-  run: (capture: DoctorConfigCapture) => Promise<T>,
-  authority?: UpdateDoctorWriteAuthority,
-): Promise<T> {
-  const capture: DoctorConfigCapture = {
-    path: path.resolve(configPath),
-    hash: "unchanged",
-    configChanges: [],
-  };
-  return doctorConfigWrites.run(
-    {
-      capture,
-      authority: authority
-        ? { inputHash: authority.inputHash, assertCurrent: authority.assertCurrent }
-        : undefined,
-    },
-    () => run(capture),
-  );
-}
-
-/** The same authority covers include writers; only the root has a captured input hash. */
-export function getUpdateDoctorConfigWriteAuthority(
-  configPath: string,
-): { assertCurrent: () => void; inputHash?: string } | undefined {
-  const context = doctorConfigWrites.getStore();
-  if (!context?.authority) {
-    return undefined;
-  }
-  const { capture, authority } = context;
-  return {
-    assertCurrent: authority.assertCurrent,
-    ...(capture.path === path.resolve(configPath)
-      ? { inputHash: capture.hash === "unchanged" ? authority.inputHash : capture.hash }
-      : {}),
-  };
-}
-
-export function assertUpdateDoctorConfigInputHash(configPath: string, inputHash: string): void {
-  const authority = getUpdateDoctorConfigWriteAuthority(configPath);
-  if (authority?.inputHash !== undefined && authority.inputHash !== inputHash) {
-    const message = "Config changed after update validation; Doctor did not promote its changes.";
-    recordUpdateDoctorConfigWriteRefusal({ reason: "config-input-changed", message, keys: [] });
-    throw new ConfigMutationConflictError(message, { retryable: false });
-  }
-}
-
-/** Retain the validated root input and live Doctor owner through include publication. */
-export async function runUpdateDoctorIncludeWrite<T>(
-  configPath: string,
-  inputHash: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  const context = doctorConfigWrites.getStore();
-  if (!context?.authority) {
-    return await run();
-  }
-  context.authority.assertCurrent();
-  assertUpdateDoctorConfigInputHash(configPath, inputHash);
-  const result = await run();
-  context.authority.assertCurrent();
-  return result;
-}
-
-/** Retain one contiguous chain from the writer's input through its actual publications. */
-export function recordUpdateDoctorConfigFileWrite(
-  configPath: string,
-  inputHash: string | null,
-  hash: string,
-): void {
-  const capture = doctorConfigWrites.getStore()?.capture;
-  if (!capture) {
-    return;
-  }
-  const resolvedPath = path.resolve(configPath);
-  const write =
-    capture.path === resolvedPath
-      ? capture
-      : ((capture.fileWrites ??= {})[resolvedPath] ??= { hash: "unchanged" });
-  if (write.hash === "unchanged") {
-    write.inputHash = inputHash ?? undefined;
-  } else if (inputHash !== write.hash) {
-    // An outside write between Doctor passes breaks ownership permanently for this run.
-    delete write.inputHash;
-  }
-  write.hash = hash;
-}
-
-/** Pair the consumed snapshot with the serialized payload at publication, never a later read. */
-export function recordUpdateDoctorConfigWrite(
-  configPath: string,
-  inputHash: string | null,
-  hash: string,
-  inputConfig: unknown,
-  outputJson: string,
-): void {
-  recordUpdateDoctorConfigFileWrite(configPath, inputHash, hash);
-  const capture = doctorConfigWrites.getStore()?.capture;
-  if (capture && capture.path === path.resolve(configPath)) {
-    const before = isRecord(inputConfig) ? inputConfig : {};
-    const after: unknown = JSON.parse(outputJson);
-    if (!isRecord(after)) {
-      throw new Error("Committed Doctor config is not an object.");
-    }
-    const keys = new Set(
-      capture.configChanges.flatMap((change) => (change.kind === "key" ? [change.key] : [])),
-    );
-    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-      if (!isDeepStrictEqual(before[key], after[key])) {
-        keys.add(key);
-      }
-    }
-    capture.configChanges = [
-      ...[...keys].toSorted().map((key): UpdateDoctorConfigChange => ({ kind: "key", key })),
-      ...capture.configChanges.filter((change) => change.kind === "migration"),
-    ];
-  }
-}
-
-/** Record migration notes only after their matching config write has committed. */
-export function recordUpdateDoctorConfigMigration(message: string): void {
-  const capture = doctorConfigWrites.getStore()?.capture;
-  if (
-    capture &&
-    message.trim() &&
-    !capture.configChanges.some(
-      (change) => change.kind === "migration" && change.message === message,
-    )
-  ) {
-    capture.configChanges.push({ kind: "migration", message });
-  }
-}
-
-export function recordUpdateDoctorConfigWriteRefusal(
-  refusal: UpdateDoctorConfigWriteRefusal,
-): void {
-  const capture = doctorConfigWrites.getStore()?.capture;
-  if (capture) {
-    capture.configWriteRefusal ??= { ...refusal, keys: [...new Set(refusal.keys)].toSorted() };
-  }
 }
 
 export function createUpdatePostInstallDoctorResultPath(

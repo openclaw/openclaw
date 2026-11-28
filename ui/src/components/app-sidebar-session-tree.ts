@@ -10,6 +10,7 @@ import {
   resolveSidebarSessionParentKey,
 } from "./app-sidebar-session-parent.ts";
 import {
+  childShowsParentWorking,
   SIDEBAR_SESSION_NO_ATTENTION,
   summarizeSidebarSessionAttention,
   type SidebarRecentSession,
@@ -24,12 +25,14 @@ function summarizeChildren(
   const childAttention: SidebarSessionAttention[] = [];
   let unreadChildCount = 0;
   let runningChildCount = 0;
-  let failedChildCount = 0;
   let queuedChildCount = 0;
   let workspaceConflictCount = 0;
   const unreadHiddenRuns: SidebarRecentSession[] = [];
   for (const child of children) {
     if (onlySubagents && !isSubagentSessionKey(child.key)) {
+      // Persistent children keep their own activity, but their hidden runs still fold upward.
+      runningChildCount += child.subagentSummary?.runningChildCount ?? 0;
+      queuedChildCount += child.subagentSummary?.queuedChildCount ?? 0;
       continue;
     }
     const descendants = onlySubagents ? child.subagentSummary : child;
@@ -39,17 +42,14 @@ function summarizeChildren(
           child.subagentSummary?.attention ?? SIDEBAR_SESSION_NO_ATTENTION,
         ])
       : child.attention;
-    childAttention.push(
-      attention.kind === "error" && attention.childLabel === undefined
-        ? { ...attention, childLabel: child.label }
-        : attention,
-    );
-    unreadChildCount += Number(child.unread) + (descendants?.unreadChildCount ?? 0);
+    childAttention.push(attention);
+    // A hidden run counts only while reading its parent can acknowledge it.
+    unreadChildCount +=
+      Number(onlySubagents ? isAcknowledgeableHiddenRun(child) : child.unread) +
+      (descendants?.unreadChildCount ?? 0);
     const visuallyActive = child.isRunVisuallyActive ?? child.hasActiveRun;
-    runningChildCount += (visuallyActive ? 1 : 0) + (descendants?.runningChildCount ?? 0);
-    failedChildCount +=
-      Number(child.status === "failed" || child.status === "timeout") +
-      (descendants?.failedChildCount ?? 0);
+    runningChildCount +=
+      Number(childShowsParentWorking(child)) + (descendants?.runningChildCount ?? 0);
     queuedChildCount +=
       Number(visuallyActive && child.status === "queued") + (descendants?.queuedChildCount ?? 0);
     workspaceConflictCount += onlySubagents
@@ -63,10 +63,12 @@ function summarizeChildren(
     }
   }
   return {
-    attention: summarizeSidebarSessionAttention([...childAttention, ...unloadedAttention]),
+    // Terminal failures belong to the child transcript, not the parent's current state.
+    attention: summarizeSidebarSessionAttention(
+      [...childAttention, ...unloadedAttention].filter((attention) => attention.kind !== "error"),
+    ),
     unreadChildCount,
     runningChildCount,
-    failedChildCount,
     queuedChildCount,
     workspaceConflictCount,
     // Hidden runs have no row to open, so their parent acknowledges them.
@@ -200,6 +202,11 @@ export function projectSessionTree(params: {
       childLoadParentKeys: childSessionKeys.length > 0 ? [...childLoadParentKeys] : [],
       children,
       loadingChildren: [...childLoadParentKeys].some((key) => loadingChildKeys.has(key)),
+      hasRunningDescendant: descendants.some(
+        (child) =>
+          child.hasRunningDescendant ||
+          (child.status !== "queued" && childShowsParentWorking(child)),
+      ),
       containsActiveDescendant: children.some(
         (child) => child.active || child.visuallyActive || child.containsActiveDescendant,
       ),

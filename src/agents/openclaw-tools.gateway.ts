@@ -20,14 +20,16 @@ export function createHostedGatewayTools(
   return [
     createPresenceTool({ runId: options?.runId }),
     createGatewayTool({
-      allowConfigReads: options?.gatewayConfigReadAllowed === true,
+      allowManagementActions: options?.gatewayManagementActionsAllowed === true,
       senderIsOwner: options?.senderIsOwner,
+      operatorAuthority: options?.pluginExecutionAuthority,
       requesterSenderId: options?.requesterSenderId,
     }),
     createPluginsTool({
       sessionId: options?.sessionId,
       runId: options?.runId,
       onYield: options?.onYield,
+      senderIsOwner: options?.senderIsOwner,
     }),
     ...(preparedDelegateTools ?? createOpenClawDelegateToolsForRun({ ...options, sessionAgentId })),
     ...(personalInstructionsEnabled ? [createPersonalInstructionsTool(sessionAgentId)] : []),

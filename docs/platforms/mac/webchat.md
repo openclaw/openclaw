@@ -23,8 +23,16 @@ Gateway and account changes still refresh hidden Dashboard windows. Saved web
 drafts recover within the same Gateway address and authenticated account; they
 are not copied to a different Gateway, account, or recreated SSH tunnel address.
 
+Closing a natively authenticated Dashboard window unloads its page, stopping
+background reconnects after that window loses native authorization. Reopening a
+retained main window uses the same WebView storage and restores its trusted
+Dashboard route; saved drafts remain scoped to the same Gateway address and account.
+Minimizing a window or hiding it when switching experiences does not unload its
+page. A native-auth document replaced during a Gateway switch is also unloaded;
+the new Gateway still receives a separate document and its own authorization.
+
 If the Dashboard cannot load, it shows a recovery page with **Reload** and
-**Connection Settings…**. Choose **Navigate → Reload** or press **Cmd-R** while a
+**Connection Settings…**. Choose **Navigate → Reload** or press **Shift-Cmd-R** while a
 Dashboard window is active to reload its current page. Gateway HTTP errors with
 plain-text or JSON bodies use the recovery page; HTML sign-in pages from an
 authenticated proxy remain available in the window.
@@ -108,7 +116,7 @@ Snooze is saved by the Gateway and never stops a run, blocks messages or agent
 tools, disables automations, or changes the thread’s worktree. The thread wakes
 at its deadline, when you send a message, or when an agent run completes.
 System events and runs that preserve visible session state do not wake it.
-Snoozing keeps an existing pin; pinning wakes a snoozed thread, and archiving
+Snoozing keeps an existing pin. Wake a snoozed thread before pinning it; archiving
 clears its snooze. Archived, child, and protected main or sentinel threads
 cannot be snoozed.
 
@@ -148,9 +156,12 @@ The anchored compact chat panel from the menu bar keeps the compact single-colum
 Native chat preserves Markdown paragraph breaks, including before lists and
 while responses are streaming.
 
-In the full macOS chat window, completed commentary, reasoning, and tool work
-collapse into a **Worked for…** disclosure above the answer. Expand it to inspect
-the work; final text, images, and other attachments stay visible. Active turns,
+In the full macOS chat window, all assistant text, images, and other attachments
+stay visible after a turn completes. Contiguous reasoning and tool work fold into
+separate **Worked** disclosures in place. Expand one to inspect that stretch of work;
+loading older history keeps expanded sections open. Collapsed headings list operation
+kinds and failed, blocked, skipped, or unknown outcomes; expanding a section also
+shows its total tool-call count. Active turns,
 work without a final answer, and unresolved or failed work after the answer remain
 expanded. Work stays on its own side of forwarded messages, new inputs, and
 history dividers. Find in Conversation expands the transcript while searching.
@@ -203,17 +214,24 @@ conflicts. Hover a row or give it keyboard focus to reveal **Pin**/**Unpin** and
 With a supporting Gateway UI, rows also show the web sidebar's unsent-draft
 pencil and the count of outbox messages needing attention, including other
 conversations in that web window. **More actions…** opens the selected thread's
-web actions menu, including plugin actions and **Stop cloud worker…** when
+web actions menu, including plugin actions and **Stop cloud device…** when
 available. Confirmation, progress, and errors stay in the web conversation.
 Older Gateway UIs keep their existing conversation behavior without these extras.
 
-Archiving from the sidebar offers **Undo** for six seconds; hovering or focusing
-the notice pauses that countdown. Undo restores the captured thread and its
-previous pin state, including successful threads from a partial batch archive.
-Restored threads return to the Active list when the Gateway confirms the restore.
-It remains available while you change conversations, filters, or agents, and
-leaves the current conversation selected. Reconnecting retires the action; if a
-thread was replaced before Undo, the failure stays visible.
+When the Gateway supports it on your connection, archiving from the sidebar
+offers **Undo** for six seconds. Hovering or focusing the notice pauses the
+countdown. Undo can restore threads that were successfully archived, without
+changing your personal pin order. If Archive cleared a shared pin, Undo creates
+a fresh shared pin unless a later edit superseded it. If the Gateway has already
+removed the working copy, choose **Restore** beside the failure to recreate it
+from the retained snapshot. Restore does not re-pin the thread. On a
+personal-pin connection without Undo, use **Threads… → Archived** to restore it.
+With an older Gateway that does not support personal pins, the existing Undo
+still appears and can restore the shared pin that the same Archive cleared.
+
+A confirmed restore returns the thread to Active without changing the current
+conversation. Changing filters or agents does not cancel Undo; reconnecting does.
+If the archived thread was replaced, the Gateway refuses the action.
 
 **Show message preview**, **Show automation sessions**, and **Show system sessions**
 are off by default. Automation sessions are cron conversations; system sessions

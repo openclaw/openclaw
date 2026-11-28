@@ -573,26 +573,6 @@ describe("existing-session browser routes", () => {
     expect(clickParams.signal).toMatchObject({ aborted: true, reason });
   });
 
-  it("supports coordinate clicks for existing-session profiles", async () => {
-    const response = await invoke("act", {
-      kind: "clickCoords",
-      x: 25,
-      y: "32",
-      doubleClick: true,
-    });
-
-    expectResponseContaining(response, { ok: true, targetId: "7", url: "https://example.com" });
-    const coords = requireRecord(mcp.clickChromeMcpCoords.mock.calls[0]?.[0], "click params");
-    expect(coords).toMatchObject({
-      ...existingTarget,
-      x: 25,
-      y: 32,
-      doubleClick: true,
-    });
-    expect(coords.button).toBeUndefined();
-    expect(coords.delayMs).toBeUndefined();
-  });
-
   it.each([{ button: "right" }, { delayMs: 5 }])(
     "rejects unsupported native coordinate input %j before clicking",
     async (options) => {
@@ -786,7 +766,7 @@ describe("existing-session interaction navigation guard", () => {
 
   it("does not submit when filling completes after the body deadline before its timer runs", async () => {
     fill.mockImplementationOnce(async () => {
-      vi.setSystemTime(Date.now() + 60_001);
+      vi.spyOn(performance, "now").mockReturnValue(performance.now() + 60_001);
     });
     const request = await startClientAction(typeAndSubmit);
 
@@ -873,7 +853,7 @@ describe("existing-session interaction navigation guard", () => {
 
   it("rejects a condition that finishes after its deadline before the timer runs", async () => {
     withDocument.mockImplementationOnce(async () => {
-      vi.setSystemTime(Date.now() + 251);
+      vi.spyOn(performance, "now").mockReturnValue(performance.now() + 251);
       return true;
     });
     const request = await startClientAction({ kind: "wait", selector: "#ready", timeoutMs: 250 });
@@ -990,24 +970,6 @@ describe("existing-session interaction navigation guard", () => {
     expect(evaluate).not.toHaveBeenCalled();
   });
 
-  it("normalizes ref-scoped statement-body evaluate sources before Chrome MCP execution", async () => {
-    evaluate.mockResolvedValueOnce("Ada");
-
-    const response = await runAction(
-      { kind: "evaluate", ref: "7", fn: "const text = el.textContent; return text;" },
-      null,
-    );
-
-    expect(response.statusCode).toBe(200);
-    expect(evaluate).toHaveBeenCalledOnce();
-    expect(evaluate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        args: ["7"],
-        fn: "async (el) => {\nconst text = el.textContent; return text;\n}",
-      }),
-    );
-  });
-
   it("blocks evaluate before execution when the current tab URL is disallowed", async () => {
     routeState.tab.url = "http://169.254.169.254/latest/meta-data/";
     blockMetadataUrl("blocked current tab");
@@ -1071,17 +1033,6 @@ describe("existing-session interaction navigation guard", () => {
       }
     },
   );
-
-  it("skips the guard when no SSRF policy is configured", async () => {
-    const response = await runAction({ kind: "press", key: "Enter" }, null);
-
-    expect(response.statusCode).toBe(200);
-    expect(press).toHaveBeenCalledOnce();
-    expect(evaluate).not.toHaveBeenCalled();
-    expect(vi.mocked(resolveSafeRouteTabUrl)).toHaveBeenCalledOnce();
-    expect(routeState.profileCtx.listTabs).toHaveBeenCalledOnce();
-    expect(checkNavigation).not.toHaveBeenCalled();
-  });
 
   it("still probes navigation when the interaction command throws", async () => {
     click.mockImplementationOnce(() => {

@@ -67,39 +67,30 @@ export function registerQueuedRegistrationClaimCases() {
     });
   });
 
-  it.each(["recovery intent", "terminal"] as const)(
-    "retains an unknown %s settlement after a released claim without replay",
-    async (stage) => {
-      await withQueuedRegistrationFixture(async (f) => {
-        await f.register();
-        const kill = killControls(f);
-        const claim = await kill.claim();
-        const first = f.holdNextWrite();
-        const recovery = f.holdNextWrite();
-        const terminal = stage === "terminal" ? f.holdNextWrite() : undefined;
-        const settling = f.track(f.scope.settleFailedLaunch("launch failed"));
-        // Claim release itself is a separate admitted write, so release its ACK before settlement.
-        const releasing = f.track(kill.release(claim));
-        await first.entered;
-        first.release();
-        await releasing;
-        await recovery.entered;
-        if (terminal) {
-          recovery.release();
-          await terminal.entered;
-        }
-        (terminal ?? recovery).loseReceipt(
-          new SqliteWorkerError("settlement acknowledgement lost", "outcome-unknown"),
-        );
-        const failure = await settling.catch((error: unknown) => error);
-        expect(failure).toMatchObject({ cause: "launch failed" });
-        const writes = f.writes;
-        await expect(f.scope.settleFailedLaunch("repeated failure")).rejects.toBe(failure);
-        expect(f.writes).toBe(writes);
-        expect(f.scope.canCleanupSession()).toBe(false);
-      });
-    },
-  );
+  it("retains an unknown terminal settlement after a released claim without replay", async () => {
+    await withQueuedRegistrationFixture(async (f) => {
+      await f.register();
+      const kill = killControls(f);
+      const claim = await kill.claim();
+      const releaseAck = f.holdNextWrite();
+      const terminal = f.holdNextWrite();
+      const settling = f.track(f.scope.settleFailedLaunch("launch failed"));
+      const releasing = f.track(kill.release(claim));
+      await releaseAck.entered;
+      releaseAck.release();
+      await releasing;
+      await terminal.entered;
+      terminal.loseReceipt(
+        new SqliteWorkerError("settlement acknowledgement lost", "outcome-unknown"),
+      );
+      const failure = await settling.catch((error: unknown) => error);
+      expect(failure).toMatchObject({ cause: "launch failed" });
+      const writes = f.writes;
+      await expect(f.scope.settleFailedLaunch("repeated failure")).rejects.toBe(failure);
+      expect(f.writes).toBe(writes);
+      expect(f.scope.canCleanupSession()).toBe(false);
+    });
+  });
 
   it("retries only durable settlement after complete cleanup of error", async () => {
     await withQueuedRegistrationFixture(async (f) => {
@@ -113,11 +104,8 @@ export function registerQueuedRegistrationClaimCases() {
       const rollback = vi.fn(async () => {});
       const callbacks = collector(f, rollback, cleanup, launch);
       const error = await callbacks.start().catch((launchError: unknown) => launchError);
-      const recovery = f.holdNextWrite();
       const terminal = f.holdNextWrite("before");
       const failed = f.track(callbacks.onStartFailure(error));
-      await recovery.entered;
-      recovery.release();
       await terminal.entered;
       terminal.reject(new Error("terminal refused"));
       await expect(failed).rejects.toThrow("could not be persisted");

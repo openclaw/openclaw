@@ -9,9 +9,11 @@ import { resolveChatSendCallerContext } from "../gateway/server-methods/gateway-
 import { createSessionMutationTestClient } from "../gateway/server-methods/sessions-mutations.owner.test-support.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { inspectOpenDictionaryToolSchemas } from "../plugins/tool-schema-diagnostics.js";
+import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
   applyCodeModeCatalog,
@@ -20,6 +22,7 @@ import {
 } from "./code-mode.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { createStableSkillAuthoring } from "./stable-skill-authoring.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -62,7 +65,7 @@ function surface(tools: ReturnType<typeof createOpenClawCodingTools>) {
   );
 }
 
-async function webchatSession(clientKind: "browser" | "cli" = "browser") {
+async function webchatSession(clientKind: "browser" | "cli" | "acp" = "browser") {
   const sessionKey = "agent:main:dashboard:prefix-proof";
   const store = path.join(sessionDirs.make(), "sessions.json");
   const sessionConfig: OpenClawConfig = { ...config, session: { store } };
@@ -77,8 +80,11 @@ async function webchatSession(clientKind: "browser" | "cli" = "browser") {
       deriveSessionMetaPatch({ ctx, existing, sessionKey }),
     );
   const client = createSessionMutationTestClient();
-  if (clientKind === "cli") {
+  if (clientKind !== "browser") {
     client.connect.client = { ...client.connect.client, id: "cli", mode: "cli" };
+    if (clientKind === "acp") {
+      client.connect.caps = ["no-question-input"];
+    }
   } else {
     client.connect.caps = ["ui-commands", "inline-widgets"];
   }
@@ -107,7 +113,7 @@ async function webchatSession(clientKind: "browser" | "cli" = "browser") {
   return { sessionKey, operator, wake, update, callerContext };
 }
 
-it.each(["browser", "cli"] as const)(
+it.each(["browser", "cli", "acp"] as const)(
   "keeps the %s WebChat catalog across wakes and recovery",
   async (clientKind) => {
     const { sessionKey, operator, wake, update, callerContext } = await webchatSession(clientKind);
@@ -127,17 +133,18 @@ it.each(["browser", "cli"] as const)(
         prompt: buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? []),
       };
     };
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "prefix-operator",
       scopes: ["operator.write"],
       signal: new AbortController().signal,
-      assertCurrent: () => {},
     });
     const expected = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey, operatorAuthority },
       () => render(operator),
     );
+    expect(expected.names).toContain("message");
     expect(expected.names).toContain("sessions_create");
+    expect(expected.names.includes("ask_user")).toBe(clientKind !== "acp");
     expect(createOpenClawCodingTools(operator).some((tool) => tool.name === "screen")).toBe(
       clientKind === "browser",
     );
@@ -147,13 +154,7 @@ it.each(["browser", "cli"] as const)(
       InputProvenance: wake.inputProvenance,
     });
     const wakeSurface = render(wake);
-    expect(wakeSurface.names).toEqual(expected.names);
     expect(wakeSurface).toEqual(expected);
-    const refused = await createOpenClawCodingTools(wake)
-      .find((tool) => tool.name === "sessions_create")!
-      .execute("wake-create", {});
-    expect(refused.details).toMatchObject({ gated: true });
-    expect(JSON.stringify(refused.content)).toContain("session write authority");
     await update({
       ...callerContext,
       GatewayClientCaps: [],
@@ -163,9 +164,37 @@ it.each(["browser", "cli"] as const)(
 
     // A new operator declaration replaces the old client's capabilities.
     await update({ ...callerContext, GatewayClientCaps: [] });
-    expect(createOpenClawCodingTools(operator).map((tool) => tool.name)).not.toContain("screen");
+    const refreshedNames = createOpenClawCodingTools(operator).map((tool) => tool.name);
+    expect(refreshedNames).not.toContain("screen");
+    expect(refreshedNames).toContain("ask_user");
   },
 );
+
+it("retains WebChat prompt reactions independently of an external delivery route", async () => {
+  const { operator, wake, update, callerContext } = await webchatSession();
+  const external = {
+    Provider: "telegram",
+    Surface: "telegram",
+    OriginatingChannel: "telegram",
+    To: "telegram:owner",
+    ChatType: "direct",
+  } as const;
+  await update(external);
+  // A WebChat operator declaration must not replace the configured external route.
+  await update({ ...callerContext, OriginatingChannel: "telegram" });
+  const render = (options: ToolOptions) => {
+    const message = createOpenClawCodingTools(options).find((tool) => tool.name === "message")!;
+    expect(message.parameters).toHaveProperty(
+      "properties.action.enum",
+      expect.arrayContaining(["react"]),
+    );
+    return JSON.stringify({ parameters: message.parameters, description: message.description });
+  };
+  const normal = render(operator);
+  await update({ Provider: "webchat", InputProvenance: wake.inputProvenance });
+  expect(render({ ...wake, sourceReplyDeliveryMode: "message_tool_only" })).toBe(normal);
+  expect(render(operator)).toBe(normal);
+});
 
 it.each([true, false])(
   "keeps GitHub definitions and the catalog across operator and wake turns (publication=%s)",
@@ -188,10 +217,9 @@ it.each([true, false])(
         prompt: buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? []),
       };
     };
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "prefix-operator",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
     });
     const expected = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: session.sessionKey!, operatorAuthority },
@@ -218,7 +246,9 @@ it("refuses a wake-turn screen call without a requesting UI through the executio
     expect(result.details).toMatchObject({ gated: true });
     expect(JSON.stringify(result.content)).toContain("open Control UI");
     expect(JSON.stringify(result.content)).toContain(
-      senderIsOwner ? "requires a connected requesting client" : "needs the owner's authority",
+      senderIsOwner
+        ? "requires a connected requesting client"
+        : "needs the Gateway owner's authority",
     );
   }
 });
@@ -261,6 +291,36 @@ it.each<[string, ToolOptions]>([
     surface(createOpenClawCodingTools(userTurn)),
   );
 });
+it("offers the human turn's skill authoring definitions on an internal turn", async () => {
+  const resolve = createStableSkillAuthoring();
+  const human: SkillLibraryAuthoringCapability = {
+    target: "personal",
+    defaultTarget: "workspace",
+    multipleProfiles: true,
+    bind: () => {},
+    invoke: async () => {
+      throw new Error("an internal turn must not reach the human grant");
+    },
+  };
+  const authoring = (
+    options: ToolOptions,
+    skillLibraryAuthoring?: SkillLibraryAuthoringCapability,
+  ) =>
+    createOpenClawCodingTools({
+      ...options,
+      ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
+    }).filter((tool) => tool.name === "skill_library");
+  const user = authoring(userTurn, resolve(session.sessionKey, human));
+  const wake = completionTurn("exec");
+  expect(user.map((tool) => tool.name)).toEqual(["skill_library"]);
+  expect(surface(authoring(wake))).not.toEqual(surface(user));
+  const stable = authoring(wake, resolve(session.sessionKey, undefined));
+  expect(surface(stable)).toEqual(surface(user));
+  const library = stable.find((tool) => tool.name === "skill_library")!;
+  await expect(
+    library.execute("personal-list", { action: "list", target: "personal" }),
+  ).rejects.toThrow("fresh message");
+});
 it("offers the same message definition on a source-bound completion turn", () => {
   const assemble = (sourceReplyOnly: boolean) =>
     surface(
@@ -279,10 +339,25 @@ it("offers the same message definition on a source-bound completion turn", () =>
 it.each(["agent:main:operator-task", "agent:main:telegram:direct:owner"])(
   "keeps message definitions stable across CLI, recovery, and announce sources in %s",
   (sessionKey) => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram" }),
+            actions: { describeMessageTool: () => ({ actions: ["send"] }) },
+          },
+        },
+      ]),
+    );
     const messageDefinition = (options: ToolOptions) => {
-      const tool = createOpenClawCodingTools({ ...session, ...options, sessionKey }).find(
-        (entry) => entry.name === "message",
-      )!;
+      const tool = createOpenClawCodingTools({
+        ...session,
+        ...options,
+        sessionKey,
+      }).find((entry) => entry.name === "message")!;
+      expect(tool).toBeDefined();
       return JSON.stringify({ description: tool.description, parameters: tool.parameters });
     };
     const cli = messageDefinition({ messageProvider: undefined, messageTo: undefined });

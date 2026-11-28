@@ -6,6 +6,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import type { SessionListFilteredEntries } from "../../src/gateway/session-list-filters.ts";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -66,7 +67,7 @@ const rows = Array.from({ length: 10_800 }, (_, index) => {
   selection.add(row);
   return row;
 });
-const views = Array.from({ length: 30 }, () => new WeakMap<object, SessionListFilteredEntries>());
+const views = Array.from({ length: 30 }, () => new Map<object, SessionListFilteredEntries>());
 let checksum = 0;
 const pass = (index: number) => {
   if (index % views.length === 0) {
@@ -91,12 +92,7 @@ for (let index = 0; index < 300; index++) {
 global.gc();
 const inspector = new Session();
 if (values.allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 128,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 128);
 }
 const cpu = process.threadCpuUsage();
 for (let index = 300; index < iterations + 300; index++) {

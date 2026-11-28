@@ -18,9 +18,9 @@ import {
   shouldDeliverMissingReplyNotice,
 } from "../../agents/reply-completion.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
-import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { logVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
+import { chatRef, type ChatRef } from "../../sessions/chat-ref.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -93,6 +93,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     | "usage"
     | "preserveUserFacingSessionState"
     | "replyUsageState"
+    | "preparePricing"
   > & {
     compactionNotice?: ReplyPayload;
     diagnosticsPayload?: ReplyPayload;
@@ -211,11 +212,16 @@ export async function resolveFollowupDeliveryDecision(params: {
     trigger: turn.queued.run.internalEventExecution ? "event" : "user",
     currentInboundEventKind: turn.queued.currentInboundEventKind,
   });
-  const { authoredSilence, pendingContinuation, automationNoChange, reasoningPayloadsEnabled } =
-    resolveAutomationReplyState(execution.outcome, {
-      opts,
-      terminalFailurePayload: accounting.terminalFailurePayload,
-    });
+  const {
+    successfulTerminal,
+    authoredSilence,
+    pendingContinuation,
+    automationNoChange,
+    reasoningPayloadsEnabled,
+  } = resolveAutomationReplyState(execution.outcome, {
+    opts,
+    terminalFailurePayload: accounting.terminalFailurePayload,
+  });
   const directBlockDeliveries = execution.outcome.directBlockDeliveries;
   const sourceReplyDelivery = resolveSourceReplyDelivery(
     result,
@@ -249,9 +255,14 @@ export async function resolveFollowupDeliveryDecision(params: {
     return { kind: "suppress" as const, reason: "silent" as const };
   }
   const completedSourceDelivery = hasCompletedSourceReplyDeliveryEvidence(result);
-  const hasLegacyMessagingToolEvidence =
+  // A terminal payload can confirm an earlier progress send as its final answer.
+  // Explicit delivery custody and unfinished/failed turns remain authoritative.
+  const canCompleteFromMessagingToolDuplicate =
     result.sourceReplyDeliveryState === undefined &&
-    resolveExplicitFinalSourceReplyDeliveryEvidence(result) === undefined;
+    (resolveExplicitFinalSourceReplyDeliveryEvidence(result) === undefined ||
+      (successfulTerminal &&
+        !pendingContinuation &&
+        sourcePolicy.sourceReplyDeliveryMode !== "message_tool_only"));
   const assistantFinalText = normalizeAssistantFinalDeliveryText(
     result.meta?.finalAssistantVisibleText ?? "",
   );
@@ -261,7 +272,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     sentMediaUrls: result.messagingToolSentMediaUrls,
     sentTargets: result.messagingToolSentTargets,
     sentTexts: result.messagingToolSentTexts,
-    onDeliveredTerminalDuplicate: hasLegacyMessagingToolEvidence
+    onDeliveredTerminalDuplicate: canCompleteFromMessagingToolDuplicate
       ? () => {
           if (completion.outcome !== "blocked") {
             completion = resolveReplyCompletion(terminalReplyExpectation, "delivered");
@@ -356,9 +367,9 @@ export async function resolveFollowupDeliveryDecision(params: {
   if (accounting.diagnosticsPayload && payloads.length > 0) {
     payloads.push(...preparePayloads([accounting.diagnosticsPayload]));
   }
-  const responseUsageLine = resolveResponseUsageLine({
+  const responseUsageLine = await resolveResponseUsageLine({
+    preparePricing: accounting.preparePricing,
     config: turn.config,
-    agentDir: turn.queued.run.agentDir,
     sessionRaw: turn.session.current()?.responseUsage,
     channel: resolveOriginMessageProvider({
       originatingChannel: turn.queued.originatingChannel,
@@ -417,6 +428,10 @@ export async function deliverFollowupDecision(params: {
   if (decision.kind === "suppress") {
     turn.queued.run.internalEventExecution?.onSuppressed?.(decision.reason);
     logVerbose(`followup queue: delivery suppressed (${decision.reason})`);
+    return { kind: "completed" as const, payloads: [] };
+  }
+  if (turn.queued.run.sessionEventOrigin?.deliver === false) {
+    logVerbose("followup queue: delivery suppressed by its silent source event");
     return { kind: "completed" as const, payloads: [] };
   }
   let payloads: ReplyPayload[];
@@ -498,7 +513,10 @@ export async function deliverFollowupDecision(params: {
     return { kind: "completed" as const, payloads: [] };
   }
   const deliverQueuedBatch = sourceDisposition?.deliver;
-  if (turn.queued.run.internalEventExecution) {
+  if (
+    turn.queued.run.internalEventExecution ||
+    deliverQueuedBatch?.ownsCompletion?.(originatingChannel)
+  ) {
     if (!deliverQueuedBatch) {
       throw new Error("Internal event lost its originating delivery owner");
     }
@@ -551,12 +569,10 @@ export async function deliverFollowupDecision(params: {
   const sameChannelOrigin = Boolean(origin && origin === provider);
   const crossChannelOrigin = Boolean(origin && provider && origin !== provider);
   const prepareSpeech = createFollowupSpeechPreparer({ turn, defaults, kind });
-  // The operation holds lifecycle admission until queue handoff. Retain its
-  // current generation so recovery cannot adopt a later reset's session.
-  const entry = turn.session.current();
-  const sessionGeneration: SessionDeliveryGeneration | undefined =
-    turn.session.kind === "session" && turn.session.storePath && entry
-      ? {
+  // Queued sends follow the chat by key; a deleted chat drops them.
+  const sessionGeneration: ChatRef | undefined =
+    turn.session.kind === "session" && turn.session.storePath && turn.session.current()
+      ? chatRef({
           agentId: resolveSessionAgentId({
             sessionKey: turn.session.key,
             config: turn.config,
@@ -564,9 +580,7 @@ export async function deliverFollowupDecision(params: {
           }),
           storePath: turn.session.storePath,
           sessionKey: turn.session.key,
-          sessionId: entry.sessionId,
-          lifecycleRevision: entry.lifecycleRevision ?? null,
-        }
+        })
       : undefined;
   for (let payload of payloads) {
     const providerRoute = deliveryPlan.resolveFollowupRoute({

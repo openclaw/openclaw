@@ -63,6 +63,37 @@ describe("config raw editing and redaction", () => {
     ]);
   }
 
+  it("wraps a long model path and keeps both preview values inside the change card", () => {
+    const model = "openrouter/qwen/qwen3-coder-480b-a35b-instruct";
+    const raw = (alias: string) =>
+      JSON.stringify({ agents: { defaults: { models: { [model]: { alias } } } } });
+    const { container } = setup({
+      originalRaw: raw("code-review-release-candidate-europe"),
+      raw: raw("code-review-release-candidate-canada"),
+    });
+    attach(container);
+    openDiff(container);
+    const card = element(container, ".config-diff", HTMLDetailsElement);
+    card.style.width = "366px";
+    const bounds = card.getBoundingClientRect();
+    expectDiff(
+      container,
+      "agents.defaults.models." + model + ".alias",
+      '"code-review-release-candidate-europe"',
+      '"code-review-release-candidate-canada"',
+    );
+    for (const part of ["path", "from", "arrow", "to"]) {
+      const range = document.createRange();
+      range.selectNodeContents(element(container, ".config-diff__" + part, HTMLElement));
+      const lines = Array.from(range.getClientRects());
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) {
+        expect(line.left).toBeGreaterThanOrEqual(bounds.left);
+        expect(line.right).toBeLessThanOrEqual(bounds.right);
+      }
+    }
+  });
+
   function expectHidden(container: HTMLElement) {
     expect(text(container, ".config-raw-field .settings-count")).toBe("1 secret redacted");
     expect(text(container, ".config-raw-field .callout.info")).toBe(
@@ -137,7 +168,7 @@ describe("config raw editing and redaction", () => {
     );
     expect(banner.querySelector("code")?.textContent).toBe("gateway.opaque");
     expect(findButton(populated.container, "Form").getAttribute("title")).toBe(
-      "Form view can't safely edit some fields",
+      "Some fields need Raw mode",
     );
     findButton(banner, "Open Raw editor").click();
     expect(onFormModeChange).toHaveBeenCalledWith("raw");
@@ -215,7 +246,7 @@ describe("config raw editing and redaction", () => {
         const button = findButton(container, "Saving…");
         expect(button.disabled).toBe(true);
         expect(button.getAttribute("aria-busy")).toBe("true");
-        expect(button.querySelectorAll(".config-action-spinner")).toHaveLength(1);
+        expect(button.querySelectorAll(".btn__spinner")).toHaveLength(1);
         expect(element(container, ".config-raw-field textarea", HTMLTextAreaElement).disabled).toBe(
           true,
         );
@@ -223,26 +254,25 @@ describe("config raw editing and redaction", () => {
     },
   );
 
-  it("keeps sensitive raw config hidden until reveal before editing", () => {
-    const onRawChange = vi.fn();
-    const { container } = setup({
-      raw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
-      originalRaw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
-      formValue: { openai: { apiKey: "supersecret" } },
-      onRawChange,
+  it.each(["supersecret", "__OPENCLAW_REDACTED__"])("reveals raw %s accurately", (secret) => {
+    const raw = JSON.stringify({ openai: { apiKey: secret } }, null, 2);
+    const { container, props } = setup({
+      raw,
+      originalRaw: raw,
+      formValue: { openai: { apiKey: secret } },
     });
-
     expectHidden(container);
-
     const revealButton = element(container, ".config-raw-toggle", HTMLButtonElement);
     expect(revealButton.getAttribute("aria-pressed")).toBe("false");
     revealButton.click();
-
+    expect(text(container, ".config-raw-field .settings-count")).toBe(
+      secret === "__OPENCLAW_REDACTED__" ? "1 secret redacted" : "1 secret visible",
+    );
     const textarea = element(container, "textarea", HTMLTextAreaElement);
-    expect(textarea.value).toBe('{\n  "openai": { "apiKey": "supersecret" }\n}\n');
-    textarea.value = textarea.value.replace("supersecret", "updatedsecret");
+    expect(textarea.value).toBe(raw);
+    textarea.value = textarea.value.replace(secret, "updatedsecret");
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onRawChange).toHaveBeenCalledWith(textarea.value);
+    expect(props.onRawChange).toHaveBeenCalledWith(textarea.value);
   });
 
   it("opens raw pending changes without sending a fake raw edit", () => {
@@ -269,6 +299,16 @@ describe("config raw editing and redaction", () => {
     props.formValue = { gateway: { mode: "local" } };
     rerender();
     expect(container.querySelector(".config-diff")).toBeNull();
+  });
+
+  it("projects changed arrays as one pending-change row", () => {
+    const { container } = setup({
+      originalRaw: "{items: [1,]}",
+      raw: "{items: [1, 2,]}",
+    });
+    openDiff(container);
+    expect(container.querySelectorAll(".config-diff__item")).toHaveLength(1);
+    expectDiff(container, "items", "[1 item]", "[2 items]");
   });
 
   it.each([

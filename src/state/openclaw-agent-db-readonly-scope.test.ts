@@ -5,6 +5,7 @@ import {
   observeSqliteReadSql,
   trackSqliteStatementExecutions,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { readExactSessionEntryCandidatesInDatabase } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { readExactSessionEntriesWithLifecycle } from "../config/sessions/session-entry-read.worker.js";
 import { applyAgentDatabaseReaderRequest } from "../infra/agent-database-readers.js";
@@ -41,6 +42,7 @@ import {
 } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
+import { SessionMetadataUnavailableError } from "./session-metadata-unavailable-error.js";
 
 const thread = vi.hoisted(() => ({ isMainThread: true }));
 vi.mock("node:worker_threads", async (importOriginal) => ({
@@ -141,6 +143,93 @@ it.each([false, true])(
   },
 );
 
+it.each([
+  { owner: "borrowed writer", snapshot: false },
+  { owner: "borrowed writer", snapshot: true },
+  { owner: "retained scope", snapshot: false },
+  { owner: "retained scope", snapshot: true },
+] as const)(
+  "rechecks revoked schema admission for $owner with snapshot=$snapshot",
+  ({ owner, snapshot }) => {
+    const options = { agentId: "main", env: state.env };
+    const writer = openAgentDb(options);
+    const scope = newScope();
+    const callback = vi.fn(({ db }: { db: EngineConnection }) => db);
+    const read = () =>
+      owner === "borrowed writer"
+        ? readAgentDb(callback, options, { snapshot })
+        : scope.run(writer, () => scope.read(callback, options, { snapshot }));
+    const first = read();
+    if (!first.found) {
+      throw new Error("Expected the admitted reader");
+    }
+    expect(first.value === writer.db).toBe(owner === "borrowed writer");
+    writer.db.exec("CREATE TABLE unrelated_read_admission(value TEXT)");
+    expect(read()).toEqual(first);
+    writer.db.exec("ALTER TABLE schema_meta RENAME TO unavailable_read_admission");
+    try {
+      callback.mockClear();
+      expect(read()).toEqual({ found: false, reason: "schema-missing" });
+      expect(callback).not.toHaveBeenCalled();
+      expect(first.value.isOpen).toBe(true);
+    } finally {
+      writer.db.exec("ALTER TABLE unavailable_read_admission RENAME TO schema_meta");
+    }
+    expect(read()).toEqual(first);
+    expect(callback).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["borrowed writer", "retained scope"] as const)(
+  "rejects Promise kernels in %s read snapshots",
+  (owner) => {
+    const options = { agentId: "main", env: state.env };
+    const writer = openAgentDb(options);
+    const scope = newScope();
+    const callback = () => Promise.resolve(1);
+    expect(() =>
+      owner === "borrowed writer"
+        ? readAgentDb(callback, options, { snapshot: true })
+        : scope.run(writer, () => scope.read(callback, options, { snapshot: true })),
+    ).toThrow("must be synchronous");
+    expect(writer.db.isTransaction).toBe(false);
+  },
+);
+
+it("keeps unavailable metadata as an error for each exact entry request", () => {
+  const options = { agentId: "main", env: state.env };
+  const writer = openAgentDb(options);
+  const sessionKey = "agent:main:read-admission";
+  writeSessionEntry(writer, sessionKey, { sessionId: "read-admission", updatedAt: 1 });
+  const read = () =>
+    readExactSessionEntryCandidatesInDatabase(
+      writer,
+      [[sessionKey], ["agent:main:absent"]],
+      "list",
+    );
+  expect(read()).toEqual([
+    {
+      ok: true,
+      value: [{ sessionKey, entry: expect.objectContaining({ sessionId: "read-admission" }) }],
+    },
+    { ok: true, value: [] },
+  ]);
+  writer.db.exec("ALTER TABLE schema_meta RENAME TO unavailable_read_admission");
+  try {
+    for (const result of read()) {
+      expect(result).toEqual({
+        ok: false,
+        error: expect.any(SessionMetadataUnavailableError),
+      });
+      if (!result.ok) {
+        expect(result.error).toMatchObject({ reason: "schema-missing" });
+      }
+    }
+  } finally {
+    writer.db.exec("ALTER TABLE unavailable_read_admission RENAME TO schema_meta");
+  }
+});
+
 it("keeps one connection while nested reads retain independent committed snapshots", async () => {
   const { options, path } = await closedDatabase();
   const target = { agentId: "main", path };
@@ -192,11 +281,11 @@ it("keeps one connection while nested reads retain independent committed snapsho
 
 it.each(["successor", "omitted"] as const)(
   "reopens a reader with revoked admission when its next receipt is %s",
-  (nextReceipt) => {
+  async (nextReceipt) => {
     const options = { agentId: "main", env: state.env };
     const owner = openAgentDb(options);
     const target = { agentId: owner.agentId, path: owner.path };
-    const initial = captureOpenClawAgentDatabaseReadValidation(owner);
+    const initial = await captureOpenClawAgentDatabaseReadValidation(owner);
     if (!initial) {
       throw new Error("Expected the owner's initial read validation");
     }
@@ -218,10 +307,10 @@ it.each(["successor", "omitted"] as const)(
     expect(first.value.isOpen).toBe(true);
     expect(first.value).not.toBe(owner.db);
 
-    invalidateOpenClawAgentDatabaseValidation(owner.path);
+    invalidateOpenClawAgentDatabaseValidation(owner.path, "a maintenance write");
     expect(Atomics.load(new Int32Array(initial.validation.valid), 0)).toBe(0);
     setOpenClawAgentDatabaseValidation(owner);
-    const successor = captureOpenClawAgentDatabaseReadValidation(owner);
+    const successor = await captureOpenClawAgentDatabaseReadValidation(owner);
     if (!successor) {
       throw new Error("Expected the owner's successor read validation");
     }

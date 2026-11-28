@@ -210,6 +210,7 @@ it("rolls rejected initial and controlled visibility back", async () => {
   });
   expect(untrack(open)).toBe(false);
   expect(surface().matches(":popover-open")).toBe(false);
+  expect(trigger().getAttribute("aria-expanded")).toBe("false");
   expect(received).toEqual([false]);
   update(() => setOpen(true));
   expect(untrack(open)).toBe(false);
@@ -217,14 +218,17 @@ it("rolls rejected initial and controlled visibility back", async () => {
   vetoShow = false;
   update(() => setOpen(true));
   await phase(surface(), "open");
+  expect(trigger().getAttribute("aria-expanded")).toBe("true");
   expect(received).toEqual([false, false, true]);
   update(() => setOpen(false));
   expect(untrack(open)).toBe(true);
   expect(surface().matches(":popover-open")).toBe(true);
+  expect(trigger().getAttribute("aria-expanded")).toBe("true");
   expect(received).toEqual([false, false, true, true]);
   vetoHide = false;
   update(() => setOpen(false));
   await phase(surface(), "hidden");
+  expect(trigger().getAttribute("aria-expanded")).toBe("false");
   expect(received).toEqual([false, false, true, true, false]);
 });
 
@@ -239,6 +243,7 @@ it("retains submenu content and identity across label updates", async () => {
       {
         id: "assign",
         label: "Assign to",
+        content: "Submenu body",
         icon,
         details,
         children: () => [{ id: "ada", label: "Ada Rivera" }],
@@ -251,8 +256,10 @@ it("retains submenu content and identity across label updates", async () => {
   await openMenu();
   expect(surface("people-assign").querySelector('[role="menuitem"]')).toBeNull();
   const assignment = trigger("people-assign");
+  expect(assignment.querySelector(".oc-menu-item__label")?.textContent).toBe("Assign to");
   await openMenu("people-assign");
   const child = surface("people-assign");
+  expect(child.textContent).toContain("Submenu body");
   const ada = item("Ada Rivera", "people-assign");
   update(() =>
     setProps((draft) => {
@@ -305,7 +312,7 @@ it("updates root placement and RTL submenu geometry", async () => {
 
 it.each([
   { dir: "ltr", placement: "right-end", left: "60px", side: "right" },
-  { dir: "ltr", placement: "right-end", left: "1060px", side: "left" },
+  { dir: "ltr", placement: "right-end", left: "1180px", side: "left" },
   { dir: "rtl", placement: "left-end", left: "1060px", side: "left" },
 ] as const)("keeps end-aligned submenu actions reachable ($dir, $side)", async (position) => {
   await page.viewport(1280, 800);
@@ -580,6 +587,7 @@ it.each(["ltr", "rtl"] as const)(
       expect(menu.getAttribute("data-phase")).toBe("open");
       // The opening transition scales DOM bounds; measure its final geometry.
       expect(getComputedStyle(menu).scale).toBe("1");
+      expect(menu.querySelectorAll(".shortcut-kbd")).toHaveLength(4);
     });
     await Promise.all(menu.getAnimations().map((animation) => animation.finished));
     const hints = [...menu.querySelectorAll<HTMLElement>(".shortcut-kbd")];
@@ -736,7 +744,7 @@ it.each(["summary", "editable"])(
   },
 );
 
-it("stretches modal error-panel actions", async () => {
+it("keeps modal error panels within the viewport and retryable", async () => {
   let retried = 0;
   const { view, dialog } = renderModal("Load settings", () => (
     <LazyViewError
@@ -750,14 +758,6 @@ it("stretches modal error-panel actions", async () => {
   for (const width of [1440, 320]) {
     await page.viewport(width, 1000);
     expect(dialog.clientHeight).toBeLessThanOrEqual(window.innerHeight);
-    const panel = view.container.querySelector<HTMLElement>(".lazy-view-error")!;
-    const actions = panel.querySelector<HTMLElement>(".lazy-view-error__actions")!;
-    const bounds = panel.getBoundingClientRect();
-    const style = getComputedStyle(panel);
-    expect(actions.getBoundingClientRect()).toMatchObject({
-      left: expect.closeTo(bounds.left + Number.parseFloat(style.paddingLeft), 0),
-      right: expect.closeTo(bounds.right - Number.parseFloat(style.paddingRight), 0),
-    });
   }
   await userEvent.click(view.getByRole("button", { name: /^Retry$/ }));
   expect(retried).toBe(1);

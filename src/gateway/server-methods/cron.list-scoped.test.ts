@@ -406,32 +406,47 @@ describe("cron.list scoped SQLite snapshots", () => {
       ]);
     }));
 
-  it("keeps global-session filtering on the explicit job agent instead of the ambient default", () =>
-    withCronStore(
-      2,
-      async ({ context, storePath }) => {
-        const store = await loadCronStore(storePath);
-        for (const job of store.jobs) {
-          job.sessionKey = "main";
-        }
-        await saveCronStore(storePath, store);
+  it.each(["main", "global"] as const)(
+    "keeps %s bindings on the selected global-session agent instead of the ambient default",
+    (target) =>
+      withCronStore(
+        2,
+        async ({ context, storePath }) => {
+          const store = await loadCronStore(storePath);
+          for (const job of store.jobs) {
+            if (target === "main") {
+              job.sessionKey = "main";
+            } else {
+              job.sessionTarget = "session:global";
+            }
+          }
+          await saveCronStore(storePath, store);
 
-        for (const client of [createCronCallerClient("ops"), null]) {
-          const page = await listScoped(context, 0, "global", client);
-          expect(page).toMatchObject({ total: 1, jobs: [{ id: "job-0000" }] });
-        }
-      },
-      {
-        config: {
-          agents: {
-            ownership: "explicit",
-            defaults: { systemAgent: { agentId: "main" } },
-            entries: { main: {}, ops: {}, other: {} },
-          },
-          session: { scope: "global" },
+          for (const client of [createCronCallerClient("ops"), null]) {
+            const page = await listScoped(context, 0, "global", client);
+            expect(page).toMatchObject({ total: 1, jobs: [{ id: "job-0000" }] });
+          }
+          store.jobs[0]!.sessionKey = undefined;
+          store.jobs[0]!.sessionTarget = "session:agent:ops:global";
+          await saveCronStore(storePath, store);
+          expect((await listScoped(context, 0, "global", null)).total).toBe(0);
+          expect(await listScoped(context, 0, "agent:ops:global", null)).toMatchObject({
+            total: 1,
+            jobs: [{ id: "job-0000" }],
+          });
         },
-      },
-    ));
+        {
+          config: {
+            agents: {
+              ownership: "explicit",
+              defaults: { systemAgent: { agentId: "main" } },
+              entries: { main: {}, ops: {}, other: {} },
+            },
+            session: { scope: "global" },
+          },
+        },
+      ),
+  );
 
   it("isolates hidden changes while revising visible off-page changes and detaching rows", () =>
     withCronStore(401, async ({ context, storePath, cron }) => {

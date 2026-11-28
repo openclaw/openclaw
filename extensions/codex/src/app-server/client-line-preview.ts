@@ -1,4 +1,4 @@
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
 
@@ -14,7 +14,8 @@ export function redactCodexAppServerLinePreview(value: string): string {
       /\b([a-z0-9_]*(?:api_?key|authorization|access_token|refresh_token|token))(\s*=\s*)(["']?)[^\s"']+(\3)/gi,
       "$1$2$3<redacted>$4",
     );
+  // Keep the terminal cause after preceding warnings in the retained stderr tail.
   return redacted.length > CODEX_APP_SERVER_PARSE_LOG_MAX
-    ? `${truncateUtf16Safe(redacted, CODEX_APP_SERVER_PARSE_LOG_MAX)}...`
+    ? `...${sliceUtf16Safe(redacted, -CODEX_APP_SERVER_PARSE_LOG_MAX)}`
     : redacted;
 }

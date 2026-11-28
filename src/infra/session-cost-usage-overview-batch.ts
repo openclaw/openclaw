@@ -1,4 +1,4 @@
-import type { UsageOverviewSessionSummary } from "../shared/usage-types.js";
+import type { UsageOverviewOptions, UsageOverviewSessionSummary } from "../shared/usage-types.js";
 import type {
   CostUsageTotals,
   SessionDailyLatency,
@@ -20,38 +20,42 @@ export type UsageOverviewBatch = {
   missing: Array<[number, string, Record<string, number>]>;
 };
 
+// TOTAL_FIELDS.length in session-cost-usage-quarters.ts; kept local so the Gateway reader
+// does not load the quarter codec.
+const TOTALS_WIDTH = 12;
+const LATENCY_WIDTH = 8;
+const DAY_COUNT_OFFSET = TOTALS_WIDTH + 10 + LATENCY_WIDTH;
+
 /** Packed row layout shared by the worker fold (writer) and `readUsageOverviewBatch`. */
 export const ROW = {
   TOTALS: 0,
-  UNAVAILABLE: 11,
-  COMPUTED_AT: 12,
-  STALE_SINCE: 13,
-  FIRST: 14,
-  LAST: 15,
-  MESSAGES: 16,
-  LATENCY: 22,
-  DAY_COUNT: 27,
-  MODEL_COUNT: 28,
-  TOOL_COUNT: 29,
-  DAY_MODEL_COUNT: 30,
+  COMPUTED_AT: TOTALS_WIDTH,
+  STALE_SINCE: TOTALS_WIDTH + 1,
+  FIRST: TOTALS_WIDTH + 2,
+  LAST: TOTALS_WIDTH + 3,
+  MESSAGES: TOTALS_WIDTH + 4,
+  LATENCY: TOTALS_WIDTH + 10,
+  DAY_COUNT: DAY_COUNT_OFFSET,
+  MODEL_COUNT: DAY_COUNT_OFFSET + 1,
+  TOOL_COUNT: DAY_COUNT_OFFSET + 2,
+  DAY_MODEL_COUNT: DAY_COUNT_OFFSET + 3,
   /** 0 without quarter data, 1 imprecise, 2 when a quarter had tokens. */
-  HOURS: 31,
-  HEADER: 32,
-  /** Date string id, then totals (12), messages (6), latency count/sum/min/max/p95. */
-  DAY_WIDTH: 24,
-  DAY_MESSAGES: 13,
-  DAY_LATENCY: 19,
-  /** Provider and model string ids (-1 when missing), count, totals (12). */
-  MODEL_WIDTH: 15,
+  HOURS: DAY_COUNT_OFFSET + 4,
+  HEADER: DAY_COUNT_OFFSET + 5,
+  /** Date string id, then totals, messages (6), latency count/sum/min/max/p95, timed ms/tokens/cost. */
+  DAY_WIDTH: 1 + TOTALS_WIDTH + 6 + LATENCY_WIDTH,
+  DAY_MESSAGES: 1 + TOTALS_WIDTH,
+  DAY_LATENCY: 1 + TOTALS_WIDTH + 6,
+  /** Provider and model string ids (-1 when missing), count, totals. */
+  MODEL_WIDTH: 3 + TOTALS_WIDTH,
   /** Tool name id, count. */
   TOOL_WIDTH: 2,
-  /** Date, provider and model ids, tokens, cost, count, unavailable flag. */
-  DAY_MODEL_WIDTH: 7,
+  /** Date, provider and model ids, tokens, cost, count. */
+  DAY_MODEL_WIDTH: 6,
   HOUR_VALUES: 79,
 } as const;
 const {
   TOTALS,
-  UNAVAILABLE,
   COMPUTED_AT,
   STALE_SINCE,
   FIRST,
@@ -167,23 +171,52 @@ function readTotals(values: Float64Array, offset: number): CostUsageTotals {
     cacheReadCost: values[offset + 8]!,
     cacheWriteCost: values[offset + 9]!,
     missingCostEntries: values[offset + 10]!,
+    cacheUnmeasuredInput: values[offset + 11]!,
   };
-  if (values[offset + UNAVAILABLE]) {
-    totals.usageReport = { state: "unavailable" };
-  }
   return totals;
 }
 
 const optional = (value: number) => (Number.isNaN(value) ? undefined : value);
 
+/** Table metrics are already present in each packed row's fixed header. */
+export function readUsageOverviewSortValue(
+  batch: UsageOverviewBatch,
+  row: number,
+  sort: UsageOverviewOptions["sort"],
+): number | undefined {
+  if (sort === undefined || sort === "recent") {
+    return undefined;
+  }
+  const base = batch.offsets[row]!;
+  if (base < 0) {
+    return 0;
+  }
+  switch (sort) {
+    case "tokens":
+      return batch.values[base + TOTALS + 4]!;
+    case "cost":
+      return batch.values[base + TOTALS + 5]!;
+    case "messages":
+      return batch.values[base + MESSAGES]!;
+    case "errors":
+      return batch.values[base + MESSAGES + 5]!;
+    default:
+      return undefined;
+  }
+}
+
 /**
  * Expand packed rows into overview summaries. `refreshing` marks stale rows whose
- * refresh the loader already scheduled.
+ * refresh the loader already scheduled. Selected indices return in caller order.
  */
 export function readUsageOverviewBatch(
   batch: UsageOverviewBatch,
   refreshing = false,
+  indices?: readonly number[],
 ): Array<UsageOverviewSessionSummary | null> {
+  if (indices?.length === 0) {
+    return [];
+  }
   const { strings, values } = batch;
   const name = (id: number) => (id < 0 ? undefined : strings[id]);
   const missing = new Map<number, Map<string, Record<string, number>>>();
@@ -205,7 +238,7 @@ export function readUsageOverviewBatch(
     }
     return totals;
   };
-  return Array.from(batch.offsets, (base, row) => {
+  const decode = (base: number, row: number): UsageOverviewSessionSummary | null => {
     if (base < 0) {
       return null;
     }
@@ -216,6 +249,9 @@ export function readUsageOverviewBatch(
       avgMs: values[offset + 1]! / values[offset]!,
       // Each quarter retains its p95; merged p95 is the largest one.
       p95Ms: values[offset + 4]!,
+      timedMs: values[offset + 5] || undefined,
+      timedTokens: values[offset + 6] || undefined,
+      timedCost: values[offset + 7] || undefined,
       minMs: values[offset + 2]!,
       maxMs: values[offset + 3]!,
     });
@@ -284,7 +320,6 @@ export function readUsageOverviewBatch(
         tokens: values[cursor + 3]!,
         cost: values[cursor + 4]!,
         count: values[cursor + 5]!,
-        ...(values[cursor + 6] ? { usageReport: { state: "unavailable" as const } } : {}),
       });
       cursor += DAY_MODEL_WIDTH;
     }
@@ -329,5 +364,8 @@ export function readUsageOverviewBatch(
         : {}),
     };
     return summary;
-  });
+  };
+  return indices
+    ? indices.map((row) => decode(batch.offsets[row]!, row))
+    : Array.from(batch.offsets, decode);
 }

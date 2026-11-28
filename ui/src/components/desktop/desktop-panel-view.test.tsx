@@ -16,9 +16,11 @@ it.each([false, true])(
       return (
         <DesktopPicker
           automatic={automatic}
+          notice={automatic ? "The assigned desktop is unavailable." : null}
           environments={[]}
           loading={false}
           onConnect={() => {}}
+          onDisconnect={() => {}}
           onRefresh={callbacks().refresh}
         />
       );
@@ -33,6 +35,6 @@ it.each([false, true])(
     button.click();
     expect(initial).toHaveBeenCalledOnce();
     expect(replacement).toHaveBeenCalledOnce();
-    view.unmount();
+    expect(view.container.textContent).not.toContain("No desktop sources yet.");
   },
 );

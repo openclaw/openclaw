@@ -44,11 +44,12 @@ vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
           key: "file:synthetic-native-cleanup",
           canonicalPath: "/synthetic-state/lease.sqlite",
         },
+        isCurrent: () => true,
         assertCurrent() {},
       },
     };
     const captureSource = args[4] ?? storage.forbidden;
-    captureSource(context, context.admission.identity);
+    captureSource({ context, identity: context.admission.identity });
     storage.held = true;
     storage.expiresAt = Date.now() + storage.remainingMs;
     return { kind: "acquired", expiresAt: storage.expiresAt };

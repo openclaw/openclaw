@@ -178,7 +178,7 @@ describe("scheduled-run access review", () => {
     expect(formatScheduledContextReport(report)).toContain("has a missing worktree (`/work/tree`)");
   });
 
-  it("reports key-only and reset parent links as unbound", () => {
+  it("reports key-only parent links as unbound and keeps an edited parent bound", () => {
     const keyOnly = storedJob({
       id: "job-key",
       owner: { agentId: "main", sessionKey: PARENT },
@@ -189,20 +189,13 @@ describe("scheduled-run access review", () => {
         ownerAccountId: "default",
       },
     });
-    const reset = storedJob({ ...linked, id: "job-reset" });
+    const edited = storedJob({ ...linked, id: "job-edited" });
     const report = classify(
       observe(keyOnly),
-      observe(reset, { ...liveParent, sessionId: "next-session" }, true),
+      observe(edited, { ...liveParent, sessionId: "next-session" }, true),
     );
     expect(report.unbound).toEqual([
-      expect.objectContaining({
-        job: expect.objectContaining({ id: "job-key" }),
-        cause: "key-only",
-      }),
-      expect.objectContaining({
-        job: expect.objectContaining({ id: "job-reset" }),
-        cause: "reset",
-      }),
+      expect.objectContaining({ job: expect.objectContaining({ id: "job-key" }) }),
     ]);
     expect(report.losses).toEqual([]);
   });

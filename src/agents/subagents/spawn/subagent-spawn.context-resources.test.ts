@@ -70,7 +70,6 @@ function createEngineFixture(
     read,
     retired,
     rollback,
-    engineDisposal,
     expectClosed() {
       expect(retired).toHaveBeenCalledOnce();
       expect(engineDisposal).toHaveBeenCalledOnce();
@@ -100,6 +99,7 @@ describe("spawn context-engine resource custody", () => {
   });
   let spawn: typeof import("./subagent-spawn.js").spawnSubagentDirect;
   let scheduler: typeof import("../swarm/swarm-scheduler.js");
+  let enqueueSwarmRun: typeof import("../swarm/swarm-scheduler.lifecycle.test-support.js").enqueueSwarmRun;
   let expectedCloseFailure: unknown;
   let GatewayDrainingError: typeof import("../../../process/gateway-work-admission.js").GatewayDrainingError;
   type Request = { method?: string; params?: Record<string, unknown> };
@@ -136,6 +136,7 @@ describe("spawn context-engine resource custody", () => {
       getRuntimeConfig: () => config,
     }));
     scheduler = await import("../swarm/swarm-scheduler.js");
+    ({ enqueueSwarmRun } = await import("../swarm/swarm-scheduler.lifecycle.test-support.js"));
     ({ LegacyContextEngine } = await import("../../../context-engine/legacy.js"));
     ({ registerContextEngineInRegistry, resolveContextEngine } =
       await import("../../../context-engine/registry.js"));
@@ -407,7 +408,7 @@ describe("spawn context-engine resource custody", () => {
       }
       return { runId: request.params?.idempotencyKey, status: "accepted" };
     });
-    scheduler.enqueueSwarmRun({
+    enqueueSwarmRun({
       groupId: JSON.stringify(["main", "main", "resource-group"]),
       runId: "blocker",
       maxConcurrent: 1,
@@ -474,7 +475,14 @@ describe("spawn context-engine resource custody", () => {
         expect(completeLaunchCleanup).not.toHaveBeenCalled();
       }
       expect(fixture.rollback).toHaveBeenCalledTimes(
-        ["rollback-failure", "disposal-failure", "withdrawal", "retired-draining"].includes(mode)
+        [
+          "rollback-failure",
+          "disposal-failure",
+          "withdrawal",
+          "retired-draining",
+          "shutdown-disposal-failure",
+          "shutdown-draining",
+        ].includes(mode)
           ? 1
           : 0,
       );

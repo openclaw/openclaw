@@ -19,7 +19,7 @@ For tooling that writes config over the gateway API, prefer this flow:
   deletes, arrays replace when explicitly confirmed with `replacePaths` if
   entries would be removed)
 - `config.apply` only when you intend to replace the entire config
-- `update.run` for explicit self-update plus restart; include `continuationMessage` when the post-restart session should run one follow-up turn
+- `update.run` for explicit self-update plus restart and a passive outcome report; a running session resumes through the ordinary graceful-shutdown marker
 - `update.status` to inspect the latest update restart sentinel and verify the running version after a restart
 
 Agents should treat `config.schema.lookup` as the first stop for exact
@@ -57,6 +57,14 @@ successful response includes `changedPaths`, the effective runtime paths changed
 after validation and secret restoration, or `[]` for a no-op. These paths contain
 no configuration values; clients can use them to distinguish a channel change
 from an unrelated write even when secret values are redacted.
+
+Successful `config.set`, `config.patch`, and `config.apply` responses include
+`billingRouteWarnings` when the write moved a configured model consumer to
+another billing route: a metered API key, a subscription/OAuth or token
+profile, or a CLI runtime's own credentials. Each entry is one line naming the
+consumer path, the model, and the old and new route; the Gateway log gets the
+same lines. The field is absent when nothing moved, and older Gateways never
+send it. It is advisory and never blocks the write.
 
 `config.patch` also accepts `response: "summary"` for callers that only need a
 commit acknowledgment. It omits the full config from the response. A summary

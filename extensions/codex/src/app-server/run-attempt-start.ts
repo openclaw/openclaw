@@ -2,7 +2,6 @@ import {
   embeddedAgentLog,
   hasBeforeToolCallPolicy,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
@@ -51,6 +50,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   const {
     params,
     attemptClientFactory,
+    callerOwnedAttemptClient,
     bindingStore,
     appServer,
     pluginConfig,
@@ -68,12 +68,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     startupAuthProfileId,
   } = connection;
   let pluginAppServer = withCodexAppServerFastModeServiceTier(appServer, runtimeParams);
-  const loopDetectionEnabled =
-    (sessionAgentId && params.config
-      ? resolveAgentConfig(params.config, sessionAgentId)?.tools?.loopDetection?.enabled
-      : undefined) ??
-    params.config?.tools?.loopDetection?.enabled ??
-    false;
   try {
     void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
@@ -87,6 +81,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       assertCurrentAsync: runtime.nativeExecutionPolicy.assertCurrent,
       authority: connection.authority,
       attemptClientFactory,
+      callerOwnedAttemptClient,
       bindingStore,
       runtime: connection.options.runtime,
       appServer: pluginAppServer,
@@ -114,11 +109,10 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
-      refreshableInstructions:
-        joinPresentSections(
-          context.refreshableInstructions,
-          turnState.promptBuild.turnDeveloperInstructions,
-        ) || undefined,
+      onDeveloperInstructions: prompt.setThreadDeveloperInstructions,
+      systemPromptReplaced: turnState.promptBuild.systemPromptReplaced,
+      refreshableInstructions: context.refreshableInstructions,
+      turnRefreshableInstructions: turnState.promptBuild.turnDeveloperInstructions,
       agentWorkspaceDeveloperInstructions: context.agentWorkspaceDeveloperInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       nativeModelAdmission: resources.nativeModelAdmission,
@@ -131,10 +125,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
           (connection.options.nativeHookRelay?.enabled !== false &&
             params.pluginHarnessToolPolicyRestricted !== true &&
             connection.nativeHookRelayEvents.includes("pre_tool_use") &&
-            (hasBeforeToolCallPolicy() ||
-              (appServer.loopDetectionPreToolUseRelay &&
-                Boolean(connection.sandboxSessionKey) &&
-                loopDetectionEnabled)))),
+            hasBeforeToolCallPolicy())),
       bundleMcpThreadConfig,
       configuredMcpDynamicSurface: attemptTools.configuredMcp !== undefined,
       configuredMcpOwnershipVersion: attemptTools.configuredMcpOwnershipVersion,
@@ -167,6 +158,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     state.sandboxExecEnvironment = startupResult.sandboxEnvironment;
     state.releaseSharedClientLease = startupResult.releaseSharedClientLease;
     state.restartContextEngineCodexThread = startupResult.restartContextEngineCodexThread;
+    prompt.adoptThreadBaseInstructions(state.thread);
     // Capture native authority only after this exact client's managed-policy
     // preflight succeeds; startup retries may have replaced the initial client.
     await attemptTools.captureCronCreatorToolAllowlist();

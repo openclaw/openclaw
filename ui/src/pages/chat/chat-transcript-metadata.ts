@@ -25,7 +25,13 @@ export const CHAT_TRANSCRIPT_METADATA_KEYS = [
   "lastRunId",
   "status",
   "runtimeMs",
+  "abortedLastRun",
   "contextTokens",
+  "sessionId",
+  "archived",
+  "archivedAt",
+  "archivedBy",
+  "archiveReason",
 ] as const;
 export type ChatTranscriptMetadata = Pick<
   GatewaySessionRow,

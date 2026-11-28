@@ -96,6 +96,7 @@ export const privateHarnessParamCases = [
   { field: "completionCheck", value: { unfinishedPlan: true, checked: false } },
   { field: "preparedSessionTarget", value: { target: {}, assertCurrent: () => undefined } },
   { field: "bindWatchdogAttempt", value: () => undefined },
+  { field: "onMemoryFlushModelProgress", value: () => undefined },
   { field: "onContextAccountingEvent", value: () => undefined },
   { field: "onCompactionRequestBudget", value: () => undefined },
   { field: "prepareContinuationRetryCount", value: () => undefined },

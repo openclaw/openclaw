@@ -10,7 +10,10 @@ import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 import type { QueueDropPolicy } from "./types.js";
 
 /** Extracts and removes a `/queue` directive from message text. */
-export function extractQueueDirective(rawBody?: string): {
+export function extractQueueDirective(
+  rawBody?: string,
+  options?: { strict?: boolean },
+): {
   queueMode?: QueueMode;
   queueReset: boolean;
   rawMode?: string;
@@ -92,5 +95,21 @@ export function extractQueueDirective(rawBody?: string): {
   }
   // Remove only the directive and consumed options; leave the rest as agent input.
   parsed.cleaned = removeDirectiveSpan(body, match.index, argsStart + consumed);
+  // Like inline /model, an unknown word followed by more text is prose. As in the
+  // level directives, only a bare `[\w-]+` word can be a mode, so "work?" is prose.
+  // A word that starts with a mode ("collect.") was meant as one and keeps the
+  // error, as do native /queue and explicit syntax (`/queue:`, options).
+  const rest = raw.slice(consumed).trim();
+  if (
+    !options?.strict &&
+    parsed.rawMode &&
+    !parsed.queueMode &&
+    (rest || !/^[\w-]+$/.test(parsed.rawMode)) &&
+    !normalizeQueueMode(/^[\w-]*/.exec(parsed.rawMode)?.[0]) &&
+    !raw.trimStart().startsWith(":") &&
+    !/^(?:debounce|cap|drop)[:=]/i.test(rest)
+  ) {
+    return { cleaned: body, hasDirective: false, queueReset: false, hasOptions: false };
+  }
   return parsed;
 }

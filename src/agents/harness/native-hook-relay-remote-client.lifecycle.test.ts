@@ -1,22 +1,18 @@
 import { EventEmitter } from "node:events";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../../test/helpers/promise.js";
 import { invokeRemoteNativeHookRelay } from "./native-hook-relay-remote-client.js";
 
 const boundary = vi.hoisted(() => ({ request: vi.fn() }));
 // mock-isolation: Supply credential bytes without reading operator files.
-vi.mock("node:fs/promises", () => ({
-  open: async () => ({
-    stat: async () => ({ isFile: () => true, size: 96 }),
-    read: async (buffer: Buffer) => ({
-      bytesRead: buffer.write(
-        JSON.stringify({
-          url: "https://relay.example/__openclaw__/native-hook/relay",
-          token: "synthetic-relay-capability",
-        }),
-      ),
-    }),
-    close: async () => {},
+vi.mock("@openclaw/fs-safe/advanced", () => ({
+  readRegularFile: async () => ({
+    buffer: Buffer.from(
+      JSON.stringify({
+        url: "https://relay.example/__openclaw__/native-hook/relay",
+        token: "synthetic-relay-capability",
+      }),
+    ),
   }),
 }));
 // mock-isolation: Control native request error and physical-close events independently.
@@ -77,7 +73,7 @@ it.each(["response", "error"] as const)("joins the socket after %s delivery", as
     request.emit("error", new Error("private transport detail"));
     expect(request.destroy).toHaveBeenCalledOnce();
   }
-  await Promise.resolve();
+  await nextEventLoopTurn();
   expect(completed).toBe(false);
   request.emit("close");
   expect(await result).toEqual(

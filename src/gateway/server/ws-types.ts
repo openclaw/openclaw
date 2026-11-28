@@ -6,6 +6,7 @@ import type { UserProfileIdentity } from "../../state/user-profiles.types.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { GatewayAuthPolicy } from "../auth-policy.types.js";
 import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.types.js";
+import type { OpenClawIdTunnelPrincipal } from "../openclaw-id/tunnel-principal.js";
 import type { GatewayOperatorAccessAuthority } from "../operator-access-policy.types.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
@@ -62,11 +63,16 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   includeSessionMessageBodies?: boolean;
   /** Connection-owned timing facts, reconciled across live peers independently of the TTL cache. */
   personPresence?: { onlineSince: number; lastActivityAt?: number };
+  /** Viewer declarations belong to this live connection, independently of the TTL cache. */
+  watchedSessions?: readonly string[];
   /** Accepted interaction on this exact connection, never copied from another client. */
   connectionLastActivityAt?: number;
   authenticatedUserId?: string;
   /** Configured Enterprise account verified by trusted-proxy handshake admission. */
   authenticatedFactoryGitHubAccountId?: number;
+  /** Connection identity supplied by the selected repository integration. */
+  authenticatedGitHubAccountId?: number;
+  authenticatedRepositoryCredentialSource?: import("../../plugins/repository-integration.types.js").RepositoryConnectionIdentity["credentialSource"];
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;
@@ -74,16 +80,30 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   preparedRecipientProfileId?: string;
   preparedSessionProfile?: UserProfileIdentity;
   authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
+  /** Initialized even for broad (undefined) access; must match this connection's published hello. */
+  profileActivity?: { viewerId: string | null | undefined };
   clientIp?: string;
   /** Server-attested inputs for rechecking browser-origin policy after config publication. */
   browserOrigin?: GatewayWsBrowserOrigin;
   internal?: {
     /** Authenticated operator transport ingress; never accepted from wire params. */
     authenticatedOperator?: true;
+    /** Closed publication transport device admission; never accepted from wire params. */
+    publicationTransport?: import("../publication-reader.js").PublicationTransportAdmission;
     /** Exact accepted/issued operator token; null attests a tokenless ingress. */
     operatorDeviceTokenIdentity?: Readonly<PairedDeviceTokenIdentity> | null;
+    /** Attested device ceiling before identity grants; never accepted from wire params. */
+    operatorDeviceScopeCeiling?: readonly string[];
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
+    /** Handshake-attested non-remote gateway-client backend; never accepted from wire params. */
+    localBackendClient?: true;
+    /** Device key W of a connection relayed by the OpenClaw ID tunnel child; never from wire params. */
+    openclawIdPeerKey?: string;
+    /** Original peer admission; every later grant checks the live membership owner. */
+    openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
+    /** Scopes this connection held before its role capped them; reload reconnects it when a role would grant more. */
+    roleCappedScopes?: readonly string[];
     /** Authenticated Control UI operator ingress; never accepted from wire params. */
     authenticatedControlUi?: true;
     /** Authenticated Control UI admin admission; never accepted from wire params. */

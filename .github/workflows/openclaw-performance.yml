@@ -15,7 +15,12 @@ on:
         options:
           - kova
           - vitest-pair
+          - node-cache-diagnostics
+          - node-cache-workload-qualification
+          - node-cache-qualified-measurement
           - gateway-concurrency
+          - gateway-memory-caps
+          - gateway-cold-turn-calibration
       target_ref:
         description: OpenClaw ref to benchmark; defaults to the workflow ref
         required: false
@@ -86,12 +91,13 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  OCM_VERSION: v0.2.48
-  OCM_LINUX_X64_SHA256: d0bdb49d69fa8bf3c3487ff04f4be82126828876f81690afdc002c427e22c1ac
+  OCM_VERSION: v0.3.10
+  OCM_LINUX_X64_SHA256: 78700755a592aeaf74915ad31addff60fd4a606d767d38b7ddc90411444c3479
   KOVA_REPOSITORY: openclaw/Kova
-  KOVA_CANONICAL_CONFIG_REF: 88d9a7efa5e6569f902bf8d298fd6a21c6be2e7b
+  KOVA_CANONICAL_CONFIG_REF: 5f1ac692af2058217c793aa06af9e28dbf46c1bd
   KOVA_LEGACY_LIST_CONFIG_REF: d69b2209905195bea06980721a92ad8b70808c5d
-  KOVA_TRUSTED_LIVE_REF: 88d9a7efa5e6569f902bf8d298fd6a21c6be2e7b
+  KOVA_COLD_TURN_CALIBRATION_REF: 113b6b6f13689457f8ef47cb7c36ad73e5cc4ba7
+  KOVA_TRUSTED_LIVE_REF: 5f1ac692af2058217c793aa06af9e28dbf46c1bd
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -99,9 +105,9 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
-    if: ${{ (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') }}
+    if: ${{ (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'node-cache-diagnostics' && inputs.mode != 'node-cache-workload-qualification' && inputs.mode != 'node-cache-qualified-measurement')) }}
     runs-on: &linux_runner_ubuntu >-
-      ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
+      ${{ inputs.mode == 'gateway-cold-turn-calibration' && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
       'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' &&
       fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' &&
       startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP ||
@@ -162,7 +168,7 @@ jobs:
             exit 1
           fi
 
-          if [[ "${PERFORMANCE_MODE:-}" == "gateway-concurrency" ]]; then
+          if [[ "${PERFORMANCE_MODE:-}" == gateway-concurrency || "${PERFORMANCE_MODE:-}" == gateway-memory-caps ]]; then
             echo "checkout_ref=$resolved_sha" >> "$GITHUB_OUTPUT"
             echo "tested_ref=$tested_ref" >> "$GITHUB_OUTPUT"
             echo "tested_sha=$resolved_sha" >> "$GITHUB_OUTPUT"
@@ -225,6 +231,10 @@ jobs:
             fi
           fi
 
+          if [[ "${PERFORMANCE_MODE:-}" == gateway-cold-turn-calibration && -z "${KOVA_REF_INPUT:-}" ]]; then
+            kova_ref="$KOVA_COLD_TURN_CALIBRATION_REF"
+          fi
+
           echo "checkout_ref=$resolved_sha" >> "$GITHUB_OUTPUT"
           echo "tested_ref=$tested_ref" >> "$GITHUB_OUTPUT"
           echo "tested_sha=$resolved_sha" >> "$GITHUB_OUTPUT"
@@ -267,17 +277,17 @@ jobs:
   kova:
     name: ${{ matrix.title }}
     needs: resolve_target
-    if: ${{ github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency') }}
+    if: ${{ github.event_name == 'schedule' || inputs.mode == 'kova' || inputs.mode == 'gateway-cold-turn-calibration' }}
     permissions:
       contents: read
     runs-on: &linux_runner_large >-
-      ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
+      ${{ inputs.mode == 'gateway-cold-turn-calibration' && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
       'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' &&
       fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' &&
       startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP ||
-      '')), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' ||
-      'blacksmith-16vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04'
-      || 'blacksmith-16vcpu-ubuntu-2404') }}
+      '')), toJSON(contains(fromJSON('["github","boat"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && 'ubuntu-24.04' ||
+      'blacksmith-4vcpu-ubuntu-2404'))) || (contains(fromJSON('["github","boat"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && 'ubuntu-24.04'
+      || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 240
     strategy:
       fail-fast: false
@@ -319,6 +329,7 @@ jobs:
       BUNDLE_DIR: ${{ github.workspace }}/.artifacts/kova/bundles/${{ matrix.lane }}
       SUMMARY_DIR: ${{ github.workspace }}/.artifacts/kova/summaries
       LANE_ID: ${{ matrix.lane }}
+      PERFORMANCE_MODE: ${{ inputs.mode }}
       TARGET_REF: ${{ needs.resolve_target.outputs.tested_ref }}
       EXPECTED_TESTED_SHA: ${{ needs.resolve_target.outputs.tested_sha }}
       PROFILE: ${{ inputs.profile || 'diagnostic' }}
@@ -340,6 +351,11 @@ jobs:
           set -euo pipefail
           run_lane=true
           reason=""
+          if [[ "${PERFORMANCE_MODE:-}" == gateway-cold-turn-calibration ]]; then
+            [[ "$LANE_ID" == "mock-provider" ]] || run_lane=false
+            echo "run=$run_lane" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [[ "$LANE_ID" == "mock-deep-profile" && "${{ github.event_name }}" != "schedule" && "${{ inputs.deep_profile || 'false' }}" != "true" ]]; then
             run_lane=false
             reason="deep_profile input is false"
@@ -510,7 +526,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Kova version and plan sanity
-        if: steps.lane.outputs.run == 'true'
+        if: ${{ steps.lane.outputs.run == 'true' && inputs.mode != 'gateway-cold-turn-calibration' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -585,7 +601,7 @@ jobs:
 
       - name: Run Kova
         id: kova
-        if: steps.lane.outputs.run == 'true'
+        if: ${{ steps.lane.outputs.run == 'true' && inputs.mode != 'gateway-cold-turn-calibration' }}
         env:
           OPENAI_API_KEY: ${{ matrix.live == 'true' && needs.resolve_target.outputs.secret_eligible == 'true' && secrets.OPENAI_API_KEY || '' }}
           OPENAI_BASE_URL: ${{ matrix.live == 'true' && needs.resolve_target.outputs.secret_eligible == 'true' && secrets.OPENAI_BASE_URL || '' }}
@@ -709,6 +725,55 @@ jobs:
             exit "$effective_status"
           fi
 
+      - name: Calibrate Gateway cold-turn resources
+        if: ${{ steps.lane.outputs.run == 'true' && inputs.mode == 'gateway-cold-turn-calibration' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          proof_root="$(mktemp -d /tmp/openclaw-calibration.XXXXXXXX)"
+          export OCM_HOME="$proof_root/ocm"
+          install -d -m 0700 "$OCM_HOME" "$OCM_HOME/envs" "$REPORT_DIR" "$BUNDLE_DIR" "$SUMMARY_DIR"
+
+          run_status=0
+          kova run --target "local-build:$GITHUB_WORKSPACE" \
+            --scenario gateway-cold-turn-calibration --state mock-openai-provider --auth mock \
+            --repeat "$REQUESTED_REPEAT" --resource-sample-interval-ms 250 \
+            --report-dir "$REPORT_DIR" --execute --json | tee "$BUNDLE_DIR/run.json" || run_status=$?
+          report_json="$(node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-selector.mjs" --report-dir "$REPORT_DIR")"
+          kova report bundle "$report_json" --output-dir "$BUNDLE_DIR" --json | tee "$BUNDLE_DIR/bundle.json"
+          if [[ "$run_status" != "0" ]]; then
+            exit "$run_status"
+          fi
+
+          build_info="$GITHUB_WORKSPACE/dist/build-info.json"
+          if ! jq -e --arg sha "$TESTED_SHA" '.commit == $sha' "$build_info" > /dev/null; then
+            echo "::error::OpenClaw build commit differs from the resolved calibration target."
+            exit 1
+          fi
+          cp "$build_info" "$BUNDLE_DIR/build-info.json"
+          if ! jq -e '.targetCleanup.status | IN("removed", "already-absent")' "$report_json" > /dev/null; then
+            echo "::error::The calibration runtime was not removed."
+            exit 1
+          fi
+          node "$KOVA_SRC/support/read-gateway-cold-turn-calibration.mjs" "$report_json" > "$proof_root/sample.json"
+          if ! jq -e --argjson count "$REQUESTED_REPEAT" \
+            '([.samples[].repeat] == [range(1; $count + 1)]) and all(.samples[]; .cleanup | IN("destroyed", "already-absent"))' \
+            "$proof_root/sample.json" > /dev/null; then
+            echo "::error::The calibration report does not contain every requested repeat and its cleanup."
+            exit 1
+          fi
+          kova_sha="$(python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$KOVA_SRC" rev-parse HEAD)"
+          jq --arg testedSha "$TESTED_SHA" --arg workflowSha "$GITHUB_SHA" --arg kovaSha "$kova_sha" \
+            '. + {$testedSha, $workflowSha, $kovaSha}' "$proof_root/sample.json" > "$BUNDLE_DIR/gateway-cold-turn-calibration.json"
+          {
+            echo "### Gateway cold-turn calibration"
+            echo
+            echo "Tested SHA: $TESTED_SHA"
+            echo "Samples: $REQUESTED_REPEAT"
+            echo "The workflow artifact contains the measurement receipt, Kova report, and raw sample bundle."
+          } | tee "$SUMMARY_DIR/${LANE_ID}.md" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Validate Kova evidence
         if: ${{ always() && steps.lane.outputs.run == 'true' }}
         shell: bash
@@ -729,6 +794,19 @@ jobs:
           fi
           if [[ "$missing" != "0" ]]; then
             exit 1
+          fi
+
+      # npm writes its own stack for "Exit handler never called!" only to its debug log,
+      # which stays on the runner (#204375). Keep it with the lane report.
+      - name: Keep npm debug logs with the Kova report
+        if: ${{ always() && steps.lane.outputs.run == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          logs="$HOME/.npm/_logs"
+          if compgen -G "$logs/*-debug-0.log" > /dev/null; then
+            mkdir -p "$REPORT_DIR/npm-logs"
+            cp "$logs"/*-debug-0.log "$REPORT_DIR/npm-logs/"
           fi
 
       - name: Upload Kova artifacts
@@ -765,7 +843,7 @@ jobs:
   source_performance:
     name: OpenClaw source performance probes
     needs: resolve_target
-    if: ${{ github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency') }}
+    if: ${{ github.event_name == 'schedule' || inputs.mode == 'kova' }}
     runs-on: *linux_runner_large
     timeout-minutes: 120
     env:
@@ -1131,7 +1209,7 @@ jobs:
   publish:
     name: Publish ${{ matrix.title }} report
     needs: [resolve_target, kova, source_performance]
-    if: ${{ always() && (github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency')) && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}
+    if: ${{ always() && (github.event_name == 'schedule' || inputs.mode == 'kova') && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 30
     permissions:
@@ -1147,10 +1225,15 @@ jobs:
             title: mock deep profile
           - lane: live-openai-candidate
             title: live OpenAI candidate
+    # Serialize each lane through merge so its shared latest pointer cannot race.
+    concurrency:
+      group: ${{ format('openclaw-performance-publish-{0}', matrix.lane) }}
+      cancel-in-progress: false
+      queue: max
     env:
       LANE_ID: ${{ matrix.lane }}
-      PERFORMANCE_PUBLISHER_HELPER: ${{ github.workspace }}/.artifacts/performance-publisher/scripts/lib/kova-report-publish-files.mjs
-      PERFORMANCE_REPORT_SELECTOR: ${{ github.workspace }}/.artifacts/performance-publisher/scripts/lib/kova-report-selector.mjs
+      PERFORMANCE_PUBLISHER_HELPER: ${{ github.workspace }}/scripts/lib/kova-report-publish-files.mjs
+      PERFORMANCE_REPORT_SELECTOR: ${{ github.workspace }}/scripts/lib/kova-report-selector.mjs
       PUBLISHED_REPORT_MAX_FILE_BYTES: "50000000"
       REPORT_PUBLISH_REQUIRED: ${{ github.event_name == 'schedule' || inputs.profile == 'release' }}
     steps:
@@ -1177,10 +1260,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
-          path: .artifacts/performance-publisher
           sparse-checkout: |
             scripts/lib/kova-report-publish-files.mjs
             scripts/lib/kova-report-selector.mjs
+            .github/actions/publish-generated-pr
+            .github/actions/create-generated-pr-tokens
           sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
@@ -1461,134 +1545,43 @@ jobs:
             --publish-root "$dest" \
             --max-file-bytes "$PUBLISHED_REPORT_MAX_FILE_BYTES"
 
-          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$reports_root" config user.name "openclaw-performance[bot]"
-          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$reports_root" config user.email "openclaw-performance[bot]@users.noreply.github.com"
-          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$reports_root" add -- openclaw-performance
-          report_commit="$(python3 -I -S "$CI_GIT_OWNER" --policy - "$reports_root" "$LANE_ID" "$TESTED_SHA" <<'PYTHON'
-          import sys
-          from ci_git_owner import run_git, git_output, GitFailure
-          try:
-              run_git(sys.argv[3], "diff", "--cached", "--quiet")
-          except GitFailure as error:
-              if error.code != 1:
-                  raise
-              run_git(sys.argv[3], "commit", "-m", f"perf: add OpenClaw {sys.argv[4]} report {sys.argv[5][:12]}", stdout=sys.stderr)
-          print(git_output(sys.argv[3], "rev-parse", "HEAD").rstrip("\n"))
-          PYTHON
-          )"
           echo "already_published=false" >> "$GITHUB_OUTPUT"
           echo "reports_root=$reports_root" >> "$GITHUB_OUTPUT"
-          echo "report_commit=$report_commit" >> "$GITHUB_OUTPUT"
           echo "dest_rel=$dest_rel" >> "$GITHUB_OUTPUT"
+          echo "latest_rel=openclaw-performance/${ref_slug}/latest-${LANE_ID}.json" >> "$GITHUB_OUTPUT"
           echo "report_url=$report_url" >> "$GITHUB_OUTPUT"
           echo "ready=true" >> "$GITHUB_OUTPUT"
-
-      - name: Create clawgrit reports app token
-        id: clawgrit_app_token
-        if: ${{ needs.resolve_target.outputs.secret_eligible == 'true' && steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}
-        continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: Iv23liOECG0slfuhz093
-          private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
-          owner: openclaw
-          repositories: clawgrit-reports
-          permission-contents: write
 
       - name: Publish to clawgrit reports
         if: ${{ needs.resolve_target.outputs.secret_eligible == 'true' && steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}
         continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
-        env:
-          CLAWGRIT_REPORTS_APP_TOKEN: ${{ steps.clawgrit_app_token.outputs.token }}
-          REPORTS_ROOT: ${{ steps.prepare.outputs.reports_root }}
-          REPORT_COMMIT: ${{ steps.prepare.outputs.report_commit }}
-          DEST_REL: ${{ steps.prepare.outputs.dest_rel }}
-          REPORT_URL: ${{ steps.prepare.outputs.report_url }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
-          import base64
-          import os
-          import re
-          from pathlib import Path
-          from ci_git_owner import run_git, git_output, GitFailure, FetchTimeout, backoff, check_cancelled, checkout_environment, git_auth_environment
+        uses: ./.github/actions/publish-generated-pr
+        with:
+          repository: clawgrit-reports
+          contents-client-id: Iv23liOECG0slfuhz093
+          contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          pull-request-client-id: Iv23liOECG0slfuhz093
+          pull-request-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          working-directory: ${{ steps.prepare.outputs.reports_root }}
+          base-branch: main
+          head-branch: perf/openclaw-${{ github.run_id }}-${{ steps.artifact.outputs.producer_attempt }}-${{ matrix.lane }}
+          commit-message: "perf: add OpenClaw ${{ matrix.lane }} report ${{ needs.resolve_target.outputs.tested_sha }}"
+          pr-title: "perf: add OpenClaw ${{ matrix.lane }} report"
+          generated-paths: |
+            ${{ steps.prepare.outputs.dest_rel }}
+            ${{ steps.prepare.outputs.latest_rel }}
+          overlap-policy: fail
+          auto-merge: "true"
+          pr-body: |
+            Publish the ${{ matrix.lane }} performance report for `${{ needs.resolve_target.outputs.tested_sha }}`.
 
-          annotation = "error" if os.environ["REPORT_PUBLISH_REQUIRED"] == "true" else "warning"
-          def summary(text):
-              check_cancelled()
-              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
-                  output.write(text + "\n")
-          def fail(message):
-              check_cancelled()
-              print(f"::{annotation}::{message}", flush=True)
-              raise SystemExit(1)
-          def success():
-              summary(f"### Clawgrit report published\n\n- Published report: {os.environ['REPORT_URL']}")
-              raise SystemExit(0)
-
-          token = os.environ.pop("CLAWGRIT_REPORTS_APP_TOKEN", "")
-          if not token:
-              summary("### Clawgrit report publish unavailable\n\nThe repository-scoped ClawSweeper GitHub App token could not be created.")
-              fail("ClawSweeper GitHub App token is unavailable; Kova artifacts were uploaded, but the report cannot be published.")
-          auth_header = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-          auth_environment = git_auth_environment("https://github.com/openclaw/clawgrit-reports.git", token)
-          del token
-          print(f"::add-mask::{auth_header}", flush=True)
-          reports = str(Path(os.environ["REPORTS_ROOT"]).resolve(strict=True))
-          report_commit = os.environ["REPORT_COMMIT"]
-          dest = os.environ["DEST_REL"]
-          if not reports.startswith(os.environ["RUNNER_TEMP"] + "/") or not re.fullmatch(r"[0-9a-f]{40}", report_commit) or not re.fullmatch(r"openclaw-performance/[A-Za-z0-9._-]+/[0-9]+-[0-9]+/[A-Za-z0-9._-]+", dest):
-              fail("Prepared report metadata failed validation.")
-          if os.environ["REPORT_URL"] != f"https://github.com/openclaw/clawgrit-reports/tree/main/{dest}":
-              fail("Prepared report URL failed validation.")
-          local = ("-c", "core.hooksPath=/dev/null")
-          if git_output(reports, *local, "config", "--local", "--get", "core.hooksPath").rstrip("\n") != "/dev/null" or git_output(reports, *local, "remote", "get-url", "origin").rstrip("\n") != "https://github.com/openclaw/clawgrit-reports.git":
-              fail("Prepared reports checkout failed integrity validation.")
-          run_git(reports, *local, "cat-file", "-e", f"{report_commit}^{{commit}}")
-          checkout_environment.update(auth_environment)
-          for attempt in range(1, 6):
-              try:
-                  run_git(reports, *local, "push", "origin", "HEAD:main", timeout=120, reclaim_locks=True)
-              except (GitFailure, FetchTimeout):
-                  # Only ordinary failures after verified extinction authorize reconciliation.
-                  # The fifth ambiguous push still gets its backoff, fetch and duplicate check.
-                  backoff(attempt * 2)
-              else:
-                  success()
-              try:
-                  # The outer publish loop already retries reconciliation within
-                  # this job's deadline; do not multiply its network budget.
-                  run_git(reports, *local, "fetch", "--depth=1", "origin", "main", timeout=120, reclaim_locks=True)
-              except (GitFailure, FetchTimeout):
-                  check_cancelled()
-                  if attempt != 5:
-                      print(f"::warning::Unable to refresh openclaw/clawgrit-reports after publish attempt {attempt}; retrying.", flush=True)
-                      continue
-              else:
-                  if git_output(reports, *local, "ls-tree", "--name-only", "FETCH_HEAD", "--", f"{dest}/report.json").rstrip("\n"):
-                      success()
-                  if attempt != 5:
-                      run_git(reports, *local, "checkout", "--detach", "FETCH_HEAD")
-                      # Unique report paths coexist; the current writer wins the shared latest pointer.
-                      try:
-                          run_git(reports, *local, "cherry-pick", "-X", "theirs", report_commit)
-                      except GitFailure:
-                          try:
-                              run_git(reports, *local, "cherry-pick", "--abort")
-                          except GitFailure:
-                              pass
-                          fail("Unable to replay the clawgrit report after a concurrent publish.")
-                      report_commit = git_output(reports, *local, "rev-parse", "HEAD").rstrip("\n")
-                      continue
-              summary(f"### Clawgrit report publish failed\n\nKova artifacts were uploaded, but publishing the clawgrit report failed after {attempt} attempts.\nCheck the ClawSweeper GitHub App installation and contents permission for openclaw/clawgrit-reports.")
-              fail(f"Kova artifacts uploaded, but clawgrit report publish failed after {attempt} attempts.")
-          PYTHON
+            Source run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Report after merge: ${{ steps.prepare.outputs.report_url }}
 
   artifact_only_guard:
     name: Verify artifact-only report mode
     needs: [resolve_target, kova, publish]
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency' && inputs.publish_reports != true }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'kova' && inputs.publish_reports != true }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 5
     permissions:
@@ -1613,7 +1606,7 @@ jobs:
   gateway_concurrency:
     name: Gateway concurrent sessions and turns
     needs: resolve_target
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'gateway-concurrency' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'gateway-concurrency' || inputs.mode == 'gateway-memory-caps') }}
     runs-on: *linux_runner_large
     timeout-minutes: 120
     permissions:
@@ -1625,12 +1618,17 @@ jobs:
       WORKFLOW_SHA: ${{ github.workflow_sha }}
       LIVE_REQUESTED: ${{ inputs.live_openai_candidate }}
       SECRET_ELIGIBLE: ${{ needs.resolve_target.outputs.secret_eligible }}
+      PERFORMANCE_MODE: ${{ inputs.mode }}
     steps:
       - name: Admit Gateway concurrency request
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$CONCURRENCY_OUTPUT"
+          if [[ "$PERFORMANCE_MODE" == gateway-memory-caps && "$LIVE_REQUESTED" == true ]]; then
+            echo "::error::The Gateway memory-cap lane requires the mock provider."
+            exit 1
+          fi
           if [[ "$LIVE_REQUESTED" == "true" && "$SECRET_ELIGIBLE" != "true" ]]; then
             echo "::error::Live Gateway concurrency requires the main workflow and its exact trusted target SHA."
             exit 1
@@ -1661,6 +1659,7 @@ jobs:
       - name: Set up Gateway concurrency environment
         uses: ./.artifacts/performance-workflow/.github/actions/setup-node-env
         with:
+          semantic-checks: ${{ inputs.mode == 'gateway-memory-caps' }}
           cache-mode: ${{ needs.resolve_target.outputs.cache_write_allowed == 'true' && 'restore' || 'off' }}
           install-bun: "false"
 
@@ -1691,6 +1690,7 @@ jobs:
 
       - name: Run mock Gateway concurrency
         id: mock
+        if: ${{ inputs.mode == 'gateway-concurrency' }}
         timeout-minutes: 20
         env:
           BENCH_PROVIDER: mock
@@ -1714,13 +1714,45 @@ jobs:
 
       - name: Run live Gateway concurrency
         id: live
-        if: ${{ inputs.live_openai_candidate == true && needs.resolve_target.outputs.secret_eligible == 'true' }}
+        if: ${{ inputs.mode == 'gateway-concurrency' && inputs.live_openai_candidate == true && needs.resolve_target.outputs.secret_eligible == 'true' }}
         timeout-minutes: 20
         env:
           BENCH_PROVIDER: openai
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         shell: bash
         run: *run_gateway_concurrency
+
+      - name: Run Gateway under 2 and 4 GiB caps
+        id: memory_caps
+        if: ${{ inputs.mode == 'gateway-memory-caps' }}
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Keep the controller and mock provider in a sibling of the measured Gateway.
+          systemd-run --user --wait --pipe --collect --service-type=exec --expand-environment=no \
+            --property='Delegate=cpu memory' --property=DelegateSubgroup=controller \
+            --working-directory="$PWD" --setenv="PATH=$PATH" \
+            bash -euo pipefail -c '
+              read -r group < /proc/self/cgroup
+              [[ "$group" == 0::/*/controller ]]
+              parent="/sys/fs/cgroup${group#0::}"
+              parent="${parent%/controller}"
+              [[ -z "$(cat "$parent/cgroup.procs")" ]]
+              echo "+cpu +memory" > "$parent/cgroup.subtree_control"
+              umask 077
+              status=0
+              for cap in 2 4; do
+                node --import ./scripts/tsx.mjs "$1/scripts/bench-gateway-concurrency.ts" \
+                  --entry dist/entry.js --runs 1 --warmup 0 \
+                  --control-ui-clients 4 --active-clients 2 --drivers 1 \
+                  --duration-ms 15000 --timeout-ms 120000 --resource-cgroup "$parent" \
+                  --transpiler-cache "$2/cache-$cap" --gateway-memory-gib "$cap" \
+                  --output "$2/memory-${cap}gib.json" 2>&1 | tee "$2/memory-${cap}gib.log" || status=1
+              done
+              exit "$status"
+            ' bash "$PERFORMANCE_HELPER_DIR" "$CONCURRENCY_OUTPUT" \
+            2>&1 | tee "$CONCURRENCY_OUTPUT/memory-caps.log"
 
       - name: Record Gateway concurrency outcome
         if: ${{ always() }}
@@ -1729,6 +1761,7 @@ jobs:
           BUILD_OUTCOME: ${{ steps.build.outcome }}
           MOCK_OUTCOME: ${{ steps.mock.outcome }}
           LIVE_OUTCOME: ${{ steps.live.outcome }}
+          MEMORY_CAPS_OUTCOME: ${{ steps.memory_caps.outcome }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1739,8 +1772,9 @@ jobs:
           const { CONCURRENCY_OUTPUT, EXPECTED_TESTED_SHA, WORKFLOW_SHA, LIVE_REQUESTED, JOB_STATUS } = process.env;
           writeFileSync(join(CONCURRENCY_OUTPUT, 'workflow-result.json'), JSON.stringify({
             testedSha: EXPECTED_TESTED_SHA, workflowSha: WORKFLOW_SHA,
-            liveRequested: LIVE_REQUESTED === 'true', jobStatus: JOB_STATUS,
+            liveRequested: LIVE_REQUESTED === 'true', jobStatus: JOB_STATUS, mode: process.env.PERFORMANCE_MODE,
             build: process.env.BUILD_OUTCOME, mock: process.env.MOCK_OUTCOME, live: process.env.LIVE_OUTCOME,
+            memoryCaps: process.env.MEMORY_CAPS_OUTCOME,
           }, null, 2) + '\n');
           NODE
           {
@@ -1748,7 +1782,11 @@ jobs:
             echo "Tested SHA: $EXPECTED_TESTED_SHA"
             echo "Workflow SHA: $WORKFLOW_SHA"
             echo "Outcome: $JOB_STATUS; live requested: $LIVE_REQUESTED"
-            echo "Each selected provider: 32 concurrent agents, 1,000 sessions, 96 turns."
+            if [[ "$PERFORMANCE_MODE" == gateway-memory-caps ]]; then
+              echo "Mock Control UI load on the same host at 2 and 4 GiB, with swap disabled for the Gateway."
+            else
+              echo "Each selected provider: 32 concurrent agents, 1,000 sessions, 96 turns."
+            fi
             echo "Raw results, failure evidence, logs, and load-phase CPU profiles are in the workflow artifact."
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -1760,6 +1798,328 @@ jobs:
           path: .artifacts/gateway-concurrency
           if-no-files-found: error
           retention-days: 14
+
+  node_cache_workload:
+    name: Prepared workload Node cache controls
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'node-cache-workload-qualification' || inputs.mode == 'node-cache-qualified-measurement') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.mode == 'node-cache-qualified-measurement' && 240 || 75 }}
+    permissions:
+      contents: read
+    env:
+      NODE_CACHE_HARNESS: ${{ github.workspace }}/node-cache-harness
+      NODE_CACHE_WORKLOAD: ${{ github.workspace }}/node-cache-workload
+      NODE_CACHE_HARNESS_SHA: ${{ github.sha }}
+      NODE_CACHE_MODE: ${{ inputs.mode }}
+    steps:
+      - name: Validate workload control request
+        timeout-minutes: 1
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          first_owned_step_started_at="$(date +%s)"
+          if [[ "$GITHUB_RUN_ATTEMPT" != "1" || ! "$NODE_CACHE_HARNESS_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Workload controls require a fresh run and exact harness SHA."
+            exit 1
+          fi
+          if [[ -n "$TARGET_REF" && "$TARGET_REF" != "$NODE_CACHE_HARNESS_SHA" ]]; then
+            echo "::error::target_ref must be empty or equal the workflow event SHA for workload controls."
+            exit 1
+          fi
+          printf 'NODE_CACHE_PREPARATION=%s\nNODE_CACHE_OUTPUT=%s\nNODE_CACHE_SCRATCH=%s\nPNPM_CONFIG_STORE_DIR=%s\nPNPM_CONFIG_CACHE_DIR=%s\n' \
+            "$RUNNER_TEMP/node-cache-preparation" "$RUNNER_TEMP/node-cache-workload-results" \
+            "$RUNNER_TEMP/node-cache-workload-scratch" "$RUNNER_TEMP/node-cache-preparation/store" \
+            "$RUNNER_TEMP/node-cache-preparation/cache" >> "$GITHUB_ENV"
+          if [[ "${NODE_CACHE_MODE:-}" == "node-cache-qualified-measurement" ]]; then
+            # This is the first owned step, not the runner's job-start timestamp.
+            preparation_deadline=$((first_owned_step_started_at + 40 * 60))
+            work_deadline=$((first_owned_step_started_at + 230 * 60))
+            printf 'NODE_CACHE_PREPARATION_DEADLINE=%s\nNODE_CACHE_WORK_DEADLINE=%s\nNODE_CACHE_MEASUREMENT_OUTPUT=%s\nNODE_CACHE_MEASUREMENT_SCRATCH=%s\n' \
+              "$preparation_deadline" "$work_deadline" "$RUNNER_TEMP/node-cache-measurement-results" \
+              "$RUNNER_TEMP/node-cache-measurement-scratch" >> "$GITHUB_ENV"
+            mkdir -p "$RUNNER_TEMP/node-cache-preparation"
+            printf '{"anchor":"first-owned-step","startedAtEpochSeconds":%s,"preparationDeadlineEpochSeconds":%s,"workDeadlineEpochSeconds":%s}\n' \
+              "$first_owned_step_started_at" "$preparation_deadline" "$work_deadline" \
+              > "$RUNNER_TEMP/node-cache-preparation/workflow-clock.json"
+          fi
+
+      - name: Checkout workload control harness
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: node-cache-harness
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout fixed Node cache workload
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 8cfbac51a27a1195176a3564f6d7cfd7d6994c85
+          path: node-cache-workload
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up workload control Node
+        timeout-minutes: 5
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+          check-latest: false
+          package-manager-cache: false
+
+      - name: Record and verify workload control runtime
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$NODE_CACHE_PREPARATION"
+          node --input-type=module - \
+            "$NODE_CACHE_HARNESS/scripts/node-cache-workload-definition.json" \
+            "$NODE_CACHE_PREPARATION/runtime.json" \
+            > "$NODE_CACHE_PREPARATION/runtime.log" 2>&1 <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+          const expected = JSON.parse(readFileSync(process.argv[2], "utf8")).runtime;
+          const actual = {
+            node: process.version,
+            v8: process.versions.v8,
+            platform: process.platform,
+            architecture: process.arch,
+            executableSha256: createHash("sha256").update(readFileSync(process.execPath)).digest("hex"),
+          };
+          writeFileSync(process.argv[3], JSON.stringify(actual, null, 2) + "\n");
+          console.log(JSON.stringify(actual));
+          if (Object.entries(actual).some(([key, value]) => expected[key] !== value)) {
+            throw new Error("Hosted Node runtime differs from the fixed workload definition");
+          }
+          NODE
+
+      - name: Set up fixed workload pnpm
+        timeout-minutes: 5
+        uses: ./node-cache-workload/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: node-cache-workload/package.json
+          lockfile-path: node-cache-workload/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: "off"
+
+      - name: Prepare fixed workload dependencies and generated types
+        shell: bash
+        run: |
+          set -euo pipefail
+          preparation_seconds=2400
+          if [[ "${NODE_CACHE_MODE:-}" == "node-cache-qualified-measurement" ]]; then
+            now="$(date +%s)"
+            preparation_seconds=$((NODE_CACHE_PREPARATION_DEADLINE - now))
+            work_seconds=$((NODE_CACHE_WORK_DEADLINE - now))
+            if (( work_seconds < preparation_seconds )); then preparation_seconds="$work_seconds"; fi
+          fi
+          # Keep timeout's TERM/KILL settlement inside the preparation ceiling.
+          preparation_seconds=$((preparation_seconds - 30))
+          if (( preparation_seconds <= 0 )); then
+            echo "::error::Node cache preparation budget exhausted."
+            exit 1
+          fi
+          [[ "$(git -C "$NODE_CACHE_HARNESS" rev-parse HEAD)" == "$NODE_CACHE_HARNESS_SHA" ]]
+          [[ "$(git -C "$NODE_CACHE_WORKLOAD" rev-parse HEAD)" == "8cfbac51a27a1195176a3564f6d7cfd7d6994c85" ]]
+          pnpm_bin="$COREPACK_HOME/v1/pnpm/12.15.0/node_modules/@pnpm/exe.linux-x64/pnpm"
+          node_bin="$(dirname "$(command -v node)")"
+          [[ -x "$pnpm_bin" && -f "$pnpm_bin" && ! -L "$pnpm_bin" ]]
+          mkdir -p "$NODE_CACHE_PREPARATION"/{home,tmp,pnpm,npm-cache}
+          preparation_env=(env -i
+            "PATH=$(dirname "$pnpm_bin"):$node_bin:$PATH"
+            "HOME=$NODE_CACHE_PREPARATION/home"
+            "TMPDIR=$NODE_CACHE_PREPARATION/tmp"
+            "PNPM_HOME=$NODE_CACHE_PREPARATION/pnpm"
+            "PNPM_CONFIG_STORE_DIR=$PNPM_CONFIG_STORE_DIR"
+            "PNPM_CONFIG_CACHE_DIR=$PNPM_CONFIG_CACHE_DIR"
+            "npm_config_cache=$NODE_CACHE_PREPARATION/npm-cache"
+            "NODE_BIN=$node_bin" "NODE_DISABLE_COMPILE_CACHE=1"
+            "CI=true" "LANG=C.UTF-8" "LC_ALL=C.UTF-8"
+            "GITHUB_WORKSPACE=$NODE_CACHE_WORKLOAD" "GITHUB_ENV=$GITHUB_ENV"
+            "DEPENDENCY_CACHE=false" "DEPENDENCY_CACHE_HIT=false"
+            "FROZEN_LOCKFILE=true" "PNPM_CONFIG_FROZEN_LOCKFILE=true"
+            "pnpm_config_manage_package_manager_versions=false")
+          cd "$NODE_CACHE_WORKLOAD"
+          {
+            # Preparation may download; the later controls cannot reconcile dependencies.
+            timeout --signal=TERM --kill-after=30s "${preparation_seconds}s" "${preparation_env[@]}" \
+              bash -euc 'bash .github/actions/setup-node-env/install-dependencies.sh
+              node scripts/generate-kysely-types.mts'
+          } > "$NODE_CACHE_PREPARATION/install.log" 2>&1
+          if [[ "${NODE_CACHE_MODE:-}" == "node-cache-qualified-measurement" ]]; then
+            now="$(date +%s)"
+            if (( now >= NODE_CACHE_PREPARATION_DEADLINE || now >= NODE_CACHE_WORK_DEADLINE )); then
+              echo "::error::Node cache preparation budget exhausted after installation."
+              exit 1
+            fi
+          fi
+          printf 'NODE_CACHE_PNPM=%s\n' "$pnpm_bin" >> "$GITHUB_ENV"
+
+      - name: Qualify prepared workload Node cache controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout_ms=1800000
+          if [[ "${NODE_CACHE_MODE:-}" == "node-cache-qualified-measurement" ]]; then
+            remaining_ms=$(((NODE_CACHE_WORK_DEADLINE - $(date +%s) - 1) * 1000))
+            if (( remaining_ms < timeout_ms )); then timeout_ms="$remaining_ms"; fi
+          fi
+          if (( timeout_ms <= 0 )); then
+            echo "::error::Node cache control budget exhausted."
+            exit 1
+          fi
+          node "$NODE_CACHE_HARNESS/scripts/vitest-pair-benchmark.mts" \
+            --mode node-cache-workload-qualification \
+            --definition "$NODE_CACHE_HARNESS/scripts/node-cache-workload-definition.json" \
+            --workload "$NODE_CACHE_WORKLOAD" \
+            --harness-sha "$NODE_CACHE_HARNESS_SHA" \
+            --pnpm-bin "$NODE_CACHE_PNPM" \
+            --output "$NODE_CACHE_OUTPUT" --scratch "$NODE_CACHE_SCRATCH" \
+            --timeout-ms "$timeout_ms" --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      - name: Measure qualified workload Node cache pairs
+        if: ${{ success() && inputs.mode == 'node-cache-qualified-measurement' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout_ms=9000000
+          remaining_ms=$(((NODE_CACHE_WORK_DEADLINE - $(date +%s) - 1) * 1000))
+          if (( remaining_ms < timeout_ms )); then timeout_ms="$remaining_ms"; fi
+          if (( timeout_ms <= 0 )); then
+            echo "::error::Node cache measurement budget exhausted."
+            exit 1
+          fi
+          node "$NODE_CACHE_HARNESS/scripts/vitest-pair-benchmark.mts" \
+            --mode node-cache-qualified-measurement \
+            --definition "$NODE_CACHE_HARNESS/scripts/node-cache-workload-definition.json" \
+            --workload "$NODE_CACHE_WORKLOAD" --qualification "$NODE_CACHE_OUTPUT" \
+            --harness-sha "$NODE_CACHE_HARNESS_SHA" --pnpm-bin "$NODE_CACHE_PNPM" \
+            --output "$NODE_CACHE_MEASUREMENT_OUTPUT" --scratch "$NODE_CACHE_MEASUREMENT_SCRATCH" \
+            --timeout-ms "$timeout_ms" --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      - name: Finalize workload control artifact
+        if: ${{ always() }}
+        env:
+          NODE_CACHE_PREPARATION: ${{ runner.temp }}/node-cache-preparation
+          NODE_CACHE_OUTPUT: ${{ runner.temp }}/node-cache-workload-results
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$NODE_CACHE_OUTPUT"
+          if [[ ! -f "$NODE_CACHE_OUTPUT/terminal-manifest.json" ]]; then
+            printf '{"version":1,"status":"failure","phase":"workflow","jobStatus":"%s"}\n' \
+              "$JOB_STATUS" > "$NODE_CACHE_OUTPUT/terminal-manifest.json"
+          fi
+          if [[ -f "$NODE_CACHE_PREPARATION/install.log" ]]; then
+            cp "$NODE_CACHE_PREPARATION/install.log" "$NODE_CACHE_OUTPUT/preparation.log"
+          fi
+          for artifact in runtime.json runtime.log workflow-clock.json; do
+            if [[ -f "$NODE_CACHE_PREPARATION/$artifact" ]]; then
+              cp "$NODE_CACHE_PREPARATION/$artifact" "$NODE_CACHE_OUTPUT/$artifact"
+            fi
+          done
+
+      - name: Upload workload control artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: node-cache-workload-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/node-cache-workload-results
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+      - name: Finalize workload measurement artifact
+        if: ${{ always() && inputs.mode == 'node-cache-qualified-measurement' }}
+        env:
+          NODE_CACHE_MEASUREMENT_OUTPUT: ${{ runner.temp }}/node-cache-measurement-results
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$NODE_CACHE_MEASUREMENT_OUTPUT"
+          if [[ ! -f "$NODE_CACHE_MEASUREMENT_OUTPUT/terminal-manifest.json" ]]; then
+            printf '{"version":1,"status":"failure","phase":"workflow","jobStatus":"%s"}\n' \
+              "$JOB_STATUS" > "$NODE_CACHE_MEASUREMENT_OUTPUT/terminal-manifest.json"
+          fi
+
+      - name: Upload workload measurement artifact
+        if: ${{ always() && inputs.mode == 'node-cache-qualified-measurement' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: node-cache-measurement-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/node-cache-measurement-results
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+  node_cache_diagnostics:
+    name: Node cache diagnostic qualification
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'node-cache-diagnostics' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout diagnostic helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up diagnostic Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+          check-latest: false
+          package-manager-cache: false
+
+      - name: Qualify native Node cache diagnostics
+        env:
+          NODE_CACHE_DIAGNOSTIC_OUTPUT: ${{ runner.temp }}/node-cache-diagnostics
+          TARGET_REF: ${{ inputs.target_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET_REF" != "$WORKFLOW_SHA" || "$(git rev-parse HEAD)" != "$WORKFLOW_SHA" ]]; then
+            echo "::error::Node cache diagnostics requires the exact workflow checkout and target_ref."
+            exit 1
+          fi
+          node scripts/vitest-pair-benchmark.mts \
+            --mode node-cache-diagnostics \
+            --output "$NODE_CACHE_DIAGNOSTIC_OUTPUT" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      - name: Finalize diagnostic artifact
+        if: ${{ always() }}
+        env:
+          NODE_CACHE_DIAGNOSTIC_OUTPUT: ${{ runner.temp }}/node-cache-diagnostics
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$NODE_CACHE_DIAGNOSTIC_OUTPUT"
+          if [[ ! -f "$NODE_CACHE_DIAGNOSTIC_OUTPUT/terminal-manifest.json" ]]; then
+            printf '{"version":1,"status":"failure","phase":"workflow","jobStatus":"%s"}\n' \
+              "$JOB_STATUS" > "$NODE_CACHE_DIAGNOSTIC_OUTPUT/terminal-manifest.json"
+          fi
+
+      - name: Upload diagnostic artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: node-cache-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/node-cache-diagnostics
+          if-no-files-found: error
+          retention-days: 30
 
   vitest_pair:
     name: Vitest paired benchmark
@@ -1925,9 +2285,11 @@ jobs:
       - publish
       - artifact_only_guard
       - gateway_concurrency
+      - node_cache_diagnostics
+      - node_cache_workload
       - vitest_pair
       - vitest_pair_guard
-    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
+    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.mode != 'gateway-cold-turn-calibration' && inputs.mode != 'node-cache-diagnostics' && inputs.mode != 'node-cache-workload-qualification' && inputs.mode != 'node-cache-qualified-measurement' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
     permissions:
       contents: read
       actions: read

@@ -57,22 +57,18 @@ type HarnessCompletionSourceAdmission = {
   scope: AgentHarnessCompletionScope;
   sourceSessionKey: string;
   sourceRunId: string;
-  requesterSessionId: string;
-  requesterLifecycleRevision?: string;
   assertCurrent: () => void;
 };
 const sourceAdmissions = resolveGlobalSingleton(
   Symbol.for("openclaw.harnessCompletionSourceAdmission"),
   () => new AsyncLocalStorage<HarnessCompletionSourceAdmission>(),
 );
-/** The native source owner admits delivery; the requester receipt owns accepted recovery thereafter. */
+/** The native source owner retains admission through ordinary completion delivery. */
 export async function withAgentHarnessCompletionAdmission<T>(
   params: {
     scope: AgentHarnessCompletionScope;
     sourceSessionKey: string;
     sourceRunId: string;
-    requesterSessionId: string;
-    requesterLifecycleRevision?: string;
     isSourceCurrent: () => boolean;
   },
   operation: () => Promise<T>,
@@ -94,8 +90,6 @@ export async function withAgentHarnessCompletionAdmission<T>(
 export function assertHarnessCompletionSourceAdmission(params: {
   requesterSessionKey: string;
   requesterAgentId: string;
-  requesterSessionId: string;
-  requesterLifecycleRevision?: string;
   sourceSessionKey: string;
   sourceRunId: string;
 }): () => void {
@@ -104,8 +98,6 @@ export function assertHarnessCompletionSourceAdmission(params: {
     !admission ||
     admission.scope.requesterSessionKey !== params.requesterSessionKey ||
     admission.scope.requesterAgentId !== params.requesterAgentId ||
-    admission.requesterSessionId !== params.requesterSessionId ||
-    admission.requesterLifecycleRevision !== params.requesterLifecycleRevision ||
     admission.sourceSessionKey !== params.sourceSessionKey ||
     admission.sourceRunId !== params.sourceRunId
   ) {

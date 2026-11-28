@@ -40,6 +40,10 @@ public enum ChatMessageVisibleText {
     }
 
     static func displayText(in message: OpenClawChatMessage, includeThinking: Bool) -> String {
+        #if os(macOS)
+        // Shared content stays unchanged for mobile and channel clients.
+        if let summary = message.desktopFailureSummary { return summary }
+        #endif
         let isAssistant = message.role.trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() == "assistant"
         let parts = message.content.compactMap { content -> String? in
@@ -58,10 +62,10 @@ public enum ChatMessageVisibleText {
             }
             return "<think>\n\(thinking)\n</think>"
         }
-        return OpenClawChatMessage.displayText(
+        return ChatInternalContext.strip(OpenClawChatMessage.displayText(
             contentText: parts.joined(separator: "\n"),
             role: message.role,
-            stopReason: message.stopReason,
-            errorMessage: message.errorMessage)
+            stopReason: message.presentationOwnsFooter ? message.stopReason : nil,
+            errorMessage: message.presentationOwnsFooter ? message.errorMessage : nil))
     }
 }

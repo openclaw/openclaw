@@ -10,7 +10,7 @@ import {
 import { isLocalModelLeanEnabled } from "./local-model-lean.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
 import { normalizeToolPolicyName, readToolAllowlistIntersection } from "./tool-policy-shared.js";
-import type { ToolSearchConfig } from "./tool-search-types.js";
+import type { ToolSearchConfig } from "./tool-search-protocol.js";
 import {
   applyToolSchemaDirectoryCatalog,
   applyToolSearchCatalog,
@@ -31,7 +31,6 @@ export type AgentToolSurfacePlanParams = {
   disableTools?: boolean;
   isRawModelRun: boolean;
   toolsAllow?: readonly string[];
-  forceCodeModeControls?: boolean;
   trigger?: EmbeddedRunTrigger;
 };
 
@@ -90,11 +89,7 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
     restrictions.every((allow) => allow.length > 0) &&
     !completionPrivateMessageOnly;
   const codeModeControlsEnabled =
-    toolsAvailable &&
-    // Restart recovery continues one provider turn. Keep its original control
-    // schema even when the reloaded config disables Code Mode for new turns.
-    (params.forceCodeModeControls === true ||
-      isCodeModeEngagedForModel(codeModeConfig, params.model));
+    toolsAvailable && isCodeModeEngagedForModel(codeModeConfig, params.model);
   const toolSearchControlsEnabled =
     toolsAvailable && !codeModeControlsEnabled && toolSearchConfig.enabled;
   return {
@@ -114,7 +109,6 @@ export function prepareAgentToolSurfacePresentation(
   return {
     codeMode: { ...plan.codeModeConfig, enabled: plan.codeModeControlsEnabled },
     toolSearch: { ...plan.toolSearchConfig, enabled: plan.toolSearchControlsEnabled },
-    toolSearchDirectoryLean: isLocalModelLeanEnabled(params),
     forceDirectMessageTool: params.forceDirectMessageTool,
   };
 }
@@ -144,15 +138,18 @@ export function applyAgentToolSurfaceCatalog({
     : toolSearchConfig.mode === "directory"
       ? applyToolSchemaDirectoryCatalog
       : applyToolSearchCatalog;
+  const directToolNames = ["message", "progress_card"];
+  if (
+    !codeModeControlsEnabled &&
+    catalogParams.config?.tools?.toolSearch === undefined &&
+    model?.api === "ollama" &&
+    model.toolSearchMode === "tools"
+  ) {
+    directToolNames.push("web_search", "web_fetch", "memory_search", "memory_get");
+  }
   return applyCatalog({
     ...catalogParams,
     config: codeModeControlsEnabled ? catalogParams.config : toolSearchRuntimeConfig,
-    directToolNames:
-      !codeModeControlsEnabled &&
-      catalogParams.config?.tools?.toolSearch === undefined &&
-      model?.api === "ollama" &&
-      model.toolSearchMode === "tools"
-        ? ["message", "web_search", "web_fetch", "memory_search", "memory_get"]
-        : ["message"],
+    directToolNames,
   });
 }

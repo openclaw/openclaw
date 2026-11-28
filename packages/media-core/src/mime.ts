@@ -51,6 +51,9 @@ const EXT_BY_MIME: Record<string, string> = {
   "application/x-tar": ".tar",
   "application/x-7z-compressed": ".7z",
   "application/vnd.rar": ".rar",
+  "application/java-archive": ".jar",
+  "application/vnd.android.package-archive": ".apk",
+  "application/x-xpinstall": ".xpi",
   "application/msword": ".doc",
   "application/vnd.ms-excel": ".xls",
   "application/vnd.ms-powerpoint": ".ppt",
@@ -173,6 +176,14 @@ export function normalizeMimeType(mime?: string | null): string | undefined {
   // Object.hasOwn: a remote "__proto__"/"constructor" header would otherwise
   // resolve to inherited Object.prototype members and break the string contract.
   return Object.hasOwn(MIME_SYNONYMS, cleaned) ? MIME_SYNONYMS[cleaned] : cleaned;
+}
+
+export const HEADERLESS_CSV_MIME_TYPE = "text/csv; header=absent";
+
+export function isHeaderlessCsvMime(mime: string): boolean {
+  return /^\s*text\/csv\s*(?:;(?!\s*header\s*=)(?:[^";]|"(?:[^"\\]|\\.)*")*)*;\s*header\s*=\s*(?:absent|"\\?a\\?b\\?s\\?e\\?n\\?t")\s*(?:;|$)/i.test(
+    mime,
+  );
 }
 
 async function sniffMime(buffer?: Buffer): Promise<string | undefined> {

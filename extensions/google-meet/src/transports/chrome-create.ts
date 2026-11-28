@@ -232,8 +232,8 @@ export async function createMeetWithBrowserProxyOnNode(params: {
   }
   const notes = new Set<string>();
   let lastError: unknown;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() <= deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() <= deadline) {
     try {
       const evaluated = await callBrowser({
         method: "POST",

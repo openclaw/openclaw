@@ -9,7 +9,6 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import * as providerPolicy from "../plugins/provider-policy-surface.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { isSmallModel } from "../shared/model-param-b.js";
 import { makeModel } from "./embedded-agent-runner/model.test-harness.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import {
@@ -104,7 +103,6 @@ it.each([undefined, 4_000_000_000])(
       const matchesConfiguredRoute = baseUrl === capturedRoute.baseUrl;
       expect(projected.parameterCount).toBe(matchesConfiguredRoute ? 4_000_000_000 : undefined);
       expect(runtimeEntry.parameterCount).toBe(projected.parameterCount);
-      expect(isSmallModel(runtimeEntry)).toBe(matchesConfiguredRoute);
     }
   },
 );
@@ -154,7 +152,8 @@ it.each<OverlayCase>([
     {
       baseUrl: `${capturedRoute.baseUrl}/`,
       params: { configured: true },
-      thinkingLevelMap: { off: null, max: "max" },
+      // A partial map keeps the captured row's other keys, including its `off: null`.
+      thinkingLevelMap: { max: "max" },
     },
     false,
   ],
@@ -280,8 +279,9 @@ it.each<OverlayCase>([
         input: override.input ?? (hasDonor ? ["text", "image"] : undefined),
         contextWindow: override.contextWindow ?? (hasDonor ? 128_000 : undefined),
         contextTokens: override.contextTokens ?? (hasDonor ? 96_000 : undefined),
-        thinkingLevelMap:
-          override.thinkingLevelMap ?? (hasDonor ? { off: null, high: "high" } : undefined),
+        thinkingLevelMap: hasDonor
+          ? { off: null, high: "high", ...override.thinkingLevelMap }
+          : override.thinkingLevelMap,
         thinkingPolicyProvider: hasDonor ? thinkingOwner : undefined,
       });
       expect(

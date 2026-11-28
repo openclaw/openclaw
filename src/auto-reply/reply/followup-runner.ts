@@ -1,3 +1,4 @@
+import { formatErrorMessage as formatRawErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
@@ -5,19 +6,36 @@ import {
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { withoutRequiredSessionPlacement } from "../../agents/session-placement-admission.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import { CronDeliveryAuthorityError } from "../../cron/delivery-attempt-fence.js";
+import { OperatorRefusalError } from "../../gateway/operator-refusal.js";
 import type { SessionActivitySummaryCompletion } from "../../gateway/session-activity-summary-completion.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  collectErrorGraphCandidates,
+  formatErrorMessage,
+  readErrorCauses,
+} from "../../infra/errors.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { deferSessionControllerClaimBeforeExecution } from "../../sessions/session-controller.mailbox-claim.js";
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
+import {
+  sanitizeSessionRunError,
+  truncateSessionRunError,
+} from "../../sessions/session-run-error-format.js";
+import { recordGatewaySessionRunFailure } from "../../sessions/session-run-error.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
@@ -28,6 +46,7 @@ import { createCompactionNoticePayload } from "./compaction-notice.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import { executeFollowupTurn } from "./followup-turn-execution.js";
+import { readCreatedGoalContinuationId } from "./goal-continuation-return.js";
 import { enqueueGoalContinuation, createGoalContinuationReturn } from "./goal-continuation.js";
 import { completeFollowupRunLifecycle, type FollowupRun } from "./queue.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
@@ -38,11 +57,12 @@ import {
   type FollowupRunnerParams,
 } from "./reply-agent-turn-preparation.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission-lifecycle.js";
-import { resolveReplyAdmissionRunId } from "./source-turn-id.js";
+import { isRoutableChannel, routeReply } from "./route-reply.js";
 import {
   isReplyOperationStalledBeforeOutput,
   resolveStalledTurnNoticeText,
 } from "./stalled-turn-recovery.js";
+import { createTypingController } from "./typing.js";
 
 type FollowupDrainDisposition = { kind: "consumed" } | { kind: "retry"; error: unknown };
 
@@ -82,6 +102,9 @@ function resolveFollowupCompletion(
     return {
       kind: "failed",
       error: terminal.error ?? "Follow-up failed.",
+      ...(outcome.kind === "rejected" && outcome.payload.text
+        ? { notice: outcome.payload.text }
+        : {}),
       ...stopReason,
       ...(classification === "timeout" ? { errorKind: "timeout" } : {}),
     };
@@ -90,12 +113,12 @@ function resolveFollowupCompletion(
 }
 
 export function createFollowupRunner(
-  initialDefaults: FollowupRunnerParams,
+  initialDefaults: Omit<FollowupRunnerParams, "typing">,
 ): (queued: FollowupRun) => Promise<void> {
   const resolveGatewayContext = Object.hasOwn(initialDefaults, "resolveGatewayContext")
     ? initialDefaults.resolveGatewayContext
     : getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
-  const defaults = { ...initialDefaults, resolveGatewayContext };
+  const runnerDefaults = { ...initialDefaults, resolveGatewayContext };
   // Follow-ups retain the host owner, never the invoking turn's transcript or request scope.
   const runFollowup = (queued: FollowupRun): Promise<void> =>
     withoutRequiredSessionPlacement(() =>
@@ -103,7 +126,18 @@ export function createFollowupRunner(
         runWithAgentWorkspaceReadiness(undefined, () =>
           withPluginRuntimeGatewayContextResolver(
             resolveGatewayContext,
-            () => executeFollowup(queued),
+            // The source dispatch sealed its typing when it returned; each turn owns a fresh one.
+            () =>
+              executeFollowup(queued, {
+                ...runnerDefaults,
+                typing: createTypingController({
+                  onReplyStart: runnerDefaults.opts?.onReplyStart,
+                  onCleanup: runnerDefaults.opts?.onTypingCleanup,
+                  typingIntervalSeconds: queued.run.config.agents?.defaults?.typingIntervalSeconds,
+                  keepalive: runnerDefaults.opts?.typingKeepalive ?? true,
+                  log: defaultRuntime.log,
+                }),
+              }),
             {
               inheritRequestScope: false,
             },
@@ -111,7 +145,10 @@ export function createFollowupRunner(
         ),
       ),
     );
-  const executeFollowup = async (queued: FollowupRun): Promise<void> => {
+  const executeFollowup = async (
+    queued: FollowupRun,
+    defaults: FollowupRunnerParams,
+  ): Promise<void> => {
     let disposition: FollowupDrainDisposition = { kind: "retry", error: undefined };
     let operation: ReplyOperation | undefined;
     let admittedTurn: AdmittedFollowupTurn | undefined;
@@ -121,6 +158,11 @@ export function createFollowupRunner(
     const admissionNotices: ReplyPayload[] = [];
     let completion: QueuedFollowupReplyBatch["completion"] = { kind: "completed" };
     let executionEntered = false;
+    // A revoked input settles visibly through its source, also before turn admission.
+    let withheld = false;
+    let withheldError: unknown;
+    // An admission refusal before the turn starts carries the person's sentence from the cause table.
+    let refusal: OperatorRefusalError | undefined;
     const hasSurvivingSources = () => {
       const claim = queued.controllerClaim ?? queued.controllerInput?.claim;
       return Boolean(
@@ -161,6 +203,7 @@ export function createFollowupRunner(
       .map((correlation) => correlation.begin())
       .filter((end) => typeof end === "function");
     try {
+      queued.operatorAuthority?.signal?.throwIfAborted();
       if (isFollowupRunAborted(queued)) {
         disposition = hasSurvivingSources()
           ? { kind: "retry", error: queued.abortSignal?.reason }
@@ -186,9 +229,6 @@ export function createFollowupRunner(
       const admission = await prepareReplyAgentTurn({
         queued,
         defaults,
-        recoveryAdmissionRunId: resolveReplyAdmissionRunId({
-          MessageSid: resolveFollowupCurrentMessageId(queued),
-        }),
         onOperationOwned: (owned) => {
           operation = owned;
         },
@@ -226,23 +266,27 @@ export function createFollowupRunner(
             turn.session.current(),
           );
       }
-      const initialGoalId = turn.session.current()?.goal?.id;
+      const initialSessionEntry = turn.session.current();
+      const initialGoal = initialSessionEntry?.goal;
+      // Queued user input can explicitly start the next goal after completion.
+      const initialGoalId = initialGoal?.status === "complete" ? undefined : initialGoal?.id;
       const runWithGoalReturn = createGoalContinuationReturn(
         turn.session.kind === "session" &&
           turn.session.storePath &&
-          initialGoalId &&
-          (turn.session.current()?.agentHarnessId === undefined ||
-            turn.session.current()?.agentHarnessId === "openclaw")
+          initialSessionEntry &&
+          (initialSessionEntry.agentHarnessId === undefined ||
+            initialSessionEntry.agentHarnessId === "openclaw")
           ? {
               base: turn.queued,
-              initialGoalId,
-              expectedSession: turn.session.current()!,
+              initialGoalId:
+                initialSessionEntry.goal?.status === "active" ? initialGoalId : undefined,
+              expectedSession: initialSessionEntry,
               sessionKey: turn.session.key,
               storePath: turn.session.storePath,
               queueKey: turn.queued.run.sessionKey ?? turn.session.key,
               settings: resolveQueueSettings({
                 cfg: turn.config,
-                sessionEntry: turn.session.current(),
+                sessionEntry: initialSessionEntry,
                 channel: turn.queued.originatingChannel,
               }),
               operation: turn.operation,
@@ -316,10 +360,6 @@ export function createFollowupRunner(
             entry: turn.session.current(),
             writer: execution.execution.outcome.sessionWriter,
             operation: turn.operation,
-            prepareRestartClaimCleanup:
-              execution.execution.outcome.kind === "settled"
-                ? turn.restartRecovery?.prepareCompletionCleanup
-                : undefined,
             activitySummaryCompletion,
             publish: (entry) => turn.session.publish(entry),
           },
@@ -376,43 +416,49 @@ export function createFollowupRunner(
         turn.session.kind === "session" &&
         turn.session.storePath
       ) {
-        await enqueueGoalContinuation({
-          base: turn.queued,
-          result: completedAccounting.runResult,
-          initialGoalId: turn.queued.goalContinuation?.goalId ?? initialGoalId,
-          expectedSession: completedAccounting.expectedSession,
-          sessionKey: turn.session.key,
-          storePath: turn.session.storePath,
-          reader: getReplyOperationSessionReader(turn.operation),
-          queueKey: turn.queued.run.sessionKey ?? turn.session.key,
-          settings: resolveQueueSettings({
-            cfg: turn.config,
-            sessionEntry: turn.session.current(),
-            channel: turn.queued.originatingChannel,
+        const { key: sessionKey, storePath } = turn.session;
+        await withSessionControllerOwner(turn.operation, () =>
+          enqueueGoalContinuation({
+            base: turn.queued,
+            result: completedAccounting.runResult,
+            initialGoalId:
+              runWithGoalReturn(() => readCreatedGoalContinuationId(turn.runId, turn.operation)) ??
+              turn.queued.goalContinuation?.goalId ??
+              initialGoalId,
+            expectedSession: completedAccounting.expectedSession,
+            sessionKey,
+            storePath,
+            reader: getReplyOperationSessionReader(turn.operation),
+            queueKey: turn.queued.run.sessionKey ?? sessionKey,
+            settings: resolveQueueSettings({
+              cfg: turn.config,
+              sessionEntry: turn.session.current(),
+              channel: turn.queued.originatingChannel,
+            }),
+            sourceRunId: turn.runId,
+            operation: turn.operation,
+            runFollowup,
           }),
-          sourceRunId: turn.runId,
-          operation: turn.operation,
-          runFollowup,
-        });
+        );
       }
     } catch (error) {
-      let operatorAuthorityLost = false;
-      try {
-        queued.operatorAuthority?.assertCurrent();
-      } catch {
-        operatorAuthorityLost = true;
-      }
-      if (operatorAuthorityLost) {
-        // Revoked input is terminal; retrying it would hold the queue indefinitely.
-        disposition = { kind: "consumed" };
-        completion = { kind: "aborted" };
-        defaultRuntime.error?.("followup queue: canceled input after loss of operator authority");
-      } else if (
-        (queued.run.internalEventExecution &&
+      // A retired cron delivery is terminal like Stop: withhold, record, never replay. So is an
+      // admission refusal before the turn starts; the person sees its sentence, not a log line.
+      const causes = collectErrorGraphCandidates(error, readErrorCauses);
+      refusal = admittedTurn
+        ? undefined
+        : causes.find((cause) => cause instanceof OperatorRefusalError);
+      const authorityLost =
+        queued.operatorAuthority?.signal?.aborted === true ||
+        refusal !== undefined ||
+        causes.some((cause) => cause instanceof CronDeliveryAuthorityError);
+      if (
+        !authorityLost &&
+        ((queued.run.internalEventExecution &&
           (executionEntered ||
             (queued.controllerClaim ?? queued.controllerInput?.claim)?.retryBeforeExecution !==
               true)) ||
-        (operation?.result?.kind === "aborted" && operation.result.code === "aborted_by_user")
+          (operation?.result?.kind === "aborted" && operation.result.code === "aborted_by_user"))
       ) {
         disposition =
           !queued.run.internalEventExecution && hasSurvivingSources()
@@ -422,11 +468,27 @@ export function createFollowupRunner(
         completion = queued.run.internalEventExecution
           ? { kind: "failed", error: formatErrorMessage(error) }
           : resolveFollowupCompletion({ kind: "aborted", reason: "user" });
-      } else if (disposition.kind === "consumed") {
-        completion = { kind: "failed", error: formatErrorMessage(error) };
-        defaultRuntime.error?.(
-          `followup queue: terminal handling failed after execution; refusing replay: ${formatErrorMessage(error)}`,
-        );
+      } else if (authorityLost || disposition.kind === "consumed") {
+        // Revoked input is terminal and visible; retrying it would hold the queue indefinitely.
+        disposition = { kind: "consumed" };
+        withheld = authorityLost;
+        withheldError = error;
+        completion = {
+          kind: "failed",
+          error: formatErrorMessage(error),
+          ...(authorityLost
+            ? {
+                notice:
+                  refusal?.message ??
+                  `withheld: ${truncateSessionRunError(sanitizeSessionRunError(error), 512)}`,
+              }
+            : {}),
+        };
+        if (!withheld) {
+          defaultRuntime.error?.(
+            `followup queue: input withheld; refusing replay: ${formatRawErrorMessage(error)}`,
+          );
+        }
         operation?.fail("run_failed", error);
       } else {
         disposition = { kind: "retry", error };
@@ -444,19 +506,135 @@ export function createFollowupRunner(
       }
       activitySummaryCompletion?.release();
       const sourceDisposition = (admittedTurn?.queued ?? queued).queuedFollowupReplyDisposition;
-      if (
-        disposition.kind === "consumed" &&
-        admittedTurn &&
-        sourceDisposition?.kind === "deliver"
-      ) {
-        try {
-          await sourceDisposition.deliver({
-            kind: "queued-followup",
-            runId: admittedTurn.runId,
-            originatingChannel: admittedTurn.queued.originatingChannel,
-            payloads: terminalPayloads,
-            completion,
+      if (withheld && completion.kind === "failed") {
+        const revoked = collectErrorGraphCandidates(withheldError, readErrorCauses).find(
+          (cause): cause is CronDeliveryAuthorityError =>
+            cause instanceof CronDeliveryAuthorityError,
+        );
+        const fence = revoked?.fence ?? queued.run.scheduledAutomation?.deliveryAttemptFence;
+        const runId =
+          admittedTurn?.runId ??
+          queued.sourceTurnId ??
+          queued.messageId ??
+          `${queued.run.sessionId}:${queued.enqueuedAt}`;
+        const sessionKey = queued.run.sessionKey ?? defaults.sessionKey;
+        const identifiers = {
+          sessionKey,
+          jobId: revoked?.jobId ?? queued.run.scheduledAutomation?.job.id,
+          runId,
+        };
+        const recordings: Array<{ path: string; record: () => Promise<void> }> = [];
+        const nonOutcomes: string[] = [];
+        const { error, notice } = completion;
+        const recordWithheld = fence?.recordWithheld;
+        if (recordWithheld) {
+          recordings.push({
+            path: "history",
+            record: () => recordWithheld({ runId, sessionKey, error }),
           });
+        } else {
+          nonOutcomes.push(
+            fence ? "history: fence has no recordWithheld" : "history: no cron receipt handle",
+          );
+        }
+        if (sessionKey && queued.run.sessionId) {
+          recordings.push({
+            path: "session-notice",
+            record: () =>
+              recordGatewaySessionRunFailure({
+                target: {
+                  agentId: queued.run.agentId,
+                  sessionKey,
+                  sessionId: queued.run.sessionId,
+                  storePath:
+                    queued.controllerInput?.target?.storeScope ??
+                    defaults.storePath ??
+                    resolveSessionStorePathCore(queued.run.config.session?.store, {
+                      agentId: queued.run.agentId,
+                    }),
+                },
+                runId,
+                error,
+                notice,
+              }),
+          });
+        } else {
+          nonOutcomes.push("session-notice: no session target");
+        }
+        const outcomes = await Promise.all(
+          recordings.map(async ({ path, record }) => {
+            try {
+              await record();
+              return path;
+            } catch (recordingError) {
+              defaultRuntime.error?.(
+                `followup queue: withheld outcome recording failed: ${JSON.stringify({ ...identifiers, path, error: formatRawErrorMessage(recordingError) })}`,
+              );
+              return undefined;
+            }
+          }),
+        );
+        const recorded = outcomes.filter((path) => path !== undefined);
+        defaultRuntime.error?.(
+          `followup queue: input withheld; refusing replay: ${JSON.stringify({ ...identifiers, reason: formatRawErrorMessage(withheldError), recorded: recorded.length ? recorded : "none", nonOutcomes })}`,
+        );
+      }
+      if (disposition.kind === "consumed") {
+        const origin = queued.originatingChannel;
+        try {
+          if ((admittedTurn || withheld) && sourceDisposition?.kind === "deliver") {
+            await sourceDisposition.deliver({
+              kind: "queued-followup",
+              runId: admittedTurn?.runId ?? queued.sourceTurnId ?? queued.messageId ?? "",
+              originatingChannel: (admittedTurn?.queued ?? queued).originatingChannel,
+              payloads: terminalPayloads,
+              completion,
+            });
+          } else if (
+            refusal &&
+            !sourceDisposition &&
+            queued.run.sessionEventOrigin?.deliver !== false &&
+            isRoutableChannel(origin) &&
+            queued.originatingTo &&
+            queued.currentInboundEventKind !== "room_event"
+          ) {
+            // A channel input refused before its turn hears why where it was sent, like a reply,
+            // under the send policy current now (admission read the same live config).
+            const cfg =
+              queued.readAdmissionConfig?.() ?? selectLiveRuntimeConfig(queued.run.config);
+            const sessionKey = queued.run.sessionKey;
+            const entry =
+              sessionKey && defaults.storePath
+                ? await readSessionEntryInWorker({ storePath: defaults.storePath, sessionKey })
+                : defaults.sessionStore?.[sessionKey ?? ""];
+            const sendPolicy = resolveSendPolicy({
+              cfg,
+              entry,
+              sessionKey: queued.run.runtimePolicySessionKey ?? sessionKey,
+              channel: origin,
+              chatType: normalizeChatType(queued.originatingChatType ?? queued.run.chatType),
+            });
+            const result =
+              sendPolicy === "allow"
+                ? await routeReply({
+                    payload: { text: refusal.message, isError: true },
+                    channel: origin,
+                    to: queued.originatingTo,
+                    agentId: queued.run.agentId,
+                    sessionKey,
+                    accountId: queued.originatingAccountId,
+                    threadId: queued.originatingThreadId,
+                    cfg,
+                    mirror: false,
+                    replyKind: "final",
+                  })
+                : undefined;
+            if (result && !result.ok) {
+              defaultRuntime.error?.(
+                `followup queue: refusal notice delivery failed: ${result.error ?? "no visible delivery"}`,
+              );
+            }
+          }
         } catch (error) {
           completion = { kind: "failed", error: formatErrorMessage(error) };
           defaultRuntime.error?.(
@@ -498,13 +676,6 @@ export function createFollowupRunner(
           claim.retryBeforeExecution = false;
         }
         completeFollowupRunLifecycle(queued);
-      }
-      try {
-        await admittedTurn?.restartRecovery?.clear();
-      } catch (error) {
-        defaultRuntime.error?.(
-          `followup queue: recovery settlement failed: ${formatErrorMessage(error)}`,
-        );
       }
       if (admittedTurn?.runId) {
         clearAgentRunContext(admittedTurn.runId);

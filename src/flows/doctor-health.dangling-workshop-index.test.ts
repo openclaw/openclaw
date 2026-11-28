@@ -6,6 +6,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { agentV19Schema } from "../state/openclaw-historical-imports.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { createDanglingSkillWorkshopReviewIndex } from "../state/openclaw-state-db-corruption.test-support.js";
@@ -62,10 +63,7 @@ it("preserves known damaged state before backing up and migrating an older agent
     fs.mkdirSync(path.dirname(agentPath), { recursive: true });
     executeSql(
       agentPath,
-      `${fs.readFileSync(
-        new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v19.sql", import.meta.url),
-        "utf8",
-      )}
+      `${agentV19Schema()}
       PRAGMA user_version = 19;
       INSERT INTO schema_meta
         (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
@@ -112,7 +110,11 @@ it("preserves known damaged state before backing up and migrating an older agent
     for (const sourcePath of [database.path, agentPath]) {
       const backups = fs
         .readdirSync(path.dirname(sourcePath))
-        .filter((name) => name.startsWith(`${path.basename(sourcePath)}.pre-startup-migration-`));
+        .filter(
+          (name) =>
+            name.startsWith(`${path.basename(sourcePath)}.pre-startup-migration-`) &&
+            name.endsWith(".bak"),
+        );
       expect(backups).toHaveLength(1);
       expectDatabase(path.join(path.dirname(sourcePath), backups[0]!), {
         "PRAGMA foreign_key_check": [],
@@ -136,8 +138,8 @@ it("refuses a newer custom agent schema before changing the malformed source", a
       customPath,
       `
           PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};
-          CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, agent_id TEXT);
-          INSERT INTO schema_meta VALUES ('primary', 'main');
+          CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, agent_id TEXT, role TEXT, schema_version INTEGER);
+          INSERT INTO schema_meta VALUES ('primary', 'main', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION + 1});
         `,
     );
     await writeConfig(state, { store: customPath });

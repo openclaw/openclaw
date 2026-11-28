@@ -18,7 +18,6 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunNotice } from "../../infra/update-run-notice.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
@@ -576,14 +575,14 @@ describe("failed update recovery restart", () => {
       expect(mocks.printResult.mock.lastCall?.[2]).toEqual({
         nextAction: recorded.origin.nextAction,
       });
-      const report = renderUpdateRunReport(recorded).markdown;
-      expect(report).toContain("readyz-unhealthy");
-      expect(report).toContain("triage");
-      expect(report).toContain("update repair");
-      expect(report).not.toContain("remains stopped");
-      expect(renderUpdateRunNotice(recorded, "finished")).toBe(
-        "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+      expect(recorded.steps).toContainEqual(
+        expect.objectContaining({
+          step: "gateway verification",
+          status: "failed",
+          detail: "readyz-unhealthy",
+        }),
       );
+      expect(renderUpdateRunNotice(recorded, "finished")).not.toContain("is still serving.");
     },
   );
 });
@@ -780,7 +779,6 @@ describe("failed package update recovery safety", () => {
       // Cleanup is pre-terminal; rollback is recorded only after completion settles.
       expect(cleanupStatus).toBe("running");
       expect(recorded.status).toBe("rolled-back");
-      expect(renderUpdateRunReport(recorded).headline).toContain("↩️ OpenClaw update rolled back");
       expect(await fs.readFile(configPath, "utf8")).toBe(original);
       if (process.platform !== "win32") {
         expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);

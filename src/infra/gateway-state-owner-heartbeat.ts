@@ -2,13 +2,17 @@ import fs from "node:fs";
 import { MessageChannel } from "node:worker_threads";
 import { coerceErrorMessage, toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { requestCliParentTermination } from "../../cli-parent-lifetime.mjs";
+import { RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS } from "../../gateway-shutdown-budget.mjs";
+import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import { hasErrnoCode } from "./errno.js";
 import { GATEWAY_OWNER_HEARTBEAT_MS } from "./gateway-lock-payload.js";
 import {
   type GatewayStateOwnerHeartbeatData,
   type GatewayStateOwnerVerification,
-  renewGatewayStateOwnerLock,
+  type GatewayStateOwnerHeartbeatLoss,
+  heartbeatStartup,
   isGatewayStateOwnerLockSnapshotCurrent,
 } from "./gateway-state-owner-heartbeat.runtime.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
@@ -20,6 +24,11 @@ import { recordWorkerMessage } from "./worker-message-metrics.js";
 const now = Date.now.bind(Date);
 
 type StateOwnerLock = { lockPath: string; verifyStillHeld(): boolean };
+type HeartbeatEvent =
+  | string
+  | null
+  | GatewayStateOwnerVerification
+  | GatewayStateOwnerHeartbeatLoss;
 
 function captureLock(lock: StateOwnerLock) {
   const raw = fs.readFileSync(lock.lockPath, "utf8");
@@ -32,7 +41,7 @@ function captureLock(lock: StateOwnerLock) {
 /** Process and schema owners share one renewal worker and one failure deadline. */
 export function startGatewayStateOwnerHeartbeat(
   heldLocks: ReadonlySet<StateOwnerLock>,
-  onLost: (error: Error) => void,
+  onLost: (error: Error, lockPath?: string) => void,
 ) {
   const locks: Record<string, string> = {};
   for (const lock of heldLocks) {
@@ -50,6 +59,7 @@ export function startGatewayStateOwnerHeartbeat(
     const lastBeat = new BigInt64Array(new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT));
     // Match the lock's mtime clock; Bun workers have independent hrtime origins.
     Atomics.store(lastBeat, 0, BigInt(now()));
+    const startup = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
     const { port1, port2 } = new MessageChannel();
     const worker = createCpuTrackedWorker(url, {
       workerData: {
@@ -59,9 +69,16 @@ export function startGatewayStateOwnerHeartbeat(
         failureMs: 60_000,
         lastBeat: lastBeat.buffer,
         events: port2,
+        startup,
       } satisfies GatewayStateOwnerHeartbeatData,
       transferList: [port2],
       execArgv: resolveRuntimeWorkerThreadExecArgv(url),
+    });
+    const closed = createDeferredCore();
+    worker.on("message", (message: unknown) => {
+      if (message === "closed") {
+        closed.resolve();
+      }
     });
     worker.unref();
     let nextVerification = 0;
@@ -76,11 +93,13 @@ export function startGatewayStateOwnerHeartbeat(
       pending.clear();
       port1.unref();
     };
-    // Parent expiration checks verify physical custody directly.
-    port1.on("message", (message: string | null | GatewayStateOwnerVerification) => {
+    // The worker publishes physical loss; parent assertions only inspect its deadline.
+    port1.on("message", (message: HeartbeatEvent) => {
       recordWorkerMessage("lifecycle", "from_worker");
       if (message === "parent-lost") {
         requestCliParentTermination();
+      } else if (message && typeof message === "object" && message.type === "lost") {
+        onLost(new Error(`${message.error}; restart the Gateway.`), message.lockPath);
       } else if (message && typeof message === "object" && message.type === "verified") {
         const request = pending.get(message.id);
         pending.delete(message.id);
@@ -100,9 +119,10 @@ export function startGatewayStateOwnerHeartbeat(
       rejectPending(error);
       onLost(error);
     });
-    worker.once("exit", () =>
-      rejectPending(new Error("Gateway state ownership verification worker stopped")),
-    );
+    worker.once("exit", () => {
+      closed.resolve();
+      rejectPending(new Error("Gateway state ownership verification worker stopped"));
+    });
     let termination: Promise<number> | undefined;
     const remainingUntilInspection = () => {
       const renewedAt = Atomics.load(lastBeat, 0);
@@ -112,49 +132,14 @@ export function startGatewayStateOwnerHeartbeat(
     const inspect = () => {
       const remaining = remainingUntilInspection();
       if (remaining <= 0) {
-        try {
-          const renewalStartedAt = now();
-          const stamp = new Date(renewalStartedAt);
-          for (const lock of heldLocks) {
-            if (!lock.verifyStillHeld()) {
-              if (lock.lockPath !== rootPath) {
-                continue;
-              }
-              throw new Error("owner lock was removed or replaced");
-            }
-            const fd = fs.openSync(lock.lockPath, "r+");
-            try {
-              const held = fs.fstatSync(fd, { bigint: true });
-              if (
-                lock.lockPath === rootPath &&
-                (held.dev !== rootIdentity.dev || held.ino !== rootIdentity.ino)
-              ) {
-                throw new Error("owner lock was removed or replaced");
-              }
-              const raw = fs.readFileSync(fd, "utf8");
-              if (
-                !lock.verifyStillHeld() ||
-                !renewGatewayStateOwnerLock(fd, lock.lockPath, raw, stamp)
-              ) {
-                throw new Error("owner lock was removed or replaced");
-              }
-            } finally {
-              fs.closeSync(fd);
-            }
-          }
-          Atomics.store(lastBeat, 0, BigInt(renewalStartedAt));
-          return 60_000;
-        } catch (error) {
-          onLost(
-            new Error(
-              `Gateway state ownership is no longer current at ${rootPath}: ${coerceErrorMessage(error)}; restart the Gateway.`,
-            ),
-          );
-        }
+        // The renewal owner may itself be stalled on host I/O. Do not repeat that I/O here.
+        throw new Error(
+          `Gateway state ownership renewal is overdue at ${rootPath}; retry after storage recovers.`,
+        );
       }
       return remaining;
     };
-    // Synchronous native custody keeps inspect(); timers renew through async filesystem I/O.
+    // Expired custody can recover through async filesystem I/O without blocking callers.
     const renewAsync = async () => {
       const renewalStartedAt = now();
       const stamp = new Date(renewalStartedAt);
@@ -242,8 +227,29 @@ export function startGatewayStateOwnerHeartbeat(
         clearTimeout(timer);
         rejectPending(new Error("Gateway state ownership is no longer current"));
         port1.close();
-        worker.postMessage("stop", []);
-        termination = worker.terminate();
+        worker.ref();
+        termination = (async () => {
+          // Startup and shutdown race for the same cell before the first lock I/O.
+          if (
+            Atomics.compareExchange(
+              startup,
+              0,
+              heartbeatStartup.pending,
+              heartbeatStartup.cancelled,
+            ) === heartbeatStartup.pending
+          ) {
+            return worker.terminate();
+          }
+          worker.postMessage("stop", []);
+          if (!(await settlesWithin(closed.promise, RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS))) {
+            // A stuck worker may leak its lock fds on runtimes without an exit sweep.
+            process.emitWarning(
+              `Gateway state-owner heartbeat did not close within ${RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS}ms; forcing termination. Lock file descriptors may remain open until process exit.`,
+              { code: "GATEWAY_STATE_HEARTBEAT_CLOSE_TIMEOUT" },
+            );
+          }
+          return worker.terminate();
+        })();
       }
       return Promise.all([termination, renewal]).then(() => undefined);
     };

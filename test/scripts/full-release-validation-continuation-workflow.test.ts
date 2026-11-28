@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -8,21 +9,82 @@ import { parse } from "yaml";
 import { releaseChildDispatchInputs } from "../../scripts/lib/full-release-child-request.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8")) as {
+const source = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
+const workflow = parse(source) as {
   jobs: Record<
     string,
-    { if?: string; env?: Record<string, string>; steps: Array<Record<string, unknown>> }
+    {
+      if?: string;
+      env?: Record<string, string>;
+      with?: Record<string, unknown>;
+      needs?: string[];
+      steps: Array<Record<string, unknown>>;
+    }
   >;
   on: { workflow_dispatch: { inputs: Record<string, unknown> } };
 };
+const watcher = parse(
+  readFileSync(".github/workflows/full-release-state-watcher.yml", "utf8"),
+) as typeof workflow;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const allSteps = Object.values(workflow.jobs).flatMap(({ steps }) => steps);
+const allSteps = [...Object.values(workflow.jobs), workflowJob("watch")].flatMap(
+  ({ steps }) => steps ?? [],
+);
+
+function workflowJob(name: string) {
+  const job = name === "watch" ? watcher.jobs.watch : workflow.jobs[name];
+  assert(job, `missing workflow job: ${name}`);
+  return job;
+}
 
 function step(job: string, name: string) {
-  const match = workflow.jobs[job]?.steps.find((entry) => entry.name === name);
+  const match = workflowJob(job).steps?.find((entry) => entry.name === name);
   assert(match, `missing workflow step: ${job}/${name}`);
   return match;
 }
+
+it("runs both release callers independently of Boat with the pinned Blacksmith watcher", () => {
+  const revision = "b5e0ed2fdd00553915067a258603606515236c58";
+  expect(workflow.jobs).not.toHaveProperty("boat_release_runners");
+  expect(workflow.jobs).not.toHaveProperty("cleanup_boat_release_runners");
+  for (const name of ["release_decision", "diagnostic_drain"]) {
+    const caller = workflowJob(name);
+    expect(caller.needs).toEqual([
+      "resolve_target",
+      "prepare_npm_package",
+      "npm_preflight_first",
+      "qualify_npm_package",
+      "prepare_plugin_npm",
+      "prepare_docker_release",
+      "release_execution_plan",
+    ]);
+    expect(caller.if).toBe("always()");
+    expect(caller.with?.runner_label).toBe("blacksmith-2vcpu-ubuntu-2404");
+    expect((workflowJob(name) as { uses?: string }).uses).toBe(
+      "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@" + revision,
+    );
+  }
+  // Retain the exact pinned definition independently of current watcher edits.
+  // This fixture is the git blob at revision above, so shallow CI needs no history.
+  const selectedSource = readFileSync(
+    "test/scripts/fixtures/full-release-state-watcher-b5e0ed.yml",
+    "utf8",
+  );
+  expect(createHash("sha256").update(selectedSource).digest("hex")).toBe(
+    "532e32b7cdcc38587774a7f24853b113596fb51998f6cfb6f87819ce69c953ef",
+  );
+  const selected = parse(selectedSource);
+  expect(selected.jobs.watch["runs-on"]).toBe("blacksmith-2vcpu-ubuntu-2404");
+  expect(selected.jobs.watch["timeout-minutes"]).toBe(720);
+  expect(selected.jobs.watch.env.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
+    "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
+  );
+  expect(
+    selected.jobs.watch.steps.find(
+      (entry: { name: string }) => entry.name === "Checkout release state tooling",
+    ).if,
+  ).toBeUndefined();
+});
 
 it("runs release tooling only from the trusted revision without persisted credentials", () => {
   const tooling = allSteps.filter((entry) =>
@@ -31,13 +93,24 @@ it("runs release tooling only from the trusted revision without persisted creden
   expect(tooling.length).toBeGreaterThan(0);
   for (const entry of tooling) {
     const checkout = entry.with as Record<string, unknown>;
-    expect(checkout).toMatchObject({ ref: "${{ github.sha }}", "persist-credentials": false });
+    // The publisher tooling scan runs the admitted publisher P, FRV's other trusted revision.
+    const ref =
+      entry.name === "Checkout publisher tooling"
+        ? "${{ env.PUBLISHER_SHA }}"
+        : "${{ github.sha }}";
+    expect(checkout).toMatchObject({ ref, "persist-credentials": false });
     const sparseCheckout = checkout["sparse-checkout"];
     if (sparseCheckout !== undefined) {
       assert(typeof sparseCheckout === "string");
-      expect(sparseCheckout.split(/\s+/u)).toContain("scripts");
+      expect(sparseCheckout.split(/\s+/u).map((path) => path.replace(/^\/|\/$/gu, ""))).toContain(
+        "scripts",
+      );
     }
   }
+  expect(step("resolve_target", "Checkout trusted workflow helper").with).toMatchObject({
+    "sparse-checkout-cone-mode": false,
+    "sparse-checkout": expect.stringContaining("/extensions/*/package.json"),
+  });
   const targets = allSteps.filter((entry) => String(entry.name).startsWith("Checkout target"));
   expect(targets.length).toBeGreaterThan(0);
   for (const entry of targets) {
@@ -45,6 +118,25 @@ it("runs release tooling only from the trusted revision without persisted creden
     expect(checkout.path).not.toBe("workflow");
     expect(String(checkout["sparse-checkout"]).split(/\s+/u)).not.toContain("scripts");
   }
+});
+
+it("scans with publisher tooling while the plugin npm preflight child runs", () => {
+  const job = workflow.jobs.prepare_plugin_npm;
+  const names = job?.steps.map((entry) => entry.name) ?? [];
+  const from = names.indexOf("Dispatch exact plugin npm artifact preflight") + 1;
+  const scan = job?.steps.slice(
+    from,
+    names.indexOf("Resolve and seal exact plugin npm artifact descriptor"),
+  );
+  expect(scan?.map((entry) => entry.if)).toEqual(
+    Array(5).fill(
+      "env.PUBLISHER_SHA != '' && env.PUBLISHER_SHA != github.sha && env.PUBLICATION_ROUTE == 'normal'",
+    ),
+  );
+  expect(job?.env?.PUBLISHER_SHA).toContain(".qualificationAdmission.workflowSha");
+  expect(scan?.at(-1)?.run).toMatch(
+    /tsx \.release-tooling\/scripts\/plugin-npm-release-plan\.ts[\s\S]*tsx \.release-tooling\/scripts\/check-plugin-npm-security-scan\.mts \\\n\s+--tooling-root \.release-tooling/u,
+  );
 });
 
 describe("full release same-parent recovery workflow", () => {
@@ -89,7 +181,7 @@ describe("full release same-parent recovery workflow", () => {
   it.each(["failure", "success", "missing"])(
     "reports %s locale diagnostics without changing validation evidence",
     (conclusion) => {
-      const summaryStep = step("diagnostic_drain", "Summarize locale validation");
+      const summaryStep = step("watch", "Summarize locale validation");
       const root = tempDirs.make("openclaw-release-locales-");
       const diagnosticPath = join(root, "diagnostics.json");
       const summaryPath = join(root, "summary.md");
@@ -130,8 +222,12 @@ describe("full release same-parent recovery workflow", () => {
     let workloadDispatches = 0;
     let artifactDispatches = 0;
     for (const job of Object.values(workflow.jobs)) {
-      const artifact = job.env?.CHILD_WORKFLOW_KIND?.startsWith("artifact-");
-      const dispatches = job.steps.filter((entry) => String(entry.name).startsWith("Dispatch"));
+      const artifact = (
+        job.env?.CHILD_WORKFLOW_KIND ?? job.env?.PREFLIGHT_FIRST_CHILD_WORKFLOW_KIND
+      )?.startsWith("artifact-");
+      const dispatches = (job.steps ?? []).filter((entry) =>
+        String(entry.name).startsWith("Dispatch"),
+      );
       for (const dispatch of dispatches) {
         const env = dispatch.env as Record<string, unknown> | undefined;
         if (!artifact && env?.CHILD_WORKFLOW_KIND) {
@@ -163,16 +259,218 @@ describe("full release same-parent recovery workflow", () => {
         }
       }
     }
+    const original = step("npm_preflight_first", "Verify initial npm preflight on retry");
+    expect(original.if).toBe("github.run_attempt != 1 && github.job == 'npm_preflight_first'");
+    expect(original.run).toBe("node scripts/full-release-artifacts.mjs verify-initial-npm");
     expect(workloadDispatches).toBeGreaterThan(0);
     expect(artifactDispatches).toBeGreaterThan(0);
+    expect(String(workflow.jobs.qualify_npm_package?.if)).not.toContain("github.run_attempt");
+    expect(workflow.jobs.release_execution_plan?.needs).toEqual(
+      expect.arrayContaining([
+        "prepare_npm_package",
+        "npm_preflight_first",
+        "qualify_npm_package",
+        "prepare_plugin_npm",
+        "prepare_docker_release",
+      ]),
+    );
+    for (const jobName of ["release_decision", "diagnostic_drain"]) {
+      expect(workflow.jobs[jobName]?.needs).toEqual(
+        expect.arrayContaining([
+          "prepare_npm_package",
+          "npm_preflight_first",
+          "qualify_npm_package",
+          "prepare_plugin_npm",
+          "prepare_docker_release",
+        ]),
+      );
+    }
+    expect(workflow.jobs.summary?.env).toMatchObject({
+      NPM_PREPARATION_RESULT:
+        "${{ needs.resolve_target.outputs.preflight_first == 'true' && needs.npm_preflight_first.result || needs.prepare_npm_package.result }}",
+      NPM_QUALIFICATION_RESULT: "${{ needs.qualify_npm_package.result }}",
+      PLUGIN_NPM_PREPARATION_RESULT: "${{ needs.prepare_plugin_npm.result }}",
+      DOCKER_PREPARATION_RESULT: "${{ needs.prepare_docker_release.result }}",
+    });
+    expect(source).not.toContain("continuationSource");
+    expect(source).not.toContain("continuation_plan_json");
+  });
+
+  it.each([
+    ["failure", false, "/workspace"],
+    ["success", true, "/workspace/qualification-verifier"],
+  ] as const)(
+    "uses materialized verifier paths after %s target resolution",
+    (result, verifierCheckedOut, verifierRoot) => {
+      const verifierSha = "a".repeat(40);
+      const targetSha = "b".repeat(40);
+      const evaluate = (expression: unknown): unknown => {
+        assert(typeof expression === "string");
+        return runInNewContext(expression.replace(/^\$\{\{|\}\}$/gu, ""), {
+          needs: {
+            resolve_target: {
+              result,
+              outputs: {
+                source_admission_json: JSON.stringify({
+                  qualificationAdmission: { workflowSha: verifierSha },
+                }),
+                sha: targetSha,
+              },
+            },
+          },
+          github: { workspace: "/workspace" },
+          inputs: { qualification_workflow_sha: verifierCheckedOut ? verifierSha : "" },
+          fromJSON: JSON.parse,
+          format: (pattern: string, value: string) => pattern.replace("{0}", value),
+        });
+      };
+      for (const caller of ["release_decision", "diagnostic_drain"]) {
+        expect(evaluate(workflowJob(caller).with?.qualification_workflow_sha)).toBe(
+          verifierCheckedOut ? verifierSha : "",
+        );
+      }
+      expect(evaluate(step("watch", "Checkout release state tooling").if ?? "true")).toBe(true);
+      expect(workflowJob("watch").env?.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
+        "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
+      );
+      for (const jobName of ["watch", "summary", "release_execution_plan", "evidence_reuse"]) {
+        const job = jobName === "watch" ? watcher.jobs.watch : workflow.jobs[jobName];
+        assert(job);
+        const checkout = step(jobName, "Checkout admitted qualification verifier");
+        expect(evaluate(checkout.if), jobName).toBe(verifierCheckedOut);
+        expect(evaluate((checkout.with as Record<string, unknown>).ref), jobName).toBe(
+          jobName === "watch" && !verifierCheckedOut ? "" : verifierSha,
+        );
+        if (job.env?.RELEASE_STATE_SCRIPT) {
+          expect(evaluate(job.env.RELEASE_STATE_SCRIPT), jobName).toBe(
+            `${verifierRoot}/scripts/full-release-validation-state.mjs`,
+          );
+        }
+        if (jobName === "release_execution_plan") {
+          const seal = step(jobName, "Seal immutable release execution plan");
+          const env = seal.env as Record<string, unknown>;
+          expect(evaluate(env.RELEASE_STATE_SCRIPT)).toBe(
+            `${verifierRoot}/scripts/full-release-validation-state.mjs`,
+          );
+          expect(seal.run).toContain('node "$RELEASE_STATE_SCRIPT" plan');
+        }
+        for (const entry of job.steps) {
+          const env = entry.env as Record<string, unknown> | undefined;
+          if (env?.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR) {
+            expect(
+              env.OPENCLAW_RELEASE_WAIVERS_PATH ?? job.env?.OPENCLAW_RELEASE_WAIVERS_PATH,
+              jobName,
+            ).toBe(
+              jobName === "evidence_reuse"
+                ? "${{ github.workspace }}/workflow/scripts/lib/release-validation-waivers.json"
+                : "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
+            );
+            const root =
+              jobName === "evidence_reuse" && !verifierCheckedOut
+                ? "/workspace/workflow"
+                : verifierRoot;
+            expect(evaluate(env.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR), jobName).toBe(
+              `${root}/scripts/release-ci-summary.mjs`,
+            );
+          }
+        }
+      }
+      for (const [jobName, stepName] of [
+        ["evidence_reuse", "Find reusable validation evidence"],
+        ["summary", "Write release validation manifest"],
+      ] as const) {
+        const env = step(jobName, stepName).env as Record<string, unknown>;
+        expect(evaluate(env.TARGET_SHA)).toBe(targetSha);
+      }
+    },
+  );
+
+  it("restores the immutable attempt-one plan instead of rebuilding child identity", () => {
+    const cache = step("release_execution_plan", "Cache immutable release execution plan");
+    const restore = step(
+      "release_execution_plan",
+      "Restore immutable release execution plan artifact",
+    );
+    const inputsRestore = step(
+      "release_execution_plan",
+      "Restore immutable release execution plan inputs",
+    );
+    const inputsUpload = step(
+      "release_execution_plan",
+      "Upload immutable release execution plan inputs",
+    );
+    const upload = step("release_execution_plan", "Upload immutable release execution plan");
+    expect(cache).toMatchObject({
+      id: "plan_cache",
+      "continue-on-error": true,
+      with: {
+        key: "full-release-execution-plan-v2-${{ github.run_id }}",
+        path: "full-release-execution-plan",
+      },
+    });
+    expect(cache.with).not.toHaveProperty("fail-on-cache-miss");
+    expect(restore).toMatchObject({
+      id: "plan_restore",
+      "continue-on-error": true,
+      if: "${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' }}",
+      with: {
+        "github-token": "${{ github.token }}",
+        name: "full-release-execution-plan-${{ github.run_id }}",
+        path: "${{ github.workspace }}/full-release-execution-plan",
+        "run-id": "${{ github.run_id }}",
+      },
+    });
+    expect(inputsRestore).toMatchObject({
+      id: "plan_inputs_restore",
+      if: "${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' && steps.plan_restore.outcome != 'success' }}",
+      with: {
+        name: "full-release-execution-plan-inputs-${{ github.run_id }}-1",
+        path: "${{ github.workspace }}/full-release-execution-plan-inputs",
+        "run-id": "${{ github.run_id }}",
+      },
+    });
+    expect(inputsUpload).toMatchObject({
+      id: "plan_inputs_upload",
+      if: "${{ github.run_attempt == 1 && steps.plan_inputs.outcome == 'success' }}",
+      with: {
+        name: "full-release-execution-plan-inputs-${{ github.run_id }}-1",
+        overwrite: false,
+      },
+    });
+    expect(upload).toMatchObject({
+      if: "${{ always() && steps.plan.outputs.sha256 != '' && steps.plan.outputs.source_parent_attempt == '1' && (steps.plan_inputs_upload.outcome == 'success' || steps.plan_inputs_restore.outcome == 'success') }}",
+      with: {
+        name: "full-release-execution-plan-${{ github.run_id }}",
+        overwrite: false,
+      },
+    });
+    const earlyRestore = step("resolve_target", "Restore immutable plan for publication admission");
+    expect(earlyRestore.with).toEqual(cache.with);
+    expect(earlyRestore.uses).toContain("actions/cache/restore@");
+    expect(earlyRestore.if).toBe("github.run_attempt != 1");
+    const restoredUpload = step(
+      "resolve_target",
+      "Upload restored immutable release execution plan",
+    );
+    expect(restoredUpload.if).toBe(
+      "${{ github.run_attempt != 1 && steps.publication_plan_cache.outputs.cache-hit == 'true' }}",
+    );
+    expect(restoredUpload.with).toEqual(upload.with);
+    expect(step("resolve_target", "Upload immutable publication admission").if).toBeUndefined();
+    const resolver = workflow.jobs.resolve_target;
+    if (!resolver) {
+      throw new Error("missing resolve_target job");
+    }
+    const steps = resolver.steps;
+    expect(
+      steps.indexOf(step("resolve_target", "Restore immutable plan for publication admission")),
+    ).toBeLessThan(steps.indexOf(step("resolve_target", "Admit publication source")));
   });
 
   it("keeps immutable plan artifacts parent-bound and non-overwriting", () => {
-    const artifactSteps = Object.values(workflow.jobs)
-      .flatMap(({ steps }) => steps)
-      .filter((entry) =>
-        /^(?:Upload|Download|Restore).*immutable release execution plan/u.test(String(entry.name)),
-      );
+    const artifactSteps = allSteps.filter((entry) =>
+      /^(?:Upload|Download|Restore).*immutable release execution plan/u.test(String(entry.name)),
+    );
     expect(artifactSteps.length).toBeGreaterThan(0);
     for (const entry of artifactSteps) {
       const options = entry.with as Record<string, unknown>;
@@ -183,10 +481,6 @@ describe("full release same-parent recovery workflow", () => {
         expect(options["run-id"]).toBe("${{ github.run_id }}");
       }
     }
-    const steps = workflow.jobs.resolve_target!.steps;
-    expect(
-      steps.indexOf(step("resolve_target", "Restore immutable plan for publication admission")),
-    ).toBeLessThan(steps.indexOf(step("resolve_target", "Admit publication source")));
   });
 
   it("waits for installation quota before candidate dispatch", () => {
@@ -203,13 +497,11 @@ describe("full release same-parent recovery workflow", () => {
   });
 
   it("only fail-fast decision collection can cancel children", () => {
-    expect(step("release_decision", "Evaluate release decision").env).toMatchObject({
-      FAIL_FAST: "${{ inputs.fail_fast }}",
-      FULL_RELEASE_STATE_MODE: "decision",
+    expect(step("watch", "Evaluate release state").env).toMatchObject({
+      FAIL_FAST: "${{ inputs.mode == 'decision' && inputs.fail_fast || false }}",
+      FULL_RELEASE_STATE_MODE: "${{ inputs.mode }}",
     });
-    expect(step("diagnostic_drain", "Drain child diagnostics").env).toMatchObject({
-      FAIL_FAST: "false",
-      FULL_RELEASE_STATE_MODE: "drain",
-    });
+    expect(workflowJob("release_decision").with?.mode).toBe("decision");
+    expect(workflowJob("diagnostic_drain").with?.mode).toBe("drain");
   });
 });

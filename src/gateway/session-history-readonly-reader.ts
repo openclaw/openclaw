@@ -19,6 +19,7 @@ import {
 import { readSessionTranscriptBindingFromProjection } from "../config/sessions/session-accessor.sqlite-transcript-binding.js";
 import type { SessionTranscriptRawDeltaLimits } from "../config/sessions/session-accessor.types.js";
 import { readWithCanonicalSessionAdmission } from "../config/sessions/session-canonical-key.js";
+import { createSessionColdPayloadReader } from "../config/sessions/session-cold-storage-payload-read.js";
 import type { SessionConversationBinding } from "../config/sessions/session-history-types.js";
 import { listSessionReactionsInDatabase } from "../config/sessions/session-reaction-store.read.js";
 import { readSessionTranscriptAccountingFromProjection } from "../config/sessions/session-transcript-accounting.js";
@@ -30,7 +31,7 @@ import {
 import { hasSessionTranscriptEntryReceipt } from "../config/sessions/session-transcript-projection-facts-scope.js";
 import {
   readRecentTranscriptConversationText,
-  type ReadRecentSessionConversationTextOptions,
+  type ReadRecentSessionConversationTurnOptions,
 } from "../config/sessions/transcript-recent-text.js";
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
 import { withScopedOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-scope.js";
@@ -135,10 +136,18 @@ export function createReadonlySessionHistoryReader(
           databaseAgentId: target.database.agentId,
           path: target.database.path,
         },
-        (projection) => {
+        (projection, cold) => {
+          if (cold) {
+            projection.readColdPayload = createSessionColdPayloadReader(
+              database,
+              target.transcript.sessionId,
+            );
+          }
           projection.resolveVisibleHistory = resolveWorkerVisibleHistoryProjection;
           return read(projection);
         },
+        undefined,
+        { allowCold: true },
       ),
     );
     if (result.kind === "unavailable") {
@@ -172,6 +181,7 @@ export function createReadonlySessionHistoryReader(
       readSnapshot((projection) => ({
         database: projection.database.db,
         generation: projection.generation,
+        updatedAt: projection.version.updatedAt,
         indexedSeq: projection.state.indexedSeq,
         leafEventId: projection.state.leafEventId,
       })),
@@ -183,7 +193,7 @@ export function createReadonlySessionHistoryReader(
       readSnapshot((projection) =>
         readSessionTranscriptBoundedMessageTailPageFromProjection(projection, options),
       ),
-    readRecentConversationText: (options: ReadRecentSessionConversationTextOptions) =>
+    readRecentConversationText: (options: ReadRecentSessionConversationTurnOptions) =>
       readSnapshot((projection) =>
         readRecentTranscriptConversationText(
           (page) => readSessionTranscriptBoundedMessageTailPageFromProjection(projection, page),
@@ -192,7 +202,12 @@ export function createReadonlySessionHistoryReader(
       ),
     readArtifactSummaries: async (query: Extract<SessionArtifactReadQuery, { kind: "list" }>) => {
       const { readArtifactSummariesFromProjection } = await import("./session-artifact-read.js");
-      return readSnapshot((projection) => readArtifactSummariesFromProjection(projection, query));
+      const projectAttachment = query.includeAttachments
+        ? (await import("./session-file-attachment-message.js")).sessionFileAttachmentMessage
+        : undefined;
+      return readSnapshot((projection) =>
+        readArtifactSummariesFromProjection(projection, query, projectAttachment),
+      );
     },
     readReactions: () =>
       readDatabase((database) => {

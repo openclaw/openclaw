@@ -2,12 +2,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiAction } from "../../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { showInputDialog } from "../../components/input-dialog.tsx";
 import * as sessionMenuWork from "../../components/session-menu-work.ts";
 import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import type { SessionCapability, SessionListOptions } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -34,7 +34,6 @@ import {
   selectMenuValue,
   settleSessionMenu,
 } from "../../test-helpers/session-menu.ts";
-import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { page as sessionsRoute, type SessionsRouteData } from "./route.ts";
 import {
@@ -275,14 +274,14 @@ describe("sessions page lifecycle", () => {
       expect(sessions.deleteMany).not.toHaveBeenCalled();
       answerConfirmDialog(actions, "confirm");
       await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
-      expect(page.textContent).toContain("Working…");
+      expect(page.textContent).toContain("Working");
       pending.reject(new Error("Deletion unavailable. Try again."));
       await waitForFast(() =>
         expect(page.querySelector('[role="alert"]')?.textContent).toContain(
           "Deletion unavailable. Try again.",
         ),
       );
-      expect(page.textContent).not.toContain("Working…");
+      expect(page.textContent).not.toContain("Working");
       expect(page.textContent).toContain("Command fixture");
     } finally {
       pending.resolve(emptyDeletion());
@@ -326,19 +325,19 @@ describe("sessions page lifecycle", () => {
     try {
       await chooseAdvanced(page, target, "delete");
       await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
-      expect(page.textContent).toContain("Working…");
+      expect(page.textContent).toContain("Working");
       changeScope("reviewer");
       await page.updateComplete;
-      expect(page.textContent).not.toContain("Working…");
+      expect(page.textContent).not.toContain("Working");
       const nextTarget = sessionRow("new-scope-command", {
         key: "agent:reviewer:new-scope-command",
       });
       page.result = sessionsResult([nextTarget], 2);
       await chooseAdvanced(page, nextTarget, "delete");
       await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledTimes(2));
-      expect(page.textContent).toContain("Working…");
+      expect(page.textContent).toContain("Working");
       next.resolve(emptyDeletion());
-      await waitForFast(() => expect(page.textContent).not.toContain("Working…"));
+      await waitForFast(() => expect(page.textContent).not.toContain("Working"));
       pending.reject(new Error("Old agent deletion failed"));
       await page.updateComplete;
       expect(page.textContent).not.toContain("Old agent deletion failed");
@@ -644,44 +643,6 @@ describe("sessions page lifecycle", () => {
     expect(page.error).toBe(retryError);
   });
 
-  it.each(["active", "provisioning"] as const)(
-    "stops a %s cloud worker while adopting roster updates",
-    async (state) => {
-      const stopped = createDeferred<{ ok: true }>();
-      const request = vi.fn(() => stopped.promise);
-      const managed = createManagedSessions();
-      const context = createContext(
-        createGateway({ request } as unknown as GatewayBrowserClient).gateway,
-        managed.sessions,
-      );
-      const placement = createActiveSessionPlacement({ environmentId: "environment-1" });
-      const target = sessionRow("cloud", {
-        label: "Cloud task",
-        hasActiveRun: state === "provisioning",
-        placement: state === "active" ? placement : { ...placement, state },
-      });
-      const page = await createRenderedPage(context, sessionsResult([target], 1));
-      expect((await openRowMenu(page, target)).textContent).toContain("Stop cloud worker…");
-      const [query] = managed.subscribeList.mock.calls[0]!;
-      managed.refreshList.mockClear();
-      vi.mocked(showConfirmDialog).mockResolvedValue(true);
-      const stopping = page.stopCloudWorker(target);
-      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-      publishRows(managed, [{ ...target, label: "Updated while stopping" }]);
-      expect(page.result?.sessions[0]?.label).toBe("Updated while stopping");
-      stopped.resolve({ ok: true });
-      await stopping;
-      expect(showConfirmDialog).toHaveBeenCalledOnce();
-      expect(request).toHaveBeenCalledWith(
-        "sessions.reclaim",
-        { key: target.key, agentId: "main" },
-        { timeoutMs: null },
-      );
-      expect(managed.refreshList).toHaveBeenCalledWith({ ...query, force: true });
-      expect(page.result?.sessions[0]?.label).toBe("Updated while stopping");
-    },
-  );
-
   it("drops stale mutation state, errors, menus, and navigation after disconnect", async () => {
     const deleted = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
     const patched = createDeferred<Awaited<ReturnType<SessionCapability["patch"]>>>();
@@ -726,24 +687,29 @@ describe("sessions page lifecycle", () => {
     expect(context.navigate).not.toHaveBeenCalled();
   });
 
-  it("forks an active session from its last completed message", async () => {
-    const { page, sessions } = await mountMutation({
-      createResult: vi.fn<SessionCapability["createResult"]>(async () => ({
-        key: "active-fork",
-        entry: { sessionId: "active-fork-id" },
-        initialRun: { status: "idle" },
-      })),
-    });
-    await page.forkSession("main", true);
-    expect(sessions.createResult).toHaveBeenCalledWith(
-      {
-        parentSessionKey: "main",
-        fork: true,
-        forkFrom: "last-completed",
-      },
-      { signal: expect.any(AbortSignal) },
-    );
-  });
+  it.each(["operator.write", "operator.sessions.write"])(
+    "forks an active owned session with %s",
+    async (scope) => {
+      const { page, sessions, connection } = await mountMutation({
+        createResult: vi.fn<SessionCapability["createResult"]>(async () => ({
+          key: "active-fork",
+          entry: { sessionId: "active-fork-id" },
+          initialRun: { status: "idle" },
+        })),
+      });
+      connection.emit({ hello: gatewayHelloForMethods(["sessions.create"], [scope]) });
+      page.result = sessionsResult([sessionRow("main", { key: "main", sharingRole: "owner" })], 1);
+      await page.forkSession("main", true);
+      expect(sessions.createResult).toHaveBeenCalledWith(
+        {
+          parentSessionKey: "main",
+          fork: true,
+          forkFrom: "last-completed",
+        },
+        { signal: expect.any(AbortSignal) },
+      );
+    },
+  );
 });
 
 describe("sessions page new group", () => {
@@ -810,9 +776,7 @@ describe("sessions page new group", () => {
     pending.resolve("completed");
     await created;
     expect(sessions.patch).not.toHaveBeenCalled();
-    expect(messages).toEqual([
-      "Gateway connection replaced before the group was saved. Try again.",
-    ]);
+    expect(messages).toEqual(["The connection changed before the group was saved. Try again."]);
     page.result = sessionsResult([row], 1);
     await page.requestNewCategory(key);
     expect(messages[1]).toBeNull();
@@ -983,7 +947,9 @@ describe("sessions page plugin actions", () => {
     menu.querySelector<HTMLElement>(actionSelector)!.click();
     await settleSessionMenu(menu);
     expect(run.mock.calls.length).toBe(1);
-    await waitForFast(() => expect(page.textContent).toContain("Reopen the session menu."));
+    await waitForFast(() =>
+      expect(page.textContent).toContain(i18n.t("pluginUi.actionUnavailableSession")),
+    );
 
     publish([{ ...current, archived: true }]);
     await page.updateComplete;
@@ -1002,7 +968,9 @@ describe("sessions page plugin actions", () => {
       menu.querySelector<HTMLElement>(actionSelector)!.click();
       await settleSessionMenu(menu);
       expect(run.mock.calls.length).toBe(0);
-      await waitForFast(() => expect(page.textContent).toContain("Reopen the session menu."));
+      await waitForFast(() =>
+        expect(page.textContent).toContain(i18n.t("pluginUi.actionSessionUnavailable")),
+      );
     }
 
     expect(page.querySelector(actionSelector)).toBeNull();

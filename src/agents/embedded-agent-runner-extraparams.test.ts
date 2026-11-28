@@ -45,8 +45,6 @@ function firstTransportHookCall(mock: { mock: { calls: unknown[][] } }): Record<
   return call as Record<string, unknown>;
 }
 
-import { isAnthropicFamilyCacheTtlEligible } from "../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
-import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
 import { createOpenAIResponsesContextManagementWrapper } from "../llm/providers/stream-wrappers/openai.js";
 import { createGoogleThinkingPayloadWrapper } from "../plugin-sdk/provider-stream-shared.js";
 import {
@@ -85,41 +83,15 @@ function installFullProviderRuntimeDepsForTest() {
           params.context,
         );
       }
-      if (params.provider === "amazon-bedrock") {
-        return isAnthropicFamilyCacheTtlEligible({
-          provider: params.provider,
-          modelId: params.context.modelId,
-        })
-          ? params.context.streamFn
-          : createTestBedrockNoCacheWrapper(params.context.streamFn);
-      }
       if (params.provider === "google") {
         return createGoogleThinkingPayloadWrapper(
           params.context.streamFn,
           params.context.thinkingLevel,
         );
       }
-      if (params.provider === "kimi") {
-        return params.context.streamFn;
-      }
-      if (params.provider === "minimax" || params.provider === "minimax-portal") {
-        return createMinimaxFastModeWrapper(
-          params.context.streamFn,
-          params.context.extraParams?.fastMode === true,
-        );
-      }
       return params.context.streamFn;
     },
   });
-}
-
-function createTestBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? (() => ({}) as ReturnType<StreamFn>);
-  return (model, context, options) =>
-    underlying(model, context, {
-      ...options,
-      cacheRetention: "none",
-    });
 }
 
 function withMinimalProviderRuntimeDepsForTest<T>(run: () => T): T {
@@ -305,20 +277,6 @@ describe("applyExtraParamsToAgent", () => {
       runResponsesPayloadMutationCase({ ...params, payload: params.payload ?? {} }),
     );
   }
-
-  it("restores explicit MiniMax-M3 maxTokens when rewriting budget thinking", () => {
-    const payload = runResponsesPayloadMutationCase({
-      thinkingLevel: "adaptive",
-      model: {
-        api: "anthropic-messages",
-        provider: "minimax",
-        id: "MiniMax-M3",
-      } as Model<"anthropic-messages">,
-      payload: { max_tokens: 8692, thinking: { type: "enabled", budget_tokens: 8192 } },
-      options: { maxTokens: 500 },
-    });
-    expect(payload).toStrictEqual({ max_tokens: 500, thinking: { type: "adaptive" } });
-  });
 
   it.each([
     ["DeepSeek V4", "deepseek-v4-pro"],
@@ -537,35 +495,6 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.google).toEqual({ thinking_config: { thinking_budget: 0 } });
     expect(payload.chat_template_kwargs).toEqual({ enable_thinking: false });
     expect(payload).not.toHaveProperty("store");
-  });
-
-  it("applies extra_body tuning-key overrides without warning", () => {
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-    try {
-      const payload = runResponsesPayloadMutationCase({
-        extraParamsOverride: {
-          extra_body: {
-            thinking: { type: "disabled" },
-          },
-        },
-        model: {
-          api: "openai-completions",
-          provider: "deepseek",
-          id: "deepseek-chat",
-          baseUrl: "https://api.deepseek.com/v1",
-        } as Model<"openai-completions">,
-        payload: {
-          messages: [],
-          model: "deepseek-chat",
-          thinking: { type: "enabled" },
-        },
-      });
-
-      expect(payload.thinking).toEqual({ type: "disabled" });
-      expect(warnSpy).not.toHaveBeenCalled();
-    } finally {
-      warnSpy.mockRestore();
-    }
   });
 
   it.each<[string, unknown]>([["messages", [{ role: "user", content: "configured message" }]]])(
@@ -1018,7 +947,7 @@ describe("applyExtraParamsToAgent", () => {
       provider: "openai",
       modelId: "gpt-5",
       extraParamsOverride: {
-        __proto__: { polluted: true },
+        ["__proto__"]: { polluted: true },
         constructor: "blocked",
         prototype: "blocked",
         temperature: 0.2,

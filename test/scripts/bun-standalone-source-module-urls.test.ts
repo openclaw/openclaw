@@ -1,7 +1,7 @@
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build, type InlineConfig, type UserConfig } from "tsdown";
@@ -24,8 +24,10 @@ import {
 } from "../../scripts/lib/standalone-source-module-urls.mjs";
 import { copyStaticExtensionAssets } from "../../scripts/lib/static-extension-assets.mts";
 import { openRootFileSync } from "../../src/infra/boundary-file-read.js";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
+import { writeJsonFile } from "../helpers/temp-repo.js";
 
-const roots: string[] = [];
+const tempDirs = createTempDirTracker();
 const formats: Array<"esm" | "cjs"> = ["esm", "cjs"];
 const helperContents = `import fs from "node:fs";
 export function readBuildInfo(): string {
@@ -35,14 +37,11 @@ export function readBuildInfo(): string {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  tempDirs.cleanup();
 });
 
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-module-urls-"));
-  roots.push(root);
+  const root = tempDirs.make("openclaw-module-urls-");
   const sourceRoot = path.join(root, "source");
   const write = (relative: string, contents: string) => {
     const filename = path.join(sourceRoot, relative);
@@ -306,29 +305,88 @@ rewriteRootRuntimeImportsToStableAliases({ rootDir });`,
     });
   });
 
-  it("rejects changed output until its postbuild owner verifies and updates the hash", async () => {
-    const { sourceRoot, helper } = fixture();
+  it("keeps emitted module identity authoritative through postbuild updates and corrupt metadata", async () => {
+    const { root, sourceRoot, helper } = fixture();
     const config = await buildOwner(sourceRoot, "esm");
     const index = () => createStandaloneSourceEntries({ sourceRoot, configs: [config] });
     const output = index().resolveModuleUrl(helper, config);
-    const filename = path.join(sourceRoot, output);
-    const original = fs.readFileSync(filename, "utf8");
-    const rewritten = `${original}\n// postbuild import rewrite\n`;
-    fs.writeFileSync(filename, rewritten);
+    const outputRoot = path.join(sourceRoot, "dist");
+    const directory = path.join(outputRoot, ".source-module-urls");
+    const [metadataName] = fs.readdirSync(directory);
+    assert(metadataName, "Missing module URL metadata");
+    const metadataPath = path.join(directory, metadataName);
+    const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
+    const helperOutput = path.join(sourceRoot, output);
+    const helperBytes = fs.readFileSync(helperOutput, "utf8");
+    fs.writeFileSync(helperOutput, `${helperBytes}\n// postbuild import rewrite\n`);
+    expect(() => index().resolveModuleUrl(helper, config)).toThrow("chunk hash mismatch");
+    fs.writeFileSync(helperOutput, helperBytes);
+
+    const rewrites = metadata.chunks.map((chunk: { output: string }) => {
+      const filename = path.join(outputRoot, chunk.output);
+      const original = fs.readFileSync(filename, "utf8");
+      const rewritten = `${original}\n// batched postbuild rewrite\n`;
+      fs.writeFileSync(filename, rewritten);
+      return { filename, original, rewritten };
+    });
+    expect(rewrites.length).toBeGreaterThan(1);
     expect(() => index().resolveModuleUrl(helper, config)).toThrow("chunk hash mismatch");
     expect(() =>
       updateStandaloneSourceModuleUrlChunks({
-        outputRoot: path.join(sourceRoot, "dist"),
-        rewrites: [{ filename, original: "wrong old bytes", rewritten }],
+        outputRoot,
+        rewrites: [{ ...rewrites[0]!, original: "wrong old bytes" }],
       }),
     ).toThrow("original hash mismatch");
-    expect(
-      updateStandaloneSourceModuleUrlChunks({
-        outputRoot: path.join(sourceRoot, "dist"),
-        rewrites: [{ filename, original, rewritten }],
-      }),
-    ).toBe(1);
+    const reads = vi.spyOn(fs, "readFileSync");
+    const writes = vi.spyOn(fs, "writeFileSync");
+    expect(updateStandaloneSourceModuleUrlChunks({ outputRoot, rewrites })).toBe(1);
+    expect(reads.mock.calls.filter(([filename]) => filename === metadataPath)).toHaveLength(1);
+    expect(writes.mock.calls.filter(([filename]) => filename === metadataPath)).toHaveLength(1);
+    reads.mockRestore();
+    writes.mockRestore();
     expect(index().resolveModuleUrl(helper, config)).toBe(output);
+
+    const current = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
+    for (const corrupt of [
+      { ...current, version: 2 },
+      {
+        ...current,
+        chunks: current.chunks.map((chunk: Record<string, unknown>, chunkIndex: number) => {
+          if (chunkIndex !== 0) {
+            return chunk;
+          }
+          const { facadeSource: _omitted, ...rest } = chunk;
+          return rest;
+        }),
+      },
+    ]) {
+      fs.writeFileSync(metadataPath, JSON.stringify(corrupt));
+      expect(() => index().resolveModuleUrl(helper, config)).toThrow("Run pnpm build");
+    }
+
+    const body = current.chunks.find(
+      (chunk: { output: string }) => chunk.output === path.relative("dist", output),
+    );
+    const duplicate = "duplicate-body.mjs";
+    fs.copyFileSync(path.join(sourceRoot, output), path.join(outputRoot, duplicate));
+    fs.writeFileSync(
+      metadataPath,
+      JSON.stringify({ ...current, chunks: [...current.chunks, { ...body, output: duplicate }] }),
+    );
+    const entries = index();
+    expect(() => entries.resolveModuleUrl(helper, config)).toThrow("found 2");
+    const runtimeRoot = path.join(root, "runtime");
+    fs.mkdirSync(path.join(runtimeRoot, "node_modules"), { recursive: true });
+    const graph = createStandaloneSourceGraph({
+      sourceRoot,
+      runtimeRoot,
+      outputRoot: root,
+      sourceEntries: entries,
+      embeddedPaths: {},
+    });
+    expect(() => graph.addEmittedChunk({ id: helper, config })).toThrow("found 2");
+    fs.rmSync(directory, { recursive: true });
+    expect(() => index().resolveModuleUrl(helper, config)).toThrow("Run pnpm build");
   });
 
   it("refreshes metadata when declared static JavaScript replaces a bundled entry", async () => {
@@ -372,42 +430,6 @@ rewriteRootRuntimeImportsToStableAliases({ rootDir });`,
     expect(fs.readFileSync(path.join(sourceRoot, assetOutput), "utf8")).toBe(assetContents);
     expect(index().resolveModuleUrl(helper, config)).toBe(output);
     runRelocatedHelper(root, sourceRoot, output);
-  });
-
-  it("updates multiple chunks with one read and write per metadata ledger", async () => {
-    const { sourceRoot, helper } = fixture();
-    const config = await buildOwner(sourceRoot, "esm");
-    const metadataDirectory = path.join(sourceRoot, "dist/.source-module-urls");
-    const [metadataName] = fs.readdirSync(metadataDirectory);
-    if (!metadataName) {
-      throw new Error("Missing module URL metadata");
-    }
-    const metadataPath = path.join(metadataDirectory, metadataName);
-    const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
-    const rewrites = metadata.chunks.map((chunk: { output: string }) => {
-      const filename = path.join(sourceRoot, "dist", chunk.output);
-      const original = fs.readFileSync(filename, "utf8");
-      const rewritten = `${original}\n// batched postbuild rewrite\n`;
-      fs.writeFileSync(filename, rewritten);
-      return { filename, original, rewritten };
-    });
-    expect(rewrites.length).toBeGreaterThan(1);
-    const reads = vi.spyOn(fs, "readFileSync");
-    const writes = vi.spyOn(fs, "writeFileSync");
-    expect(
-      updateStandaloneSourceModuleUrlChunks({
-        outputRoot: path.join(sourceRoot, "dist"),
-        rewrites,
-      }),
-    ).toBe(1);
-    expect(reads.mock.calls.filter(([filename]) => filename === metadataPath)).toHaveLength(1);
-    expect(writes.mock.calls.filter(([filename]) => filename === metadataPath)).toHaveLength(1);
-    expect(
-      createStandaloneSourceEntries({ sourceRoot, configs: [config] }).resolveModuleUrl(
-        helper,
-        config,
-      ),
-    ).toMatch(/^dist\//);
   });
 
   it("binds a pnpm dependency entry to its emitted physical module", async () => {
@@ -467,36 +489,6 @@ rewriteRootRuntimeImportsToStableAliases({ rootDir });`,
     runRelocatedHelper(root, sourceRoot, output);
   });
 
-  it("requires fresh producer metadata instead of inferring an emitted location", async () => {
-    const { sourceRoot, helper } = fixture();
-    const config = await buildOwner(sourceRoot, "esm");
-    const directory = path.join(sourceRoot, "dist/.source-module-urls");
-    const [metadataName] = fs.readdirSync(directory);
-    if (!metadataName) {
-      throw new Error("Missing module URL metadata");
-    }
-    const filename = path.join(directory, metadataName);
-    const metadata = JSON.parse(fs.readFileSync(filename, "utf8"));
-    fs.writeFileSync(filename, JSON.stringify({ ...metadata, version: 2 }));
-    expect(() =>
-      createStandaloneSourceEntries({ sourceRoot, configs: [config] }).resolveModuleUrl(
-        helper,
-        config,
-      ),
-    ).toThrow("Run pnpm build");
-    delete metadata.chunks[0].facadeSource;
-    fs.writeFileSync(filename, JSON.stringify(metadata));
-    expect(() =>
-      createStandaloneSourceEntries({ sourceRoot, configs: [config] }).resolveModuleUrl(
-        helper,
-        config,
-      ),
-    ).toThrow("Run pnpm build");
-    fs.rmSync(directory, { recursive: true });
-    const entries = createStandaloneSourceEntries({ sourceRoot, configs: [config] });
-    expect(() => entries.resolveModuleUrl(helper, config)).toThrow("Run pnpm build");
-  });
-
   it("keeps the same source's emitted URL separate for each real build configuration", async () => {
     const { sourceRoot, helper } = fixture();
     const main = await buildOwner(sourceRoot, "esm", "dist/main");
@@ -509,53 +501,15 @@ rewriteRootRuntimeImportsToStableAliases({ rootDir });`,
     expect(mainOutput).not.toBe(workerOutput);
   });
 
-  it("rejects two recorded bodies inside one configuration", async () => {
-    const { root, sourceRoot, helper } = fixture();
-    const config = await buildOwner(sourceRoot, "esm");
-    const output = createStandaloneSourceEntries({
-      sourceRoot,
-      configs: [config],
-    }).resolveModuleUrl(helper, config);
-    const metadataDirectory = path.join(sourceRoot, "dist/.source-module-urls");
-    const [metadataName] = fs.readdirSync(metadataDirectory);
-    if (!metadataName) {
-      throw new Error("Missing module URL metadata");
-    }
-    const metadataPath = path.join(metadataDirectory, metadataName);
-    const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
-    const body = metadata.chunks.find(
-      (chunk: { output: string }) => chunk.output === path.relative("dist", output),
-    );
-    const duplicate = "duplicate-body.mjs";
-    fs.copyFileSync(path.join(sourceRoot, output), path.join(sourceRoot, "dist", duplicate));
-    metadata.chunks.push({ ...body, output: duplicate });
-    fs.writeFileSync(metadataPath, JSON.stringify(metadata));
-    const entries = createStandaloneSourceEntries({ sourceRoot, configs: [config] });
-    expect(() => entries.resolveModuleUrl(helper, config)).toThrow("found 2");
-    const runtimeRoot = path.join(root, "runtime");
-    fs.mkdirSync(path.join(runtimeRoot, "node_modules"), { recursive: true });
-    const graph = createStandaloneSourceGraph({
-      sourceRoot,
-      runtimeRoot,
-      outputRoot: root,
-      sourceEntries: entries,
-      embeddedPaths: {},
-    });
-    expect(() => graph.addEmittedChunk({ id: helper, config })).toThrow("found 2");
-  });
-
   it("keeps inventory-emitted companions out of the declared entry contract", async () => {
     const { root, sourceRoot, write } = fixture();
     const packageDir = path.join(sourceRoot, "extensions/plugin");
-    write(
-      "extensions/plugin/package.json",
-      JSON.stringify({
-        name: "@openclaw/plugin",
-        version: "1.0.0",
-        type: "module",
-        openclaw: { extensions: ["./index.ts"], setupEntry: "./setup-entry.ts" },
-      }),
-    );
+    writeJsonFile(path.join(packageDir, "package.json"), {
+      name: "@openclaw/plugin",
+      version: "1.0.0",
+      type: "module",
+      openclaw: { extensions: ["./index.ts"], setupEntry: "./setup-entry.ts" },
+    });
     write(
       "extensions/plugin/index.ts",
       'export { readBuildInfo } from "./channel-plugin-api.ts";\n',
@@ -568,11 +522,10 @@ export default defineBundledChannelSetupEntry({ plugin: { specifier: "./channel-
     );
     const helper = write("extensions/plugin/channel-plugin-api.ts", helperContents);
     const plan = resolvePluginNpmRuntimeBuildPlan({ repoRoot: sourceRoot, packageDir });
-    if (!plan) {
-      throw new Error("Missing inventory fixture plan");
-    }
+    assert(plan, "Missing inventory fixture plan");
     const named = new Set<string>();
-    const base = createPluginNpmRuntimeBuildOptions(plan, { logLevel: "silent" });
+    const [base] = createPluginNpmRuntimeBuildOptions(plan, { logLevel: "silent" });
+    assert(base, "Missing inventory fixture build config");
     const config = {
       ...base,
       cwd: sourceRoot,
@@ -599,9 +552,7 @@ export default defineBundledChannelSetupEntry({ plugin: { specifier: "./channel-
     const outputs = urls.get(helper);
     expect(outputs).toHaveLength(1);
     const output = outputs?.[0];
-    if (!output) {
-      throw new Error("Missing inventory companion output");
-    }
+    assert(output, "Missing inventory companion output");
     runRelocatedHelper(root, sourceRoot, output);
   });
 
@@ -724,60 +675,67 @@ export default defineBundledChannelSetupEntry({ legacySessionSurface: { specifie
     },
   );
 
-  it("uses an isolated plugin's staged metadata after fresh build and cache restore", async () => {
+  it("uses isolated plugin and worker metadata after fresh build and cache restore", async () => {
     const { root, sourceRoot, write } = fixture();
-    const packageDir = path.join(sourceRoot, "extensions/plugin");
-    write(
-      "extensions/plugin/package.json",
-      JSON.stringify({
-        name: "@openclaw/plugin",
-        type: "module",
-        version: "1.0.0",
-        openclaw: {
-          extensions: ["./index.ts"],
-          setupEntry: "./setup-entry.ts",
-          build: { runtimeFormat: "cjs", bundledDist: false },
-          release: { publishToNpm: true },
+    const packageDir = path.join(sourceRoot, "extensions/codex");
+    writeJsonFile(path.join(packageDir, "package.json"), {
+      name: "@openclaw/codex",
+      type: "module",
+      version: "1.0.0",
+      openclaw: {
+        extensions: ["./index.ts"],
+        setupEntry: "./setup-entry.ts",
+        build: {
+          runtimeFormat: "cjs",
+          bundledDist: false,
+          workerEntries: ["./catalog-page.worker.ts"],
         },
-      }),
-    );
-    write("extensions/plugin/openclaw.plugin.json", JSON.stringify({ id: "plugin" }));
-    write("extensions/plugin/index.ts", 'export { readBuildInfo } from "./src/identity.ts";\n');
-    write(
-      "extensions/plugin/setup-entry.ts",
-      'export { readBuildInfo } from "./src/identity.ts";\n',
-    );
-    const helper = write("extensions/plugin/src/identity.ts", helperContents);
-    const plan = resolvePluginNpmRuntimeBuildPlan({ repoRoot: sourceRoot, packageDir });
-    if (!plan) {
-      throw new Error("Missing isolated plugin fixture plan");
+        release: { publishToNpm: true },
+      },
+    });
+    write("extensions/codex/openclaw.plugin.json", JSON.stringify({ id: "codex" }));
+    for (const name of ["index", "setup-entry", "catalog-page.worker"]) {
+      write(`extensions/codex/${name}.ts`, 'export { readBuildInfo } from "./src/identity.ts";\n');
     }
-    const base = createPluginNpmRuntimeBuildOptions(plan, { logLevel: "silent" });
-    const config = { ...base, cwd: sourceRoot } satisfies UserConfig;
+    const helper = write("extensions/codex/src/identity.ts", helperContents);
+    const plan = resolvePluginNpmRuntimeBuildPlan({ repoRoot: sourceRoot, packageDir });
+    assert(plan, "Missing isolated plugin fixture plan");
+    const configs = createPluginNpmRuntimeBuildOptions(plan, { logLevel: "silent" }).map((config) =>
+      Object.assign(config, { cwd: sourceRoot }),
+    );
+    const [config, workerConfig] = configs;
+    assert(config && workerConfig, "Missing isolated plugin build groups");
     const index = () =>
       createStandaloneSourceEntries({
         sourceRoot,
         configs: [],
         pluginEntries: [
           {
-            id: "plugin",
+            id: "codex",
             isolated: true,
             sourceEntries: plan.sourceEntries,
             runtimeExtension: ".cjs",
-            runtimeBuildConfig: config,
+            runtimeBuildConfigs: configs,
             runtimeBuildPlan: plan,
           },
         ],
       });
     await buildExternalPluginLocalDist({ repoRoot: sourceRoot, env: {}, logLevel: "silent" });
     expect(fs.existsSync(plan.outDir)).toBe(false);
-    const output = index().resolveModuleUrl(helper, config);
-    expect(output).toMatch(/^dist\/extensions\/plugin\/\.setup\/.*\.cjs$/);
-    expect(output).not.toContain("extensions/plugin/dist");
+    const entries = index();
+    const output = entries.resolveModuleUrl(helper, config);
+    const workerOutput = entries.resolveModuleUrl(helper, workerConfig);
+    expect(workerOutput).toBe("dist/extensions/codex/catalog-page.worker.cjs");
+    expect(entries.resolve(workerOutput)?.contextId).not.toBe(
+      entries.resolve("dist/extensions/codex/index.cjs")?.contextId,
+    );
+    expect(output).toMatch(/^dist\/extensions\/codex\/\.setup\/.*\.cjs$/);
+    expect(output).not.toContain("extensions/codex/dist");
     fs.rmSync(path.join(sourceRoot, "dist"), { recursive: true });
     await buildExternalPluginLocalDist({ repoRoot: sourceRoot, env: {}, logLevel: "silent" });
     expect(fs.existsSync(plan.outDir)).toBe(false);
     expect(index().resolveModuleUrl(helper, config)).toBe(output);
-    runRelocatedHelper(root, sourceRoot, output);
+    expect(index().resolveModuleUrl(helper, workerConfig)).toBe(workerOutput);
+    runRelocatedHelper(root, sourceRoot, workerOutput);
   });
 });

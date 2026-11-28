@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import {
   ensureOnboardingPluginInstalled,
@@ -241,9 +242,9 @@ export async function setupAppRecommendations(params: {
             ? "wizard.appRecommendations.optionThirdParty"
             : "wizard.appRecommendations.option",
           {
-            name: match.candidate.displayName,
-            reason: match.reason,
-            app: match.appLabel,
+            name: terminalText`${match.candidate.displayName}`,
+            reason: terminalText`${match.reason}`,
+            app: terminalText`${match.appLabel}`,
           },
         ),
       })),

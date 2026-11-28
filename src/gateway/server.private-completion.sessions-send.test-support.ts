@@ -99,6 +99,9 @@ export function registerSessionsSendPrivateCompletionTests(
             completionWork = Promise.resolve(result);
             return result;
           },
+          runWithRequester<T>(work: () => Promise<T>): Promise<T> {
+            return this.run(work);
+          },
         },
       });
       const close = vi.spyOn(completion, "close");
@@ -176,7 +179,7 @@ export function registerSessionsSendPrivateCompletionTests(
           expect(settled.pending).toMatchObject([
             {
               run_id: runId,
-              state: "interrupted",
+              state: "cancelled",
               message_json: expect.stringContaining(childReply),
             },
           ]);

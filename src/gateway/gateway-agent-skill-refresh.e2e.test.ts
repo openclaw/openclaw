@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi } from "vitest";
 import { createFixtureRequest } from "../../test/helpers/gateway-built-fixture.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
@@ -14,6 +15,7 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getTrackedWorkerPoolSnapshot } from "../infra/worker-cpu.js";
+import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import {
   closeSkillsWatchers,
   refreshSkillsDiscovery,
@@ -25,6 +27,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { resetGatewayTestState } from "./gateway.test-support.js";
+import { formatGatewayPendingCloseSteps } from "./restart-trace.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -45,7 +48,8 @@ it(
     let unregisterLifecycle: (() => void) | undefined;
     const requests: string[] = [];
     const providerServer = createTrackedProvider((raw, response) => {
-      requests.push(raw);
+      const { input } = JSON.parse(raw) as { input: unknown[] };
+      requests.push(input.map(extractFirstTextBlock).join("\n"));
       writeOpenAiResponsesText(response, {
         text: "ok",
         messageId: randomUUID(),
@@ -58,7 +62,25 @@ it(
       (gatewayClose ??= Promise.resolve().then(async () => {
         // A rejected acquisition may retain a server whose rollback did not finish.
         const started = gateway ?? (await gatewayStartup);
-        await started?.server.close({ reason: "skill refresh test cleanup" });
+        try {
+          await started?.server.close({ reason: "skill refresh test cleanup" });
+        } catch (error) {
+          console.error(
+            "Skill refresh Gateway cleanup failed",
+            JSON.stringify({
+              pending: formatGatewayPendingCloseSteps(),
+              discoveryWorkers: discoveryWorkers(),
+              errors: collectNestedErrorCandidates(error)
+                .slice(0, 8)
+                .map((nested) =>
+                  nested instanceof Error
+                    ? { name: nested.name, message: nested.message.slice(0, 500) }
+                    : { name: typeof nested },
+                ),
+            }),
+          );
+          throw error;
+        }
       }));
     return runQaGatewayTestFixture(
       context,
@@ -85,10 +107,7 @@ it(
         const canonicalSkillFile = path.join(workspace, "skills", "canonical-proof", "SKILL.md");
         const bundledPluginsDir = state.path("empty-bundled-plugins");
         state.envVars.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-        await Promise.all([
-          fs.mkdir(path.dirname(seedSkillFile), { recursive: true }),
-          fs.mkdir(bundledPluginsDir, { recursive: true }),
-        ]);
+        await fs.mkdir(bundledPluginsDir, { recursive: true });
         signal.throwIfAborted();
         await writeSkill(seedSkillFile, "seed-proof", "seed-skill-description");
         signal.throwIfAborted();
@@ -191,10 +210,10 @@ it(
           return current;
         };
         const first = await turn("first");
-        for (const prompt of [first?.prompt, requests.at(-1)]) {
-          expect(prompt).toContain("seed-skill-description");
-          expect(prompt).not.toContain("worktree-only-description");
-        }
+        expect(first?.prompt).toContain("seed-skill-description");
+        expect(first?.prompt).not.toContain("worktree-only-description");
+        expect(requests.at(-1)).toContain('\n- "seed-proof"\n');
+        expect(requests.at(-1)).not.toContain("seed-skill-description");
         expect(discoveryWorkers()).toEqual([expect.objectContaining({ workerCount: 1 })]);
         const firstEventCount = countSkillsChanged(gatewayEvents);
         const second = await refreshTurn(
@@ -203,7 +222,7 @@ it(
           "second",
           first?.version,
         );
-        expect(requests.at(-1)).toContain("updated-seed-description");
+        expect(requests.at(-1)).not.toContain("updated-seed-description");
         expect(countSkillsChanged(gatewayEvents)).toBeGreaterThan(firstEventCount);
         const secondLifecycleCount = lifecycleEvents.length;
         const secondEventCount = countSkillsChanged(gatewayEvents);
@@ -219,7 +238,7 @@ it(
           second?.version,
         );
 
-        await fs.mkdir(path.dirname(canonicalSkillFile), { recursive: true });
+        expect(requests.at(-1)).not.toContain("canonical-proof");
         signal.throwIfAborted();
         await refreshTurn(
           canonicalSkillFile,
@@ -227,7 +246,8 @@ it(
           "fifth",
           fourth?.version,
         );
-        expect(requests.at(-1)).toContain("canonical-root-description");
+        expect(requests.at(-1)).toContain('\n- "canonical-proof"\n');
+        expect(requests.at(-1)).not.toContain("canonical-root-description");
 
         await closeClient();
         signal.throwIfAborted();
@@ -235,7 +255,11 @@ it(
         await closeGateway();
         signal.throwIfAborted();
         expect(discoveryWorkers()).toEqual([]);
-        await writeSkill(canonicalSkillFile, "canonical-proof", "after-gateway-close");
+        await writeSkill(
+          path.join(workspace, "skills", "after-close-proof", "SKILL.md"),
+          "after-close-proof",
+          "after-gateway-close",
+        );
         signal.throwIfAborted();
         expect(lifecycleEvents).toHaveLength(lifecycleCountBeforeClose);
 
@@ -258,7 +282,8 @@ it(
           meta: { aborted: false },
         });
         expect(requests).toHaveLength(requestCountBeforeLocal + 1);
-        expect(requests.at(-1)).toContain("after-gateway-close");
+        expect(requests.at(-1)).toContain('\n- "after-close-proof"\n');
+        expect(requests.at(-1)).not.toContain("after-gateway-close");
         expect(lifecycleEvents).toHaveLength(lifecycleCountBeforeClose);
       },
       async () => {
@@ -306,6 +331,7 @@ async function initializeGitWorkspace(workspace: string, signal: AbortSignal): P
 }
 
 async function writeSkill(file: string, name: string, description: string): Promise<void> {
+  await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(
     file,
     `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`,

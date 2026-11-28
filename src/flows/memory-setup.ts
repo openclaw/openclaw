@@ -2,10 +2,8 @@ import type { SecretInputMode } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { withTimeout } from "../infra/fs-safe.js";
-import type {
-  EmbeddingProviderAdapter,
-  EmbeddingProvider,
-} from "../plugins/embedding-provider-types.js";
+import type { EmbeddingProvider } from "../plugins/embedding-provider-runtime-types.js";
+import type { EmbeddingProviderAdapter } from "../plugins/embedding-provider-types.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import {
   WizardCancelledError,
@@ -215,6 +213,7 @@ export async function runMemorySetupFlow(
     ...config,
     memory: { ...config.memory, search: candidateSearch },
   };
+  let skippedMedia: string[];
   try {
     const { resolveMemorySearchConfig } = await import("../agents/memory-search.js");
     if (!sameProvider && config.agents?.entries) {
@@ -277,10 +276,15 @@ export async function runMemorySetupFlow(
       candidateConfig = { ...candidateConfig, agents: { ...config.agents, entries } };
     }
     // Validate shared defaults without letting a per-agent override mask incompatibility.
-    resolveMemorySearchConfig({ ...candidateConfig, agents: undefined }, "main");
-    for (const agentId of Object.keys(config.agents?.entries ?? {})) {
-      resolveMemorySearchConfig(candidateConfig, agentId);
-    }
+    const resolvedSearches = [
+      resolveMemorySearchConfig({ ...candidateConfig, agents: undefined }, "main"),
+      ...Object.keys(config.agents?.entries ?? {}).map((agentId) =>
+        resolveMemorySearchConfig(candidateConfig, agentId),
+      ),
+    ];
+    skippedMedia = [
+      ...new Set(resolvedSearches.flatMap((search) => search?.multimodal.skippedModalities ?? [])),
+    ];
   } catch {
     await prompter.note(
       "The selected provider, model, or fallback is not compatible with the retained memory settings. Check the memory search configuration and try again.",
@@ -403,7 +407,11 @@ export async function runMemorySetupFlow(
     return config;
   }
   await prompter.note(
-    "Embedding readiness passed in this CLI session. The Gateway daemon must also be able to resolve any environment-based SecretRef. This changes shared memory defaults. On a provider change, agents with remote overrides retain their previous embedding destination and model. If the provider or model changes, rebuild the index explicitly with `openclaw memory index --force` before vector search resumes.",
+    `Embedding readiness passed in this CLI session. The Gateway daemon must also be able to resolve any environment-based SecretRef. This changes shared memory defaults. On a provider change, agents with remote overrides retain their previous embedding destination and model. If the provider or model changes, rebuild the index explicitly with \`openclaw memory index --force\` before vector search resumes.${
+      skippedMedia.length
+        ? ` For agents whose embedding model does not support ${skippedMedia.join(" or ")} files, memory will skip those files. See each agent’s memory status for details.`
+        : ""
+    }`,
     "Ready to save",
   );
   if (

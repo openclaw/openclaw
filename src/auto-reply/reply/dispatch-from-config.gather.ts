@@ -37,7 +37,7 @@ import { captureSessionTarget } from "../../sessions/session-controller.target.j
 import { resolveSessionDispatchKind } from "../../sessions/session-key-utils.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
-import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { normalizeTtsAutoMode } from "../../tts/tts-config.js";
 import { prepareTtsPreferences, type PreparedTtsPreferences } from "../../tts/tts-preferences.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -164,12 +164,15 @@ export async function gatherDispatchRequest(
   };
   const { cfg, dispatcher } = normalizedParams;
   bindReplyDispatcherConversationContext(dispatcher, ctx.agentText);
+  const targetSessionKey = resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey;
   const targetAgentId = resolveSessionAgentId({
-    sessionKey: resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
+    sessionKey: targetSessionKey,
     config: cfg,
     fallbackAgentId: ctx.AgentId,
   });
-  await waitForAgentDatabaseWriteAdmission(targetAgentId, {
+  await waitForAgentInputAdmission(targetAgentId, {
+    cfg,
+    sessionKey: targetSessionKey,
     signal: params.replyOptions?.abortSignal,
   });
   const refusal = readAgentDatabaseAdmissionRefusal(targetAgentId);
@@ -199,9 +202,7 @@ export async function gatherDispatchRequest(
     normalizeOptionalString(ctx.SessionKey) ?? normalizeOptionalString(ctx.CommandTargetSessionKey);
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
-  const assertRequestCurrent = () => params.replyOptions?.operatorAuthority?.assertCurrent();
-  const initialSessionStoreEntry = await resolveSessionStoreLookup(ctx, cfg, assertRequestCurrent);
-  assertRequestCurrent();
+  const initialSessionStoreEntry = await resolveSessionStoreLookup(ctx, cfg);
   // resolveSessionStoreLookup is command-target-aware (it prefers
   // resolveCommandTurnTargetSessionKey), whereas the lifecycle's sessionKey is
   // source-first (ctx.SessionKey). On a native command turn that targets a
@@ -282,7 +283,21 @@ export async function gatherDispatchRequest(
         { beforeReplyResolver: agentDispatchStartedAt === 0 },
       );
     }
-    messageLifecycle.markProcessed(outcome, opts);
+    // Admitted session identity: the agent turn owner is the operation admitted
+    // for this turn — its sessionId is fresh when /new created a session mid-turn
+    // (the pre-admission capture above is then stale) and present on a brand-new
+    // session's first turn. Validate its key against the lifecycle's session key
+    // so a command retarget or ACP binding never pairs another session's id with
+    // this message; on divergence keep the prior captured value.
+    const admittedTurnOwner = replyOperationRunState.agentTurnOwner;
+    const admittedSessionId =
+      admittedTurnOwner && admittedTurnOwner.key === sessionKey
+        ? admittedTurnOwner.sessionId
+        : undefined;
+    messageLifecycle.markProcessed(outcome, {
+      ...opts,
+      ...(admittedSessionId !== undefined ? { sessionId: admittedSessionId } : {}),
+    });
   };
   const finishReplyOperationAborted = () => {
     recordProcessed("skipped", { reason: "reply_operation_aborted" });
@@ -363,10 +378,8 @@ export async function gatherDispatchRequest(
             CommandTargetSessionKey: undefined,
           },
           cfg,
-          assertRequestCurrent,
         )
       : initialSessionStoreEntry;
-  assertRequestCurrent();
   if (params.replyOptions?.abortSignal?.aborted) {
     return finishReplyOperationAborted();
   }
@@ -396,13 +409,8 @@ export async function gatherDispatchRequest(
     }
   };
   const sessionStoreEntry = boundAcpDispatchSessionKey
-    ? await resolveSessionStoreLookup(
-        { ...ctx, SessionKey: boundAcpDispatchSessionKey },
-        cfg,
-        assertRequestCurrent,
-      )
+    ? await resolveSessionStoreLookup({ ...ctx, SessionKey: boundAcpDispatchSessionKey }, cfg)
     : initialSessionStoreEntry;
-  assertRequestCurrent();
   if (params.replyOptions?.abortSignal?.aborted) {
     return finishReplyOperationAborted();
   }
@@ -487,7 +495,6 @@ export async function gatherDispatchRequest(
     );
     preparedTtsPreferences = await prepareTtsPreferences();
     params.replyOptions?.abortSignal?.throwIfAborted();
-    params.replyOptions?.operatorAuthority?.assertCurrent();
   } catch (error) {
     if (params.replyOptions?.abortSignal?.aborted && isAbortError(error)) {
       return finishReplyOperationAborted();
@@ -516,7 +523,6 @@ export async function gatherDispatchRequest(
     assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
     params.replyOptions?.abortSignal?.throwIfAborted();
     replyOperationCoordinator.getDispatchAbortSignal()?.throwIfAborted();
-    assertRequestCurrent();
   };
   const verboseProgress = createShouldEmitVerboseProgress({
     agentId: sessionAgentId,

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { i18n } from "../../../i18n/index.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
@@ -20,8 +21,8 @@ it("labels certified contention as a calm system notice", () => {
 });
 
 it.each([
-  [{ mode: "snapshot", phase: "saving" }, "Saving snapshot…"],
-  [{ mode: "cold", reason: "warm-images-off", phase: "provisioning" }, "Provisioning environment…"],
+  [{ mode: "snapshot", phase: "saving" }, "Saving snapshot"],
+  [{ mode: "cold", reason: "warm-images-off", phase: "provisioning" }, "Provisioning environment"],
 ] as const)("prioritizes run and placement phases over cloud mode (%j)", (startStatus, label) => {
   const provisioning = {
     sessionKey: "agent:main:cloud-status",
@@ -35,7 +36,7 @@ it.each([
     chatStartupStatusLabel(null, { ...provisioning, phase: "reconnecting", startStatus }),
     runStatus("provisioning_environment"),
     runStatus("starting_model"),
-  ]).toEqual([label, "Reconnecting…", label, "Waiting for a response"]);
+  ]).toEqual([label, "Reconnecting", label, "Waiting for a response"]);
 });
 
 it("retains the bubble and completed markdown while replacing stream snapshots and settling", () => {
@@ -92,4 +93,30 @@ it("prepares interleaved stream snapshots once for the rail and bubble", () => {
   expect(normalize).toHaveBeenCalledTimes(2);
   expect(positions(first).markers[0]?.message).toBe(railFirst.markers[0]?.message);
   expect(positions(second).markers[0]?.message).toBe(railSecond.markers[0]?.message);
+});
+
+it("routes the unnamed assistant stream label through the catalog", () => {
+  const translate = vi.spyOn(i18n, "t");
+  try {
+    const view = mountSolid(() => (
+      <StreamGroup
+        parts={[
+          {
+            kind: "stream",
+            key: "stream:localized",
+            startedAt: 1,
+            isStreaming: true,
+            text: "Answer",
+            thinking: "",
+          },
+        ]}
+        options={{}}
+      />
+    ));
+    flush();
+    expect(translate).toHaveBeenCalledWith("sessionsView.assistant", undefined);
+    expect(view.container.querySelector(".chat-bubble")).not.toBeNull();
+  } finally {
+    translate.mockRestore();
+  }
 });

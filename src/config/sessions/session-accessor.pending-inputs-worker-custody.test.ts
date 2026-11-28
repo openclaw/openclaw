@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
 import { makeContextParams } from "../../gateway/server-request-context.test-support.js";
@@ -11,17 +12,29 @@ import {
   rolePolicyConfig,
   sharingPolicyClient,
 } from "../../gateway/session-sharing.test-utils.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { withSessionTranscriptWriteLock as withTranscriptLock } from "../../plugin-sdk/session-transcript-runtime.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
-import type { StoreWriterTiming } from "../../shared/store-writer-queue.js";
+import { controllerSource } from "../../sessions/controller-core.test-support.js";
 import {
+  captureSessionControllerSettlement,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
+import { retireSessionControllerInput } from "../../sessions/session-controller.mailbox.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
+import type { StoreWriterTiming } from "../../shared/store-writer-queue.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
@@ -50,7 +63,7 @@ function message(runId: string, content: string): PersistedUserTurnMessage {
   return { role: "user", content, timestamp: 100, idempotencyKey: `${runId}:user` };
 }
 async function finish(receipt: SessionPendingInputReceipt | undefined) {
-  receipt?.finish("interrupted");
+  receipt?.finish("interrupted", "failed");
   await receipt?.settled?.();
 }
 function authorizedInput(
@@ -64,6 +77,8 @@ function authorizedInput(
     message: message(runId, content),
     assertCurrent,
     assertAdmittedCurrent: assertCurrent,
+    assertFreshInputCurrent: authorization.assertCurrent,
+    prepareMessageAfterIdempotencyCheck: (prepared: PersistedUserTurnMessage) => prepared,
     authority: authorization.admittedInputAuthority,
   };
 }
@@ -94,51 +109,147 @@ describe("accepted input worker custody", () => {
   it("appends, consumes, and finishes worker custody across a state-directory alias", async () => {
     setRuntimeConfigSnapshot({});
     const fixtureRoot = path.resolve(fixture.sessionsDir(), "../../..");
-    const aliasRoot = path.join(fixtureRoot, "state-alias");
-    fs.symlinkSync(fixtureRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
-    const scope = {
-      agentId: "alias-agent",
-      env: { OPENCLAW_STATE_DIR: aliasRoot },
-      sessionId: "alias-session",
-      sessionKey: "agent:alias-agent:pending-inputs",
-    };
-    await upsertEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const input = message("worker-alias", "Continue through worker custody");
-    receipt = await stageInput(scope, {
-      runId: "worker-alias",
-      message: input,
-      assertCurrent: () => {},
+    const gateway = acquireGatewayStateOwner({
+      databasePath: resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: fixtureRoot }),
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: path.join(fixtureRoot, "openclaw.json"),
+        role: "gateway",
+        processNamespace: readGatewayLockProcessNamespace(),
+      },
     });
-    assert(receipt, "Expected aliased pending input custody");
+    try {
+      const aliasRoot = path.join(fixtureRoot, "state-alias");
+      fs.symlinkSync(fixtureRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+      const scope = {
+        agentId: "alias-agent",
+        env: { OPENCLAW_STATE_DIR: aliasRoot },
+        sessionId: "alias-session",
+        sessionKey: "agent:alias-agent:pending-inputs",
+      };
+      await upsertEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const input = message("worker-alias", "Continue through worker custody");
+      receipt = await stageInput(scope, {
+        runId: "worker-alias",
+        message: input,
+        assertCurrent: () => {},
+      });
+      assert(receipt, "Expected aliased pending input custody");
 
-    const custody = receipt.run(() => captureCustody());
-    assert(custody, "Expected captured worker custody");
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
-    expect(custody.facts.databasePath).toBe(fs.realpathSync(database.path));
+      const custody = receipt.run(() => captureCustody());
+      assert(custody, "Expected captured worker custody");
+      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
+      expect(custody.facts.databasePath).toBe(fs.realpathSync(database.path));
 
-    const workerScope = { ...scope, storePath: custody.facts.databasePath };
-    const readAlias = await prepareForeignLiveSessionPendingInputEntries(scope);
-    const readCanonical = await prepareForeignLiveSessionPendingInputEntries(workerScope);
-    expect(readAlias()).toEqual(new Map([[receipt.inputId, input.idempotencyKey]]));
-    expect(readCanonical()).toEqual(readAlias());
-    expect(
-      await receipt.run(async () => (await prepareForeignLiveSessionPendingInputEntries(scope))()),
-    ).toEqual(new Map());
-    const result = runWithCustody(custody.facts, custody.relocation, custody.assertCurrent, () =>
-      appendSync(workerScope, { message: receipt!.message }),
-    );
-    expect(result.value).toMatchObject({ ok: true, value: { appended: true } });
-    custody.publish(result.receipt);
-    expect(readAlias()).toEqual(new Map([[receipt.inputId, input.idempotencyKey]]));
-    receipt.finish("cancelled");
-    expect(readAlias()).toEqual(new Map());
-    await receipt.settled?.();
-    receipt = undefined;
+      const workerScope = { ...scope, storePath: custody.facts.databasePath };
+      let readAlias: Awaited<ReturnType<typeof prepareForeignLiveSessionPendingInputEntries>>;
+      let readCanonical: typeof readAlias;
+      const filesystem = observeMainThreadFs();
+      try {
+        const aliasRequest = { ...scope };
+        const preparingAlias = prepareForeignLiveSessionPendingInputEntries(aliasRequest);
+        aliasRequest.sessionId = "different-session-after-capture";
+        readAlias = await preparingAlias;
+        readCanonical = await prepareForeignLiveSessionPendingInputEntries(workerScope);
+        expect(await readAlias()).toEqual(new Map([[receipt.inputId, input.idempotencyKey]]));
+        expect(await readCanonical()).toEqual(await readAlias());
+      } finally {
+        filesystem[Symbol.dispose]();
+      }
+      await receipt.run(async () => {
+        using ownFilesystem = observeMainThreadFs();
+        const readOwn = await prepareForeignLiveSessionPendingInputEntries(scope);
+        expect(await readOwn()).toEqual(new Map());
+        expect(ownFilesystem.stacks()).toEqual([]);
+      });
+      expect(filesystem.stacks()).toEqual([]);
+      const heldAlias = path.join(fixtureRoot, "held-state-alias");
+      const replacementRoot = path.join(fixtureRoot, "replacement-state");
+      await fs.promises.mkdir(replacementRoot);
+      await fs.promises.rename(aliasRoot, heldAlias);
+      try {
+        await fs.promises.symlink(
+          replacementRoot,
+          aliasRoot,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        expect(() => receipt!.run(() => {})).toThrow(
+          "Session database target changed outside captured discovery custody",
+        );
+        expect(await readCanonical()).toEqual(new Map());
+      } finally {
+        await fs.promises.rm(aliasRoot, { force: true });
+        await fs.promises.rename(heldAlias, aliasRoot);
+      }
+      expect(await readCanonical()).toEqual(new Map([[receipt.inputId, input.idempotencyKey]]));
 
-    expect(await readTranscript(scope)).toContainEqual(
-      expect.objectContaining({ message: expect.objectContaining({ content: input.content }) }),
-    );
-    expect(await listInputs(scope)).toMatchObject({ items: [], total: 0 });
+      const result = runWithCustody(custody.facts, custody.relocation, custody.assertCurrent, () =>
+        appendSync(workerScope, { message: receipt!.message }),
+      );
+      expect(result.value).toMatchObject({ ok: true, value: { appended: true } });
+      custody.publish(result.receipt);
+      expect(await readAlias()).toEqual(new Map([[receipt.inputId, input.idempotencyKey]]));
+
+      const physicalPath = custody.facts.databasePath;
+      const retainedPath = `${physicalPath}.retained`;
+      const readerRoot = path.join(fixtureRoot, "replacement-reader");
+      const originalIdentity = await fs.promises.stat(physicalPath, { bigint: true });
+      await fs.promises.rename(physicalPath, retainedPath);
+      try {
+        await fs.promises.copyFile(retainedPath, physicalPath);
+        expect((await fs.promises.stat(physicalPath, { bigint: true })).ino).not.toBe(
+          originalIdentity.ino,
+        );
+        await fs.promises.symlink(
+          fixtureRoot,
+          readerRoot,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        const readReplacement = await prepareForeignLiveSessionPendingInputEntries({
+          ...workerScope,
+          storePath: path.join(
+            readerRoot,
+            "agents",
+            scope.agentId,
+            "agent",
+            "openclaw-agent.sqlite",
+          ),
+        });
+        expect(() => receipt!.run(() => {})).toThrow(
+          "SQLite database file identity changed before existing-only open",
+        );
+        expect(await readReplacement()).toEqual(new Map());
+      } finally {
+        await fs.promises.rm(readerRoot, { force: true });
+        await fs.promises.rm(physicalPath, { force: true });
+        await fs.promises.rename(retainedPath, physicalPath);
+      }
+      expect((await fs.promises.stat(physicalPath, { bigint: true })).ino).toBe(
+        originalIdentity.ino,
+      );
+
+      receipt.finish("cancelled", "failed");
+      expect(await readAlias()).toEqual(new Map());
+      await receipt.settled?.();
+      receipt = undefined;
+
+      expect(await readTranscript(scope)).toContainEqual(
+        expect.objectContaining({ message: expect.objectContaining({ content: input.content }) }),
+      );
+      expect(await listInputs(scope)).toMatchObject({ items: [], total: 0 });
+    } finally {
+      try {
+        await finish(receipt);
+        receipt = undefined;
+      } finally {
+        try {
+          await closeOpenClawAgentDatabasesAsync();
+        } finally {
+          gateway.release();
+        }
+      }
+    }
   });
 
   it("appends and finishes pending input through the memory session actor", async () => {
@@ -163,7 +274,7 @@ describe("accepted input worker custody", () => {
           const admitted = receipt;
           assert(admitted?.runAsync, "Expected incognito pending input custody");
           const readForeign = await prepareForeignLiveSessionPendingInputEntries(scope);
-          expect(readForeign()).toEqual(
+          expect(await readForeign()).toEqual(
             new Map([[admitted.inputId, input.message.idempotencyKey]]),
           );
           await upsertEntry(scope, { sessionId: scope.sessionId, updatedAt: 2 });
@@ -174,7 +285,7 @@ describe("accepted input worker custody", () => {
               return appendMessage(scope, { message: admitted.message });
             }),
           ).resolves.toMatchObject({ appended: true });
-          expect(readForeign()).toEqual(
+          expect(await readForeign()).toEqual(
             new Map([[admitted.inputId, input.message.idempotencyKey]]),
           );
           client.connect.scopes = ["operator.read", "operator.write"];
@@ -185,11 +296,11 @@ describe("accepted input worker custody", () => {
           ).rejects.toThrow("was not found");
           expect(effects).toBe(1);
           // Revoked execution does not let another turn take still-held input.
-          expect(readForeign()).toEqual(
+          expect(await readForeign()).toEqual(
             new Map([[admitted.inputId, input.message.idempotencyKey]]),
           );
-          admitted.finish("cancelled");
-          expect(readForeign()).toEqual(new Map());
+          admitted.finish("cancelled", "failed");
+          expect(await readForeign()).toEqual(new Map());
           await admitted.settled?.();
           receipt = undefined;
 
@@ -246,9 +357,7 @@ it("refreshes every collected source after a non-revoking profile change", async
       const collected = bindInputs(receipts, message("collected", "Collected sources"));
       assert(collected?.runAsync, "Expected collected input authority");
       let executed = 0;
-      await collected.runAsync(() => {
-        executed++;
-      });
+      await collected.runAsync(() => executed++);
       expect(executed).toBe(1);
       setUserProfileRole(second.id, "view");
       await removeSessionMember(scope, second.id);
@@ -260,7 +369,7 @@ it("refreshes every collected source after a non-revoking profile change", async
       expect(executed).toBe(1);
     } finally {
       for (const receipt of receipts) {
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
       }
       await Promise.all(
         receipts.flatMap((receipt) => (receipt.settled ? [receipt.settled()] : [])),
@@ -303,16 +412,15 @@ it.each(["turn", "locked"] as const)(
       let admitted: SessionPendingInputReceipt | undefined;
       let unsettled: SessionPendingInputReceipt | undefined;
       try {
+        using authorityReads = vi.spyOn(authorization.admittedInputAuthority!, "withCurrent");
+        setUserProfileRole(profileId, "suggest");
         admitted = await stageInput(
           scope,
-          authorizedInput(
-            authorization,
-            "prepared-custody",
-            "Continue with captured custody",
-            assertCurrent,
-          ),
+          authorizedInput(authorization, "prepared-custody", "Continue", assertCurrent),
         );
         expect(admitted?.state).toBe("queued");
+        expect(authorityReads).toHaveBeenCalledTimes(1);
+        setUserProfileRole(profileId, "view");
         unsettled = await stageInput(scope, {
           runId: "pending-settlement",
           message: { ...admitted!.message, idempotencyKey: "pending-settlement:user" },
@@ -376,7 +484,7 @@ it.each(["turn", "locked"] as const)(
         );
         try {
           update.run("{", 1, scope.sessionKey);
-          unsettled.finish("interrupted");
+          unsettled.finish("interrupted", "failed");
           await unsettled.settled?.();
           expect(
             database.db
@@ -393,3 +501,78 @@ it.each(["turn", "locked"] as const)(
     });
   },
 );
+
+it("refuses a stale shared reader without orphaning its source settlement capture", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    setRuntimeConfigSnapshot(cfg);
+    const client = roleClient("view", "stale-reader-member");
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:stale-reader",
+      sessionId: "stale-reader",
+    };
+    await upsertEntry(scope, { sessionId: scope.sessionId, updatedAt: 1, visibility: "shared" });
+    await addSessionMember(scope, {
+      identityId: client.authenticatedUserProfile!.profileId,
+      addedBy: "owner",
+    });
+    const authorization = await authorize(scope, client, cfg);
+    const receipt = await stageInput(
+      scope,
+      authorizedInput(authorization, "stale-reader", "Continue"),
+    );
+    assert(receipt?.runAsync, "Expected shared input authority");
+    const authority = authorization.admittedInputAuthority!;
+    const prepared = authority.withPreparedCurrent;
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope))).path;
+    using invalidation = vi
+      .spyOn(authority, "withPreparedCurrent")
+      .mockImplementation((facts, consume, assertCurrent) =>
+        prepared(
+          facts,
+          () => {
+            invalidateOpenClawAgentDatabaseValidation(database, "a maintenance write");
+            return consume();
+          },
+          assertCurrent,
+        ),
+      );
+    const consume = vi.fn();
+    const source = controllerSource(
+      captureSessionTarget({
+        storeScope: database,
+        sessionKey: scope.sessionKey,
+        incarnation: scope.sessionId,
+      }),
+      {
+        adapter: {
+          onSettled: async () => {
+            await receipt.runAsync!(consume);
+          },
+        },
+      },
+    );
+    // Startup recovery may capture a live source without retaining a waiter.
+    void captureSessionControllerSettlement({ target: source.target! });
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", listener);
+    try {
+      retireSessionControllerInput(source);
+      await expect(source.settlement.promise).rejects.toThrow(
+        "Session reader validation is no longer current",
+      );
+      await nextTurn();
+      expect(consume).not.toHaveBeenCalled();
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", listener);
+      invalidation.mockRestore();
+      await expect(finish(receipt)).rejects.toThrow(
+        "Session reader validation is no longer current",
+      );
+      authorization.release?.();
+    }
+  });
+});

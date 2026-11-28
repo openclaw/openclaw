@@ -51,6 +51,7 @@ export const databaseEngineAdapters: {
           store.storeId,
           {
             reuse: store.reusePostgresConnection,
+            readOnly: store.input.readOnly,
             lockTimeoutMs: POSTGRES_LOCK_TIMEOUT_MS,
             statementTimeoutMs: POSTGRES_STATEMENT_TIMEOUT_MS,
           },
@@ -108,8 +109,10 @@ export const databaseEngineAdapters: {
               version: version - 1,
               postgres: migration.fromSchema.postgres,
               postgresFragments: migration.fromSchema.postgresFragments,
+              postgresWithoutOptionalColumn: migration.fromSchema.postgresWithoutOptionalColumn,
               postgresVectorDecoderVersion: migration.fromSchema.postgresVectorDecoderVersion,
               postgresVectorSearchVersion: migration.fromSchema.postgresVectorSearchVersion,
+              postgresTextSearchVersion: migration.fromSchema.postgresTextSearchVersion,
             },
             snapshot,
           );
@@ -134,17 +137,29 @@ export const databaseEngineAdapters: {
             ),
           );
           db.exec(migration.sql);
-          db.prepare("UPDATE openclaw_schema_meta SET version = ? WHERE store = ?").run(
-            version,
-            store.schema.id,
-          );
+          const minReader = migration.minReader ?? version;
+          if (minReader < version) {
+            db.exec("ALTER TABLE openclaw_schema_meta ADD COLUMN IF NOT EXISTS min_reader BIGINT");
+          }
+          if (minReader < version || snapshot.metadata.min_reader !== undefined) {
+            db.prepare(
+              "UPDATE openclaw_schema_meta SET version = ?, min_reader = ? WHERE store = ?",
+            ).run(version, minReader < version ? minReader : null, store.schema.id);
+          } else {
+            db.prepare("UPDATE openclaw_schema_meta SET version = ? WHERE store = ?").run(
+              version,
+              store.schema.id,
+            );
+          }
           verifyAndRecordPostgresSchema(db, store.namespace!, {
             ...schema,
             version,
             postgres: migration.schema.postgres,
             postgresFragments: migration.schema.postgresFragments,
+            postgresWithoutOptionalColumn: migration.schema.postgresWithoutOptionalColumn,
             postgresVectorDecoderVersion: migration.schema.postgresVectorDecoderVersion,
             postgresVectorSearchVersion: migration.schema.postgresVectorSearchVersion,
+            postgresTextSearchVersion: migration.schema.postgresTextSearchVersion,
           });
         }
       },

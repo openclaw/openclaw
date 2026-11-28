@@ -102,14 +102,14 @@ export function sessionScope(store: TestStore, agentId = "main") {
 export const runStoreDoctor = (store: TestStore, mode: DoctorSessionSqliteMode) =>
   runDoctorSessionSqlite({ env: store.env, store: store.storePath, mode });
 
-export function retireRecovery(
+export async function retireRecovery(
   store: Pick<TestStore, "env">,
   confirm: Parameters<typeof retireSessionSqliteRecovery>[0]["confirm"] = async () => true,
-  preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
+  preview?: Awaited<ReturnType<typeof inspectSessionSqliteRecovery>>,
 ) {
   return retireSessionSqliteRecovery({
     env: store.env,
-    preview,
+    preview: preview ?? (await inspectSessionSqliteRecovery({ cfg: {}, env: store.env })),
     readConfig: async () => ({}),
     confirm,
   });

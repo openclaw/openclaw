@@ -7,7 +7,7 @@ import type {
   SessionEntryReadScope,
 } from "../../../config/sessions/session-accessor.js";
 import type { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
-import type { prepareSessionGenerationFacts } from "../../../config/sessions/session-delivery-generation.js";
+import type { prepareLeaseFacts } from "../../../config/sessions/session-delivery-generation.js";
 import type { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
 import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
 import type { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
@@ -84,7 +84,6 @@ export function createSubagentRegistryMockState() {
           lifecycleRevision: entry.lifecycleRevision,
           lifecycleRunId: entry.lifecycleRunId,
           activeWriterRunId: entry.activeWriterRunId,
-          subagentRecovery: entry.subagentRecovery,
         }
       );
     }),
@@ -150,7 +149,7 @@ export function createSubagentRegistryMockState() {
     getSubagentRunsSnapshotForChildSession: vi.fn(snapshotRuns),
     captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
     cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-    runSubagentAnnounceFlow: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
+    runSubagentAnnounceFlow: vi.fn(async (): Promise<"delivered" | "undelivered"> => "delivered"),
     getGlobalHookRunner: vi.fn(() => null),
     ensureContextEnginesInitialized: vi.fn(),
     loadAgentRuntimePluginRegistryHandle,
@@ -181,9 +180,9 @@ export function createSubagentRegistryMockState() {
       loadSessionEntryReadOnly: mocks.loadSessionEntry,
       patchSessionEntryCore: mocks.patchSessionEntryCore,
     },
-    prepareSessionGenerationFacts: (
-      input: Parameters<typeof prepareSessionGenerationFacts>[0],
-    ): ReturnType<typeof prepareSessionGenerationFacts> => {
+    prepareLeaseFacts: (
+      input: Parameters<typeof prepareLeaseFacts>[0],
+    ): ReturnType<typeof prepareLeaseFacts> => {
       let active = true;
       const assertCurrent = () => {
         const entry = mocks.readSessionCurrent(input);
@@ -198,10 +197,18 @@ export function createSubagentRegistryMockState() {
       assertCurrent();
       return Promise.resolve({
         assertCurrent,
+        assertNativeTransactionCurrent: Object.assign(() => assertCurrent(), {
+          nativeSource: true,
+        }),
         readSessionSettings: () => {
           assertCurrent();
           const { permissionMode, toolOverrides } = mocks.entries[input.sessionKey] ?? {};
-          return { permissionMode, toolOverrides };
+          return {
+            sessionId: input.sessionId ?? "",
+            lifecycleRevision: input.lifecycleRevision ?? undefined,
+            permissionMode,
+            toolOverrides,
+          };
         },
         bindCreation: () => {
           throw new Error("Registry fixtures do not supply committed session creation receipts.");

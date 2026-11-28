@@ -7,6 +7,7 @@ import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { raceWithTimeout } from "@openclaw/retry";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
@@ -15,10 +16,11 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { runBestEffortCleanup } from "../infra/non-fatal-cleanup.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { bindCommandStdinFile, openCommandStdinFile } from "../process/command-stdin-file.js";
 import { createPermitPool } from "../shared/permit-pool.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
 import {
-  probePlaybackMediaFileDescriptor,
+  probePlaybackMediaFile,
   toMediaProbeResult,
   type MediaProbeResult,
   type PlaybackMediaProbeResult,
@@ -78,14 +80,14 @@ const PLAYBACK_TRANSCODE_POLICY = {
     target: { contentType: "audio/mp4", extension: ".m4a" },
   },
   video: {
-    nativeMimeTypes: ["video/mp4"],
+    nativeMimeTypes: ["video/mp4", "video/x-m4v"],
     codecProbeInputFormats: {
       "video/mp4": "mov",
+      "video/x-m4v": "mov",
     },
     transcodeInputFormats: {
       "video/avi": "avi",
       "video/flv": "flv",
-      "video/matroska": "matroska,webm",
       "video/quicktime": "mov",
       "video/webm": "matroska,webm",
       "video/x-flv": "flv",
@@ -208,6 +210,7 @@ type PlaybackInspection = MediaProbeResult &
     | { mode: "fallback" }
     | {
         mode: "transcode";
+        remux: boolean;
         durationMs: number;
         audioStreamIndex?: number;
         videoStreamIndex?: number;
@@ -229,6 +232,7 @@ export class PlaybackInspectionBusyError extends Error {
 
 const PLAYBACK_TRANSCODE_CACHE_VERSION = "v2";
 const MAX_PLAYBACK_TRANSCODE_JOBS = 2;
+const PLAYBACK_REMUX_WAIT_MS = 500;
 const PLAYBACK_TRANSCODE_MAX_ALLOC_BYTES = 256 * 1024 * 1024;
 const PLAYBACK_TRANSCODE_MAX_DURATION_SECS = 20 * 60;
 const PLAYBACK_TRANSCODE_MAX_INPUT_PIXELS = 4096 * 4096;
@@ -236,7 +240,7 @@ const PLAYBACK_TRANSCODE_THREADS = 2;
 const PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS = 60_000;
 const MAX_PLAYBACK_ENTRIES = { failures: 32, inspections: 32 } as const;
 const MAX_PENDING_PLAYBACK_INSPECTIONS = 32;
-const playbackJobs = new Set<string>();
+const playbackJobs = new Map<string, Promise<PlaybackTranscodeResolution>>();
 const playbackFailures = new Map<string, number>();
 const playbackInspections = new Map<string, PlaybackInspection>();
 const playbackInspectionJobs = new Map<string, PlaybackInspectionJob>();
@@ -299,7 +303,7 @@ async function probePlaybackSource(
     return null;
   }
   assertCurrent();
-  return await probePlaybackMediaFileDescriptor(opened.handle.fd, kind);
+  return await probePlaybackMediaFile(bindCommandStdinFile(opened), kind);
 }
 
 function assertPlaybackInspectionAuthority(waiters: Set<PlaybackInspectionWaiter>): void {
@@ -369,6 +373,10 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
         ? {
             ...metadata,
             mode: "transcode",
+            remux:
+              params.kind === "video" &&
+              mimeType === "video/quicktime" &&
+              resolveNativePlaybackCodecCompatibility(params.kind, params.mimeType, probe) === true,
             durationMs: probe.durationMs,
             ...(probe.audioStreamIndex !== undefined
               ? { audioStreamIndex: probe.audioStreamIndex }
@@ -456,13 +464,6 @@ export function replacePlaybackFileExtension(fileName: string, extension: `.${st
   return `${stem || "media"}${extension}`;
 }
 
-function playbackCacheRelativePath(
-  cacheKey: string,
-  extension: `.${string}`,
-): `${typeof PLAYBACK_TRANSCODE_SUBDIR}/${string}` {
-  return `${PLAYBACK_TRANSCODE_SUBDIR}/${PLAYBACK_TRANSCODE_CACHE_VERSION}-${cacheKey}${extension}`;
-}
-
 function makePlaybackInputFileName(sourcePath: string, mimeType: string): string {
   const sourceExtension = path.extname(sourcePath).toLowerCase();
   const extension = /^\.[a-z0-9]{1,12}$/u.test(sourceExtension)
@@ -479,7 +480,7 @@ function playbackDurationsMatch(sourceDurationMs: number, outputDurationMs: numb
   );
 }
 
-/** Resolves a native, pending, cached, or failed playback rendition without blocking on ffmpeg. */
+/** Returns quickly for full encodes; gives a lossless remux a brief chance to avoid polling. */
 export async function resolvePlaybackTranscode(
   params: PlaybackSourceParams,
 ): Promise<PlaybackTranscodeResolution> {
@@ -500,24 +501,22 @@ export async function resolvePlaybackTranscode(
   const source = { path: params.sourcePath, ...params.sourceStat };
   const cacheKey = createPlaybackTranscodeCacheKey(source);
   const target = policy.target;
-  const operationKey = playbackCacheRelativePath(cacheKey, target.extension);
+  const operationKey = `${PLAYBACK_TRANSCODE_SUBDIR}/${PLAYBACK_TRANSCODE_CACHE_VERSION}-${cacheKey}${target.extension}`;
+  const rendition = (filePath: string) => ({
+    kind: "transcoded" as const,
+    path: filePath,
+    ...target,
+  });
   let cachedPath: string | null;
   {
     const store = fileStore({ rootDir: getMediaDir(), dirMode: 0o700, mode: 0o600, maxBytes });
-    await using cached = await store
-      .open(playbackCacheRelativePath(cacheKey, target.extension))
-      .catch(() => null);
+    await using cached = await store.open(operationKey).catch(() => null);
     cachedPath = cached?.realPath ?? null;
   }
   params.signal?.throwIfAborted();
   params.assertCurrent?.();
   if (cachedPath) {
-    return {
-      kind: "transcoded",
-      path: cachedPath,
-      contentType: target.contentType,
-      extension: target.extension,
-    };
+    return rendition(cachedPath);
   }
 
   let inspection: PlaybackInspection;
@@ -537,8 +536,20 @@ export async function resolvePlaybackTranscode(
     return { kind: "fallback" };
   }
 
-  if (playbackJobs.has(operationKey)) {
-    return { kind: "preparing" };
+  const resolveJobResponse = async (job: Promise<PlaybackTranscodeResolution>) => {
+    const preparing = { kind: "preparing" } as const;
+    if (!inspection.remux) {
+      return preparing;
+    }
+    const result = await raceWithTimeout(job, PLAYBACK_REMUX_WAIT_MS, () => preparing, {
+      signal: params.signal,
+    });
+    params.assertCurrent?.();
+    return result;
+  };
+  const activeJob = playbackJobs.get(operationKey);
+  if (activeJob) {
+    return await resolveJobResponse(activeJob);
   }
   const failedAtMs = playbackFailures.get(operationKey);
   if (failedAtMs !== undefined) {
@@ -551,11 +562,7 @@ export async function resolvePlaybackTranscode(
     return { kind: "preparing" };
   }
 
-  const transcodeInspection = inspection;
-  const transcodeMimeType = params.mimeType;
-  const transcodeKind = params.kind;
   const job = (async () => {
-    const transcodePolicy: PlaybackPolicyEntry = PLAYBACK_TRANSCODE_POLICY[transcodeKind];
     await using opened = await openLocalFileSafely({ filePath: source.path });
     if (!playbackSourceIdentityMatches(source, opened)) {
       throw new Error("Playback source changed before transcode");
@@ -566,7 +573,7 @@ export async function resolvePlaybackTranscode(
         prefix: "playback-transcode-",
       },
       async (workspace) => {
-        const inputName = makePlaybackInputFileName(source.path, transcodeMimeType);
+        const inputName = makePlaybackInputFileName(source.path, params.mimeType);
         const stagingName = `.${inputName}.stage`;
         // Keep private-store admission without its full-payload buffering path.
         await workspace.store.write(stagingName, "", { durable: false });
@@ -606,18 +613,18 @@ export async function resolvePlaybackTranscode(
           }
           inputPath = input.realPath;
         }
-        const outputPath = workspace.path(`output${transcodePolicy.target.extension}`);
-        const inputFormat = resolvePlaybackInputFormat(transcodePolicy, transcodeMimeType);
+        const outputPath = workspace.path(`output${target.extension}`);
+        const inputFormat = resolvePlaybackInputFormat(policy, params.mimeType);
         if (!inputFormat) {
           throw new Error("Playback transcode input format is not allowed");
         }
-        const audioOnly = transcodeKind === "audio";
-        const { audioStreamIndex, videoStreamIndex } = transcodeInspection;
+        const audioOnly = params.kind === "audio";
+        const { audioStreamIndex, videoStreamIndex } = inspection;
         const primaryStreamIndex = audioOnly ? audioStreamIndex : videoStreamIndex;
         if (primaryStreamIndex === undefined) {
           throw new Error(`Playback ${audioOnly ? "audio" : "video"} stream is missing`);
         }
-        await runFfmpeg([
+        const inputArgs = [
           "-hide_banner",
           "-loglevel",
           "error",
@@ -650,6 +657,8 @@ export async function resolvePlaybackTranscode(
           "-dn",
           "-t",
           String(PLAYBACK_TRANSCODE_MAX_DURATION_SECS),
+        ];
+        const encodeArgs = [
           ...(audioOnly
             ? []
             : [
@@ -666,6 +675,8 @@ export async function resolvePlaybackTranscode(
           "aac",
           "-b:a",
           "128k",
+        ];
+        const outputArgs = [
           "-movflags",
           "+faststart",
           "-f",
@@ -673,45 +684,52 @@ export async function resolvePlaybackTranscode(
           "-fs",
           String(maxBytes + 1),
           outputPath,
-        ]);
-        const outputStat = await fs.stat(outputPath);
-        if (!outputStat.isFile() || outputStat.size === 0 || outputStat.size > maxBytes) {
-          throw new Error("Playback transcode output exceeds its media limit");
+        ];
+        const renderPlayback = async (codecArgs: string[]) => {
+          await runFfmpeg([...inputArgs, ...codecArgs, ...outputArgs]);
+          const output = await openCommandStdinFile(outputPath);
+          let outputProbe: PlaybackMediaProbeResult | null;
+          try {
+            if (output.size === 0n || output.size > maxBytes) {
+              throw new Error("Playback transcode output exceeds its media limit");
+            }
+            outputProbe = await probePlaybackMediaFile(output.stdinFile, params.kind);
+          } finally {
+            await runBestEffortCleanup({
+              cleanup: () => output[Symbol.asyncDispose](),
+              onError: (error) => log.warn("Failed to close playback probe output", { error }),
+            });
+          }
+          if (
+            !outputProbe?.durationMs ||
+            !playbackDurationsMatch(inspection.durationMs, outputProbe.durationMs)
+          ) {
+            throw new Error("Playback transcode output duration does not match its source");
+          }
+          return await fs.readFile(outputPath);
+        };
+        if (inspection.remux) {
+          try {
+            return await renderPlayback(["-c", "copy"]);
+          } catch {
+            // Some QuickTime tracks still cannot be copied into a valid MP4. Re-encode as before.
+          }
         }
-        const outputHandle = await fs.open(outputPath, "r");
-        let outputProbe: PlaybackMediaProbeResult | null;
-        try {
-          outputProbe = await probePlaybackMediaFileDescriptor(outputHandle.fd, transcodeKind);
-        } finally {
-          await runBestEffortCleanup({
-            cleanup: () => outputHandle.close(),
-            onError: (error) => log.warn("Failed to close playback probe output", { error }),
-          });
-        }
-        if (
-          !outputProbe?.durationMs ||
-          !playbackDurationsMatch(transcodeInspection.durationMs, outputProbe.durationMs)
-        ) {
-          throw new Error("Playback transcode output duration does not match its source");
-        }
-        return await fs.readFile(outputPath);
+        return await renderPlayback(encodeArgs);
       },
     );
 
-    await writePlaybackTranscodeCache({
+    return await writePlaybackTranscodeCache({
       buffer: outputBuffer,
-      fileName: path.basename(
-        playbackCacheRelativePath(cacheKey, transcodePolicy.target.extension),
-      ),
+      fileName: path.basename(operationKey),
       maxBytes,
       tempPrefix: `.${cacheKey}`,
     });
-  })();
-  playbackJobs.add(operationKey);
-  void job.then(
-    () => {
+  })().then<PlaybackTranscodeResolution, PlaybackTranscodeResolution>(
+    (filePath) => {
       playbackJobs.delete(operationKey);
       playbackFailures.delete(operationKey);
+      return rendition(filePath);
     },
     (reason: unknown) => {
       playbackJobs.delete(operationKey);
@@ -723,7 +741,9 @@ export async function resolvePlaybackTranscode(
       playbackFailures.delete(operationKey);
       playbackFailures.set(operationKey, Date.now());
       pruneMapToMaxSize(playbackFailures, MAX_PLAYBACK_ENTRIES.failures);
+      return { kind: "fallback" };
     },
   );
-  return { kind: "preparing" };
+  playbackJobs.set(operationKey, job);
+  return await resolveJobResponse(job);
 }

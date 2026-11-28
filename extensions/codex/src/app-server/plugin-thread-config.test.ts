@@ -1,6 +1,10 @@
 // Codex tests cover plugin thread config plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CodexAppInventoryCache, defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
+import {
+  CodexAppInventoryCache,
+  defaultCodexAppInventoryCache,
+  resolveCodexPluginThreadAppCacheKey,
+} from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -9,7 +13,10 @@ import {
   type CodexPluginConfig,
 } from "./config.js";
 import { refreshCodexPluginRuntimeState } from "./plugin-activation.js";
-import { resolveRecoverableCodexPluginConfigKeys } from "./plugin-inventory.js";
+import {
+  createCodexAppInventoryRequest,
+  resolveRecoverableCodexPluginConfigKeys,
+} from "./plugin-inventory.js";
 import {
   appInfo,
   appSummary,
@@ -45,7 +52,14 @@ const disabledAppPolicy = {
   open_world_enabled: false,
 };
 
+const disabledAppsConfig = { "features.apps": false, apps: { _default: disabledAppPolicy } };
+
 type NativeConfigLayerName = NonNullable<CodexConfigReadResponse["origins"][string]>["name"];
+type NativeConfigLayer = {
+  name: NativeConfigLayerName;
+  config: JsonObject;
+  disabledReason: string | null;
+};
 
 describe("Codex plugin thread config", () => {
   beforeEach(() => {
@@ -198,12 +212,7 @@ describe("Codex plugin thread config", () => {
       request,
     });
 
-    expect(config.configPatch).toEqual({
-      "features.apps": false,
-      apps: {
-        _default: disabledAppPolicy,
-      },
-    });
+    expect(config.configPatch).toEqual(disabledAppsConfig);
     expect(config.policyContext.apps).toEqual({});
     expect(config.provisionalAppIds).toBeUndefined();
     expect(request.mock.calls.map(([method]) => method)).not.toContain("config/read");
@@ -417,12 +426,7 @@ describe("Codex plugin thread config", () => {
 
     expect(methods).toEqual(["plugin/installed", "plugin/read"]);
     expect(methods).not.toContain("plugin/install");
-    expect(config.configPatch).toEqual({
-      "features.apps": false,
-      apps: {
-        _default: disabledAppPolicy,
-      },
-    });
+    expect(config.configPatch).toEqual(disabledAppsConfig);
     expect(config.diagnostics).toContainEqual(
       expect.objectContaining({
         code: "plugin_activation_failed",
@@ -431,63 +435,37 @@ describe("Codex plugin thread config", () => {
     );
   });
 
-  it("maps destructive app access from global and per-plugin policy", async () => {
-    const pluginOverrideDisabled = await buildReadyGoogleCalendarThreadConfig(
-      codexPluginConfig({
-        allow_destructive_actions: true,
-        plugins: {
-          "google-calendar": curatedPlugin("google-calendar", {
-            allow_destructive_actions: false,
-          }),
-        },
-      }),
-    );
-
-    const disabledApps = pluginOverrideDisabled.configPatch?.apps as
-      | Record<string, unknown>
-      | undefined;
-    expect(disabledApps?.["google-calendar-app"]).toEqual({
-      enabled: true,
-      destructive_enabled: false,
-      open_world_enabled: true,
-    });
-    expect(disabledApps?.["google-calendar-app"]).not.toHaveProperty("default_tools_enabled");
-    expect(disabledApps?.["google-calendar-app"]).not.toHaveProperty("approvals_reviewer");
-    expect(disabledApps?.["google-calendar-app"]).not.toHaveProperty("tools");
-    expect(
-      pluginOverrideDisabled.policyContext.apps["google-calendar-app"]?.allowDestructiveActions,
-    ).toBe(false);
-    expect(
-      pluginOverrideDisabled.policyContext.apps["google-calendar-app"]?.destructiveApprovalMode,
-    ).toBe("deny");
-
-    const pluginOverrideEnabled = await buildReadyGoogleCalendarThreadConfig(
-      codexPluginConfig({
-        allow_destructive_actions: false,
-        plugins: {
-          "google-calendar": curatedPlugin("google-calendar", {
-            allow_destructive_actions: true,
-          }),
-        },
-      }),
-    );
-
-    const enabledApps = pluginOverrideEnabled.configPatch?.apps as
-      | Record<string, unknown>
-      | undefined;
-    expect(enabledApps?.["google-calendar-app"]).toEqual({
-      enabled: true,
-      destructive_enabled: true,
-      open_world_enabled: true,
-    });
-    expect(enabledApps?.["google-calendar-app"]).not.toHaveProperty("approvals_reviewer");
-    expect(
-      pluginOverrideEnabled.policyContext.apps["google-calendar-app"]?.allowDestructiveActions,
-    ).toBe(true);
-    expect(
-      pluginOverrideEnabled.policyContext.apps["google-calendar-app"]?.destructiveApprovalMode,
-    ).toBe("allow");
-  });
+  it.each([
+    { global: true, override: false, mode: "deny" },
+    { global: false, override: true, mode: "allow" },
+  ] as const)(
+    "applies destructive override $override over global $global policy",
+    async ({ global, override, mode }) => {
+      const config = await buildReadyGoogleCalendarThreadConfig(
+        codexPluginConfig({
+          allow_destructive_actions: global,
+          plugins: {
+            "google-calendar": curatedPlugin("google-calendar", {
+              allow_destructive_actions: override,
+            }),
+          },
+        }),
+      );
+      const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
+      expect(apps?.["google-calendar-app"]).toEqual({
+        enabled: true,
+        destructive_enabled: override,
+        open_world_enabled: true,
+      });
+      for (const key of ["default_tools_enabled", "approvals_reviewer", "tools"]) {
+        expect(apps?.["google-calendar-app"]).not.toHaveProperty(key);
+      }
+      expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
+        allowDestructiveActions: override,
+        destructiveApprovalMode: mode,
+      });
+    },
+  );
 
   it("projects ask approvals for literal __proto__ keys without changing saved settings", async () => {
     const title = "__proto__";
@@ -947,12 +925,7 @@ describe("Codex plugin thread config", () => {
       request,
     });
 
-    expect(config.configPatch).toEqual({
-      "features.apps": false,
-      apps: {
-        _default: disabledAppPolicy,
-      },
-    });
+    expect(config.configPatch).toEqual(disabledAppsConfig);
     expect(config.policyContext.apps).toStrictEqual({});
     expect(config.provisionalAppIds).toBeUndefined();
     expect(config.diagnostics).toStrictEqual([]);
@@ -997,11 +970,7 @@ describe("Codex plugin thread config", () => {
     },
   ] satisfies Array<{
     name: string;
-    layers?: Array<{
-      name: NativeConfigLayerName;
-      config: JsonObject;
-      disabledReason: string | null;
-    }>;
+    layers?: Array<NativeConfigLayer>;
     configUnavailable?: boolean;
     ask?: boolean;
     meetingsExposed: boolean;
@@ -1015,11 +984,7 @@ describe("Codex plugin thread config", () => {
       meetingsExposed,
       slackExposed,
     }: {
-      layers?: Array<{
-        name: NativeConfigLayerName;
-        config: JsonObject;
-        disabledReason: string | null;
-      }>;
+      layers?: Array<NativeConfigLayer>;
       configUnavailable?: boolean;
       ask?: boolean;
       meetingsExposed: boolean;
@@ -1058,25 +1023,13 @@ describe("Codex plugin thread config", () => {
       const config = await build;
 
       const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
-      if (ask) {
-        expect(apps).toMatchObject({
-          "chatgpt-meetings": { enabled: false },
-          slack: { enabled: false },
-        });
-      } else {
-        expect(Object.hasOwn(apps ?? {}, "chatgpt-meetings")).toBe(meetingsExposed);
-        expect(Object.hasOwn(apps ?? {}, "slack")).toBe(slackExposed);
-      }
+      expect(Object.hasOwn(apps ?? {}, "chatgpt-meetings")).toBe(meetingsExposed);
+      expect(Object.hasOwn(apps ?? {}, "slack")).toBe(slackExposed);
       expect(config.provisionalAppIds ?? []).toEqual(
         [meetingsExposed ? "chatgpt-meetings" : null, slackExposed ? "slack" : null]
           .filter((appId): appId is string => appId !== null)
           .toSorted(),
       );
-      if (configUnavailable) {
-        expect(config.diagnostics).toContainEqual(
-          expect.objectContaining({ code: "account_app_config_unavailable" }),
-        );
-      }
       expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(1);
     },
   );
@@ -1416,12 +1369,7 @@ describe("Codex plugin thread config", () => {
       },
     });
 
-    expect(config.configPatch).toEqual({
-      "features.apps": false,
-      apps: {
-        _default: disabledAppPolicy,
-      },
-    });
+    expect(config.configPatch).toEqual(disabledAppsConfig);
     expect(config.policyContext.apps).toStrictEqual({});
     expect(config.diagnostics).toContainEqual({
       code: "account_app_inventory_unavailable",
@@ -1516,12 +1464,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.enabled).toBe(false);
-    expect(config.configPatch).toEqual({
-      "features.apps": false,
-      apps: {
-        _default: disabledAppPolicy,
-      },
-    });
+    expect(config.configPatch).toEqual(disabledAppsConfig);
     expect(config.policyContext.apps).toStrictEqual({});
     expect(config.diagnostics).toStrictEqual([]);
   });
@@ -1529,13 +1472,8 @@ describe("Codex plugin thread config", () => {
   const appPolicyCases: Array<{
     name: string;
     appEnabled: boolean;
-    layers?: Array<{
-      name: NativeConfigLayerName;
-      config: JsonObject;
-      disabledReason: string | null;
-    }>;
+    layers?: Array<NativeConfigLayer>;
     configUnavailable?: boolean;
-    ask?: boolean;
     exposed: boolean;
   }> = [
     {
@@ -1582,17 +1520,11 @@ describe("Codex plugin thread config", () => {
       configUnavailable,
       exposed,
       appEnabled,
-      ask,
     }: {
-      layers?: Array<{
-        name: NativeConfigLayerName;
-        config: JsonObject;
-        disabledReason: string | null;
-      }>;
+      layers?: Array<NativeConfigLayer>;
       configUnavailable?: boolean;
       exposed: boolean;
       appEnabled: boolean;
-      ask?: boolean;
     }) => {
       const app = appInfo("google-calendar-app", true, appEnabled);
       const appCache = await cacheApps([app]);
@@ -1612,7 +1544,7 @@ describe("Codex plugin thread config", () => {
       });
 
       const build = buildCodexPluginThreadConfig({
-        pluginConfig: calendarPluginConfig(ask ? { allow_destructive_actions: "ask" } : {}),
+        pluginConfig: calendarPluginConfig(),
         appCache,
         appCacheKey: "runtime",
         nowMs: 1,
@@ -1635,13 +1567,7 @@ describe("Codex plugin thread config", () => {
           expect.objectContaining({ code: "app_not_ready" }),
         );
       } else {
-        if (ask) {
-          expect(config.configPatch?.apps).toMatchObject({
-            "google-calendar-app": { enabled: false },
-          });
-        } else {
-          expect(config.configPatch?.apps).not.toHaveProperty("google-calendar-app");
-        }
+        expect(config.configPatch?.apps).not.toHaveProperty("google-calendar-app");
         expect(config.provisionalAppIds).toBeUndefined();
         expect(config.diagnostics).toContainEqual(
           expect.objectContaining({ code: "app_not_ready" }),
@@ -1735,12 +1661,7 @@ describe("Codex plugin thread config", () => {
       },
     });
 
-    expect(config.configPatch).toEqual({
-      "features.apps": false,
-      apps: {
-        _default: disabledAppPolicy,
-      },
-    });
+    expect(config.configPatch).toEqual(disabledAppsConfig);
     expect(config.policyContext.apps).toStrictEqual({});
     expect(config.diagnostics).toStrictEqual([]);
   });
@@ -1799,6 +1720,87 @@ describe("Codex plugin thread config", () => {
         ...(cold ? [{ forceRefresh: false }] : []),
         { forceRefresh: true },
       ]);
+    },
+  );
+
+  it.each(["missing", "inaccessible", "ready"] as const)(
+    "bounds readiness repair for an initially %s app without relaxing policy",
+    async (unavailable) => {
+      const appCache = new CodexAppInventoryCache();
+      const metadataCache = new CodexPluginMetadataCache();
+      const initiallyReady = unavailable === "ready";
+      let ready = initiallyReady;
+      let denied = false;
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "plugin/installed") {
+          return pluginInstalled([
+            pluginSummary("google-calendar", { installed: true, enabled: true }),
+          ]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+        }
+        if (method === "app/installed" || method === "app/read") {
+          return codexAppInventoryResponse(
+            method,
+            !ready && unavailable === "missing" ? [] : [appInfo("google-calendar-app", ready)],
+            params as CodexAppServerRequestParams<typeof method>,
+          );
+        }
+        if (method === "config/read") {
+          const config = { apps: { "google-calendar-app": { enabled: !denied } } };
+          return { config, layers: [{ name: { type: "user" }, config }] };
+        }
+        throw new Error(`unexpected request ${method}`);
+      });
+      const threadId = "same-native-thread";
+      const appCacheKey = "same-account";
+      const key = resolveCodexPluginThreadAppCacheKey({ appCacheKey, threadId });
+      await appCache.refreshNow({
+        key,
+        request: createCodexAppInventoryRequest({ request, threadId }),
+        nowMs: 0,
+        forceRefetch: false,
+      });
+      request.mockClear();
+      const build = (nowMs: number) =>
+        buildCodexPluginThreadConfig({
+          pluginConfig: calendarPluginConfig(),
+          appCache,
+          metadataCache,
+          appCacheKey,
+          threadId,
+          nowMs,
+          request,
+        });
+
+      for (const nowMs of [1, 2, 3]) {
+        const config = await build(nowMs);
+        expect(Object.hasOwn(config.policyContext.apps, "google-calendar-app")).toBe(
+          initiallyReady,
+        );
+        if (!initiallyReady) {
+          expect(config.configPatch).toEqual(disabledAppsConfig);
+        }
+      }
+      expect(request.mock.calls.filter(([method]) => method === "app/installed")).toEqual(
+        initiallyReady ? [] : [["app/installed", { forceRefresh: true, threadId }]],
+      );
+      if (initiallyReady) {
+        return;
+      }
+
+      ready = true;
+      const recovered = await build(60_001);
+      expect(recovered.policyContext.apps).toHaveProperty("google-calendar-app");
+      expect(recovered.provisionalAppIds).toEqual(["google-calendar-app"]);
+      expect(request.mock.calls.filter(([method]) => method === "app/installed")).toHaveLength(2);
+      denied = true;
+      const revoked = await build(60_002);
+      expect(revoked.policyContext.apps).toEqual({});
+      expect(revoked.configPatch).toEqual(disabledAppsConfig);
+      expect(request.mock.calls.filter(([method]) => method === "app/installed")).toHaveLength(2);
+      expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(2);
     },
   );
 
@@ -2037,12 +2039,7 @@ describe("Codex plugin thread config", () => {
       },
     });
 
-    expect(config.configPatch).toEqual({
-      "features.apps": false,
-      apps: {
-        _default: disabledAppPolicy,
-      },
-    });
+    expect(config.configPatch).toEqual(disabledAppsConfig);
     expect(config.policyContext.apps).toStrictEqual({});
     expect(config.policyContext.pluginAppIds).toStrictEqual({
       "google-calendar": ["google-calendar-app"],
@@ -2063,12 +2060,7 @@ describe("Codex plugin thread config", () => {
       request: createReadyCalendarRequest(),
     });
 
-    expect(config.configPatch).toEqual({
-      "features.apps": false,
-      apps: {
-        _default: disabledAppPolicy,
-      },
-    });
+    expect(config.configPatch).toEqual(disabledAppsConfig);
     expect(config.policyContext.apps).toStrictEqual({});
     expect(config.diagnostics).toStrictEqual([
       {
@@ -2431,39 +2423,25 @@ describe("Codex plugin thread config", () => {
     });
   });
 
-  it("marks missing and changed plugin app bindings stale only when relevant", () => {
+  it.each([
+    { name: "missing binding", missing: true, enabled: true, current: "input-2", stale: true },
+    { name: "changed input", missing: false, enabled: true, current: "input-2", stale: true },
+    { name: "unchanged input", missing: false, enabled: true, current: "input-1", stale: false },
+    { name: "disabled plugins", missing: false, enabled: false, current: undefined, stale: true },
+  ])("marks $name stale=$stale", ({ missing, enabled, current, stale }) => {
     expect(
       isCodexPluginThreadBindingStale({
-        codexPluginsEnabled: true,
-        currentInputFingerprint: "input-2",
+        codexPluginsEnabled: enabled,
+        currentInputFingerprint: current,
+        ...(!missing
+          ? {
+              bindingFingerprint: "config-1",
+              bindingInputFingerprint: "input-1",
+              hasBindingPolicyContext: true,
+            }
+          : {}),
       }),
-    ).toBe(true);
-    expect(
-      isCodexPluginThreadBindingStale({
-        codexPluginsEnabled: true,
-        bindingFingerprint: "config-1",
-        bindingInputFingerprint: "input-1",
-        currentInputFingerprint: "input-2",
-        hasBindingPolicyContext: true,
-      }),
-    ).toBe(true);
-    expect(
-      isCodexPluginThreadBindingStale({
-        codexPluginsEnabled: true,
-        bindingFingerprint: "config-1",
-        bindingInputFingerprint: "input-1",
-        currentInputFingerprint: "input-1",
-        hasBindingPolicyContext: true,
-      }),
-    ).toBe(false);
-    expect(
-      isCodexPluginThreadBindingStale({
-        codexPluginsEnabled: false,
-        bindingFingerprint: "config-1",
-        bindingInputFingerprint: "input-1",
-        hasBindingPolicyContext: true,
-      }),
-    ).toBe(true);
+    ).toBe(stale);
   });
 });
 

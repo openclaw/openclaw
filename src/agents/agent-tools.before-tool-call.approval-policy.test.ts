@@ -95,7 +95,7 @@ it.each(["wrapped", "adapted"] as const)(
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
     const selectedTool = { name: "diffs", execute } as unknown as AnyAgentTool;
     setPluginToolMeta(selectedTool, { pluginId: "diffs", optional: false });
-    const context = { agentId: "main", sessionKey: "main", loopDetection: { enabled: false } };
+    const context = { agentId: "main", sessionKey: "main" };
     if (path === "wrapped") {
       await wrapToolWithBeforeToolCallHook(selectedTool, context).execute("call-diffs", {});
     } else {
@@ -195,4 +195,28 @@ it("uses the transport channel when tool policy provider differs", async () => {
     turnSourceThreadId: "thread-1",
     approvalReviewerDeviceIds: ["device-tui-reviewer"],
   });
+});
+
+it("passes the run trigger to before_tool_call hooks beside the requester", async () => {
+  hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+  const requester = { channel: "discord", senderIsOwner: false };
+  const params = { path: "/tmp/MEMORY.md", content: "note" };
+
+  await runBeforeToolCallHook({
+    toolName: "write",
+    params,
+    ctx: { agentId: "main", sessionKey: "main", runId: "flush-1", trigger: "memory", requester },
+  });
+  await runBeforeToolCallHook({
+    toolName: "write",
+    params,
+    ctx: { agentId: "main", sessionKey: "main", runId: "turn-1", requester },
+  });
+
+  expect(hookRunner.runBeforeToolCall.mock.calls[0]?.[1]).toMatchObject({
+    runId: "flush-1",
+    trigger: "memory",
+    requester,
+  });
+  expect(hookRunner.runBeforeToolCall.mock.calls[1]?.[1]).not.toHaveProperty("trigger");
 });

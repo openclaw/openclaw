@@ -11,6 +11,7 @@ import {
   type UpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
+import { OpenClawStateLeaseError } from "../state/openclaw-state-lease-error.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import {
   withOpenClawTestState,
@@ -60,6 +61,14 @@ const mocks = vi.hoisted(() => {
     lint: vi.fn<(typeof import("../commands/doctor-lint.js"))["runDoctorLintCli"]>(),
     config: vi.fn<() => OpenClawConfig>(),
     runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
+    // The contribution list owner has its own tests; this keeps its after-restart order.
+    runAfterRestart: vi.fn(async (ctx: DoctorHealthFlowContext) => {
+      const deferred = ctx.afterRestartContributions ?? [];
+      ctx.afterRestartContributions = undefined;
+      for (const contribution of deferred) {
+        await contribution.run(ctx);
+      }
+    }),
     writeUpdatePostInstallDoctorResult: vi.fn(),
     service: vi.fn(),
     resident: vi.fn<() => { pid: number } | undefined>(),
@@ -117,7 +126,10 @@ const mocks = vi.hoisted(() => {
       noteStalePluginRuntimeSymlinks: async () => undefined,
       removeStalePluginRuntimeSymlinks: async () => ({ changes: [], warnings: [] }),
     },
-    "../commands/doctor-platform-notes.js": { noteStartupOptimizationHints: () => undefined },
+    "../commands/doctor-platform-notes.js": {
+      noteStartupOptimizationHints: () => undefined,
+      noteMacGatewayPlatformWarnings: async () => undefined,
+    },
     // Keep config preparation outside service-lifecycle fixtures.
     "../commands/doctor-config-flow.js": {
       loadAndMaybeMigrateDoctorConfig: async () => ({
@@ -126,7 +138,10 @@ const mocks = vi.hoisted(() => {
         [Symbol.asyncDispose]: async () => undefined,
       }),
     },
-    "./doctor-health-contributions.js": { runDoctorHealthContributions: handles.runContributions },
+    "./doctor-health-contributions.js": {
+      runDoctorHealthContributions: handles.runContributions,
+      runDoctorAfterRestartContributions: handles.runAfterRestart,
+    },
   };
   for (const [module, replacement] of Object.entries(replacements)) {
     vi.doMock(module, () => replacement);
@@ -297,6 +312,7 @@ export function registerDoctorConfigReceiptTests(
     "restored-config",
     "schema-refusal",
     "wrapped-refusal",
+    "lease-loss",
   ] as const)("publishes consumed input and final committed hash (%s)", async (outcome) => {
     await withDoctorState(async (state) => {
       const resultPath = state.path("doctor-result.json");
@@ -323,6 +339,12 @@ export function registerDoctorConfigReceiptTests(
       };
       const failures: Partial<Record<typeof outcome, Error>> = {
         error: new Error("health failed after commit"),
+        "lease-loss": new Error("maintenance failed", {
+          cause: new OpenClawStateLeaseError("state lease heartbeat is not running", {
+            code: "OPENCLAW_STATE_LEASE_LOST",
+            loss: { reason: "admission-failed" },
+          }),
+        }),
         "partial-config": new AggregateError([configFailure("partial", "unknown")]),
         "unrestored-config": configFailure("complete", "not-restored"),
         "restored-config": configFailure("partial", "restored"),
@@ -403,7 +425,12 @@ export function registerDoctorConfigReceiptTests(
                 ? ["gateway-stop", "stale-gateway-stop-failed"]
                 : ["doctor", "doctor-failed"];
         result.failureFacts = [
-          { check, code, message: outcome === "error" ? failure.message : expect.any(String) },
+          {
+            check,
+            code,
+            message: outcome === "error" ? failure.message : expect.any(String),
+            ...(outcome === "lease-loss" ? { leaseLoss: { reason: "admission-failed" } } : {}),
+          },
         ];
       }
       if (outcome !== "unchanged") {

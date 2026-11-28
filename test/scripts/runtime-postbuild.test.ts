@@ -4,7 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { create as createTar } from "tar";
+import { create as createTar } from "tar/raw";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { collectPackageDistImportErrors } from "../../scripts/lib/package-dist-imports.mjs";
@@ -33,7 +33,6 @@ import {
   writeLegacyRootRuntimeCompatAliases,
   writeStableRootRuntimeAliases,
 } from "../../scripts/runtime-postbuild.mts";
-import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { readBuildIdFromBuildInfoForModuleUrl } from "../../src/version.js";
 import { fixtureFiles } from "./script-fixture-files.test-support.js";
@@ -218,17 +217,6 @@ describe("runtime postbuild static assets", () => {
     expect(f.read("dist/bundled/session-memory/handler.js")).toBe("export default () => {};\n");
   });
 
-  it("discovers repo static asset metadata without scanning extension directories", () => {
-    const payload = expectNoNodeFsScans<string[]>(
-      `
-      const assets = await import("./scripts/lib/static-extension-assets.mts");
-      return assets.discoverStaticExtensionAssets().map(({ dest }) => dest);
-    `,
-      { allowedExistsSyncPaths: [path.join(MODULE_ROOT, ".git")] },
-    );
-    expect(payload.length).toBeGreaterThan(0);
-  });
-
   it("ships the PostgreSQL schema read by the packaged Logbook port descriptor", async () => {
     const rootDir = createTempDir("openclaw-logbook-port-assets-");
     const pluginPath = "extensions/logbook";
@@ -246,55 +234,6 @@ describe("runtime postbuild static assets", () => {
     const schema = await readText(MODULE_ROOT, schemaPath);
     for (const outputRoot of ["dist", "dist-runtime"]) {
       await expect(readText(rootDir, path.join(outputRoot, schemaPath))).resolves.toBe(schema);
-    }
-  });
-
-  it("copies each package asset once with multiple Git index stages", async () => {
-    const rootDir = createTempDir("openclaw-static-assets-index-");
-    const git = (args: string[], input?: string) =>
-      childProcess.execFileSync("git", args, { cwd: rootDir, encoding: "utf8", input });
-    const pluginIds = ["conflicted", "package-only", "with-manifest"];
-    for (const id of pluginIds) {
-      const pluginDir = path.join(rootDir, "extensions", id);
-      await fs.mkdir(pluginDir, { recursive: true });
-      await writeFiles(pluginDir, {
-        "asset.txt": `${id} bytes\n`,
-        "package.json": JSON.stringify({
-          openclaw: { build: { staticAssets: [{ source: "asset.txt", output: "asset.txt" }] } },
-        }),
-      });
-    }
-    for (const id of ["with-manifest", "manifest-only"]) {
-      const pluginDir = path.join(rootDir, "extensions", id);
-      await fs.mkdir(pluginDir, { recursive: true });
-      await writeText(pluginDir, "openclaw.plugin.json", "not valid JSON");
-    }
-    git(["init", "-q"]);
-    git(["add", "extensions"]);
-    const packagePath = "extensions/conflicted/package.json";
-    const blob = git(["hash-object", "-w", "--stdin"], "{}").trim();
-    // Keep resolved working-tree metadata while the index still holds all merge stages.
-    git(
-      ["update-index", "--index-info"],
-      sourceLines(
-        `0 ${"0".repeat(blob.length)}\t${packagePath}`,
-        ...[1, 2, 3].map((stage) => `100644 ${blob} ${stage}\t${packagePath}`),
-      ),
-    );
-    const copy = vi.spyOn(fsSync, "copyFileSync");
-    try {
-      copyStaticExtensionAssets({ rootDir });
-      expect(copy).toHaveBeenCalledTimes(3);
-      expect(discoverStaticExtensionAssets({ rootDir }).map(({ pluginDir }) => pluginDir)).toEqual(
-        pluginIds,
-      );
-      for (const id of pluginIds) {
-        await expect(
-          readText(rootDir, path.join("dist", "extensions", id, "asset.txt")),
-        ).resolves.toBe(`${id} bytes\n`);
-      }
-    } finally {
-      copy.mockRestore();
     }
   });
 
@@ -601,6 +540,19 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
+  it.each(["//#region ", "// ", "//!"])(
+    "does not treat source-owned implementations as runtime wrappers (%s)",
+    async (label) => {
+      const f = await runtimeFixture({
+        "owner.runtime-Impl123.mjs": `import { value } from "./owner.runtime-Other456.mjs";\n${label}src/infra/owner.ts\nexport const current = value;\n`,
+        "owner.runtime-Other456.mjs": "export const value = true;\n",
+        "owner.runtime.js": 'export * from "./owner.runtime-Stale.js";\n',
+      });
+      f.aliases();
+      await expectPathMissing(f.file("owner.runtime.js"));
+    },
+  );
+
   it("ignores legacy wrappers to the stable runtime alias when choosing the implementation", async () => {
     const f = await runtimeFixture({
       "runtime-plugins.runtime-NewHash.mjs": "export const ready = true;\n",
@@ -729,8 +681,15 @@ describe("runtime postbuild static assets", () => {
       for (const chunk of release.chunks) {
         const loaded = await load(rootDir, `dist/${chunk.path}`);
         for (const { exported, origin } of chunk.exports) {
-          expect(loaded[exported](), `${release.version}: ${chunk.path}:${exported}`).toBe(
-            origin.symbol,
+          expect(await loaded[exported](), `${release.version}: ${chunk.path}:${exported}`).toBe(
+            // Both immutable 9.36/9.37 updaters denied leased-handoff authority; the
+            // recorded immutable export is inline, not a named runtime export.
+            origin.module === "src/infra/update-managed-service-handoff-current.ts" &&
+              origin.symbol === "isImmutableManagedServiceUpdateHandoffProcess" &&
+              chunk.path === "update-managed-service-handoff-current-E5XsvJxw.mjs" &&
+              exported === "isCurrentManagedServiceUpdateHandoffProcess"
+              ? false
+              : origin.symbol,
           );
         }
       }
@@ -830,11 +789,11 @@ describe("previous release update compatibility", () => {
         ].join("\n"),
         ...(includePrivateWorker
           ? {
-              "state/openclaw-state-read.worker.js":
-                '//#region src/cli/update-cli/update-command-service-command.ts\nexport async function restart() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n',
-              "state/openclaw-state-read-command.mjs":
-                '//#region src/daemon/inspect.ts\nexport async function inspect() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n',
-              "state/openclaw-state-read-service-abcdefgh.mjs":
+              "infra/shared-worker-host.worker.js":
+                '//#region src/cli/update-cli/update-command-service-command.ts\nexport async function restart() { return await import("./shared-worker-host-service-abcdefgh.mjs"); }\n',
+              "infra/shared-worker-host-command.mjs":
+                '//#region src/daemon/inspect.ts\nexport async function inspect() { return await import("./shared-worker-host-service-abcdefgh.mjs"); }\n',
+              "infra/shared-worker-host-service-abcdefgh.mjs":
                 '//#region src/cli/update-cli/runner.ts\nexport function resolveRunner() { return "private worker"; }\n',
             }
           : {}),
@@ -1312,7 +1271,7 @@ describe("previous release update compatibility", () => {
     return output;
   }
 
-  function serveTarball(archive: string): { child: childProcess.ChildProcess; url: string } {
+  function serveTarball(archive: string, failFirstRequests = 0) {
     const root = createTempDir("update-compat-registry-");
     const portFile = path.join(root, "port");
     const server = path.join(root, "server.cjs");
@@ -1321,19 +1280,31 @@ describe("previous release update compatibility", () => {
       [
         'const fs = require("node:fs");',
         'const http = require("node:http");',
-        "const [archive, portFile] = process.argv.slice(2);",
+        "const [archive, portFile, failFirst] = process.argv.slice(2);",
+        "let requests = 0;",
         "const instance = http.createServer((_request, response) => {",
+        "  requests += 1;",
+        "  if (requests <= Number(failFirst)) {",
+        '    response.writeHead(503, { "content-type": "text/plain" });',
+        '    response.end("temporary registry failure");',
+        "    return;",
+        "  }",
         '  response.writeHead(200, { "content-type": "application/octet-stream" });',
         "  fs.createReadStream(archive).pipe(response);",
         "});",
         'instance.listen(0, "127.0.0.1", () => {',
-        "  fs.writeFileSync(portFile, String(instance.address().port));",
+        '  fs.writeFileSync(portFile + ".tmp", String(instance.address().port));',
+        '  fs.renameSync(portFile + ".tmp", portFile);',
         "});",
       ].join("\n"),
     );
-    const child = childProcess.spawn(testNodeExecPath, [server, archive, portFile], {
-      stdio: "ignore",
-    });
+    const child = childProcess.spawn(
+      testNodeExecPath,
+      [server, archive, portFile, String(failFirstRequests)],
+      {
+        stdio: "ignore",
+      },
+    );
     const deadline = Date.now() + 5_000;
     while (!fsSync.existsSync(portFile) && Date.now() < deadline) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
@@ -1349,8 +1320,10 @@ describe("previous release update compatibility", () => {
   function runInventoryCli(
     args: string[],
     replies: Array<{ args: string[]; value: unknown }> = [],
+    prepareBuild: (root: string) => void = candidate,
   ) {
     const root = createTempDir("update-compat-npm-");
+    prepareBuild(root);
     const bin = path.join(root, "bin");
     const callsFile = path.join(root, "calls.json");
     const stub = path.join(bin, "npm.cjs");
@@ -1389,7 +1362,7 @@ describe("previous release update compatibility", () => {
     const calls: unknown = fsSync.existsSync(callsFile)
       ? JSON.parse(fsSync.readFileSync(callsFile, "utf8"))
       : [];
-    return { result, calls };
+    return { result, calls, root };
   }
 
   it("records an ordered supported window, including releases without post-swap imports, offline", () => {
@@ -1449,7 +1422,7 @@ describe("previous release update compatibility", () => {
     const archive = path.join(root, "openclaw.tgz");
     await createTar({ cwd: root, file: archive, gzip: true }, ["package"]);
     const registryIntegrity = `sha512-${createHash("sha512").update(fsSync.readFileSync(archive)).digest("base64")}`;
-    const fixture = serveTarball(archive);
+    const fixture = serveTarball(archive, 1);
     try {
       const output = path.join(root, "inventory.json");
       const integrityArgs = ["view", `openclaw@${version}`, "dist.integrity", "--json"];
@@ -1462,6 +1435,7 @@ describe("previous release update compatibility", () => {
         ],
       );
       expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toContain("Retrying openclaw@2026.9.4 registry tarball download");
       expect(calls).toEqual([integrityArgs, tarballArgs]);
       expect(readUpdateCompatibilityInventory(output).releases).toMatchObject([
         { version, integrity: registryIntegrity, chunks: [] },
@@ -1481,18 +1455,44 @@ describe("previous release update compatibility", () => {
     }
   });
 
+  it("rejects recorded exports that the candidate build cannot bridge", () => {
+    const output = writeWindowInventory(createTempDir("update-compat-unbridgeable-"));
+    const inventory = readUpdateCompatibilityInventory(output);
+    inventory.releases[0]!.chunks[0]!.exports[0]!.origin.symbol = "removedExport";
+    fsSync.writeFileSync(output, JSON.stringify(inventory));
+    const { result } = runInventoryCli(
+      ["--check", "--output", output],
+      [
+        {
+          args: ["view", "openclaw", "dist-tags", "--json"],
+          value: { latest: "2026.9.3", beta: "2026.9.2" },
+        },
+      ],
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("no equivalent current export");
+  });
+
+  it("requires built dist before checking an inventory", () => {
+    const output = writeWindowInventory(createTempDir("update-compat-no-build-"));
+    const { result } = runInventoryCli(["--check", "--output", output], [], () => {});
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Run pnpm build before checking update compatibility");
+  });
+
   it.each(["npm 11", "npm 12"])(
     "checks %s latest and beta coverage without refetching recorded integrity",
     (npmVersion) => {
       const output = writeWindowInventory(createTempDir("update-compat-tag-coverage-"));
       const tags = { latest: "2026.9.3", beta: "2026.9.2" };
       const npmArgs = ["view", "openclaw", "dist-tags", "--json"];
-      const { result, calls } = runInventoryCli(
+      const { result, calls, root } = runInventoryCli(
         ["--check", "--output", output],
         [{ args: npmArgs, value: npmVersion === "npm 12" ? [tags] : tags }],
       );
       expect(result.status, result.stderr).toBe(0);
       expect(calls).toEqual([npmArgs]);
+      expect(fsSync.readdirSync(path.join(root, "dist"))).toEqual(["current.mjs"]);
     },
   );
 

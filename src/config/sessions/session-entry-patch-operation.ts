@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isDeepStrictEqual } from "node:util";
 import { isSubagentSessionRow } from "../../shared/session-list-visibility.js";
 import type { SessionActivitySummary } from "./activity-summary.js";
 import {
@@ -11,7 +11,6 @@ import {
   type PreparedSessionMetaPatch,
 } from "./metadata-projection.js";
 import { resolveSessionObserverDigestForLifecycle } from "./observer-digest.js";
-import { buildRestartRecoveryClaimCleanupPatch } from "./restart-recovery-state.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
 import type { buildSessionCreationStamp } from "./session-entry-provenance.js";
@@ -65,12 +64,24 @@ export type SessionEntryBookkeepingReducer =
 /** Closed internal operations; arbitrary updater callbacks retain prepare/CAS. */
 type SessionEntryPatchStep = (
   | { kind: "fields"; patch: Partial<SessionEntry> }
+  | {
+      kind: "shell-call";
+      runId: string;
+      call?: { callId: string; key: string };
+      notice?: NonNullable<SessionEntry["pendingShellCalls"]>["notice"];
+      acknowledged?: {
+        marker: NonNullable<SessionEntry["resumeAfterRestart"]>;
+        pending: NonNullable<SessionEntry["pendingShellCalls"]>;
+      };
+    }
   | { kind: "writer-revoke"; runId: string; terminalAtMs?: number }
   | {
       kind: "cron-session";
       sessionKey: string;
       initial?: SessionEntry;
       next: SessionEntry;
+      /** Final run accounting supersedes its own provider-boundary snapshots. */
+      contextTotalsAccounted?: true;
       creation: ReturnType<typeof buildSessionCreationStamp>;
     }
   | {
@@ -78,6 +89,8 @@ type SessionEntryPatchStep = (
       sessionKey: string;
       source: SessionEntry;
       continuation: NonNullable<SessionEntry["cronRunContinuation"]>;
+      /** The occurrence's admitted parent; absence clears a row's earlier receipt. */
+      scheduledMemoryParent?: SessionEntry["scheduledMemoryParent"];
       create: boolean;
       creation: ReturnType<typeof buildSessionCreationStamp>;
       thinkingLevel?: string;
@@ -111,23 +124,7 @@ type SessionEntryPatchStep = (
       kind: "pending-final-clear";
       sessionId: string;
       intentId: string;
-      recoveryRunId?: string;
       now: number;
-    }
-  | {
-      kind: "restart-safe-terminal";
-      runId: string;
-      retryable: boolean;
-      patch: Partial<SessionEntry>;
-    }
-  | {
-      kind: "restart-claim-clear";
-      sessionId: string;
-      recoveryRunId: string;
-      recoverySourceRunId?: string;
-      executionRunId: string;
-      executionGeneration: string;
-      terminalRunId?: string;
     }
   | {
       kind: "compaction-accounting";
@@ -138,6 +135,12 @@ type SessionEntryPatchStep = (
 export type SessionEntryPatchOperation =
   | SessionEntryPatchStep
   | { kind: "compound"; operations: readonly SessionEntryPatchStep[] };
+
+/** An accepted pin/archive write can invalidate Undo even when the entry data stays equal. */
+export type SessionEntryPatchWriteIntent = {
+  invalidateArchiveUndo?: true;
+  shellCallMutation?: true;
+};
 
 /** Shared by ordinary cron writes and the atomic reset-boundary owner. */
 export function projectCronSessionEntry(
@@ -151,9 +154,18 @@ export function projectCronSessionEntry(
   ) {
     throw createSessionWorkStartChangedError(operation.sessionKey);
   }
-  return current && initial
-    ? mergeSessionSnapshotChanges({ initial, next, current })
-    : { ...next, ...(!current ? operation.creation : {}) };
+  const merged =
+    current && initial
+      ? mergeSessionSnapshotChanges({ initial, next, current })
+      : { ...next, ...(!current ? operation.creation : {}) };
+  return operation.contextTotalsAccounted
+    ? {
+        ...merged,
+        totalTokens: next.totalTokens,
+        totalTokensFresh: next.totalTokensFresh,
+        totalTokensVersion: next.totalTokensVersion,
+      }
+    : merged;
 }
 
 /** Each reducer observes its predecessor's postimage; callers persist only the result. */
@@ -178,7 +190,20 @@ export function projectSessionEntryPatch(
     if (patch === null) {
       continue;
     }
-    next = mergeSessionEntryPatch({ ...params, existing, writeBase, patch });
+    if (params.writeIntent && operation.kind === "shell-call") {
+      params.writeIntent.shellCallMutation = true;
+    }
+    next = mergeSessionEntryPatch({
+      ...params,
+      existing,
+      writeBase,
+      patch,
+      // Bookkeeping reducers can project a complete row, but do not own its pin or archive.
+      writeIntent:
+        operation.kind === "fields" || operation.kind === "public-fields"
+          ? params.writeIntent
+          : undefined,
+    });
     if (next) {
       existing = writeBase = next;
     }
@@ -246,6 +271,39 @@ export function reduceSessionEntryPatch(
     return null;
   }
   switch (operation.kind) {
+    case "shell-call": {
+      const { call, runId } = operation;
+      if (!existingEntry || entry.incognito || entry.archivedAt !== undefined) {
+        return null;
+      }
+      const pending = entry.pendingShellCalls;
+      const previous = pending?.runId === runId ? pending : undefined;
+      if (operation.acknowledged) {
+        if (
+          !previous ||
+          !isDeepStrictEqual(previous, operation.acknowledged.pending) ||
+          !isDeepStrictEqual(entry.resumeAfterRestart, operation.acknowledged.marker)
+        ) {
+          throw new Error("The interrupted shell no longer owns this restart marker");
+        }
+        return { pendingShellCalls: undefined, resumeAfterRestart: undefined };
+      }
+      if (!call) {
+        return pending?.runId === runId ? { pendingShellCalls: pending } : null;
+      }
+      if (!call.callId || call.callId.length > 1024) {
+        throw new Error("The shell invocation ID cannot be saved; the command was not started.");
+      }
+      if (previous?.calls.some((item) => item.callId === call.callId)) {
+        throw new Error("This shell invocation was already admitted; it was not repeated.");
+      }
+      // A steer with a different requester or destination cannot inherit the first sender's channel.
+      const notice =
+        !previous || isDeepStrictEqual(previous.notice, operation.notice)
+          ? operation.notice
+          : undefined;
+      return { pendingShellCalls: { runId, calls: [...(previous?.calls ?? []), call], notice } };
+    }
     case "writer-revoke":
       return {
         activeWriterRunId: undefined,
@@ -297,6 +355,8 @@ export function reduceSessionEntryPatch(
         claudeCliSessionId: source.claudeCliSessionId,
         ...(!existingEntry ? operation.creation : {}),
         ...(operation.thinkingLevel ? { thinkingLevel: operation.thinkingLevel } : {}),
+        // Only this cron-owned write sets the receipt; the copied source row never carries one.
+        scheduledMemoryParent: operation.scheduledMemoryParent,
         cronRunContinuation: continuation,
       };
     }
@@ -356,119 +416,13 @@ export function reduceSessionEntryPatch(
     case "compaction-accounting":
       return projectCompactionAccountingPatch(entry, operation.accounting);
     case "pending-final-clear": {
-      const recoveryRunId = normalizeOptionalString(entry.restartRecoveryDeliveryRunId);
       const deliveries = entry.pendingFinalDelivery?.deliveries;
-      if (
-        entry.sessionId !== operation.sessionId ||
-        entry.pendingFinalDelivery?.intentId !== operation.intentId ||
-        !deliveries?.length ||
-        !deliveries.every(({ state }) => state === "delivered" || state === "suppressed") ||
-        (recoveryRunId !== undefined && recoveryRunId !== operation.recoveryRunId)
-      ) {
-        return null;
-      }
-      const completesHookTurn =
-        recoveryRunId === undefined &&
-        (entry.restartRecoveryBeforeAgentReplyState === "handled-reply" ||
-          entry.restartRecoveryBeforeAgentReplyState === "handled-unrecoverable");
-      return {
-        ...(recoveryRunId
-          ? buildRestartRecoveryClaimCleanupPatch({ entry, recordTerminalSource: true })
-          : {
-              restartRecoveryBeforeAgentReplyState: undefined,
-              restartRecoverySourceIngress: undefined,
-              restartRecoverySourceMessageChannel: undefined,
-              restartRecoveryOperatorSource: undefined,
-              restartRecoveryRequesterSource: undefined,
-              restartRecoveryForceSafeTools: undefined,
-            }),
-        pendingFinalDelivery: undefined,
-        ...(completesHookTurn
-          ? {
-              abortedLastRun: false,
-              endedAt: operation.now,
-              lifecycleRunId: undefined,
-              runtimeMs:
-                typeof entry.startedAt === "number"
-                  ? Math.max(0, operation.now - entry.startedAt)
-                  : undefined,
-              status: "done" as const,
-            }
-          : {}),
-      };
-    }
-    case "restart-safe-terminal":
-      return entry.restartRecoveryDeliveryRunId === operation.runId
-        ? {
-            ...operation.patch,
-            ...(!operation.retryable
-              ? buildRestartRecoveryClaimCleanupPatch({
-                  entry,
-                  recordTerminalSource: true,
-                  terminalSourceRunId: entry.restartRecoveryDeliverySourceRunId,
-                })
-              : {}),
-          }
+      return entry.sessionId === operation.sessionId &&
+        entry.pendingFinalDelivery?.intentId === operation.intentId &&
+        deliveries?.length &&
+        deliveries.every(({ state }) => state === "delivered" || state === "suppressed")
+        ? { pendingFinalDelivery: undefined }
         : null;
-    case "restart-claim-clear": {
-      const isExecutionFence = (run: NonNullable<SessionEntry["restartRecoveryRuns"]>[number]) =>
-        run.runId === operation.executionRunId &&
-        run.lifecycleGeneration === operation.executionGeneration;
-      const ownsClaim =
-        entry.restartRecoveryDeliveryRunId !== undefined
-          ? entry.restartRecoveryDeliveryRunId === operation.recoveryRunId &&
-            normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ===
-              operation.recoverySourceRunId
-          : entry.restartRecoveryRuns?.some(isExecutionFence) === true;
-      if (
-        entry.sessionId !== operation.sessionId ||
-        (entry.abortedLastRun === true && entry.mainRestartRecovery !== undefined) ||
-        !ownsClaim
-      ) {
-        return null;
-      }
-      // Unknown provider outcomes retire their source without replay. Until this
-      // commit, the active receipt still belongs to restart-safe reconciliation.
-      const terminalPending = entry.restartRecoveryDeliveryReceiptState === "terminal-pending";
-      const preservesPendingFinal = !terminalPending && entry.pendingFinalDelivery !== undefined;
-      const completesHandledSilent =
-        entry.restartRecoveryBeforeAgentReplyState === "handled-silent" && !preservesPendingFinal;
-      const endedAt = terminalPending || completesHandledSilent ? Date.now() : undefined;
-      const remainingRuns = entry.restartRecoveryRuns?.filter((run) => !isExecutionFence(run));
-      return {
-        ...buildRestartRecoveryClaimCleanupPatch({
-          entry,
-          recordTerminalSource: true,
-          terminalSourceRunId: operation.recoverySourceRunId,
-          terminalRunId:
-            operation.terminalRunId ??
-            (entry.restartRecoveryDeliveryRunId ? undefined : operation.executionRunId),
-        }),
-        restartRecoveryRuns: remainingRuns?.length ? remainingRuns : undefined,
-        ...(terminalPending ? { pendingFinalDelivery: undefined } : {}),
-        // Transport settlement owns the pending intent and its hook-safety provenance.
-        ...(preservesPendingFinal
-          ? {
-              restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
-              restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
-              restartRecoverySourceMessageChannel: entry.restartRecoverySourceMessageChannel,
-              restartRecoveryForceSafeTools: entry.restartRecoveryForceSafeTools,
-            }
-          : {}),
-        ...(endedAt !== undefined
-          ? {
-              abortedLastRun: terminalPending,
-              endedAt,
-              lifecycleRunId: undefined,
-              runtimeMs:
-                typeof entry.startedAt === "number"
-                  ? Math.max(0, endedAt - entry.startedAt)
-                  : undefined,
-              status: terminalPending ? ("failed" as const) : ("done" as const),
-            }
-          : {}),
-        updatedAt: endedAt ?? entry.updatedAt,
-      };
     }
   }
   return operation satisfies never;
@@ -481,17 +435,24 @@ export function mergeSessionEntryPatch(params: {
   sessionKey: string;
   replaceEntry?: boolean;
   preserveActivity?: boolean;
+  writeIntent?: SessionEntryPatchWriteIntent;
 }): SessionEntry | undefined {
-  const { existing, writeBase, patch, sessionKey } = params;
-  // A fallback supplies identity, not an existing node's immutable creation policy.
-  const creationPatch = !existing && patch ? { ...writeBase, ...patch } : patch;
-  if (!creationPatch) {
+  const { existing, writeBase, sessionKey, patch, writeIntent } = params;
+  if (!patch) {
     return undefined;
+  }
+  if (
+    writeIntent &&
+    (params.replaceEntry || Object.hasOwn(patch, "pinnedAt") || Object.hasOwn(patch, "archivedAt"))
+  ) {
+    writeIntent.invalidateArchiveUndo = true;
   }
   if (params.replaceEntry) {
     // SAFETY: The existing replaceEntry updater contract supplies a complete entry.
     return structuredClone(patch as SessionEntry);
   }
+  // A fallback supplies identity, not an existing node's immutable creation policy.
+  const creationPatch = !existing ? { ...writeBase, ...patch } : patch;
   const merged = params.preserveActivity
     ? mergeSessionEntryPreserveActivity(existing, creationPatch)
     : mergeSessionEntry(existing, creationPatch);

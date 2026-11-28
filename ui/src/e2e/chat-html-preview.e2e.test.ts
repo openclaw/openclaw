@@ -1,5 +1,7 @@
 // Uses the real isolated sandbox listener with deterministic Gateway file data.
+import { writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
+import { join } from "node:path";
 import { expect, it } from "vitest";
 import { buildSandboxHostPath } from "../../../src/agents/sandbox-host.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
@@ -8,6 +10,7 @@ import {
   closeHttpServer,
   listenLoopback,
 } from "../../../test/helpers/gateway-integration-fixtures.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createControlUiMockBootstrapConfig,
   defaultControlUiFeatureMethods,
@@ -85,6 +88,114 @@ function withSandbox(
 }
 
 suite.define(() => {
+  it("delivers HiDPI coordinate clicks inside the HTML preview after navigation", async (test) => {
+    await withSandbox(test, async (sandboxPort) => {
+      const html =
+        '<details><summary style="padding:8px;width:160px">Batch notes</summary><p>Six boxes of winter pears.</p></details>';
+      await suite.withPage(
+        {
+          viewport: { width: 1280, height: 720 },
+          serviceWorkers: "block",
+          permissions: ["local-network-access"],
+        },
+        async ({ page, context }) => {
+          await page.route(`${suite.server.baseUrl}packing-slip.html`, (route) =>
+            route.fulfill({ contentType: "text/html", body: html }),
+          );
+          await page.goto(`${suite.server.baseUrl}packing-slip.html`);
+          const emulation = await context.newCDPSession(page);
+          await emulation.send("Emulation.setDeviceMetricsOverride", {
+            width: 1280,
+            height: 720,
+            deviceScaleFactor: 2,
+            mobile: false,
+            screenWidth: 1280,
+            screenHeight: 720,
+          });
+          await page.mouse.click(96, 24);
+          expect(
+            await page.locator("details").evaluate((element) => element.hasAttribute("open")),
+          ).toBe(true);
+          const gateway = await installMockGateway(page, {
+            workspace: "/workspace",
+            historyMessages: [
+              {
+                role: "assistant",
+                timestamp: Date.now(),
+                content: [{ type: "text", text: "Open [page](page.html)." }],
+              },
+            ],
+            methodResponses: {
+              "sessions.files.get": fileResponse(html),
+              "canvas.document.preview": {
+                html,
+                sandboxUrl: buildSandboxHostPath({ blockDescendantFrames: true }),
+                sandboxPort,
+                sandboxOrigin: `http://127.0.0.1:${sandboxPort}`,
+              },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await gateway.waitForRequest("sessions.messages.subscribe");
+          await page.locator('a.markdown-file-link[data-file-path="page.html"]').click();
+          const outer = page.locator(
+            "openclaw-chat-detail-panel:visible .chat-html-preview__frame",
+          );
+          const document = outer.contentFrame().frameLocator("iframe");
+          const summary = document.locator("summary");
+          await summary.waitFor();
+          await page
+            .locator("openclaw-chat-detail-panel:visible openclaw-chat-html-preview [role=status]")
+            .waitFor({ state: "hidden" });
+          await page.locator(".sidebar-region").evaluate(async (region) => {
+            await Promise.all(
+              region
+                .getAnimations({ subtree: true })
+                .filter(
+                  (animation) =>
+                    animation.playState === "running" &&
+                    Number.isFinite(animation.effect?.getComputedTiming().endTime),
+                )
+                .map((animation) => animation.finished),
+            );
+          });
+          await expect.poll(() => page.evaluate(() => devicePixelRatio)).toBe(2);
+          const bounds = await outer.boundingBox();
+          expect(bounds).not.toBeNull();
+          const point = await summary.evaluate((element) => {
+            const rect = element.getBoundingClientRect();
+            return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+          });
+          expect(
+            await document.locator("details").evaluate((element) => element.hasAttribute("open")),
+          ).toBe(false);
+          const x = bounds!.x + point.x;
+          const y = bounds!.y + point.y;
+          const pointer = await summary.evaluateHandle((element) => {
+            const receipt = { reached: false };
+            element.addEventListener("pointermove", (event) => {
+              receipt.reached ||= event.isTrusted && event.target === element;
+            });
+            return receipt;
+          });
+          await expect
+            .poll(async () => {
+              await page.mouse.move(x, y);
+              return pointer.evaluate((receipt) => receipt.reached);
+            })
+            .toBe(true);
+          await page.mouse.click(x, y);
+          await expect
+            .poll(() =>
+              document.locator("details").evaluate((element) => element.hasAttribute("open")),
+            )
+            .toBe(true);
+          await emulation.detach();
+        },
+      );
+    });
+  });
+
   for (const mode of ["scripts", "strict"] as const) {
     it(`renders HTML with ${mode} and retains Source in the same file tab`, async (test) => {
       await withSandbox(test, async (sandboxPort) => {
@@ -169,18 +280,34 @@ suite.define(() => {
             }
             await page.goto(`${suite.server.baseUrl}chat`);
             await gateway.waitForRequest("sessions.messages.subscribe");
+            const panel = page.locator("openclaw-chat-detail-panel:visible");
+            const outer = panel.locator(".chat-html-preview__frame");
+            const frameTop = () =>
+              outer.evaluate(
+                (frame) =>
+                  frame.getBoundingClientRect().top -
+                  frame.closest(".chat-html-preview")!.getBoundingClientRect().top,
+              );
+            let loadingTop: number | undefined;
+            await page.route(
+              `http://127.0.0.1:${sandboxPort}${sandboxUrl}`,
+              async (route) => {
+                loadingTop = await frameTop();
+                await route.continue();
+              },
+              { times: 1 },
+            );
             await page
               .locator('a.markdown-file-link[data-file-path="page.html"]')
               .filter({ hasText: /^page$/ })
               .click();
-            const panel = page.locator("openclaw-chat-detail-panel:visible");
-            const outer = panel.locator(".chat-html-preview__frame");
             await outer.waitFor();
             const document = outer.contentFrame().frameLocator("iframe");
             await document.getByRole("heading", { name: "Local HTML page" }).waitFor();
             await panel
               .locator("openclaw-chat-html-preview [role=status]")
               .waitFor({ state: "hidden" });
+            expect(await frameTop()).toBe(loadingTop);
             expect(await outer.contentFrame().locator("iframe").getAttribute("sandbox")).toBe(
               mode === "strict" ? "" : "allow-scripts allow-forms",
             );
@@ -199,7 +326,7 @@ suite.define(() => {
             const originalFrame = await outer.elementHandle();
             if (mode === "scripts") {
               expect(await gateway.getRequests("sessions.files.assets")).toMatchObject([
-                { params: { path: "page.html", refs: Object.keys(scripts) } },
+                { params: { path: "/workspace/page.html", refs: Object.keys(scripts) } },
               ]);
               expect(await document.locator("html").getAttribute("data-blocking-saw-app")).toBe(
                 "false",
@@ -274,6 +401,18 @@ suite.define(() => {
             await panel
               .locator("openclaw-chat-html-preview [role=status]")
               .waitFor({ state: "hidden" });
+            const header = await page.locator(".side-panel__header:visible").boundingBox();
+            const paneWidth = {
+              x: expect.closeTo(header!.x, 0),
+              width: expect.closeTo(header!.width, 0),
+            };
+            for (const part of [
+              panel.locator(".sidebar-file-view__path-bar"),
+              panel.locator(".sidebar-file-toolbar"),
+              outer,
+            ]) {
+              expect(await part.boundingBox()).toMatchObject(paneWidth);
+            }
             for (const height of [1000, 480]) {
               await page.setViewportSize({ width: 1440, height });
               await expect
@@ -299,7 +438,13 @@ suite.define(() => {
             await page.setViewportSize({ width: 1440, height: 1000 });
             const attachmentFrame = await outer.elementHandle();
             await selectFileAction(panel, "Source");
-            expect(await panel.locator("pre:visible").textContent()).toBe(attachmentSource);
+            const sourceBlock = panel.locator("pre:visible");
+            expect(await sourceBlock.textContent()).toBe(attachmentSource);
+            const toolbar = await panel.locator(".sidebar-file-toolbar").boundingBox();
+            expect(await sourceBlock.boundingBox()).toMatchObject({
+              ...paneWidth,
+              y: expect.closeTo(toolbar!.y + toolbar!.height, 0),
+            });
             expect(await panel.locator("a[download]").getAttribute("href")).toBe(mediaUrl);
             await tab.click();
             expect(await originalFrame!.evaluate((frame) => frame.isConnected)).toBe(true);
@@ -324,6 +469,124 @@ suite.define(() => {
             expect(await gateway.getRequests("canvas.document.view")).toEqual([]);
             expect(await gateway.getRequests("wake")).toEqual([]);
             expect(await gateway.getRequests("chat.send")).toEqual([]);
+          },
+        );
+      });
+    });
+
+    it(`retains in-page navigation outside the resource CSP subset with ${mode}`, async (test) => {
+      const policy = "default-src 'none'; style-src 'unsafe-inline'; script-src 'none'";
+      const report = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}">
+<style>body{font:16px system-ui;padding:20px}section{margin-top:1800px;padding-bottom:1200px}</style>
+</head><body><h1>Review notes</h1><a href="#details">Read details</a>
+<input aria-label="Local note"><script>document.documentElement.dataset.ran="yes"</script>
+<section><h2 id="details">Details</h2><p>The selected report stays open.</p></section></body></html>`;
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR ? suite.artifactDir : undefined;
+      const viewport = { width: 1440, height: 1000 };
+      await withSandbox(test, async (sandboxPort) => {
+        await suite.withPage(
+          {
+            viewport,
+            permissions: ["local-network-access"],
+            ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
+          },
+          async ({ page }) => {
+            const gateway = await installMockGateway(page, {
+              workspace: "/workspace",
+              featureMethods: [
+                ...defaultControlUiFeatureMethods,
+                "canvas.document.preview",
+                "sessions.files.preview",
+              ],
+              historyMessages: [
+                {
+                  role: "assistant",
+                  content: [{ type: "text", text: "Open [report](page.html)." }],
+                },
+              ],
+              methodResponses: {
+                "sessions.files.get": fileResponse(report),
+                "canvas.document.preview": {
+                  html: report,
+                  sandboxUrl: buildSandboxHostPath({ blockDescendantFrames: true }),
+                  sandboxPort,
+                  sandboxOrigin: `http://127.0.0.1:${sandboxPort}`,
+                },
+                "sessions.files.preview": { status: "unsupported", html: report, omitted: 0 },
+              },
+            });
+            await page.route(`${suite.server.baseUrl}chat`, (route) =>
+              fulfillWithControlUiCsp(route, "Content-Security-Policy"),
+            );
+            await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
+              route.fulfill({
+                json: { ...createControlUiMockBootstrapConfig(), embedSandbox: mode },
+              }),
+            );
+            await page.goto(`${suite.server.baseUrl}chat`);
+            await gateway.waitForRequest("sessions.messages.subscribe");
+            await page.locator('a.markdown-file-link[data-file-path="page.html"]').click();
+            const panel = page.locator("openclaw-chat-detail-panel:visible");
+            const outer = panel.locator(".chat-html-preview__frame");
+            const document = outer.contentFrame().frameLocator("iframe");
+            const heading = document.getByRole("heading", { name: "Review notes", exact: true });
+            await heading.waitFor();
+            await panel.getByRole("status").filter({ hasText: "Use Source or Download" }).waitFor();
+            expect(
+              await document
+                .locator('meta[http-equiv="Content-Security-Policy"]')
+                .getAttribute("content"),
+            ).toBe(policy);
+            expect(await document.locator("html").getAttribute("data-ran")).toBeNull();
+            expect(await outer.contentFrame().locator("iframe").getAttribute("sandbox")).toBe(
+              mode === "strict" ? "" : "allow-scripts allow-forms",
+            );
+            expect(
+              await heading.evaluate(() => {
+                try {
+                  void localStorage.length;
+                  return false;
+                } catch {
+                  return true;
+                }
+              }),
+            ).toBe(true);
+            await document.getByRole("textbox", { name: "Local note" }).fill("Retain this report");
+            const originalHeading = await heading.elementHandle();
+            const capture = async (name: string) => {
+              if (artifactDir) {
+                const frame = await takeControlUiScreenshotFrame(page, panel, [outer], {
+                  animations: "disabled",
+                });
+                await writeFile(join(artifactDir, `${mode}-${name}.png`), frame.png);
+              }
+            };
+            await capture("before-click");
+            await document.getByRole("link", { name: "Read details", exact: true }).click();
+            await expect
+              .poll(() =>
+                document.locator("#details").evaluate((target) => {
+                  const bounds = target.getBoundingClientRect();
+                  return window.scrollY > 0 && bounds.top >= -1 && bounds.top < window.innerHeight;
+                }),
+              )
+              .toBe(true);
+            expect(
+              await heading.evaluate((element, original) => element === original, originalHeading),
+            ).toBe(true);
+            expect(await document.getByRole("textbox", { name: "Local note" }).inputValue()).toBe(
+              "Retain this report",
+            );
+            await capture("after-click");
+            expect(await gateway.getRequests("canvas.document.preview")).toHaveLength(1);
+            expect(await gateway.getRequests("sessions.files.assets")).toEqual([]);
+          },
+          async ({ page, context }) => {
+            const video = page.video();
+            await suite.closeBrowserContext(context);
+            if (artifactDir) {
+              await video?.saveAs(join(artifactDir, `${mode}-fragment.webm`));
+            }
           },
         );
       });

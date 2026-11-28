@@ -57,6 +57,7 @@ it.each(["root", "skills", "connectors", "libraries", "library:missing"] as cons
     flush();
     expect(skillName).not.toHaveBeenCalled();
     mounted.container.querySelector<HTMLButtonElement>(".agent-chat__input-btn--attach")!.click();
+    await import("./chat-composer-plus-menu-content.tsx");
     const content = mounted.container.querySelector(".agent-chat__capability-menu-panel")!;
     await waitForSolid(() => expect(content.matches(":popover-open")).toBe(true));
     const expectedContent = {
@@ -91,7 +92,7 @@ it.each(["root", "skills", "connectors", "libraries", "library:missing"] as cons
     expect(observer.takeRecords()).toHaveLength(0);
     expect([...content.querySelectorAll("*")]).toEqual(children);
 
-    const capability = menu.capabilityMenu!;
+    const capability = menu.capabilityMenu!.read()!;
     switch (view) {
       case "root":
         capability.webSearchBaseEnabled = false;

@@ -1,7 +1,7 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import mermaidScriptUrl from "../../../packages/mermaid-renderer/src/mermaid-script-url.ts";
+import { afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { NativeMermaidWindow } from "../../../packages/mermaid-renderer/src/native.ts";
+import peleScriptUrl from "../../../packages/mermaid-renderer/src/pele-script-url.ts";
 import "../../../packages/mermaid-renderer/src/native.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { parsePassiveSvg, theme } from "./markdown-mermaid.test-support.ts";
@@ -41,7 +41,7 @@ async function expectRecovery(source: string, index: number) {
 beforeAll(async () => {
   // Vite builds the classic bundle on its first request. Prepare that fixture
   // before the native renderer's load watchdog, which still covers the iframe.
-  const response = await fetch(mermaidScriptUrl);
+  const response = await fetch(peleScriptUrl);
   expect(response.ok).toBe(true);
   await response.arrayBuffer();
 });
@@ -87,9 +87,21 @@ it("delivers ordered passive images at the requested viewport width", async () =
   expect(frame.contentDocument).toBeNull();
 });
 
+it("keeps a small diagram at layout scale within the iPad physical bitmap cap", async () => {
+  await render("ipad", "flowchart TD\nDraft --> Review\nReview --> Ship", 694);
+  const reply = replies[0];
+  assert.isDefined(reply);
+  expect(reply.success, reply.error).toBe(true);
+  const root = new DOMParser().parseFromString(reply.svg!, "image/svg+xml").querySelector("svg")!;
+  const image = diagram.querySelector("img")!;
+  expect(image.height).toBe(Math.ceil(root.viewBox.baseVal.height));
+  expect(image.width * image.height * 2 ** 2).toBeLessThanOrEqual(4_194_304);
+  expect(image.style.objectFit).toBe("contain");
+});
+
 it("keeps syntax and raster-limit failures permanent and renders the next request", async () => {
-  const source = "flowchart TB\nA[One] --> B[Two] --> C[Three]";
-  await render("oversized", source, 4_096);
+  const source = "flowchart TB\nA[One] --> B[Two] --> C[Three] --> D[Four] --> E[Five] --> F[Six]";
+  await render("oversized", source, 8_192);
   expect(replies).toEqual([
     { id: "oversized", success: false, error: "Diagram image is too large.", retryable: false },
   ]);

@@ -4,17 +4,14 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { retainSessionEntryWorkerPublication } from "../../config/sessions/session-accessor.sqlite-entry-worker-publication.js";
-import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
-import { removeSessionMember as removeSessionMemberSync } from "../../config/sessions/session-sharing-store.native.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   getActiveGatewayRootWorkCount,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import {
-  beginSessionEffect,
-  getCompetingSessionWorkAdmissionRelease,
-} from "../../sessions/session-controller.lifecycle.js";
+import { selectedEffects } from "../../sessions/session-controller.lifecycle-projections.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
+import { targetFrom } from "../../sessions/session-controller.target.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -24,7 +21,7 @@ import * as profileReader from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { captureGatewayDeviceRevocation } from "../device-revocation.js";
 import { SessionMutationAuthorizationChangedError as AuthorizationChangedError } from "../session-sharing.js";
-import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
+import { rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { bindChatProfile } from "./chat-send-admission-fixtures.test-support.js";
 import { admitChatSend } from "./chat-send-admission.js";
@@ -52,11 +49,13 @@ const expectFailed = (outcome: { value: unknown } | { error: unknown }) =>
   expect(outcome).toEqual(
     "error" in outcome ? { error: expect.any(Error) } : { value: { ok: false } },
   );
-function lifecycleRelease(fixture: Awaited<ReturnType<typeof createBrowserFollowupFixture>>) {
-  return getCompetingSessionWorkAdmissionRelease({
-    scope: fixture.scope.storePath,
-    identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
-  });
+function lifecycleEffects(fixture: Awaited<ReturnType<typeof createBrowserFollowupFixture>>) {
+  return selectedEffects([
+    targetFrom({
+      scope: fixture.scope.storePath,
+      identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
+    }),
+  ]);
 }
 
 it.each([true, false])(
@@ -115,7 +114,7 @@ it("clears a pending reservation when its retained reader is revoked after publi
     await closing;
     expect(fixture.context.dedupe.has(pendingKey)).toBe(false);
     expect(rpcSourceTesting.size).toBe(0);
-    expect(lifecycleRelease(fixture)).toBeUndefined();
+    expect(lifecycleEffects(fixture).size).toBe(0);
 
     fixture.params.message = "Corrected input after the failed reservation.";
     admitted = await admitChatSend(await authorize(fixture));
@@ -173,8 +172,14 @@ it("retains callback custody during database closure", async () => {
     );
     assert(retainedRead, "Expected the callback's retained worker read");
     const [readerOutcome] = await Promise.allSettled([retainedRead]);
-    const released = lifecycleRelease(fixture);
-    expect(released).toBeDefined();
+    const effects = [...lifecycleEffects(fixture)];
+    expect(effects).toHaveLength(1);
+    expect(effects[0]!.phase).toBe("acquired");
+    const released = effects[0]!.ref.released;
+    const onReleased = vi.fn();
+    void released.then(onReleased);
+    await Promise.resolve();
+    expect(onReleased).not.toHaveBeenCalled();
     expect(getActiveGatewayRootWorkCount()).toBe(rootsBefore + 1);
     expect(caller.isCurrent()).toBe(true);
     expect(rpcSourceTesting.size).toBe(1);
@@ -187,6 +192,7 @@ it("retains callback custody during database closure", async () => {
       expectFailed(result);
     }
     await released;
+    expect(lifecycleEffects(fixture).size).toBe(0);
     expect(getActiveGatewayRootWorkCount()).toBe(rootsBefore);
     expect(caller.isCurrent()).toBe(false);
     expect(rpcSourceTesting.size).toBe(0);
@@ -202,37 +208,6 @@ it("retains callback custody during database closure", async () => {
     root.release();
     caller.release();
   }
-});
-
-it("rejects membership revoked inside retained chat admission before dispatch", async () => {
-  await using fixture = await createBrowserFollowupFixture({
-    createdActor: { type: "human", source: "profile", id: "another-profile" },
-  });
-  const cfg = { ...rolePolicyConfig(), session: { store: fixture.scope.storePath } };
-  const member = roleClient("view", "chat-admission-member");
-  Object.assign(fixture.client, member, { connId: "chat-admission-member" });
-  fixture.context.getRuntimeConfig = () => cfg;
-  await patchSessionEntryCore(fixture.scope, () => ({ visibility: "read-only" }));
-  await addSessionMember(fixture.scope, {
-    identityId: member.authenticatedUserProfile!.profileId,
-    addedBy: "another-profile",
-  });
-  const prepared = await authorize(fixture);
-  const { authorization, authorizationError, respond } = prepared;
-  expect(authorizationError).toBeNull();
-  await expect(
-    admitChatSend({
-      ...prepared,
-      withPreparedCurrent: (facts, consume, assertSourceCurrent) => {
-        removeSessionMemberSync(fixture.scope, member.authenticatedUserProfile!.profileId);
-        return authorization.withPreparedCurrent!(facts, consume, assertSourceCurrent);
-      },
-    }),
-  ).resolves.toEqual({ ok: false });
-  expect(fixture.context.dedupe.size).toBe(0);
-  expect(rpcSourceTesting.size).toBe(0);
-  expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.anything());
 });
 
 it("joins a session write still publishing when durable recovery reconciliation resumes", async () => {
@@ -341,13 +316,13 @@ it.each(["revocation", "role change"] as const)(
         expect.objectContaining({
           code: "INVALID_REQUEST",
           message: expect.stringContaining(
-            change === "revocation" ? "caller authority" : "operator role changed",
+            change === "revocation" ? "Gateway request could not start" : "operator role changed",
           ),
         }),
       );
       expect(fixture.context.broadcast).not.toHaveBeenCalled();
       expect(rpcSourceTesting.size).toBe(0);
-      expect(lifecycleRelease(fixture)).toBeUndefined();
+      expect(lifecycleEffects(fixture).size).toBe(0);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       resume.resolve();

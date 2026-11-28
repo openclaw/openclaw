@@ -70,6 +70,19 @@ const pluginPolicyLogs = [
   "webhooks-only-policy/baseline-runtime.out",
   "webhooks-only-policy/candidate-runtime.out",
 ];
+const nativePluginUiLogs = ["", "native-ui-opt-out/"]
+  .flatMap((prefix) =>
+    ["baseline", "candidate"].flatMap((stage) => [
+      `${prefix}native-ui-${stage}-proof.json`,
+      `${prefix}native-ui-${stage}-catalog.out`,
+      `${prefix}native-ui-${stage}-catalog.err`,
+    ]),
+  )
+  .concat([
+    "native-ui-opt-out/update.json",
+    "native-ui-opt-out/update.err",
+    "native-ui-opt-out/candidate-gateway.log",
+  ]);
 const logNames = [
   "baseline-install.log",
   "baseline-companion.json",
@@ -124,6 +137,7 @@ const logNames = [
   "physical-candidate-repair.json",
   "legacy-operator-cron-history-proof.json",
   ...pluginPolicyLogs,
+  ...nativePluginUiLogs,
   ...nativeAssignmentLogs,
   "webhooks-only-policy/update.err",
   "webhooks-only-policy/gateway.log",
@@ -172,6 +186,68 @@ const reasons = [
   "SQLite journal state requires an artifact-preserving reader; omitted before native open",
 ];
 const omissions = {};
+const installedRecoveryLabels = [
+  "installed recovery",
+  "installed recovery install",
+  "installed recovery driver error",
+];
+
+function installedRecoveryProjection(value, sanitize = (text) => text) {
+  if (value?.availability !== "captured") {
+    return { availability: "unavailable" };
+  }
+  if (
+    !/^installed-recovery-[A-Za-z0-9]+$/.test(value.runDirectory) ||
+    !["running", "passed"].includes(value.status)
+  ) {
+    throw new Error();
+  }
+  return {
+    availability: "captured",
+    runDirectory: value.runDirectory,
+    status: value.status,
+    driverError: {
+      availability: value.driverError?.availability === "captured" ? "captured" : "unavailable",
+    },
+    logs: {
+      install: sanitize(value.logs?.install ?? null, "installed recovery install"),
+    },
+  };
+}
+
+function captureInstalledRecovery(artifactRoot, observationRoot) {
+  if (!observationRoot) {
+    return { availability: "unavailable" };
+  }
+  try {
+    const summary = JSON.parse(
+      readOwned(artifactRoot, "installed-recovery.json", "installed recovery"),
+    );
+    if (
+      !/^installed-recovery-[A-Za-z0-9]+$/.test(summary?.runDirectory) ||
+      ownedPath(artifactRoot, summary.runDirectory) !== fs.realpathSync(observationRoot)
+    ) {
+      throw new Error();
+    }
+    return installedRecoveryProjection({
+      availability: "captured",
+      runDirectory: summary.runDirectory,
+      status: summary.status,
+      // Assertion values stay private; publish only the error file's availability.
+      driverError: {
+        availability: readOwned(observationRoot, "driver.err", "installed recovery driver error")
+          ? "captured"
+          : "unavailable",
+      },
+      logs: {
+        install: readOwned(observationRoot, "install.log", "installed recovery install"),
+      },
+    });
+  } catch {
+    omissions["installed recovery"] = reasons[3];
+    return { availability: "unavailable" };
+  }
+}
 
 function ownedPath(root, relative) {
   if (!root || fs.lstatSync(root).isSymbolicLink()) {
@@ -1564,6 +1640,7 @@ async function capture(artifactRoot, phase, exitStatus, signal = "", observation
         : readOwned(artifactRoot, name, name);
   }
   const stateRoot = process.env.OPENCLAW_STATE_DIR;
+  report.installedRecovery = captureInstalledRecovery(artifactRoot, observationRoot);
   report.packageIntegrity = capturePackageIntegrity(observationRoot);
   report.pluginIdentity = await pluginIdentities(stateRoot, artifactRoot);
   report.migration = captureMigrationEvidence(stateRoot, artifactRoot, observationRoot);
@@ -1682,17 +1759,184 @@ function publishedPostCore(snapshot, sanitize) {
   };
 }
 
+function publishedNativePluginUi(snapshot, sanitize) {
+  const selected =
+    snapshot.scenario === "legacy-operator-state" &&
+    ["2026.10.5", "2026.10.7", "2026.10.8"].includes(snapshot.baseline?.version) &&
+    snapshot.candidate?.kind === "tarball" &&
+    snapshot.updateRestartMode === "manual" &&
+    snapshot.phases?.some(
+      (event) => event.phase === "prepare-native-plugin-ui-upgrade" && event.status === "passed",
+    );
+  if (!selected && !snapshot.nativePluginUi && !snapshot.nativePluginUiOptOut) {
+    return undefined;
+  }
+  const invalid = () => {
+    throw new Error("Invalid or missing native plugin UI upgrade evidence");
+  };
+  if (!selected) {
+    invalid();
+  }
+  const proofs = [snapshot.nativePluginUi, snapshot.nativePluginUiOptOut];
+  for (const [index, proof] of proofs.entries()) {
+    const policy = index === 0 ? "omitted" : "false";
+    const baseline = proof?.baseline;
+    if (
+      proof?.status !== "passed" ||
+      proof.stage !== "candidate" ||
+      proof.policy !== policy ||
+      proof.servingVersion !== snapshot.candidate?.version ||
+      proof.servingVersion !== snapshot.installedVersion ||
+      proof.eligible !== (index === 0) ||
+      proof.pluginSettingsPreserved !== true ||
+      proof.operatorDataPreserved !== true ||
+      baseline?.status !== "passed" ||
+      baseline.stage !== "baseline" ||
+      baseline.policy !== policy ||
+      baseline.servingVersion !== snapshot.baseline.version ||
+      baseline.eligible !== false ||
+      baseline.pluginSettingsPreserved !== true ||
+      baseline.operatorDataPreserved !== true ||
+      !/^[a-f0-9]{64}$/u.test(proof.installed?.archiveSha256 ?? "") ||
+      !Array.isArray(proof.assets)
+    ) {
+      invalid();
+    }
+    const expected =
+      index === 0
+        ? [
+            [true, 200],
+            [true, 200],
+            [false, 401],
+          ]
+        : [
+            [true, 404],
+            [true, 404],
+          ];
+    if (
+      proof.assets.length !== expected.length ||
+      proof.assets.some(
+        (asset, i) =>
+          asset.authenticated !== expected[i][0] ||
+          asset.status !== expected[i][1] ||
+          (asset.status === 200 && !/^[a-f0-9]{64}$/u.test(asset.sha256 ?? "")),
+      )
+    ) {
+      invalid();
+    }
+  }
+  if (proofs[0].installed.archiveSha256 !== proofs[1].installed.archiveSha256) {
+    invalid();
+  }
+  return {
+    status: "passed",
+    baselineVersion: sanitize(snapshot.baseline.version, "native plugin UI"),
+    candidateVersion: sanitize(snapshot.candidate.version, "native plugin UI"),
+    fixtureArchiveSha256: proofs[0].installed.archiveSha256,
+    omittedBecameEligible: true,
+    explicitFalsePreserved: true,
+    authenticatedAssetsServed: true,
+    unauthenticatedAssetsDenied: true,
+    // Cold-start smoke proof; warm cached-asset policy enforcement has its own Gateway test.
+    optedOutAssetsDenied: true,
+    pluginSettingsPreserved: true,
+    // The fixture retains a state-directory sentinel, not a plugin storage-API round trip.
+    operatorDataPreserved: true,
+  };
+}
+
+function publishedDeferredSchemaDoctor(snapshot, sanitize) {
+  const proof = snapshot.deferredSchemaDoctor;
+  if (proof === null || proof === undefined) {
+    return null;
+  }
+  const schema = (value) =>
+    value &&
+    [value.userVersion, value.metadataVersion, value.contentVersion].every(
+      (version) => Number.isSafeInteger(version) && version >= 0,
+    );
+  if (
+    snapshot.scenario !== "legacy-operator-state" ||
+    snapshot.updateRestartMode !== "manual" ||
+    proof.relativePath !== "state/openclaw.sqlite" ||
+    proof.baselineVersion !== snapshot.baseline.version ||
+    proof.baselineVersion !== "2026.9.2" ||
+    proof.candidateVersion !== snapshot.candidate.version ||
+    !/^[a-f0-9]{64}$/u.test(proof.candidateSha256) ||
+    !/^[a-f0-9]{40}$/u.test(proof.sourceSha) ||
+    !Number.isSafeInteger(proof.expectedContentVersion) ||
+    proof.expectedContentVersion < 0 ||
+    !Number.isSafeInteger(proof.baselinePublishedVersion) ||
+    proof.baselinePublishedVersion < 0 ||
+    !schema(proof.before) ||
+    !["passed", "not-observed"].includes(proof.status)
+  ) {
+    throw new Error("Invalid deferred-schema Doctor proof");
+  }
+  const tuple = (value) => ({
+    userVersion: value.userVersion,
+    metadataVersion: value.metadataVersion,
+    contentVersion: value.contentVersion,
+  });
+  const result = {
+    status: proof.status,
+    relativePath: proof.relativePath,
+    baselineVersion: proof.baselineVersion,
+    candidateVersion: sanitize(proof.candidateVersion, "summary"),
+    candidateSha256: proof.candidateSha256,
+    sourceSha: proof.sourceSha,
+    expectedContentVersion: proof.expectedContentVersion,
+    before: tuple(proof.before),
+    baselinePublishedVersion: proof.baselinePublishedVersion,
+  };
+  if (proof.status === "passed") {
+    if (
+      !schema(proof.after) ||
+      JSON.stringify(tuple(proof.after)) !== JSON.stringify(tuple(proof.before)) ||
+      proof.before.userVersion !== 15 ||
+      proof.before.userVersion !== proof.baselinePublishedVersion ||
+      proof.before.userVersion !== proof.before.metadataVersion ||
+      proof.before.userVersion >= proof.before.contentVersion ||
+      proof.before.contentVersion !== proof.expectedContentVersion ||
+      proof.doctorExitCode !== 1 ||
+      proof.diagnosticVersion !== proof.expectedContentVersion ||
+      proof.pendingMigrations !== 0 ||
+      proof.sameDatabase !== true ||
+      [
+        proof.beforeObserverFamilyUnchanged,
+        proof.cliFamilyUnchanged,
+        proof.afterObserverFamilyUnchanged,
+      ].some((value) => typeof value !== "boolean")
+    ) {
+      throw new Error("Invalid deferred-schema Doctor result");
+    }
+    Object.assign(result, {
+      after: tuple(proof.after),
+      doctorExitCode: 1,
+      diagnosticVersion: proof.diagnosticVersion,
+      pendingMigrations: 0,
+      sameDatabase: true,
+      beforeObserverFamilyUnchanged: proof.beforeObserverFamilyUnchanged,
+      cliFamilyUnchanged: proof.cliFamilyUnchanged,
+      afterObserverFamilyUnchanged: proof.afterObserverFamilyUnchanged,
+    });
+  }
+  return result;
+}
+
 function publishedSuccessSummary(artifactRoot, sanitize) {
   const raw = readOwned(artifactRoot, "summary.json", "summary");
   if (raw === null) {
     throw new Error();
   }
   const snapshot = JSON.parse(raw);
-  if (snapshot.status !== "passed") {
+  if (snapshot.status !== "passed" || !Array.isArray(snapshot.phases)) {
     throw new Error();
   }
   const pluginPolicy = publishedPluginPolicy(snapshot, { sanitize, boundedList });
   const nativeAssignments = publishedNativeAssignments(snapshot);
+  const nativePluginUi = publishedNativePluginUi(snapshot, sanitize);
+  const deferredSchemaDoctor = publishedDeferredSchemaDoctor(snapshot, sanitize);
   let packageActivationRecovery;
   if (
     ["package-publication-recovery", "package-verification-recovery"].includes(snapshot.scenario)
@@ -1817,9 +2061,13 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     backupRollback: publishedBackupRollback(snapshot, { sanitize, boundedList, textFields }),
     ...(pluginPolicy ? { pluginPolicy } : {}),
     ...(nativeAssignments ? { nativeAssignments } : {}),
+    ...(nativePluginUi ? { nativePluginUi } : {}),
+    ...(deferredSchemaDoctor ? { deferredSchemaDoctor } : {}),
     ...(packageActivationRecovery ? { packageActivationRecovery } : {}),
     timings,
-    phases: boundedList(snapshot.phases).map((event) => {
+    // Preserve the full start/completion journal within the summary's input/output
+    // byte limits; generic collection counts reject valid long-running proofs.
+    phases: snapshot.phases.map((event) => {
       if (
         !["started", "passed", "failed"].includes(event?.status) ||
         typeof event.phase !== "string" ||
@@ -1900,7 +2148,7 @@ function failedUpdateContext(text, label) {
   try {
     // Match the warning-prefixed updater JSON accepted by assertions.readUpdateJson.
     const result = JSON.parse(text.slice(text.indexOf("{")));
-    if (result?.status !== "error" || !Array.isArray(result.steps)) {
+    if (!["ok", "error"].includes(result?.status) || !Array.isArray(result.steps)) {
       return "";
     }
     const index = result.steps.findIndex(
@@ -1944,6 +2192,43 @@ function failedUpdateContext(text, label) {
   }
 }
 
+function diagnosticSanitizer(redactSensitiveText, outcome) {
+  return function sanitize(text, label) {
+    if (text === null || text === undefined) {
+      return null;
+    }
+    if (typeof text !== "string" || Buffer.byteLength(text) > inputLimit) {
+      throw new Error();
+    }
+    let redacted = redactSensitiveText(text, { mode: "tools" });
+    if (outcome === "failed" && Buffer.byteLength(JSON.stringify(redacted)) > outputLimit) {
+      const context = failedUpdateContext(text, label);
+      if (context) {
+        // Keep execution order explicit; this is a diagnostic prelude, not reordered steps.
+        redacted = `${redactSensitiveText(context, { mode: "tools" })}\n\nCaptured update output (original order):\n${redacted}`;
+      }
+    }
+    // Keep the latest startup/native events after redacting the whole input.
+    const tail =
+      label === "missing-load-path/baseline-gateway.log" ||
+      label === "native-assignment-messages.jsonl";
+    const lines = redacted.split(/(?<=\n)/u);
+    if (tail) {
+      lines.reverse();
+    }
+    let result = "";
+    for (const line of lines) {
+      const next = tail ? line + result : result + line;
+      if (Buffer.byteLength(JSON.stringify(next)) > outputLimit) {
+        omissions[label] = "redacted output truncated at a complete line (16 KiB)";
+        break;
+      }
+      result = next;
+    }
+    return result;
+  };
+}
+
 export function publishDiagnostics(
   artifactRoot,
   destination,
@@ -1953,6 +2238,7 @@ export function publishDiagnostics(
   for (const label of Object.keys(omissions)) {
     delete omissions[label];
   }
+  const sanitize = diagnosticSanitizer(redactSensitiveText, outcome);
   if (outcome === "passed") {
     writeReport(
       artifactRoot,
@@ -2000,6 +2286,7 @@ export function publishDiagnostics(
     "successful update plugins",
     "plugin identity",
     "package integrity",
+    ...installedRecoveryLabels,
     ...["doctor", "sessions", "archives", "sibling"].map((section) => `migration-${section}`),
     "session migration",
     ...Object.values(migrationLabels),
@@ -2008,42 +2295,14 @@ export function publishDiagnostics(
       omissions[label] = snapshot.omissions[label];
     }
   }
-  function sanitize(text, label) {
-    if (text === null || text === undefined) {
-      return null;
-    }
-    if (typeof text !== "string" || Buffer.byteLength(text) > inputLimit) {
-      throw new Error();
-    }
-    let redacted = redactSensitiveText(text, { mode: "tools" });
-    if (outcome === "failed" && Buffer.byteLength(JSON.stringify(redacted)) > outputLimit) {
-      const context = failedUpdateContext(text, label);
-      if (context) {
-        // Keep execution order explicit; this is a diagnostic prelude, not reordered steps.
-        redacted = `${redactSensitiveText(context, { mode: "tools" })}\n\nCaptured update output (original order):\n${redacted}`;
-      }
-    }
-    // Keep the latest startup/native events after redacting the whole input.
-    const tail =
-      label === "missing-load-path/baseline-gateway.log" ||
-      label === "native-assignment-messages.jsonl";
-    const lines = redacted.split(/(?<=\n)/u);
-    if (tail) {
-      lines.reverse();
-    }
-    let result = "";
-    for (const line of lines) {
-      const next = tail ? line + result : result + line;
-      if (Buffer.byteLength(JSON.stringify(next)) > outputLimit) {
-        omissions[label] = "redacted output truncated at a complete line (16 KiB)";
-        break;
-      }
-      result = next;
-    }
-    return result;
-  }
   for (const name of logNames) {
     report.logs[name] = sanitize(snapshot.logs?.[name], name);
+  }
+  report.installedRecovery = { availability: "unavailable" };
+  try {
+    report.installedRecovery = installedRecoveryProjection(snapshot.installedRecovery, sanitize);
+  } catch {
+    omissions["installed recovery"] = reasons[3];
   }
   for (const field of ["ExecStart", "WorkingDirectory", "supervisorWorkingDirectory"]) {
     report.service[field] = sanitize(snapshot.service?.[field], field);

@@ -5,10 +5,15 @@ import {
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { focusProgrammatically } from "../../lib/programmatic-focus.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import type { Overlay } from "../overlay-lifecycle.ts";
-import { containsComposed } from "../overlay-registry.ts";
-import { MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
+import {
+  compareMenuElements,
+  MENU_FORM_CONTROL_SELECTOR,
+  ownsMenuTarget,
+} from "./menu-form-controls.ts";
+import type { MenuKeySource, PendingMenuHover, PendingMenuIntent } from "./menu-navigation.ts";
 import type { MenuNavigationOptions, MenuRuntime } from "./menu-runtime.ts";
 
 export type { MenuNavigationOptions } from "./menu-runtime.ts";
@@ -33,8 +38,9 @@ export function createMenuControls(): MenuControls {
 }
 
 export type MenuBinding = {
+  isOpen(): boolean;
   itemRef(): (element: HTMLElement) => void;
-  items(): HTMLElement[];
+  items(ordered?: boolean): HTMLElement[];
   highlightedValue(): string | null;
   highlightedValueNow(): string | null;
   setHighlightedValue(value: string | null): void;
@@ -65,27 +71,20 @@ export function useMenuMachine(
   options: MenuNavigationOptions = {},
 ): MenuBinding {
   const { elements: itemNodes, ref: itemRef } = createMenuControls();
-  const ownsTarget = (target: HTMLElement) =>
-    ![...overlay.children].some((child) => child.open && containsComposed(child.surface, target)) &&
-    (options.surface === "listbox"
-      ? overlay.surface.contains(target)
-      : target.closest('[role="menu"]') === overlay.surface);
   const items = (ordered = true) => {
-    const connected = [...itemNodes].filter((item) => item.isConnected && ownsTarget(item));
-    return ordered
-      ? connected.toSorted((left, right) =>
-          left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
-        )
-      : connected;
+    const connected = [...itemNodes].filter(
+      (item) => item.isConnected && ownsMenuTarget(overlay, item, options.surface),
+    );
+    return ordered ? connected.toSorted(compareMenuElements) : connected;
   };
   const parentRuntime = createMemo(() => parent?.runtime());
-  let hover: PointerEvent | undefined;
+  let hover: PendingMenuHover | undefined;
   let runtime: MenuRuntime | undefined;
   let virtualized = false;
   let stopRuntime: (() => void) | undefined;
   let mounted = false;
   let loading = false;
-  let pending: Array<{ run: (loaded: MenuRuntime) => void; keyboard?: boolean }> = [];
+  const pending: PendingMenuIntent[] = [];
   const [revision, setRevision] = createSignal(0);
   const [error, setError] = createSignal<unknown>();
   const notify = () => setRevision((value) => value + 1);
@@ -103,56 +102,42 @@ export function useMenuMachine(
     },
     { lazy: true },
   );
-  const run = (intent: (loaded: MenuRuntime) => void) => {
+  const awaitingRuntime = () => loading || (parent && !parentRuntime() && !parent.error());
+  const run = (intent: (loaded: MenuRuntime) => void, highlightedValue?: string | null) => {
     if (runtime) {
       intent(runtime);
-    } else if (overlay.open && loading) {
-      pending.push({ run: intent });
+    } else if (overlay.open && awaitingRuntime()) {
+      pending.push({ run: intent, highlightedValue });
     }
   };
-  const load = async () => {
-    if (!mounted || runtime || loading) {
+  const load = async (loadedParent?: MenuRuntime) => {
+    // A submenu may already be visible, but its Zag machine must start with its parent.
+    if (!mounted || runtime || loading || (parent && !loadedParent)) {
       return;
     }
     loading = true;
     setError(undefined);
     try {
-      const { createMenuRuntime } = await retryControlUiImport(() => import("./menu-runtime.ts"));
+      const { createMenuRuntime, adoptNativeMenuInput, replayMenuIntents } =
+        await retryControlUiImport(() => import("./menu-navigation.ts"));
       if (!mounted) {
         return;
       }
       runtime = createMenuRuntime(
         overlay,
         direction,
-        parentRuntime()?.service,
+        loadedParent?.service,
         { ...options, virtualized: () => virtualized },
         items,
         notify,
         onSelect,
       );
       stopRuntime = runtime.start();
-      if (hover && overlay.trigger?.matches(":hover") && overlay.parent?.open) {
-        runtime.trigger(parentRuntime()).onPointerMove(hover);
-      }
+      adoptNativeMenuInput(runtime, overlay, options.surface, items, hover, parentRuntime);
       hover = undefined;
-      // Native entry already chose focus while the module was loading. Adopt it
-      // before replaying subsequent keyboard input instead of focusing twice.
-      if (overlay.open && options.surface !== "listbox") {
-        const focused = items().find((item) => item.matches(":focus"));
-        if (focused?.dataset.value) {
-          runtime.read().setHighlightedValue(focused.dataset.value);
-        }
-      }
       loading = false;
       notify();
-      while (pending.length) {
-        pending.shift()?.run(runtime);
-        // Vanilla queues the transition; Home/End queue the highlight again,
-        // whose store notification publishes roving focus. Drain both before replay.
-        await new Promise<void>((resolve) => {
-          queueMicrotask(() => queueMicrotask(resolve));
-        });
-      }
+      await replayMenuIntents(pending, runtime, parentRuntime);
     } catch (reason) {
       if (!mounted) {
         return;
@@ -161,7 +146,7 @@ export function useMenuMachine(
       stopRuntime = undefined;
       runtime = undefined;
       loading = false;
-      pending = [];
+      pending.length = 0;
       setError(reason);
       notify();
     }
@@ -170,18 +155,19 @@ export function useMenuMachine(
     mounted = true;
     const stopOpen = overlay.subscribe((open) => {
       notify();
-      if (open) {
+      if (!open) {
+        pending.length = 0;
+      } else if (!parent) {
         void load();
-      } else {
-        pending = [];
       }
     });
-    if (overlay.open || parentRuntime()) {
-      void load();
+    const loadedParent = parentRuntime();
+    if (overlay.open || loadedParent) {
+      void load(loadedParent);
     }
     return () => {
       mounted = false;
-      pending = [];
+      pending.length = 0;
       stopOpen();
       stopRuntime?.();
     };
@@ -202,24 +188,25 @@ export function useMenuMachine(
       if (loaded) {
         loaded.updateInputs(dir, catalog, selected);
       } else if (loadedParent) {
-        void load();
+        void load(loadedParent);
       }
     },
   );
-  const deferKey = (event: KeyboardEvent, target: "content" | "input" | "trigger") => {
+  const deferKey = (event: KeyboardEvent, target: MenuKeySource) => {
     if (
       event.defaultPrevented ||
       event.isComposing ||
       !overlay.open ||
-      !loading ||
+      !awaitingRuntime() ||
       !(event.target instanceof HTMLElement) ||
-      (target === "content" && !ownsTarget(event.target))
+      (target === "content" && !ownsMenuTarget(overlay, event.target, options.surface))
     ) {
       return;
     }
+    const { key } = event;
     const editing =
       event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
-    if (event.key === "Escape") {
+    if (key === "Escape") {
       // A child can retain focus on its parent trigger before navigation loads, too.
       if (![...overlay.children].some((child) => child.open)) {
         overlay.keydown(event);
@@ -230,14 +217,13 @@ export function useMenuMachine(
       target === "content" &&
       options.surface !== "listbox" &&
       event.target.matches(MENU_FORM_CONTROL_SELECTOR) &&
-      !(event.target.matches("input[data-search]") && ["ArrowDown", "Enter"].includes(event.key)) &&
-      !(event.target instanceof HTMLButtonElement && ["ArrowDown", "ArrowUp"].includes(event.key))
+      !(event.target.matches("input[data-search]") && ["ArrowDown", "Enter"].includes(key)) &&
+      !(event.target instanceof HTMLButtonElement && ["ArrowDown", "ArrowUp"].includes(key))
     ) {
       return;
     }
     if (
-      event.key === "Tab" ||
-      (event.key.length !== 1 &&
+      (key.length !== 1 &&
         ![
           "ArrowDown",
           "ArrowUp",
@@ -247,8 +233,8 @@ export function useMenuMachine(
           "End",
           "Enter",
           "Backspace",
-        ].includes(event.key)) ||
-      (editing && !["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) ||
+        ].includes(key)) ||
+      (editing && !["ArrowDown", "ArrowUp", "Enter"].includes(key)) ||
       event.ctrlKey ||
       event.metaKey ||
       event.altKey
@@ -256,46 +242,38 @@ export function useMenuMachine(
       return;
     }
     const originalTarget = event.target;
-    const currentTarget = event.currentTarget;
     event.preventDefault();
     event.stopPropagation();
     if (
       target === "content" &&
       options.surface !== "listbox" &&
-      ["Enter", " "].includes(event.key) &&
-      itemNodes.has(originalTarget) &&
-      !originalTarget.hasAttribute("aria-haspopup") &&
-      !pending.some((intent) => intent.keyboard)
+      !pending.some((intent) => "event" in intent)
     ) {
-      // Leaf activation already has a native owner; only prior navigation needs replay.
-      originalTarget.click();
-      return;
+      // Close the visible branch before the next Escape chooses its deepest owner.
+      if (parent && key === (direction() === "rtl" ? "ArrowRight" : "ArrowLeft")) {
+        overlay.request(false, "return");
+        return;
+      }
+      if (
+        ["Enter", " "].includes(key) &&
+        itemNodes.has(originalTarget) &&
+        !originalTarget.hasAttribute("aria-haspopup")
+      ) {
+        originalTarget.click();
+        return;
+      }
     }
-    pending.push({
-      keyboard: true,
-      run: (loaded) => {
-        const replay = new KeyboardEvent(event.type, event);
-        Object.defineProperties(replay, {
-          target: {
-            value: target === "content" ? loaded.service.scope.getActiveElement() : originalTarget,
-          },
-          currentTarget: { value: currentTarget },
-        });
-        if (target === "content") {
-          loaded.content().onKeyDown(replay);
-        } else if (target === "trigger") {
-          loaded.trigger(parentRuntime()).onKeyDown(replay);
-        } else {
-          loaded.keydown(replay);
-        }
-      },
-    });
+    pending.push({ event, source: target, originalTarget, currentTarget: event.currentTarget });
   };
   const keydown = (event: KeyboardEvent) =>
     runtime ? runtime.keydown(event) : deferKey(event, "input");
   const setHighlightedValue = (value: string | null) =>
-    run((loaded) => loaded.service.send({ type: "HIGHLIGHTED.SET", value }));
+    run((loaded) => loaded.service.send({ type: "HIGHLIGHTED.SET", value }), value);
   return {
+    isOpen: () => {
+      revision();
+      return overlay.open;
+    },
     runtime: current,
     items,
     itemRef,
@@ -310,7 +288,7 @@ export function useMenuMachine(
       if (isStaleChunkImportError(error())) {
         void retryStaleChunkReloadWhenReachable({ canReload: () => mounted && overlay.open });
       } else {
-        void load();
+        void load(parentRuntime());
       }
     },
     item(value, disabled, type, checked = false, label = value) {
@@ -326,9 +304,13 @@ export function useMenuMachine(
         "data-valuetext": label,
         tabIndex: -1,
         ...rendered?.runtime.item(rendered.api, value, disabled, type, checked, label),
-        // Preserve cold entry focus without echoing machine-owned focus into its queue.
+        // A repeated cold focus must not replay an old highlight after queued keys.
+        // Keep distinct focus changes ordered, including entry focus before returning to the trigger.
         onFocusIn: () => {
-          if (runtime?.service.context.get("highlightedValue") !== value) {
+          const highlighted = runtime
+            ? runtime.service.context.get("highlightedValue")
+            : pending.findLast((intent) => intent.highlightedValue !== undefined)?.highlightedValue;
+          if (highlighted !== value) {
             setHighlightedValue(value);
           }
         },
@@ -385,8 +367,8 @@ export function useMenuMachine(
             return;
           }
           const focus = event.detail === 0 || options.pointerFocus?.() !== "trigger";
-          if (!focus) {
-            overlay.trigger?.focus({ preventScroll: true });
+          if (!focus && overlay.trigger) {
+            focusProgrammatically(overlay.trigger, { preventScroll: true });
           }
           overlay.request(parentBinding ? true : !overlay.open, focus ? "first" : "none");
         },
@@ -394,11 +376,7 @@ export function useMenuMachine(
           if (disabled || !parentBinding || event.pointerType !== "mouse") {
             return;
           }
-          hover = new PointerEvent(event.type, event);
-          Object.defineProperties(hover, {
-            target: { value: event.target },
-            currentTarget: { value: event.currentTarget },
-          });
+          hover = { event, originalTarget: event.target, currentTarget: event.currentTarget };
         },
         onPointerLeave: () => {
           hover = undefined;
@@ -416,9 +394,8 @@ export function useMenuMachine(
           }
           const forward = direction() === "rtl" ? "ArrowLeft" : "ArrowRight";
           if (
-            ["ArrowDown", "ArrowUp", "Enter", " ", ...(parentBinding ? [forward] : [])].includes(
-              event.key,
-            )
+            ["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key) ||
+            (parentBinding && event.key === forward)
           ) {
             event.preventDefault();
             overlay.request(true, event.key === "ArrowUp" ? "last" : "first");

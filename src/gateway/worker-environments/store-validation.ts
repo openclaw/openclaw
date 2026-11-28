@@ -178,6 +178,7 @@ export function assertShape(
     WorkerEnvironmentRecord,
     | "state"
     | "leaseId"
+    | "resourceReceipt"
     | "nodeDeviceId"
     | "sshEndpoint"
     | "desktop"
@@ -187,6 +188,13 @@ export function assertShape(
 ): void {
   if (record.sshEndpoint && record.nodeDeviceId) {
     throw new Error("Worker environment cannot retain both SSH and node transports");
+  }
+  if (
+    record.resourceReceipt !== null &&
+    record.leaseId !== null &&
+    record.resourceReceipt.leaseId !== record.leaseId
+  ) {
+    throw new Error("Worker environment resource receipt does not match its provider lease");
   }
   if (workerEnvironmentStateRequiresLease(record.state)) {
     if (!record.leaseId) {

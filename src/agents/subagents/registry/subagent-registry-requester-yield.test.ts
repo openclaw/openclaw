@@ -1,20 +1,24 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { mergeAcceptedSessionSpawnsForRun } from "../../accepted-session-spawn.js";
+import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
 import {
   finalizeRequesterFinalAttachment,
   registerRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
   adoptSubagentRunForRequesterTurnInRuns,
   listUnsettledRequesterChildrenInRuns,
   markRequesterTurnYieldedInRuns,
-  selectRequesterTurnChildren,
   settleRequesterTurnAfterSessionSpawns,
 } from "./subagent-registry-requester-yield.js";
 import { createRequesterInitialTransferFixture } from "./subagent-registry-requester-yield.test-support.js";
@@ -22,6 +26,7 @@ import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryChangesToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
+import { retainedOperatorFixture } from "./subagent-registry.completed-followup-authority.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 
@@ -124,8 +129,8 @@ afterAll(() => state.cleanup());
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("selectRequesterTurnChildren", () => {
-  it("tracks current requester cohorts without scanning unrelated retained runs", () => {
+describe("markRequesterTurnYieldedInRuns", () => {
+  it("tracks current requester cohorts without scanning unrelated retained runs", async () => {
     subagentRuns.clear();
     try {
       for (let index = 0; index < 256; index++) {
@@ -134,7 +139,7 @@ describe("selectRequesterTurnChildren", () => {
         subagentRuns.set(entry.runId, entry);
       }
       const previous = {
-        ...makeRun("previous"),
+        ...makeRun("previous", false),
         childAgentId: "main",
         requesterAgentId: "main",
         generation: 1,
@@ -165,28 +170,39 @@ describe("selectRequesterTurnChildren", () => {
       const enumeration = vi.spyOn(subagentRuns, "values").mockImplementation(() => {
         throw new Error("Requester selection must not enumerate retained registry rows");
       });
-      const superseded = vi.fn();
-      const select = () =>
-        selectRequesterTurnChildren(
-          subagentRuns,
-          REQUESTER,
-          "main",
-          REQUESTER_TURN,
-          superseded,
-        ).map((entry) => entry.runId);
+      const mark = async (expectedRunIds: string[]) => {
+        const beforeWrite = vi.fn();
+        expect(
+          await markRequesterTurnYieldedInRuns({
+            preparedAuthority: null,
+            requesterSessionKey: REQUESTER,
+            requesterAgentId: "main",
+            requesterTurnRunId: REQUESTER_TURN,
+            runs: subagentRuns,
+            transfer: createRequesterInitialTransferFixture(subagentRuns, beforeWrite),
+          }),
+        ).toBe(expectedRunIds.length);
+        expect(beforeWrite.mock.calls).toEqual(expectedRunIds.length ? [expectedRunIds] : []);
+        const stored = loadSubagentRegistryFromSqlite();
+        for (const runId of expectedRunIds) {
+          expect(subagentRuns.get(runId)?.requesterTurnYielded).toBe(true);
+          expect(stored.get(runId)?.requesterTurnYielded).toBe(true);
+        }
+      };
 
-      expect(select()).toEqual([current.runId]);
-      expect(superseded).toHaveBeenLastCalledWith(previous);
+      await mark([current.runId]);
+      expect(subagentRuns.get(previous.runId)?.requesterTurnYielded).toBeUndefined();
+      expect(subagentRuns.get(independent.runId)?.requesterTurnYielded).toBeUndefined();
       subagentRuns.set(current.runId, { ...current, requesterTurnRunId: "rebound-turn" });
-      expect(select()).toEqual([]);
+      await mark([]);
       subagentRuns.set(current.runId, current);
-      expect(select()).toEqual([current.runId]);
+      await mark([current.runId]);
       subagentRuns.delete(current.runId);
-      expect(select()).toEqual([previous.runId]);
+      await mark([previous.runId]);
       subagentRuns.clear();
-      expect(select()).toEqual([]);
+      await mark([]);
       subagentRuns.set(current.runId, current);
-      expect(select()).toEqual([current.runId]);
+      await mark([current.runId]);
       expect(enumeration).not.toHaveBeenCalled();
     } finally {
       vi.restoreAllMocks();
@@ -372,6 +388,114 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
 });
 
 describe("settleRequesterTurnAfterSessionSpawns", () => {
+  it.each(["discarded", "delivered"] as const)(
+    "transfers a reused-session cohort after committed %s children are cleaned",
+    async (status) => {
+      const delivered = makeRun("already-delivered");
+      const running = {
+        ...makeRun("still-running"),
+        childSessionKey: delivered.childSessionKey,
+        execution: { status: "running" as const, startedAt: 3_000 },
+        delivery: { status: "pending" as const },
+      };
+      const removed = ["cleaned-a", "cleaned-b"].map((runId) => {
+        const entry = makeRun(runId);
+        entry.delivery = {
+          status,
+          ...(status === "discarded" ? { discardReason: "expired" as const } : {}),
+        };
+        entry.cleanupCompletedAt = 2_500;
+        return entry;
+      });
+      const entries = [delivered, ...removed, running];
+      const instance = createOperationalRunInstanceRef(REQUESTER_TURN);
+      const source = await retainedOperatorFixture("yield-cleanup-receipts");
+      mergeAcceptedSessionSpawnsForRun(instance, entries.map(accepted));
+      try {
+        for (const entry of entries) {
+          subagentRuns.set(entry.runId, entry);
+          const custody = await withPluginRuntimeGatewayRequestScope(
+            { ...source, isWebchatConnect: () => false },
+            () => captureOperatorToolGatewayContinuationContext(),
+          );
+          if (!custody) {
+            throw new Error("Missing completion custody");
+          }
+          subagentRuns.bindCompletionAuthority(entry, custody, instance);
+        }
+        saveSubagentRegistryChangesToSqlite(
+          subagentRuns,
+          entries.map((entry) => entry.runId),
+        );
+        await mutateSubagentRuns(
+          removed.map((entry) => entry.runId),
+          () => ({
+            value: undefined,
+            postimages: new Map(removed.map((entry) => [entry.runId, null])),
+            removalReason: "retention",
+          }),
+          { runs: subagentRuns },
+        );
+        const schedule = vi.fn();
+        expect(
+          await settleRuns(entries, {
+            runs: subagentRuns,
+            acceptedSessionSpawns: mergeAcceptedSessionSpawnsForRun(
+              instance,
+              entries.map(accepted),
+            ),
+            schedule,
+          }),
+        ).toBe(true);
+        for (const entry of [delivered, running]) {
+          expect(
+            loadSubagentRegistryFromSqlite().get(entry.runId)?.requesterSettleWake,
+          ).toMatchObject({
+            status: "pending",
+            requesterYieldBatch: true,
+            batchRunIds: [delivered.runId, running.runId],
+          });
+        }
+        expect(schedule).toHaveBeenCalledExactlyOnceWith(
+          delivered.runId,
+          subagentRuns.get(delivered.runId),
+          "settle",
+        );
+      } finally {
+        subagentRuns.clear();
+        source.source.release();
+      }
+    },
+  );
+
+  it("accounts for a superseded retired receipt without transferring its obligation", async () => {
+    const retired = {
+      ...makeRun("run-retired"),
+      killReconciliation: { killedAt: 2_000, supersededAt: 2_100 },
+    };
+    const current = makeRun("run-current");
+    const runs = runMap(retired, current);
+    const beforeWrite = vi.fn();
+    const schedule = vi.fn();
+
+    expect(await settleRuns([retired, current], { runs, beforeWrite, schedule })).toBe(true);
+    expect(beforeWrite).toHaveBeenCalledExactlyOnceWith(current.runId);
+    expect(runs.get(retired.runId)).toEqual(retired);
+    expect(loadSubagentRegistryFromSqlite().get(current.runId)).toMatchObject({
+      requesterTurnRunId: undefined,
+      requesterSettleWake: {
+        status: "pending",
+        requesterYieldBatch: true,
+        batchRunIds: [current.runId],
+      },
+    });
+    expect(schedule).toHaveBeenCalledExactlyOnceWith(
+      current.runId,
+      runs.get(current.runId),
+      "settle",
+    );
+  });
+
   it.each(["yield intent", "cohort release"] as const)(
     "keeps a selected child's current requester turn at %s",
     async (kind) => {
@@ -585,7 +709,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
     } else if (kind === "valid delete receipt") {
       entry.cleanup = "delete";
-      entry.retireAfterRequesterTurn = true;
+      entry.retireAfterSettle = true;
     } else if (kind === "a replayed running child") {
       entry.execution.status = "running";
     }
@@ -668,7 +792,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       } else if (kind === "delete") {
         first.cleanup = "delete";
         first.cleanupCompletedAt = 2_100;
-        first.retireAfterRequesterTurn = true;
+        first.retireAfterSettle = true;
       } else if (kind === "in_progress") {
         second.delivery = { status: "in_progress" };
       }
@@ -688,13 +812,13 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           attemptCount: 0,
           batchRunIds,
           requesterYieldBatch: true,
+          requesterRunId: REQUESTER_TURN,
           yieldedFinalDeliverable: true,
           rearmGeneration: 1,
           ...(kind === "running" ? {} : { afterRequesterYield: true }),
-          ...(kind === "delete" ? { retireAfterSettle: true } : {}),
         });
         expect(runs.get(entry.runId)!.requesterTurnRunId).toBeUndefined();
-        expect(runs.get(entry.runId)!.retireAfterRequesterTurn).toBeUndefined();
+        expect(runs.get(entry.runId)!.retireAfterSettle).toBe(kind === "delete" ? true : undefined);
       }
       expect(loadSubagentRegistryFromSqlite().get(first.runId)).toMatchObject({
         requesterTurnRunId: undefined,
@@ -712,9 +836,6 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         );
         expect(calls).toEqual(["persist", "schedule"]);
       }
-      if (kind === "in_progress") {
-        expect(runs.get(second.runId)!.delivery?.disposition).toBe("intentional_non_delivery");
-      }
     },
   );
 
@@ -722,7 +843,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     "retires normal-answer children only after a committed plan (reject: %s)",
     async (reject) => {
       const entry = makeRun("run-delete", false);
-      entry.retireAfterRequesterTurn = true;
+      entry.retireAfterSettle = true;
       const runs = runMap(entry);
       const original = structuredClone(entry);
       const failure = new Error("sqlite unavailable");

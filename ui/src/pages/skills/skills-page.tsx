@@ -1,3 +1,4 @@
+import type { SkillsSearchParams } from "@openclaw/gateway-protocol";
 import {
   createDeferred,
   createEffect,
@@ -5,6 +6,7 @@ import {
   createSignal,
   createStore,
   onSettled,
+  refresh,
   Show,
 } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -14,24 +16,26 @@ import {
   hasOperatorReadAccess,
   hasOperatorWriteAccess,
 } from "../../app/operator-access.ts";
-import { Icon } from "../../components/solid/icon.tsx";
+import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { createPageRequest, type PageReadResult } from "../../lib/page-request.ts";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
-import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
-import { searchClawHub } from "../../lib/skills/clawhub-search.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
+import {
+  loadSkillCategories,
+  type SkillCategoryDirectory,
+} from "../../lib/skills/clawhub-search.ts";
 import {
   closeClawHubDetail,
+  createSkillsChangeReloader,
   installFromClawHub,
   installSkill,
   loadClawHubDetail,
-  loadClawHubSecurityVerdicts,
   loadSkillCard,
   loadSkills,
   refreshSkills,
@@ -44,15 +48,17 @@ import {
   type SkillsState,
 } from "../../lib/skills/index.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../plugins/plugin-icon-owner.ts";
-import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
+import { pluginsHubPanel } from "../plugins/plugins-hub.ts";
 import { createSkillLibrary } from "./library-state.ts";
+import { SkillLibraryNavigation, SkillLibraryPageMenu } from "./library-toolbar.tsx";
 import { SkillLibrary, SkillLibraryDialogs, SkillLibraryFeedback } from "./library-view.tsx";
 import { createSkillsMutationPresentation } from "./mutation-presentation.ts";
+import { createSkillPages } from "./skill-page-route.ts";
+import { createSkillsDiscoveryRequest } from "./skills-discovery-request.ts";
 import { SkillsHeader } from "./skills-header.tsx";
 import { createSkillsData } from "./skills-page-state.ts";
 import type {
   ClawHubDetailReceipt,
-  SkillDetailTab,
   SkillsPageProps,
   SkillsPresentation,
   SkillsRouteData,
@@ -79,16 +85,11 @@ export function SkillsPage(props: SkillsPageProps) {
     skillsFilter: "",
     skillsStatusFilter: "all",
     skillsDetailKey: null,
-    skillsDetailTab: "overview",
     clawhubSearchQuery: "",
+    clawhubCategory: null,
   });
   let active = true;
-  let clawhubSearchTimer: {
-    timeout: ReturnType<typeof setTimeout>;
-    resolve: (result: PageReadResult) => void;
-  } | null = null;
   let routeDataInitialized = false;
-  let routeDataEnabled = true;
   let accessSignature = "";
   const skills = observeState<SkillsState>({
     ...createSkillsData(),
@@ -103,6 +104,7 @@ export function SkillsPage(props: SkillsPageProps) {
     },
   });
   const data = skills.state;
+  const runtimeConfig = projectOwner(context.runtimeConfig, (owner) => owner.state);
   const verdictCompletion = createMemo(() => skills.read().clawhubVerdictsRead);
   const acceptedVerdicts = createMemo(() => skills.read().clawhubVerdicts);
   // Optional verdict enrichment must not hold independent inventory or detail selection.
@@ -117,27 +119,7 @@ export function SkillsPage(props: SkillsPageProps) {
     });
   });
   const [detailReceipt, setDetailReceipt] = createSignal<ClawHubDetailReceipt | null>(null);
-  const [searchCompletion, setSearchCompletion] = createSignal<Promise<PageReadResult> | null>(
-    null,
-  );
-  const searchRequest = createPageRequest(() => {}, {
-    task: ({ client, query }: { client: GatewayBrowserClient; query: string }, { signal }) =>
-      searchClawHub(client, query, signal),
-    onComplete: (results) => {
-      data.clawhubSearchResults = results;
-    },
-    onError: () => {},
-  });
-  const readClawHubSearch = createMemo(() => {
-    const completion = searchCompletion();
-    // First readiness belongs to Loading too, before request admission publishes its receipt.
-    return (completion ?? Promise.resolve(null)).then((result) => {
-      if (result) {
-        throw result.error;
-      }
-      return true;
-    });
-  });
+  const search = createSkillsDiscoveryRequest(data);
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
     onIdentityChange: resetLoadedSkillState,
@@ -181,20 +163,37 @@ export function SkillsPage(props: SkillsPageProps) {
   // Unrelated skill publications must not re-arm the detail boundary.
   const detailClient = createMemo(() => gateway.client);
   const detailEpoch = createMemo(() => gateway.epoch);
+  // Taxonomy is optional: it never holds the ordinary feed or installed inventory.
+  const categoryClient = createMemo(() =>
+    surface() === "discovery" &&
+    canCallGatewayMethod(gateway.snapshot, "skills.categories", "operator.read")
+      ? gateway.client
+      : null,
+  );
+  const categoryDirectory = createMemo(() => {
+    detailEpoch();
+    const client = categoryClient();
+    // Each registry starts with unknown grouping, without holding route and search admission.
+    return createDeferred<SkillCategoryDirectory | null>(
+      () => (client ? loadSkillCategories(client) : { categories: [] }),
+      { loadingValue: null },
+    );
+  });
   const detailRef = createMemo(() => skills.read().clawhubDetailRef);
   const detailSnapshot = createMemo(() => skills.read().clawhubDetail);
   const detailError = createMemo(() => skills.read().clawhubDetailError);
   const detailAgent = createMemo(() => skills.read().skillsAgentId);
   const detailAgentRevision = createMemo(() => skills.read().skillsAgentRevision);
+  const detailScope = () => ({
+    client: detailClient(),
+    epoch: detailEpoch(),
+    agentId: detailAgent(),
+    agentRevision: detailAgentRevision(),
+  });
   const mutations = createSkillsMutationPresentation({
     state: data,
     readSkills: () => skills.read().skillsReport,
-    scope: () => ({
-      client: detailClient(),
-      epoch: detailEpoch(),
-      agentId: detailAgent(),
-      agentRevision: detailAgentRevision(),
-    }),
+    scope: detailScope,
     readEpoch: () => gateway.readEpoch(),
     active: () => active,
   });
@@ -251,10 +250,22 @@ export function SkillsPage(props: SkillsPageProps) {
     const previous = data.skillsAgentId;
     reconcileAgentState();
     if (routeDataInitialized && previous !== data.skillsAgentId) {
-      routeDataEnabled = false;
       ensureInitialData();
     }
   };
+  // The address owns which skill page is open; the list stays mounted behind it.
+  const pageRoute = createSkillPages({
+    context,
+    surface,
+    scope: detailScope,
+    report: () => skills.read().skillsReport,
+    openedKey: () => local.skillsDetailKey,
+    setOpenedKey: (skillKey) => setLocal((state) => void (state.skillsDetailKey = skillKey)),
+    loadCard: (skillKey) => void loadSkillCard(data, skillKey),
+    clawhubRef: () => data.clawhubDetailRef,
+    openClawHub: openClawHubDetail,
+    closeClawHub: closeDetail,
+  });
   // Route receipts admit loader data; changing surface only retargets its selection owner.
   createEffect(
     () => ({
@@ -264,6 +275,7 @@ export function SkillsPage(props: SkillsPageProps) {
       connected: gateway.connected,
       epoch: gateway.epoch,
       query: local.clawhubSearchQuery,
+      skillPage: pageRoute.readSnapshot(),
     }),
     (current, previous) => {
       if (!previous || current.route !== previous.route || current.surface !== previous.surface) {
@@ -277,6 +289,7 @@ export function SkillsPage(props: SkillsPageProps) {
         }
         ensureInitialData();
       }
+      pageRoute.synchronizeReads(current.skillPage, previous?.skillPage);
       syncSearch(
         [current.client, current.connected, current.epoch, current.surface],
         current.query,
@@ -290,8 +303,12 @@ export function SkillsPage(props: SkillsPageProps) {
     let location = context.router.getState().location;
     const stopNavigation = context.router.subscribe((state) => {
       if (state.location !== location) {
-        retirePresentation();
+        // Moving between the list and a skill's page stays inside this page's presentation.
+        if (state.location.pathname !== location.pathname) {
+          retirePresentation();
+        }
         location = state.location;
+        pageRoute.setLocation(location);
       }
     });
     // Roster receipts reconcile the request target before admitting missing skill reads.
@@ -330,8 +347,14 @@ export function SkillsPage(props: SkillsPageProps) {
         ],
       );
     };
+    const changes = createSkillsChangeReloader(data);
+    const stopChanges = context.gateway.subscribeEvents(changes.onEvent);
     // Icon reconciliation waits for result/detail publication to settle.
-    const stopSkills = skills.subscribe(() => onSettled(syncIcons));
+    const stopState = skills.subscribe(() => {
+      onSettled(syncIcons);
+      changes.onStateChange();
+    });
+    const stopSkills = () => [stopChanges, stopState].forEach((stop) => stop());
     syncSelection();
     syncIcons();
     return () => {
@@ -341,8 +364,7 @@ export function SkillsPage(props: SkillsPageProps) {
       [stopLifecycle, stopNavigation, stopAgents, ...stopSelections, stopSkills].forEach((stop) =>
         stop(),
       );
-      clearClawHubSearchTimer();
-      searchRequest.cancel();
+      search.reset();
       skills.dispose();
       clawhubIcons.reset();
     };
@@ -353,25 +375,28 @@ export function SkillsPage(props: SkillsPageProps) {
       return;
     }
     lastSearchScope = scope;
-    if (scope[1] && !clawhubSearchTimer) {
-      void setSearchCompletion(performSearch(query));
+    // A category and its cursor belong to the registry on the previous connection.
+    setLocal((state) => void (state.clawhubCategory = null));
+    // The raw gateway may be connected before this page has admitted that connection.
+    if (!scope[0] || !scope[1]) {
+      search.reset();
+      return;
     }
+    performSearch({ query });
   }
 
-  function performSearch(query: string): Promise<PageReadResult> {
-    searchRequest.reset();
-    const snapshot = context.gateway.snapshot;
-    const client = snapshot.client;
+  function performSearch(params: SkillsSearchParams, debounce = false) {
+    const snapshot = gateway.snapshot;
     if (
-      snapshot.phase !== "connected" ||
-      !canReadSkills() ||
+      snapshot?.phase !== "connected" ||
+      !hasOperatorReadAccess(snapshot.hello?.auth ?? null) ||
       admittedSurface !== "discovery" ||
-      !client
+      !snapshot.client
     ) {
-      return Promise.resolve(null);
+      search.reset();
+      return;
     }
-    void searchRequest.run({ client, query });
-    return searchRequest.read!;
+    search.run(snapshot.client, params, debounce);
   }
 
   function agentSelection() {
@@ -386,7 +411,8 @@ export function SkillsPage(props: SkillsPageProps) {
       reconcileSkillsAgentId(data, agentState.agentsList, retirePresentation);
     }
     if (previousAgentId !== data.skillsAgentId) {
-      selectSkill(null);
+      // The open page reads again for the new agent once its scope settles.
+      pageRoute.reset();
       closeDetail();
     }
   }
@@ -399,9 +425,7 @@ export function SkillsPage(props: SkillsPageProps) {
     data.skillsAgentRevision++;
     data.skillsLoading = false;
     data.skillOperation = null;
-    setSearchCompletion(null);
-    searchRequest.reset();
-    clearClawHubSearchTimer();
+    search.reset();
     clawhubIcons.reconcileKeys(new Set(Object.keys(data.clawhubIconUrls)));
   }
 
@@ -410,13 +434,8 @@ export function SkillsPage(props: SkillsPageProps) {
     retireSkillsReads(data);
     setDetailReceipt(null);
     library.reset();
-    setSearchCompletion(null);
-    searchRequest.reset();
-    clearClawHubSearchTimer();
-    if (routeDataInitialized) {
-      routeDataEnabled = false;
-    }
-    selectSkill(null);
+    search.reset();
+    pageRoute.reset();
     Object.assign(data, createSkillsData(), {
       skillsAgentRevision: data.skillsAgentRevision + 1,
     });
@@ -428,15 +447,12 @@ export function SkillsPage(props: SkillsPageProps) {
       return;
     }
     routeDataInitialized = true;
-    routeDataEnabled = true;
     if (!gateway.isRouteDataCurrent(route) || route.agents !== context.agents || !canReadSkills()) {
-      routeDataEnabled = false;
       return;
     }
     const selection = agentSelection().state;
     // A preload may finish after another explicit choice, including an A→B→A switch.
     if (agentSelection().intentRevision !== route.selectionIntentRevision) {
-      routeDataEnabled = false;
       reconcileAgentState();
       return;
     }
@@ -446,19 +462,13 @@ export function SkillsPage(props: SkillsPageProps) {
     }
     reconcileAgentState();
     if (data.skillsAgentId !== route.selectedAgentId) {
-      routeDataEnabled = false;
       return;
     }
-    routeDataEnabled = true;
     retireSkillsReads(data);
     data.skillsLoading = false;
-    data.skillsReport = route.report;
     data.skillsError = route.error;
-    if (route.report) {
-      void loadClawHubSecurityVerdicts(data, route.report);
-    }
-    if (route.clawhubRef && route.clawhubRef !== data.clawhubDetailRef) {
-      openClawHubDetail(route.clawhubRef);
+    if (!route.error) {
+      void loadSkills(data, { reportRead: route.reportRead });
     }
   }
 
@@ -468,12 +478,7 @@ export function SkillsPage(props: SkillsPageProps) {
     }
     const snapshot = context.gateway.snapshot;
     library.ensureLoaded(snapshot);
-    if (
-      routeDataEnabled ||
-      !routeDataInitialized ||
-      snapshot.phase !== "connected" ||
-      !snapshot.client
-    ) {
+    if (!routeDataInitialized || snapshot.phase !== "connected" || !snapshot.client) {
       return;
     }
     const agentState = context.agents.state;
@@ -484,7 +489,7 @@ export function SkillsPage(props: SkillsPageProps) {
       return;
     }
     reconcileAgentState();
-    if (!data.skillsReport && !data.skillsLoading) {
+    if (!data.skillsReport && !data.skillsLoading && !data.skillsError) {
       void loadSkills(data);
     }
   }
@@ -509,34 +514,28 @@ export function SkillsPage(props: SkillsPageProps) {
     setLocal((state) => {
       state.clawhubSearchQuery = query;
     });
-    data.clawhubSearchResults = null;
     data.clawhubInstallMessage = null;
-    clearClawHubSearchTimer();
-    searchRequest.reset();
-    void setSearchCompletion(
-      new Promise<PageReadResult>((resolve) => {
-        const timeout = setTimeout(() => {
-          clawhubSearchTimer = null;
-          void performSearch(query).then(resolve);
-        }, 300);
-        clawhubSearchTimer = { timeout, resolve };
-      }),
-    );
+    performSearch({ query, category: local.clawhubCategory?.slug }, Boolean(query.trim()));
   }
 
-  function clearClawHubSearchTimer() {
-    if (clawhubSearchTimer) {
-      clearTimeout(clawhubSearchTimer.timeout);
-      clawhubSearchTimer.resolve(null);
-      clawhubSearchTimer = null;
+  function selectCategory(category: SkillsPresentation["clawhubCategory"]) {
+    if (local.clawhubCategory?.slug === category?.slug) {
+      return;
     }
+    setLocal((state) => void (state.clawhubCategory = category));
+    data.clawhubInstallMessage = null;
+    performSearch({ query: local.clawhubSearchQuery, category: category?.slug });
   }
 
-  function selectSkill(key: string | null) {
-    setLocal((state) => {
-      state.skillsDetailKey = key;
-      state.skillsDetailTab = "overview";
-    });
+  function loadNextPage() {
+    const cursor = search.nextCursor();
+    if (cursor) {
+      performSearch({
+        query: local.clawhubSearchQuery,
+        category: local.clawhubCategory?.slug,
+        cursor,
+      });
+    }
   }
 
   function openClawHubDetail(ref: string) {
@@ -551,15 +550,6 @@ export function SkillsPage(props: SkillsPageProps) {
   function closeDetail() {
     setDetailReceipt(null);
     closeClawHubDetail(data);
-  }
-
-  function changeDetailTab(tab: SkillDetailTab) {
-    setLocal((state) => {
-      state.skillsDetailTab = tab;
-    });
-    if (tab === "card" && local.skillsDetailKey) {
-      void loadSkillCard(data, local.skillsDetailKey);
-    }
   }
 
   function canUpdateSkills(): boolean {
@@ -582,24 +572,28 @@ export function SkillsPage(props: SkillsPageProps) {
     );
   }
 
-  function navigateSkills(route: "skills" | "skill-settings") {
-    context.navigate(route, {
-      search: data.skillsAgentId ? `?agent=${encodeURIComponent(data.skillsAgentId)}` : "",
-    });
-  }
-
+  const libraryNavigation = {
+    onSearch: () => pageRoute.navigateList("skills"),
+    onWorkshop: () => context.navigate("skill-workshop"),
+  };
+  const libraryPageMenu = () => {
+    const menu = () => <SkillLibraryPageMenu library={library} {...libraryNavigation} />;
+    return <FloatingHeaderActions fallback={menu()}>{menu()}</FloatingHeaderActions>;
+  };
   return (
     <openclaw-skills-page>
-      <SkillsHeader
-        surface={surface()}
-        onNavigate={(tab) => context.navigate(tab)}
-        onSettings={() => navigateSkills("skill-settings")}
-      />
+      <Show when={!pageRoute.page()}>
+        <SkillsHeader
+          surface={surface()}
+          onNavigate={(tab) => context.navigate(tab)}
+          onSettings={() => pageRoute.navigateList("skill-settings")}
+        />
+      </Show>
       <SettingsWorkspace>
         <div
-          id={surface() === "discovery" ? PLUGINS_HUB_PANEL_ID : undefined}
-          role={surface() === "discovery" ? "tabpanel" : undefined}
-          aria-labelledby={surface() === "discovery" ? "plugins-tab-skills" : undefined}
+          // Bound layout work for the large installed inventory without containing discovery.
+          style={{ contain: surface() === "settings" ? "layout" : undefined }}
+          {...(surface() === "discovery" ? pluginsHubPanel("skills") : {})}
         >
           <Skills
             state={viewState()}
@@ -614,10 +608,15 @@ export function SkillsPage(props: SkillsPageProps) {
             }
             readClawHubDetail={readClawHubDetail}
             readClawHubVerdicts={readClawHubVerdicts}
-            readClawHubSearch={readClawHubSearch}
+            readClawHubSearch={search.read}
+            readCategories={() => categoryDirectory()()}
+            onRetryCategories={() => void refresh(categoryDirectory())}
+            onCategoryChange={selectCategory}
+            hasNextPage={Boolean(search.nextCursor())}
+            onLoadMore={loadNextPage}
             clawhubSearchEpoch={gateway.epoch}
             surface={surface()}
-            libraryEntries={library.entries()}
+            libraryEntries={library.state.list ? library.entries() : undefined}
             onLibraryOpen={(skillId) => void library.open(skillId)}
             library={
               surface() === "discovery" ? (
@@ -628,24 +627,12 @@ export function SkillsPage(props: SkillsPageProps) {
               ) : (
                 <SkillLibrary
                   library={library}
-                  navigationActions={
-                    <>
-                      <button type="button" class="btn" onClick={() => navigateSkills("skills")}>
-                        <Icon name="search" />
-                        {t("skillDiscovery.search")}
-                      </button>
-                      <button
-                        type="button"
-                        class="btn"
-                        onClick={() => context.navigate("skill-workshop")}
-                      >
-                        {t("pluginsPage.workshopTab")}
-                      </button>
-                    </>
-                  }
+                  pageMenu={libraryPageMenu}
+                  navigationActions={<SkillLibraryNavigation {...libraryNavigation} />}
                 />
               )
             }
+            pageMenu={surface() === "discovery" ? undefined : libraryPageMenu}
             showInventory={library.showWorkspace()}
             canUpdate={canUpdateSkills()}
             canInstall={canInstallFromClawHub()}
@@ -677,9 +664,16 @@ export function SkillsPage(props: SkillsPageProps) {
                 updateSkillEdit(data, key, value);
               }
             }}
-            onSaveKey={(key) => {
+            apiKeyConfig={{
+              snapshot: () => runtimeConfig.read().configSnapshot,
+              error: () => runtimeConfig.read().lastError,
+              retry: () => void context.runtimeConfig.refreshDisplay(),
+            }}
+            onSaveKey={(key, replaceable) => {
               if (canUpdateSkills()) {
-                void mutations.run(() => saveSkillApiKey(data, key, canUpdateSkills));
+                // Read at save and again at dispatch, from the owner's current snapshot.
+                const current = () => replaceable(context.runtimeConfig.state.configSnapshot, key);
+                void mutations.run(() => saveSkillApiKey(data, key, current, canUpdateSkills));
               }
             }}
             onInstall={(skillKey, name, installId) => {
@@ -687,22 +681,17 @@ export function SkillsPage(props: SkillsPageProps) {
                 void mutations.run(() => installSkill(data, skillKey, name, installId));
               }
             }}
-            onDetailOpen={selectSkill}
-            onDetailClose={() =>
-              setLocal((state) => {
-                state.skillsDetailKey = null;
-              })
-            }
-            onDetailTabChange={changeDetailTab}
+            listHref={pageRoute.listHref()}
+            onDetailOpen={pageRoute.openInstalled}
+            onDetailClose={pageRoute.close}
+            onSkillCardRetry={(skillKey) => void loadSkillCard(data, skillKey)}
             onClawHubQueryChange={changeClawHubQuery}
-            onClawHubDetailOpen={openClawHubDetail}
-            onClawHubDetailClose={closeDetail}
+            onClawHubDetailOpen={pageRoute.openClawHub}
             onClawHubInstall={(ref, version) => {
               if (!canInstallFromClawHub()) {
                 return;
               }
               if (!library.showWorkspace()) {
-                closeDetail();
                 library.edit((state) => {
                   state.importSource = { slug: ref, version };
                   state.importSlug = "";

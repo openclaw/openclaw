@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createFixtureSkillEntry } from "../../skills/test-support/test-helpers.js";
+import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
@@ -16,6 +17,7 @@ import {
   projectPublicSessionEntry,
   projectPublicSessionEntryPatch,
 } from "./session-entry-projection.js";
+import { promptReport } from "./system-prompt-report.test-support.js";
 import type { InternalSessionEntry } from "./types.js";
 
 const subscriptions: (() => void)[] = [];
@@ -79,6 +81,66 @@ it("updates maintenance and retained-reference predicates with the canonical ent
   expect(references().has("previous")).toBe(false);
 });
 
+it("updates the prompt report without rebinding the unchanged skill snapshot", () => {
+  const skillsSnapshot = {
+    prompt: "retained skill ".repeat(4096),
+    skills: [
+      {
+        name: "probe",
+        source: { fileHost: "gateway" as const, filePath: "/skills/probe/SKILL.md" },
+      },
+    ],
+  };
+  const entry = { sessionId: "original", updatedAt: 1, skillsSnapshot };
+  replaceSessionEntrySync(scope, { ...entry, systemPromptReport: promptReport(1, 1, 0) });
+  const database = openOpenClawAgentDatabase(scope);
+  database.db.exec(`
+    CREATE TEMP TABLE snapshot_binds(field TEXT, bytes INTEGER);
+    CREATE TEMP TRIGGER capture_snapshot_bind BEFORE INSERT ON session_entry_snapshots
+    BEGIN INSERT INTO snapshot_binds VALUES (NEW.field, length(CAST(NEW.value_json AS BLOB))); END;
+  `);
+  const updates = 8;
+  for (let i = 1; i <= updates; i++) {
+    replaceSessionEntrySync(scope, {
+      ...entry,
+      updatedAt: i + 1,
+      systemPromptReport: promptReport(i + 1, 1, 0),
+    });
+  }
+  const binds = database.db
+    .prepare(
+      "SELECT field, count(*) AS calls, sum(bytes) AS bytes FROM snapshot_binds GROUP BY field ORDER BY field",
+    )
+    .all();
+  closeOpenClawAgentDatabases(scope.env.OPENCLAW_STATE_DIR);
+  expect(readEntry(scope)).toMatchObject({
+    skillsSnapshot,
+    systemPromptReport: { generatedAt: updates + 1 },
+  });
+  expect(binds).toEqual([
+    { field: "systemPromptReport", calls: updates, bytes: expect.any(Number) },
+  ]);
+});
+
+it("keeps submitted member order during a mixed write and removes a cleared snapshot", () => {
+  const original = { name: "probe", requiredEnv: ["KEY"] };
+  const reordered = { requiredEnv: ["KEY"], name: "probe" };
+  const entry = { sessionId: "original", updatedAt: 1 };
+  const store = (skill: typeof original, stamp: number) =>
+    replaceSessionEntrySync(scope, {
+      ...entry,
+      skillsSnapshot: { prompt: "saved", skills: [skill] },
+      systemPromptReport: promptReport(stamp, 1, 0),
+    });
+  store(original, 1);
+  store(reordered, 2);
+  const before = readEntry(scope)!;
+  expect(Object.keys(before.skillsSnapshot!.skills[0]!)).toEqual(Object.keys(reordered));
+  replaceSessionEntrySync(scope, { ...entry, systemPromptReport: promptReport(3, 1, 0) });
+  expect(readEntry(scope)).toMatchObject({ systemPromptReport: { generatedAt: 3 } });
+  expect(readEntry(scope)?.skillsSnapshot).toBeUndefined();
+});
+
 it("bounds saved-prompt decoding while publishing identity changes", async () => {
   const prompt = "identity-decode-payload:" + "x".repeat(16_384);
   const skillsSnapshot = { prompt, skills: [] };
@@ -132,7 +194,8 @@ it("records committed owner facts before cancellation observers", async () => {
   expect(facts.map((entry) => entry.skillsSnapshot)).toEqual([skillsSnapshot]);
   expect(observed).toEqual([{ acceptedId: "successor", persistedId: "successor" }]);
   expect(result?.skillsSnapshot).toEqual(skillsSnapshot);
-  result!.skillsSnapshot!.skills.push({ name: "caller-only" });
+  // Internal results share the frozen publication's nested facts (#186051).
+  expect(() => result!.skillsSnapshot!.skills.push({ name: "caller-only" })).toThrow(TypeError);
   expect(readEntry(scope)?.skillsSnapshot).toEqual(skillsSnapshot);
 });
 
@@ -160,7 +223,7 @@ it("isolates the existing-entry context when first read during the update", asyn
 });
 
 it("protects required profile provenance and an absent surface during replacement", async () => {
-  const stamp = creationStamp(10);
+  const stamp = { ...creationStamp(10), createdIndependently: true as const };
   await seed(stamp);
   const replacement: InternalSessionEntry = {
     sessionId: "replacement",
@@ -205,6 +268,7 @@ it("does not mint creator authority when replacing an unstamped node", async () 
       createdVia: "operator",
       createdActor: { type: "human", source: "profile", id: "new-profile" },
       createdSurface: "plugin-dock",
+      createdIndependently: true,
     }),
     { replaceEntry: true },
   );
@@ -212,11 +276,12 @@ it("does not mint creator authority when replacing an unstamped node", async () 
   expect(persisted).toMatchObject({ sessionId: "replacement", createdVia: "operator" });
   expect(persisted?.createdActor).toBeUndefined();
   expect(persisted?.createdSurface).toBeUndefined();
+  expect(persisted?.createdIndependently).toBeUndefined();
   expect(persisted).not.toHaveProperty("sandbox");
   expect(persisted).not.toHaveProperty("label");
 });
 
-it("persists private source and workspace facts but excludes runtime-only resolved skills from SQLite JSON", async () => {
+it("persists private workspace facts but excludes runtime-only resolved skills from SQLite JSON", async () => {
   const resolvedSkills = [createFixtureSkillEntry("demo").skill];
   const savedSkills = {
     prompt: "saved",
@@ -229,23 +294,12 @@ it("persists private source and workspace facts but excludes runtime-only resolv
     updatedAt: 42,
     pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
     pendingWorktree: { name: "session-startup", titleSource: "Start work" },
-    restartRecoveryRequesterSource: {
-      agentId: "main",
-      sessionKey: scope.sessionKey,
-      sessionId: "runtime-skills-session",
-      sourceRunId: "original-run",
-      requesterOrigin: { sessionKey: scope.sessionKey, operatorProfileId: "original-requester" },
-    },
     skillsSnapshot: { ...savedSkills, resolvedSkills, discoverySkills: resolvedSkills },
   };
 
   await upsertEntry(scope, entry);
   const persisted = JSON.parse(String(readRow()?.entry_json)) as InternalSessionEntry;
-  for (const key of [
-    "pendingProjectGitUrl",
-    "pendingWorktree",
-    "restartRecoveryRequesterSource",
-  ] as const) {
+  for (const key of ["pendingProjectGitUrl", "pendingWorktree"] as const) {
     expect(persisted[key]).toEqual(entry[key]);
     expect(readEntry(scope)?.[key]).toEqual(entry[key]);
     expect(projectPublicSessionEntry(entry)).not.toHaveProperty(key);

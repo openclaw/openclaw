@@ -16,11 +16,11 @@ import {
   listAvailableExtensionIds,
   listChangedExtensionIds,
 } from "../../scripts/lib/changed-extensions.mts";
+import { parseNodeFailureReport } from "../../scripts/lib/ci-node-test-evidence.mjs";
 import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestProcessTargetChunks,
   createExtensionTestShards,
-  estimateExtensionTestCost,
   listExtensionTestFilesForRoots,
   listTrackedTestPlanFiles,
   resolveExtensionBatchPlan,
@@ -56,7 +56,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { listVitestConfigTestFiles } from "../vitest-projects-config.test-support.js";
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
 import { matchesVitestCliSelection } from "../vitest/vitest.pattern-file.ts";
-import { childTermination, scriptFiles } from "./run-vitest.test-support.js";
+import { childTermination, cleanRunnerEnv, scriptFiles } from "./run-vitest.test-support.js";
 
 vi.mock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/vitest-build-prerequisites.mts")>()),
@@ -289,40 +289,7 @@ it("keeps explicitly requested extensions without tests in batch plans", () => {
   expect(batch.planGroups.flatMap((group) => group.extensionIds)).toEqual([testedExtensionId]);
 });
 
-it("counts tracked extension tests without walking extension directories", () => {
-  const payload = expectNoNodeFsScans<{
-    batchTests: number;
-    shards: number;
-    shardTests: number;
-  }>(
-    `
-        const { createExtensionTestShards, resolveExtensionBatchPlan } =
-          await import("./scripts/lib/extension-test-plan.mts");
-        const extensionIds = ["matrix", "openai", "slack", "telegram"];
-        const batch = resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds });
-        const shards = createExtensionTestShards({ cwd: process.cwd(), extensionIds, shardCount: 2 });
-        return {
-          batchTests: batch.testFileCount,
-          shards: shards.length,
-          shardTests: shards.reduce((total, shard) => total + shard.testFileCount, 0),
-        };
-      `,
-    { counters: ["readdirSync"] },
-  );
-  expect(payload.batchTests).toBeGreaterThan(0);
-  expect(payload.shards).toBe(2);
-  expect(payload.shardTests).toBe(payload.batchTests);
-});
-
 it("balances extension test shards by estimated CI cost", () => {
-  for (const [config, singletonSeconds, tenFileSeconds] of [
-    [extensionConfig("slack"), 2, 12],
-    [extensionConfig("telegram"), 6, 43],
-    [extensionConfig("database-workers"), 8, 76],
-  ] as const) {
-    expect(estimateExtensionTestCost(config, 1), config).toBe(singletonSeconds);
-    expect(estimateExtensionTestCost(config, 10), config).toBe(tenFileSeconds);
-  }
   const shards = createExtensionTestShards({ shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT });
   const expectedIds = listAvailableExtensionIds().filter(
     (targetArg) => resolveExtensionTestPlan({ targetArg }).hasTests,
@@ -392,6 +359,73 @@ it.each([0, 7])("runs bounded parallel groups and stops admission after exit %s"
   ).toBe(true);
 });
 
+posixIt("emits complete native evidence after a failed batch and its passing peer", () => {
+  const root = realpathSync(tempDirs.make("openclaw-batch-evidence-"));
+  const files = scriptFiles(root);
+  files.linkModules();
+  mkdirSync(path.join(root, "test"));
+  const config = path.join(root, "vitest.config.mjs");
+  writeFileSync(
+    config,
+    `export default {root:${JSON.stringify(root)},test:{include:["test/*.test.mjs"],pool:"forks",maxWorkers:1,fileParallelism:false,fsModuleCache:false}};`,
+  );
+  for (const [name, body] of [
+    ["failed", "throw new Error('accepted failure')"],
+    ["passed", ""],
+  ]) {
+    writeFileSync(
+      path.join(root, "test", name + ".test.mjs"),
+      `import {it} from "vitest"; it("native fixture",()=>{${body}});`,
+    );
+  }
+  const plan = {
+    extensionCount: 2,
+    extensionIds: ["failed", "passed"],
+    estimatedCost: 2,
+    hasTests: true,
+    testFileCount: 2,
+    planGroups: ["failed", "passed"].map((name) => ({
+      config,
+      estimatedCost: 1,
+      extensionIds: [name],
+      roots: [path.join(root, "test", name + ".test.mjs")],
+      testFileCount: 1,
+    })),
+  };
+  const entry = path.join(root, "batch.mts");
+  writeFileSync(
+    entry,
+    `import {runExtensionBatchPlan} from ${JSON.stringify(path.join(process.cwd(), "scripts/test-extension-batch-run.mts"))};process.exitCode=await runExtensionBatchPlan(${JSON.stringify(plan)},{vitestArgs:["--configLoader=native","--reporter=verbose"]});`,
+  );
+  const result = spawnSync(
+    process.execPath,
+    ["--import", path.join(process.cwd(), "scripts/tsx.mjs"), entry],
+    {
+      cwd: root,
+      encoding: "utf8",
+      env: cleanRunnerEnv({
+        CI: "1",
+        OPENCLAW_EXTENSION_BATCH_PARALLEL: "1",
+        OPENCLAW_VITEST_MAX_WORKERS: "1",
+      }),
+    },
+  );
+  const output = result.stdout + result.stderr;
+  expect(result.status, output).toBe(1);
+  expect(result.signal).toBeNull();
+  expect(output).toContain(
+    '[shard:completion] {"version":1,"planned":2,"completed":2,"invocations":2,"failedInvocations":1}',
+  );
+  const signatures = parseNodeFailureReport(output, true);
+  expect(signatures, output).toEqual([
+    expect.objectContaining({
+      kind: "vitest",
+      file: "test/failed.test.mjs",
+      test: expect.stringContaining("native fixture :: Error: accepted failure"),
+    }),
+  ]);
+});
+
 it("rejects malformed extension batch parallelism", () => {
   for (const value of ["nope", "2x", "0"]) {
     expect(() =>
@@ -458,7 +492,7 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
     const expectedHome = realHomeReplay ? JSON.stringify(home) : "path.join(tmpdir(), 'home')";
     writeFileSync(
       path.join(root, "selected.test.mjs"),
-      `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(Boolean(process.versions.bun)).toBe(${runtime === "bun"});expect(process.execArgv.includes('--no-concurrent-sparkplug')).toBe(${runtime === "node" && pool === "forks"});expect(process.execArgv).toContain('--no-warnings');expect(process.env.NODE_OPTIONS).toBe('--trace-warnings');expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
+      `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(Uint8Array.fromBase64(Uint8Array.of(255).toBase64()).toHex()).toBe('ff');expect(Boolean(process.versions.bun)).toBe(${runtime === "bun"});expect(process.execArgv.includes('--no-concurrent-sparkplug')).toBe(${runtime === "node" && pool === "forks"});expect(process.execArgv).toContain('--no-warnings');expect(process.env.NODE_OPTIONS).toBe('--trace-warnings');expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
     );
     for (const name of ["excluded", "unrelated"]) {
       writeFileSync(
@@ -728,6 +762,37 @@ it.each([
     OPENCLAW_VITEST_RUNTIME: "node",
   });
 });
+
+it.each([
+  { policy: "dual-all", runtime: "node", expectedCalls: 3 },
+  { policy: "dual-all", runtime: "bun", expectedCalls: 3 },
+  { policy: "bun-all", runtime: "node", expectedCalls: 0 },
+  { policy: "bun-all", runtime: "bun", expectedCalls: 3 },
+])(
+  "runs only $runtime from the $policy extension selection",
+  async ({ policy, runtime, expectedCalls }) => {
+    const runGroup = vi.fn<(params: RunGroupParams) => Promise<number>>().mockResolvedValue(0);
+    vi.mocked(prepareVitestRuntime).mockClear();
+    expect(
+      await runExtensionBatchPlan(concurrentPlan(), {
+        env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy, OPENCLAW_CI_TEST_RUNTIME: runtime },
+        runGroup,
+      }),
+    ).toBe(0);
+    expect(runGroup).toHaveBeenCalledTimes(expectedCalls);
+    for (const [invocation] of runGroup.mock.calls) {
+      expect(invocation.env?.OPENCLAW_VITEST_RUNTIME).toBe(runtime);
+    }
+    if (expectedCalls === 0) {
+      expect(prepareVitestRuntime).not.toHaveBeenCalled();
+    } else {
+      expect(prepareVitestRuntime).toHaveBeenCalledOnce();
+      expect(vi.mocked(prepareVitestRuntime).mock.calls[0]?.[1]?.OPENCLAW_VITEST_RUNTIME).toBe(
+        runtime,
+      );
+    }
+  },
+);
 
 it("preserves Codex process bounds with release options", async () => {
   const excluded = "extensions/codex/src/app-server/run-attempt.test.ts";

@@ -4,14 +4,7 @@ import {
   SESSION_ROW_DETAIL_FIELDS,
   SESSION_SIDEBAR_ROW_FIELDS,
 } from "../../packages/gateway-protocol/src/session-row-fields.js";
-import {
-  buildSubagentSessionListReadIndex,
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
-  isSubagentRunLive,
-  isSubagentRunQueued,
-  resolveSubagentSessionStatus,
-} from "../agents/subagents/registry/subagent-registry-read.js";
+import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   isTerminalSessionStatus,
   resolveSessionGoalDisplayState,
@@ -29,6 +22,11 @@ import type {
   SessionListActiveRunProjector,
   SessionListRowContext,
 } from "./session-utils-contracts.js";
+import {
+  resolveSessionChildOwners,
+  shouldPropagateChildActivity,
+  type SessionChildLink,
+} from "./session-utils-core.js";
 import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
@@ -113,8 +111,7 @@ export function resolveGatewaySessionKind(key: string, entry?: SessionEntry) {
 }
 
 type GatewaySessionRunState = {
-  subagentRun: ReturnType<SessionListRowContext["subagentRuns"]["getDisplaySubagentRun"]>;
-  subagentOwner: string | undefined;
+  subagent: ReturnType<SessionListRowContext["subagentRuns"]["getSessionDisplayFacts"]>;
   fields: Pick<
     GatewaySessionRow,
     | "status"
@@ -131,9 +128,7 @@ type GatewaySessionRunState = {
 export type GatewaySessionRunStateCache = {
   current?: {
     entry: SessionEntry | undefined;
-    live: boolean;
     active: boolean;
-    clock: number | undefined;
     value: GatewaySessionRunState;
   };
 };
@@ -153,13 +148,13 @@ export function projectGatewaySessionRunState(params: {
 }): GatewaySessionRunState {
   const { key, entry, now, rowContext } = params;
   const subagentRuns = rowContext?.subagentRuns ?? buildSubagentSessionListReadIndex(now);
-  const subagentRun = subagentRuns.getDisplaySubagentRun(key);
-  const liveSubagentRunActive = isSubagentRunLive(subagentRun) || isSubagentRunQueued(subagentRun);
+  const subagent = subagentRuns.getSessionDisplayFacts(key, now);
+  const liveSubagentRunActive = subagent?.active === true;
   // Follow-up turns retain the child session while owning a different run from its original spawn.
   const hasActiveSubagentRun =
     liveSubagentRunActive ||
     subagentRuns.countActiveDescendantRuns(key) > 0 ||
-    ((subagentRun !== null || entry?.spawnedBy !== undefined) &&
+    ((subagent !== null || entry?.spawnedBy !== undefined) &&
       rowContext?.projectedAgentRuns !== undefined &&
       (params.projectRunProgress
         ? params.projectRunProgress(rowContext.projectedAgentRuns)
@@ -174,61 +169,43 @@ export function projectGatewaySessionRunState(params: {
     rowContext?.projectedSubagentActivity?.has(key) === true;
   // Clock views and live custody can change without a topology publication.
   // Compare their current facts before reusing an immutable projection.
-  const clock = subagentRun && !Number.isFinite(subagentRun.execution.endedAt) ? now : undefined;
   const previous = params.cache?.current;
   if (
     previous &&
     previous.entry === entry &&
-    previous.value.subagentRun === subagentRun &&
-    previous.live === liveSubagentRunActive &&
+    previous.value.subagent?.identity === subagent?.identity &&
+    previous.value.subagent?.active === subagent?.active &&
     previous.active === hasActiveSubagentRun &&
-    previous.clock === clock
+    previous.value.subagent?.clock === subagent?.clock
   ) {
     return previous.value;
   }
-  const subagentOwner =
-    normalizeOptionalString(subagentRun?.controllerSessionKey) ||
-    normalizeOptionalString(subagentRun?.requesterSessionKey);
   const fields: GatewaySessionRunState["fields"] = {
     status: entry?.status,
     lastRunError: entry?.lastRunError,
     suppressErrorNotice: entry?.suppressErrorNotice,
     subagentRunState: undefined,
-    hasActiveSubagentRun: subagentRun || hasActiveSubagentRun ? hasActiveSubagentRun : undefined,
+    hasActiveSubagentRun: subagent || hasActiveSubagentRun ? hasActiveSubagentRun : undefined,
     startedAt: entry?.startedAt,
     endedAt: entry?.endedAt,
     runtimeMs: entry?.runtimeMs,
   };
-  if (subagentRun) {
-    const endedAt = subagentRun.execution.endedAt;
-    const subagentStatus = resolveSubagentSessionStatus(subagentRun);
+  if (subagent) {
+    const { endedAt, status: subagentStatus } = subagent;
+    // A kill claim keeps the pause marker until its reconciliation commits, so a
+    // killed paused child can read "paused" briefly before it reads "killed".
     fields.subagentRunState = liveSubagentRunActive
       ? "active"
-      : typeof endedAt === "number" ||
-          isTerminalSessionStatus(fields.status) ||
-          typeof fields.endedAt === "number"
-        ? "historical"
-        : "interrupted";
+      : subagent.paused
+        ? "paused"
+        : typeof endedAt === "number" ||
+            isTerminalSessionStatus(fields.status) ||
+            typeof fields.endedAt === "number"
+          ? "historical"
+          : "interrupted";
     fields.status = liveSubagentRunActive
       ? subagentStatus
       : (fields.status ?? (typeof endedAt === "number" ? subagentStatus : undefined));
-    const ownsInterruptedSession =
-      entry?.lifecycleRunId === subagentRun.runId ||
-      (entry?.lifecycleRunId === undefined && entry?.lastRunId === subagentRun.runId) ||
-      (subagentRun.taskRunId !== undefined &&
-        entry?.subagentRecovery?.lastRunId === subagentRun.runId &&
-        entry.lifecycleRunId ===
-          (entry.subagentRecovery.sessionLifecycleRunId ?? subagentRun.taskRunId));
-    if (
-      fields.status === "interrupted" &&
-      subagentStatus === "failed" &&
-      subagentRun.execution.interruptionReason === "gateway-restart" &&
-      ownsInterruptedSession
-    ) {
-      fields.status = "failed";
-      fields.lastRunError ??=
-        "Restart recovery could not reach the parent. Inspect the child session before continuing.";
-    }
     // A lifecycle start after the spawn run ended belongs to a follow-up turn; do not refill
     // its cleared terminal fields from the finished spawn run.
     const fallbackEndedAt =
@@ -237,24 +214,18 @@ export function projectGatewaySessionRunState(params: {
       fields.startedAt > endedAt
         ? undefined
         : endedAt;
-    fields.startedAt =
-      (liveSubagentRunActive ? undefined : fields.startedAt) ??
-      getSubagentSessionStartedAt(subagentRun);
+    fields.startedAt = (liveSubagentRunActive ? undefined : fields.startedAt) ?? subagent.startedAt;
     fields.endedAt = liveSubagentRunActive ? endedAt : (fields.endedAt ?? fallbackEndedAt);
     fields.runtimeMs = liveSubagentRunActive
-      ? getSubagentSessionRuntimeMs(subagentRun, now)
+      ? subagent.runtimeMs
       : (fields.runtimeMs ??
-        (typeof fallbackEndedAt === "number"
-          ? getSubagentSessionRuntimeMs(subagentRun, now)
-          : undefined));
+        (typeof fallbackEndedAt === "number" ? subagent.runtimeMs : undefined));
   }
-  const value = { subagentRun, subagentOwner, fields };
+  const value = { subagent, fields };
   if (params.cache) {
     params.cache.current = {
       entry,
-      live: liveSubagentRunActive,
       active: hasActiveSubagentRun,
-      clock,
       value,
     };
   }
@@ -306,4 +277,28 @@ export function applyGatewaySessionRowMode(
     }
     row.rowMode = "compact";
   }
+}
+
+/** One child contribution serves retained aggregates and standalone row presentation. */
+export function projectPreparedSessionChild(
+  child: SessionChildLink & { parsedKey?: ReturnType<typeof parseAgentSessionKey> },
+  parentKey: string,
+  now: number,
+  rowContext: NonNullable<Parameters<typeof projectGatewaySessionRunState>[0]["rowContext"]>,
+  hasActiveDescendantRun = false,
+) {
+  // A child paused on sessions_yield still owes its parent a result. Its own row keeps
+  // hasActiveSubagentRun for live work, so readers can tell paused alone from waiting.
+  const { fields } = projectGatewaySessionRunState({ ...child, now, rowContext });
+  const active =
+    hasActiveDescendantRun || fields.hasActiveSubagentRun || fields.subagentRunState === "paused";
+  return {
+    included: resolveSessionChildOwners({
+      ...child,
+      now,
+      subagentRuns: rowContext.subagentRuns,
+      hasActiveRun: active,
+    }).includes(parentKey),
+    active: active && shouldPropagateChildActivity(child.key, child.entry, parentKey),
+  };
 }

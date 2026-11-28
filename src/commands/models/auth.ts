@@ -1,10 +1,6 @@
 import { cancel } from "@clack/prompts";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
@@ -27,10 +23,10 @@ import {
   createProviderAuthConfigPatch,
   writeProviderAuthConfig,
 } from "../../plugins/provider-auth-config.js";
+import { readProviderAuthFailure } from "../../plugins/provider-auth-failure.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "../../plugins/provider-auth-method.js";
 import { persistProviderAuthProfilesAfterLogin } from "../../plugins/provider-auth-persistence.js";
-import type { ProviderAuthContext } from "../../plugins/provider-authentication.types.js";
 import { applyPrimaryModel } from "../../plugins/provider-model-primary.js";
 import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
 import {
@@ -50,7 +46,6 @@ import {
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
-import type { WizardPrompter } from "../../wizard/prompts.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import {
   confirm as clackConfirm,
@@ -61,58 +56,44 @@ import {
 import { repairModelSelectionRuntimePlugins } from "../runtime-plugin-install.js";
 import { saveModelProviderApiKey } from "./auth-api-key.js";
 import { tryImportProviderCredential } from "./auth-credential-import.js";
+import { formatProviderAuthFailureForCli } from "./auth-login-gateway.js";
+import type {
+  ModelsAuthLoginFlowOptions,
+  ModelsAuthLoginFlowResult,
+  ModelsAuthLoginOptions,
+} from "./auth-login.types.js";
 import {
   looksLikeOpenAIApiKey,
   normalizeManualAuthProvider,
   readPipedStdin,
   resolveDefaultTokenProfileId,
-  validateOpenAICodexApiKeyInput,
+  resolveManualTokenExpiryMs,
 } from "./auth-manual-input.js";
 import {
+  allowLoginProviderModels,
+  allowProviderModelsInConfig,
   applyProviderLoginDefaultModel,
-  completeProviderModelAccess,
-  prepareProviderModelAccess,
   withoutProviderModelPolicy,
-  type PreparedProviderModelAccess,
 } from "./auth-model-policy.js";
 import { promotePersistedAuthProfile } from "./auth-profile-promotion.js";
 import {
   refreshProviderAuthAfterLogin,
   refreshRunningGatewayAuthState,
+  refreshSavedAuthAfterSettingsFailure,
   type ModelAuthRefreshOutcome,
 } from "./auth-refresh.js";
 import {
   resolveReloginProfileIdentity,
   snapshotReloginAuthProfiles,
 } from "./auth-relogin-identity.js";
+import { isSharedGatewayForCliLogin, showModelsAuthScopeNote } from "./auth-scope-note.js";
 import {
   loadValidConfigSnapshotOrThrow,
   resolveModelsTargetAgent,
   updateConfig,
 } from "./shared.js";
 
-function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
-  const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
-  if (!normalizedExpiresIn) {
-    return undefined;
-  }
-  const durationMs = parseDurationMs(normalizedExpiresIn, { defaultUnit: "d" });
-  const expires = resolveExpiresAtMsFromDurationMs(durationMs);
-  if (expires === undefined) {
-    throw new Error("Invalid expiry duration: resulting token expiry is outside Date range.");
-  }
-  return expires;
-}
-
-function requireManualAuthProvider(raw: string | undefined): string {
-  const provider = normalizeOptionalString(raw);
-  if (!provider) {
-    throw new Error(
-      `Missing --provider. Run ${formatCliCommand("openclaw models status")} or ${formatCliCommand("openclaw plugins list")} to choose a provider.`,
-    );
-  }
-  return normalizeManualAuthProvider(provider);
-}
+export type { ModelsAuthLoginFlowOptions, ModelsAuthLoginFlowResult } from "./auth-login.types.js";
 
 function guardCancel<T>(value: T | typeof import("@clack/prompts").CANCEL_SYMBOL): T {
   if (typeof value === "symbol") {
@@ -130,19 +111,6 @@ const password = async (params: Parameters<typeof clackPassword>[0]) =>
   guardCancel(await clackPassword(params));
 const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
   guardCancel(await clackSelect(params));
-
-async function readPastedSecret(params: {
-  message: string;
-  validate: (value: string | undefined) => string | undefined;
-}): Promise<string> {
-  const input = process.stdin.isTTY ? await password(params) : await readPipedStdin();
-  const normalized = normalizeSecretInput(input);
-  const validationMessage = params.validate(normalized);
-  if (validationMessage) {
-    throw new Error(validationMessage);
-  }
-  return normalized;
-}
 
 type ResolvedModelsAuthContext = Awaited<ReturnType<typeof resolveModelsAuthContext>>;
 
@@ -231,43 +199,6 @@ export function resolveRequestedLoginProviderOrThrow(
   );
 }
 
-async function pickProviderAuthMethod(params: {
-  provider: ProviderPlugin;
-  requestedMethod?: string;
-  prompter: WizardPrompter;
-  tokenOnly?: boolean;
-}) {
-  const rawRequestedMethod = params.requestedMethod?.trim();
-  if (rawRequestedMethod) {
-    return pickAuthMethod(params.provider, rawRequestedMethod);
-  }
-  const methods = params.tokenOnly
-    ? params.provider.auth.filter((method) => method.kind === "token")
-    : params.provider.auth;
-  if (params.tokenOnly && methods.length === 0) {
-    return null;
-  }
-  const preferred = methods.find((method) =>
-    params.tokenOnly ? method.id === "setup-token" : method.kind === "oauth",
-  );
-  if (preferred) {
-    return preferred;
-  }
-  if (methods.length === 1) {
-    return methods[0] ?? null;
-  }
-  return params.prompter
-    .select({
-      message: `${params.tokenOnly ? "Token" : "Auth"} method for ${params.provider.label}`,
-      options: methods.map((method) => ({
-        value: method.id,
-        label: method.label,
-        hint: method.hint,
-      })),
-    })
-    .then((id) => methods.find((method) => method.id === id) ?? null);
-}
-
 async function runProviderAuthMethod(
   params: Omit<ModelsAuthLoginFlowOptions, "provider" | "method" | "config"> &
     Omit<ResolvedModelsAuthContext, "providers"> & {
@@ -279,12 +210,6 @@ async function runProviderAuthMethod(
 ) {
   params.signal?.throwIfAborted();
   params.assertCurrent?.();
-  const modelAccess = prepareProviderModelAccess({
-    config: params.config,
-    agentId: params.agentId,
-    provider: params.provider.id,
-    providerLabel: params.provider.label,
-  });
   const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir);
   const existingProfiles = Object.entries(store.profiles)
     .filter(
@@ -308,6 +233,7 @@ async function runProviderAuthMethod(
     isRemote: params.isRemote,
     signal: params.signal,
     openUrl: params.openUrl,
+    nodes: params.nodes,
     browserAuthorization: params.browserAuthorization,
   });
   params.signal?.throwIfAborted();
@@ -331,7 +257,7 @@ async function runProviderAuthMethod(
     profiles: connectionResult.profiles,
     requestedProfileId: params.profileId,
     existingProfiles: params.existingProfiles,
-    matchesPersonalAccount: params.method.matchesPersonalAccount,
+    method: params.method,
     allowMissingReusedProfile: params.allowMissingReusedProfile,
   });
   const profiles = resolvedIdentity.profiles;
@@ -452,6 +378,9 @@ async function runProviderAuthMethod(
       await login.prompter.note(login.result.notes.join("\n"), "Provider notes");
     }
   } catch (error) {
+    if (error instanceof ProviderAuthConfigApplyError) {
+      await refreshSavedAuthAfterSettingsFailure(login);
+    }
     if (persistedProfiles.length > 0 && !(error instanceof ProviderCredentialsSavedError)) {
       throw new ProviderCredentialsSavedError(
         error instanceof Error
@@ -462,31 +391,13 @@ async function runProviderAuthMethod(
     }
     throw error;
   }
-  if (persistedProfiles.length > 0) {
-    await completeLoginModelAccess(params, modelAccess);
-  }
-  return { result: connectionResult, profiles: persistedProfiles, authRefresh };
-}
-
-function completeLoginModelAccess(
-  params: Pick<
-    ModelsAuthLoginFlowOptions,
-    "prompter" | "runtime" | "onModelAccessRequested" | "signal" | "assertCurrent"
-  >,
-  prepared: ReturnType<typeof prepareProviderModelAccess>,
-) {
-  return completeProviderModelAccess({
-    prepared,
-    prompter: params.prompter,
-    onRequested: params.onModelAccessRequested,
-    runtime: params.runtime,
-    assertCurrent: () => {
-      params.signal?.throwIfAborted();
-      params.assertCurrent?.();
-    },
-  }).catch((error: unknown) => {
-    throw new ProviderAuthConfigApplyError(error);
-  });
+  const modelAccess =
+    persistedProfiles.length > 0
+      ? await allowLoginProviderModels(params, params.agentId, params.provider.id)
+      : undefined;
+  // The provider's own result: a credential-only sign-in applies none of its recommendations,
+  // but `models.authLogin` still selects its recommended model for an agent without one.
+  return { result, profiles: persistedProfiles, authRefresh, modelAccess };
 }
 
 export async function modelsAuthSetupTokenCommand(
@@ -524,7 +435,7 @@ export async function modelsAuthSetupTokenCommand(
   }
 
   const prompter = createClackPrompter();
-  const method = await pickProviderAuthMethod({ provider, prompter, tokenOnly: true });
+  const method = await pickAuthMethod({ provider, prompter, tokenOnly: true });
   if (!method) {
     throw new Error(`Provider "${provider.id}" does not expose a token auth method.`);
   }
@@ -560,32 +471,35 @@ async function pasteManualAuthCredential(
   const { agentId, agentDir } = resolveModelsTargetAgent(config, opts.agent ?? undefined, {
     kind: "mutation",
   });
-  const provider = requireManualAuthProvider(opts.provider);
+  // `--provider` is a required option of both paste commands.
+  const provider = normalizeManualAuthProvider(opts.provider ?? "");
   const tokenProfileId =
     mode === "token"
       ? normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider)
       : undefined;
-  const input = await readPastedSecret({
-    message: `Paste ${mode === "token" ? "token" : "API key"} for ${provider}`,
-    validate: (value) => {
-      const trimmed = value?.trim();
-      if (!trimmed) {
-        return "Required";
-      }
-      if (mode === "api_key") {
-        return provider === "openai" ? validateOpenAICodexApiKeyInput(trimmed) : undefined;
-      }
-      if (provider === "anthropic") {
-        return validateAnthropicSetupToken(trimmed.replaceAll(/\s+/g, ""));
-      }
-      if (provider === "openai" && looksLikeOpenAIApiKey(trimmed)) {
-        return `That looks like an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-api-key --provider openai")} for API-key auth.`;
-      }
-      return undefined;
-    },
-  });
+  const input = normalizeSecretInput(
+    process.stdin.isTTY
+      ? await password({
+          message: `Paste ${mode === "token" ? "token" : "API key"} for ${provider}`,
+        })
+      : await readPipedStdin(),
+  );
+  // saveModelProviderApiKey validates API keys; tokens are checked here.
+  const invalid = !input.trim()
+    ? "Required"
+    : mode === "api_key"
+      ? undefined
+      : provider === "anthropic"
+        ? validateAnthropicSetupToken(input.replaceAll(/\s+/g, ""))
+        : provider === "openai" && looksLikeOpenAIApiKey(input)
+          ? `That looks like an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-api-key --provider openai")} for API-key auth.`
+          : undefined;
+  if (invalid) {
+    throw new Error(invalid);
+  }
   let profileId = tokenProfileId;
   let warning: string | undefined;
+  let modelAccess: string | undefined;
   if (tokenProfileId !== undefined) {
     const token =
       provider === "anthropic"
@@ -597,14 +511,21 @@ async function pasteManualAuthCredential(
       credential: { type: "token", provider, token, ...(expires ? { expires } : {}) },
       agentDir,
     });
-    await updateConfig((cfg) =>
-      applyAuthProfileConfig(cfg, { profileId: tokenProfileId, provider, mode: "token" }),
-    );
+    await updateConfig((cfg) => {
+      const next = applyAuthProfileConfig(cfg, {
+        profileId: tokenProfileId,
+        provider,
+        mode: "token",
+      });
+      modelAccess = allowProviderModelsInConfig(next, agentId, provider);
+      return next;
+    });
   } else {
-    ({ profileId, warning } = await saveModelProviderApiKey({
+    ({ profileId, warning, modelAccess } = await saveModelProviderApiKey({
       config,
       provider,
       apiKey: input,
+      agentId,
       agentDir,
       profileId: normalizeOptionalString(opts.profileId),
     }));
@@ -615,6 +536,9 @@ async function pasteManualAuthCredential(
   }
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/${mode})`);
+  if (modelAccess) {
+    runtime.log(modelAccess);
+  }
   if (mode === "token" && provider === "anthropic") {
     runtime.log("Anthropic setup-token auth is supported in OpenClaw.");
     runtime.log("OpenClaw prefers Claude CLI reuse when it is available on the host.");
@@ -665,16 +589,13 @@ export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: Ru
     });
     if (methodId !== "paste") {
       const prompter = createClackPrompter();
-      const method = tokenMethods.find((candidate) => candidate.id === methodId);
-      if (!method) {
-        throw new Error(
-          `Unknown token auth method "${methodId}". Run ${formatCliCommand("openclaw models auth login --provider " + providerPlugin.id)} to choose interactively.`,
-        );
-      }
       await runProviderAuthMethod({
         ...context,
         provider: providerPlugin,
-        method,
+        method: expectDefined(
+          tokenMethods.find((candidate) => candidate.id === methodId),
+          "token method offered by the select above",
+        ),
         runtime,
         prompter,
       });
@@ -718,63 +639,24 @@ export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: Ru
   );
 }
 
-type LoginOptions = {
-  provider?: string;
-  method?: string;
-  profileId?: string;
-  setDefault?: boolean;
-  yes?: boolean;
-  agent?: string;
-  /** Discard cached provider profiles before starting a replacement login. */
-  force?: boolean;
-};
-
-export type ModelsAuthLoginFlowResult = {
-  providerId: string;
-  methodId: string;
-  authRefresh: ModelAuthRefreshOutcome;
-  defaultModel?: string;
-  imported?: boolean;
-  profiles: Array<{
-    profileId: string;
-    provider: string;
-    mode: "api_key" | "oauth" | "token";
-  }>;
-};
-
-export type ModelsAuthLoginFlowOptions = LoginOptions & {
-  ownerPluginId?: string;
-  credentialOnly?: boolean;
-  assertCurrent?: () => void;
-  config?: OpenClawConfig;
-  runtime: RuntimeEnv;
-  prompter: WizardPrompter;
-  onModelAccessRequested?: (request: PreparedProviderModelAccess) => void;
-  env?: NodeJS.ProcessEnv;
-  isRemote?: boolean;
-  signal?: AbortSignal;
-  openUrl?: (url: string) => Promise<void>;
-  browserAuthorization?: ProviderAuthContext["oauth"]["authorize"];
-  beforePersistentEffect?: () => void | Promise<void>;
-  /** Publish a hosted login through its current Gateway instead of a separate CLI connection. */
-  refreshAfterLogin?: (agentId: string) => Promise<void>;
-};
-
 export async function runModelsAuthLoginFlowCore(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
-  return runModelsAuthLoginFlow(opts, true);
+  return runModelsAuthLoginFlow(opts, () => true);
 }
 
 export async function runModelsAuthLoginFlowForGateway(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
-  return runModelsAuthLoginFlow(opts, opts.isRemote === false);
+  return runModelsAuthLoginFlow(
+    opts,
+    (config) => opts.isRemote === false && isSharedGatewayForCliLogin(config),
+  );
 }
 
 async function runModelsAuthLoginFlow(
   opts: ModelsAuthLoginFlowOptions,
-  showScopeNote: boolean,
+  showScopeNote: (config: OpenClawConfig) => boolean | Promise<boolean>,
 ): Promise<ModelsAuthLoginFlowResult> {
   const requestedProviderId = opts.provider
     ? normalizeManualAuthProvider(opts.provider)
@@ -815,16 +697,8 @@ async function runModelsAuthLoginFlow(
   } else if (requestedProviderId && !requestedProvider) {
     requestedProvider = resolveRequestedLoginProviderOrThrow(authProviders, requestedProviderId);
   }
-  if (showScopeNote) {
-    await prompter.note(
-      [
-        "Scope: System / agent",
-        `Agent: ${context.agentId}`,
-        "Location: the machine running OpenClaw",
-        `For personal model accounts on a Gateway, run ${formatCliCommand("openclaw models accounts login --help")}.`,
-      ].join("\n"),
-      "Provider sign-in",
-    );
+  if (await showScopeNote(context.config)) {
+    await showModelsAuthScopeNote(prompter, context.agentId);
   }
   const selectedProvider =
     requestedProvider ??
@@ -851,29 +725,26 @@ async function runModelsAuthLoginFlow(
 
   const chosenMethod = opts.ownerPluginId
     ? selectedProvider.auth.find((method) => method.id === opts.method)
-    : await pickProviderAuthMethod({
+    : await pickAuthMethod({
         provider: selectedProvider,
         requestedMethod: opts.method,
         prompter,
+        config: context.config,
       });
 
   if (!chosenMethod) {
     throw new Error(
-      `Unknown auth method. Run ${formatCliCommand("openclaw models auth login --provider " + selectedProvider.id)} without --method to choose interactively.`,
+      opts.ownerPluginId
+        ? "The selected provider login is no longer available."
+        : `Unknown auth method. Run ${formatCliCommand("openclaw models auth login --provider " + selectedProvider.id)} without --method to choose interactively.`,
     );
   }
 
-  const modelAccess = prepareProviderModelAccess({
-    config: context.config,
-    agentId: context.agentId,
-    provider: selectedProvider.id,
-    providerLabel: selectedProvider.label,
-  });
   // Snapshot before --force removes cached credentials. Provider-owned identity
   // matching may safely keep the old profile id for the same authenticated account.
   const existingProfiles = await snapshotReloginAuthProfiles({
     agentDir: context.agentDir,
-    matchesPersonalAccount: chosenMethod.matchesPersonalAccount,
+    method: chosenMethod,
   });
   const imported =
     !opts.credentialOnly && !opts.force && !opts.profileId && !opts.setDefault
@@ -904,11 +775,16 @@ async function runModelsAuthLoginFlow(
     opts.runtime.log(
       `Auth profile: ${imported.profileId} (${imported.provider}/${imported.mode}, imported)`,
     );
-    await completeLoginModelAccess(opts, modelAccess);
+    const modelAccess = await allowLoginProviderModels(
+      { ...opts, config: context.config },
+      context.agentId,
+      selectedProvider.id,
+    );
     return {
       providerId: selectedProvider.id,
       methodId: chosenMethod.id,
       authRefresh,
+      ...(modelAccess ? { modelAccess } : {}),
       imported: true,
       profiles: [
         { profileId: imported.profileId, provider: imported.provider, mode: imported.mode },
@@ -919,8 +795,6 @@ async function runModelsAuthLoginFlow(
   const forceLogin = Boolean(opts.force);
   if (forceLogin) {
     await opts.beforePersistentEffect?.();
-    // Resolve the method before purging profiles so an invalid --method cannot
-    // delete working credentials without starting a replacement login.
     try {
       const clearedStore = await removeProviderAuthProfilesWithLock({
         cfg: context.config,
@@ -945,7 +819,7 @@ async function runModelsAuthLoginFlow(
     await refreshRunningGatewayAuthState(context.agentId, "logout", opts.runtime);
   }
 
-  const { result, profiles, authRefresh } = await runProviderAuthMethod({
+  const { result, profiles, authRefresh, modelAccess } = await runProviderAuthMethod({
     ...opts,
     ...context,
     provider: selectedProvider,
@@ -954,16 +828,12 @@ async function runModelsAuthLoginFlow(
     existingProfiles,
     allowMissingReusedProfile: forceLogin,
   });
-  if (selectedProvider.id === "openai") {
-    opts.runtime.log(
-      `Tip: Codex-capable models can use native Codex web search. Configure the \`web_search\` tool with \`${formatCliCommand("openclaw configure --section web")}\`. Docs: https://docs.openclaw.ai/tools/web`,
-    );
-  }
   return {
     providerId: selectedProvider.id,
     methodId: chosenMethod.id,
     authRefresh,
     ...(result.defaultModel ? { defaultModel: result.defaultModel } : {}),
+    ...(modelAccess ? { modelAccess } : {}),
     profiles: profiles.map((profile) => ({
       profileId: profile.profileId,
       provider: profile.credential.provider,
@@ -972,17 +842,28 @@ async function runModelsAuthLoginFlow(
   };
 }
 
-export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
+export async function modelsAuthLoginCommand(opts: ModelsAuthLoginOptions, runtime: RuntimeEnv) {
   if (!process.stdin.isTTY) {
     throw new Error(
       `models auth login requires an interactive TTY. In automation, use ${formatCliCommand("openclaw models auth paste-token --provider <provider>")} when token auth is available.`,
     );
   }
 
-  await runModelsAuthLoginFlowCore({
-    ...opts,
-    runtime,
-    prompter: createClackPrompter(),
+  const result = await runModelsAuthLoginFlow(
+    { ...opts, runtime, prompter: createClackPrompter(process.stdout, opts.signal) },
+    isSharedGatewayForCliLogin,
+  ).catch((error: unknown) => {
+    const failure = readProviderAuthFailure(error);
+    throw failure
+      ? new Error(formatProviderAuthFailureForCli(failure.reason, failure.message, opts.provider), {
+          cause: error,
+        })
+      : error;
   });
+  if (opts.refreshAfterLogin && result.authRefresh !== "refreshed") {
+    throw new ProviderCredentialsSavedError(
+      "Sign-in was saved, but this session could not refresh its credentials. Restart the local TUI and retry your message.",
+    );
+  }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

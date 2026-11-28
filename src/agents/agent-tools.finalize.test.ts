@@ -14,7 +14,6 @@ import {
   registerHeadlessToolSearchCatalog,
 } from "./tool-search.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
-import { createMessageTool } from "./tools/message-tool-execution.js";
 
 type Options = Partial<Parameters<typeof finalizeAgentTools>[0]>;
 
@@ -67,32 +66,7 @@ async function published(tools: () => AnyAgentTool[], options: Options = {}) {
 afterEach(() => clearPluginMetadataLifecycleCaches());
 
 describe("finalized tool descriptor snapshots", () => {
-  it.each([undefined, {}])(
-    "shares message publications across new sessions (config: %j)",
-    async (config) => {
-      using publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
-      using prewarm = vi.spyOn(toolSchema, "normalizeOpenAIStrictToolParameters");
-      const first = createMessageTool({ config });
-      const cold = attempt([first]);
-      const bytes = JSON.stringify(cold.tool().parameters);
-      await cold.settle();
-      const prepared = attempt([createMessageTool({ config })]).tool().parameters;
-      publish.mockClear();
-      prewarm.mockClear();
-      for (let index = 0; index < 8; index++) {
-        const current = createMessageTool({ config, runId: `run-${index}` });
-        expect(current.execute).not.toBe(first.execute);
-        const next = attempt([current], { hookContext: { sessionId: `session-${index}` } });
-        expect(next.tool().parameters).toBe(prepared);
-        expect(JSON.stringify(next.tool().parameters)).toBe(bytes);
-        await next.settle();
-      }
-      expect(publish).not.toHaveBeenCalled();
-      expect(prewarm).not.toHaveBeenCalled();
-    },
-  );
-
-  it("reuses Tool Search schemas while binding the current catalog and configured limit", async () => {
+  it("binds Tool Search to the current catalog and configured limit", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const controls = (searchDefaultLimit = 1) => {
       const config = { tools: { toolSearch: { searchDefaultLimit } } };
@@ -102,20 +76,12 @@ describe("finalized tool descriptor snapshots", () => {
       registerHeadlessToolSearchCatalog({ catalogRef, tools });
     const names = ["lookup_one", "lookup_two", "lookup_three"];
     try {
-      register(names.map((name) => tool(schema(), { name })));
-      const cold = controls();
-      const coldBytes = JSON.stringify([0, 1, 2].map((index) => cold.tool(index).parameters));
-      await cold.settle();
-      const warm = controls();
-      expect(JSON.stringify([0, 1, 2].map((index) => warm.tool(index).parameters))).toBe(coldBytes);
-      await warm.settle();
-
       const current = tool(schema(), { name: names[0] });
       register([current, ...names.slice(1).map((name) => tool(schema(), { name }))]);
+      await controls().settle();
       const next = controls();
       for (const index of [0, 1, 2]) {
         expect(getPublishedRuntimeToolInputSchema(next.tool(index).parameters)).toBeDefined();
-        expect(next.tool(index).parameters).toBe(warm.tool(index).parameters);
       }
       expect((await next.tool().execute("search", { query: "lookup" })).details).toHaveLength(1);
       await next.tool(2).execute("dispatch", { id: names[0], args: { query: "current" } });
@@ -173,6 +139,24 @@ describe("finalized tool descriptor snapshots", () => {
     },
   );
 
+  it("shares schema projections across interleaved catalogs without retaining run bindings", async () => {
+    const parameters = schema();
+    const first = (await published(() => [tool(parameters)])).tool().parameters;
+    using publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
+    for (let index = 0; index < 80; index++) {
+      const current = tool(parameters, { description: `Current description ${index}` });
+      const next = attempt([current, tool(parameters, { name: `sibling_${index}` })], {
+        hookContext: { sessionId: `catalog-${index}` },
+      });
+      expect(next.tool().parameters).toBe(first);
+      expect(next.tool().description).toBe(current.description);
+      await next.tool().execute("current", {});
+      expect(current.execute).toHaveBeenCalledOnce();
+      await next.settle();
+    }
+    expect(publish).not.toHaveBeenCalled();
+  });
+
   it("retains isolated published schemas across source and sibling changes", async () => {
     const nestedSchema = () => ({
       type: "object",
@@ -207,21 +191,22 @@ describe("finalized tool descriptor snapshots", () => {
     expect(attempt(tools()).tool().outputSchema).toBe(descriptor.outputSchema);
   });
 
-  it.each([
-    ["provider", { modelProvider: "google" }],
-    ["model", { modelId: "other-model" }],
-    ["API", { modelApi: "anthropic-messages" }],
-    ["compatibility", { modelCompat: { unsupportedToolSchemaKeywords: ["title"] } }],
-    ["config", { config: { tools: { allow: ["lookup"] } } }],
-  ] satisfies Array<[string, Options]>)("refreshes when %s changes", async (_name, change) => {
-    const parameters = schema();
+  it("shares unchanged definitions across config and route changes but isolates schema compatibility", async () => {
+    const parameters = { ...schema(), title: "Lookup" };
     const previous = (await published(() => [tool(parameters)])).tool().parameters;
-    const changed = attempt([tool(parameters)], change);
-    expect(changed.tool().parameters).not.toBe(previous);
-    await changed.settle();
-    const refreshed = attempt([tool(parameters)], change).tool().parameters;
-    expect(getPublishedRuntimeToolInputSchema(refreshed)).toBeDefined();
-    expect(refreshed).not.toBe(previous);
+    for (const change of [
+      { modelId: "other-model" },
+      { modelApi: "anthropic-messages" },
+      { config: { tools: { allow: ["lookup"] } } },
+    ]) {
+      const changed = await published(() => [tool(parameters)], change);
+      expect(changed.tool().parameters).toEqual(parameters);
+    }
+    const compat = { modelCompat: { unsupportedToolSchemaKeywords: ["title"] } };
+    const stripped = (await published(() => [tool(parameters)], compat)).tool().parameters;
+    expect(stripped).toEqual(schema());
+    expect(attempt([tool(parameters)]).tool().parameters).toBe(previous);
+    expect(attempt([tool(parameters)], compat).tool().parameters).toBe(stripped);
   });
 
   it("refreshes on plugin load, unload, and metadata lifecycle reset", async () => {
@@ -253,7 +238,7 @@ describe("finalized tool descriptor snapshots", () => {
       });
     const previous = (await published(() => [search()])).tool().parameters;
     const enabled = attempt([search(), tool(schema(), { name: "sessions_history" })]);
-    expect(enabled.tool().parameters).not.toBe(previous);
+    expect(enabled.tool().parameters).toBe(previous);
     expect(enabled.tool().description).toContain("Follow up with sessions_history");
     await enabled.settle();
     const disabled = attempt([search()]);

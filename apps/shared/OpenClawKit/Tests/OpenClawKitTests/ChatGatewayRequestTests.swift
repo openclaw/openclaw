@@ -822,6 +822,32 @@ struct ChatGatewayRequestTests {
         }
     }
 
+    @Test func `attachment send deadline leaves admission time after a slow upload`() {
+        // An 8 MB file is 10,666,668 base64 bytes. URLSession reports the send
+        // done once buffered, so the deadline must outlast the upload itself.
+        let content = String(repeating: "A", count: 10_666_668)
+        func request(_ timeout: Int?, _ attachments: [OpenClawChatAttachmentPayload]) -> Double {
+            OpenClawChatGatewayRequests.sendMessage(
+                sessionKey: "main",
+                agentID: nil,
+                expectedSessionRoutingContract: nil,
+                message: "report",
+                thinking: nil,
+                idempotencyKey: "file-send",
+                attachments: attachments,
+                requestTimeoutMs: timeout).timeoutMs
+        }
+        let file = OpenClawChatAttachmentPayload(
+            type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: content)
+        let uploadAt1MbpsMs = Double(content.utf8.count * 8 / 1000)
+
+        // 30 s admission window plus the upload at 256 kbit/s.
+        #expect(request(nil, [file]) == 30000 + 333_333)
+        #expect(request(nil, [file]) > 30000 + uploadAt1MbpsMs)
+        #expect(request(nil, []) == 30000)
+        #expect(request(1200, [file]) == 1200)
+    }
+
     @Test func `send request omits inherited thinking override`() {
         let inherited = OpenClawChatGatewayRequests.sendMessage(
             sessionKey: "global",

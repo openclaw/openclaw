@@ -6,7 +6,11 @@ import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { LiveTransportQaCliRegistrationOptions, QaDockerRunCommand } from "./qa-runtime.js";
+import type {
+  LiveTransportQaCliRegistrationOptions,
+  QaDockerFetchLike,
+  QaDockerRunCommand,
+} from "./qa-runtime.js";
 
 const loadPluginManifestRegistryCore = vi.hoisted(() => vi.fn());
 const loadBundledPluginManifestRegistry = vi.hoisted(() => vi.fn());
@@ -304,20 +308,64 @@ it("bounds a stalled waitForHealth probe by the remaining overall deadline", asy
   });
   const sleepImpl = mockAsync();
   const startedAt = Date.now();
+  const now = vi.spyOn(performance, "now").mockReturnValue(100.25).mockReturnValueOnce(100);
 
-  await expect(
-    dockerRuntime().waitForHealth(healthUrl, {
+  try {
+    await expect(
+      dockerRuntime().waitForHealth(healthUrl, {
+        fetchImpl,
+        sleepImpl,
+        timeoutMs: 25,
+        pollMs: 1_000,
+      }),
+    ).rejects.toThrow("did not become healthy");
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(probeSignal?.aborted).toBe(true);
+    expect(sleepImpl).not.toHaveBeenCalled();
+  } finally {
+    now.mockRestore();
+  }
+});
+
+it("retries a timed-out health probe while the overall deadline still has time", async () => {
+  const healthy = cancelTrackedFetchResponse(true);
+  let probeSignal: AbortSignal | undefined;
+  const now = vi.spyOn(performance, "now").mockReturnValue(100.25).mockReturnValueOnce(100);
+  const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValueOnce(AbortSignal.abort());
+  const fetchImpl = vi
+    .fn<QaDockerFetchLike>(async () => healthy.response)
+    .mockImplementationOnce(async (_input, init) => {
+      probeSignal = init?.signal ?? undefined;
+      if (!probeSignal) {
+        throw new Error("health probe signal missing");
+      }
+      if (!probeSignal.aborted) {
+        await once(probeSignal, "abort");
+      }
+      now.mockReturnValue(2100.25);
+      throw new Error("health probe aborted");
+    });
+  const sleepImpl = mockAsync();
+
+  try {
+    await dockerRuntime().waitForHealth(healthUrl, {
       fetchImpl,
       sleepImpl,
-      timeoutMs: 25,
-      pollMs: 1_000,
-    }),
-  ).rejects.toThrow("did not become healthy");
+      timeoutMs: 2_500,
+      pollMs: 1,
+    });
 
-  expect(Date.now() - startedAt).toBeLessThan(500);
-  expect(fetchImpl).toHaveBeenCalledTimes(1);
-  expect(probeSignal?.aborted).toBe(true);
-  expect(sleepImpl).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(timeout).toHaveBeenNthCalledWith(1, 2_000);
+    expect(probeSignal?.aborted).toBe(true);
+    expect(sleepImpl).toHaveBeenCalledExactlyOnceWith(1);
+    expect(healthy.cancel).toHaveBeenCalledOnce();
+  } finally {
+    timeout.mockRestore();
+    now.mockRestore();
+  }
 });
 
 it("resolves an unpinned QA Docker host port away from an occupied loopback default", async () => {

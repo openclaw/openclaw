@@ -5,7 +5,7 @@ import { resolveStoredSessionKeyForAgentStore } from "../../gateway/session-stor
 import { createGatewaySessionLineageReaderAsync } from "../../gateway/session-utils-store-lineage.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { readWithSessionStoreTopology } from "../../sessions/session-row-changes.js";
-import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import { readAgentDatabaseReadAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../../state/agent-deletion-journal.read.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
@@ -34,7 +34,7 @@ import {
   prepareSessionStoreTargetInventory,
 } from "./session-store-target-inventory.js";
 import {
-  targetDiscoveryLane,
+  sessionStoreLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "./session-transcript-worker-runtime.js";
@@ -68,6 +68,7 @@ export async function loadCombinedSessionStoreForGatewayCoreAsync(
       listConfiguredSessionStoreAgentIds(config),
       env,
       "recovery",
+      "read",
     );
     const discovery = options.discovery ?? {
       env,
@@ -142,7 +143,7 @@ export async function prepareCombinedSessionStoreLineage(
       const owner = normalizeAgentId(parsed.agentId);
       if (
         !owners.has(owner) &&
-        !readAgentDatabaseAdmissionRefusal(owner, { env: discovery?.env }) &&
+        !readAgentDatabaseReadAdmissionRefusal(owner, { env: discovery?.env }) &&
         !excluded(resolveOpenClawAgentSqlitePath({ agentId: owner, env: discovery?.env }), owner)
       ) {
         parents.set(identity(agentId, parentKey), {
@@ -202,6 +203,7 @@ export async function prepareCombinedSessionStoreForGatewayAsync(
     listConfiguredSessionStoreAgentIds(cfg),
     env,
     "recovery",
+    "read",
   );
   return readCombinedSessionStoreTopology(inventory, options, scopeAgentIds);
 }
@@ -270,7 +272,7 @@ async function readCombinedSessionStoreTopology(
       }));
       return result;
     },
-    targetDiscoveryLane,
+    sessionStoreLane,
   );
 }
 

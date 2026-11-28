@@ -2,7 +2,6 @@ import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
   resolveDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import {
   resolveAgentRunExpiresAtMs,
@@ -14,6 +13,7 @@ import { captureGatewayScopeMatcher } from "../gateway/session-runtime-scope.js"
 import { registerAgentRunDeadlineRenewer } from "../infra/agent-run-deadline.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { monotonicNow, remainingMonotonicMs } from "../shared/monotonic-time.js";
 import { getSessionControllerSourceIdentity } from "./session-controller.identity.js";
 import {
   isSessionControllerSourceQueued,
@@ -423,9 +423,7 @@ export function initializeRpcSourceTiming(
             timeoutMs: params.timeoutMs,
           })
         : (asDateTimestampMs(params.expiresAtMs) ?? 0),
-    queueDeadlineAtMs: params.onQueueTimeout
-      ? (resolveExpiresAtMsFromDurationMs(params.timeoutMs, { nowMs: now }) ?? 0)
-      : undefined,
+    queueDeadlineAtMs: params.onQueueTimeout ? monotonicNow() + params.timeoutMs : undefined,
     timeoutMs: params.timeoutMs,
     cancelQueueDeadline,
     expireQueue() {
@@ -462,10 +460,10 @@ export function initializeRpcSourceTiming(
   };
   ref.input.abortSignal.addEventListener("abort", dispose, { once: true });
   void ref.input.settlement.promise.then(dispose, dispose);
-  if (params.onQueueTimeout && canStartRpcSource(ref)) {
+  if (timing.queueDeadlineAtMs !== undefined && canStartRpcSource(ref)) {
     queueTimer = setTimeout(
       timing.expireQueue,
-      Math.max(0, (timing.queueDeadlineAtMs ?? 0) - Date.now()),
+      Math.max(0, remainingMonotonicMs(timing.queueDeadlineAtMs)),
     );
     queueTimer.unref();
   }
@@ -480,7 +478,7 @@ export function markRpcSourceExecutionStarted(ref: RpcSourceRef): boolean {
   const now = Date.now();
   if (
     timing.queueDeadlineAtMs !== undefined &&
-    !isFutureDateTimestampMs(timing.queueDeadlineAtMs, { nowMs: now })
+    remainingMonotonicMs(timing.queueDeadlineAtMs) <= 0
   ) {
     timing.expireQueue();
     return false;

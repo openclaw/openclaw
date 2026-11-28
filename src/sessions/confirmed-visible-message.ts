@@ -23,10 +23,7 @@ import type { RoutePeer } from "../routing/resolve-route.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { deliveryContextKey } from "../utils/delivery-context.shared.js";
-import {
-  commitBackgroundPayloadsToSession,
-  type BackgroundPayloadsCommit,
-} from "./background-result-payloads.js";
+import type { BackgroundPayloadsCommit } from "./background-result-payloads.js";
 import type { BackgroundSessionResultProvenance } from "./background-session-result.js";
 
 /** Inputs describing one payload the channel confirmed as delivered. */
@@ -45,7 +42,7 @@ export type ConfirmedVisibleMessageParams = {
   deliveryId: string;
   payloadIndex: number;
   signal?: AbortSignal;
-  expectedGeneration?: { sessionKey?: string; sessionId: string; lifecycleRevision?: string };
+  expectedGeneration?: { sessionKey?: string };
   /** Background producer recorded on the history row, when there is one. */
   provenance?: BackgroundSessionResultProvenance;
   assertCurrent?: () => void;
@@ -120,6 +117,7 @@ export async function commitConfirmedVisibleMessage(
     });
   }
   const entry = await readSessionEntryInWorker({
+    agentId,
     sessionKey: destinationKey,
     storePath,
     readConsistency: "latest",
@@ -127,21 +125,14 @@ export async function commitConfirmedVisibleMessage(
   if (!entry) {
     return { ok: false, reason: "destination conversation is unavailable" };
   }
-  // A caller-pinned generation applies only to the conversation it was pinned for.
-  const expected = params.expectedGeneration;
-  const generation =
-    expected && (!expected.sessionKey || toStoreKey(expected.sessionKey) === destinationKey)
-      ? expected
-      : entry;
+  // Loaded at use: only a confirmed external send needs this commit graph (gateway media
+  // helpers), and a one-shot turn would otherwise load it on its startup path.
+  const { commitBackgroundPayloadsToSession } = await import("./background-result-payloads.js");
   // The destination is another conversation, so the producer's write claim must not apply.
   return await runWithoutOwnedSessionTranscriptWrites(() =>
     commitBackgroundPayloadsToSession({
       agentId,
       sessionKey: destinationKey,
-      expectedGeneration: {
-        sessionId: generation.sessionId,
-        lifecycleRevision: generation.lifecycleRevision,
-      },
       payloads: [params.payload],
       idempotencyKey: `outbound-delivery:${params.deliveryId}:${params.payloadIndex}`,
       provenance: params.provenance,

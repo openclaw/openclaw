@@ -40,8 +40,8 @@
       "help": "HTTPS relay origin. HTTP is supported only for localhost and 127.0.0.1 development."
     },
     "agentId": {
-      "label": "Default Agent",
-      "help": "Optional agent for new conversations; otherwise use the Gateway default."
+      "label": "Default agent",
+      "help": "The agent for new sessions from connected apps. Leave blank to use the Gateway default."
     }
   },
   "controlUi": {
@@ -49,5 +49,9 @@
     "styles": [
       "dist/control-ui/2a51d7d8d2e4e1bad981b014f3a481b1903ec641534aca084a10c809b297abe6/index.css"
     ]
-  }
+  },
+  "recommendedPrompts": [
+    "Help me plan an MCP Relay connection from ChatGPT, Codex, or Claude to this Gateway.",
+    "Review my connected MCP Relay apps and their access without changing grants."
+  ]
 }

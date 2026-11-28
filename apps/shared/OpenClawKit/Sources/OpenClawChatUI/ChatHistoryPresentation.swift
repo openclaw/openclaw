@@ -22,7 +22,7 @@ public enum OpenClawChatHistoryPresentation {
         submittedAtMs: Int64? = nil,
         inputConsumptions: [OpenClawChatHistoryPayload.InputConsumption]? = nil) -> String?
     {
-        let entries = rawMessages.compactMap(Self.decodeMessage)
+        let entries = rawMessages.flatMap(Self.decodeMessages)
         return Self.replyEntry(
             from: entries,
             runID: runID,
@@ -38,7 +38,7 @@ public enum OpenClawChatHistoryPresentation {
         inputConsumptions: [OpenClawChatHistoryPayload.InputConsumption]?) -> OpenClawChatMessage?
     {
         self.replyEntry(
-            from: rawMessages.compactMap(self.decodeMessage),
+            from: rawMessages.flatMap(self.decodeMessages),
             runID: runID,
             inputConsumptions: inputConsumptions,
             isTerminal: { $0.message.isCompletedReply && !$0.text.isEmpty })?.message
@@ -121,6 +121,17 @@ public enum OpenClawChatHistoryPresentation {
         guard let stopReason = entry.message.stopReason?.lowercased() else { return false }
         // Progress rows are not final replies; the later assistant row owns completion.
         return stopReason != "tooluse" && stopReason != "tool_use" && stopReason != "tool_calls"
+    }
+
+    private nonisolated static func decodeMessages(_ raw: OpenClawKit.AnyCodable) -> [MessageEntry] {
+        guard let entry = decodeMessage(raw) else { return [] }
+        return entry.message.ingestedMessages.map { message in
+            MessageEntry(
+                message: message,
+                text: ChatMessageVisibleText.visibleText(in: message)
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                isMessageToolMirror: entry.isMessageToolMirror)
+        }
     }
 
     private nonisolated static func decodeMessage(_ raw: OpenClawKit.AnyCodable) -> MessageEntry? {

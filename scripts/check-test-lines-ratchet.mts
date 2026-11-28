@@ -2,16 +2,17 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { releaseBranchForChecks } from "./lib/check-limits.mts";
 import {
-  loadRatchetReference,
-  loadRatchetSnapshot,
   loadRatchetSources,
   parseRatchetArgs,
   parseRatchetScalar,
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
 
-const BASELINE = "config/test-lines-baseline.txt";
+// Covers the regression tests a fix needs; larger growth needs a reviewed record.
+const ALLOWANCE = 400;
+const ALLOCATIONS = "config/test-lines-allocations";
 const PATTERNS = [
   "*.test.ts",
   "*.test.tsx",
@@ -32,19 +33,16 @@ function countNewlines(source: Buffer) {
   return lines;
 }
 
-function countTestLines(root: string, staged: boolean) {
-  const files = execFileSync("git", ["ls-files", "-z", "--", ...PATTERNS], {
-    cwd: root,
-    maxBuffer: 256 * 1024 * 1024,
-  })
-    .toString("utf8")
-    .split("\0")
-    .filter(Boolean);
+function countFiles(root: string, files: string[], ref: string | null) {
   let total = 0;
-  if (staged) {
-    // Bound index snapshots instead of concatenating the entire test tree.
+  if (ref !== null) {
+    // Bound index/reference snapshots instead of concatenating the entire test tree.
     for (let offset = 0; offset < files.length; offset += 32) {
-      for (const source of loadRatchetSources(root, files.slice(offset, offset + 32)).values()) {
+      for (const source of loadRatchetSources(
+        root,
+        files.slice(offset, offset + 32),
+        ref,
+      ).values()) {
         total += countNewlines(Buffer.from(source));
       }
     }
@@ -72,66 +70,106 @@ function countTestLines(root: string, staged: boolean) {
 function countTestLineDelta(root: string, base: string, staged: boolean) {
   const entries = execFileSync(
     "git",
-    ["diff", "--numstat", "-z", ...(staged ? ["--cached"] : []), base, "--", ...PATTERNS],
+    [
+      "diff",
+      "--name-status",
+      "--no-renames",
+      "-z",
+      ...(staged ? ["--cached"] : []),
+      base,
+      "--",
+      ...PATTERNS,
+    ],
     { cwd: root, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
   )
     .split("\0")
     .filter(Boolean);
-  let delta = 0;
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index]!;
-    const [added, removed] = entry.split("\t", 2);
-    if (added !== "-") {
-      delta += Number(added) - Number(removed);
+  const before: string[] = [];
+  const after: string[] = [];
+  for (let index = 0; index < entries.length; index += 2) {
+    const status = entries[index];
+    const file = entries[index + 1]!;
+    if (status !== "A") {
+      before.push(file);
     }
-    // NUL-delimited rename records carry the old and new paths separately.
-    if (entry === `${added}\t${removed}\t`) {
-      index += 2;
+    if (status !== "D") {
+      after.push(file);
     }
   }
-  return delta;
+  // Count literal LF bytes, like wc -l; git numstat also counts unterminated lines.
+  return countFiles(root, after, staged ? "" : null) - countFiles(root, before, base);
+}
+
+function parseCount(source: string, file: string) {
+  const value = parseRatchetScalar(source, file);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`${file} must contain a safe integer`);
+  }
+  return value;
+}
+
+function loadAllocations(root: string, staged: boolean, ref?: string) {
+  const files = execFileSync(
+    "git",
+    ref
+      ? ["ls-tree", "-r", "--name-only", "-z", ref, "--", ALLOCATIONS]
+      : ["ls-files", "-z", "--", ALLOCATIONS],
+    { cwd: root, encoding: "utf8" },
+  )
+    .split("\0")
+    .filter((file) => file.endsWith(".txt"));
+  const allocations = new Map<string, number>();
+  if (ref || staged) {
+    for (let offset = 0; offset < files.length; offset += 32) {
+      for (const [file, source] of loadRatchetSources(
+        root,
+        files.slice(offset, offset + 32),
+        ref ?? "",
+      )) {
+        allocations.set(file, parseCount(source, file));
+      }
+    }
+    return allocations;
+  }
+  for (const file of files) {
+    // Worktree deletions remove credit; untracked files never grant it.
+    if (!fs.existsSync(path.join(root, file))) {
+      continue;
+    }
+    allocations.set(file, parseCount(fs.readFileSync(path.join(root, file), "utf8"), file));
+  }
+  return allocations;
 }
 
 export function main(root = process.cwd(), argv = process.argv.slice(2)) {
   try {
     const args = parseRatchetArgs(argv);
-    if (args.staged && args.prune) {
-      throw new Error("--prune cannot be combined with --staged");
+    if (args.prune) {
+      throw new Error("The test-line budget has no baseline to prune.");
     }
-    const parse = (source: string) => {
-      const value = parseRatchetScalar(source, BASELINE);
-      if (!Number.isSafeInteger(value)) {
-        throw new Error(`${BASELINE} must contain a safe integer`);
-      }
-      return value;
-    };
-    const ceiling = loadRatchetSnapshot(root, BASELINE, args.staged, parse);
+    if (releaseBranchForChecks(root)) {
+      console.log("Test-line budget skipped for release branch.");
+      return 0;
+    }
     const base = resolveRatchetBase(root, args);
-    const previous = base ? loadRatchetReference(root, base, BASELINE, parse) : null;
-    if (previous !== null && ceiling > previous) {
-      console.warn(
-        `Test line ceiling raised manually: ${previous} -> ${ceiling}; justify this in the PR.`,
-      );
+    if (!base) {
+      throw new Error("The test-line budget needs a comparison base; pass --base <ref>.");
     }
-    const total = countTestLines(root, args.staged);
-    const delta = base ? countTestLineDelta(root, base, args.staged) : null;
-    if (total > ceiling) {
-      const details = `Test lines: ${total}; ceiling: ${ceiling}; over by: ${total - ceiling}; net delta: ${delta !== null && delta > 0 ? "+" : ""}${delta ?? "unavailable"}.`;
-      if (!args.prune && delta !== null && delta <= 0) {
-        console.log(`${details} Tree is over the ceiling; this change does not add test lines.`);
-        return 0;
-      }
+    const delta = countTestLineDelta(root, base, args.staged);
+    // Only records this change adds or raises cover its growth; merged records stay inert.
+    const previous = loadAllocations(root, false, base);
+    let credit = 0;
+    for (const [file, value] of loadAllocations(root, args.staged)) {
+      credit += Math.max(0, value - (previous.get(file) ?? 0));
+    }
+    const details = `Net test lines: ${delta > 0 ? "+" : ""}${delta}; allowance: ${ALLOWANCE}; allocation credit: ${credit}.`;
+    if (delta > ALLOWANCE + credit) {
       console.error(
-        `${details}\nOffset the added lines by deleting or consolidating tests elsewhere, or raise the ceiling in ${BASELINE} with justification in the PR.`,
+        `${details}\nDelete or consolidate tests to remove ${delta - ALLOWANCE - credit} lines, or add a justified ${ALLOCATIONS}/<change>.txt record of ${delta - ALLOWANCE} and state the reason in the PR.`,
       );
       return 1;
     }
-    if (args.prune && total < ceiling) {
-      fs.writeFileSync(path.join(root, BASELINE), `${total}\n`);
-      console.log(`Pruned ${BASELINE}: ${ceiling} -> ${total}.`);
-    } else {
-      console.log(`Test lines OK: ${total}; ceiling: ${ceiling}; slack: ${ceiling - total}.`);
-    }
+    console.log(`Test lines OK. ${details}`);
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

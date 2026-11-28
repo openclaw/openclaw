@@ -8,6 +8,8 @@ import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gatewa
 import { deleteCronSessionViaGateway } from "../cron/isolated-agent/session-cleanup.js";
 import { resolveQuestionOverGateway } from "../infra/question-gateway-resolver.js";
 import { listSpawnedSessionKeysWithResult } from "../plugin-sdk/session-visibility-internal.js";
+import { createOwnedInstance } from "../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
 import { withPluginRuntimeGatewayContextResolver as withinGateway } from "../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -21,12 +23,12 @@ import * as gatewayCall from "./call.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "./method-scopes.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
+import { bindGatewayLifecycleRequest } from "./server-lifecycle-runtime-context.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-methods/types.js";
 import {
   getInProcessGatewayRequestContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
-import { bindGatewayLifecycleRequest } from "./server-recovery-runtime-context.js";
 import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 const deleteGatewaySession = vi.hoisted(() =>
@@ -77,7 +79,7 @@ function createGateway(handlers: GatewayRequestHandlers) {
     getMethodRegistry: () => registry,
     isDispatchAvailable: () => true,
   });
-  context.recoveryRuntime = runtime.recovery;
+  context.lifecycleRuntime = runtime.lifecycle;
   runtimes.push(runtime);
   return () => context;
 }
@@ -99,6 +101,7 @@ describe("hosted lifecycle Gateway dispatch", () => {
     socketCall.mockReset().mockRejectedValue(new Error("unexpected Gateway socket"));
     deleteGatewaySession.mockReset().mockRejectedValue(new Error("unexpected session deletion"));
   });
+  afterEach(() => expect(socketCall.mock.calls.filter(([request]) => !request.url)).toEqual([]));
 
   it("reads cron/subagent history and session ownership without a transport", async () => {
     const resolveContext = createGateway({
@@ -117,7 +120,6 @@ describe("hosted lifecycle Gateway dispatch", () => {
         listSpawnedSessionKeysWithResult({ requesterSessionKey: "agent:main:parent" }),
       ).resolves.toEqual({ ok: true, value: new Set(["agent:main:subagent:child"]) });
     });
-    expect(socketCall).not.toHaveBeenCalled();
   });
 
   it("keeps cron and detached subagent cleanup on their Gateway with lifecycle preconditions", async () => {
@@ -146,7 +148,6 @@ describe("hosted lifecycle Gateway dispatch", () => {
     current = undefined;
     await expect(cleanupChild(resolveGatewayContext)).resolves.toBe("failed");
     expect(deletions).toHaveLength(2);
-    expect(socketCall).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -168,7 +169,6 @@ describe("hosted lifecycle Gateway dispatch", () => {
         ).resolves.toBe("deleted"),
       );
       expect(callGateway).toHaveBeenCalledOnce();
-      expect(socketCall).not.toHaveBeenCalled();
     },
   );
 
@@ -206,8 +206,56 @@ describe("hosted lifecycle Gateway dispatch", () => {
     }
     await expect(result).resolves.toBe("failed");
     expect(mutate).not.toHaveBeenCalled();
-    expect(socketCall).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "re-admits transferred plugin cleanup and history reads after the caller closes, owner current=%s",
+    async (ownerStaysCurrent) => {
+      const { instance, registry } = createOwnedInstance("cleanup-owner");
+      const invocation = new PluginInvocationScope(registry, [instance], { retained: true });
+      const effect = vi.fn(() => "child history");
+      const cleanupPlugin = instance.wrap(effect);
+      const staleCleanup = invocation.wrap(cleanupPlugin);
+      const invoke = invocation.run(() => AsyncLocalStorage.snapshot());
+      invocation.release();
+      const beforeCommit = createDeferredCore();
+      const resumeCommit = createDeferredCore();
+      const resolveContext = createGateway({
+        "chat.history": ({ respond }) => respond(true, { messages: [cleanupPlugin()] }),
+      });
+      let current = true;
+      deleteGatewaySession.mockImplementation(async ({ params, assertCurrent }) => {
+        beforeCommit.resolve();
+        await resumeCommit.promise;
+        assertCurrent?.();
+        cleanupPlugin();
+        return { ok: true, result: { ok: true, key: params.key, deleted: true, archived: [] } };
+      });
+      const result = invoke(() => cleanupChild(resolveContext, () => current));
+      try {
+        expect(() => staleCleanup()).toThrow("Plugin cleanup-owner consumer is closed");
+        await awaitGateBeforeSettlement(
+          beforeCommit.promise,
+          result,
+          "Transferred cleanup never reached its captured Gateway",
+        );
+        current = ownerStaysCurrent;
+        resumeCommit.resolve();
+        await expect(result).resolves.toBe(ownerStaysCurrent ? "deleted" : "failed");
+        expect(effect).toHaveBeenCalledTimes(ownerStaysCurrent ? 1 : 0);
+        expect(() => staleCleanup()).toThrow("Plugin cleanup-owner consumer is closed");
+        const readHistory = bindGatewayLifecycleRequest(resolveContext);
+        await expect(
+          invoke(() => readHistory({ method: "chat.history", params: {} })),
+        ).resolves.toEqual({ messages: ["child history"] });
+      } finally {
+        resumeCommit.resolve();
+        invocation.release();
+        await Promise.allSettled([result]);
+        await instance.dispose();
+      }
+    },
+  );
 
   it("answers on the same Gateway and rejects replacement during source authorization", async () => {
     const answer = vi.fn();
@@ -234,7 +282,6 @@ describe("hosted lifecycle Gateway dispatch", () => {
       ).rejects.toThrow("Gateway instance unavailable");
     });
     expect(answer).toHaveBeenCalledOnce();
-    expect(socketCall).not.toHaveBeenCalled();
   });
 
   it("resolves hosted command SecretRefs from the active Gateway snapshot", async () => {
@@ -266,7 +313,6 @@ describe("hosted lifecycle Gateway dispatch", () => {
       expect(readTalkTestProviderApiKey(result.resolvedConfig)).toBe("synthetic-hosted-value");
       expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_gateway");
     });
-    expect(socketCall).not.toHaveBeenCalled();
   });
 
   it("preserves an explicit remote question destination inside a hosted scope", async () => {

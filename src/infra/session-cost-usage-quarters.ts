@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { usageModelIdentity } from "../shared/usage-aggregates.js";
-import type { UsageCalendar } from "../shared/usage-calendar.js";
+import { includesUsageDay, type UsageCalendar } from "../shared/usage-calendar.js";
 import { computeLatencyStats, type SessionUsageRollupData } from "./session-cost-usage-rollup.js";
 import type { CostUsageTotals } from "./session-cost-usage.types.js";
 
@@ -13,7 +13,7 @@ import type { CostUsageTotals } from "./session-cost-usage.types.js";
 export const USAGE_COST_QUARTER_SCOPE = "session-cost-usage-quarters-v1";
 
 export const QUARTER_MS = 15 * 60 * 1000;
-const FORMAT = 1;
+const FORMAT = 3;
 
 export const TOTAL_FIELDS = [
   "input",
@@ -27,6 +27,7 @@ export const TOTAL_FIELDS = [
   "cacheReadCost",
   "cacheWriteCost",
   "missingCostEntries",
+  "cacheUnmeasuredInput",
 ] as const;
 export const MESSAGE_FIELDS = [
   "total",
@@ -36,11 +37,10 @@ export const MESSAGE_FIELDS = [
   "toolResults",
   "errors",
 ] as const;
-// Totals vectors: TOTAL_FIELDS in order, then 1 when a usage report was unavailable.
-export const TOTALS_WIDTH = 12;
+// Totals vectors: TOTAL_FIELDS in order.
+export const TOTALS_WIDTH = TOTAL_FIELDS.length;
 export const TOKENS = 4;
 export const COST = 5;
-export const UNAVAILABLE = 11;
 
 // Six column tables, each sorted by its owner row:
 // quarters: index in month, first/last offsets, totals, messages, latency count/sum/min/max/p95;
@@ -88,6 +88,7 @@ export type UsageCostQuarterBlock = {
   models: ReadonlyArray<readonly [string | null, string | null]>;
   tools: readonly string[];
   missingKeys: readonly string[];
+  timedUsage?: readonly number[];
 };
 
 function sumParts(parts: readonly (readonly number[] | undefined)[], row: number): number {
@@ -126,7 +127,6 @@ const missingEntries = (totals: CostUsageTotals) =>
 function sameTotals(left: CostUsageTotals, right: CostUsageTotals): boolean {
   return (
     TOTAL_FIELDS.every((field) => left[field] === right[field]) &&
-    (left.usageReport?.state === "unavailable") === (right.usageReport?.state === "unavailable") &&
     missingEntries(left) === missingEntries(right)
   );
 }
@@ -158,10 +158,7 @@ export function encodeUsageCostQuarters(
   const toolIndex = new Map<string, number>();
   const missingKeys: string[] = [];
   const missingIndex = new Map<string, number>();
-  const totalsValues = (totals: CostUsageTotals) => [
-    ...TOTAL_FIELDS.map((field) => totals[field]),
-    totals.usageReport?.state === "unavailable" ? 1 : 0,
-  ];
+  const totalsValues = (totals: CostUsageTotals) => TOTAL_FIELDS.map((field) => totals[field]);
   const pushMissing = (table: number, row: number, totals: CostUsageTotals) => {
     for (const [key, count] of Object.entries(totals.missingCostByModel ?? {})) {
       push(table, [row, dictionary(missingKeys, missingIndex, key, key), count]);
@@ -169,8 +166,16 @@ export function encodeUsageCostQuarters(
   };
   let ownedModels = 0;
   const buckets = Object.values(month.buckets).toSorted((a, b) => a.timestampMs - b.timestampMs);
+  // The optional header vector leaves the existing binary columns readable by older builds.
+  let timedUsage: number[] | undefined;
   for (const [row, bucket] of buckets.entries()) {
     const latency = computeLatencyStats(bucket.latency);
+    if (latency?.timedMs) {
+      timedUsage ??= Array<number>(buckets.length * 3).fill(0);
+      timedUsage[row * 3] = latency.timedMs;
+      timedUsage[row * 3 + 1] = latency.timedTokens ?? 0;
+      timedUsage[row * 3 + 2] = latency.timedCost ?? 0;
+    }
     push(QUARTERS, [
       (bucket.timestampMs - monthStartMs) / QUARTER_MS,
       (bucket.firstTimestampMs ?? bucket.timestampMs) - bucket.timestampMs,
@@ -239,6 +244,7 @@ export function encodeUsageCostQuarters(
       format: FORMAT,
       rows: TABLE_WIDTHS.map((_, table) => columns[TABLE_OFFSETS[table]!]!.length),
       columns: codes.join(""),
+      timedUsage,
       models,
       tools,
       missingKeys,
@@ -281,7 +287,7 @@ export function decodeUsageCostQuarters(
     if (!isRecord(header) || header.format !== FORMAT) {
       return undefined;
     }
-    const { rows, columns: codes, models, tools, missingKeys } = header;
+    const { rows, columns: codes, models, tools, missingKeys, timedUsage } = header;
     if (
       !isCountList(rows) ||
       rows.length !== TABLE_WIDTHS.length ||
@@ -289,7 +295,11 @@ export function decodeUsageCostQuarters(
       codes.length !== COLUMN_COUNT ||
       !isModelList(models) ||
       !isStringList(tools) ||
-      !isStringList(missingKeys)
+      !isStringList(missingKeys) ||
+      (timedUsage !== undefined &&
+        (!Array.isArray(timedUsage) ||
+          timedUsage.length !== rows[QUARTERS]! * 3 ||
+          !timedUsage.every(Number.isFinite)))
     ) {
       return undefined;
     }
@@ -327,6 +337,7 @@ export function decodeUsageCostQuarters(
       models,
       tools,
       missingKeys,
+      timedUsage,
     };
     // Derived columns sum stored columns of their table, which may follow them.
     const derived = sections[3];
@@ -361,11 +372,13 @@ export type UsageQuarterRange = {
   startMs: number;
   endMs: number;
   dates: string[];
-  slot: (quarterStartMs: number) => number;
+  slot: (quarterStartMs: number, block: UsageCostQuarterBlock, row: number) => number;
 };
 
 const SPLIT_QUARTER = -1;
 const UNKNOWN = -2;
+const OUTSIDE_QUARTER = -3;
+const TRANSITION_QUARTER = -4;
 export const slotHour = (slot: number) => (slot >> 3) & 31;
 export const slotWeekday = (slot: number) => slot & 7;
 
@@ -388,6 +401,18 @@ export function createUsageQuarterRange(params: {
   const keyed = indexed ? undefined : new Map<number, number>();
   const dates: string[] = [];
   const dayIndex = new Map<string, number>();
+  const calendarSlot = (local: ReturnType<UsageCalendar["at"]>): number => {
+    if (!includesUsageDay(local.date, params.calendar.civilDays)) {
+      return OUTSIDE_QUARTER;
+    }
+    let day = dayIndex.get(local.date);
+    if (day === undefined) {
+      day = dates.length;
+      dates.push(local.date);
+      dayIndex.set(local.date, day);
+    }
+    return day * 256 + local.hour * 8 + local.weekday;
+  };
   const compute = (quarterStartMs: number): number => {
     const local = params.calendar.at(quarterStartMs);
     // Modern zone offsets and transitions are quarter-hour aligned; others need transcripts.
@@ -399,36 +424,54 @@ export function createUsageQuarterRange(params: {
     ) {
       return SPLIT_QUARTER;
     }
-    let day = dayIndex.get(local.date);
-    if (day === undefined) {
-      day = dates.length;
-      dates.push(local.date);
-      dayIndex.set(local.date, day);
+    if (
+      local.offset !== params.calendar.at(quarterStartMs + QUARTER_MS).offset &&
+      local.offset !== params.calendar.at(quarterStartMs + QUARTER_MS - 1).offset
+    ) {
+      return TRANSITION_QUARTER;
     }
-    return day * 256 + local.hour * 8 + local.weekday;
+    return calendarSlot(local);
   };
+  function cachedSlot(quarterStartMs: number): number {
+    if (indexed) {
+      const index = quarterStartMs / QUARTER_MS - firstQuarter;
+      if (index >= 0 && index < quarterCount) {
+        let found = indexed[index]!;
+        if (found === UNKNOWN) {
+          found = compute(quarterStartMs);
+          indexed[index] = found;
+        }
+        return found;
+      }
+    }
+    let found = keyed?.get(quarterStartMs);
+    if (found === undefined) {
+      found = compute(quarterStartMs);
+      keyed?.set(quarterStartMs, found);
+    }
+    return found;
+  }
   return {
     startMs,
     endMs,
     dates,
-    slot(quarterStartMs) {
-      if (indexed) {
-        const index = quarterStartMs / QUARTER_MS - firstQuarter;
-        if (index >= 0 && index < quarterCount) {
-          let found = indexed[index]!;
-          if (found === UNKNOWN) {
-            found = compute(quarterStartMs);
-            indexed[index] = found;
-          }
-          return found;
-        }
+    slot(start, block, row) {
+      const slot = cachedSlot(start);
+      if (slot !== TRANSITION_QUARTER) {
+        return slot;
       }
-      let found = keyed?.get(quarterStartMs);
-      if (found === undefined) {
-        found = compute(quarterStartMs);
-        keyed?.set(quarterStartMs, found);
-      }
-      return found;
+      // Only replay when the clock change splits activity inside the stored quarter.
+      const at = (field: number) => {
+        const column = TABLE_OFFSETS[QUARTERS]! + field;
+        return params.calendar.at(
+          start + (sectionOf(block, column)?.[block.offsets[column]! + row] ?? 0),
+        );
+      };
+      const first = at(Q_FIRST);
+      const last = at(Q_LAST);
+      return first.offset === last.offset && first.date === last.date && first.hour === last.hour
+        ? calendarSlot(first)
+        : SPLIT_QUARTER;
     },
   };
 }
@@ -481,7 +524,7 @@ export function usageQuartersNeedTranscript(
     if (
       start + QUARTER_MS > range.startMs &&
       start <= range.endMs &&
-      range.slot(start) === SPLIT_QUARTER
+      range.slot(start, block, row) === SPLIT_QUARTER
     ) {
       return true;
     }

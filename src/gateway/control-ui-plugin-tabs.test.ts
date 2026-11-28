@@ -1,5 +1,5 @@
 import { Value } from "typebox/value";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { HelloOkSchema } from "../../packages/gateway-protocol/src/schema/frames.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -117,19 +117,25 @@ it("hides tabs whose required scopes are not granted", () => {
 });
 
 it("projects only tabs, ordered by order, label, then id", () => {
-  activateDescriptors([
+  const registry = activateDescriptors([
     tab("b", { id: "beta", label: "Beta", placement: "route:workboard" }),
     tab("a", { id: "alpha", label: "Alpha", order: 5 }),
     tab("c", { id: "zed", label: "Beta" }),
     tab("other", { id: "run-panel", surface: "run" }),
   ]);
+  Object.freeze(registry.controlUiDescriptors);
+  using copies = vi.spyOn(Array.prototype, "toSorted");
 
   const tabs = listControlUiPluginTabs([]);
+  const descriptors = listControlUiPluginDescriptors([]);
+  const sortCopyCount = copies.mock.calls.length;
+  expect(sortCopyCount).toBe(0);
   expect(tabs.map((row) => row.id)).toEqual(["beta", "zed", "alpha"]);
   expect(tabs[0]).toMatchObject({ pluginId: "b", placement: "route:workboard" });
-  expect(listControlUiPluginDescriptors([]).map((entry) => entry.pluginId)).toEqual([
-    "a",
+  expect(descriptors.map((entry) => entry.pluginId)).toEqual(["a", "b", "c", "other"]);
+  expect(registry.controlUiDescriptors.map((entry) => entry.pluginId)).toEqual([
     "b",
+    "a",
     "c",
     "other",
   ]);

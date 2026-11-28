@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { resolveAgentEntry, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { wrapUntrustedPromptDataBlock } from "../agents/sanitize-for-prompt.js";
 import type { SessionEventTarget } from "../auto-reply/reply/session-event-contract.js";
 import {
   assertSessionEventTargetCurrent,
@@ -6,6 +8,7 @@ import {
   enqueueSessionEventForHost,
 } from "../auto-reply/reply/session-event-handoff.js";
 import { prepareSessionEventTargetForHost } from "../auto-reply/reply/session-event-target.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   canonicalizeMainSessionAlias,
@@ -18,8 +21,11 @@ import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import type { CronServiceDeps } from "../cron/service/state.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
-import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueAutomationSystemEvent } from "../infra/system-events.js";
+import {
+  resolveSystemEventQueueKey,
+  withSystemEventOwner,
+} from "../infra/system-event-ownership.js";
+import { enqueueAutomationSystemEvent, enqueueSystemEvent } from "../infra/system-events.js";
 import {
   normalizeAgentId,
   resolveEventSessionKey,
@@ -27,11 +33,14 @@ import {
 } from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { assertAgentDatabaseAdmitted } from "../state/agent-database-admission.js";
+import { captureCronJobTurnTarget } from "./cron-job-turn-target.js";
+import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 
 /** Resolve and admit scheduler events against the current roster and canonical session owner. */
 export function createGatewayCronTargetResolver(
   env: NodeJS.ProcessEnv,
   log: Pick<ReturnType<typeof import("../logging/logger.js").getChildLogger>, "warn">,
+  resolveGatewayContext?: () => GatewayRequestContext | undefined,
 ) {
   const resolveCronAgent = (requested?: string | null) => {
     const runtimeConfig = getRuntimeConfig();
@@ -59,11 +68,15 @@ export function createGatewayCronTargetResolver(
     requestedSessionKey?: string | null;
   }) => {
     const requested = paramsValue.requestedSessionKey?.trim();
-    const candidate = toAgentStoreSessionKey({
-      agentId: paramsValue.agentId,
-      requestKey: requested,
-      mainKey: paramsValue.runtimeConfig.session?.mainKey,
-    });
+    // Global scope stores this conversation under the literal key, not its queue identity.
+    const candidate =
+      paramsValue.runtimeConfig.session?.scope === "global" && requested === "global"
+        ? requested
+        : toAgentStoreSessionKey({
+            agentId: paramsValue.agentId,
+            requestKey: requested,
+            mainKey: paramsValue.runtimeConfig.session?.mainKey,
+          });
     const canonical = canonicalizeMainSessionAlias({
       cfg: paramsValue.runtimeConfig,
       agentId: paramsValue.agentId,
@@ -215,18 +228,110 @@ export function createGatewayCronTargetResolver(
     if (!agentId || !sessionKey) {
       throw new Error("Session event has no configured owner");
     }
-    const receipt = enqueueSessionEventForHost(text, {
-      ...opts,
-      agentId,
-      sessionKey,
-      source: "cron",
-    });
-    void receipt.settled.then((result) => {
-      if (result.status !== "completed") {
+    const { jobId, ...eventOpts } = opts ?? {};
+    // A job notice is fixed runtime text: post it to the conversation directly, so it shows even
+    // when the conversation's own model cannot run. Its turn stays as the agent's hidden repair
+    // input. With no session to post into yet, the turn's visible input carries it.
+    const posting =
+      jobId === undefined
+        ? Promise.resolve(false)
+        : postCronNotice({ text, agentId, sessionKey, deliver: eventOpts.deliver !== false }).catch(
+            (error: unknown) => {
+              log.warn({ jobId, error: String(error) }, "cron: notice was not posted directly");
+              return false;
+            },
+          );
+    const enqueue = async (expectedTarget = eventOpts.expectedTarget) => {
+      const posted = await posting;
+      const receipt = enqueueSessionEventForHost(posted ? buildPostedNoticeInput(text) : text, {
+        ...eventOpts,
+        ...(expectedTarget ? { expectedTarget } : {}),
+        agentId,
+        sessionKey,
+        ...(posted
+          ? {
+              // The user already has the notice; only the agent's authored reply follows it,
+              // and silence is a complete answer.
+              source: "cron_failure_repair" as const,
+              suppressErrorDelivery: true as const,
+              replyExpectation: "optional" as const,
+            }
+          : { source: "cron" as const }),
+      });
+      void receipt.settled.then((result) => {
+        if (result.status === "completed") {
+          return;
+        }
         log.warn({ result }, "Session event did not complete");
-      }
-    });
-    return receipt.accepted;
+        // The posted notice row is not replayed to the model. A repair turn that failed for good
+        // before it started recorded no input, so the next turn gets the notice as context.
+        if (posted && result.status === "failed" && !result.executionStarted && !result.retryable) {
+          enqueueSystemEvent(text, { sessionKey: resolveSystemEventQueueKey(sessionKey, agentId) });
+        }
+      });
+      return await receipt.accepted;
+    };
+    const context = jobId ? resolveGatewayContext?.() : undefined;
+    const job = jobId ? context?.cron.getJob(jobId) : undefined;
+    if (!context || !job) {
+      return enqueue();
+    }
+    // A notice about a job acts for the job's requester, like the job's own runs.
+    return captureCronJobTurnTarget({ job, agentId, sessionKey, context }).then(enqueue);
   };
   return { resolveCronAgent, resolveCronTarget, deferSessionEvent, enqueueSessionEvent };
+}
+
+/**
+ * The repair turn's hidden input for a notice already posted to the conversation. It names the
+ * notice as shown, so the agent adds only a repair it made, or stays silent.
+ */
+function buildPostedNoticeInput(text: string): string {
+  return [
+    "Automation notice from the scheduler, not a user message. It is already shown to the user in this conversation, with what they need to do: do not repeat, paraphrase or acknowledge it.",
+    `If you can fix the cause yourself, do it and reply with one line saying what you changed. Leave a disabled automation disabled unless you fixed its cause. Otherwise reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
+    // The notice names the automation, which is user-authored text: data, never instructions.
+    wrapUntrustedPromptDataBlock({ label: "Notice shown to the user", text, maxChars: 4_000 }),
+  ].join("\n");
+}
+
+/**
+ * Posts a fixed cron notice through the session notice writer: one transcript row and a durable
+ * send to the conversation's channel when it has one. Returns false when the conversation has no
+ * current session to post into.
+ */
+async function postCronNotice(params: {
+  text: string;
+  agentId: string;
+  sessionKey: string;
+  deliver: boolean;
+}): Promise<boolean> {
+  // Delivery and transcript runtimes stay lazy, as in the plugin notice runtime.
+  const { captureSessionGeneration, postSessionNotice } =
+    await import("../sessions/session-notice.js");
+  const config = getRuntimeConfig();
+  const generation = await captureSessionGeneration({
+    config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  if (!generation) {
+    return false;
+  }
+  const posted = await postSessionNotice({
+    config,
+    // Core cron is the producer; no plugin owns or gates this notice.
+    pluginId: "cron",
+    generation,
+    notice: { type: "system-notice", text: params.text, data: {} },
+    // One post per notice occurrence; the notice's turn carries the text to the model.
+    idempotencyKey: `cron-notice:${randomUUID()}`,
+    ...(params.deliver ? { deliver: {} } : {}),
+  });
+  if (posted.status !== "posted") {
+    throw new Error(
+      posted.status === "skipped" ? posted.reason : `${posted.stage}: ${posted.error}`,
+    );
+  }
+  return true;
 }

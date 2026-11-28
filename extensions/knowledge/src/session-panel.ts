@@ -2,7 +2,8 @@ import type { ControlUiHost, ControlUiPanel } from "openclaw/plugin-sdk/control-
 import { createFeatureClient } from "openclaw/plugin-sdk/feature-contract";
 import { browserContract } from "./browser-contract.js";
 import { coalesceChanges } from "./change-refresh.js";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
+import { t } from "./i18n/index.js";
 import { markdownView } from "./markdown-view.js";
 import type { ActivityOutput } from "./session-activity.js";
 import { viewingClient } from "./store-view-client.js";
@@ -24,44 +25,52 @@ const button = (label: string, click: () => void) => {
   n.addEventListener("click", click);
   return n;
 };
+const OPERATIONS = new Set([
+  "search",
+  "lookup",
+  "records",
+  "record",
+  "connections",
+  "save",
+  "createClaim",
+  "createRelationship",
+  "batch",
+  "correct",
+  "withdraw",
+  "annotate",
+  "recall",
+]);
 const operationLabel = (op: string, action: string) =>
-  ({
-    search: "Found",
-    lookup: "Looked up",
-    records: "Listed",
-    record: "Read",
-    connections: "Explored",
-    save: "Saved",
-    createClaim: "Added claim",
-    createRelationship: "Added relationship",
-    batch: "Published",
-    correct: "Corrected",
-    withdraw: "Withdrew",
-    annotate: "Annotated",
-    recall: "Updated recall",
-  })[op] ?? (action === "write" ? "Changed" : "Read");
+  OPERATIONS.has(op)
+    ? t(`knowledge.sessionPanel.operations.${op}`)
+    : t(
+        action === "write"
+          ? "knowledge.sessionPanel.operations.changed"
+          : "knowledge.sessionPanel.operations.record",
+      );
 
 export function registerSessionPanel(host: ControlUiHost) {
   const panel: ControlUiPanel = {
     id: "session-activity",
-    label: "Knowledge",
+    label: t("knowledge.common.knowledge"),
+    icon: "knowledge",
     mount(container, initialContext) {
       let context = initialContext;
       const root = el("section", undefined, "knowledge-page knowledge-session-panel");
-      root.setAttribute("aria-label", "Knowledge session activity");
+      root.setAttribute("aria-label", t("knowledge.sessionPanel.label"));
       const header = el("header", undefined, "knowledge-session-header"),
-        heading = el("h2", "In this conversation");
+        heading = el("h2", t("knowledge.sessionPanel.title"));
       const controls = el("div", undefined, "knowledge-session-controls"),
         filters = el("div", undefined, "knowledge-session-filters");
       filters.setAttribute("role", "group");
-      filters.setAttribute("aria-label", "Activity type");
+      filters.setAttribute("aria-label", t("knowledge.sessionPanel.filter"));
       let activityFilter: "" | "read" | "write" = "",
         oldestFirst = false;
       const filterButtons = new Map<string, HTMLButtonElement>();
       for (const [value, label, glyph] of [
-        ["", "All activity", "activity"],
-        ["read", "Reads", "eye"],
-        ["write", "Writes", "pencil"],
+        ["", t("knowledge.sessionPanel.all"), "activity"],
+        ["read", t("knowledge.sessionPanel.reads"), "eye"],
+        ["write", t("knowledge.sessionPanel.writes"), "pencil"],
       ] as const) {
         const control = button("", () => {
           if (activityFilter === value) {
@@ -78,7 +87,7 @@ export function registerSessionPanel(host: ControlUiHost) {
           next = null;
           upper = undefined;
           detail.hidden = true;
-          selected = "";
+          selected = undefined;
           render();
           void load();
         });
@@ -96,23 +105,35 @@ export function registerSessionPanel(host: ControlUiHost) {
         render();
       });
       order.className = "knowledge-session-control";
-      order.setAttribute("aria-label", "Oldest first");
+      order.setAttribute("aria-label", t("knowledge.sessionPanel.oldestFirst"));
       function renderOrder() {
         order.setAttribute("aria-pressed", String(oldestFirst));
         order.title = oldestFirst
-          ? "Oldest first · Switch to newest first"
-          : "Newest first · Switch to oldest first";
+          ? t("knowledge.sessionPanel.oldestTitle")
+          : t("knowledge.sessionPanel.newestTitle");
         order.replaceChildren(icon(oldestFirst ? "sortAscending" : "sortDescending", 16));
       }
       renderOrder();
       controls.append(filters, order);
-      const status = el("p", "Loading activity…", "knowledge-session-muted");
+      const status = el("p", t("knowledge.sessionPanel.loading"), "knowledge-session-muted");
       status.setAttribute("role", "status");
       const list = el("ol", undefined, "knowledge-session-list"),
-        older = button("Load earlier activity", () => void load(true));
+        older = button(t("knowledge.sessionPanel.older"), () => void load(true));
       older.hidden = true;
       const detail = el("section", undefined, "knowledge-session-preview");
       detail.hidden = true;
+      const previewContent = el("div");
+      const activityCard = (sequence: number) =>
+        list.querySelector<HTMLButtonElement>(`[data-sequence="${sequence}"]`);
+      const back = button(t("knowledge.sessionPanel.back"), () => {
+        ++previewGeneration;
+        const origin = selected === undefined ? null : activityCard(selected);
+        selected = undefined;
+        detail.hidden = true;
+        root.scrollTop = activityScroll;
+        (origin ?? filterButtons.get(activityFilter))?.focus();
+      });
+      detail.append(back, previewContent);
       header.append(heading, controls);
       root.append(header, status, detail, list, older);
       container.append(root);
@@ -127,10 +148,11 @@ export function registerSessionPanel(host: ControlUiHost) {
       let rows: ActivityOutput["items"] = [],
         upper: number | undefined,
         next: number | null = null,
-        busy = false,
-        selected = "";
+        busy = false;
+      let selected: number | undefined,
+        activityScroll = 0;
       const client = viewingClient(
-        createFeatureClient<typeof contract>(browserContract, host),
+        createFeatureClient<FullOutputContract>(browserContract, host),
         () => ({
           agent,
         }),
@@ -146,15 +168,15 @@ export function registerSessionPanel(host: ControlUiHost) {
         };
       }
       function sync() {
-        const t = target(),
-          id = JSON.stringify([t.key, t.id, t.agent]);
+        const current = target(),
+          id = JSON.stringify([current.key, current.id, current.agent]);
         if (id === identity) {
           return false;
         }
         identity = id;
-        sessionKey = t.key;
-        sessionId = t.id;
-        agent = t.agent;
+        sessionKey = current.key;
+        sessionId = current.id;
+        agent = current.agent;
         ++generation;
         ++previewGeneration;
         busy = false;
@@ -162,16 +184,21 @@ export function registerSessionPanel(host: ControlUiHost) {
         upper = undefined;
         next = null;
         vault = "";
-        selected = "";
+        selected = undefined;
         detail.hidden = true;
-        detail.replaceChildren();
+        previewContent.replaceChildren();
         list.replaceChildren();
         older.hidden = true;
         return true;
       }
       const pageTarget = (id: string) => ({ id: "overview", params: { agent, vault, record: id } });
       function render() {
-        const display = oldestFirst ? [...rows].toReversed() : rows;
+        const focused = document.activeElement;
+        const focusedEvent =
+          focused instanceof HTMLButtonElement && list.contains(focused)
+            ? focused.dataset.sequence
+            : undefined;
+        const display = oldestFirst ? rows.toReversed() : rows;
         list.replaceChildren();
         for (const row of display) {
           const item = el(
@@ -179,7 +206,11 @@ export function registerSessionPanel(host: ControlUiHost) {
             undefined,
             `knowledge-session-item knowledge-session-${row.action}`,
           );
-          const card = button("", () => void preview(row.id));
+          const card = button("", () => {
+            activityScroll = root.scrollTop;
+            void preview(row.id, row.sequence);
+          });
+          card.dataset.sequence = String(row.sequence);
           card.className = "knowledge-session-card";
           card.setAttribute("aria-label", row.title);
           const glyph = el("span", undefined, "knowledge-session-glyph knowledge-tile");
@@ -221,15 +252,20 @@ export function registerSessionPanel(host: ControlUiHost) {
         }
         older.hidden = next === null;
         older.disabled = busy;
+        if (focusedEvent !== undefined) {
+          (activityCard(Number(focusedEvent)) ?? filterButtons.get(activityFilter))?.focus();
+        }
       }
-      async function preview(id: string) {
+      async function preview(id: string, sequence: number) {
         const p = ++previewGeneration,
           g = generation;
-        selected = id;
+        selected = sequence;
         detail.hidden = false;
-        detail.replaceChildren(el("p", "Loading record…"));
+        previewContent.replaceChildren(el("p", t("knowledge.sessionPanel.loadingRecord")));
+        root.scrollTop = 0;
+        back.focus({ preventScroll: true });
         try {
-          const result = await client.invoke("record", {
+          const result = await client.invoke("record_detail", {
             id,
             maxChars: 5000,
             includeMetadata: false,
@@ -238,19 +274,13 @@ export function registerSessionPanel(host: ControlUiHost) {
           if (!valid(g) || p !== previewGeneration) {
             return;
           }
-          detail.replaceChildren(
-            button("Back to activity", () => {
-              ++previewGeneration;
-              selected = "";
-              detail.hidden = true;
-            }),
-          );
+          previewContent.replaceChildren();
           if (!result.record) {
-            detail.append(el("p", "This record is no longer available."));
+            previewContent.append(el("p", t("knowledge.sessionPanel.recordGone")));
             return;
           }
-          detail.append(el("h3", result.record.title));
-          const full = el("a", "Open full page", "knowledge-session-full");
+          previewContent.append(el("h3", result.record.title));
+          const full = el("a", t("knowledge.sessionPanel.openPage"), "knowledge-session-full");
           full.href = host.navigation.pageHref(pageTarget(id));
           full.addEventListener("click", (e) => {
             if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
@@ -259,27 +289,23 @@ export function registerSessionPanel(host: ControlUiHost) {
             e.preventDefault();
             host.navigation.openPage(pageTarget(id));
           });
-          detail.append(
+          previewContent.append(
             full,
-            markdownView(result.record.body ?? "", (nextId) => void preview(nextId), result.links),
+            markdownView(
+              result.record.body ?? "",
+              (nextId) => void preview(nextId, sequence),
+              result.links,
+            ),
           );
           if (result.content.nextOffset !== null) {
-            detail.append(
-              el(
-                "p",
-                "Preview shortened. Open the full page for all notes and evidence.",
-                "knowledge-session-muted",
-              ),
+            previewContent.append(
+              el("p", t("knowledge.sessionPanel.shortened"), "knowledge-session-muted"),
             );
           }
-        } catch (error) {
+        } catch {
           if (valid(g) && p === previewGeneration) {
-            detail.replaceChildren(
-              el("p", host.redact(String(error)), "knowledge-error"),
-              button("Back to activity", () => {
-                selected = "";
-                detail.hidden = true;
-              }),
+            previewContent.replaceChildren(
+              el("p", t("knowledge.sessionPanel.previewFailed"), "knowledge-error"),
             );
           }
         }
@@ -291,11 +317,11 @@ export function registerSessionPanel(host: ControlUiHost) {
           return;
         }
         if (!host.connection.connected) {
-          status.textContent = "Disconnected. Reconnect to refresh activity.";
+          status.textContent = t("knowledge.sessionPanel.disconnected");
           return;
         }
         if (!sessionId || !agent) {
-          status.textContent = "Session details are not available yet.";
+          status.textContent = t("knowledge.sessionPanel.noSession");
           return;
         }
         const g = generation;
@@ -309,7 +335,7 @@ export function registerSessionPanel(host: ControlUiHost) {
           if (scope.store !== "ready") {
             rows = [];
             render();
-            status.textContent = scope.message ?? "No Knowledge store is available for this agent.";
+            status.textContent = scope.message ?? t("knowledge.sessionPanel.noStore");
             return;
           }
           if (vault && vault !== scope.vault) {
@@ -318,7 +344,7 @@ export function registerSessionPanel(host: ControlUiHost) {
             next = null;
             ++previewGeneration;
             detail.hidden = true;
-            selected = "";
+            selected = undefined;
             more = false;
           }
           vault = scope.vault;
@@ -335,11 +361,11 @@ export function registerSessionPanel(host: ControlUiHost) {
           rows = more ? [...rows, ...result.items] : result.items;
           upper = result.upper;
           next = result.nextBefore;
-          status.textContent = rows.length ? "" : "No activity yet.";
+          status.textContent = rows.length ? "" : t("knowledge.sessionPanel.empty");
           render();
-        } catch (error) {
+        } catch {
           if (valid(g)) {
-            status.textContent = `Couldn’t refresh activity. ${host.redact(String(error))}`;
+            status.textContent = t("knowledge.sessionPanel.refreshFailed");
           }
         } finally {
           if (valid(g)) {

@@ -1,6 +1,32 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { managedHandoffBootSchema } from "./update-managed-service-handoff-schema.js";
+import { managedHandoffBootSchema } from "./update-managed-service-handoff-boot-schema.js";
+
+const windowsBootIdentityArgs = [
+  "-NoProfile",
+  "-NonInteractive",
+  "-Command",
+  "(Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')",
+];
+const windowsBootIdentityTimeoutMs = 5_000;
+
+/** Same boot observation as the synchronous handoff reader, without blocking Node. */
+export function readWindowsBootIdentityAsync(env: NodeJS.ProcessEnv): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(
+      "powershell.exe",
+      windowsBootIdentityArgs,
+      { env, windowsHide: true, timeout: windowsBootIdentityTimeoutMs, killSignal: "SIGKILL" },
+      (error, stdout) => {
+        const boot = managedHandoffBootSchema.safeParse({
+          platform: "win32",
+          identity: error ? undefined : stdout.trim(),
+        });
+        resolve(boot.success ? boot.data.identity : null);
+      },
+    );
+  });
+}
 
 /** Legacy Windows records need a five-minute margin around the observed boot time. */
 export function predatesCurrentBoot(
@@ -15,7 +41,9 @@ export function predatesCurrentBoot(
 export function createManagedHandoffBootIdentityReader(serviceManagerEnv: NodeJS.ProcessEnv) {
   return function bootIdentity() {
     let value: string | undefined;
-    if (process.platform === "linux") {
+    // Android (Termux) runs the Linux kernel and records that kernel's boot.
+    const platform = process.platform === "android" ? "linux" : process.platform;
+    if (platform === "linux") {
       value = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
     } else if (["freebsd", "darwin", "win32"].includes(process.platform)) {
       const freebsd = process.platform === "freebsd";
@@ -23,19 +51,14 @@ export function createManagedHandoffBootIdentityReader(serviceManagerEnv: NodeJS
       const result = spawnSync(
         windows ? "powershell.exe" : freebsd ? "/sbin/sysctl" : "/usr/sbin/sysctl",
         windows
-          ? [
-              "-NoProfile",
-              "-NonInteractive",
-              "-Command",
-              "(Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')",
-            ]
+          ? windowsBootIdentityArgs
           : freebsd
             ? ["-b", "kern.boot_id"]
             : ["-n", "kern.bootsessionuuid"],
         {
           env: serviceManagerEnv,
           ...(freebsd ? { maxBuffer: 16 } : { encoding: "utf8" as const, windowsHide: true }),
-          timeout: windows ? 5000 : 1000,
+          timeout: windows ? windowsBootIdentityTimeoutMs : 1000,
           killSignal: "SIGKILL",
           stdio: ["ignore", "pipe", "ignore"],
         },
@@ -51,10 +74,7 @@ export function createManagedHandoffBootIdentityReader(serviceManagerEnv: NodeJS
       }
     }
     // Unknown boot identities cannot be replaced with uptime or a wall-clock guess.
-    const boot = {
-      platform: process.platform,
-      identity: process.platform === "win32" ? value : value?.toLowerCase(),
-    };
+    const boot = { platform, identity: platform === "win32" ? value : value?.toLowerCase() };
     const parsed = managedHandoffBootSchema.safeParse(boot);
     if (!parsed.success) {
       throw new Error("OS boot identity unavailable; run openclaw triage manually");

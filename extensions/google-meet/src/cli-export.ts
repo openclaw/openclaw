@@ -2,6 +2,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createTranscriptSpeakerLabels } from "openclaw/plugin-sdk/transcripts";
 import { listGoogleMeetCalendarEvents, type GoogleMeetCalendarLookupResult } from "./calendar.js";
 import {
   formatDuration,
@@ -97,21 +99,47 @@ export function writeCalendarEventsSummary(
   }
 }
 
-function participantDisplayName(
+function appendTranscriptEntries(
+  lines: string[],
   entry: GoogleMeetArtifactsResult["artifacts"][number],
-  name: string,
-): string {
-  const participant = entry.participants.find((candidate) => candidate.name === name);
-  if (!participant) {
-    return name;
-  }
-  return (
-    participant.signedinUser?.displayName ??
-    participant.anonymousUser?.displayName ??
-    participant.phoneUser?.displayName ??
-    participant.signedinUser?.user ??
-    name
+  format: "summary" | "transcript",
+): void {
+  const names = new Map(
+    entry.participants.map((participant) => [
+      participant.name,
+      participant.signedinUser?.displayName ??
+        participant.anonymousUser?.displayName ??
+        participant.phoneUser?.displayName ??
+        participant.signedinUser?.user,
+    ]),
   );
+  // A participant resource spans transcription sessions within one conference.
+  // Reserve names in speech order, independently of the roster's join order.
+  const speakerLabel = createTranscriptSpeakerLabels();
+  for (const group of entry.transcriptEntries) {
+    lines.push("", `### ${format === "summary" ? "Transcript Entries: " : ""}${group.transcript}`);
+    if (group.entriesError) {
+      lines.push(`Warning: ${group.entriesError}`);
+      continue;
+    }
+    if (format === "summary" && !group.entries.length) {
+      lines.push("_No transcript entries._");
+    }
+    for (const { participant, text, startTime, endTime } of group.entries) {
+      const speaker = participant
+        ? speakerLabel(participant, names.get(participant) || participant)
+        : "";
+      if (format === "transcript") {
+        lines.push(`- ${speaker || "unknown"}${startTime ? ` [${startTime}]` : ""}: ${text ?? ""}`);
+      } else {
+        const times =
+          startTime || endTime
+            ? ` (${formatOptional(startTime)} -> ${formatOptional(endTime)})`
+            : "";
+        lines.push(`- ${speaker ? `${speaker}: ` : ""}${text ?? ""}${times}`);
+      }
+    }
+  }
 }
 
 function appendArtifactDocuments(
@@ -201,30 +229,7 @@ export function renderArtifacts(
       }
     }
     appendArtifactDocuments(lines, "Transcripts", entry.transcripts);
-    for (const transcriptEntries of entry.transcriptEntries) {
-      lines.push("");
-      lines.push(`### Transcript Entries: ${transcriptEntries.transcript}`);
-      if (transcriptEntries.entriesError) {
-        lines.push(`Warning: ${transcriptEntries.entriesError}`);
-        continue;
-      }
-      if (transcriptEntries.entries.length === 0) {
-        lines.push("_No transcript entries._");
-        continue;
-      }
-      for (const transcriptEntry of transcriptEntries.entries) {
-        const times =
-          transcriptEntry.startTime || transcriptEntry.endTime
-            ? ` (${formatOptional(transcriptEntry.startTime)} -> ${formatOptional(
-                transcriptEntry.endTime,
-              )})`
-            : "";
-        const speaker = transcriptEntry.participant
-          ? `${participantDisplayName(entry, transcriptEntry.participant)}: `
-          : "";
-        lines.push(`- ${speaker}${transcriptEntry.text ?? ""}${times}`);
-      }
-    }
+    appendTranscriptEntries(lines, entry, "summary");
     appendArtifactDocuments(lines, "Smart Notes", entry.smartNotes);
   }
   return `${lines.join("\n")}\n`;
@@ -293,23 +298,8 @@ function renderTranscriptMarkdown(result: GoogleMeetArtifactsResult): string {
     lines.push(`## ${entry.conferenceRecord.name}`);
     if (entry.transcriptEntries.length === 0) {
       lines.push("_No transcript entries._");
-      continue;
     }
-    for (const transcriptEntries of entry.transcriptEntries) {
-      lines.push("");
-      lines.push(`### ${transcriptEntries.transcript}`);
-      if (transcriptEntries.entriesError) {
-        lines.push(`Warning: ${transcriptEntries.entriesError}`);
-        continue;
-      }
-      for (const transcriptEntry of transcriptEntries.entries) {
-        const speaker = transcriptEntry.participant
-          ? participantDisplayName(entry, transcriptEntry.participant)
-          : "unknown";
-        const time = transcriptEntry.startTime ? ` [${transcriptEntry.startTime}]` : "";
-        lines.push(`- ${speaker}${time}: ${transcriptEntry.text ?? ""}`);
-      }
-    }
+    appendTranscriptEntries(lines, entry, "transcript");
     for (const [title, documents] of [
       ["Transcript Document Bodies", entry.transcripts],
       ["Smart Note Document Bodies", entry.smartNotes],
@@ -446,7 +436,7 @@ export async function writeMeetExportBundle(params: {
   calendarEvent?: GoogleMeetCalendarLookupResult;
 }): Promise<{ outputDir: string; files: string[]; zipFile?: string }> {
   const outputDir =
-    params.outputDir?.trim() ||
+    readNonBlankString(params.outputDir) ??
     `google-meet-export-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   await fsp.mkdir(outputDir, { recursive: true });
   let zipOutputDir = outputDir;

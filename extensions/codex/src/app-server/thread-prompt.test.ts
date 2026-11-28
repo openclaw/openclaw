@@ -5,7 +5,11 @@ import {
   type CodexDynamicToolSpec,
   type JsonObject,
 } from "./protocol.js";
-import { buildDeveloperInstructions, type CodexThreadPromptContext } from "./thread-prompt.js";
+import {
+  buildDeveloperInstructions,
+  resolveCodexOpenClawBaseInstructions,
+  type CodexThreadPromptContext,
+} from "./thread-prompt.js";
 
 function tool(
   name: string,
@@ -56,6 +60,60 @@ function render(
 }
 
 describe("buildDeveloperInstructions deferred tool discovery", () => {
+  // The base carries this policy unless it is identity-only (none) or empty (ring zero).
+  it.each<[string, Partial<CodexThreadPromptContext>, number]>([
+    ["full", {}, 0],
+    ["minimal", { promptMode: "minimal" }, 0],
+    ["none", { promptMode: "none" }, 1],
+    ["ring-zero", { toolsAllow: ["openclaw"] }, 1],
+  ])("keeps developer-carrier policy only without a base: %s", (_mode, params, count) => {
+    const instructions = render(params, { dynamicTools: [], hostSystemAgentActive: true });
+    expect(instructions.match(/Permission blocks:/g) ?? []).toHaveLength(count);
+    expect(instructions.includes("You are a personal agent running inside OpenClaw.")).toBe(
+      count === 1,
+    );
+  });
+
+  it("renders the provider's stable policy into the base instructions", () => {
+    const base = resolveCodexOpenClawBaseInstructions(
+      {
+        agentId: "main",
+        config: {},
+        modelId: "gpt-5.6-luna",
+        runtimePlan: {
+          prompt: {
+            provider: "openai",
+            resolveSystemPromptContribution: (context: object) => ({
+              stablePrefix: JSON.stringify(context),
+            }),
+          },
+        } as unknown as CodexThreadPromptContext["runtimePlan"],
+      },
+      { dynamicTools: [] },
+    );
+    expect(base).toContain(`"provider":"openai","modelId":"gpt-5.6-luna","promptMode":"full"`);
+  });
+
+  it("resolves supervised guidance from the native provider without an outer plan", () => {
+    const supervised = {
+      agentId: "main",
+      config: { plugins: { entries: { openai: { config: { personality: "off" } } } } },
+      modelId: "gpt-5.5",
+    };
+    const openai = resolveCodexOpenClawBaseInstructions(supervised, {
+      nativeModelProvider: "openai",
+    });
+    expect(openai).toContain("<execution_policy>");
+    expect(openai).not.toContain("## Interaction Style");
+    // Only OpenAI-family threads read the OpenAI plugin's personality, as on the regular engine.
+    expect(
+      resolveCodexOpenClawBaseInstructions(supervised, { nativeModelProvider: "custom-native" }),
+    ).toContain("## Interaction Style");
+    expect(resolveCodexOpenClawBaseInstructions(supervised, {})).not.toContain(
+      "<execution_policy>",
+    );
+  });
+
   it.each([
     [false, false, false],
     [true, false, false],
@@ -77,8 +135,8 @@ describe("buildDeveloperInstructions deferred tool discovery", () => {
               : [namespace([tool("dashboard", {}, true)])],
         },
       );
-      if (restricted) {
-        for (const name of ["ALL_TOOLS", "`tool_search`", "spawn_agent"]) {
+      if (restricted || codeOnly) {
+        for (const name of ["ALL_TOOLS", "`tool_search`"]) {
           expect(instructions).not.toContain(name);
         }
       } else {
@@ -88,71 +146,19 @@ describe("buildDeveloperInstructions deferred tool discovery", () => {
             ? "native JavaScript `exec`"
             : "Shell command tools execute operating-system commands",
         );
-        if (!codeOnly) {
-          expect(instructions).toContain("openclaw.dashboard");
-        } else {
-          expect(instructions).not.toContain("`tool_search`");
-        }
+        expect(instructions).toContain("openclaw.dashboard");
       }
     },
   );
 });
 
 describe("buildDeveloperInstructions delegation guidance", () => {
-  it("routes new helpers by tool requirements without moving existing children", () => {
-    const instructions = render(
-      {},
-      {
-        dynamicTools: [namespace([spawnTool, tool("sessions_create")])],
-      },
-    );
-
-    expect(instructions).toContain("`spawn_agent` for work that only needs Codex-native tools");
-    expect(instructions).toContain("native collaboration tools may be deferred");
-    expect(instructions).toContain(
-      'For new delegated work that needs OpenClaw tools, use `openclaw.sessions_spawn` with `runtime="subagent"` from the start.',
-    );
-    expect(instructions).toContain(
-      "For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn.",
-    );
-    expect(instructions).toContain("Do not respawn existing work to switch tool routes");
-  });
-
-  it.each<{ properties: JsonObject; expected: string }>([
-    { properties: {}, expected: "use `sessions_spawn` from the start." },
-    {
-      properties: { runtime: { type: "string", enum: ["acp"] } },
-      expected: "Keep work needing OpenClaw tools in this session",
-    },
-  ])("respects the advertised managed runtime schema: %j", ({ properties, expected }) => {
-    const instructions = render(
-      {},
-      {
-        dynamicTools: [tool("sessions_spawn", properties)],
-      },
-    );
-
-    expect(instructions).toContain(expected);
-    expect(instructions).not.toContain('runtime="subagent"');
-  });
-
-  it.each([{ requireWorkspaceOnly: true }, { delegationCapability: "host_only" }] as const)(
-    "does not advertise native helpers for restricted runs (%j)",
-    (overrides) => {
-      const instructions = render(overrides);
-      expect(instructions).not.toContain("spawn_agent");
-      expect(instructions).not.toContain("wait_agent");
-      expect(instructions).toContain('`sessions_spawn` with `runtime="subagent"`');
-    },
-  );
-
   it.each<Partial<CodexThreadPromptContext>>([
     { delegationCapability: "report_only" },
     { disableTools: true },
     { toolsAllow: [] },
-  ])("does not advertise either delegation route when delegation is disabled (%j)", (overrides) => {
+  ])("does not advertise delegation when delegation is disabled (%j)", (overrides) => {
     const instructions = render(overrides);
-    expect(instructions).not.toContain("spawn_agent");
     expect(instructions).not.toContain("sessions_spawn");
   });
 
@@ -160,8 +166,6 @@ describe("buildDeveloperInstructions delegation guidance", () => {
     const instructions = render({ toolsAllow: [] }, { dynamicTools: [] });
 
     expect(instructions).not.toContain("Shell command tools");
-    expect(instructions).not.toContain("spawn_agent");
-    expect(render({}, { dynamicTools: [] })).toContain("Shell command tools");
   });
 
   it.each([false, true])(
@@ -183,8 +187,13 @@ describe("buildDeveloperInstructions delegation guidance", () => {
       const instructions = renderCreation(true);
 
       expect(instructions).toContain("`openclaw.sessions_create`");
-      expect(instructions).toContain("no completion event or yield expectation");
-      expect(instructions).toContain("Actual delegated helpers use native `spawn_agent`");
+      expect(instructions).toContain(
+        "Explicit requests to start a session or task: `openclaw.sessions_create`",
+      );
+      const helperRoute = instructions
+        .split("\n")
+        .find((line) => line.startsWith("Delegated helpers:"));
+      expect(helperRoute).toContain('`sessions_spawn` with `runtime="subagent"`');
       expect(instructions).toContain("unrequested follow-up proposals use `openclaw.suggest_task`");
       expect(instructions).not.toContain("## Delegation");
       expect(renderCreation(false)).not.toContain("`openclaw.sessions_create`");
@@ -206,9 +215,9 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
     const instructions = render({}, { dynamicTools });
 
     expect(instructions).toContain("## UI Presentation");
-    expect(instructions).toContain('`openclaw.screen(action="browser_show")`');
+    expect(instructions).toContain("Control UI panels: `openclaw.screen`");
     for (const uiTool of uiTools) {
-      expect(instructions).toContain(`\`openclaw.${uiTool.name}\``);
+      expect(instructions).toContain(`openclaw.${uiTool.name}`);
     }
     expect(instructions).toContain(
       '`openclaw.message(action="send", clawhub={query:"capability"})`',

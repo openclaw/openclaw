@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { assert, afterEach, beforeEach, expect, it } from "vitest";
+import { assert, afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import * as cronNotifications from "./server-cron-notifications.js";
 import {
   addAgentTurnJob,
   createCronConfig,
@@ -10,9 +12,10 @@ import {
 } from "./server-cron.test-support.js";
 
 let state: ReturnType<typeof loadCronService>;
+let cfg: ReturnType<typeof createCronConfig>;
 beforeEach(({ task }) => {
   resetGatewayCronMocks();
-  const cfg = createCronConfig(`server-cron-session-target-${task.id}`);
+  cfg = createCronConfig(`server-cron-session-target-${task.id}`);
   cfg.agents = { defaults: { systemAgent: { agentId: "main" } }, entries: { main: {}, ops: {} } };
   state = loadCronService(cfg);
 });
@@ -23,11 +26,17 @@ afterEach(async () => {
 
 const opaqueKey = "agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
 it.each([
-  [undefined, opaqueKey, "main", opaqueKey],
-  ["ops", "agent:main:main", "ops", "agent:ops:main"],
-])(
-  "routes agent=%s session=%s through to controller-owned cron turns",
-  async (agentId, sessionKey, expectedAgentId, expectedSessionKey) => {
+  [undefined, opaqueKey, "main", opaqueKey, "per-sender"],
+  ["ops", "agent:main:main", "ops", "agent:ops:main", "per-sender"],
+  ["main", "global", "main", "global", "global"],
+  ["ops", "global", "ops", "global", "global"],
+  ["main", "main", "main", "global", "global"],
+  ["main", "global", "main", "agent:main:global", "per-sender"],
+  ["main", "agent:main:global", "main", "agent:main:global", "global"],
+] as const)(
+  "routes agent=%s session=%s to %s/%s under %s scope",
+  async (agentId, sessionKey, expectedAgentId, expectedSessionKey, scope) => {
+    cfg.session = { ...cfg.session, scope };
     const job = await addAgentTurnJob(state, "custom-session", "hello", {
       agentId,
       sessionTarget: `session:${sessionKey}`,
@@ -40,25 +49,33 @@ it.each([
     expect(options).toMatchObject({
       agentId: expectedAgentId,
       sessionKey: expectedSessionKey,
+      cronStorePath: state.storePath,
     });
   },
 );
 
 it("refuses a stored job whose explicit session belongs to another agent", async () => {
-  const job = await addAgentTurnJob(state, "mismatched-session", "hello", {
-    agentId: "main",
-    sessionTarget: "session:agent:ops:scheduled-report",
-    deleteAfterRun: false,
-  });
+  onTestFinished(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  const failureAlert = vi.spyOn(cronNotifications, "sendGatewayCronFailureAlert");
+  try {
+    const job = await addAgentTurnJob(state, "mismatched-session", "hello", {
+      agentId: "main",
+      sessionTarget: "session:agent:ops:scheduled-report",
+      deleteAfterRun: false,
+    });
 
-  await state.cron.run(job.id, "force");
+    await state.cron.run(job.id, "force");
 
-  expect(state.cron.getJob(job.id)?.state).toMatchObject({
-    lastRunStatus: "error",
-    lastError: expect.stringMatching(/session target belongs to another agent/i),
-  });
-  expect(runCronSessionTurnMock).not.toHaveBeenCalled();
-  expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+    expect(state.cron.getJob(job.id)?.state).toMatchObject({
+      lastRunStatus: "error",
+      lastError: expect.stringMatching(/session target belongs to another agent/i),
+    });
+    expect(runCronSessionTurnMock).not.toHaveBeenCalled();
+    expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+    expect(failureAlert).toHaveBeenCalledOnce();
+  } finally {
+    await Promise.allSettled(failureAlert.mock.results.map(({ value }) => value));
+  }
 });
 
 it.each(["current", "isolated"] as const)(

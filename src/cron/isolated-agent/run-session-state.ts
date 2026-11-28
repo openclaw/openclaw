@@ -15,8 +15,10 @@ import {
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { readSessionTranscriptWatermarkAsync } from "../../config/sessions/session-transcript-watermark.js";
+import type { SessionScheduledMemoryParent } from "../../config/sessions/types.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/work-start-error.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { AmbiguousSessionControllerError } from "../../sessions/session-controller.contracts.js";
 import {
   beginSessionEffect,
   captureSessionTarget,
@@ -75,12 +77,15 @@ function clearCronContextOwnerState(entry: SessionEntry) {
 }
 
 /** Resolved cron session plus its mutable backing store and active entry. */
-export type MutableCronSession = ReturnType<typeof resolveCronSession>;
+export type MutableCronSession = ReturnType<typeof resolveCronSession> & {
+  contextTotalsAccounted?: true;
+};
 
 /** Commits a closed cron operation and returns its acknowledged entry. */
 export type CronSessionRowWriter = (params: {
   operation: Extract<SessionEntryPatchOperation, { kind: "cron-session" }>;
   resetBoundary?: SessionResetBoundaryWrite;
+  storeAdmission?: object;
   sessionKey: string;
   storePath: string;
   assertCommitAllowed?: () => void;
@@ -90,6 +95,7 @@ export type CronSessionRowWriter = (params: {
 export type PersistCronSessionEntry = (
   assertCommitAllowed?: () => void,
   entry?: SessionEntry,
+  storeAdmission?: object,
 ) => Promise<void>;
 
 /** Hidden exact-run row retained while detached cron work can still resume. */
@@ -100,6 +106,11 @@ export type CronRunContinuationSession = {
     execution?: { cliExecutionProvider?: string },
   ) => Promise<void>;
   seal: (options?: { basePersisted?: boolean }) => Promise<void>;
+  /**
+   * Records the parent an occurrence was admitted against, so sessions this run
+   * spawns resolve memory through it. Undefined clears an earlier attempt's receipt.
+   */
+  recordScheduledMemoryParent: (parent: SessionScheduledMemoryParent | undefined) => Promise<void>;
 };
 
 function resolveCronLifecycleRevisionIdentity(lifecycleRevision: string): string {
@@ -125,9 +136,9 @@ export async function beginCronPreparationEffect(params: {
       storeScope: cronSession.storePath,
       sessionKey: runSessionKey,
       incarnation: cronSession.sessionEntry.sessionId,
+      // The previous run can still own its session ID after the job starts a new one.
       aliases: [
         agentSessionKey,
-        initialSessionEntry?.sessionId,
         resolveCronLifecycleRevisionIdentity(cronSession.lifecycleRevision),
       ],
     }),
@@ -155,6 +166,21 @@ export async function beginCronPreparationEffect(params: {
         throw new CronSessionLifecycleClaimError(agentSessionKey, archivedSessionError);
       }
     },
+  }).catch((cause: unknown) => {
+    if (!(cause instanceof AmbiguousSessionControllerError)) {
+      throw cause;
+    }
+    const previousId = initialSessionEntry?.sessionId;
+    const previousRunKey = previousId && `${agentSessionKey}:run:${previousId}`;
+    const previousRunHasWork =
+      params.usesDetachedRunSession &&
+      previousRunKey &&
+      previousRunKey !== runSessionKey &&
+      cause.hasWorkFor(previousRunKey);
+    cause.message = previousRunHasWork
+      ? "The agent didn’t start because work from the previous run was still active. Wait a moment, then try running it again."
+      : "The agent didn’t start because OpenClaw found conflicting session records for this run. Wait a moment, then try running it again.";
+    throw cause;
   });
 }
 
@@ -212,7 +238,8 @@ export function createPersistCronSessionEntry(params: {
   workspaceDir: string;
   persistSessionEntry: CronSessionRowWriter;
 }): PersistCronSessionEntry {
-  return async (assertCommitAllowed, liveEntry = params.cronSession.sessionEntry) => {
+  return async (assertCommitAllowed, entry, storeAdmission) => {
+    const liveEntry = entry ?? params.cronSession.sessionEntry;
     const resetBoundaryPending = params.cronSession.resetBoundaryPending !== undefined;
     // Reset admission completes before a CLI turn can own settlement.
     if (assertCommitAllowed && resetBoundaryPending) {
@@ -236,11 +263,13 @@ export function createPersistCronSessionEntry(params: {
       committedEntry = await params.persistSessionEntry({
         storePath: params.cronSession.storePath,
         sessionKey: params.agentSessionKey,
+        storeAdmission,
         operation: {
           kind: "cron-session",
           sessionKey: params.agentSessionKey,
           initial: params.cronSession.initialSessionEntry,
           next: persistedEntry,
+          contextTotalsAccounted: params.cronSession.contextTotalsAccounted,
           creation: buildSessionCreationStamp({
             via: "cron",
             actor: params.createdActor ?? { type: "system" },
@@ -268,6 +297,7 @@ export function createPersistCronSessionEntry(params: {
       throw new CronSessionLifecycleClaimError(params.agentSessionKey);
     }
     params.cronSession.resetBoundaryPending = undefined;
+    params.cronSession.contextTotalsAccounted = undefined;
     // The storage projection may intentionally omit resume identity until its
     // transcript exists. Keep that projection out of the active run object.
     params.cronSession.sessionEntry = mergeSessionSnapshotChanges({
@@ -332,7 +362,14 @@ export function createCronRunContinuationSession(params: {
       : {}),
   };
   let sealed = false;
-  let persistedSnapshot: { source: SessionEntry; continuation: typeof continuation } | undefined;
+  let scheduledMemoryParent: SessionScheduledMemoryParent | undefined;
+  let persistedSnapshot:
+    | {
+        source: SessionEntry;
+        continuation: typeof continuation;
+        scheduledMemoryParent?: SessionScheduledMemoryParent;
+      }
+    | undefined;
   const persist = async (
     create: boolean,
     phase: "running" | "ready",
@@ -354,7 +391,11 @@ export function createCronRunContinuationSession(params: {
     delete source.previousSessionId;
     delete source.forkSource;
     delete source.usageFamilySessionIds;
-    const snapshot = { source, continuation: { ...continuation } };
+    const snapshot = {
+      source,
+      continuation: { ...continuation },
+      ...(scheduledMemoryParent ? { scheduledMemoryParent: { ...scheduledMemoryParent } } : {}),
+    };
     if (phase === "running" && isDeepStrictEqual(snapshot, persistedSnapshot)) {
       return;
     }
@@ -367,6 +408,7 @@ export function createCronRunContinuationSession(params: {
           kind: "cron-run-continuation",
           sessionKey: params.runSessionKey,
           source,
+          ...(scheduledMemoryParent ? { scheduledMemoryParent } : {}),
           create,
           creation: buildSessionCreationStamp({
             via: "cron",
@@ -418,6 +460,10 @@ export function createCronRunContinuationSession(params: {
       await persist(false, "running", false, assertCommitAllowed);
     },
     seal: async (options) => await persist(false, "ready", options?.basePersisted === true),
+    recordScheduledMemoryParent: async (parent) => {
+      scheduledMemoryParent = parent ? { ...parent } : undefined;
+      await persist(false, "running");
+    },
   };
 }
 

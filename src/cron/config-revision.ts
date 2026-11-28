@@ -25,3 +25,14 @@ export function resolveCronJobConfigRevision(job: CronStoredJob): string {
   const projected = projectCronJobThroughStorageCodec({ ...job, updatedAtMs: 0, state: {} });
   return hashCronJobDefinition(configRevisionDefinition(projected));
 }
+
+export type CronJobConfigRevisionResult = string | Error;
+
+/** Preserve lazy comparison errors while the service normalizes/quarantines loaded rows. */
+export function captureCronJobConfigRevision(job: CronStoredJob): CronJobConfigRevisionResult {
+  try {
+    return resolveCronJobConfigRevision(job);
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+}

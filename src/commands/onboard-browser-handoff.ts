@@ -10,6 +10,8 @@ import { callGateway } from "../gateway/call.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { openUrlPrivately } from "../infra/browser-handoff.js";
 import type { SystemPresence } from "../infra/system-presence.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { sleep } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -164,6 +166,7 @@ export async function runBrowserHatchHandoff(params: {
     const document = await waitForControlUiDocument({
       url: target.documentUrl,
       tlsConfig: target.tlsConfig,
+      signal: getAsyncWorkSignal(),
       onPending: () => {
         progress = params.prompter.progress(t("wizard.guided.controlUiPreparing"));
       },
@@ -175,6 +178,7 @@ export async function runBrowserHatchHandoff(params: {
     return false;
   } finally {
     progress?.stop();
+    getAsyncWorkSignal()?.throwIfAborted();
   }
 
   const baseline = await probeDashboardPresence(target, HANDOFF_PROBE_TIMEOUT_MS);
@@ -263,9 +267,9 @@ export async function runBrowserHatchHandoff(params: {
   }
 
   const baselineClientKeys = new Set(baseline);
-  const deadline = Date.now() + (opened ? GUI_HANDOFF_TIMEOUT_MS : HEADLESS_HANDOFF_TIMEOUT_MS);
+  const deadline = monotonicNow() + (opened ? GUI_HANDOFF_TIMEOUT_MS : HEADLESS_HANDOFF_TIMEOUT_MS);
   while (true) {
-    const beforeProbeMs = deadline - Date.now();
+    const beforeProbeMs = deadline - monotonicNow();
     if (beforeProbeMs <= 0) {
       return false;
     }
@@ -279,7 +283,7 @@ export async function runBrowserHatchHandoff(params: {
     if (result.some((key) => !baselineClientKeys.has(key))) {
       break;
     }
-    const remainingMs = deadline - Date.now();
+    const remainingMs = deadline - monotonicNow();
     if (remainingMs <= 0) {
       return false;
     }

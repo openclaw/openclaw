@@ -16,7 +16,7 @@ import type {
   resolveManifestCliCommandSurfaceOwner,
   resolveManifestToolOwner,
 } from "../plugins/manifest-command-aliases.runtime.js";
-import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { isRemoteAgentDispatchInvocation, resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isSimpleCommandHelpInvocation, rewriteUpdateFlagArgv } from "./argv.js";
 import {
   resolveCliCommandPathPolicy,
@@ -33,7 +33,7 @@ import type { BareRootLaunchTarget } from "./run-main.gateway-types.js";
 
 export const TUI_REQUIRES_TTY =
   "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.";
-const ROOT_HELP_ALIASES = new Set(["tools", "help"]);
+const ROOT_HELP_ALIASES = new Set(["help"]);
 const SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS = new Set(["setup", "onboard", "configure"]);
 const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getCoreCliCommandDescriptors()
@@ -43,6 +43,19 @@ const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
     .filter((descriptor) => descriptor.parentDefaultHelp)
     .map((descriptor) => descriptor.name),
 ]);
+export async function loadCliStartupDotEnv(
+  invocation: ReturnType<typeof resolveCliArgvInvocation>,
+  loadGlobalEnv: boolean,
+): Promise<void> {
+  if (isRemoteAgentDispatchInvocation(invocation)) {
+    const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
+    await loadGatewayDispatchCliDotEnv();
+  } else {
+    const { loadCliDotEnv } = await import("./dotenv.js");
+    loadCliDotEnv({ loadGlobalEnv });
+  }
+}
+
 export function shouldLoadCliDotEnv(loadGlobalEnv: boolean): boolean {
   const cwd = tryProcessCwd();
   if (cwd && existsSync(path.join(cwd, ".env"))) {
@@ -90,10 +103,6 @@ export function isGatewayRunFastPathArgv(argv: string[]): boolean {
   }
 
   return sawGateway;
-}
-
-export function isRemoteAgentDispatchInvocation(argv: string[], primary: string | null): boolean {
-  return primary === "agent" && !argv.includes("--local");
 }
 
 export function isAgentExecInvocation(commandPath: string[]): boolean {

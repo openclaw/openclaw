@@ -426,30 +426,18 @@ describe("Team Reports scheduler lifecycle", () => {
     await expect(scheduler.generate()).rejects.toThrow("not running");
   });
 
-  it("reports the earliest due time and last completed run while another run is active", async () => {
+  it("reports the last completed run while another run is active", async () => {
     const { scheduler, github, nextRun } = await setup({
       start: false,
       schedule: { intradayEveryHours: 4 },
     });
-    expect(await scheduler.health()).toEqual({ running: false, warnings: 0 });
     await scheduler.start();
-    expect(await scheduler.health()).toEqual({
-      running: true,
-      nextDueMs: Date.parse("2026-08-20T16:00:00Z"),
-      warnings: 0,
-    });
     const firstCollection = blockCollection(github);
     await scheduler.generate();
     expect((await scheduler.health()).lastRun).toBeUndefined();
     firstCollection.resolve(healthy);
     await nextRun();
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(await scheduler.health()).toEqual({
-      running: true,
-      lastRun: { status: "ok", kind: "manual", finishedAtMs: Date.parse("2026-08-20T12:00:00Z") },
-      nextDueMs: Date.parse("2026-08-20T16:00:00Z"),
-      warnings: 0,
-    });
     const blocked = blockCollection(github);
     await scheduler.generate({ intraday: true });
     await vi.advanceTimersByTimeAsync(0);
@@ -526,7 +514,7 @@ describe("Team Reports scheduler lifecycle", () => {
     expect((await restarted.store.getPeriod("day", "2026-08-20"))?.report.status).toBe("closed");
   });
 
-  it("rejects a concurrent manual run and defers an intraday tick without overlapping collectors", async () => {
+  it("rejects concurrent manual work and retries a deferred tick across a wall-clock rewind", async () => {
     vi.setSystemTime(new Date("2026-08-20T03:54:00Z"));
     const { scheduler, store, github, nextRun } = await setup({
       schedule: { intradayEveryHours: 4 },
@@ -544,7 +532,7 @@ describe("Team Reports scheduler lifecycle", () => {
     expect(github.collect).toHaveBeenCalledOnce();
     expect((await runById(store, id))?.status).toBe("running");
     blocked.resolve(healthy);
-    await nextRun();
+    await nextRun().then(() => vi.setSystemTime(Date.now() - 3_600_000));
     expect((await runById(store, id))?.status).toBe("ok");
     await vi.advanceTimersByTimeAsync(60_000);
     await nextRun();

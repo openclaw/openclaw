@@ -1,16 +1,13 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { EmbeddingProviderRuntime } from "./embedding-provider-types.js";
-import {
-  clearEmbeddingProviders,
-  registerEmbeddingProvider,
-  type EmbeddingProviderAdapter,
-} from "./embedding-providers.js";
+import type { EmbeddingProviderRuntime } from "./embedding-provider-runtime-types.js";
+import type { EmbeddingProviderAdapter } from "./embedding-provider-types.js";
+import { clearEmbeddingProviders, registerEmbeddingProvider } from "./embedding-providers.js";
 import {
   getMemoryEmbeddingProvider as getProvider,
   listMemoryEmbeddingProviders as listProviders,
 } from "./memory-embedding-provider-runtime.js";
-import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
+import type { MemoryEmbeddingProviderAdapter } from "./registry-contribution-types.js";
 
 const mocks = vi.hoisted(() => ({
   resolvePluginCapabilityProviders: vi.fn<
@@ -127,7 +124,6 @@ it("returns generic provider, runtime, and identity objects unchanged", async ()
 it("preserves private memory metadata through generic registration", () => {
   const memoryAdapter = {
     id: "migrated-memory",
-    supportsMultimodalEmbeddings: ({ model }: { model: string }) => model === "multimodal",
     shouldContinueAutoSelection: () => true,
     create: async () => ({ provider: null }),
   } satisfies MemoryEmbeddingProviderAdapter;
@@ -135,6 +131,5 @@ it("preserves private memory metadata through generic registration", () => {
 
   const adapter = getProvider("migrated-memory");
   expect(adapter).toBe(memoryAdapter);
-  expect(adapter?.supportsMultimodalEmbeddings?.({ model: "multimodal" })).toBe(true);
   expect(adapter?.shouldContinueAutoSelection?.(new Error("setup"))).toBe(true);
 });

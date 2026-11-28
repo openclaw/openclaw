@@ -7,7 +7,67 @@ import { expect } from "vitest";
 import type { SqlConnection } from "../infra/sql-connection.js";
 import { CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { addPreCutoverClientCredentialTablesForTest } from "./openclaw-state-schema.test-support.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
+} from "./openclaw-state-schema.test-support.js";
+
+export function downgradeWorkerPlacementsToV7(db: DatabaseSync): void {
+  restorePreTemplateStateIdentifiersForTest(db);
+  addPreCutoverClientCredentialTablesForTest(db);
+  const row = db
+    .prepare(
+      "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'worker_session_placements'",
+    )
+    .get() as { sql?: unknown } | undefined;
+  if (typeof row?.sql !== "string") {
+    throw new Error("missing worker_session_placements table SQL");
+  }
+  const v8LocalClaim = `(turn_claim_owner IS 'local' AND (\n      state IN ('local', 'requested', 'failed')\n      OR (state IN ('active', 'draining') AND execution_mode IS 'remote-exec')\n    ))`;
+  const v7Create = row.sql
+    .replace("CREATE TABLE worker_session_placements", "CREATE TABLE worker_session_placements_v7")
+    .replace(
+      "\n  execution_mode TEXT CHECK (execution_mode IN ('worker-turn', 'remote-exec')),",
+      "",
+    )
+    .replace(
+      v8LocalClaim,
+      `(turn_claim_owner IS 'local' AND state IN ('local', 'requested', 'failed'))`,
+    )
+    .replace("\n      AND (execution_mode IS NULL OR execution_mode IS 'worker-turn')", "");
+  if (v7Create.includes("execution_mode")) {
+    throw new Error("failed to derive v7 worker placement schema");
+  }
+  const columns = (
+    db.prepare("PRAGMA table_xinfo(worker_session_placements)").all() as Array<{
+      hidden: number;
+      name: string;
+    }>
+  )
+    .filter((column) => column.hidden === 0 && column.name !== "execution_mode")
+    .map((column) => `"${column.name}"`)
+    .join(", ");
+  db.exec("PRAGMA foreign_keys = OFF;");
+  try {
+    db.exec(`
+      BEGIN IMMEDIATE;
+      ${v7Create};
+      INSERT INTO worker_session_placements_v7 (${columns})
+        SELECT ${columns} FROM worker_session_placements;
+      DROP TABLE worker_session_placements;
+      ALTER TABLE worker_session_placements_v7 RENAME TO worker_session_placements;
+      CREATE INDEX idx_worker_session_placements_session_key
+        ON worker_session_placements(agent_id, session_key);
+      CREATE INDEX idx_worker_session_placements_reconcile
+        ON worker_session_placements(updated_at_ms, session_id);
+      PRAGMA user_version = 7;
+      UPDATE schema_meta SET schema_version = 7 WHERE meta_key = 'primary';
+      COMMIT;
+    `);
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON;");
+  }
+}
 
 const V2026_7_1_2_STATE_FIXTURE_URL = new URL(
   "../../test/fixtures/sqlite/openclaw-state-v2026.7.1-2.sqlite.gz",
@@ -27,6 +87,7 @@ export const V2026_7_1_2_STATE_MIGRATION_CHANGES = [
   "Removed redundant conversation binding target projections (v15)",
   "Replaced retained task indexes with ordered cron history indexes (v24)",
   "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
+  "Introduced durable default cron partition selection (v34)",
   "Migrated shared state tables to SQLite STRICT typing (46)",
 ];
 
@@ -55,7 +116,7 @@ export function expectV2026_7_1_2CronHistoryPreserved(database: SqlConnection): 
         "SELECT value_json FROM config_machine_state WHERE state_key = 'cron.defaultStoreKey'",
       )
       .get(),
-  ).toBeUndefined();
+  ).toEqual({ value_json: JSON.stringify("/fixture/state/cron/jobs.json") });
 }
 
 export function materializeV2026_7_1_2StateDatabase(stateDir: string) {
@@ -73,6 +134,9 @@ export function materializeV2026_7_1_2StateDatabase(stateDir: string) {
 
 // Synthetic pre-v8 databases must not retain the current placement-only index.
 export function markStateDatabaseVersion(database: DatabaseSync, version: number): void {
+  if (version < 36) {
+    restorePreTemplateStateIdentifiersForTest(database);
+  }
   if (
     version < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION &&
     !database.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'device_identities'").get()
@@ -83,4 +147,19 @@ export function markStateDatabaseVersion(database: DatabaseSync, version: number
     ${version < 8 ? "DROP INDEX IF EXISTS idx_worker_session_placements_environment;" : ""} PRAGMA user_version = ${version};
     UPDATE schema_meta SET schema_version = ${version} WHERE meta_key = 'primary';
   `);
+}
+
+/** Shared expected tail for historical fixtures; independent of production migration discovery. */
+export function expectedStateMigrationsFromV27(pathname: string) {
+  return [
+    "state-write-indexes-v27",
+    "github-publication-draft-v28",
+    "local-client-credentials-v29",
+    "automation-policy-fence-v30",
+    "local-workspace-manifests-v31",
+    "local-workspace-cas-v35",
+    "template-names-v36",
+    "worker-resource-receipts-v37",
+    "repository-disk-authority-v38",
+  ].map((kind) => ({ kind, path: pathname }));
 }

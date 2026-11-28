@@ -68,38 +68,10 @@ guesswork.
 
 ## Plugin-Suite Workflow
 
-Use this section when perf work involves bundled plugins, plugin-inspector, SDK
-barrels, package-boundary tests, or extension suites.
-
-1. Map the suite shape first:
-   - source tests: `pnpm test extensions/<id>` or `pnpm test:extensions:batch <id>`
-   - package boundaries: `pnpm run test:extensions:package-boundary:canary` and
-     `pnpm run test:extensions:package-boundary:compile`
-   - all bundled source tests: `pnpm test:extensions`
-   - plugin import memory: `pnpm test:extensions:memory -- --json .artifacts/test-perf/extensions-memory.json`
-   - plugin-inspector/report work: keep report primitives in `plugin-inspector`;
-     keep wrappers thin and collect peak RSS when the command supports it.
-2. Start narrow, then widen:
-   - one plugin changed: run that plugin's tests and plugin-inspector slice.
-   - SDK/public barrel changed: add representative provider, channel, memory,
-     and feature plugins.
-   - loader/runtime mirror changed: add package-boundary checks and build/package
-     proof as needed.
-   - unknown shared plugin behavior: run `test:extensions:batch` groups before
-     `pnpm test:extensions`.
-3. Treat plugin-inspector failures as product signals:
-   - JSON must parse.
-   - warnings/errors must be classified, not hidden.
-   - runtime capture should be quiet and config-tolerant.
-   - command output should include wall time, exit code, and peak RSS when
-     available.
-4. Follow `$openclaw-testing` for host selection. Trusted source benchmarks
-   can run locally with comparable machine/load conditions. Use `$crabbox` when
-   clean packaging, Linux/platform behavior, isolation, or an explicit remote
-   request is part of the proof; reuse and clean up only the owned lease.
-5. If plugin performance is package-artifact sensitive, switch to
-   `release-openclaw-plugin-testing` and Package Acceptance rather than
-   trusting source-only timing.
+For bundled plugins, plugin-inspector, SDK barrels, package-boundary tests, or
+extension suites, read the [plugin-suite workflow](references/plugin-suites.md)
+in full before choosing benchmarks or proof. It covers suite breadth, host
+selection, and package-artifact escalation.
 
 ## Metric Collection
 
@@ -226,10 +198,9 @@ pnpm test:perf:groups --report <vitest-json> \
 ## Verification
 
 - Always run the targeted test surface that proves the change.
-- Source changes: focused local tests + targeted typecheck/lint/format before push; `pnpm check:changed` optional. PR CI = broad proof. Testbox only for CI/local gaps, immediate grant; warmed Testbox reuse when selected.
-- For test-only changes, run `pnpm test:changed` or the exact edited tests.
-- Run `pnpm build` when touching lazy-loading, bundled artifacts, package
-  boundaries, dynamic imports, build output, or public surfaces.
+- Follow [OpenClaw testing](../openclaw-testing/SKILL.md) for focused tests,
+  required builds, proof routing, and publication timing.
+- For test-only changes, run the exact edited tests through that owner's supported command.
 - For plugin SDK/barrel/runtime changes, compare exact commits with
   `pnpm plugin-sdk:api:diff -- --base <base-sha> --head <head-sha>` when the
   public API surface may drift. For PR-local proof, use the branch merge base
@@ -237,8 +208,8 @@ pnpm test:perf:groups --report <vitest-json> \
 - For plugin-suite perf fixes, verify at least one representative plugin batch
   plus the changed gate; use Package Acceptance if the bug only exists in a
   packed artifact.
-- If deps are missing/stale, run `pnpm install` and retry the exact failed
-  command once.
+- For missing or stale dependencies, follow [Source dependencies](../../../CONTRIBUTING.md#source-dependencies)
+  and the current worktree's owner instructions. Use a qualified proof route.
 - Use the report format:
 
 ```markdown

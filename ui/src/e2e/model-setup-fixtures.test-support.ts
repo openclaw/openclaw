@@ -164,7 +164,7 @@ export async function expectLocalActivation(
   modelRef: string,
   icon = provider,
 ) {
-  await page.getByRole("heading", { name: "Connection verified" }).waitFor();
+  await page.getByRole("heading", { name: "Model verified" }).waitFor();
   const success = page.locator(".model-setup-success");
   await expectText(success, modelRef);
   await expectText(success, "Verified in", true);
@@ -226,8 +226,13 @@ export async function returnToLocalModelSettings(
     providers: [{ provider, displayName: label, status: "static", profiles: [] }],
   });
   await gateway.emitGatewayEvent("config.changed", {});
+  await gateway.emitGatewayEvent("chat.metadata.changed", {
+    agentId: "main",
+    modelCatalogChanged: true,
+    authChanged: true,
+  });
   await page.setViewportSize({ height: 900, width: 1280 });
-  await page.getByRole("button", { name: "Return to Models" }).click();
+  await page.getByRole("button", { name: "Back to Models" }).click();
   await expectCount(page.locator("openclaw-modal-dialog"), 0);
   expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
   const connection = page.locator(`[data-provider-id="${provider}"]`);

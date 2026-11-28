@@ -1,5 +1,8 @@
+import assert from "node:assert/strict";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
+import { createExactAssistantMessage } from "../../config/sessions/transcript-message.test-support.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 
@@ -75,4 +78,49 @@ it("preserves labels targeting asynchronously replayed model and thinking entrie
     expect(manager.getLabel(entry.id)).toBe(label);
     expect([modelEntryId, thinkingEntryId]).not.toContain(entry.id);
   }
+});
+
+it("remaps both placement references while retaining the original marker bytes", async () => {
+  const manager = SessionManager.inMemory();
+  const first = await manager.appendMessageAsync({
+    role: "user",
+    content: "original",
+    timestamp: 1,
+  });
+  const pending = {
+    ...createExactAssistantMessage({
+      text: "background",
+      provider: "openclaw",
+      model: "automation-result",
+    }),
+    excludeFromContext: true,
+    openclawModelPlacement: "pending",
+  };
+  const result = await manager.appendMessageAsync(pending);
+  const preceding = await manager.appendMessageAsync(
+    createExactAssistantMessage({ text: "signed output" }),
+  );
+  const data = { afterEntryId: preceding, resultEntryIds: [result] };
+  const marker = await manager.appendCustomEntryAsync(
+    BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE,
+    data,
+  );
+  const original = JSON.stringify(manager.getEntry(marker));
+
+  expect((await rewrite(manager, first!)).changed).toBe(true);
+  const branch = manager.getBranch();
+  expect(branch.at(-1)).toMatchObject({
+    data: { afterEntryId: branch[2]?.id, resultEntryIds: [branch[1]?.id] },
+  });
+  expect(JSON.stringify(manager.getEntry(marker))).toBe(original);
+  expect(
+    manager.buildSessionContext().messages.map((message) => {
+      assert(message.role === "user" || message.role === "assistant");
+      return message.content;
+    }),
+  ).toEqual([
+    "replacement",
+    [{ type: "text", text: "signed output" }],
+    [{ type: "text", text: "background" }],
+  ]);
 });

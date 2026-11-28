@@ -81,20 +81,23 @@ internal turns suppress project-doc loading and that fallback carrier.
 
 OpenClaw developer instructions cover OpenClaw runtime concerns: source-channel
 delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
-active agent workspace profile files. With an OpenClaw-managed direct stdio
-app-server, including a Desktop executable selected for Computer Use, skill
-catalogs, persona files, memory-provider instructions, plugin-injected system
-context, and tool-routed `MEMORY.md` guidance
-are appended to the parent model request instructions by a private inference
-relay. Native base and catalog instructions remain unchanged; this new context
-is not written to native conversation history or automatically inherited by
-native subagents. Connections without that relay carry eligible skills, persona, and memory
-in thread developer instructions instead, preserving delivery when the model
-owns collaboration-mode instructions. Native children can inherit that fallback context; selected personal `users/<profile-id>/USER.md` overlays are excluded and require the managed parent-only relay. See [workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files)
-for fallback refresh and inheritance semantics. Plugin `before_prompt_build`
+active agent workspace profile files. Skill catalogs, shared persona files,
+memory-provider instructions, and tool-routed `MEMORY.md` guidance are carried in
+thread developer instructions on every connection, so they stay in the cached
+prompt prefix and native children can inherit them. Ordinary managed sessions also carry
+[capability-aware collaboration guidance](/plugins/codex-harness-runtime/permissions)
+there instead of the native catalogue's Default-mode block. With an OpenClaw-managed
+direct stdio app-server, including a Desktop executable selected for Computer Use,
+a private inference relay appends only parent-only context to each model request's
+instructions: a selected personal `users/<profile-id>/USER.md` overlay, cron policy,
+plugin-injected system context, and per-turn conversation context. Native base
+instructions remain unchanged; this context is not written to native conversation
+history or inherited by native subagents. Connections without that relay omit the
+personal overlay. See [workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files)
+for refresh and inheritance semantics. Plugin `before_prompt_build`
 system context is prepared for each turn; changing recall results does not reload
 the managed thread or block follow-up messages while a background command runs.
-It follows stable parent context and shares the relay's 256 KiB context limit.
+It follows the parent-only context and shares the relay's 256 KiB context limit.
 Plugin `systemPrompt` replacements remain thread policy. Active `BOOTSTRAP.md` and, when memory tools are unavailable,
 bounded `MEMORY.md` content travel as plain turn input references. They are
 introduced on a new native thread, after a cold resume or native compaction,
@@ -113,6 +116,16 @@ native accounts, locked upstreams, and native `features.respect_system_proxy` pr
 and TLS configuration instead of changing native networking settings. OpenClaw leaves the native network and account configuration unchanged. Existing history, including any older embedded
 persona or explicitly shared task text, is preserved; this is not a retroactive
 history scrub. See [Workspace bootstrap files](/plugins/codex-harness-reference#workspace-bootstrap-files).
+
+Trajectory `context.compiled`, the system-prompt report (`/context`),
+`llm_input`, and context-engine history budgets count OpenClaw's base instructions and
+thread instructions. Reports use the base the thread lifecycle placed, including the one a supervised thread
+renders for its probed native model; history budgets run
+before startup and use an estimate. After a managed parent turn registers its inference
+context, they also include that exact registered text. Codex's own additions,
+such as an operator `model_instructions_file`, are not counted. This diagnostic
+projection is not the complete native/provider prompt and is never sent back
+into native thread requests. Existing trajectories are not backfilled.
 
 Delivery mode and the current message target requirement arrive as compact
 application context before each user turn. They explicitly supersede earlier

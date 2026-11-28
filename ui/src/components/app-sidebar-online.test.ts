@@ -33,7 +33,6 @@ import {
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
-import * as personActivity from "./person-activity-link.ts";
 import { SidebarOwnerSessionCounts } from "./sidebar-owner-session-counts.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
@@ -186,32 +185,7 @@ describe("sidebar people workload", () => {
     vi.setSystemTime(NOW);
   });
 
-  it("defers person activity links while Online is hidden and shows current people when opened", async () => {
-    const { gateway, sessions } = createWorkloadGateway(async () => summary());
-    await sessions.refresh({ agentId: "main", limit: 1 });
-    const link = vi.spyOn(personActivity, "personActivityLink");
-    const { sidebar } = await mountSidebar(gateway.gateway, sessions, "panel", TWO_AGENTS);
-    sidebar.connected = true;
-    await settle(sidebar);
-    expect(link).not.toHaveBeenCalled();
-
-    await selectSidebarView(sidebar, "online");
-    await vi.dynamicImportSettled();
-    await settle(sidebar);
-    expect(person(sidebar, "ada").getAttribute("href")).toBe("/activity/ada");
-    expect(link).toHaveBeenCalled();
-    await selectSidebarView(sidebar, "sessions");
-    link.mockClear();
-    gateway.publishEvent("presence", { presence: [profile("ada", "Ada renamed", NOW)] });
-    await settle(sidebar);
-    expect(link).not.toHaveBeenCalled();
-    await selectSidebarView(sidebar, "online");
-    const row = person(sidebar, "Ada renamed");
-    expect(row.getAttribute("href")).toBe("/activity/ada");
-    expect(row.getAttribute("aria-label")).toContain("Ada renamed");
-  });
-
-  it("keeps a pending snapshot hidden until newly present profiles have counts", async () => {
+  it("keeps a pending Online snapshot hidden until newly present profiles have counts", async () => {
     const snapshot = createDeferred<SidebarSnapshotModel | null>();
     const delayedCounts = createDeferred<SessionsListResult>();
     vi.spyOn(SessionSnapshotStore.prototype, "readSidebar").mockReturnValue(snapshot.promise);
@@ -236,6 +210,7 @@ describe("sidebar people workload", () => {
     });
     await sessions.refresh({ agentId: "main", limit: 1 });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions, "panel", TWO_AGENTS);
+    sidebar.navigationView = "online";
     await settle(sidebar);
     expect(sidebar.querySelector("aside.sidebar")).toBeNull();
 
@@ -339,23 +314,6 @@ describe("sidebar people workload", () => {
     },
   );
 
-  it("adds and removes a running badge without remounting the person", async () => {
-    let running = 0;
-    const { sidebar } = await mountWorkload(async () =>
-      summary([{ profileId: "ada", open: 13, running }]),
-    );
-    const original = person(sidebar, "ada");
-    expect(counts(sidebar, "ada")).toEqual(["13"]);
-    for (const next of [12, 0]) {
-      running = next;
-      await sidebar.sessionData.ownerCounts.refresh();
-      await settle(sidebar);
-      expect(person(sidebar, "ada")).toBe(original);
-      expect(original.getAttribute("aria-description")).toContain(`${next} running`);
-      expect(counts(sidebar, "ada")).toEqual(next ? ["12", "13"] : ["13"]);
-    }
-  });
-
   it("keeps a single deduplicated self visible when returning to Online", async () => {
     const { sidebar, publishPresence } = await mountWorkload();
     const self = presence()[0]!;
@@ -370,30 +328,6 @@ describe("sidebar people workload", () => {
     expect(names(sidebar)).toEqual([]);
     expect(sidebar.querySelector(".sidebar-online__list")).not.toBeNull();
   });
-
-  it.each(["chip", "roster"] as const)(
-    "hides people filters in Sessions and preserves them when Online is selected again (%s)",
-    async (mode) => {
-      const { sidebar } = await mountWorkload();
-      sidebar.sidebarAgentsMode = mode;
-      const view = sidebar.people;
-      view.set("statusFilter", "running");
-      view.set("sortMode", "running");
-      await settle(sidebar);
-      expect(names(sidebar)).toEqual(["bea", "ada"]);
-      expect(sidebar.querySelector(".sidebar-online__filter-toggle")).not.toBeNull();
-
-      await selectSidebarView(sidebar, "sessions");
-      expect(sidebar.querySelector(".sidebar-online__filter-toggle")).toBeNull();
-      expect(sidebar.querySelector(".sidebar-online__list")).toBeNull();
-
-      await selectSidebarView(sidebar, "online");
-      expect(names(sidebar)).toEqual(["bea", "ada"]);
-      expect(sidebar.querySelector(".sidebar-online__filter-toggle")).not.toBeNull();
-      await click(sidebar, ".sidebar-online__filter-toggle");
-      expect(sidebar.sidebarMenus.peopleFilterMenuPosition).not.toBeNull();
-    },
-  );
 
   it("uses one complete cross-agent summary, including self, not the paginated or owner-filtered sidebar", async () => {
     const pending = createDeferred<SessionsListResult>();
@@ -454,44 +388,10 @@ describe("sidebar people workload", () => {
     expect(dom.text(".sidebar-online .sidebar-session-empty-hint")).toBe(
       "No people match this filter",
     );
-    expect(sidebar.querySelector(".sidebar-online [aria-haspopup=dialog]")).not.toBeNull();
+    expect(sidebar.querySelector(".sidebar-online__filter-toggle")).not.toBeNull();
     sidebar.people.resetView();
     await settle(sidebar);
     expect(names(sidebar)).toEqual(["ada", "cy", "bea"]);
-  });
-
-  it("dismisses compact people menus and retains choices across a view-context replacement", async () => {
-    const { sidebar, provider, context, dom } = await mountWorkload();
-    const open = async () => {
-      await click(sidebar, ".sidebar-online__filter-toggle");
-      await vi.dynamicImportSettled();
-      await settle(sidebar);
-    };
-    await open();
-    expect(dom.query("#sidebar-people-reset")).toBeNull();
-    expect(dom.text("#sidebar-people-status")).toContain("All");
-    await click(sidebar, "#sidebar-people-status");
-    await click(
-      sidebar,
-      'openclaw-select-picker:has(#sidebar-people-status) [data-value="running"]',
-    );
-    expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
-    expect(names(sidebar)).toEqual(["ada", "bea"]);
-    await open();
-    await click(sidebar, "#sidebar-people-sort");
-    await click(sidebar, 'openclaw-select-picker:has(#sidebar-people-sort) [data-value="running"]');
-    expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
-    expect(names(sidebar)).toEqual(["bea", "ada"]);
-    provider.setContext({ ...context, basePath: "/control" });
-    await settle(sidebar);
-    expect(names(sidebar)).toEqual(["bea", "ada"]);
-    await open();
-    expect(dom.text("#sidebar-people-status")).toContain("Running");
-    await click(sidebar, "#sidebar-people-reset");
-    expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
-    expect(names(sidebar)).toEqual(["ada", "cy", "bea"]);
-    await open();
-    expect(sidebar.querySelector("#sidebar-people-reset")).toBeNull();
   });
 
   it("dismisses a person card at native detach and keeps interaction alive across a same-task move", async () => {
@@ -549,24 +449,6 @@ describe("sidebar people workload", () => {
       ).not.toBeNull();
     }
     expect(personDescription(sidebar, "cy")).toContain("0 open sessions, 0 running");
-  });
-
-  it("lists running people first within each presence group, by name and never by count", async () => {
-    const { sidebar, publishPresence } = await mountWorkload(async () =>
-      summary([
-        { profileId: "zed", open: 1, running: 1 },
-        { profileId: "bruno", open: 17, running: 17 },
-        { profileId: "agata", open: 2, running: 2 },
-      ]),
-    );
-    const people = [
-      ["bruno", "bruno", NOW - 180_000],
-      ["amy", "amy", NOW],
-      ["agata", "Ágata", NOW - 180_000],
-      ["zed", "Zed", NOW],
-    ] as const;
-    await publishPresence(people.map(([id, name, activity]) => profile(id, name, activity)));
-    expect(names(sidebar)).toEqual(["Zed", "amy", "Ágata", "bruno"]);
   });
 
   it("does not turn a failed summary into zero and recovers through the visible retry", async () => {

@@ -27,6 +27,10 @@ export function createMediaGenerateExecute(params: {
     agentSessionKey?: string;
     requesterAgentId?: string;
   };
+  customAction?: (
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) => Promise<MediaGenerateActionResult> | undefined;
   list: (
     auth: MediaGenerateProviderAuth,
   ) => MediaGenerateActionResult | Promise<MediaGenerateActionResult>;
@@ -38,6 +42,10 @@ export function createMediaGenerateExecute(params: {
 }): AnyAgentTool["execute"] {
   return async (_toolCallId, rawArgs: Record<string, unknown>, signal) => {
     const args = rawArgs;
+    const customResult = params.customAction?.(args, signal);
+    if (customResult !== undefined) {
+      return customResult;
+    }
     const action = resolveGenerateAction(args);
     const options = params.options;
     if (action === "list") {
@@ -92,6 +100,18 @@ export function createMediaGenerateProviderListAction<T extends MediaGeneratePro
       cfg: config,
       providers: params.listProviders({ config }),
     });
+}
+
+/**
+ * Snapshots provider metadata into plain JSON values so list results stay
+ * serializable after plugin provider resources are released. Plugin-bound
+ * proxies reject later reads once their consumer closes, and structuredClone
+ * cannot materialize them; the JSON round-trip also drops non-JSON values that
+ * would otherwise break later serialization.
+ */
+function snapshotProviderMetadata<T>(value: T): T {
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- Plugin-bound proxies cannot be materialized by structuredClone; the JSON round-trip is the serialization contract.
+  return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T); // SAFETY: JSON round-trip preserves the JSON-serializable subset of T's shape.
 }
 
 export async function createMediaGenerateProviderListActionResult<
@@ -187,7 +207,7 @@ export async function createMediaGenerateProviderListActionResult<
     content: [{ type: "text", text: lines.join("\n") }],
     details: {
       kind: params.kind,
-      providers: providerDetails,
+      providers: providerDetails.map(snapshotProviderMetadata),
     },
   };
 }

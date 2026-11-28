@@ -42,9 +42,10 @@ export type CodexWorkspaceBootstrapContext = {
   memoryToolRouted?: boolean;
   promptContext?: string;
   threadDeveloperInstructions?: string;
-  personaInstructions?: string;
   sharedPersonaInstructions?: string;
+  personalPersonaInstructions?: string;
   memoryInstructions?: string;
+  sessionProjectGuidance?: string;
 };
 
 /** A child baseline reads the bounded workspace snapshot without invoking admission hooks. */
@@ -144,9 +145,10 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       promptContextFiles,
       memoryReferenceFiles,
       memoryToolRoutedBootstrapFiles,
+      instructionSnapshot,
     } = prepared;
     const threadDeveloperInstructionFiles = includeAgentWorkspaceInstructions
-      ? prepared.instructionSnapshot.files
+      ? instructionSnapshot.files
       : [];
     const personaFiles = injectOpenClawContext ? prepared.personaFiles : [];
     return {
@@ -160,13 +162,19 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       memoryToolNames,
       memoryToolRouted,
       promptContext: renderCodexWorkspaceBootstrapPromptContext(promptContextFiles),
-      // Empty is a captured snapshot too; a missing value still permits first capture.
+      // Keep the last delivered instructions only when the current file is empty or missing.
       threadDeveloperInstructions: includeAgentWorkspaceInstructions
-        ? (params.agentWorkspaceDeveloperInstructions ?? prepared.instructionSnapshot.instructions)
+        ? instructionSnapshot.instructions || params.agentWorkspaceDeveloperInstructions || ""
         : undefined,
-      personaInstructions: injectOpenClawContext ? prepared.personaInstructions : undefined,
+      sessionProjectGuidance:
+        injectOpenClawContext && availableToolNames.has("session_project")
+          ? await params.params.prepareSessionProjectGuidance?.()
+          : undefined,
       sharedPersonaInstructions: injectOpenClawContext
         ? prepared.sharedPersonaInstructions
+        : undefined,
+      personalPersonaInstructions: injectOpenClawContext
+        ? prepared.personalPersonaInstructions
         : undefined,
       memoryInstructions: injectOpenClawContext
         ? renderCodexWorkspaceMemoryInstructions({

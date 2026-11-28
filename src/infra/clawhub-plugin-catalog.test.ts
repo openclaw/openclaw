@@ -113,6 +113,11 @@ it.each([false, true])(
 it.each([
   ["overview", fetchClawHubPluginOverview],
   ["categories", fetchClawHubPluginCategories],
+  [
+    "curated category",
+    (options: Parameters<typeof fetchClawHubPluginOverview>[0]) =>
+      fetchClawHubPluginCatalog({ ...options, category: "channels" }),
+  ],
 ])("public %s omits ambient auth unless requested", async (_name, read) => {
   await withEnvAsync(
     {
@@ -152,15 +157,15 @@ it.each([
 
 it("reads ranked plugins and categories from the overview", async () => {
   const ranking = { featured: true, trending: true, featuredRank: 1, trendingRank: 0 };
+  const category = { ...remoteCategory, previewCursor: "opaque-english-preview" };
   const fetchImpl = mockResponse({
-    categories: [remoteCategory],
+    categories: [category],
     items: [{ ...remotePlugin, ...ranking }],
   });
-
   const result = await fetchClawHubPluginOverview(registry);
-
   expect(fetchImpl.url().pathname).toBe("/api/v1/plugins/overview");
-  expect(result.categories).toEqual([remoteCategory]);
+  expect(Object.fromEntries(fetchImpl.url().searchParams)).toEqual({ previewCursors: "true" });
+  expect(result.categories).toEqual([category]);
   expect(result.items).toMatchObject([
     {
       packageName: "memory-plus",
@@ -204,23 +209,6 @@ it("uses plugin search with a publisher icon fallback and no invented pagination
   expect(result.items[0]?.iconUrl).toBe(remotePlugin.ownerImage);
 });
 
-it.each([
-  [
-    { intent: "featured", limit: 6 },
-    { featured: "true", limit: "6" },
-  ],
-  [
-    { intent: "all", category: "models", limit: 8 },
-    { category: "models", curated: "true", sort: "downloads", limit: "8" },
-  ],
-] as const)("preserves canonical ordering: %j", async (options, query) => {
-  const category = { ...remoteCategory, pinnedPackages: ["@vendor/model"] };
-  const { result, url } = await catalog(options, { items: [], categories: [category] });
-  expect(url.pathname).toBe("/api/v1/plugins");
-  expect(Object.fromEntries(url.searchParams)).toEqual(query);
-  expect(result).toEqual({ items: [], categories: [category] });
-});
-
 it("validates and restores canonical category ordering", async () => {
   const categories = await readCategories([
     remoteCategory,
@@ -255,14 +243,12 @@ it("batch-reads current and legacy categories for exact package versions", async
     { ...packages[1], categories: null },
   ];
   const request = mockResponse({ packages: response });
-
   const result = await fetchClawHubPluginVersionCategories({
     ...registry,
     token: "private-token",
     skipAuth: true,
     packages,
   });
-
   expect(request.init()?.method).toBe("POST");
   expect(new Headers(request.init()?.headers).has("authorization")).toBe(false);
   expect(request.url().pathname).toBe("/api/v1/packages/categories:batch");
@@ -360,7 +346,6 @@ it.each([
     },
     readme: "# Memory Plus\n\nLong-term memory.",
   });
-
   const detail = await fetchClawHubPluginDetail({
     ...registry,
     packageName: "memory-plus",
@@ -563,3 +548,39 @@ it.each([
     ),
   ).rejects.toThrow(/identity|requested plugin release/);
 });
+
+it.each([
+  [undefined, undefined],
+  [[], []],
+  [
+    ["  Plan  my week.\nPrioritize commitments.  ", "Compare options.", "😀".repeat(128)],
+    ["Plan my week. Prioritize commitments.", "Compare options.", "😀".repeat(128)],
+  ],
+  [["one", "two", "three", "four"], undefined],
+  [["valid", " "], undefined],
+  [["valid", false], undefined],
+  [["valid", "😀".repeat(129)], undefined],
+])(
+  "transports third-party not-installed manifest recommendations without installation: %j",
+  async (recommendedPrompts, expected) => {
+    const remote = await readDetail({
+      version: {
+        version: "1.2.3",
+        pluginManifestSummary: {
+          configFields: [],
+          mcpServers: [],
+          bundledSkills: [],
+          recommendedPrompts,
+        },
+      },
+    });
+    const result = joinClawHubPluginDetail({
+      remote,
+      local: { plugins: [], diagnostics: [], mutationAllowed: true },
+    });
+    expect(result.plugin.catalog.official).toBe(false);
+    expect(result.plugin.local.installed).toBe(false);
+    expect(result.detail.recommendedPrompts).toEqual(expected);
+    expect(Value.Check(PluginDiscoveryDetailSchema, result.detail)).toBe(true);
+  },
+);

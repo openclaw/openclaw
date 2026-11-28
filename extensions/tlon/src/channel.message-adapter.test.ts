@@ -27,6 +27,8 @@ it.each([
     "chat/~sampel-palnet/operators",
     "agent:main:tlon:group:chat/~sampel-palnet/operators",
   ],
+  ["tlon:club:0v1.abcde", "group", "club:0v1.abcde", "agent:main:tlon:group:club:0v1.abcde"],
+  ["club:0v1.xyz", null, "", ""],
   ["not/a/target", null, "", ""],
 ] as const)("tlon outbound session routing resolves %s", (target, kind, id, sessionKey) => {
   const resolveOutboundSessionRoute = expectDefined(
@@ -44,7 +46,7 @@ it.each([
           recipientSessionExact: true,
           peer: { kind, id },
           chatType: kind,
-          from: kind === "group" ? `tlon:group:${id}` : `tlon:${id}`,
+          from: kind === "group" && !id.startsWith("club:") ? `tlon:group:${id}` : `tlon:${id}`,
           to: `tlon:${id}`,
         },
   );

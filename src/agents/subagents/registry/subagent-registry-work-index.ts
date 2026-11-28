@@ -1,4 +1,6 @@
+import { hasSubagentKill } from "./subagent-control-kill-intent.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { hasPendingRequesterTurnResult } from "./subagent-requester-turn-custody.js";
 
 export const SUBAGENT_SESSION_RUN_TTL_MS = 5 * 60_000;
 
@@ -8,13 +10,11 @@ export function needsSubagentActivation(entry: SubagentRunRecord): boolean {
     entry.cleanupCompletedAt === undefined ||
     Boolean(
       // Collectors retain their spawning turn for cancellation, without owing a requester wake.
-      (entry.requesterTurnRunId && entry.expectsCompletionMessage === true) ||
+      hasPendingRequesterTurnResult(entry) ||
       entry.requesterSettleWake ||
       entry.pauseReason ||
-      entry.killIntent ||
-      entry.killReconciliation ||
-      entry.collectorLaunchCleanupPending ||
-      entry.execution.restartRecovery,
+      hasSubagentKill(entry) ||
+      entry.collectorLaunchCleanupPending,
     )
   );
 }
@@ -26,7 +26,7 @@ export function subagentSweepAt(entry: SubagentRunRecord): number {
     entry.delivery?.status === "in_progress" ||
     entry.delivery?.status === "suspended"
   ) {
-    // Unfinished rows also carry runtime-only recovery and completion custody.
+    // Unfinished rows may still own live completion or resource cleanup.
     return 0;
   }
   if (entry.archiveAtMs) {

@@ -1,9 +1,14 @@
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { containsComposed, registryFor } from "../../../components/overlay-registry.ts";
+import { composerInputElement, focusComposerInput } from "../../../lib/composer-input.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import { createMediaQuery } from "../../../lib/reactive/platform.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+
+const PHONE_COMPOSER_QUERY =
+  "(max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
 
 export function createComposerMobileInteraction(
   context: () => ReturnType<typeof createChatComposerContext>,
@@ -15,6 +20,10 @@ export function createComposerMobileInteraction(
   const [keyboardNavigation, setKeyboardNavigation] = createSignal(false);
   const editingScope = createMemo(() => context().draftKey);
   const mobileComposer = createMemo(() => props.mobileComposer === true);
+  const phoneLayout = createMediaQuery(
+    PHONE_COMPOSER_QUERY,
+    globalThis.matchMedia(PHONE_COMPOSER_QUERY).matches,
+  );
   // Pane props refresh when the host consumes editing. Only changed scope/mode
   // values may reset this local interaction state, not that props invalidation.
   const [editing, setEditing] = createSignal(() => {
@@ -51,6 +60,11 @@ export function createComposerMobileInteraction(
     setEditing(next);
   };
   const mobileEditing = createMemo(() => mobileComposer() && editing());
+  // Drawer navigation also serves wider windows; only phones rest on one line.
+  // A typed draft keeps the open surface and its controls after leaving the editor.
+  const mobileResting = createMemo(
+    () => mobileComposer() && phoneLayout() && !editing() && !context().visibleDraft.trim(),
+  );
   const editingTransition = createMemo(
     () => ({
       editing: mobileEditing(),
@@ -159,7 +173,18 @@ export function createComposerMobileInteraction(
       target.matches(
         'textarea:not(:disabled):not([readonly]), input:not(:disabled):not([readonly]):is(:not([type]), [type="text"], [type="search"], [type="email"], [type="url"], [type="tel"], [type="password"], [type="number"]), [contenteditable="true"]',
       );
+    const isEditorTarget = (target: EventTarget | undefined) => {
+      const textarea = state.composerTextarea;
+      return Boolean(
+        textarea && target instanceof Node && composerInputElement(textarea).contains(target),
+      );
+    };
     let pointerOrigin: EventTarget | undefined;
+    const retargetedEditorTap = (event: MouseEvent) =>
+      props.mobileComposer &&
+      isEditorTarget(pointerOrigin) &&
+      !isEditorTarget(event.composedPath()[0]) &&
+      event.detail > 0;
     let disposed = false;
     const stops = [
       listen(
@@ -169,17 +194,24 @@ export function createComposerMobileInteraction(
           if (!props.mobileComposer) {
             return;
           }
-          pointerOrigin = event.composedPath()[0];
+          const origin = event.composedPath()[0];
+          // The editor forwards pointer events through its hidden raw-value port.
+          // Those controller events must not replace the visible gesture target.
+          if (origin === state.composerTextarea && state.composerTextarea?.hidden) {
+            return;
+          }
+          pointerOrigin = origin;
           setKeyboardNavigation(false);
           // Focus during the tap, before expansion moves the native hit target.
           // iOS needs this user gesture to open the software keyboard.
           if (
             event.button === 0 &&
-            pointerOrigin instanceof HTMLTextAreaElement &&
-            pointerOrigin === state.composerTextarea &&
-            editable(pointerOrigin)
+            isEditorTarget(pointerOrigin) &&
+            state.composerTextarea &&
+            !state.composerTextarea.disabled &&
+            !state.composerTextarea.readOnly
           ) {
-            pointerOrigin.focus({ preventScroll: true });
+            focusComposerInput(state.composerTextarea, { preventScroll: true });
             changeEditing(true);
           }
           if (pointerOrigin instanceof Node && !insideComposer(pointerOrigin)) {
@@ -190,16 +222,24 @@ export function createComposerMobileInteraction(
       ),
       listen(
         doc,
+        "mousedown",
+        (event) => {
+          // Chrome hit-tests the compatibility mouse events after touchend. The
+          // keyboard can move the entire composer before then; click is too
+          // late to prevent mousedown's default action from blurring the editor.
+          if (retargetedEditorTap(event)) {
+            event.preventDefault();
+          }
+        },
+        true,
+      ),
+      listen(
+        doc,
         "click",
         (event) => {
           // Expansion can move the toolbar under the first textarea tap. That tap
           // belongs to the editor, never to the action now occupying its position.
-          if (
-            props.mobileComposer &&
-            pointerOrigin === state.composerTextarea &&
-            event.composedPath()[0] !== pointerOrigin &&
-            event.detail > 0
-          ) {
+          if (retargetedEditorTap(event)) {
             event.preventDefault();
             event.stopPropagation();
           }
@@ -271,6 +311,9 @@ export function createComposerMobileInteraction(
     ];
     if (props.mobileComposer && insideEditor(doc.activeElement) && editable(doc.activeElement)) {
       changeEditing(true);
+      // A composer that mounts focused (a handed-off boot draft) never showed
+      // its compact form; opening it must not animate from that height.
+      previousInputHeight = undefined;
     }
     return () => {
       disposed = true;
@@ -279,5 +322,5 @@ export function createComposerMobileInteraction(
       props.onComposerEditingChange?.(false);
     };
   });
-  return { mobileEditing, keyboardNavigation, lifecycle };
+  return { mobileEditing, mobileResting, keyboardNavigation, lifecycle };
 }

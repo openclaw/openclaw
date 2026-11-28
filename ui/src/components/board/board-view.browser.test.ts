@@ -69,7 +69,7 @@ async function updateSnapshot(view: OpenClawBoardView, overrides: Partial<BoardS
 }
 
 async function mount(
-  applyOps = vi.fn(async () => undefined),
+  applyOps = vi.fn(async (): Promise<void> => undefined),
   parent: HTMLElement = document.body,
 ): Promise<OpenClawBoardView> {
   const view = document.createElement("openclaw-board-view");
@@ -274,8 +274,9 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     },
   );
 
-  it("moves a narrow card onto the visible target's logical position", async () => {
-    const applyOps = vi.fn(async () => undefined);
+  it("holds a narrow card at its drop target until a newer snapshot arrives", async () => {
+    const saving = createDeferred();
+    const applyOps = vi.fn(() => saving.promise);
     const view = await mount(applyOps);
     view.style.width = "354px";
     const cards = [...view.querySelectorAll<HTMLElement>(".board-widget")];
@@ -287,6 +288,15 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_move", name: "second", position: 0 }]),
     );
+    const firstIsAbove = () =>
+      cards[0]!.getBoundingClientRect().top < cards[1]!.getBoundingClientRect().top;
+    await vi.waitFor(() => expect(firstIsAbove()).toBe(false));
+    expect(view.querySelector(".board-widget--dragging")).toBeNull();
+    await updateSnapshot(view, { revision: 2 });
+    expect(firstIsAbove()).toBe(true);
+    saving.resolve();
+    await settle(view);
+    expect(firstIsAbove()).toBe(true);
   });
 
   // Chrome must stay revealed while focus is anywhere inside the cell (menu
@@ -399,7 +409,8 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const bounds = panel.getBoundingClientRect();
     const row = remove.getBoundingClientRect();
     expect(row.top).toBeGreaterThanOrEqual(bounds.top);
-    expect(row.bottom).toBeLessThanOrEqual(bounds.bottom);
+    // Native scrolling can round a fractional menu edge by less than one CSS pixel.
+    expect(row.bottom).toBeLessThanOrEqual(bounds.bottom + 1);
     expect(panel.scrollTop).toBeGreaterThan(0);
 
     await userEvent.keyboard("{Enter}");
@@ -471,6 +482,53 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     finishDocumentAnimations();
     expect(getComputedStyle(second).borderTopColor).not.toBe("rgba(0, 0, 0, 0)");
   });
+
+  it.each([
+    { width: 480, height: 634 },
+    { width: 354, height: 178 },
+  ])(
+    "fits a page dashboard inside a $width×$height side panel across expansion",
+    async ({ width, height }) => {
+      const host = document.createElement("div");
+      host.className = "sidebar-region sidebar-region--open";
+      host.style.width = `${width}px`;
+      const panel = document.createElement("div");
+      panel.dataset.region = "side";
+      const parent = document.createElement("div");
+      parent.className = "board-session-surface__board";
+      parent.style.height = `${height}px`;
+      panel.append(parent);
+      host.append(panel);
+      document.body.append(host);
+      const view = await mount(undefined, parent);
+      view.pageWidgetName = "first";
+      await updateSnapshot(view, {
+        tabs: [source.tabs[0]!],
+        widgets: [{ ...source.widgets[0]!, sizeW: 12, sizeH: 20, presentation: "full-bleed" }],
+      });
+      const frame = view.querySelector("iframe")!;
+
+      for (const expanded of [false, true, false]) {
+        host.classList.toggle("sidebar-region--expanded", expanded);
+        await vi.waitFor(() => {
+          const available = parent.getBoundingClientRect();
+          const bounds = frame.getBoundingClientRect();
+          expect(bounds.height).toBeGreaterThan(0);
+          expect(bounds.top).toBeGreaterThanOrEqual(available.top - 1);
+          expect(bounds.bottom).toBeLessThanOrEqual(available.bottom + 1);
+          expect(view.scrollHeight).toBeLessThanOrEqual(view.clientHeight + 1);
+        });
+        expect(view.querySelector("iframe")).toBe(frame);
+      }
+
+      // An ordinary grid still uses its saved rows rather than clipping its cards.
+      view.pageWidgetName = "";
+      await settle(view);
+      expect(view.scrollHeight).toBeGreaterThan(view.clientHeight);
+      expect(frame.getBoundingClientRect().height).toBeGreaterThan(height);
+      expect(view.querySelector("iframe")).toBe(frame);
+    },
+  );
 
   it.each(
     (["card", "full-bleed", "frameless"] as const).flatMap((presentation) => [

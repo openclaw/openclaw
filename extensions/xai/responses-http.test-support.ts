@@ -23,8 +23,6 @@ export function createXaiFetchInspectors(label: "code_execution" | "x_search") {
 
   return {
     firstFetchUrl: (mockFetch: FetchCallSource) => String(firstFetchCall(mockFetch)[0]),
-    firstAuthorizationHeader: (mockFetch: FetchCallSource) =>
-      new Headers(firstFetchInit(mockFetch).headers).get("Authorization"),
     parseFirstRequestBody: (mockFetch: FetchCallSource) =>
       JSON.parse(requestBodyText(firstFetchInit(mockFetch).body)) as Record<string, unknown>,
   };

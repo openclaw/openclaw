@@ -1,8 +1,13 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, it, vi } from "vitest";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { buildCodexSelectedHistoryItems } from "./context-engine-history-items.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
 import {
@@ -21,6 +26,12 @@ import {
   writeCodexAppServerBinding,
 } from "./run-attempt.context-engine.test-support.js";
 import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
+import {
+  attachSqliteSessionTarget,
+  appendSqliteHistoryMessage,
+  readTranscriptMessagesByIdentity,
+} from "./sqlite-session.test-helpers.js";
+import { isCodexTurnContextHandoff } from "./test-support.js";
 
 setupRunAttemptTestHooks();
 
@@ -57,11 +68,20 @@ function seedParams(mode: "thread_bootstrap" | "per_turn" = "per_turn") {
 
 function selectedItems(requests: RecordedRequest[]): JsonValue[] {
   return requests
-    .filter(({ method }) => method === "thread/inject_items")
+    .filter(
+      ({ method, params }) =>
+        method === "thread/inject_items" && !isCodexTurnContextHandoff(params),
+    )
     .flatMap(({ params }) =>
       isJsonObject(params) && Array.isArray(params.items) ? params.items : [],
     )
     .filter((item) => isJsonObject(item) && item.role === "user");
+}
+
+function selectedHistoryRequests(requests: RecordedRequest[]): RecordedRequest[] {
+  return requests.filter(
+    ({ method, params }) => method === "thread/inject_items" && !isCodexTurnContextHandoff(params),
+  );
 }
 
 const partText = (part: JsonValue): string =>
@@ -91,10 +111,15 @@ async function runTurn(
   const offset = harness.requests.length;
   const run = runCodexAppServerAttempt({ ...params, runId });
   await run.waitForTurnAccepted();
-  await harness.completeTurn("completed", threadId);
-  await run;
   const requests = harness.requests.slice(offset);
   const turn = requests.find(({ method }) => method === "turn/start");
+  // Settle the actual thread before asserting identity, so wrong reuse fails without a timeout.
+  const acceptedThreadId = isJsonObject(turn?.params) ? turn.params.threadId : undefined;
+  await harness.completeTurn(
+    "completed",
+    typeof acceptedThreadId === "string" ? acceptedThreadId : threadId,
+  );
+  await run;
   expect(turn?.params).toMatchObject({ threadId });
   expect(JSON.stringify(turn?.params)).not.toContain("SELECTED_HISTORY");
   return requests;
@@ -103,10 +128,16 @@ async function runTurn(
 it.each([false, true])("prepares only fresh native history (engine: %s)", async (engine) => {
   const { params, assemble } = seedParams();
   delete params.authoredContextTokenCap;
+  params.agentDir = path.join(tempDir, "agent");
+  params.config = {
+    ...params.config,
+    agents: { defaults: { compaction: { maxActiveTranscriptBytes: "2mb" } } },
+  };
   if (!engine) {
     delete params.contextEngine;
   }
   const harness = selectedHarness();
+  const prepareContextMedia = vi.fn(async () => ({ images: [] }));
   const prepareBoundedSeed = vi.fn<
     NonNullable<EmbeddedRunAttemptParams["hostCapabilities"]["prepareBoundedSeed"]>
   >(async ({ assertCurrent, tokenBudget }) => {
@@ -114,21 +145,219 @@ it.each([false, true])("prepares only fresh native history (engine: %s)", async 
     expect(tokenBudget).toBeGreaterThan(0);
     expect(tokenBudget).toBeLessThan(500_000);
     expect(harness.requests.some(({ method }) => method === "thread/start")).toBe(true);
-    return [userMessage("BOUNDED_SELECTED_HISTORY", 1)];
+    return [
+      userMessage("BOUNDED_SELECTED_HISTORY", 1),
+      {
+        ...assistantMessage("Local delivery bookkeeping.", 2),
+        provider: "openclaw",
+        model: "delivery-mirror",
+      },
+      {
+        ...assistantMessage("Scheduled report ready.", 3),
+        provider: "openclaw",
+        model: "automation-result",
+        openclawAutomation: { kind: "cron", jobId: "job", runId: "run" },
+      },
+    ];
   });
-  params.hostCapabilities = { ...params.hostCapabilities, prepareBoundedSeed };
+  params.hostCapabilities = { ...params.hostCapabilities, prepareBoundedSeed, prepareContextMedia };
   const first = await runTurn(params, harness, "lazy-seed");
   expect(prepareBoundedSeed).toHaveBeenCalledOnce();
   expect(JSON.stringify(selectedItems(first))).toContain("BOUNDED_SELECTED_HISTORY");
+  expect(JSON.stringify(selectedItems(first)).split("Scheduled report ready.")).toHaveLength(2);
+  expect(JSON.stringify(first)).not.toContain("Local delivery bookkeeping.");
+  // Image bytes remain in both mirrors after native compaction; they are not active tokens.
+  const image = { type: "image" as const, mimeType: "image/png", data: "A".repeat(2_100_000) };
+  const rolloutPath = path.join(
+    params.agentDir,
+    "codex-home",
+    "sessions",
+    "rollout-thread-selected-1.jsonl",
+  );
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  await fs.writeFile(
+    rolloutPath,
+    [
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_image", image_url: `data:${image.mimeType};base64,${image.data}` },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "compacted",
+        payload: { message: "summary", replacement_history: [] },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: { total_tokens: 12_000 },
+            total_token_usage: { total_tokens: 500_000 },
+            model_context_window: 500_000,
+          },
+        },
+      }),
+    ].join("\n"),
+  );
   assemble.mockResolvedValue({
-    messages: [userMessage(original.repeat(1_000), 1)],
+    messages: [{ ...userMessage(original, 1), content: [{ type: "text", text: original }, image] }],
     estimatedTokens: 20_000,
   });
-  const next = await runTurn(params, harness, "lazy-seed-next");
+  prepareContextMedia.mockClear();
+  for (const runId of ["image-follow-up", "image-follow-up-again"]) {
+    const next = await runTurn(params, harness, runId);
+    expect(selectedItems(next)).toEqual([]);
+    expect(next.some(({ method }) => method === "thread/start")).toBe(false);
+    expect(next.some(({ method }) => method === "thread/compact/start")).toBe(false);
+  }
+  await harness.client.closeAndWait();
+  const resumed = createStartedThreadHarness(
+    async (method) =>
+      method === "thread/resume" ? threadStartResult("thread-selected-1") : undefined,
+    { persistedThreads: [threadStartResult("thread-selected-1", { cwd: params.workspaceDir })] },
+  );
+  const cold = await runTurn(params, resumed, "image-after-restart");
+  expect(cold.some(({ method }) => method === "thread/resume")).toBe(true);
+  expect(cold.some(({ method }) => method === "thread/start")).toBe(false);
+  expect(cold.some(({ method }) => method === "thread/compact/start")).toBe(false);
+  expect(selectedItems(cold)).toEqual([]);
   expect(prepareBoundedSeed).toHaveBeenCalledOnce();
-  expect(selectedItems(next)).toEqual([]);
-  expect(next.some(({ method }) => method === "thread/start")).toBe(false);
-  expect(next.some(({ method }) => method === "thread/compact/start")).toBe(false);
+  expect(prepareContextMedia).not.toHaveBeenCalled();
+  await expect(readCodexAppServerBinding(params.sessionFile)).resolves.toMatchObject({
+    threadId: "thread-selected-1",
+  });
+});
+
+it.each([
+  { engine: false, boundedSeed: true },
+  { engine: true, boundedSeed: true },
+  { engine: false, boundedSeed: false },
+])(
+  "recovers a resumed relay size rejection without replaying work (engine: $engine, bounded seed: $boundedSeed)",
+  async ({ engine, boundedSeed }) => {
+    const { params } = seedParams();
+    delete params.authoredContextTokenCap;
+    if (!engine) {
+      delete params.contextEngine;
+    }
+    if (!boundedSeed) {
+      await attachSqliteSessionTarget(
+        params,
+        path.join(tempDir, "unconfigured-recovery.sqlite"),
+        params.sessionId,
+      );
+      await appendSqliteHistoryMessage(params, userMessage("PRESERVED_HISTORY", 1));
+    }
+    const harness = selectedHarness();
+    const prepareBoundedSeed = vi.fn(async () => [userMessage("PRESERVED_HISTORY", 1)]);
+    await openFileBackedSessionManagerForTest(params.sessionFile, {
+      sessionId: params.sessionId,
+    }).appendMessageAsync(userMessage("PRESERVED_HISTORY", 1));
+    const image = {
+      type: "image" as const,
+      mimeType: "image/png",
+      data: Buffer.concat([
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+          "base64",
+        ),
+        Buffer.alloc(2_250_000),
+      ]).toString("base64"),
+    };
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      prepareBoundedSeed: boundedSeed ? prepareBoundedSeed : undefined,
+      prepareContextMedia: async ({ message }) => ({
+        images:
+          !boundedSeed &&
+          message.role === "user" &&
+          JSON.stringify(message.content).includes("PRESERVED_HISTORY")
+            ? Array.from({ length: 12 }, () => image)
+            : [],
+      }),
+    };
+    await runTurn(params, harness, "before-size-rejection");
+    const transcriptBefore = await fs.readFile(params.sessionFile, "utf8");
+    const storedBefore = !boundedSeed ? await readTranscriptMessagesByIdentity(params) : [];
+    const offset = harness.requests.length;
+    const run = runCodexAppServerAttempt({ ...params, runId: "relay-size-rejection" });
+    await run.waitForTurnAccepted();
+    const failure =
+      '{"type":"error","status":400,"error":{"type":"invalid_request_error","code":"request_too_large","message":"Request exceeds the maximum size accepted by the Codex inference relay (33554432 bytes)."}}';
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-selected-1",
+        turn: {
+          id: "turn-1",
+          status: "failed",
+          items: [],
+          error: { message: failure, codexErrorInfo: "badRequest" },
+        },
+      },
+    });
+    const result = await run;
+    expect(readAttemptTerminal(result).promptError).toBeTruthy();
+    expect(
+      harness.requests.slice(offset).filter(({ method }) => method === "turn/start"),
+    ).toHaveLength(1);
+    expect(harness.requests.slice(offset).some(({ method }) => method === "thread/start")).toBe(
+      false,
+    );
+    expect((await fs.readFile(params.sessionFile, "utf8")).startsWith(transcriptBefore)).toBe(true);
+    await expect(readCodexAppServerBinding(params.sessionFile)).resolves.toBeUndefined();
+    const next = await runTurn(
+      params,
+      harness,
+      "continue-after-size-rejection",
+      "thread-selected-2",
+    );
+    if (boundedSeed) {
+      expect(prepareBoundedSeed).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(selectedItems(next))).toContain("PRESERVED_HISTORY");
+    } else {
+      expect(prepareBoundedSeed).not.toHaveBeenCalled();
+      const turn = next.find(({ method }) => method === "turn/start");
+      const input =
+        isJsonObject(turn?.params) && Array.isArray(turn.params.input) ? turn.params.input : [];
+      expect(input.some((part) => isJsonObject(part) && part.type === "image")).toBe(false);
+      expect(JSON.stringify(input)).toContain("Attachment images omitted: context budget exceeded");
+      expect(JSON.stringify(input)).toContain("CURRENT_REQUEST $current");
+      expect(JSON.stringify(input)).toContain("PRESERVED_HISTORY");
+      expect(
+        (await readTranscriptMessagesByIdentity(params)).slice(0, storedBefore.length),
+      ).toEqual(storedBefore);
+    }
+    expect(next.some(({ method }) => method === "thread/delete")).toBe(false);
+  },
+);
+
+it("rejects restored media that exceeds selected-history bytes despite fitting image tokens", async () => {
+  await expect(
+    buildCodexSelectedHistoryItems({
+      messages: [userMessage("Earlier image question", 1)],
+      tokenBudget: 100_000,
+      prepareFileContext: async () => ({
+        images: Array.from({ length: 12 }, () => ({
+          type: "image" as const,
+          mimeType: "image/png",
+          data: Buffer.concat([
+            Buffer.from(
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+              "base64",
+            ),
+            Buffer.alloc(75_000),
+          ]).toString("base64"),
+        })),
+      }),
+    }),
+  ).rejects.toThrow("Selected history or restored attachments exceed their rendered allowance");
 });
 
 it("installs >1,048,576 characters in UTF-8-bounded quotes with ordered media before readiness", async () => {
@@ -232,7 +461,7 @@ it.each(["thread_bootstrap", "per_turn"] as const)(
     });
     const replacement = await runTurn(params, harness, "rewrite", "thread-selected-2");
     expect(replacement.filter(({ method }) => method === "thread/start")).toHaveLength(1);
-    expect(replacement.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+    expect(selectedHistoryRequests(replacement)).toHaveLength(1);
     const text = JSON.stringify(selectedItems(replacement));
     expect(text).toContain("REWRITTEN_SELECTED_HISTORY");
     expect(text).toContain(appended);
@@ -240,6 +469,44 @@ it.each(["thread_bootstrap", "per_turn"] as const)(
     expect(
       selectedItems(await runTurn(params, harness, "repeat-rewrite", "thread-selected-2")),
     ).toEqual([]);
+  },
+);
+
+it.each(["thread_bootstrap", "per_turn"] as const)(
+  "keeps the acknowledged %s prefix when only a local mirror changes",
+  async (mode) => {
+    const { params, assemble } = seedParams(mode);
+    const initial = await assemble();
+    const resultText = "Scheduled report ready.";
+    const confirmed = {
+      ...assistantMessage(resultText, 2),
+      provider: "openclaw",
+      model: "automation-result",
+      openclawAutomation: { kind: "cron", jobId: "job", runId: "run" },
+    };
+    const local = {
+      ...assistantMessage("Local delivery bookkeeping.", 3),
+      provider: "openclaw",
+      model: "delivery-mirror",
+    };
+    assemble.mockResolvedValue({ ...initial, messages: [...initial.messages, confirmed] });
+    const harness = selectedHarness();
+    const first = await runTurn(params, harness, "confirmed");
+    expect(JSON.stringify(selectedItems(first)).split(resultText)).toHaveLength(2);
+    const before = await readCodexAppServerBinding(params.sessionFile);
+    expect(before?.contextEngine?.projection?.fingerprint).toBeDefined();
+
+    assemble.mockResolvedValue({
+      ...initial,
+      messages: [...initial.messages, confirmed, local],
+    });
+    const next = await runTurn(params, harness, "local-mirror");
+    expect(selectedHistoryRequests(next)).toEqual([]);
+    expect(next.some(({ method }) => method === "thread/start")).toBe(false);
+    expect(JSON.stringify(next)).not.toContain("Local delivery bookkeeping.");
+    expect(
+      (await readCodexAppServerBinding(params.sessionFile))?.contextEngine?.projection,
+    ).toEqual(before?.contextEngine?.projection);
   },
 );
 
@@ -299,7 +566,7 @@ it.each(["fresh", "reused"] as const)(
     }
     const retry = selectedHarness("thread-retry");
     const requests = await runTurn(params, retry, "retry", "thread-retry");
-    expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+    expect(selectedHistoryRequests(requests)).toHaveLength(1);
     const restored = JSON.stringify(selectedItems(requests));
     expect(restored.split(original)).toHaveLength(2);
     if (ownership === "reused") {
@@ -330,7 +597,7 @@ it.each(["legacy-engine-fingerprint", "pending:selection-v1:interrupted"])(
     });
     const replacement = await runTurn(params, harness, "upgrade", "thread-selected-2");
     expect(replacement.filter(({ method }) => method === "thread/start")).toHaveLength(1);
-    expect(replacement.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+    expect(selectedHistoryRequests(replacement)).toHaveLength(1);
     expect(JSON.stringify(selectedItems(replacement))).toContain(original);
     const unchanged = await runTurn(params, harness, "after-upgrade", "thread-selected-2");
     expect(unchanged.some(({ method }) => method === "thread/start")).toBe(false);
@@ -350,5 +617,35 @@ it.each([undefined, 0, -1, Number.NaN, Infinity])(
       }),
     ).rejects.toThrow(/budget|allowance/i);
     expect(prepareFileContext).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  ["keeps it when before_prompt_build replaces systemPrompt", true],
+  ["rejects it when the OpenClaw base stays", false],
+] as const)(
+  "budgets history just over the base-inclusive allowance: %s",
+  async (_case, replaced) => {
+    const { params, assemble } = seedParams();
+    // About 2.5k tokens of OpenClaw base and policy separate these two allowances.
+    params.authoredContextTokenCap = 40_000;
+    params.contextTokenBudget = 40_000;
+    assemble.mockResolvedValue({
+      messages: [userMessage(`REPLACED_BASE_HISTORY${"h".repeat(54_000)}`, 1)],
+      estimatedTokens: 13_500,
+    });
+    if (replaced) {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          { hookName: "before_prompt_build", handler: () => ({ systemPrompt: "" }) },
+        ]),
+      );
+    }
+    const turn = runTurn(params, selectedHarness(), "replaced-base");
+    if (!replaced) {
+      await expect(turn).rejects.toThrow("exceed their rendered allowance");
+      return;
+    }
+    expect(JSON.stringify(selectedItems(await turn))).toContain("REPLACED_BASE_HISTORY");
   },
 );

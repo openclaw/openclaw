@@ -10,8 +10,10 @@ import {
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
+import { installSqliteFtsTokenizerMismatch } from "../infra/sqlite-index-corruption.test-support.js";
 import { inspectScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped-snapshot.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot.js";
+import { AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import * as stateFastPath from "../state/openclaw-state-db-fast-path.js";
 import * as schemaScope from "../state/schema-migration-backup-scope.js";
@@ -74,6 +76,55 @@ async function capture(params: Parameters<typeof backupDoctorMigrationDatabases>
   }
 }
 
+it.each([false, true])("preserves canonical FTS-only damage (mixed damage: %s)", async (mixed) => {
+  const fixture = createFixture((pathname) => {
+    fs.mkdirSync(path.dirname(pathname), { recursive: true });
+    using database = new DatabaseSync(pathname);
+    database.exec("CREATE TABLE preserved (value TEXT) STRICT;");
+    if (path.basename(pathname) === "openclaw-agent.sqlite") {
+      const ddl = AGENT_FTS_SCHEMAS[0]?.match(
+        /CREATE VIRTUAL TABLE[^;]+session_transcript_fts USING fts5[^;]+;/u,
+      )?.[0];
+      expect(ddl).toBeDefined();
+      database.exec(ddl!);
+      database.exec("INSERT INTO session_transcript_fts(text) VALUES ('ab'||char(65534)||'cd');");
+      if (mixed) {
+        database.exec("CREATE TABLE damaged(value ANY) STRICT; INSERT INTO damaged VALUES (123);");
+        database.enableDefensive?.(false);
+        database.exec("PRAGMA writable_schema = ON;");
+        database
+          .prepare("UPDATE sqlite_schema SET sql = ? WHERE name = 'damaged'")
+          .run("CREATE TABLE damaged(value TEXT) STRICT");
+      }
+    }
+  });
+  installSqliteFtsTokenizerMismatch(fixture.agent, "session_transcript_fts");
+
+  const backup = capture({
+    env: fixture.env,
+    pendingDatabasePaths: [fixture.shared],
+    databasePaths: [fixture.agent],
+    versionMigrationsOnly: true,
+  });
+  if (mixed) {
+    await expect(backup).rejects.toThrow(
+      /non-TEXT value in damaged.value.*restore a verified backup/u,
+    );
+    expect(listBackups(fixture.agent)).toEqual([]);
+    return;
+  }
+  await expect(backup).resolves.toMatchObject({ warnings: [] });
+  const archives = listBackups(fixture.agent);
+  expect(archives).toHaveLength(1);
+  using preserved = new DatabaseSync(archives[0]!, { readOnly: true });
+  expect(preserved.prepare("PRAGMA integrity_check").all()).toEqual([
+    { integrity_check: "malformed inverted index for FTS5 table main.session_transcript_fts" },
+  ]);
+  expect(preserved.prepare("SELECT text FROM session_transcript_fts").all()).toEqual([
+    { text: "ab￾cd" },
+  ]);
+});
+
 describe("Doctor full migration backups", () => {
   let fixture: ReturnType<typeof createFixture>;
   beforeEach(() => {
@@ -112,7 +163,7 @@ describe("Doctor full migration backups", () => {
     expect(listBackups(fixture.shared)).toHaveLength(1);
     expect(listBackups(fixture.agent)).toHaveLength(1);
     expect(readPreservedValue(listBackups(fixture.agent)[0]!)).toBe("agent before migration");
-    const preview = inspectSessionSqliteRecovery({ cfg: {}, env: fixture.env });
+    const preview = await inspectSessionSqliteRecovery({ cfg: {}, env: fixture.env });
     expect(preview.artifacts).toHaveLength(2);
     for (const database of [fixture.shared, fixture.agent]) {
       expect(preview.artifacts).toContainEqual(protectedArchive(listBackups(database)[0]!));
@@ -243,7 +294,7 @@ describe("Doctor table-scoped migration backup selection", () => {
   beforeEach(() => {
     // Synthetic scopes isolate selection; full-backup cases retain the real resolver.
     vi.spyOn(schemaScope, "resolveSchemaMigrationBackupTables").mockReturnValue(declaredTables);
-    vi.spyOn(stateFastPath, "needsOpenClawStateDatabaseSchemaRepair").mockReturnValue(false);
+    vi.spyOn(stateFastPath, "needsOpenClawStateDatabaseSchemaRepair").mockResolvedValue(false);
     fixture = createFixture(seedDatabase, true);
   });
 
@@ -434,7 +485,7 @@ describe("Doctor table-scoped migration backup selection", () => {
       declaredTables,
     );
     expectFullBackup(fixture.shared);
-    const recovery = inspectSessionSqliteRecovery({ cfg: {}, env: fixture.env });
+    const recovery = await inspectSessionSqliteRecovery({ cfg: {}, env: fixture.env });
     expect(recovery.artifacts).toContainEqual(protectedArchive(archive));
 
     {

@@ -15,12 +15,24 @@ export {
   DEFAULT_SECRET_FILE_MAX_BYTES,
   PRIVATE_SECRET_DIR_MODE,
   PRIVATE_SECRET_FILE_MODE,
-  readSecretFile,
   readSecretFileSync,
   type SecretFileReadOptions,
 } from "@openclaw/fs-safe/secret";
 
-type SecretFileWriteParams = Parameters<typeof writeSecretFileAtomicImpl>[0];
+/** Filesystem validation belongs to the external-file owner, outside the caller's event loop. */
+export async function readSecretFile(
+  filePath: string,
+  label: string,
+  options: FsSafeSecretFileReadOptions = {},
+): Promise<string> {
+  const { readSecretFileInWorker } = await import("./secret-file-read.js");
+  return await readSecretFileInWorker(filePath, label, options);
+}
+
+// Private secret writes reject directory preservation and keep numeric mode enforcement.
+type SecretFileWriteParams = Omit<Parameters<typeof writeSecretFileAtomicImpl>[0], "dirMode"> & {
+  dirMode?: number;
+};
 
 // fs-safe 0.8 no longer repairs existing directory modes; OpenClaw keeps its
 // documented behavior of tightening its own secret directories before writing.
@@ -38,12 +50,18 @@ function tightenSecretDirectoryModes(params: {
 
 export async function writePrivateSecretFileAtomic(params: SecretFileWriteParams): Promise<void> {
   await tightenSecretDirectoryModes(params);
-  await writeSecretFileAtomicImpl(params);
+  await writeSecretFileAtomicImpl({
+    ...params,
+    allowDrvfsRenameRecovery: params.allowDrvfsRenameRecovery ?? true,
+  });
 }
 
 export async function createSecretFileAtomic(params: SecretFileWriteParams): Promise<void> {
   await tightenSecretDirectoryModes(params);
-  await createSecretFileAtomicImpl(params);
+  await createSecretFileAtomicImpl({
+    ...params,
+    allowDrvfsRenameRecovery: params.allowDrvfsRenameRecovery ?? true,
+  });
 }
 
 export type SecretFileReadResult =

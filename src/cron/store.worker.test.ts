@@ -127,6 +127,7 @@ it.each([
                   configJobIndexes: [],
                   configJobRuntimeEntries: [],
                   invalidConfigRows: [],
+                  configRevisions: new Map(),
                 },
               }
             : { ok: false as const, error: serializeCronLoadError(failure) }),

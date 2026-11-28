@@ -8,9 +8,20 @@ import { withConfigWriteLock } from "../config/write-lock.js";
 import { showDoctorIntro, showDoctorOutro } from "../flows/doctor-health-startup.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
-import { prepareDoctorConfigRecovery } from "./doctor-config-preflight-legacy-config.js";
+import {
+  formatUnparseableConfigNextSteps,
+  prepareDoctorConfigRecovery,
+} from "./doctor-config-preflight-legacy-config.js";
 import { formatDoctorLintFailure } from "./doctor-lint-output.js";
 import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
+
+function requestsConfigRecovery(argv: string[]): boolean {
+  return (
+    !hasFlag(argv, "--lint") &&
+    !hasFlag(argv, "--json") &&
+    ["--fix", "--repair", "--yes"].some((flag) => hasFlag(argv, flag))
+  );
+}
 
 /** Recovery may repair file bytes; an unresolved target must never reach stateful Doctor. */
 export async function prepareDoctorEngineSelection(params: {
@@ -18,11 +29,7 @@ export async function prepareDoctorEngineSelection(params: {
   snapshot: ConfigFileSnapshot;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
 }): Promise<ConfigFileSnapshot> {
-  const enabled =
-    !hasFlag(params.argv, "--lint") &&
-    !hasFlag(params.argv, "--json") &&
-    ["--fix", "--repair", "--yes"].some((flag) => hasFlag(params.argv, flag));
-  if (!enabled) {
+  if (!requestsConfigRecovery(params.argv)) {
     return params.snapshot;
   }
   return runWithLocalStateOwner({
@@ -60,19 +67,26 @@ export function reportDoctorUnresolvedEngine(
   error?: unknown,
 ): void {
   const unparseable = snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID");
-  const message = unparseable
-    ? "unknown: config could not be parsed; fix config (or run `openclaw doctor --fix`), then rerun"
-    : "unknown: database target could not be resolved; fix database settings or credentials, then rerun";
+  // Completed recovery for --fix, --repair and --yes left it unparseable; suggesting it would loop.
+  const recoveryFailed = unparseable && !error && requestsConfigRecovery(argv);
+  const message = recoveryFailed
+    ? "unknown: config could not be parsed or repaired; fix config, then rerun"
+    : unparseable
+      ? "unknown: config could not be parsed; fix config (or run `openclaw doctor --fix`), then rerun"
+      : "unknown: database target could not be resolved; fix database settings or credentials, then rerun";
   const sections = ["Shared state", "Agent state", "Sessions", "Credentials", "Cron"];
   const details = sanitizeDoctorNote(
     [formatInvalidConfigDetails(snapshot.issues), error ? formatErrorMessage(error) : ""]
       .filter(Boolean)
       .join("\n"),
   );
-  const nextStep = unparseable
-    ? "Run `openclaw config validate` to inspect the parse error."
-    : "Fix database settings or supply the referenced credentials, then rerun `openclaw doctor`.";
+  const nextStep = recoveryFailed
+    ? `Doctor cannot repair this file automatically; it remains unchanged. ${formatUnparseableConfigNextSteps()}`
+    : unparseable
+      ? "Run `openclaw config validate` to inspect the parse error."
+      : "Fix database settings or supply the referenced credentials, then rerun `openclaw doctor`.";
   const lint = hasFlag(argv, "--lint");
+  process.exitCode = 2;
   const machineOutput = isDoctorMachineOutput({ argv, stdoutIsTTY: process.stdout.isTTY });
   if (lint || machineOutput) {
     const failure = new Error([message, details, nextStep].filter(Boolean).join("\n"));
@@ -80,9 +94,6 @@ export function reportDoctorUnresolvedEngine(
       writeRuntimeJson(defaultRuntime, formatDoctorLintFailure(failure));
     } else {
       defaultRuntime.error(failure.message);
-    }
-    if (lint) {
-      process.exitCode = 2;
     }
     return;
   }
@@ -101,5 +112,7 @@ export function reportDoctorUnresolvedEngine(
   for (const section of sections) {
     note(message, section);
   }
-  showDoctorOutro("Doctor complete. Database checks remain unknown.");
+  showDoctorOutro(
+    "Doctor blocked. Database checks remain unknown; no state migrations were performed.",
+  );
 }

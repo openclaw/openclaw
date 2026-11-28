@@ -2,7 +2,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EffectiveToolInventoryResult } from "../../agents/tools-effective-inventory.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { decideTurnGrant } from "../../gateway/operator-admission.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -17,6 +20,7 @@ import {
 import { buildStatusPluginsReply, buildStatusReply } from "./commands-status.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { handleWhoamiCommand } from "./commands-whoami.js";
+import { buildCommandTestParams } from "./commands.test-harness.js";
 
 // Tests info-style commands that report context, status, skills, and session exports.
 
@@ -411,7 +415,12 @@ const toolsTestState = vi.hoisted(() => {
 
   return {
     releaseRuntimeModel: vi.fn(async () => {}),
-    resolveToolsMock: vi.fn((..._args: unknown[]) => defaultResolveTools()),
+    readAcpSessionMeta: vi.fn<
+      typeof import("../../acp/runtime/session-meta-readonly.js").readAcpSessionMetaForEntryAsync
+    >(async () => undefined),
+    resolveToolsMock: vi.fn<
+      typeof import("../../agents/tools-effective-inventory.js").resolveEffectiveToolInventory
+    >(async () => defaultResolveTools()),
     resolveRuntimeModelContextMock: vi.fn(async (_params: unknown) => ({})),
     threadingContext: {
       currentChannelId: "channel-123",
@@ -421,8 +430,14 @@ const toolsTestState = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../agents/tools-effective-inventory.js", () => ({
-  resolveEffectiveToolInventory: (...args: unknown[]) => toolsTestState.resolveToolsMock(...args),
+vi.mock("../../acp/runtime/session-meta-readonly.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../acp/runtime/session-meta-readonly.js")>()),
+  readAcpSessionMetaForEntryAsync: toolsTestState.readAcpSessionMeta,
+}));
+
+vi.mock("../../agents/tools-effective-inventory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/tools-effective-inventory.js")>()),
+  resolveEffectiveToolInventory: toolsTestState.resolveToolsMock,
   acquireEffectiveToolInventoryRuntimeModelContext: async (params: unknown) => {
     const context = await toolsTestState.resolveRuntimeModelContextMock(params);
     return {
@@ -467,10 +482,139 @@ describe("handleToolsCommand", () => {
 
   beforeEach(() => {
     toolsTestState.releaseRuntimeModel.mockClear();
-    toolsTestState.resolveToolsMock.mockReset().mockImplementation(() => makeDefaultInventory());
+    toolsTestState.readAcpSessionMeta.mockReset().mockResolvedValue(undefined);
+    toolsTestState.resolveToolsMock
+      .mockReset()
+      .mockImplementation(async () => makeDefaultInventory());
     toolsTestState.resolveRuntimeModelContextMock.mockReset();
     toolsTestState.resolveRuntimeModelContextMock.mockResolvedValue({});
     setActivePluginRegistry(createTestRegistry([]));
+  });
+
+  it("uses the target session sandbox policy in the direct tool list", async () => {
+    const { resolveEffectiveToolInventory } = await vi.importActual<
+      typeof import("../../agents/tools-effective-inventory.js")
+    >("../../agents/tools-effective-inventory.js");
+    toolsTestState.resolveToolsMock.mockImplementation(resolveEffectiveToolInventory);
+    for (const required of [false, true]) {
+      const params = buildCommandTestParamsImpl(
+        "/tools",
+        {
+          ...buildConfig(),
+          agents: { defaults: { sandbox: { mode: "off" } } },
+          tools: { web: { search: { enabled: true, provider: "brave" } } },
+        },
+        undefined,
+        { workspaceDir: "/tmp" },
+      );
+      params.sessionEntry = { sessionId: "wrapper", updatedAt: 1, sandboxMode: "off" };
+      params.sessionStore = {
+        [params.sessionKey]: {
+          sessionId: "target",
+          updatedAt: 1,
+          sandboxMode: "off",
+          sandbox: required ? "required" : undefined,
+        },
+      };
+      const result = await handleToolsCommandImpl(params, true);
+      expect(result?.reply?.text).toContain("Available tools");
+      expect(result?.reply?.text?.includes("web_search")).toBe(!required);
+      expect(result?.reply?.text).toContain("read");
+    }
+  });
+
+  it("lists brokered GitHub tools only for eligible command sessions through the real inventory", async () => {
+    const { resolveEffectiveToolInventory } = await vi.importActual<
+      typeof import("../../agents/tools-effective-inventory.js")
+    >("../../agents/tools-effective-inventory.js");
+    toolsTestState.resolveToolsMock.mockImplementation(resolveEffectiveToolInventory);
+    for (const scenario of [
+      { runtime: "openclaw", expected: true },
+      { runtime: "codex", expected: true },
+      { runtime: "codex", requiredTarget: true, expected: true, expectedIdentity: false },
+      { runtime: "openclaw", excludesGitHub: true, expected: true },
+      { runtime: "codex", excludesGitHub: true, expected: false },
+      { runtime: "copilot", expected: true },
+      { runtime: "external", expected: false },
+      { runtime: "openclaw", localEmbedded: true, expected: false },
+      { runtime: "openclaw", unbound: true, expected: false },
+      { runtime: "openclaw", denied: true, expected: false },
+      { runtime: "openclaw", acp: true, expected: false },
+    ]) {
+      const cfg: OpenClawConfig = {
+        ...buildConfig(),
+        ...(scenario.excludesGitHub
+          ? {
+              plugins: {
+                entries: {
+                  codex: {
+                    config: {
+                      codexDynamicToolsExclude: ["github_publish", "github_identity_status"],
+                    },
+                  },
+                },
+              },
+            }
+          : {}),
+        agents: {
+          defaults: {
+            ...(scenario.requiredTarget ? { sandbox: { mode: "off" as const } } : {}),
+            models: { "openai/gpt-4.1": { agentRuntime: { id: scenario.runtime } } },
+          },
+        },
+        tools: {
+          deny: [
+            "gateway",
+            "nodes",
+            ...(scenario.denied ? ["github_publish", "github_identity_status"] : []),
+          ],
+        },
+      };
+      const params = buildCommandTestParamsImpl("/tools", cfg, undefined, {
+        workspaceDir: "/tmp",
+      });
+      params.provider = "openai";
+      params.model = "gpt-4.1";
+      params.sessionEntry = { sessionId: "tools-session", updatedAt: 1 };
+      if (scenario.requiredTarget) {
+        // Command ownership cannot relax the canonical target's sandbox requirement.
+        params.command.senderIsOwner = true;
+        params.sessionEntry = { sessionId: "wrapper-session", updatedAt: 1, sandboxMode: "off" };
+        params.sessionStore = {
+          [params.sessionKey]: {
+            sessionId: "tools-session",
+            updatedAt: 1,
+            sandboxMode: "off",
+            sandbox: "required",
+          },
+        };
+      }
+      toolsTestState.readAcpSessionMeta.mockResolvedValue(
+        scenario.acp
+          ? {
+              backend: "acpx",
+              agent: "main",
+              runtimeSessionName: params.sessionKey,
+              mode: "persistent",
+              state: "idle",
+              lastActivityAt: 1,
+            }
+          : undefined,
+      );
+      // Only the host's runtime identity is relevant; no Gateway method executes.
+      const gateway = { localEmbedded: scenario.localEmbedded } as GatewayRequestContext;
+      const result = await withPluginRuntimeGatewayContextResolver(
+        scenario.unbound ? undefined : () => gateway,
+        () => handleToolsCommandImpl(params, true),
+      );
+      expect(result?.reply?.text).toContain("Available tools");
+      for (const [name, expected] of [
+        ["github_publish", scenario.expected],
+        ["github_identity_status", scenario.expectedIdentity ?? scenario.expected],
+      ] as const) {
+        expect(result?.reply?.text?.includes(name), JSON.stringify(scenario)).toBe(expected);
+      }
+    }
   });
 
   it("renders a product-facing tool list", async () => {
@@ -681,5 +825,69 @@ describe("handleToolsCommand", () => {
     await handleToolsCommandImpl(params, true);
 
     expect(resolveToolsArg(toolsTestState.resolveToolsMock).accountId).toBe("work");
+  });
+});
+
+describe("denied /status", () => {
+  const controlUiOwner: Partial<MsgContext> = {
+    Provider: "webchat",
+    Surface: "webchat",
+    GatewayClientScopes: ["operator.admin"],
+    TurnGrant: decideTurnGrant(["operator.admin"]),
+  };
+
+  it.each<{
+    name: string;
+    ctx: Partial<MsgContext>;
+    allowFrom: Record<string, string[]>;
+    reply: unknown;
+  }>([
+    {
+      // An admin can edit commands.allowFrom itself; admission decides this once.
+      name: "runs for an admitted operator.admin Control UI turn outside commands.allowFrom",
+      ctx: controlUiOwner,
+      allowFrom: { "*": ["someone-else"] },
+      reply: { text: "status reply" },
+    },
+    {
+      name: "names the policy for a non-admin Control UI turn outside commands.allowFrom",
+      ctx: {
+        ...controlUiOwner,
+        GatewayClientScopes: ["operator.write"],
+        TurnGrant: decideTurnGrant(["operator.write"]),
+      },
+      allowFrom: { "*": ["someone-else"] },
+      reply: {
+        text: expect.stringContaining("`commands.allowFrom` does not include this Gateway client"),
+      },
+    },
+    {
+      name: "runs for a Control UI owner when commands.allowFrom only lists other channels",
+      ctx: controlUiOwner,
+      allowFrom: { whatsapp: ["someone-else"] },
+      reply: { text: "status reply" },
+    },
+    {
+      name: "refuses a native command from a denied channel sender",
+      ctx: { CommandSource: "native" },
+      allowFrom: { "*": ["someone-else"] },
+      reply: { text: "You are not authorized to use this command." },
+    },
+    {
+      name: "stays silent for a denied channel text sender",
+      ctx: {},
+      allowFrom: { "*": ["someone-else"] },
+      reply: undefined,
+    },
+  ])("$name", async ({ ctx, allowFrom, reply }) => {
+    const params = buildCommandTestParams(
+      "/status",
+      { commands: { text: true, allowFrom }, channels: { whatsapp: { allowFrom: ["*"] } } },
+      ctx,
+    );
+
+    const result = await handleStatusCommand(params, true);
+
+    expect(result).toEqual({ shouldContinue: false, ...(reply ? { reply } : {}) });
   });
 });

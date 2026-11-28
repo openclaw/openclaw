@@ -4,9 +4,10 @@ import type { PluginCandidate } from "../plugins/discovery.js";
 import { resolvePluginDoctorContractArtifact } from "../plugins/doctor-contract-artifact.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import { inspectPluginSourceDependencies } from "../plugins/plugin-generation-source-inspection.js";
+import { inspectPluginSourceDependenciesAsync } from "../plugins/plugin-generation-worker.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 
-/** Optional source inspection must not turn a plugin syntax error into an update refusal. */
+/** The candidate-state subprocess already isolates this synchronous source inspection. */
 export function inspectUpdateCandidatePluginSource(
   entry: { pluginId: string; rootDir: string; entryFile: string },
   warnings: string[],
@@ -15,19 +16,40 @@ export function inspectUpdateCandidatePluginSource(
   try {
     return inspectPluginSourceDependencies([entry], dependencyLookupBoundary);
   } catch (error) {
-    if (!(error instanceof SyntaxError)) {
-      throw error;
-    }
-    if (warnings.length < UPDATE_RUN_DIAGNOSTIC_LIMIT) {
-      warnings.push(
-        `Update checks could not inspect plugin ${entry.pluginId} (${entry.entryFile}): ${error.message}. Continuing without dependency inspection for this entry.`.slice(
-          0,
-          UPDATE_RUN_TEXT_LIMIT,
-        ),
-      );
-    }
-    return undefined;
+    return handleSourceInspectionError(error, entry, warnings);
   }
+}
+
+/** Doctor runs on the serving process; source acquisition belongs to its preparation worker. */
+export async function inspectUpdateCandidatePluginSourceAsync(
+  entry: { pluginId: string; rootDir: string; entryFile: string },
+  warnings: string[],
+  dependencyLookupBoundary?: Parameters<typeof inspectPluginSourceDependenciesAsync>[1],
+) {
+  try {
+    return await inspectPluginSourceDependenciesAsync([entry], dependencyLookupBoundary);
+  } catch (error) {
+    return handleSourceInspectionError(error, entry, warnings);
+  }
+}
+
+function handleSourceInspectionError(
+  error: unknown,
+  entry: { pluginId: string; entryFile: string },
+  warnings: string[],
+): undefined {
+  if (!(error instanceof SyntaxError)) {
+    throw error;
+  }
+  if (warnings.length < UPDATE_RUN_DIAGNOSTIC_LIMIT) {
+    warnings.push(
+      `Update checks could not inspect plugin ${entry.pluginId} (${entry.entryFile}): ${error.message}. Continuing without dependency inspection for this entry.`.slice(
+        0,
+        UPDATE_RUN_TEXT_LIMIT,
+      ),
+    );
+  }
+  return undefined;
 }
 
 /** Snapshot the executable surfaces their owners can demand during candidate validation. */

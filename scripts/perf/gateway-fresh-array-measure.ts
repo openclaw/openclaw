@@ -10,13 +10,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { SubagentRunReadRecord } from "../../src/agents/subagents/registry/subagent-registry-read.types.js";
+import type * as SwarmSummary from "../../src/agents/subagents/registry/subagent-session-swarm-summary.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -29,10 +30,12 @@ const { values } = parseArgs({
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0, "iterations must be positive");
 assert(values.mode === "cpu" || values.mode === "allocation", "mode must be cpu or allocation");
-const source = path.join(realpathSync(values.root), "src/gateway/session-swarm-summary.ts");
+const source = path.join(
+  realpathSync(values.root),
+  "src/agents/subagents/registry/subagent-session-swarm-summary.ts",
+);
 const sourceSha256 = createHash("sha256").update(readFileSync(source)).digest("hex");
-const { buildSessionSwarmSummary }: typeof import("../../src/gateway/session-swarm-summary.js") =
-  await import(pathToFileURL(source).href);
+const { buildSessionSwarmSummary }: typeof SwarmSummary = await import(pathToFileURL(source).href);
 const sessionKey = "agent:main:dashboard:synthetic";
 const groupCount = 40;
 const runsPerGroup = 250;
@@ -58,10 +61,6 @@ const runs = Object.freeze(
     });
   }),
 );
-
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
-}
 
 const samplingInterval = 32_768;
 for (const includeChildren of [false, true]) {
@@ -111,7 +110,7 @@ for (const includeChildren of [false, true]) {
     const hostLoadAfter = loadavg();
     if (values.mode === "allocation") {
       const { profile } = await inspector.post("HeapProfiler.stopSampling");
-      allocationBytes = sampledBytes(profile.head);
+      allocationBytes = sumSampledHeapBytes(profile.head);
     }
     assert.equal(checksum, iterations * (includeChildren ? 69 : 5));
     assert.equal(createHash("sha256").update(JSON.stringify(last)).digest("hex"), outputSha256);

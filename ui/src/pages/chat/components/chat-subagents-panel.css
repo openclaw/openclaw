@@ -4,6 +4,18 @@
   min-height: 0;
 }
 
+/* Embedded transcripts must fit panels narrower than the main conversation. */
+.chat-subagent-detail .chat-main {
+  min-width: 0;
+}
+
+.chat-subagents__model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat-subagents__list {
   display: flex;
   flex: 1;
@@ -155,4 +167,24 @@
 .chat-subagents__native p {
   margin: 4px 0 8px;
   font-size: var(--control-ui-text-xs);
+}
+
+.subagent-list-name {
+  display: flex;
+  min-width: 0;
+  white-space: pre;
+}
+
+.subagent-list-name__head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subagent-list-name__tail {
+  flex: none;
+  max-width: 75%;
+  overflow: hidden;
+  direction: rtl;
+  unicode-bidi: plaintext;
 }

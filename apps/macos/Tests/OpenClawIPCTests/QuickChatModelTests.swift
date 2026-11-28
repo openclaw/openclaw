@@ -1,6 +1,7 @@
 import Foundation
 import OpenClawChatUI
 import OpenClawIPC
+import OpenClawKit
 import OpenClawProtocol
 import Testing
 @testable import OpenClaw
@@ -457,33 +458,84 @@ struct QuickChatModelTests {
             agentID: nil))
     }
 
-    @Test func `edits during a screenshot send survive and keep their draft`() async throws {
+    @Test(.testWaitLimit, arguments: ["accepted", "startup", "replaced-gateway"])
+    func `pending screenshot keeps its payload and draft without crossing gateway replacement`(
+        scenario: String) async throws
+    {
         let latch = SendLatch()
-        var receivedMessage: String?
-        let model = self.makeModel(sendHandler: { _, _, message, _, _, _ in
-            receivedMessage = message
-            return try await latch.wait()
+        let source = try GatewayConnectionEndpointSource(url: #require(URL(string: "ws://quickchat-test.invalid")))
+        var sends: [Data] = []
+        let recordSend: @MainActor @Sendable (Data) -> Int = { params in
+            sends.append(params)
+            return sends.count
+        }
+        let sockets = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, index in
+                guard index > 0 else { return }
+                let data: Data = switch message {
+                case let .data(value): value
+                case let .string(value): Data(value.utf8)
+                @unknown default: Data()
+                }
+                let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                try #require(frame["method"] as? String == "chat.send")
+                let params = try #require(frame["params"] as? [String: Any])
+                let attempt = try await recordSend(JSONSerialization.data(withJSONObject: params, options: .sortedKeys))
+                var response: [String: Any] = try [
+                    "type": "res", "id": #require(frame["id"] as? String), "ok": true,
+                    "payload": ["runId": #require(params["idempotencyKey"] as? String), "status": "started"],
+                ]
+                if attempt == 1 {
+                    _ = try await latch.wait()
+                    if scenario != "accepted" {
+                        response["ok"] = false
+                        response["error"] = [
+                            "code": "UNAVAILABLE", "message": "Agent is preparing", "retryable": true,
+                            "retryAfterMs": 1,
+                            "details": ["reason": "startup-sidecars", "method": "chat.send"],
+                        ]
+                    }
+                }
+                try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: response)))
+            })
         })
+        let gateway = GatewayConnection(
+            configProvider: { source.snapshot().config },
+            sessionBox: WebSocketSessionBox(session: sockets))
+        let model = self.makeModel(sendHandler: QuickChatModel.gatewaySendProvider(gateway: gateway))
         await self.prepare(model)
-        let png =
-            try #require(
-                Data(
-                    base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="))
+        let png = try #require(Data(
+            base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAA" +
+                "C0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="))
         let pipelineID = try #require(model.beginCapturePipeline())
         let send = Task { await model.sendCapturedImage(
-            pipelineID: pipelineID,
-            data: png,
-            label: "Safari — Docs",
-            fileName: "window-safari.jpg") }
+            pipelineID: pipelineID, data: png, label: "Synthetic window", fileName: "window.jpg") }
+        defer {
+            model.cancelAllTasks()
+            latch.finish(with: "started")
+        }
         while !latch.started {
+            try Task.checkCancellation()
             await Task.yield()
         }
-        // The screenshot send is suspended in flight; edits made now must survive it.
         model.text = "typed while sending"
+        #expect(model.sendState == .sending)
+        if scenario == "replaced-gateway" {
+            try source.setURL(#require(URL(string: "ws://replacement-test.invalid")))
+        }
         latch.finish(with: "started")
+        let accepted = await send.value
+        await gateway.shutdown()
 
-        #expect(await send.value)
-        #expect(receivedMessage == "Screenshot: Safari — Docs")
+        #expect(accepted == (scenario != "replaced-gateway"))
+        try #require(sends.count == (scenario == "startup" ? 2 : 1))
+        let first = try #require(JSONSerialization.jsonObject(with: sends[0]) as? [String: Any])
+        #expect(first["message"] as? String == "Screenshot: Synthetic window")
+        #expect(first["sessionKey"] as? String == "agent:main:main")
+        #expect((first["attachments"] as? [[String: Any]])?.count == 1)
+        if accepted { #expect(model.lastAcceptedIdempotencyKey == first["idempotencyKey"] as? String) }
+        if scenario == "startup" { #expect(sends[0] == sends[1]) }
+        #expect(sockets.snapshotMakeCount() == 1)
         #expect(model.text == "typed while sending")
         #expect(model.sendState == .idle)
     }
@@ -526,32 +578,60 @@ struct QuickChatModelTests {
         #expect(model.sendState == .idle)
     }
 
-    @Test func `window screenshot sends attachment and default caption`() async throws {
-        var receivedMessage: String?
-        var receivedAttachments: [OpenClawChatAttachmentPayload] = []
-        let model = self.makeModel(sendHandler: { _, _, message, _, _, attachments in
-            receivedMessage = message
-            receivedAttachments = attachments
+    @Test(arguments: [("", "retry"), ("Explain this", "retry"), ("Explain this", "edit"), ("Explain this", "target")])
+    func `rejected screenshot keeps its payload for an unchanged retry`(
+        _ draft: String,
+        _ action: String) async throws
+    {
+        var sentMessages: [String] = []
+        var sentAttachments: [[OpenClawChatAttachmentPayload]] = []
+        var sentKeys: [String] = []
+        var sentSessions: [String] = []
+        let model = self.makeModel(sendHandler: { session, _, message, _, key, attachments in
+            sentSessions.append(session)
+            sentMessages.append(message)
+            sentAttachments.append(attachments)
+            sentKeys.append(key)
+            if sentKeys.count == 1 {
+                throw GatewayResponseError(
+                    method: "chat.send",
+                    code: "UNAVAILABLE",
+                    message: "Synthetic startup refusal",
+                    details: [
+                        "reason": AnyCodable("startup-sidecars"),
+                        "retryable": AnyCodable(true),
+                        "method": AnyCodable("chat.send"),
+                    ])
+            }
             return "started"
         })
         await self.prepare(model)
-        let png =
-            try #require(
-                Data(
-                    base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="))
-
+        model.text = draft
+        let png = try #require(Data(
+            base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAA" +
+                "C0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="))
         let pipelineID = try #require(model.beginCapturePipeline())
-        #expect(await model.sendCapturedImage(
-            pipelineID: pipelineID,
-            data: png,
-            label: "Safari — Docs",
-            fileName: "window-safari.jpg"))
-        #expect(receivedMessage == "Screenshot: Safari — Docs")
-        #expect(receivedAttachments.count == 1)
-        #expect(receivedAttachments[0].type == "file")
-        #expect(receivedAttachments[0].mimeType == "image/jpeg")
-        #expect(receivedAttachments[0].fileName == "window-safari.jpg")
-        #expect(!receivedAttachments[0].content.hasPrefix("data:"))
+        #expect(await !(model.sendCapturedImage(
+            pipelineID: pipelineID, data: png, label: "Synthetic window", fileName: "window.jpg")))
+        guard case .failed = model.sendState else {
+            Issue.record("expected visible screenshot send failure")
+            return
+        }
+        #expect(sentMessages[0] == (draft.isEmpty ? "Screenshot: Synthetic window" : draft))
+        let attachment = try #require(sentAttachments[0].first)
+        #expect(attachment.type == "file" && attachment.mimeType == "image/jpeg")
+        #expect(attachment.fileName == "window.jpg" && !attachment.content.hasPrefix("data:"))
+        if action == "edit" { model.text = "Replacement" }
+        if action == "target" {
+            model.selectSessionOverride(.init(key: "agent:main:other", displayName: "Other"))
+        }
+        #expect(model.canSend)
+        #expect(await model.send())
+        try #require(sentKeys.count == 2)
+        #expect((sentKeys[0] == sentKeys[1]) == (action == "retry"))
+        #expect(sentMessages[1] == (action == "edit" ? "Replacement" : sentMessages[0]))
+        #expect(sentAttachments[1] == (action == "retry" ? [attachment] : []))
+        #expect(sentSessions[1] == (action == "target" ? "agent:main:other" : "agent:main:main"))
     }
 
     @Test func `message assembly appends context block`() {

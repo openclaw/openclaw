@@ -26,11 +26,6 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  buildRestartSafeChatTranscriptState,
-  createRestartSafeChatRequest,
-  resolveRestartSafeChatAdmission,
-} from "../../gateway/server-methods/chat-restart-recovery.js";
 import { clearMemoryPluginState } from "../../plugins/memory-state.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
@@ -50,10 +45,13 @@ type ModelRequest = {
   tools?: Array<{ function?: { name?: string } }>;
 };
 // Keep injected prompt/tool growth out of this pending-input test. Reported usage
-// still crosses preflight pressure once the approved input is added, while the
-// rendered request fits without a second, unrelated overflow-recovery compaction.
+// crosses the context window once the approved input is added, so reply-level
+// maintenance must compact before the request (below the window it defers to the
+// request boundary, which measures the rendered request). The rendered request still
+// fits without a second, unrelated overflow-recovery compaction.
 const contextTokens = 65_536;
-const priorInputTokens = 45_000;
+// Prior usage sits just below the window, above the shared compaction and flush triggers.
+const priorInputTokens = contextTokens - 4_152;
 
 const providerText = (content: unknown) =>
   extractTextFromChatContent(content, { joinWith: "\n", normalizeText: (text) => text }) ?? "";
@@ -94,7 +92,7 @@ it.each([
     1,
   ],
 ] as const)(
-  "required maintenance keeps restart-safe admitted input current (%s)",
+  "required maintenance keeps admitted pending input current (%s)",
   (_history, priorTurns, expectedCompactions) =>
     withOpenClawTestState({ label: "required-maintenance-pending" }, async (state) => {
       const runtimeContext = "Synthetic current runtime fact for the approved request.";
@@ -267,25 +265,6 @@ it.each([
             }),
           );
         }
-        const request = await createRestartSafeChatRequest({
-          eligible: true,
-          message: approved,
-          senderIsOwner: true,
-          cfg,
-        });
-        const restartSafeAdmission = resolveRestartSafeChatAdmission({
-          acpMeta: null,
-          ...scope,
-          cfg,
-          clientRunId: runId,
-          context: {},
-          entry,
-          initialSessionEntry: entry,
-          now: Date.now(),
-          placement: undefined,
-          request,
-        });
-        expect(restartSafeAdmission).toBeDefined();
         recorder = createUserTurnTranscriptRecorder({
           target: {
             ...scope,
@@ -294,12 +273,6 @@ it.each([
             config: cfg,
           },
           input: { text: approved, timestamp: Date.now(), idempotencyKey: `${runId}:user` },
-          ...buildRestartSafeChatTranscriptState({
-            sourceIngress: "control-ui",
-            admission: restartSafeAdmission!,
-            clientRunId: runId,
-            startedAt: Date.now(),
-          }),
         });
         // Idle Control UI admission intentionally persists the approved user before ACK.
         expect(await recorder.stageApproved?.({ runId, assertCurrent })).toBe(true);
@@ -393,7 +366,8 @@ it.each([
         ]);
       } finally {
         await waitForSessionMaintenance(sessionKey);
-        recorder?.finishPendingInput?.("interrupted");
+        recorder?.finishPendingInput?.("cancelled", "failed");
+        await recorder?.waitForPendingInputSettlement?.();
         admissionOwner.close();
         const mcpManager = getSessionMcpRuntimeTestManager();
         for (const runtimeSessionId of mcpManager.listSessionIds()) {

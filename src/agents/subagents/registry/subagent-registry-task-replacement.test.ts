@@ -15,14 +15,17 @@ import { seedAttachedPlacementEnvironment } from "../../../gateway/worker-enviro
 import { createWorkerSessionPlacementGate } from "../../../gateway/worker-environments/placement-worker-gate.js";
 import { prepareWorkerTurnTranscriptSource } from "../../../gateway/worker-environments/worker-turn-transcript-target.js";
 import {
+  emitAgentEvent,
   getAgentEventLifecycleGeneration,
   onAgentEvent,
   rotateAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
 import {
+  clearAgentRunContext,
   getAgentRunContext,
   getAgentRunContextOwnership,
   getAgentRunContextOwnerStatus,
+  registerAgentRunContext,
 } from "../../../infra/agent-run-registry.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -44,10 +47,7 @@ import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js"
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
-import {
-  finalizeInterruptedSubagentRun,
-  releaseSubagentRun,
-} from "./subagent-registry.test-helpers.js";
+import { releaseSubagentRun } from "./subagent-registry.test-helpers.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 const fixture = useSubagentControlFixture();
@@ -110,6 +110,73 @@ function updateRun(
     return { value: undefined, postimages: new Map([[runId, draft]]) };
   });
 }
+
+it("ignores an unregistered emitter instead of rewriting terminal tasks sharing its session", async () => {
+  const childSessionKey = "agent:main:subagent:unregistered-completion";
+  const sessionId = "unregistered-completion-session";
+  const previousRunId = "unregistered-completion-old";
+  const nextRunId = "unregistered-completion-next";
+  const emitter = "unregistered-completion-emitter";
+  await writeSession(childSessionKey, sessionId);
+  await writeSession("agent:main:main", "unregistered-completion-requester");
+  await register(previousRunId, childSessionKey, sessionId, {
+    spawnMode: "session",
+    expectsCompletionMessage: true,
+  });
+  const freeze = (runId: string, answer: string, endedAt: number) =>
+    updateRun(runId, (draft) => {
+      draft.execution = {
+        ...draft.execution,
+        status: "terminal",
+        endedAt,
+        outcome: { status: "ok" },
+      };
+      draft.completion = { required: true, resultText: answer, capturedAt: endedAt };
+      draft.cleanupHandled = true;
+    });
+  await freeze(previousRunId, "The predecessor answer.", 1);
+  expect(
+    await replaceRun(previousRunId, nextRunId, {
+      expected: subagentRuns.get(previousRunId),
+      allowEndedSource: true,
+      preserveCompletedRun: true,
+    }),
+  ).toBe(true);
+  await freeze(nextRunId, "The successor answer.", 2);
+  await fixture.settle();
+  const before = loadSubagentRegistryFromSqlite();
+  const previousCompletion = structuredClone(before.get(previousRunId)?.completion);
+  const nextCompletion = structuredClone(before.get(nextRunId)?.completion);
+  expect(previousCompletion?.resultText).toBe("The predecessor answer.");
+  expect(nextCompletion?.resultText).toBe("The successor answer.");
+  fixture.capture.mockResolvedValue("An unrelated run's answer.");
+  registerAgentRunContext(emitter, {
+    agentId: "main",
+    sessionKey: childSessionKey,
+    sessionId,
+    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+  });
+  onTestFinished(() => clearAgentRunContext(emitter));
+  const observed = vi.fn();
+  onTestFinished(
+    onAgentEvent((event) => {
+      if (event.runId === emitter) {
+        observed(event);
+      }
+    }),
+  );
+  emitAgentEvent({
+    runId: emitter,
+    stream: "lifecycle",
+    data: { phase: "end", executionSettled: true, status: "ok", startedAt: 3, endedAt: 4 },
+  });
+  await fixture.settle();
+  expect(observed).toHaveBeenCalledOnce();
+  const after = loadSubagentRegistryFromSqlite();
+  expect(after.get(previousRunId)?.completion).toEqual(previousCompletion);
+  expect(after.get(nextRunId)?.completion).toEqual(nextCompletion);
+  expect(fixture.capture).not.toHaveBeenCalled();
+});
 
 it("does not recreate a source released before replacement admission", async () => {
   await register(
@@ -472,13 +539,15 @@ it.each(["successor", "source retirement"] as const)(
     });
     const previous = subagentRuns.get("rollback-predecessor")!;
     const error = "subagent run lost active execution context";
-    expect(
-      await finalizeInterruptedSubagentRun({
-        runId: previous.runId,
-        expectedEntry: previous,
-        error,
-      }),
-    ).toBe(1);
+    await updateRun(previous.runId, (draft) => {
+      draft.execution = {
+        ...draft.execution,
+        status: "terminal",
+        endedAt: Date.now(),
+        outcome: { status: "error", error },
+      };
+      draft.completion = { required: true, resultText: null };
+    });
     await fixture.settle();
     await updateRun(previous.runId, (draft) => {
       draft.collect = true;
@@ -541,7 +610,7 @@ it.each(["successor", "source retirement"] as const)(
   },
 );
 
-it("rearms native execution for an interrupted run's successor", async () => {
+it("rearms native execution for a failed run's successor", async () => {
   fixture.announce.mockResolvedValue("delivered");
   const childSessionKey = "agent:main:subagent:interrupted-task";
   const requesterSessionKey = "agent:main:main";
@@ -558,9 +627,15 @@ it("rearms native execution for an interrupted run's successor", async () => {
   });
   const previous = subagentRuns.get("interrupted-task-old")!;
   const error = "subagent run lost active execution context";
-  expect(
-    await finalizeInterruptedSubagentRun({ runId: previous.runId, expectedEntry: previous, error }),
-  ).toBe(1);
+  await updateRun(previous.runId, (draft) => {
+    draft.execution = {
+      ...draft.execution,
+      status: "terminal",
+      endedAt: Date.now(),
+      outcome: { status: "error", error },
+    };
+    draft.completion = { required: true, resultText: null };
+  });
   await fixture.settle();
   expect(loadSubagentRegistryFromSqlite().get(previous.runId)).toMatchObject({
     task: "Resume interrupted work",
@@ -598,8 +673,11 @@ it("rearms native execution for an interrupted run's successor", async () => {
     "interrupted-task-session",
   );
   expect(
-    await finalizeInterruptedSubagentRun({ runId: previous.runId, expectedEntry: previous, error }),
-  ).toBe(0);
+    await replaceRun(previous.runId, "stale-predecessor-successor", {
+      expected: previous,
+      allowEndedSource: true,
+    }),
+  ).toBe(false);
   expect(subagentRuns.get(successor.runId)).toBe(successor);
   expect(await replaceRun(successor.runId, "interrupted-task-newer", { expected: successor })).toBe(
     true,

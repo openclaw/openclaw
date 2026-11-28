@@ -61,11 +61,7 @@ it.each([false, true])("preserves system authority with literal markers=%s", (ma
       : undefined,
   );
   expectMessage(first.messages[0], "system", coauthor, hookInstruction);
-  expectMessage(
-    first.messages[0],
-    "system",
-    "Empty or none reports no items for that snapshot's scope and time; it does not prove unqueried work is absent, establish global inactivity, or show whether earlier work ran.",
-  );
+  expectMessage(first.messages[0], "system", "empty/none covers only that scope/time");
   expect(JSON.stringify(first.messages[0])).not.toContain("none means no active work");
   expect(JSON.stringify(first.messages)).not.toMatch(
     /OPENCLAW_CACHE_BOUNDARY|OPENCLAW-RELOCATABLE-BOUNDARY/,
@@ -104,10 +100,11 @@ it.each([false, true])("uses Code Mode skill access only when admitted (%s)", (a
   if (admitted) {
     expect(prompt).toContain('`skills.read("<name>")`');
     expect(prompt).toContain("skills.search(query)");
-    expect(prompt).not.toContain("read exact <location> with `read`");
+    expect(prompt).not.toContain("read exact `<location>` with `read`");
   } else {
-    expect(prompt).not.toContain("skills.read(");
-    expect(prompt).not.toContain("skills.search(");
+    expect(prompt).not.toMatch(
+      /## Skills|<available_skills>|read exact `?<location>|skills\.(read|search)\(/,
+    );
   }
 });
 
@@ -117,10 +114,10 @@ it.each(["", prepareSkillsForPrompt({ skills: [demo], maxSkillsInPrompt: 0 }).pr
     const prompt = renderSkills(["skills_search", "skills_read"], skillsPrompt);
     expect(prompt).toContain("skills_search");
     expect(prompt).toContain("skills_read");
-    expect(prompt).not.toMatch(/Scan <available_skills>|use a listed match/);
+    expect(prompt).not.toMatch(/Scan `?<available_skills>|use a listed match/);
     const denied = renderSkills(["read"], skillsPrompt);
     expect(denied).not.toMatch(
-      /skills_search|skills\.search\(|Scan <available_skills>|read exact <location>/,
+      /skills_search|skills\.search\(|Scan `?<available_skills>|read exact `?<location>/,
     );
     if (skillsPrompt) {
       expect(prompt).toContain(skillsPrompt);
@@ -128,6 +125,20 @@ it.each(["", prepareSkillsForPrompt({ skills: [demo], maxSkillsInPrompt: 0 }).pr
     } else {
       expect(denied).not.toContain("## Skills");
     }
+  },
+);
+
+it.each([true, false])(
+  "keeps skill descriptions unless skills_search can match them (%s)",
+  (search) => {
+    const description = "Recover a PostgreSQL primary after failover.";
+    const skill = { ...createFixtureSkillEntry("ops-a").skill, description };
+    const prompt = renderSkills(
+      search ? ["skills_read", "skills_search"] : ["skills_read"],
+      formatSkillsForPromptCore([skill]),
+    );
+    expect(prompt).toContain('- "ops-a"');
+    expect(prompt.includes(description)).toBe(!search);
   },
 );
 
@@ -151,20 +162,4 @@ it("adds Ultra orchestration only when sessions_spawn is callable", () => {
   expect(unavailable).toContain("verify the result before replying");
   expect(unavailable).not.toContain("Use `sessions_spawn` when independent work");
   expect(ultra({ promptMode: "none" })).not.toContain(heading);
-});
-
-it("keeps shared USER preferences before the current person's overlay", () => {
-  const prompt = buildAgentSystemPrompt({
-    workspaceDir: "/workspace",
-    contextFiles: [
-      { path: "/workspace/USER.md", content: "Shared preferences" },
-      {
-        path: "/workspace/users/person/USER.md",
-        content: "Personal preferences",
-        personalUser: true,
-      },
-    ],
-  });
-  expect(prompt.indexOf("Shared preferences")).toBeLessThan(prompt.indexOf("Personal preferences"));
-  expect(prompt).toContain("belongs to this session");
 });

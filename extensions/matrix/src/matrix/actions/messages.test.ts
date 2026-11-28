@@ -3,7 +3,6 @@ import { PollResponseEvent } from "matrix-js-sdk/lib/extensible_events_v1/PollRe
 import { PollStartEvent } from "matrix-js-sdk/lib/extensible_events_v1/PollStartEvent.js";
 import { MatrixError } from "matrix-js-sdk/lib/http-api/errors.js";
 import { describe, expect, it, vi } from "vitest";
-import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import { buildHttpError } from "../sdk/event-helpers.js";
 import { editMatrixMessage, readMatrixMessages } from "./messages.js";
@@ -116,16 +115,6 @@ function createMessagesClient(params: {
 }
 
 function createEditClient() {
-  setMatrixRuntime({
-    config: { current: () => ({}) },
-    channel: {
-      text: {
-        resolveMarkdownTableMode: () => "code",
-        resolveTextChunkLimit: () => 4_000,
-        convertMarkdownTables: (text: string) => text,
-      },
-    },
-  } as unknown as import("openclaw/plugin-sdk/plugin-runtime").PluginRuntime);
   const sendMessage = vi.fn().mockResolvedValue("evt-edit");
   const client = {
     getEvent: vi.fn().mockResolvedValue({ content: { body: "original" } }),

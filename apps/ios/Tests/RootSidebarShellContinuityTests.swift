@@ -47,15 +47,37 @@ struct RootSidebarShellContinuityTests {
             RootSidebarShell(
                 sidebarWidth: 316,
                 isDrawerLayout: self.isDrawer,
-                isPresented: self.isPresented,
-                canOpenFromEdge: true,
+                presentation: RootSidebarPresentation(isPresented: self.isPresented),
+                openingRegion: .edge,
                 reduceMotion: self.reduceMotion,
                 animation: nil,
                 onShow: {},
                 onHide: {},
                 sidebar: Color.clear,
-                detail: StatefulDetail(recorder: self.recorder))
+                detail: StatefulDetail(recorder: self.recorder),
+                contentSafeAreaInsets: .init())
         }
+    }
+
+    @Test func `drawer card includes the safe area and only clips the corners`() {
+        let bounds = CGRect(x: 0, y: 0, width: 500, height: 700)
+        let insets = EdgeInsets(top: 50, leading: 70, bottom: 30, trailing: 90)
+        let closed = RootSidebarContentClipShape(progress: 0, safeAreaInsets: insets).path(in: bounds)
+        let open = RootSidebarContentClipShape(progress: 1, safeAreaInsets: insets).path(in: bounds)
+        for barPoint in [
+            CGPoint(x: 250, y: -25), CGPoint(x: -35, y: 350),
+            CGPoint(x: 250, y: 715), CGPoint(x: 545, y: 350),
+        ] {
+            #expect(closed.contains(barPoint))
+            #expect(open.contains(barPoint))
+        }
+        let topLeadingCorner = CGPoint(x: -69, y: -49)
+        #expect(closed.contains(topLeadingCorner))
+        #expect(!open.contains(topLeadingCorner))
+        #expect(RootSidebarContentClipShape(progress: -0.05, safeAreaInsets: insets).path(in: bounds).boundingRect ==
+            closed.boundingRect)
+        #expect(RootSidebarContentClipShape(progress: 1.05, safeAreaInsets: insets).path(in: bounds).boundingRect ==
+            open.boundingRect)
     }
 
     @Test(arguments: [false, true])

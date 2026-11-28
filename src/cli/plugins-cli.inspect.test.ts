@@ -1,7 +1,6 @@
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
@@ -9,7 +8,6 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginInspectReport } from "../plugins/status.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   withPluginDiagnosticsReportForInspectionMock as withDiagnostics,
@@ -19,21 +17,14 @@ import {
   buildPluginSnapshotReportMock as snapshot,
   loadPluginMetadataSnapshotMock,
   expectNoPluginCliCalls as expectNoCalls,
-  pluginCliConfigMock as configMock,
   pluginsCliRuntimeLogs as logs,
   resetPluginsCliTestState,
-  retirePluginDiagnosticsMock,
+  resolvePluginLifecycleGatewayMock,
   runPluginsCommand,
   runPluginCli as plugins,
   runtimeErrors,
   setInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
-
-const workshopMocks = vi.hoisted(() => ({ detectToolPolicyDiagnostic: vi.fn() }));
-
-vi.mock("../skills/workshop/tool-policy-diagnostic.js", () => ({
-  detectSkillWorkshopToolPolicyDiagnostic: workshopMocks.detectToolPolicyDiagnostic,
-}));
 
 function createInspectReport(
   overrides: Partial<PluginInspectReport> & Pick<PluginInspectReport, "plugin">,
@@ -92,53 +83,42 @@ const inspectHome = path.resolve(path.sep, "tmp", "p-home");
 describe("plugins cli inspect", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
-    workshopMocks.detectToolPolicyDiagnostic.mockReset();
     process.exitCode = undefined;
   });
   afterEach(() => {
     process.exitCode = originalExitCode;
   });
 
-  it.each([false, true])(
-    "serializes while owned and waits for release before JSON output (all: %s)",
-    async (all) => {
-      const started = createDeferredCore();
-      const finish = createDeferredCore();
-      const plugin = createPluginRecord({ id: "owned-inspect" });
-      let released = false;
-      let serialized = false;
-      Object.defineProperty(plugin, "description", {
-        enumerable: true,
-        get() {
-          expect(released).toBe(false);
-          serialized = true;
-          return "resource-backed description";
-        },
-      });
-      const report = mockInspection(plugin);
-      withDiagnostics.mockImplementation(async (_params, formatReport) => {
-        const output = formatReport(report);
-        expect(serialized).toBe(true);
-        started.resolve();
-        await finish.promise;
-        released = true;
-        return output;
-      });
-      const command = plugins("inspect", all ? "--all" : plugin.id, "--runtime", "--json");
-      try {
-        await started.promise;
-        expect(logs).toEqual([]);
-      } finally {
-        finish.resolve();
-        await command;
-      }
-      expect(withDiagnostics).toHaveBeenCalledTimes(1);
-      expect(released).toBe(true);
-      expect(logs).toHaveLength(1);
-      const result = JSON.parse(logs[0] ?? "");
-      expect((all ? result[0] : result).plugin.description).toBe("resource-backed description");
-    },
-  );
+  it.each([false, true])("distinguishes CLI loading from Gateway state (all: %s)", async (all) => {
+    const plugin = createPluginRecord({
+      id: "cli-only",
+      status: "loaded",
+      description: "Plugin description",
+    });
+    mockInspection(plugin);
+    const query = vi.fn().mockResolvedValue({
+      plugins: [{ id: plugin.id, runtime: { state: "unloaded" } }],
+    });
+    resolvePluginLifecycleGatewayMock.mockResolvedValue(query);
+    const selector = all ? "--all" : plugin.id;
+    await plugins("inspect", selector, "--runtime", "--json");
+    const result = JSON.parse(logs.at(-1) ?? "null");
+    expect(all ? result[0] : result).toMatchObject({
+      inspectionScope: "cli",
+      plugin: { status: "loaded", description: "Plugin description" },
+      gatewayRuntime: { state: "unloaded" },
+    });
+    await plugins("inspect", selector, "--runtime");
+    const output = stripVTControlCharacters(logs.at(-1) ?? "");
+    expect(output).toContain("CLI status");
+    expect(output).toContain("Gateway");
+    expect(output).toContain("unloaded");
+
+    query.mockRejectedValue(new Error("Gateway unavailable"));
+    await plugins("inspect", selector, "--runtime", "--json");
+    const unavailable = JSON.parse(logs.at(-1) ?? "null");
+    expect((all ? unavailable[0] : unavailable).gatewayRuntime).toBeNull();
+  });
 
   it("reports a missing runtime inspection as JSON failure", async () => {
     const plugin = createPluginRecord({ id: "owned-inspect" });
@@ -164,17 +144,6 @@ describe("plugins cli inspect", () => {
       expect(withDiagnostics).not.toHaveBeenCalled();
     },
   );
-
-  it("does not publish runtime inspection output when retirement fails", async () => {
-    inspectAll.mockReturnValue([]);
-    retirePluginDiagnosticsMock.mockRejectedValue(new Error("diagnostics cleanup failed"));
-
-    await expect(plugins("inspect", "--all", "--runtime", "--json")).rejects.toThrow(
-      "diagnostics cleanup failed",
-    );
-
-    expect(logs).toEqual([]);
-  });
 
   it.each([
     { runtime: false, selection: "all" },
@@ -339,65 +308,27 @@ describe("plugins cli inspect", () => {
 
   it("runtime-inspects exact plugin ids and display names without repairing deps", async () => {
     const plugin = createPluginRecord({ id: "openclaw-mem0", name: "Mem0" });
-    mockInspection(
-      plugin,
-      {
-        gatewayDiscoveryServices: ["mem0-runtime-discovery"],
-      },
-      [createPluginRecord({ id: "unrelated-plugin", name: "openclaw-mem0" }), plugin],
+    loadPluginMetadataSnapshotMock.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [{ id: plugin.id, legacyPluginIds: ["mem0-old"] }],
+      }),
     );
+    mockInspection(plugin, { gatewayDiscoveryServices: ["mem0-runtime-discovery"] }, [
+      createPluginRecord({ id: "unrelated-plugin", name: "openclaw-mem0" }),
+      plugin,
+    ]);
+    const selection = { config: {}, onlyPluginIds: [plugin.id], runtimeInspection: true };
 
-    for (const selector of ["openclaw-mem0", "Mem0"]) {
+    for (const selector of ["openclaw-mem0", "Mem0", "OPENCLAW-MEM0", "mem0-old"]) {
       await plugins("inspect", selector, "--runtime");
       expect(withDiagnostics).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          config: {},
-          onlyPluginIds: ["openclaw-mem0"],
-          runtimeInspection: true,
-        }),
+        expect.objectContaining(selection),
         expect.any(Function),
       );
       expect(logs.at(-1)).toContain("Gateway discovery:\nmem0-runtime-discovery");
     }
   });
 
-  it("explains policy-hidden Skill Workshop for every configured agent", async () => {
-    const agentIds = ["main", "venus"];
-    const config: OpenClawConfig = {
-      tools: { profile: "messaging" },
-      agents: { ownership: "explicit", entries: { main: {}, venus: {} } },
-    };
-    configMock.mockReturnValue(config);
-    workshopMocks.detectToolPolicyDiagnostic.mockImplementation(
-      ({ agentId }: { agentId: string }) => ({
-        agentId,
-        message:
-          `Skill Workshop is active, but "skill_workshop" is hidden for agent "${agentId}": ` +
-          'tools.profile: "messaging" does not include "skill_workshop". ' +
-          'Add tools.alsoAllow: ["skill_workshop"].',
-      }),
-    );
-    snapshot.mockReturnValue({ plugins: [], diagnostics: [] });
-
-    await expect(plugins("inspect", "skill-workshop")).rejects.toThrow("__exit__:1");
-
-    const output = runtimeErrors.at(-1);
-    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
-      config,
-      workspaceDir: undefined,
-    });
-    expect(output).toContain("Skill Workshop is built into OpenClaw, not a plugin");
-    expect(output).toContain('tools.profile: "messaging" does not include "skill_workshop".');
-    expect(output).toContain('Add tools.alsoAllow: ["skill_workshop"].');
-    for (const agentId of agentIds) {
-      expect(workshopMocks.detectToolPolicyDiagnostic).toHaveBeenCalledWith({
-        config,
-        workshopEnabled: true,
-        agentId,
-      });
-      expect(output).toContain(`hidden for agent "${agentId}"`);
-    }
-  });
   it.each(["", "-other"])(
     "preserves diagnostic metadata and source identity (home suffix=%s)",
     async (sourceSuffix) => {

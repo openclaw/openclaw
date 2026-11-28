@@ -29,14 +29,15 @@ function escapeWorkflowCommandData(value: string): string {
 }
 
 export function createVitestUnhandledErrorDetector() {
-  let buffered = "";
   let sawUnhandledBanner = false;
   let count: number | undefined;
   let awaitingErrorFirstLine = false;
   let errorFirstLine: string | undefined;
   let origin: string | undefined;
 
-  const inspectLine = (rawLine: string) => {
+  // The output forwarder owns framing separately for each stream, including EOF tails.
+  // Buffering again would join an unterminated stdout tail to a later stderr line.
+  const observeLine = (rawLine: string) => {
     const line = stripVitestAnsi(rawLine).trim();
     if (!sawUnhandledBanner) {
       sawUnhandledBanner = line.includes("Unhandled Errors");
@@ -65,26 +66,11 @@ export function createVitestUnhandledErrorDetector() {
     origin ??= UNHANDLED_ORIGIN_RE.exec(line)?.[1];
   };
 
-  const observe = (output: string): void => {
-    buffered += output;
-    while (true) {
-      const newlineIndex = buffered.indexOf("\n");
-      if (newlineIndex === -1) {
-        return;
-      }
-      inspectLine(buffered.slice(0, newlineIndex));
-      buffered = buffered.slice(newlineIndex + 1);
-    }
+  return {
+    observeLine,
+    finish: (): VitestUnhandledErrors | null =>
+      count === undefined ? null : { count, errorFirstLine, origin },
   };
-  const finish = (): VitestUnhandledErrors | null => {
-    if (buffered.length > 0) {
-      inspectLine(buffered);
-      buffered = "";
-    }
-    return count === undefined ? null : { count, errorFirstLine, origin };
-  };
-
-  return { observe, finish };
 }
 
 function formatVitestUnhandledErrorSummary(result: VitestUnhandledErrors): string {

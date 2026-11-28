@@ -8,7 +8,7 @@ import { bindSessionTranscriptStoreScope } from "../config/sessions/session-acce
 import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import type { SessionTranscriptAccountingOptions } from "../config/sessions/session-transcript-accounting.types.js";
-import type { ReadRecentSessionConversationTextOptions } from "../config/sessions/transcript-recent-text.js";
+import type { ReadRecentSessionConversationTurnOptions } from "../config/sessions/transcript-recent-text.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type {
   SessionArtifactReadQuery,
@@ -110,9 +110,6 @@ export async function readSessionTranscriptAccountingAsync(
     ...(Object.hasOwn(options, "includeTurnTaint")
       ? { includeTurnTaint: options.includeTurnTaint }
       : {}),
-    ...(Object.hasOwn(options, "usageEventLimit")
-      ? { usageEventLimit: options.usageEventLimit }
-      : {}),
   };
   const memory = captureSessionActorTranscriptRead(scope, signal);
   if (memory) {
@@ -148,7 +145,7 @@ export async function readSessionTranscriptBoundedMessageTailPageAsync(
 
 export async function readRecentSessionConversationTextAsync(
   scope: SessionTranscriptReadScope,
-  options: ReadRecentSessionConversationTextOptions,
+  options: ReadRecentSessionConversationTurnOptions,
   signal?: AbortSignal,
 ) {
   signal?.throwIfAborted();

@@ -10,16 +10,20 @@ import type {
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { AgentCommandOutputEventFields } from "../infra/agent-activity-events.js";
 import type { AgentApprovalEventData } from "../infra/agent-events.types.js";
+import type { RestartResumeNotice } from "../infra/agent-run-registry.types.js";
 import type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { ReplyPayload } from "./reply-payload.js";
+import type { ReplyMessageInjectionOutcome } from "./reply/message-injection-authority.js";
+import type { FollowupQueueDisposition } from "./reply/queue-policy.js";
 import type { TypingController } from "./reply/typing.js";
 import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
 export type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
+export type { FollowupQueueDisposition } from "./reply/queue-policy.js";
 
 /** An accepted visible work session and its canonical Control UI link. */
 export type VisibleWorkSession = {
@@ -106,6 +110,32 @@ export type QueuedReplyDeliveryCorrelation = {
     | void;
 };
 
+export type QueuedFollowupReplyBatch = {
+  kind: "queued-followup";
+  runId: string;
+  originatingChannel: string | undefined;
+  payloads: ReplyPayload[];
+  completion:
+    | { kind: "progress" }
+    | { kind: "completed"; stopReason?: string; allowCanvasOnly?: true }
+    | {
+        kind: "failed";
+        error: string;
+        /** Host-authored failure copy with its next step; safe to keep in history. */
+        notice?: string;
+        stopReason?: string;
+        errorKind?: "timeout";
+      }
+    | { kind: "aborted"; stopReason?: string };
+};
+
+export type QueuedFollowupReplyDelivery = ((
+  batch: QueuedFollowupReplyBatch,
+) => Promise<void> | void) & {
+  ownsCompletion?: (originatingChannel: string | undefined) => boolean;
+  createSourceRetry?: () => QueuedFollowupReplyDelivery;
+};
+
 /**
  * Exclusive: each lifecycle is its own collect-admission identity.
  * Cancel-only: share collect identity via ownerKey (gateway chat.send).
@@ -134,6 +164,8 @@ export type TurnAdoptionLifecycle = {
   deferredHeartbeatIntervalMs?: number;
   /** Deferred turn finished without owning the reply lane. */
   onAbandoned?: () => void | Promise<void>;
+  /** Explicit queue-cap loss; unlike abandonment, this is a terminal policy decision. */
+  onDropped?: (reason: FollowupQueueDisposition) => void | Promise<void>;
   /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */
   onSettled?: () => void | Promise<void>;
   /** Retires cancellation ownership while retaining live identity. */
@@ -192,6 +224,7 @@ export type GetReplyOptions = {
   media?: MediaFact[];
   /** Return "reply-dispatch" synchronously to accept the offered completion ownership. */
   onPreparedAgentRunStart?: (start: PreparedAgentRunStart) => unknown;
+  onRestartResumeSaved?: RestartResumeNotice;
   /**
    * @deprecated Use onPreparedAgentRunStart with a prepared transcript boundary. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    * Notifies when an agent run starts. Return "reply-dispatch" synchronously to accept
@@ -205,10 +238,10 @@ export type GetReplyOptions = {
   ) => unknown;
   /** Reports the terminal agent-run classification to the shared dispatch owner. */
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
+  /** Retains source-owned delivery when this turn is queued behind an active run. */
+  onQueuedFollowupReplyBatch?: QueuedFollowupReplyDelivery;
   /** Reports terminal queue-cap rejection or eviction when no agent run will report an outcome. */
-  onFollowupQueueDisposition?: (
-    disposition: "queue-cap" | "queue-cap-old" | "queue-cap-new",
-  ) => void;
+  onFollowupQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /**
    * Reports fresh visible children before their first turn and accepted spawns at settlement.
    * Creation reports include the key even when no public session URL is configured.
@@ -230,6 +263,8 @@ export type GetReplyOptions = {
     | "accepted"
     | "rejected"
     | "collaborative-steering-disabled";
+  /** Original owner refusal retained through Gateway followup dispatch. */
+  messageInjectionRejection?: Extract<ReplyMessageInjectionOutcome, { status: "rejected" }>;
   /** Current user turn is already durable; replay it without appending another copy. */
   suppressNextUserMessagePersistence?: boolean;
   onReplyStart?: () => Promise<void> | void;
@@ -252,12 +287,10 @@ export type GetReplyOptions = {
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
-  /** @internal Preserve the recovery owner's replay-safe tool restriction for this turn. */
-  forceRestartSafeTools?: boolean;
-  /** @internal Retain restart-safe Code Mode controls for an interrupted continuation. */
-  forceCodeModeTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
   toolsAllow?: string[];
+  /** Trusted installer conversation only; instruction loading still uses the workspace. */
+  deferWorkspaceBootstrap?: true;
   /**
    * @deprecated Ignored. The tool-failure warning is delivered whenever a run ends
    * without a reply and cannot be suppressed. Kept only so plugin-sdk callers that
@@ -427,6 +460,8 @@ export type GetReplyOptions = {
     provider: string;
     model: string;
     thinkLevel: string | undefined;
+    agentRuntime?: string;
+    cliExecution?: boolean;
   }) => void;
   /**
    * Controls whether normal assistant replies are automatically delivered to

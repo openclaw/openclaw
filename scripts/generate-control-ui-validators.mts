@@ -36,6 +36,7 @@ import {
 import {
   SessionNarrationEventSchema,
   SessionObserverDigestSchema,
+  SessionsFilesGetResultSchema,
 } from "../packages/gateway-protocol/src/schema/sessions.js";
 import { TalkVoiceChangeEventSchema } from "../packages/gateway-protocol/src/schema/talk-voice.js";
 import { CHAT_TRANSCRIPT_METADATA_KEYS } from "../ui/src/pages/chat/chat-transcript-metadata.ts";
@@ -191,6 +192,12 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
     "TalkVoiceChangeEvent",
     TalkVoiceChangeEventSchema,
     'import("' + schemaRoot + 'talk-voice.js").TalkVoiceChangeEvent',
+    "session-input",
+  ],
+  [
+    "SessionFileReadMetadata",
+    Type.Pick(SessionsFilesGetResultSchema, ["root", "source"]),
+    'Pick<import("' + schemaRoot + 'sessions.js").SessionsFilesGetResult, "root" | "source">',
     "session-input",
   ],
 ];

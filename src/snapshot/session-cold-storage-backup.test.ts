@@ -3,7 +3,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
-import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import { backupCreateCommand } from "../commands/backup.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
@@ -16,6 +15,7 @@ import {
   historicalId as sessionId,
   maintenanceConfig,
 } from "../config/sessions/session-cold-storage.test-support.js";
+import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createOpenClawTestState,

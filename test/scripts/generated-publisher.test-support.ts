@@ -5,19 +5,16 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll } from "vitest";
 import { parse } from "yaml";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action.yml";
 const publisherTemplateDirs = useAutoCleanupTempDirTracker(afterAll);
-let generatedPublisherTemplate: string | undefined;
+let generatedPublisherTemplate: { root: string; initialMain: string } | undefined;
 function runGit(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
@@ -48,22 +45,27 @@ function copyGeneratedPublisherFixture(root: string, workspaceName: string) {
     runGit(worktree, ["remote", "add", "origin", "../origin.git"]);
     runGit(worktree, ["push", "-u", "origin", "main"]);
     runGit(templateRoot, ["--git-dir", origin, "symbolic-ref", "HEAD", "refs/heads/main"]);
-    generatedPublisherTemplate = templateRoot;
+    const initialMain = runGit(worktree, ["rev-parse", "HEAD"]);
+    generatedPublisherTemplate = { root: templateRoot, initialMain };
   }
-  // Relative origin follows each copied repository pair, isolating refs, hooks and config.
+  // Immutable seed and relative origin isolate each copy's initial commit, refs, hooks and config.
   for (const name of ["origin.git", "worktree"]) {
     cpSync(
-      path.join(generatedPublisherTemplate, name),
+      path.join(generatedPublisherTemplate.root, name),
       path.join(root, name === "worktree" ? workspaceName : name),
       { recursive: true, mode: fsConstants.COPYFILE_FICLONE },
     );
   }
+  return generatedPublisherTemplate.initialMain;
 }
 
 export type GeneratedPublisherOptions = {
   headBranch?: string;
+  repository?: string;
   disarmRace?: boolean;
+  reconcileHeadRace?: boolean;
   updateSourceBeforeAutoMerge?: boolean;
+  mode?: "preflight" | "reconcile-stale" | "publish";
   race?: "delete" | "advance" | "recreate";
   reconciliation?: "missing" | "merged";
   autoMerge?: boolean;
@@ -71,8 +73,10 @@ export type GeneratedPublisherOptions = {
   existingPr?: boolean;
   expectFailure?: boolean;
   failGeneratedPush?: boolean;
+  generatedFiles?: Record<string, string>;
   invalidationPaths?: string;
   malformedAutoMergeRecord?: boolean;
+  unknownMergeabilityOnce?: boolean;
   mergeGeneratedPush?: boolean;
   noGeneratedChange?: boolean;
   overlapPolicy?: string;
@@ -94,13 +98,12 @@ export function prepareGeneratedPublisherFixture(
   const runnerTemp = path.join(root, "runner-temp");
   const prState = path.join(root, "pr-open");
   const mergeCalls = path.join(root, "merge-calls");
-  const ghCalls = path.join(root, "gh-calls");
+  const reconcileHeadRace = path.join(root, "reconcile-head-race");
   const stalePrHeadOnce = path.join(root, "stale-pr-head-once");
   const stalePrViewHeadOnce = path.join(root, "stale-pr-view-head-once");
   const summary = path.join(root, "summary.md");
 
-  copyGeneratedPublisherFixture(root, workspaceName);
-  const initialMain = runGit(worktree, ["rev-parse", "HEAD"]);
+  const initialMain = copyGeneratedPublisherFixture(root, workspaceName);
   let initialBranch = "";
   mkdirSync(fakeBin);
   mkdirSync(runnerTemp, { recursive: true });
@@ -110,6 +113,9 @@ export function prepareGeneratedPublisherFixture(
   }
   if (options.stalePrViewHeadOnce) {
     writeFileSync(stalePrViewHeadOnce, "", "utf8");
+  }
+  if (options.reconcileHeadRace) {
+    writeFileSync(reconcileHeadRace, "", "utf8");
   }
   if (options.existingPr) {
     runGit(worktree, ["switch", "-c", headBranch]);
@@ -139,8 +145,15 @@ export function prepareGeneratedPublisherFixture(
       runGit(updater, ["push", "origin", "main"]);
     }
   }
+  if (options.mode === "reconcile-stale") {
+    runGit(worktree, ["fetch", "origin", "main"]);
+    runGit(worktree, ["reset", "--hard", "origin/main"]);
+  }
   if (!options.noGeneratedChange) {
     writeFixture(worktree, "generated/a.txt", "desired-a\n");
+  }
+  for (const [name, contents] of Object.entries(options.generatedFiles ?? {})) {
+    writeFixture(worktree, name, contents);
   }
   if (options.failGeneratedPush) {
     writeExecutable(path.join(origin, "hooks", "pre-receive"), [
@@ -182,16 +195,25 @@ export function prepareGeneratedPublisherFixture(
     "fi",
     'case "${1-}:${2-}" in',
     "  auth:setup-git) exit 0 ;;",
+    "  api:graphql)",
+    '    printf "%s\\n" "$@" | grep -Fxq "name=${PUBLISH_REPOSITORY#*/}"',
+    '    printf "true\\n" ;;',
     "  api:*)",
     '    if [[ -f "$FAKE_PR_STATE" ]]; then',
+    '      if [[ -f "$FAKE_RECONCILE_HEAD_RACE.ready" ]]; then',
+    '        "${FAKE_REAL_GIT:-git}" --git-dir="$FAKE_ORIGIN" update-ref refs/heads/${FAKE_HEAD_BRANCH} "$FAKE_INITIAL_MAIN"',
+    '        rm -f "$FAKE_RECONCILE_HEAD_RACE" "$FAKE_RECONCILE_HEAD_RACE.ready"',
+    '      elif [[ -f "$FAKE_RECONCILE_HEAD_RACE" ]]; then',
+    '        : > "$FAKE_RECONCILE_HEAD_RACE.ready"',
+    "      fi",
     '      read_head "$FAKE_STALE_HEAD_ONCE"',
-    '      printf "https://github.com/openclaw/openclaw/pull/1\\t%s\\n" "$head"',
+    '      printf "https://github.com/${PUBLISH_REPOSITORY}/pull/1\\t%s\\n" "$head"',
     "    fi",
     "    ;;",
     "  pr:create)",
     '    if [[ "$FAKE_RECONCILIATION" == "" ]]; then : > "$FAKE_PR_STATE"; fi',
     '    if [[ "$FAKE_RECONCILIATION" == "merged" ]]; then "$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" update-ref refs/heads/main "$("$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" rev-parse refs/heads/${FAKE_HEAD_BRANCH})"; fi',
-    '    printf "%s\\n" "https://github.com/openclaw/openclaw/pull/1"',
+    '    printf "%s\\n" "https://github.com/${PUBLISH_REPOSITORY}/pull/1"',
     "    ;;",
     "  pr:edit) exit 0 ;;",
     "  pr:view)",
@@ -199,7 +221,9 @@ export function prepareGeneratedPublisherFixture(
     '    [[ -n "${GH_TOKEN:-}" ]]',
     '    [[ -f "$FAKE_PR_STATE" ]]',
     '    read_head "$FAKE_STALE_PR_VIEW_HEAD_ONCE"',
-    '    if [[ "$FAKE_MALFORMED_AUTO_MERGE_RECORD" == "true" ]]; then printf "%s\\n" "$head"; else printf "%s\\t%s\\n" "$head" "$FAKE_AUTO_MERGE_METHOD"; fi',
+    '    state="CLEAN"',
+    '    if [[ "$FAKE_UNKNOWN_MERGEABILITY_ONCE" == "true" && ! -f "$FAKE_PR_STATE.known" ]]; then state="UNKNOWN"; : > "$FAKE_PR_STATE.known"; fi',
+    '    if [[ "$FAKE_MALFORMED_AUTO_MERGE_RECORD" == "true" ]]; then printf "%s\\n" "$head"; else printf "%s\\t%s\\t%s\\n" "$head" "$FAKE_AUTO_MERGE_METHOD" "$state"; fi',
     '    if [[ -n "$FAKE_RACE" && ! -f "$FAKE_PR_STATE.raced" ]]; then',
     '      : > "$FAKE_PR_STATE.raced"',
     '      if [[ "$FAKE_RACE" == "advance" ]]; then',
@@ -232,14 +256,16 @@ export function prepareGeneratedPublisherFixture(
       FAKE_RACE: options.race ?? "",
       FAKE_INITIAL_MAIN: initialMain,
       FAKE_RECONCILIATION: options.reconciliation ?? "",
+      FAKE_RECONCILE_HEAD_RACE: reconcileHeadRace,
       BASE_BRANCH: "main",
       COMMIT_MESSAGE: "chore(test): refresh generated output",
       AUTO_MERGE: String(options.autoMerge ?? false),
       FAKE_AUTO_MERGE_METHOD: options.existingAutoMergeMethod ?? "",
+      FAKE_UNKNOWN_MERGEABILITY_ONCE: String(options.unknownMergeabilityOnce ?? false),
       FAKE_MALFORMED_AUTO_MERGE_RECORD: String(options.malformedAutoMergeRecord ?? false),
       FAKE_ORIGIN: origin,
       FAKE_HEAD_BRANCH: headBranch,
-      FAKE_GH_CALLS: ghCalls,
+      FAKE_GH_CALLS: path.join(root, "gh-calls"),
       FAKE_MERGE_CALLS: mergeCalls,
       FAKE_PR_STATE: prState,
       FAKE_STALE_HEAD_ONCE: stalePrHeadOnce,
@@ -247,9 +273,11 @@ export function prepareGeneratedPublisherFixture(
       GENERATED_PATHS: "generated",
       INVALIDATION_PATHS: options.invalidationPaths ?? "source",
       OVERLAP_POLICY: options.overlapPolicy ?? "defer",
+      PUBLISH_MODE: options.mode ?? "publish",
       CONTENTS_TOKEN: "contents-token",
       GH_TOKEN: "test-token",
       GITHUB_REPOSITORY: "openclaw/openclaw",
+      PUBLISH_REPOSITORY: options.repository ?? "openclaw/openclaw",
       GITHUB_REPOSITORY_OWNER: "openclaw",
       GITHUB_STEP_SUMMARY: summary,
       HEAD_BRANCH: headBranch,
@@ -259,25 +287,42 @@ export function prepareGeneratedPublisherFixture(
       RUNNER_TEMP: runnerTemp,
     },
     inspect(publishOutput: string, checkAuth = true) {
-      const authHeader = spawnSync(
-        "git",
-        ["config", "--local", "--get-all", "http.https://github.com/.extraheader"],
-        { cwd: worktree, encoding: "utf8" },
-      );
-      if (checkAuth && (authHeader.status !== 1 || authHeader.stdout.trim() !== "")) {
-        throw new Error("generated publisher left its Git authorization header configured");
+      if (checkAuth) {
+        const authHeader = spawnSync(
+          "git",
+          ["config", "--local", "--get-all", "http.https://github.com/.extraheader"],
+          { cwd: worktree, encoding: "utf8" },
+        );
+        if (authHeader.status !== 1 || authHeader.stdout.trim() !== "") {
+          throw new Error("generated publisher left its Git authorization header configured");
+        }
       }
 
       const branchRef = "refs/heads/" + headBranch;
       const originGit = (...args: string[]) => runGit(root, ["--git-dir", origin, ...args]);
-      const branchExists =
-        spawnSync("git", ["--git-dir", origin, "show-ref", "--verify", branchRef]).status === 0;
-      const branchHead = branchExists ? originGit("rev-parse", branchRef) : "";
+      const branch = spawnSync(
+        "git",
+        ["--git-dir", origin, "show-ref", "--verify", "--hash", branchRef],
+        { encoding: "utf8" },
+      );
+      const branchExists = branch.status === 0;
+      const branchHead = branchExists ? branch.stdout.trim() : "";
       const generated = (file: string) =>
         branchExists ? originGit("show", `${branchRef}:generated/${file}.txt`) : "";
       return {
         branchExists,
         branchHead,
+        localHead: runGit(worktree, ["rev-parse", "HEAD"]),
+        generatedFiles: Object.fromEntries(
+          Object.keys(options.generatedFiles ?? {}).map((name) => [
+            name,
+            branchExists
+              ? execFileSync("git", ["--git-dir", origin, "show", `${branchRef}:${name}`], {
+                  encoding: "utf8",
+                })
+              : "",
+          ]),
+        ),
         initialBranch,
         generatedA: generated("a"),
         generatedB: generated("b"),
@@ -294,36 +339,64 @@ export function runGeneratedPublisherScenario(
   baseChangePath: "a" | "b" | null,
   options: GeneratedPublisherOptions = {},
 ) {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-generated-pr-"));
+  const tempDirs = createTempDirTracker();
+  const root = tempDirs.make("openclaw-generated-pr-");
   try {
     const fixture = prepareGeneratedPublisherFixture(root, baseChangePath, options);
-    const action = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8"));
-    const run = action.runs.steps.find(
-      (step: { name?: string }) => step.name === "Publish generated pull request",
-    ).run;
-    writeExecutable(path.join(fixture.fakeBin, "timeout"), [
-      "#!/bin/bash",
-      'while [[ "$#" -gt 0 ]]; do case "$1" in --signal=*|--kill-after=*) shift ;; [0-9]*s) shift; break ;; *) break ;; esac; done',
-      'exec "$@"',
-    ]);
-    const publish = spawnSync("bash", ["-c", run], {
-      cwd: fixture.worktree,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        ...fixture.env,
-        CI_GIT_OWNER: path.resolve(".github/actions/git-owner/owner.py"),
-        PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
-      },
-    });
-    const publishOutput = `${publish.stdout}${publish.stderr}`;
-    if (options.expectFailure ? publish.status === 0 : publish.status !== 0) {
-      throw new Error(
-        `generated publisher exited ${String(publish.status)} (expected ${options.expectFailure ? "failure" : "success"}):\n${publishOutput}`,
-      );
-    }
-    return fixture.inspect(publishOutput);
+    return runPreparedGeneratedPublisher(fixture, options.expectFailure ?? false);
   } finally {
-    rmSync(root, { force: true, recursive: true });
+    tempDirs.cleanup();
+  }
+}
+
+function runPreparedGeneratedPublisher(
+  fixture: ReturnType<typeof prepareGeneratedPublisherFixture>,
+  expectFailure: boolean,
+) {
+  const action = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8"));
+  const run = action.runs.steps.find(
+    (step: { name?: string }) => step.name === "Publish generated pull request",
+  ).run;
+  writeExecutable(path.join(fixture.fakeBin, "timeout"), [
+    "#!/bin/bash",
+    'while [[ "$#" -gt 0 ]]; do case "$1" in --signal=*|--kill-after=*) shift ;; [0-9]*s) shift; break ;; *) break ;; esac; done',
+    'exec "$@"',
+  ]);
+  const publish = spawnSync("bash", ["-c", run], {
+    cwd: fixture.worktree,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...fixture.env,
+      CI_GIT_OWNER: path.resolve(".github/actions/git-owner/owner.py"),
+      PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
+    },
+  });
+  const publishOutput = `${publish.stdout}${publish.stderr}`;
+  if (expectFailure ? publish.status === 0 : publish.status !== 0) {
+    throw new Error(
+      `generated publisher exited ${String(publish.status)} (expected ${expectFailure ? "failure" : "success"}):\n${publishOutput}`,
+    );
+  }
+  return fixture.inspect(publishOutput);
+}
+
+export function runGeneratedPublisherReconcileThenPublish() {
+  const tempDirs = createTempDirTracker();
+  const root = tempDirs.make("openclaw-generated-pr-sequence-");
+  try {
+    const fixture = prepareGeneratedPublisherFixture(root, null, {
+      autoMerge: true,
+      existingAutoMergeMethod: "SQUASH",
+      existingPr: true,
+      mode: "reconcile-stale",
+      updateSource: true,
+    });
+    const reconcile = runPreparedGeneratedPublisher(fixture, false);
+    fixture.env.PUBLISH_MODE = "publish";
+    const publish = runPreparedGeneratedPublisher(fixture, false);
+    return { publish, reconcile };
+  } finally {
+    tempDirs.cleanup();
   }
 }

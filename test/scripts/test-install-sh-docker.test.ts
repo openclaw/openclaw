@@ -22,6 +22,7 @@ import {
 import { withinTest } from "../helpers/promise.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { isProcessAlive } from "./live-process-fixture.test-support.js";
+import { writeFixtureFiles as writeFiles } from "./z0632-fixtures.test-support.js";
 
 const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
 const INSTALL_E2E_DOCKER_PATH = "scripts/test-install-sh-e2e-docker.sh";
@@ -123,14 +124,6 @@ function writeExecutable(file: string, source: string) {
 function writeCommands(bin: string, commands: Record<string, string>) {
   for (const [name, source] of Object.entries(commands)) {
     writeExecutable(join(bin, name), source);
-  }
-}
-
-function writeFiles(root: string, files: Record<string, string>) {
-  for (const [name, source] of Object.entries(files)) {
-    const file = join(root, name);
-    mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(file, source);
   }
 }
 
@@ -346,10 +339,13 @@ const UPDATE_URL = "http://candidate.invalid/openclaw.tgz";
 function runUpdateJson(
   payload: {
     status: string;
+    runId?: string;
     reason?: string;
     before: { version: string; buildId?: string };
-    after: { version: string; buildId?: string };
-    steps: Record<string, unknown>[];
+    after?: { version: string; buildId?: string };
+    steps: readonly Record<string, unknown>[];
+    target?: Record<string, unknown>;
+    run?: unknown;
   },
   env: NodeJS.ProcessEnv = {},
 ) {
@@ -361,7 +357,7 @@ function runUpdateJson(
     env: {
       ...process.env,
       UPDATE_JSON: JSON.stringify(payload),
-      UPDATE_EXPECT_VERSION: payload.after.version,
+      UPDATE_EXPECT_VERSION: payload.after?.version ?? payload.before.version,
       UPDATE_BASELINE_VERSION: payload.before.version,
       UPDATE_TAG_URL: UPDATE_URL,
       ...env,
@@ -615,8 +611,8 @@ describe("test-install-sh-docker", () => {
       writeCommands(bin, {
         timeout: '#!/bin/bash\nprintf "%s\\n" "$*" >> "$TIMEOUT_RECEIPTS"\nshift 2\nexec "$@"\n',
         npm: `#!/usr/bin/env node
-const fs = require("node:fs");
-const path = require("node:path");
+import fs from "node:fs";
+import path from "node:path";
 const args = process.argv.slice(2);
 const pack = args.indexOf("pack");
 if (pack >= 0) {
@@ -632,9 +628,9 @@ if (pack >= 0) {
 }
 `,
         python3: `#!/usr/bin/env node
-const fs = require("node:fs");
-const http = require("node:http");
-const path = require("node:path");
+import fs from "node:fs";
+import http from "node:http";
+import path from "node:path";
 http.createServer((request, response) => {
   const file = path.join(process.cwd(), new URL(request.url, "http://localhost").pathname.slice(1));
   fs.createReadStream(file).on("error", () => {
@@ -648,7 +644,7 @@ http.createServer((request, response) => {
         // Join actual listener readiness instead of spending the runner's startup sleep.
         sleep: '#!/bin/bash\nIFS= read -r ready < "$SERVER_READY"\n[[ "$ready" == ready ]]\n',
         docker: `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 if (args[0] !== "run") throw new Error("Unexpected Docker invocation");
 const env = new Map();
@@ -822,10 +818,12 @@ fs.appendFileSync(process.env.CONTAINER_RECEIPTS, JSON.stringify({ args, env: Ob
       "unset HOME; source scripts/docker/install-sh-common/version-parse.sh; resolve_npm_config_path_value '~/.npmrc'",
     );
     expect(noHomeResult.status, noHomeResult.stderr).toBe(0);
+    const noHomeEnv = { ...process.env };
+    delete noHomeEnv.HOME;
     const nativeHomeResult = runCommand(
       process.execPath,
-      ["-e", "delete process.env.HOME; process.stdout.write(require('node:os').homedir())"],
-      { env: process.env },
+      ["-e", "process.stdout.write(require('node:os').homedir())"],
+      { env: noHomeEnv },
     );
     expect(nativeHomeResult.status, nativeHomeResult.stderr).toBe(0);
     expect(noHomeResult.stdout).toBe(join(nativeHomeResult.stdout, ".npmrc"));
@@ -1146,6 +1144,39 @@ printf 'status=%s\\n' "$status"
     );
   });
 
+  it.each([NONROOT_DOCKERFILE_PATH, "scripts/docker/install-sh-smoke/Dockerfile"])(
+    "retries failed package indexes without installing from incomplete lists: %s",
+    (dockerfilePath) => {
+      const dockerfile = readFileSync(dockerfilePath, "utf8");
+      const start = dockerfile.indexOf("  set -eux;");
+      const end = dockerfile.indexOf("\n\n", start);
+      const install = dockerfile.slice(start, end).replace(/\\\r?\n/gu, " ");
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `
+        apt-get() {
+          if [[ "$1" == update ]]; then
+            echo update
+            # APT normally tolerates failed indexes; strict mode must reject them.
+            [[ " $* " != *" APT::Update::Error-Mode=any "* ]]
+          else
+            echo unexpected-install
+          fi
+        }
+        sleep() { :; }
+        ${install}
+      `,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stdout.trim().split("\n")).toEqual(["update", "update", "update"]);
+      expect(result.stderr).toContain("apt-get update failed (attempt 3)");
+    },
+  );
+
   it("does not execute or retain a non-root installer after curl fails", () => {
     const fixture = runFailedInstallerDownload(true);
     const outputPath = readFileSync(fixture.outputPathCapture, "utf8");
@@ -1355,7 +1386,7 @@ printf 'command-status=%s\\n' "$command_result"
         npm: '#!/bin/bash\nif [[ " $* " == *" root -g "* ]]; then printf "%s\\n" "$FAKE_GLOBAL_ROOT"; fi\n',
         timeout: '#!/bin/bash\nshift 2\nexec "$@"\n',
         openclaw: `#!${testNodeExecPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
   console.log("OpenClaw " + fs.readFileSync(process.env.FAKE_VERSION_FILE, "utf8"));
@@ -1500,6 +1531,21 @@ fs.readFileSync = (file, ...args) => {
       "already-current",
       1,
     ],
+    [
+      "failed recovery cleanup",
+      {
+        steps: [
+          {
+            name: "package-install",
+            exitCode: 0,
+            command: "npm install http://candidate.invalid/openclaw.tgz",
+          },
+          { name: "recovery-artifact-cleanup", exitCode: 1 },
+        ],
+      },
+      "already-current",
+      1,
+    ],
     ["skipped first upgrade", {}, "applied", 1],
   ])("validates explicit installer outcome: %s", (_label, overrides, outcome, expectedExit) => {
     const payload = {
@@ -1512,6 +1558,95 @@ fs.readFileSync = (file, ...args) => {
     };
     const result = runUpdateJson(payload, { UPDATE_EXPECT_OUTCOME: outcome });
     expect(result.status, result.stderr).toBe(expectedExit);
+  });
+
+  it("accepts one automatic recovery cleanup after an already-current update", () => {
+    const payload = {
+      status: "skipped",
+      reason: "already-current",
+      before: { version: "2026.9.3", buildId: "candidate-build" },
+      after: { version: "2026.9.3", buildId: "candidate-build" },
+      steps: [
+        { name: "package-install", exitCode: 0, command: `npm install ${UPDATE_URL}` },
+        { name: "recovery-artifact-cleanup", exitCode: 0 },
+      ],
+    };
+
+    expect(runUpdateJson(payload, { UPDATE_EXPECT_OUTCOME: "already-current" }).status).toBe(0);
+  });
+
+  it("requires both halves of a wrapped already-current receipt and the installed build witness", () => {
+    const before = { version: "2026.11.11", buildId: "candidate-build" };
+    const stage = {
+      name: "package-install",
+      exitCode: 0,
+      command: `npm install --allow-scripts=${UPDATE_URL} ${UPDATE_URL}`,
+    };
+    const run = {
+      runId: "candidate-update-run",
+      phase: "finished",
+      status: "skipped",
+      reason: "already-current",
+      before,
+      after: before,
+      target: { kind: "package", channel: "stable", version: before.version, tag: UPDATE_URL },
+      steps: [
+        { step: "staging", status: "completed" },
+        { step: "validating", status: "skipped" },
+        { step: "global update", status: "completed", exitCode: 0 },
+      ],
+    };
+    const receipt = {
+      runId: run.runId,
+      status: run.status,
+      reason: run.reason,
+      before,
+      after: before,
+      steps: [stage],
+      run,
+    };
+    const buildInfo = join(tempDirs.make("installer-noop-build-"), "build-info.json");
+    const verify = (payload: Parameters<typeof runUpdateJson>[0], buildId = before.buildId) => {
+      writeFileSync(buildInfo, JSON.stringify({ buildId }));
+      return runUpdateJson(payload, {
+        UPDATE_EXPECT_OUTCOME: "already-current",
+        BUILD_INFO: buildInfo,
+        INSTALLED_BUILD_BEFORE: before.buildId,
+      });
+    };
+    const positive = verify(receipt);
+    expect(positive.status, positive.stderr).toBe(0);
+    expect(positive.stdout).toContain("installed build unchanged, no activation");
+    const bare = verify({ ...run, steps: [{ step: "prepare:pack", status: "completed" }] });
+    expect(bare.status, bare.stderr).toBe(0);
+
+    const negatives = [
+      [{ ...receipt, run: null }, "run identity"],
+      [{ ...receipt, run: { ...run, runId: "other-run" } }, "run identity"],
+      [{ ...receipt, run: { ...run, target: { ...run.target, tag: "wrong" } } }, "run target"],
+      [{ ...receipt, run: { ...run, phase: "validating" } }, "terminal"],
+      [
+        { ...receipt, run: { ...run, steps: [{ step: "activating", status: "completed" }] } },
+        "activated a release",
+      ],
+      [
+        {
+          ...receipt,
+          steps: [
+            { ...stage, command: `npm install --allow-scripts=${UPDATE_URL} ${UPDATE_URL}.wrong` },
+          ],
+        },
+        "missing expected tgz URL",
+      ],
+    ] as const;
+    for (const [payload, error] of negatives) {
+      const result = verify(payload);
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain(error);
+    }
+    const changed = verify(receipt, "different-build");
+    expect(changed.status, changed.stderr).toBe(1);
+    expect(changed.stderr).toContain("changed or omitted installed build identity");
   });
 
   it("accepts legacy same-version apply only with the frozen-target compatibility flag", () => {

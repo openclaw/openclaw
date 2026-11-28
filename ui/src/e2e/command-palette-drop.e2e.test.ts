@@ -286,6 +286,12 @@ suite.define(() => {
             path.join(suite.artifactDir, "palette-" + width + ".png"),
             frame.elements[0]!.png,
           );
+          const chipBox = (await palette.locator(".chat-attachment-thumb").boundingBox())!;
+          const inputBox = (await input.boundingBox())!;
+          expect(chipBox.x).toBeCloseTo(inputBox.x, 0);
+          const gap = inputBox.y - (chipBox.y + chipBox.height);
+          expect(gap).toBeGreaterThanOrEqual(0);
+          expect(gap).toBeLessThanOrEqual(8);
           await palette.getByRole("button", { name: "Remove launcher.png", exact: true }).click();
           await expect.poll(() => images.count()).toBe(0);
           await attach(surface, "drag");
@@ -332,10 +338,9 @@ suite.define(() => {
           expect(await gateway.getRequests("sessions.create")).toEqual([]);
           if (width === 390) {
             expect(await start.locator("kbd").count()).toBe(0);
-            const footer = surface.locator(":scope > .cmd-palette__footer");
-            expect(await footer.locator("kbd").count()).toBe(1);
-            expect(await footer.locator("kbd").textContent()).toMatch(/^(Enter|⏎)$/);
           }
+          // Leave the attachment hover target before testing the palette's Escape shortcut.
+          await page.mouse.move(0, 0);
           await input.press("Escape");
           await input.waitFor({ state: "hidden" });
           await page.keyboard.press("ControlOrMeta+K");

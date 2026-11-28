@@ -137,6 +137,7 @@ async function runLane(
     let captured: ProviderPrefixSnapshot | undefined;
     let requestGapMs: number | undefined;
     let prefixError: Error | undefined;
+    let httpStatus: number | undefined;
     let requestCount = 0;
     const responseStream = await stream(model, context, {
       apiKey,
@@ -148,6 +149,9 @@ async function runLane(
       maxRetries: 0,
       timeoutMs: 90_000,
       signal: AbortSignal.timeout(90_000),
+      onResponse({ status }) {
+        httpStatus = status;
+      },
       onPayload(payload) {
         try {
           requestCount += 1;
@@ -184,7 +188,7 @@ async function runLane(
     }
     assert(
       response.stopReason !== "error" && response.stopReason !== "aborted",
-      `${name}/${stage}: provider request failed (${response.stopReason})${mockMode ? `: ${response.errorMessage}` : ""}`,
+      `${name}/${stage}: provider request failed (${response.stopReason}, HTTP ${httpStatus ?? "unobserved"})${mockMode ? `: ${response.errorMessage}` : ""}`,
     );
     assert(captured, `${name}/${stage}: no production request was captured`);
     const { cacheRead, cacheWrite, input, output } = response.usage;
@@ -280,7 +284,7 @@ try {
   for (const provider of providers) {
     const keyName = `${provider.toUpperCase()}_API_KEY`;
     const apiKey = mockMode ? "synthetic-cache-probe-key" : process.env[keyName];
-    assert(apiKey?.trim(), `${keyName} is required; selected cache lanes cannot skip`);
+    assert(apiKey && apiKey.trim(), `${keyName} is required; selected cache lanes cannot skip`);
     if (provider === "anthropic") {
       const model = { ...ANTHROPIC_MODEL, ...(mock ? { baseUrl: mock.baseUrl } : {}) };
       const { bindsClaudeThinkingPrefix, streamAnthropic } = await loadAnthropicProviderInternals();

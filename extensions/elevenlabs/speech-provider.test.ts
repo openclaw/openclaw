@@ -14,9 +14,9 @@ vi.mock("./config-api.js", () => ({
 }));
 
 // mock-isolation: Synthesis uses fixture-owned transport and never performs external requests.
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: fetchMock,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
 }));
 
 const DIRECTIVE_POLICY = createSpeechDirectivePolicy();

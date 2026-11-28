@@ -11,11 +11,13 @@ describe("oc-path-parse-edges", () => {
   it("round-trip canonical forms", () => {
     const cases = [
       "oc://SOUL.md",
+      "oc://.settings.json/key",
+      "oc://notes..json/key",
       "oc://SOUL.md/Boundaries",
       "oc://SOUL.md/Boundaries/deny-rule-1",
       "oc://SOUL.md/Boundaries/deny-rule-1/risk",
-      "oc://SOUL.md?session=daily",
-      "oc://X.md/a/b/c?session=s",
+      "oc://e\u0301.md?session=e\u0301",
+      "oc://é.md/a/b/e\u0301?session=s",
       "oc://skills/email-drafter/[frontmatter]/name",
       "oc://config/plugins.entries.foo.token",
       "oc://config.jsonc/items/$first",
@@ -55,13 +57,9 @@ describe("oc-path-parse-edges", () => {
   });
 
   it("formatOcPath rejects field without item or section", () => {
-    expect(() => formatOcPath({ file: "X", field: "name" })).toThrow(OcPathError);
-    try {
-      formatOcPath({ file: "X", field: "name" });
-    } catch (err) {
-      expect(err).toBeInstanceOf(OcPathError);
-      expect((err as OcPathError).code).toBe("OC_PATH_NESTING");
-    }
+    expect(() => formatOcPath({ file: "X", field: "name" })).toThrow(
+      expect.objectContaining({ code: "OC_PATH_NESTING" }),
+    );
   });
 
   it("wildcard detection is quote-aware (literal `*` inside quoted segment)", () => {

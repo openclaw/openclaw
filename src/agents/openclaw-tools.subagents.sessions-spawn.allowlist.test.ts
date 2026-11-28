@@ -17,7 +17,7 @@ type AgentTree = NonNullable<OpenClawConfig["agents"]>;
 function resolveAgentConfigFromEntries(cfg: Record<string, unknown>, agentId: string) {
   return (cfg.agents as AgentTree | undefined)?.entries?.[agentId];
 }
-function setConfig(main = {}, targets = {}, defaults?: Record<string, unknown>) {
+function setConfig(main: object, targets = {}, defaults?: Record<string, unknown>) {
   hoisted.configOverride = createSubagentSpawnTestConfig(undefined, {
     agents: { entries: { main, ...targets }, ...(defaults ? { defaults } : {}) },
   });
@@ -53,7 +53,7 @@ beforeEach(async () => {
 });
 
 it("forbids cross-agent targets outside the requester's allowlist", async () => {
-  setConfig({ subagents: { allowAgents: ["alpha"] } });
+  setConfig({ subagents: { allowAgents: ["alpha"] } }, { alpha: {}, beta: {} });
   expectRejected(await spawn("beta"));
 });
 

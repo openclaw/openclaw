@@ -26,6 +26,8 @@ suite.define(() => {
         },
         async ({ page }) => {
           const sessionKey = "agent:cloud:unicode-placement-proof";
+          const sessions = createdSessionListResult(sessionKey);
+          const [session] = sessions.sessions;
           const message = "Keep this task after a Unicode placement failure";
           const lead = "Unicode placement diagnostic: ";
           const prefix = writeFails ? storageWarning : "";
@@ -54,11 +56,11 @@ suite.define(() => {
                 repositoryStatus: "git",
               },
               "sessions.create": { key: sessionKey },
-              "sessions.list": createdSessionListResult(sessionKey),
-              "sessions.describe": { session: {} },
+              "sessions.list": sessions,
+              "sessions.describe": { session },
               "chat.history": {
                 messages: [],
-                sessionInfo: { hasActiveRun: false, status: "done" },
+                sessionInfo: { ...session, hasActiveRun: false, status: "done" },
               },
             },
           });
@@ -96,7 +98,7 @@ suite.define(() => {
           const alert = page.getByRole("alert").filter({ hasText: lead });
           await expect(alert).toBeVisible();
           await alert.locator("summary").click();
-          const detail = alert.locator("pre");
+          const detail = alert.locator(".lazy-view-error__detail");
           await expect(detail).toBeVisible();
           const rendered = await detail.textContent();
           const renderedWellFormed =

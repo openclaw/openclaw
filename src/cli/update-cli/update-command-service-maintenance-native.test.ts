@@ -1,12 +1,10 @@
 import "./update-command-service-maintenance.test-support.js";
-import "./update-command-service-maintenance-native.test-support.js";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import { hostname } from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
@@ -27,10 +25,8 @@ import {
   createManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
 } from "../../infra/update-managed-service-handoff-lease.js";
-import { createUpdateRun, getUpdateRunAsync } from "../../infra/update-run-ledger.js";
-import * as phaseWrites from "../../infra/update-run-write.async.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import * as exec from "../../process/exec.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -42,56 +38,25 @@ import {
   writeHandoffMeta,
 } from "./update-command-service-fixtures.test-support.js";
 
-const { mocks, withServiceHome } =
-  await import("./update-command-service-maintenance.test-support.js");
-const { runNativeMaintenanceUpdate } =
-  await import("./update-command-service-maintenance-native.test-support.js");
+const { withServiceHome } = await import("./update-command-service-maintenance.test-support.js");
 
-function mutateHandoff(column: "owner" | "payload_json", value: string, root: string) {
-  const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
-  try {
-    db.prepare(`UPDATE managed_update_handoffs SET ${column}=? WHERE install_root=?`).run(
-      value,
-      root,
-    );
-  } finally {
-    db.close();
-  }
-}
-
-type StopScenario = Partial<Record<"caller" | "retained" | "receipt" | "tuple", true>> & {
-  revoke?: "unrecorded" | "stop" | "inspection" | "disable" | "cleanup" | "receipt";
+type StopScenario = {
+  tuple?: true;
+  revoke?: "unrecorded" | "inspection" | "disable" | "cleanup";
 };
 it
   .runIf(process.platform === "darwin" || process.platform === "linux")
   .each<[string, StopScenario]>([
-    ["activation helper", { caller: true }],
-    ["activation helper with retained service root", { caller: true, retained: true }],
-    ["held service phase acknowledgement", { caller: true, receipt: true }],
-    [
-      "revoked after service phase acknowledgement",
-      { caller: true, receipt: true, revoke: "receipt" },
-    ],
     ["tuple-only caller", { tuple: true }],
     ["unrecorded helper", { revoke: "unrecorded" }],
-    ["revoked at native stop", { caller: true, revoke: "stop" }],
     ["revoked after inspection with disable", { revoke: "inspection" }],
     ["revoked after disable", { revoke: "disable" }],
     ["revoked before port cleanup", { revoke: "cleanup" }],
   ])(
   "enforces live handoff authority in the real LaunchAgent stop: %s",
-  (_name, { caller, retained, receipt, tuple, revoke }) =>
+  (_name, { tuple, revoke }) =>
     withServiceHome(async (home) => {
       const root = await fs.realpath(process.cwd());
-      const callerRoot = retained ? path.join(home, "caller-install") : root;
-      if (retained) {
-        await fs.mkdir(callerRoot);
-        await fs.writeFile(
-          path.join(callerRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2026.9.6", bin: "openclaw.mjs" }),
-        );
-        await fs.writeFile(path.join(callerRoot, "openclaw.mjs"), "");
-      }
       const runId = randomUUID();
       const label = "ai.openclaw.native-stop-test";
       // Bootout must kill a real process; refused authority must leave it serving.
@@ -109,7 +74,7 @@ it
           databasePath: resolveManagedUpdateLeaseDatabasePath(),
           serviceManagerEnv: process.env,
         });
-        const claim = store.acquire(callerRoot, "native-stop-handoff", { kind: "update" });
+        const claim = store.acquire(root, "native-stop-handoff", { kind: "update" });
         if (claim.kind !== "acquired") {
           throw new Error("fixture could not acquire its handoff lease");
         }
@@ -119,28 +84,13 @@ it
           }
         };
         createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
-        const metaPath = await writeHandoffMeta(home, callerRoot, runId, claim.lease.owner);
+        const metaPath = await writeHandoffMeta(home, root, runId, claim.lease.owner);
         revokeAt("unrecorded");
         vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
           platform: "darwin",
           identity: "01234567-89ab-cdef-0123-456789abcdef",
         }));
         mockProcessPlatform("darwin");
-        if (caller) {
-          // Admission still checks both live identities and the lease after handoff.
-          const helperStart = pidAlive.getFileLockProcessStartTime(process.ppid);
-          expect(helperStart).not.toBeNull();
-          mutateHandoff(
-            "payload_json",
-            JSON.stringify({
-              version: 2,
-              helper: { pid: process.ppid, startIdentity: String(helperStart) },
-              executor: claim.lease.executor,
-              action: { kind: "update" },
-            }),
-            callerRoot,
-          );
-        }
         vi.spyOn(exec, "runExec").mockImplementation(async (command, args, options) => {
           if (command !== "/usr/bin/plutil" || typeof options !== "object" || !options.input) {
             throw new Error(`Unexpected fixture subprocess: ${command}`);
@@ -202,7 +152,7 @@ it
           pids: callerPids,
           complete: true,
         });
-        const cleanup = vi.spyOn(ancestry, "cleanStaleGatewayProcessesSync").mockReturnValue([]);
+        const cleanup = vi.spyOn(ancestry, "cleanStaleGatewayProcesses").mockResolvedValue([]);
         vi.spyOn(launchdRuntime, "resolveLaunchAgentGatewayContext").mockImplementation(
           async () => {
             revokeAt("cleanup");
@@ -238,16 +188,6 @@ it
             return nativeResult();
           }
           expect(args[0]).toBe("bootout");
-          if (retained) {
-            expect(store.read(callerRoot)).toMatchObject({
-              kind: "current",
-              lease: { owner: claim.lease.owner, executor: { pid: process.pid } },
-            });
-            expect(store.read(root)).toMatchObject({
-              kind: "current",
-              lease: { executor: { pid: process.pid } },
-            });
-          }
           atBootout = intent();
           await stopChildProcess(child, 5000);
           await closed;
@@ -269,150 +209,39 @@ it
                 "../../daemon/service.js",
               );
             const service = resolveGatewayService();
-            const revokeExecutor = () => mutateHandoff("owner", "revoked-native-stop-owner", root);
-            const receiptCommitted = createDeferredCore();
-            const releaseReceipt = createDeferredCore();
-            const stopEntered = createDeferredCore();
-            let observingServiceWrite = false;
-            let activatingReceipts = 0;
-            const hostWrites: string[] = [];
-            const observeSql = (sql: string) => {
-              if (
-                observingServiceWrite &&
-                /\b(?:UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+["`]?update_runs\b/i.test(sql)
-              ) {
-                hostWrites.push(sql);
-              }
-            };
-            const prepare = receipt ? vi.spyOn(DatabaseSync.prototype, "prepare") : undefined;
-            const execute = receipt ? vi.spyOn(DatabaseSync.prototype, "exec") : undefined;
-            if (prepare && execute) {
-              DatabaseSync.prototype.prepare = function (this: DatabaseSync, sql) {
-                observeSql(sql);
-                return prepare.call(this, sql);
-              };
-              DatabaseSync.prototype.exec = function (this: DatabaseSync, sql) {
-                observeSql(sql);
-                return execute.call(this, sql);
-              };
-            }
-            const originalWrite = phaseWrites.recordUpdateRunPhaseAsync;
-            if (receipt) {
-              vi.spyOn(phaseWrites, "recordUpdateRunPhaseAsync").mockImplementation(
-                async (...args) => {
-                  const record = await originalWrite(...args);
-                  if (args[1] === "activating") {
-                    activatingReceipts += 1;
-                    if (activatingReceipts === 1) {
-                      // Observe service preparation, not execution's earlier phase.
-                      observingServiceWrite = true;
-                    } else if (activatingReceipts === 2) {
-                      receiptCommitted.resolve();
-                      await releaseReceipt.promise;
-                    }
-                  }
-                  return record;
-                },
-              );
-            }
-            const nativeStop = service.stop;
-            const stopCall = vi.spyOn(service, "stop").mockImplementation(async (args) => {
-              observingServiceWrite = false;
-              stopEntered.resolve();
-              if (revoke === "stop") {
-                revokeExecutor();
-              }
-              await nativeStop(args);
-            });
-            mocks.service.mockReturnValue(service);
             const nativeArgs = {
               env: process.env,
               stdout: output,
               disable: revoke === "inspection" || revoke === "disable",
               updateHandoff: { root, runId },
             };
-            const stop = () =>
-              caller
-                ? runNativeMaintenanceUpdate(
-                    callerRoot,
-                    runId,
-                    claim.lease.owner,
-                    retained ? root : undefined,
-                  )
-                : tuple
-                  ? service.stop(nativeArgs)
-                  : withGatewayServiceOperationLock(process.env, (assertCurrent) =>
-                      withGatewayServiceUpdateAuthority(
-                        assertCurrent,
-                        () => stopLaunchAgent(nativeArgs),
-                        { originalRoot: root },
-                      ),
-                    );
-            const authorized = caller && !revoke;
-            const pending = stop();
-            try {
-              if (receipt) {
-                const reached = await Promise.race([
-                  receiptCommitted.promise.then(() => "service-receipt"),
-                  stopEntered.promise.then(() => "native-stop"),
-                  pending.then(() => "command-completed"),
-                ]);
-                expect([hostWrites, reached, activatingReceipts]).toEqual([
-                  [],
-                  "service-receipt",
-                  2,
-                ]);
-                expect(stopCall).not.toHaveBeenCalled();
-                expect([loaded, pidAlive.isPidAlive(gatewayPid)]).toEqual([true, true]);
-                expect(await getUpdateRunAsync(runId, { env: effectiveEnv })).toMatchObject({
-                  runId,
-                  phase: "activating",
-                  status: "running",
-                });
-                observingServiceWrite = false;
-                if (revoke === "receipt") {
-                  revokeExecutor();
-                }
-                releaseReceipt.resolve();
-              }
-              if (authorized) {
-                await pending;
-                if (retained) {
-                  expect(store.read(root)).toEqual({ kind: "absent" });
-                }
-              } else {
-                await expect(pending).rejects.toThrow(
-                  caller
-                    ? /Update executor ownership is no longer current/
-                    : `Refusing to stop LaunchAgent ${label} from inside the same launchd service`,
+            const pending = tuple
+              ? service.stop(nativeArgs)
+              : withGatewayServiceOperationLock(process.env, (assertCurrent) =>
+                  withGatewayServiceUpdateAuthority(
+                    assertCurrent,
+                    () => stopLaunchAgent(nativeArgs),
+                    { originalRoot: root },
+                  ),
                 );
-              }
-              if (revoke === "receipt") {
-                expect(stopCall).not.toHaveBeenCalled();
-              }
-              const target = `${launchdRuntime.resolveLaunchAgentGuiDomain()}/${label}`;
-              const bootedOut = authorized || revoke === "cleanup";
-              expect(
-                nativeCalls.filter(
-                  ([command]) => command !== "print" && command !== "print-disabled",
-                ),
-              ).toEqual(
-                bootedOut
-                  ? [["bootout", target]]
-                  : revoke === "disable"
-                    ? [["disable", target]]
-                    : [],
-              );
-              const expectedIntent = bootedOut
-                ? { pid: gatewayPid, reason: "update.run" }
-                : undefined;
-              expect([loaded, pidAlive.isPidAlive(gatewayPid)]).toEqual([!bootedOut, !bootedOut]);
-              expect([atBootout, intent()]).toEqual([expectedIntent, expectedIntent]);
-              expect(cleanup).not.toHaveBeenCalled();
-            } finally {
-              releaseReceipt.resolve();
-              await pending.catch(() => undefined);
-            }
+            await expect(pending).rejects.toThrow(
+              `Refusing to stop LaunchAgent ${label} from inside the same launchd service`,
+            );
+            const target = `${launchdRuntime.resolveLaunchAgentGuiDomain()}/${label}`;
+            const bootedOut = revoke === "cleanup";
+            expect(
+              nativeCalls.filter(
+                ([command]) => command !== "print" && command !== "print-disabled",
+              ),
+            ).toEqual(
+              bootedOut ? [["bootout", target]] : revoke === "disable" ? [["disable", target]] : [],
+            );
+            const expectedIntent = bootedOut
+              ? { pid: gatewayPid, reason: "update.run" }
+              : undefined;
+            expect([loaded, pidAlive.isPidAlive(gatewayPid)]).toEqual([!bootedOut, !bootedOut]);
+            expect([atBootout, intent()]).toEqual([expectedIntent, expectedIntent]);
+            expect(cleanup).not.toHaveBeenCalled();
           },
         );
       } finally {

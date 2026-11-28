@@ -22,7 +22,7 @@ function mount(overrides: Parameters<typeof createComposerProps>[0] = {}) {
   const button = (stop = false) =>
     findComposerButton(
       container,
-      t(stop ? "chat.runControls.stopGenerating" : "chat.runControls.sendMessage"),
+      t(stop ? "chat.runControls.stop" : "chat.runControls.sendMessage"),
     );
   return { container, input, button };
 }

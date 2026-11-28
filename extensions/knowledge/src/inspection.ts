@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   CompactMetadata,
   RecordInput,
@@ -8,7 +9,7 @@ import type {
 import { RECORD_RESPONSE_MAX_BYTES } from "./limits.js";
 import type { Envelope, LoadedRecord } from "./model.js";
 import { eligible } from "./retrieval.js";
-import { splitsPair } from "./text-window.js";
+import { splitsPair, textWindow } from "./text-window.js";
 import type { SampleVault } from "./vault.js";
 
 const summary = ({
@@ -53,7 +54,9 @@ const compactMetadata = (m: Envelope): CompactMetadata => {
     "attribution",
     "assertion_origin",
     "claim_kind",
+    "subject_hint",
     "aliases",
+    "tags",
     "fields",
     "updated_at",
     "supersedes",
@@ -125,25 +128,33 @@ function boundRecord(result: RecordOutput, input: RecordInput, compact = false):
     }
   }
   // Full metadata repeats every evidence descriptor; paged evidence remains available.
-  // Compact domain fields are a preview; full metadata keeps them for edits that replace fields.
   const metadata = result.record?.metadata;
   if (metadata?.evidence !== undefined && size() > RECORD_RESPONSE_BYTES) {
     delete metadata.evidence;
     (result.omitted ??= []).push("metadata.evidence");
   }
-  if (compact && metadata?.fields !== undefined && size() > RECORD_RESPONSE_BYTES) {
-    delete metadata.fields;
-    (result.omitted ??= []).push("metadata.fields");
-  }
+  // The body pages and domain fields do not, so the body shrinks first. Compact fields
+  // too large to fit beside any body text are omitted; edits then preserve them by
+  // leaving fields out.
   const r = result.record,
     key = result.view === "raw" ? "raw" : "body";
-  if (r && typeof r[key] === "string" && size() > RECORD_RESPONSE_BYTES) {
-    const original = r[key]!;
+  const original = r && typeof r[key] === "string" ? r[key] : undefined;
+  const originalNext = result.content.nextOffset;
+  // Each attempt starts from the whole window; false when not one character fits.
+  const fit = () => {
+    if (original === undefined) {
+      return size() <= RECORD_RESPONSE_BYTES;
+    }
+    r![key] = original;
+    result.content.nextOffset = originalNext;
+    if (size() <= RECORD_RESPONSE_BYTES) {
+      return true;
+    }
     let low = 0,
       high = original.length;
     while (low < high) {
       const mid = Math.ceil((low + high) / 2);
-      r[key] = original.slice(0, mid);
+      r![key] = original.slice(0, mid);
       result.content.nextOffset = next(result.content.offset, mid, result.content.totalChars);
       if (size() <= RECORD_RESPONSE_BYTES) {
         low = mid;
@@ -154,13 +165,20 @@ function boundRecord(result: RecordOutput, input: RecordInput, compact = false):
     if (splitsPair(original, low)) {
       low--;
     }
-    r[key] = original.slice(0, low);
+    r![key] = original.slice(0, low);
     result.content.nextOffset = next(result.content.offset, low, result.content.totalChars);
-    if (!low && original.length) {
-      throw new Error(
-        "Record details exceed response budget. Use view=raw, metadataView=none and no evidence/references for paged original text.",
-      );
-    }
+    return low > 0 && size() <= RECORD_RESPONSE_BYTES;
+  };
+  let fits = fit();
+  if (!fits && compact && metadata?.fields !== undefined) {
+    delete metadata.fields;
+    (result.omitted ??= []).push("metadata.fields");
+    fits = fit();
+  }
+  if (!fits && original) {
+    throw new Error(
+      "Record details exceed response budget. Use view=raw, metadataView=none and no evidence/references for paged original text.",
+    );
   }
   if (size() > RECORD_RESPONSE_BYTES) {
     throw new Error(
@@ -268,7 +286,7 @@ export async function inspectRecord(vault: SampleVault, input: RecordInput): Pro
     );
     let remaining = input.maxEvidenceChars ?? 4000;
     const preview = <T extends { excerpt: string; excerptTruncated: boolean }>(e: T): T => {
-      const excerpt = e.excerpt.slice(0, remaining);
+      const excerpt = truncateUtf16Safe(e.excerpt, remaining);
       remaining -= excerpt.length;
       return {
         ...e,
@@ -289,7 +307,7 @@ export async function inspectRecord(vault: SampleVault, input: RecordInput): Pro
       },
     }));
     result.evidence = detail.evidence.map((e) => {
-      const excerpt = e.excerpt.slice(0, remaining);
+      const excerpt = truncateUtf16Safe(e.excerpt, remaining);
       remaining -= excerpt.length;
       return Object.assign(e, {
         excerpt,
@@ -347,10 +365,14 @@ export async function inspectOntology(
           "Ontology source unavailable. List view=sources to find an authorized sourcePath.",
         );
       }
-      const raw = source.raw.slice(offset, offset + (input.maxChars ?? 12000));
-      result.source = { path: source.path, raw, totalChars: source.raw.length };
+      const sourceWindow = textWindow(source.raw, offset, input.maxChars ?? 12000);
+      result.source = {
+        path: source.path,
+        raw: sourceWindow.text,
+        totalChars: source.raw.length,
+      };
       result.total = source.raw.length;
-      result.nextOffset = next(offset, raw.length, source.raw.length);
+      result.nextOffset = sourceWindow.content.nextOffset;
     } else {
       result.sources = page(data.sources).map((s) => ({
         path: s.path,

@@ -7,13 +7,205 @@ import {
   captureMatrixLedgerBoundary,
   collectMatrixUsage,
   readMatrixSessionLedger,
+  readMatrixModelAccounting,
   type MatrixSessionLedger,
 } from "../../scripts/lib/code-mode-matrix-usage.js";
+import { emitTrustedDiagnosticEvent } from "../../src/infra/diagnostic-events.js";
+import {
+  emitDiagnosticsTimelineEvent,
+  finishDiagnosticsTimeline,
+  flushDiagnosticsTimeline,
+} from "../../src/infra/diagnostics-timeline.js";
+import { withEnvAsync } from "../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const ROOT = "agent:qa:matrix:root";
 const CHILD = "agent:worker:subagent:child";
+
+describe("matrix logical model accounting", () => {
+  type TimelineRow = Record<string, unknown> & { attributes: Record<string, unknown> };
+  function timeline(extra: Record<string, unknown>[] = []) {
+    return [
+      { name: "timeline.capture.started", attributes: { exclusiveProcess: true } },
+      { name: "provider.request.started", runId: "task", spanId: "call" },
+      {
+        name: "provider.request",
+        type: "provider.request",
+        runId: "task",
+        spanId: "call",
+        ok: true,
+        attributes: { usageState: "available", input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+      ...extra,
+      { name: "timeline.capture.completed", attributes: { complete: true } },
+    ].map<TimelineRow>((row, index) =>
+      Object.assign(
+        {
+          schemaVersion: "openclaw.diagnostics.v1",
+          pid: 123,
+          provider: "fixture",
+          type: "mark",
+        },
+        row,
+        {
+          attributes: {
+            captureId: "capture",
+            sequence: index + 1,
+            failedWrites: 0,
+            model: "model",
+            observationUnit: "logical-call",
+            ...(typeof row.attributes === "object" && row.attributes ? row.attributes : {}),
+          },
+        },
+      ),
+    );
+  }
+  async function read(rows: unknown[], suffix = "\n", joined = true) {
+    const file = path.join(tempDirs.make("matrix-model-accounting-"), "timeline.jsonl");
+    fs.writeFileSync(file, rows.map((row) => JSON.stringify(row)).join("\n") + suffix);
+    return readMatrixModelAccounting({ file, joined, foregroundRunIds: ["task"] });
+  }
+
+  it("reads the canonical writer and metadata-only usage projection through final close", async () => {
+    const file = path.join(tempDirs.make("matrix-model-accounting-writer-"), "timeline.jsonl");
+    await withEnvAsync(
+      { OPENCLAW_DIAGNOSTICS: "timeline", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: file },
+      async () => {
+        for (const row of timeline().slice(0, -1)) {
+          emitDiagnosticsTimelineEvent({
+            type: row.type === "provider.request" ? "provider.request" : "mark",
+            name: String(row.name),
+            runId: typeof row.runId === "string" ? row.runId : undefined,
+            spanId: typeof row.spanId === "string" ? row.spanId : undefined,
+            provider: "fixture",
+            ok: row.ok === true,
+            attributes: {
+              exclusiveProcess: true,
+              model: "model",
+              observationUnit: "logical-call",
+              usageState: "available",
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+            },
+          });
+        }
+        emitTrustedDiagnosticEvent({
+          type: "model.usage",
+          provider: "fixture",
+          model: "model",
+          sessionKey: "private-session-key",
+          channel: "private-channel",
+          agentId: "private-agent",
+          usage: { input: 999 },
+          costUsd: 0.000006,
+        });
+        finishDiagnosticsTimeline(true);
+      },
+    );
+    const result = await readMatrixModelAccounting({
+      file,
+      joined: true,
+      foregroundRunIds: ["task"],
+    });
+    expect(result).toMatchObject({
+      complete: true,
+      foreground: { observedCalls: 1, tokens: { input: 0 } },
+    });
+    expect(result.usageObservations).toEqual([
+      expect.objectContaining({
+        provider: "fixture",
+        model: "model",
+        input: 999,
+        costUsd: 0.000006,
+      }),
+    ]);
+    expect(fs.readFileSync(file, "utf8")).not.toContain("private-");
+    await withEnvAsync(
+      { OPENCLAW_DIAGNOSTICS: "timeline", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: file },
+      async () => {
+        emitTrustedDiagnosticEvent({ type: "model.usage", usage: { input: 1 } });
+        flushDiagnosticsTimeline();
+      },
+    );
+    expect(
+      (await readMatrixModelAccounting({ file, joined: true, foregroundRunIds: ["task"] }))
+        .complete,
+    ).toBe(false);
+  });
+
+  it.each([
+    "close",
+    "start",
+    "terminal",
+    "unmatched",
+    "duplicate",
+    "conflict",
+    "loss",
+    "sequence",
+    "process",
+    "retained",
+    "late",
+    "schema",
+  ])("does not certify %s damage", async (damage) => {
+    const rows = timeline();
+    if (damage === "close") {
+      rows.pop();
+    }
+    if (damage === "start") {
+      rows.shift();
+    }
+    if (damage === "terminal") {
+      rows.splice(2, 1);
+    }
+    if (damage === "unmatched") {
+      rows.splice(1, 1);
+    }
+    if (damage === "duplicate") {
+      rows.splice(3, 0, rows[2]!);
+    }
+    if (damage === "conflict") {
+      rows[2]!.provider = "other";
+    }
+    if (damage === "loss") {
+      rows[3]!.attributes.failedWrites = 1;
+    }
+    if (damage === "sequence") {
+      rows[2]!.attributes.sequence = 20;
+    }
+    if (damage === "process") {
+      rows[2]!.pid = 456;
+    }
+    if (damage === "retained") {
+      rows[3]!.attributes.complete = false;
+    }
+    if (damage === "late") {
+      rows.push({ ...rows[2]!, name: "model.usage", type: "mark" });
+    }
+    if (damage === "schema") {
+      rows[2]!.schemaVersion = "unrecognized";
+    }
+    const damaged = rows.map((row, index) =>
+      Object.assign({}, row, {
+        attributes: {
+          ...row.attributes,
+          ...(damage === "sequence" ? {} : { sequence: index + 1 }),
+        },
+      }),
+    );
+    expect(await read(damaged)).toMatchObject({
+      complete: false,
+      foreground: { tokens: { input: null } },
+    });
+  });
+
+  it("requires a complete final line and joined child even with valid terminal records", async () => {
+    expect((await read(timeline(), "")).complete).toBe(false);
+    expect((await read(timeline(), "\n", false)).complete).toBe(false);
+  });
+});
 const rootIdentity = { storeId: "qa", sessionId: "root", sessionKey: ROOT };
 
 function usage(scale = 1, total = 0.012, totalOrigin?: "provider-billed") {
@@ -161,83 +353,11 @@ describe("matrix task billing", () => {
     expect(interview).toMatchObject({ complete: true, totalTokens: 24, assistantTurns: 1 });
   });
 
-  const unavailable = { usageReport: { state: "unavailable" } };
-  const unknownTotals = {
-    complete: false,
-    costComplete: false,
-    totalTokens: null,
-    costUsd: null,
-    reasoningTokens: null,
-  };
   const buckets = { input: 10, output: 4, cacheRead: 8, cacheWrite: 2 };
   const incomplete = (knownTotalTokens = 24) => ({
     complete: false,
     totalTokens: null,
     knownTotalTokens,
-  });
-  it("ignores unavailable counters", () => {
-    expect(
-      accounting({
-        events: [assistant({ usage: { ...usage(), ...unavailable } })],
-        rootUsage: unavailable,
-      }),
-    ).toMatchObject({
-      ...unknownTotals,
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      knownTotalTokens: 0,
-      knownCostUsd: 0,
-      assistantTurns: 1,
-    });
-  });
-  it("preserves measured usage alongside unavailable usage", () => {
-    const failed = assistant({ usage: { ...usage(), ...unavailable }, stopReason: "error" });
-    expect(
-      accounting({
-        events: [failed, assistant()],
-        rootUsage: unavailable,
-      }),
-    ).toMatchObject({
-      ...unknownTotals,
-      ...buckets,
-      knownTotalTokens: 24,
-      knownCostUsd: 0.012,
-      reasoningComplete: false,
-      assistantTurns: 2,
-      modelErrors: 1,
-    });
-  });
-  it.each([false, true])("distinguishes measured=%s zero usage", (measured) => {
-    const zero = {
-      ...usage(0, 0, "provider-billed"),
-      ...(measured ? { usageReport: { state: "available" } } : {}),
-    };
-    expect(accounting({ events: [assistant({ usage: zero })], rootUsage: zero })).toMatchObject({
-      complete: measured,
-      costComplete: measured,
-      totalTokens: measured ? 0 : null,
-      costUsd: measured ? 0 : null,
-      knownTotalTokens: 0,
-      reasoningTokens: measured ? 0 : null,
-      reasoningComplete: measured,
-      assistantTurns: 1,
-    });
-  });
-  const missingCache = { input: 10, output: 4, totalTokens: 24, cost: { total: 0.01 } };
-  it.each([
-    ["missing response usage", undefined, false, false],
-    ["placeholder price", usage(1, 0), true, false],
-    ["provider-billed zero", usage(1, 0, "provider-billed"), true, true],
-    ["missing cache bucket", missingCache, false, false],
-  ] as const)("accounts for %s", (_label, observation, complete, costComplete) => {
-    expect(accounting({ events: [assistant({ usage: observation })] })).toMatchObject({
-      complete,
-      costComplete,
-      totalTokens: complete ? 24 : null,
-      knownTotalTokens: 24,
-    });
   });
   it("counts failed model/tool consumption without the delivery mirror", () => {
     expect(
@@ -397,7 +517,7 @@ describe("matrix task billing", () => {
   );
 });
 
-function modeRow(mode: "code" | "direct", repetition = 1) {
+function modeRow(mode: "code" | "direct" | "auto", repetition = 1) {
   return {
     id: `${mode}-${repetition}`,
     mode,
@@ -432,6 +552,12 @@ function comparePairs(...codeRows: ReturnType<typeof modeRow>[]) {
 }
 
 describe("same-source mode comparisons", () => {
+  it("rejects mixing default and forced treatments into one comparison", () => {
+    expect(() =>
+      compareCodeModeMatrixModes([modeRow("direct"), modeRow("auto"), modeRow("code")]),
+    ).toThrow("one treatment");
+  });
+
   it("charges failed attempts to completed tasks and exposes auditable empirical pairs", () => {
     const completedWithErrors = modeRow("code", 1);
     completedWithErrors.accounting.toolFailures = 1;

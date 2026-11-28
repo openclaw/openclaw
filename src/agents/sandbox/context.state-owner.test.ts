@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { registerSandboxBackend } from "./backend.js";
 import * as custody from "./context-custody.test-support.js";
@@ -11,6 +12,12 @@ import * as custody from "./context-custody.test-support.js";
 const registry = vi.hoisted(() => ({
   readRegisteredSandboxRuntimeIds: vi.fn<() => Promise<string[]>>(),
   updateRegistry: vi.fn(),
+}));
+const builtinFactories = vi.hoisted(() => ({ docker: vi.fn(), podman: vi.fn() }));
+vi.mock("./docker-backend.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./docker-backend.js")>()),
+  createDockerSandboxBackend: builtinFactories.docker,
+  createPodmanSandboxBackend: builtinFactories.podman,
 }));
 vi.mock("./registry.js", () => registry);
 vi.mock("../../skills/loading/workspace-skill-sync.runtime.js", () => ({
@@ -20,7 +27,39 @@ vi.mock("../../skills/loading/workspace-skill-sync.runtime.js", () => ({
 const roots = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.clearAllMocks());
 
-it("checks physical custody once per runtime assertion and refuses a successor owner", async () => {
+it.each(["docker", "podman"] as const)(
+  "does not await plugin runtime discovery for built-in %s setup",
+  async (backend) => {
+    const root = roots.make("sandbox-builtin-discovery-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+      using _ = custody.acquireOwner(root);
+      registry.readRegisteredSandboxRuntimeIds.mockImplementation(async () => {
+        throw new Error("Built-in setup must not wait for plugin runtime discovery");
+      });
+      builtinFactories[backend].mockResolvedValueOnce({
+        id: backend,
+        runtimeId: "synthetic-builtin",
+        runtimeLabel: "Synthetic built-in",
+        workdir: "/workspace",
+        buildExecSpec: vi.fn(),
+        runShellCommand: vi.fn(),
+      });
+      try {
+        const context = await custody.prepareContext(
+          custody.createConfig({ backend }),
+          "agent:main:subagent:builtin",
+          path.join(root, "workspace"),
+        );
+        expect(context?.backendId).toBe(backend);
+        expect(registry.readRegisteredSandboxRuntimeIds).not.toHaveBeenCalled();
+      } finally {
+        registry.readRegisteredSandboxRuntimeIds.mockReset();
+      }
+    });
+  },
+);
+
+it("uses worker-observed custody without lock polling and refuses a successor owner", async () => {
   const root = roots.make("sandbox-owner-assertion-");
   await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
     const owner = custody.acquireOwner(root);
@@ -46,14 +85,22 @@ it("checks physical custody once per runtime assertion and refuses a successor o
       );
       expect(assertCurrent).toBeDefined();
       const stat = vi.spyOn(fs, "lstatSync");
+      const realpath = vi.spyOn(fs.realpathSync, "native");
       try {
         assertCurrent!();
-        // fs-safe brackets one physical custody verification with two leaf observations.
-        expect(stat.mock.calls.filter(([pathname]) => pathname === owner.path)).toHaveLength(2);
+        expect(stat.mock.calls.filter(([pathname]) => pathname === owner.path)).toHaveLength(0);
+        expect(
+          realpath.mock.calls.filter(
+            ([pathname]) => pathname === path.join(root, "state", "openclaw.sqlite"),
+          ),
+        ).toHaveLength(1);
       } finally {
         stat.mockRestore();
+        realpath.mockRestore();
       }
+      const captured = captureGatewayStateOwner(path.join(root, "state", "openclaw.sqlite"))!;
       fs.unlinkSync(owner.path);
+      await expect(captured.prepareAccess()).rejects.toThrow();
       expect(assertCurrent).toThrow();
       owner.release();
       successor = custody.acquireOwner(root);

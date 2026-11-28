@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  extractLastUserText,
+  normalizeResponsesInput,
+  splitMockConversationContext,
+} from "../../../../extensions/qa-lab/src/providers/mock-openai/mock-openai-input.js";
 
 type Deferred = { promise: Promise<void>; resolve: () => void };
 
@@ -20,7 +26,10 @@ async function readBody(request: AsyncIterable<unknown>): Promise<string> {
 }
 
 function responseText(raw: string): string {
-  const matches = [...raw.matchAll(/Reply exactly:\s*([A-Z0-9_-]+)/gu)];
+  const body: unknown = JSON.parse(raw);
+  const input = normalizeResponsesInput(asRecord(body).input);
+  const { current } = splitMockConversationContext(extractLastUserText(input));
+  const matches = [...current.matchAll(/Reply exactly:\s*([A-Z0-9_-]+)/gu)];
   return matches.at(-1)?.[1] ?? "WIRE-OK";
 }
 

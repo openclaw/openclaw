@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { findExistingAncestor } from "../infra/fs-safe.js";
@@ -36,14 +37,6 @@ import {
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { decodeLaunchdPlistMetadata } from "./launchd-plist.js";
 import { resolveDaemonHomeDir } from "./paths.js";
-import {
-  readScheduledTaskCommand,
-  readStartupEntryCommand,
-  resolveStartupEntryPath,
-  resolveStartupEntryPaths,
-  resolveTaskName,
-} from "./schtasks-layout.js";
-import { listScheduledTasks } from "./schtasks-state-probe.js";
 import { resolveWindowsServiceCommandProfile } from "./service-env-merge.js";
 import { listLoadedSystemdUnits } from "./systemd-loaded-unit-inventory.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
@@ -97,10 +90,12 @@ export function renderGatewayServiceCleanupHints(
             ? "system"
             : "gui/$UID";
         const launchctlCommand = domain === "system" ? "sudo launchctl" : "launchctl";
-        hints.push(`${launchctlCommand} bootout ${domain}/${quoteCliArg(service.label)}`);
+        hints.push(
+          terminalText`${launchctlCommand} bootout ${domain}/${quoteCliArg(service.label)}`,
+        );
         if (plistPath) {
           const removeCommand = service.scope === "system" ? "sudo rm" : "rm";
-          hints.push(`${removeCommand} ${quoteCliArg(plistPath)}`);
+          hints.push(terminalText`${removeCommand} ${quoteCliArg(plistPath)}`);
         }
         break;
       }
@@ -108,13 +103,16 @@ export function renderGatewayServiceCleanupHints(
         const systemctlCommand = `systemctl --${service.scope}`;
         const unit = quoteCliArg(service.label);
         // A discovered unit may be the only running Gateway; inspect before removal.
-        hints.push(`${systemctlCommand} status -- ${unit}`, `${systemctlCommand} cat -- ${unit}`);
+        hints.push(
+          terminalText`${systemctlCommand} status -- ${unit}`,
+          terminalText`${systemctlCommand} cat -- ${unit}`,
+        );
         break;
       }
       case "win32":
         if (service.windowsStartupEntry) {
           hints.push(
-            `Get-Item -LiteralPath '${service.windowsStartupEntry.replaceAll("'", "''")}'`,
+            terminalText`Get-Item -LiteralPath '${service.windowsStartupEntry.replaceAll("'", "''")}'`,
           );
           break;
         }
@@ -122,7 +120,7 @@ export function renderGatewayServiceCleanupHints(
         // The hint can be pasted into cmd.exe or PowerShell, so exclude names
         // that either shell can expand rather than guessing a common escape.
         if (/^[A-Za-z0-9_. ()\\/-]+$/.test(service.label)) {
-          hints.push(`schtasks /Query /TN "${service.label}" /V /FO LIST`);
+          hints.push(terminalText`schtasks /Query /TN "${service.label}" /V /FO LIST`);
         }
         break;
     }
@@ -206,7 +204,9 @@ async function scanLaunchdDir(params: {
   return results;
 }
 
-export async function findSystemGatewayServices(): Promise<ExtraGatewayService[]> {
+export async function findSystemGatewayServices(
+  includeEntry?: (entry: string) => boolean,
+): Promise<ExtraGatewayService[]> {
   if (process.platform !== "linux") {
     return [];
   }
@@ -214,14 +214,8 @@ export async function findSystemGatewayServices(): Promise<ExtraGatewayService[]
   const results: ExtraGatewayService[] = [];
   try {
     for (const dir of DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS) {
-      results.push(
-        ...(
-          await scanSystemdDir({
-            dir,
-            scope: "system",
-          })
-        ).map(projectService),
-      );
+      const services = await scanSystemdDir({ dir, scope: "system", includeEntry });
+      results.push(...services.map(projectService));
     }
   } catch {
     return [];
@@ -235,6 +229,13 @@ async function scanWindowsStartupEntries(
   errors: GatewayServiceInventory["errors"],
   deadline: number,
 ): Promise<InspectedGatewayService[]> {
+  const {
+    readScheduledTaskCommand,
+    readStartupEntryCommand,
+    resolveStartupEntryPath,
+    resolveStartupEntryPaths,
+    resolveTaskName,
+  } = await import("./schtasks-layout.js");
   let directory: string;
   let selected: Set<string>;
   try {
@@ -534,6 +535,9 @@ async function scanGatewayServices(
     if (!opts.deep) {
       return inventory;
     }
+    // Load Windows-only launchers before starting the native inventory deadline.
+    const [{ readScheduledTaskCommand, resolveTaskName }, { listScheduledTasks }] =
+      await Promise.all([import("./schtasks-layout.js"), import("./schtasks-state-probe.js")]);
     const deadline = performance.now() + WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS;
     const expired = () => deadline - performance.now() < 1;
     const deadlineError = {

@@ -8,6 +8,64 @@ afterEach(codeMode.resetCodeModeTestState);
 const quickjs = { codeMode: { executor: "quickjs" as const } };
 const textOutput = (...texts: string[]) => texts.map((text) => ({ type: "text", text }));
 
+it("preserves every namespace row under heap pressure without substituting text", async () => {
+  const rows = Array.from({ length: 100_000 }, (_, index) => ({ index, marker: `row:${index}` }));
+  for (const heapMiB of [128, 16]) {
+    const after = codeMode.jsonTool("fixture_after", true);
+    const result = await runCodeModeScriptHeadless({
+      ctx: codeMode.createHeadlessCodeModeHarness([after], {
+        codeMode: {
+          executor: "quickjs",
+          memoryLimitBytes: heapMiB * 1024 * 1024,
+          timeoutMs: 60_000,
+        },
+      }),
+      extraNamespaces: [
+        {
+          id: "fixture-data",
+          globalName: "fixtureData",
+          scope: { kind: "value", value: rows },
+        },
+      ],
+      code: `
+        text("guest entered");
+        let mismatches = 0;
+        for (let i = 0; i < fixtureData.length; i++) {
+          const row = fixtureData[i];
+          if (!row || row.index !== i || row.marker !== "row:" + i || Object.keys(row).length !== 2) mismatches++;
+        }
+        await fixture_after({});
+        return { array: Array.isArray(fixtureData), rows: fixtureData.length, mismatches };
+      `,
+    });
+    if (result.status === "failed") {
+      expect(heapMiB).toBe(16);
+      expect(result).toMatchObject({
+        code: "internal_error",
+        error: expect.stringMatching(/out of memory/i),
+        output: [],
+        toolCallCount: 0,
+      });
+      codeMode.expectToolCalls(0, after);
+    } else {
+      expect(result).toMatchObject({
+        status: "completed",
+        value: { array: true, rows: rows.length, mismatches: 0 },
+        toolCallCount: 1,
+      });
+      expect(result.output).toEqual(textOutput("guest entered"));
+      codeMode.expectToolCalls(1, after);
+    }
+    expect(codeMode.testing.activeRuns.size).toBe(0);
+  }
+  expect(
+    await runCodeModeScriptHeadless({
+      ctx: codeMode.createHeadlessCodeModeHarness([], quickjs),
+      code: "return 42;",
+    }),
+  ).toMatchObject({ status: "completed", value: 42 });
+});
+
 function snapshotFixture() {
   const pendingStarted = createDeferred<AbortSignal>();
   const pending = codeMode.pluginToolWithExecute(
@@ -73,7 +131,7 @@ it.each(["exec", "wait", "headless"] as const)(
   },
 );
 
-it.each(["abort", "restart-safe"])("shares the output budget with %s diagnostics", async (mode) => {
+it("shares the output budget with abort diagnostics", async () => {
   const controller = new AbortController();
   const fixture = codeMode.pluginToolWithExecute("output_fixture", "Output fixture", async () => {
     controller.abort();
@@ -87,16 +145,15 @@ it.each(["abort", "restart-safe"])("shares the output budget with %s diagnostics
       "failure",
       {
         code: 'text("🦞".repeat(1000)); await output_fixture({}); return true;',
-        restartSafe: mode === "restart-safe",
       },
       controller.signal,
     ),
   );
   expect(result).toMatchObject({
     status: "failed",
-    code: mode === "abort" ? "aborted" : "invalid_input",
+    code: "aborted",
   });
-  expect(fixture.execute).toHaveBeenCalledTimes(mode === "abort" ? 1 : 0);
+  expect(fixture.execute).toHaveBeenCalledOnce();
   codeMode.expectOriginalCodeModeMarker(
     (result.output as unknown[])[0],
     textOutput("🦞".repeat(1000)),
@@ -104,3 +161,54 @@ it.each(["abort", "restart-safe"])("shares the output budget with %s diagnostics
   codeMode.expectCodeModeSharedBudget(result, 1024);
   expect(codeMode.testing.activeRuns.size).toBe(0);
 });
+
+it.each([false, true])(
+  "fails reply decoding OOM after checkpoint=%s without later effects",
+  async (checkpoint) => {
+    const started = createDeferred();
+    const large = codeMode.pluginToolWithExecute("fixture_large", "Large reply", async () => {
+      started.resolve();
+      return { content: [], details: Array.from({ length: 500_000 }, () => ({})) };
+    });
+    const small = codeMode.jsonTool("fixture_small", [{ value: 7 }]);
+    const after = codeMode.jsonTool("fixture_after", true);
+    const h = codeMode.createCatalogCodeModeHarness([large, small, after], {
+      codeMode: {
+        executor: "quickjs",
+        memoryLimitBytes: 16 * 1024 * 1024,
+        maxSnapshotBytes: 32 * 1024 * 1024,
+      },
+    });
+    expect(await h.complete("return (await fixture_small({}))[0].value;")).toMatchObject({
+      status: "completed",
+      value: 7,
+    });
+    const first = await h.run(
+      `const pending = fixture_large({});
+       ${checkpoint ? "await yield_control();" : ""}
+       const value = await pending;
+       await fixture_after({});
+       return { array: Array.isArray(value), length: value.length };`,
+      "decode-oom",
+      { awaitResults: !checkpoint },
+    );
+    let result = first;
+    if (checkpoint) {
+      expect(first.status).toBe("waiting");
+      await started.promise;
+      codeMode.expectToolCalls(1, large);
+      result = await codeMode.waitUntilCompleted({ details: first, waitTool: h.tools[1]! });
+    }
+    expect(result, JSON.stringify(result)).toMatchObject({
+      status: "failed",
+      code: "internal_error",
+      failurePhase: "host",
+      bridgeDispatchStarted: true,
+      error: expect.stringContaining("out of memory"),
+    });
+    codeMode.expectToolCalls(1, large, small);
+    codeMode.expectToolCalls(0, after);
+    expect(await h.complete("return 42;")).toMatchObject({ status: "completed", value: 42 });
+    expect(codeMode.testing.activeRuns.size).toBe(0);
+  },
+);

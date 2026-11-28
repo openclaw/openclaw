@@ -15,6 +15,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { SubagentSessionListReadView } from "../../src/agents/subagents/registry/subagent-registry-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../src/config/sessions/types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -53,11 +54,17 @@ const { createSessionRowProjectionContext } =
 const { readSessionListSelectionFacts } = await import("../../src/gateway/session-list-target.js");
 const cfg = { agents: { entries: { main: {} } } };
 const runs: ReturnType<SubagentSessionListReadView["runs"]> = new Map();
-const contextOwner = createSessionRowProjectionContext({
-  snapshotIdentity: () => runs,
-  runs: () => runs,
-  prepare: async () => {},
-});
+const contextOwner = createSessionRowProjectionContext(
+  {
+    snapshotIdentity: () => runs,
+    runs: () => runs,
+    prepare: async () => {},
+  },
+  {
+    state: () => ({ cfg, epoch: 0, disposed: false }),
+    prepareRegistry: () => undefined,
+  },
+);
 const context = contextOwner.current;
 const identities = context.userProfileIdentityById;
 for (let index = 0; index < 50; index++) {
@@ -67,7 +74,6 @@ for (let index = 0; index < 50; index++) {
     profileId: id,
     label: `Viewer ${index}`,
     avatarUrl: `/avatar/${id}`,
-    hasUploadedAvatar: true,
   });
 }
 const configuredAgentIds = new Set(["main"]);
@@ -143,12 +149,7 @@ try {
   globalThis.gc?.();
   const inspector = new Session();
   if (values.allocation) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 16384,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 16384);
   }
   const hostLoad = loadavg();
   const start = process.threadCpuUsage();

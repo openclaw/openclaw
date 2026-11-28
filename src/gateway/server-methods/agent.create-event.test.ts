@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
@@ -58,6 +57,7 @@ vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => {
         preparedRuntimeMocks.releaseDispatch.mock.calls.length,
       );
       return {
+        run: <T>(run: () => T): T => run(),
         [Symbol.asyncDispose]: preparedRuntimeMocks.releaseSelected,
         snapshot: input,
         pluginGeneration: options.pluginGeneration,
@@ -85,6 +85,7 @@ vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => {
       onRuntimeLease?.({
         snapshot,
         pluginGeneration: runtime.pluginGeneration,
+        run: <T>(run: () => T): T => run(),
         [Symbol.asyncDispose]: preparedRuntimeMocks.releaseDispatch,
       });
       return runtime;
@@ -95,7 +96,7 @@ vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => {
 // mock-isolation: The ingress fixture does not need the process runtime singleton.
 vi.mock("../../runtime.js", () => ({ defaultRuntime: {} }));
 
-import { agentHandlers } from "./agent.js";
+import { agentRunHandler } from "./agent-run-handler.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-agent-create-event-");
 
@@ -135,8 +136,7 @@ it.each(["immediate", "deferred workspace", "superseded catalog"] as const)(
     const respond = vi.fn();
     let execution: Promise<unknown> | undefined;
 
-    const agent = expectDefined(agentHandlers.agent, "agent handler missing");
-    await agent({
+    await agentRunHandler({
       params: { message: "hi", sessionKey, idempotencyKey: runId },
       respond,
       context: {

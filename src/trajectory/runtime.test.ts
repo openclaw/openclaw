@@ -27,6 +27,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createLargeTrajectoryUsage } from "./export.test-helpers.js";
 import { TRAJECTORY_RUNTIME_EVENT_MAX_BYTES } from "./paths.js";
+import { restoreTrajectorySnapshots } from "./runtime-snapshot.js";
 import * as runtimeStoreWriter from "./runtime-store-writer.js";
 import {
   loadSqliteTrajectoryRuntimeEvents,
@@ -101,7 +102,7 @@ function oversizedMessages() {
   }));
 }
 
-async function createMarkerRecorder() {
+async function createMarkerRecorder(maxRuntimeFileBytes?: number) {
   const storePath = path.join(
     tempDirs.make("openclaw-trajectory-runtime-"),
     "agents/main/sessions/sessions.json",
@@ -118,6 +119,7 @@ async function createMarkerRecorder() {
       sessionId: target.sessionId,
       sessionKey: target.sessionKey,
       sessionFile: formatSqliteSessionFileMarker(target),
+      maxRuntimeFileBytes,
     }),
   );
   return { recorder, storePath, sessionKey: target.sessionKey };
@@ -365,8 +367,10 @@ describe("trajectory runtime", () => {
     },
   );
 
-  it("stores bounded oversized runtime events in SQLite", async () => {
-    const { recorder: runtimeRecorder, storePath } = await createMarkerRecorder();
+  it("keeps oversized snapshots partial when their fragments exceed the capture window", async () => {
+    const { recorder: runtimeRecorder, storePath } = await createMarkerRecorder(
+      TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+    );
     const usage = createLargeTrajectoryUsage();
     runtimeRecorder.recordEvent("model.completed", {
       usage,
@@ -391,7 +395,7 @@ describe("trajectory runtime", () => {
 
   it("bounds oversized prompts before compact preservation", async () => {
     const parsed = await captureEvent("context.compiled", {
-      prompt: "x".repeat(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1),
+      prompt: "x".repeat(65_537),
     });
     expectBoundedCapture();
     expect(parsed.data.truncated).toBeUndefined();
@@ -401,18 +405,51 @@ describe("trajectory runtime", () => {
 
   it("keeps normal schema-v1 event payloads unchanged", async () => {
     const data = {
+      finalPromptText: "inspect",
       prompt: "inspect",
-      systemPrompt: "system prompt",
+      systemPrompt: "x".repeat(65_536),
       messages: [{ role: "user", content: "inspect" }],
       messagesSnapshot: [{ role: "assistant", content: "done" }],
       imagesCount: 0,
     };
 
-    const parsed = await captureEvent("prompt.submitted", data);
+    const recorder = await createCapturedRuntimeRecorder();
+    const slices = vi.spyOn(Array.prototype, "slice");
+    let copiedKeyLists: number;
+    try {
+      recorder.recordEvent("prompt.submitted", data);
+      copiedKeyLists = slices.mock.contexts.filter(
+        (keys) => Array.isArray(keys) && keys.includes("imagesCount"),
+      ).length;
+    } finally {
+      slices.mockRestore();
+    }
+    const parsed = captured();
+    expect(copiedKeyLists).toBe(0);
     expect(parsed.schemaVersion).toBe(1);
     expect(parsed.data).toEqual(data);
     expect(JSON.stringify(parsed.data)).toBe(JSON.stringify(data));
     expect(parsed.data.truncated).toBeUndefined();
+  });
+
+  it("omits replay state before inspecting its contents", async () => {
+    const recorder = await createCapturedRuntimeRecorder();
+    const readReplay = vi.fn(() => ({ data: "opaque replay" }));
+    const message = {
+      role: "assistant",
+      content: "done",
+      get providerReplay() {
+        return readReplay();
+      },
+    };
+    recorder.recordEvent("context.compiled", { messages: [message] });
+    recorder.recordEvent("tool.result", { result: message, success: true });
+    expect(captured().data).toEqual({ messages: [{ role: "assistant", content: "done" }] });
+    expect(captured(1).data).toEqual({
+      result: { role: "assistant", content: "done" },
+      success: true,
+    });
+    expect(readReplay).not.toHaveBeenCalled();
   });
 
   it("preserves non-JSON leaves and custom JSON results in captured events", async () => {
@@ -544,32 +581,37 @@ describe("trajectory runtime", () => {
       messagesSnapshot: oversizedMessages(),
     });
 
-    expectBoundedCapture();
-    const parsed = captured();
+    const parsed = expectDefined(
+      restoreTrajectorySnapshots(writes.map((line) => JSON.parse(line)))[0],
+      "completed event",
+    );
+    const data = expectDefined(parsed.data, "completion data");
     expect(parsed.type).toBe("model.completed");
-    expect(parsed.data).toMatchObject({
-      truncated: true,
-      reason: "trajectory-event-size-limit",
+    expect(data).toMatchObject({
       usage,
       promptCache,
       assistantTexts: ["done"],
       finalPromptText: "inspect",
     });
-    expect(parsed.data.finalPromptTextOriginalLength).toBeUndefined();
-    expect(parsed.data.messagesSnapshot).toBeUndefined();
-    expect(parsed.data.droppedFields).toEqual(["messagesSnapshot"]);
+    expect(data.finalPromptTextOriginalLength).toBeUndefined();
+    expect(data.messagesSnapshot).toEqual(oversizedMessages());
+    expect(data.truncated).toBeUndefined();
     const secondUsage = { input: 12, output: 3, total: 15 };
     recorder.recordEvent("model.completed", {
       usage: secondUsage,
       assistantTexts: ["final answer"],
     });
-    expect(writes).toHaveLength(2);
-    expect(captured().data.usage).toEqual(usage);
-    expect(captured(1).data).toMatchObject({
+    const logical = restoreTrajectorySnapshots(writes.map((line) => JSON.parse(line)));
+    expect(logical).toHaveLength(2);
+    expect(logical[0]?.data?.usage).toEqual(usage);
+    expect(logical[1]?.data).toMatchObject({
       usage: secondUsage,
       assistantTexts: ["final answer"],
     });
-    expect(captured(1).data.truncated).toBeUndefined();
+    expect(logical[1]?.data?.truncated).toBeUndefined();
+    expect(
+      writes.every((line) => Buffer.byteLength(line) <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES),
+    ).toBe(true);
   });
   it("preserves stopReason while dropping oversized preserved fields to keep runtime events bounded", async () => {
     const oversizedUsage = Object.fromEntries(
@@ -612,7 +654,9 @@ describe("trajectory runtime", () => {
   it("drops repeated conversation fields in priority order", async () => {
     const prompt = "summarize the incident timeline";
     const messageBlocks = oversizedMessages();
-    const parsed = await captureEvent("context.compiled", {
+    const recorder = await createCapturedRuntimeRecorder();
+    const stringify = vi.spyOn(JSON, "stringify");
+    recorder.recordEvent("context.compiled", {
       prompt,
       messagesSnapshot: messageBlocks,
       messages: messageBlocks,
@@ -622,7 +666,12 @@ describe("trajectory runtime", () => {
         description: "x".repeat(32_760),
       })),
     });
-
+    const fullEvents = stringify.mock.calls.filter(
+      ([value]) => value?.traceSchema && value.data?.messagesSnapshot,
+    ).length;
+    stringify.mockRestore();
+    expect(fullEvents).toBe(0);
+    const parsed = captured();
     expect(parsed.data.prompt).toBe(prompt);
     expect(parsed.data.tools).toHaveLength(7);
     expect(parsed.data.messagesSnapshot).toBeUndefined();
@@ -634,7 +683,7 @@ describe("trajectory runtime", () => {
 
   it("caps large final prompts and records their original length", async () => {
     const finalPromptText = `prompt-${"🙂".repeat(4_096)}`;
-    const parsed = await captureEvent("model.completed", { finalPromptText });
+    const parsed = await captureEvent("model.completed", Object.freeze({ finalPromptText }));
     expect(Buffer.byteLength(parsed.data.finalPromptText, "utf8")).toBeLessThanOrEqual(4 * 1024);
     expect(Buffer.byteLength(parsed.data.finalPromptText, "utf8")).toBeGreaterThan(4 * 1024 - 4);
     expect(parsed.data.finalPromptTextOriginalLength).toBe(finalPromptText.length);

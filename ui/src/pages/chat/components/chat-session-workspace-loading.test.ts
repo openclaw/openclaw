@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { createGatewayBrowserClientFixture } from "../chat-application-context.test-support.ts";
 import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import {
@@ -18,9 +20,12 @@ import {
   retainSessionWorkspaceArtifacts,
   refreshSessionWorkspaceState,
 } from "./chat-session-workspace-state.ts";
+import { textFile } from "./chat-session-workspace.test-support.ts";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
+  refreshSessionWorkspace,
+  resolveSessionDiffSidebarContent,
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
 
@@ -71,15 +76,7 @@ async function fixture({ loadInitialListing = true } = {}) {
       listFiles,
       getFile: async () => ({
         sessionKey: listing.sessionKey,
-        file: {
-          path: "reports/inventory.csv",
-          name: "inventory.csv",
-          kind: "read",
-          missing: false,
-          previewKind: "text",
-          contentEncoding: "utf8",
-          content: "item,count\nnotebooks,3",
-        },
+        file: textFile("reports/inventory.csv", "item,count\nnotebooks,3"),
       }),
     }),
   };
@@ -405,6 +402,27 @@ it("keeps unresolved, project, external and artifact homonyms distinct", () => {
   expect(workspaceCatalogSearch(listing, "")).toEqual([]);
 });
 
+it("searches local Files candidates with sigma equivalence and literal separators", () => {
+  const file = "ΕΛΕΓΧΟΣ/A  B.md";
+  const listing = catalogListing([workspaceFile(file, "modified")], {
+    artifacts: [artifact("report", "ΕΛΕΓΧΟΣ")],
+    browser: {
+      path: "",
+      search: "unrelated",
+      entries: [{ path: "stale.md", name: "stale.md", kind: "file" }],
+    },
+  });
+  for (const query of ["Σ", "σ", "ς", "  Σ  "]) {
+    expect(workspaceCatalogSearch(listing, query).map((entry) => entry.path)).toEqual([
+      file,
+      "ΕΛΕΓΧΟΣ",
+    ]);
+  }
+  expect(workspaceCatalogSearch(listing, "A  B.md")).toHaveLength(1);
+  expect(workspaceCatalogSearch(listing, "A B.md")).toEqual([]);
+  expect(workspaceCatalogSearch(listing, "A--B.md")).toEqual([]);
+});
+
 it.each([
   ["types.d.ts", "types", ".d.ts"],
   ["backup.tar.gz", "backup", ".tar.gz"],
@@ -455,4 +473,89 @@ it("offers folder filters only for project files inside that path boundary", () 
   expect(workspaceCatalogFilters(catalog, "ui")).toEqual(["all", "changed"]);
   expect(workspaceCatalogFilters(catalog, "ui-other")).toEqual(["all", "read"]);
   expect(workspaceCatalogFilters(catalog, "empty")).toEqual(["all"]);
+});
+
+it("keeps flat catalog request identities, metadata and artifact search scope", () => {
+  const listing = catalogListing(
+    [
+      workspaceFile("nested/report.md", "modified", {
+        workspacePath: "docs/report.md",
+        size: 2048,
+        missing: true,
+      }),
+      workspaceFile("read.md", "read"),
+    ],
+    {
+      artifacts: [
+        { ...artifact("opaque-id", "Portrait"), mimeType: "image/jpeg", sizeBytes: 4096 },
+      ],
+      browser: {
+        path: "docs",
+        entries: [{ path: "docs/report.md", name: "report.md", kind: "file", size: 8192 }],
+      },
+    },
+  );
+  const flat = projectWorkspaceCatalog(listing, {}, "session");
+  expect(flat.session[0]).toMatchObject({
+    key: "file:nested/report.md",
+    path: "nested/report.md",
+    workspacePath: "docs/report.md",
+    origin: "session",
+    size: 2048,
+    missing: true,
+  });
+  expect(flat.session[2]).toMatchObject({ artifactId: "opaque-id", size: 4096 });
+  expect([...flat.project.keys()]).toEqual(["docs/report.md"]);
+  expect(workspaceCatalogChildren(flat, "all", "docs").get("docs")).toMatchObject([
+    { path: "docs/report.md", origin: "workspace", size: 8192 },
+  ]);
+  expect(workspaceCatalogSearch(listing, "report", "session").map((entry) => entry.origin)).toEqual(
+    ["session", "workspace"],
+  );
+  for (const query of ["opaque-id", "IMAGE/JPEG"]) {
+    expect(workspaceCatalogSearch(listing, query, "session")).toMatchObject([
+      { artifactId: "opaque-id" },
+    ]);
+    expect(workspaceCatalogSearch(listing, query)).toEqual([]);
+  }
+  listing.browser!.search = "old-query";
+  expect(workspaceCatalogSearch(listing, "report", "session").map((entry) => entry.origin)).toEqual(
+    ["session"],
+  );
+});
+
+it("keeps accepted Changes totals through a same-workspace refresh, never across sessions", async () => {
+  const { state } = await fixture({ loadInitialListing: false });
+  const totals = (additions: number): SessionsDiffResult => ({
+    sessionKey: state.sessionKey,
+    files: [],
+    additions,
+    deletions: 84,
+  });
+  const stale = createDeferred<SessionsDiffResult>();
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce(totals(4656))
+    .mockReturnValueOnce(stale.promise)
+    .mockResolvedValueOnce(totals(4700));
+  Object.assign(state, {
+    client: createGatewayBrowserClientFixture({ request }),
+    hello: gatewayHelloForMethods(["sessions.diff"], ["operator.read"]),
+    sessionWorkspaceReadDisabledReason: null,
+  });
+  const diff = () => {
+    const content = resolveSessionDiffSidebarContent(state);
+    return content?.kind === "session-diff" ? content : undefined;
+  };
+  const summary = { scope: "uncommitted" } as const;
+  await diff()?.load(summary, { summaryOnly: true });
+  const staleLoad = diff()?.load(summary, { summaryOnly: true, refresh: true });
+  refreshSessionWorkspace(state, false);
+  expect(diff()?.uncommitted?.additions).toBe(4656);
+  await diff()?.load(summary, { summaryOnly: true });
+  stale.resolve(totals(1));
+  await staleLoad;
+  expect(diff()?.uncommitted?.additions).toBe(4700);
+  state.sessionKey = "agent:main:other";
+  expect(diff()?.uncommitted).toBeUndefined();
 });

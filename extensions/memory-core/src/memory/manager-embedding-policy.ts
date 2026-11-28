@@ -6,6 +6,8 @@ import {
   formatEmbeddingModelInput,
   resolveEmbeddingInputFormatVersion,
   type EmbeddingInput,
+  type MemoryEmbeddingProvider,
+  type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
@@ -13,10 +15,21 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { EmbeddingProvider } from "./embeddings.js";
+import type { MemoryEmbeddingBatchConfig } from "./manager-sync-base.js";
+
+export function resolveMemoryIndexConcurrency(
+  batch: Pick<MemoryEmbeddingBatchConfig, "enabled" | "concurrency">,
+  runtime?: MemoryEmbeddingProviderRuntime,
+): number {
+  if (batch.enabled) {
+    return batch.concurrency;
+  }
+  const declared = runtime?.inlineIndexConcurrency;
+  return declared !== undefined && Number.isSafeInteger(declared) && declared > 0 ? declared : 4;
+}
 
 export function embedMemoryQuery(
-  provider: EmbeddingProvider,
+  provider: MemoryEmbeddingProvider,
   text: string,
   settings: Pick<ResolvedMemorySearchConfig, "queryInstruction" | "inputFormat">,
   options: EmbeddingProviderCallOptions,
@@ -35,7 +48,7 @@ export function embedMemoryQuery(
 }
 
 export function embedMemoryDocuments(
-  provider: EmbeddingProvider,
+  provider: MemoryEmbeddingProvider,
   inputs: Array<string | EmbeddingInput>,
   inputFormat: ResolvedMemorySearchConfig["inputFormat"],
   options: EmbeddingProviderCallOptions,
@@ -147,7 +160,7 @@ const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
 // rejects a batch by its aggregate token count and asks for more batches;
 // that exact phrase is splittable while a per-input token limit is not.
 const SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE =
-  /(too many tokens overall,?\s*split into more batches|request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b|\bbatch size is invalid,?\s+it should not be larger than\s+\d+\b|\binput array max\s+\d+(?=\s*(?:["'}]|$))|input\s*数组最大不得超过\s*\d+\s*条)/i;
+  /(^memory embeddings batch timed out\b|too many tokens overall,?\s*split into more batches|request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b|\bbatch size is invalid,?\s+it should not be larger than\s+\d+\b|\binput array max\s+\d+(?=\s*(?:["'}]|$))|input\s*数组最大不得超过\s*\d+\s*条)/i;
 
 const SHORT_MEMORY_EMBEDDING_RETRY_BUDGET = {
   attempts: 3,
@@ -196,8 +209,14 @@ function isInvalidEmbeddingResponse(error: unknown): boolean {
 }
 
 function embeddingRetryMessage(error: unknown): string {
-  const message = asOptionalRecord(error)?.embeddingErrorMessage;
-  return typeof message === "string" ? message : formatErrorMessage(error);
+  const fields = asOptionalRecord(error);
+  const message = fields?.embeddingErrorMessage;
+  // Wrapped provider errors can put the item cap beyond the message preview.
+  // The bounded raw-body preview may still contain it.
+  const errorBody = typeof fields?.errorBody === "string" ? fields.errorBody : undefined;
+  return [typeof message === "string" ? message : formatErrorMessage(error), errorBody]
+    .filter((part): part is string => Boolean(part))
+    .join("\n");
 }
 
 function resolveMemoryEmbeddingRetryBudget(
@@ -209,6 +228,10 @@ function resolveMemoryEmbeddingRetryBudget(
   }
   const fields = asOptionalRecord(error);
   const message = embeddingRetryMessage(error);
+  // The watchdog exhausted this request's budget; let indexing try smaller batches.
+  if (message.startsWith("memory embeddings batch timed out")) {
+    return undefined;
+  }
   const cooldown = fields?.retryAfterMs;
   const retryAfterMs =
     typeof cooldown === "number" && Number.isSafeInteger(cooldown) && cooldown >= 0
@@ -251,6 +274,8 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
 }): Promise<T> {
   const profile = MEMORY_EMBEDDING_RETRY_PROFILES[params.profile];
   let remainingWaitMs = profile.maxTotalWaitMs;
+  // The scheduler consumes this attempt's budget synchronously before the retry wait.
+  let retryBudget: MemoryEmbeddingRetryBudget | undefined;
   return await retryAsync(params.run, {
     attempts: profile.rateLimit.attempts,
     minDelayMs: profile.transient.baseDelayMs,
@@ -263,16 +288,15 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
       if (params.signal?.aborted) {
         return false;
       }
-      const retryBudget = resolveMemoryEmbeddingRetryBudget(profile, err);
+      retryBudget = resolveMemoryEmbeddingRetryBudget(profile, err);
       return retryBudget !== undefined && attempt < retryBudget.attempts;
     },
-    delayMs: ({ attempt, err }) => {
-      const retryBudget = resolveMemoryEmbeddingRetryBudget(profile, err);
+    delayMs: ({ attempt }) => {
       return retryBudget
         ? Math.min(retryBudget.maxDelayMs, retryBudget.baseDelayMs * 2 ** (attempt - 1))
         : 0;
     },
-    retryAfterMs: (err) => resolveMemoryEmbeddingRetryBudget(profile, err)?.retryAfterMs,
+    retryAfterMs: () => retryBudget?.retryAfterMs,
     sleep: async (delayMs) => {
       const boundedDelayMs = Math.min(delayMs, remainingWaitMs);
       remainingWaitMs -= boundedDelayMs;
@@ -283,12 +307,14 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
 
 export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {
   items: TInput[];
+  signal?: AbortSignal;
   maxInputsPerRequest?: number;
   run: (items: TInput[]) => Promise<TOutput[]>;
   onSuccess?: (items: TInput[], outputs: TOutput[]) => void | Promise<void>;
   waitForRetry: (delayMs: number) => Promise<void>;
   onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
 }): Promise<TOutput[]> {
+  params.signal?.throwIfAborted();
   const split = async (splitAt: number): Promise<TOutput[]> => {
     const results: TOutput[] = [];
     for (let start = 0; start < params.items.length; start += splitAt) {
@@ -310,10 +336,12 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
   try {
     outputs = await runMemoryEmbeddingRetryLoop({
       profile: "index",
+      signal: params.signal,
       run: async () => await params.run(params.items),
       waitForRetry: params.waitForRetry,
     });
   } catch (err) {
+    params.signal?.throwIfAborted();
     const message = embeddingRetryMessage(err);
     if (
       isInvalidEmbeddingResponse(err) ||

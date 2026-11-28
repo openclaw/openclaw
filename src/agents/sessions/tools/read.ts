@@ -6,7 +6,6 @@ import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classif
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
 import { shortenPathWithHome } from "../../../infra/home-display.js";
-import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
 import type { ImageContent, TextContent } from "../../../llm/types.js";
 import {
   classifyMediaReferenceSource,
@@ -43,8 +42,13 @@ import {
   resolveLocalPathToCwd,
   resolveToCwd,
 } from "./path-utils.js";
-import { readLocalFile } from "./read-file.js";
+import { captureLocalReadFile, readLocalFile } from "./read-file.js";
 import { createBoundedReadTextPage } from "./read-page.js";
+import {
+  createReadTextCapture,
+  decodeReadTextBuffer,
+  type ReadTextCapture,
+} from "./read-text-capture.js";
 import type { ReadToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { readToolInputSchema, readToolOutputSchema } from "./tool-schemas.js";
@@ -123,16 +127,22 @@ async function suggestLocalReadPaths(filePath: string): Promise<string[]> {
     }
     throw error;
   }
-  const requested = basename(filePath).toLowerCase();
-  const maxDistance = Math.max(1, Math.floor(requested.length * 0.4));
-  return entries
-    .map((entry) => ({ entry, distance: levenshteinDistance(requested, entry.toLowerCase()) }))
-    .filter(({ entry, distance }) => entry !== basename(filePath) && distance <= maxDistance)
-    .toSorted(
-      (left, right) => left.distance - right.distance || left.entry.localeCompare(right.entry),
-    )
-    .slice(0, 3)
-    .map(({ entry }) => entry);
+  const filename = basename(filePath);
+  const requested = filename.toLowerCase();
+  let maxDistance = Math.max(1, Math.floor(requested.length * 0.4));
+  const matches: { entry: string; distance: number }[] = [];
+  for (const entry of entries) {
+    const distance = levenshteinDistance(requested, entry.toLowerCase(), maxDistance);
+    if (entry !== filename && distance !== null) {
+      matches.push({ entry, distance });
+      matches.sort(
+        (left, right) => left.distance - right.distance || left.entry.localeCompare(right.entry),
+      );
+      matches.length = Math.min(matches.length, 3);
+      maxDistance = matches[2]?.distance ?? maxDistance;
+    }
+  }
+  return matches.map(({ entry }) => entry);
 }
 
 interface CompactReadClassification {
@@ -151,11 +161,11 @@ interface ReadOperations {
   resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Resolve a user-supplied path for this read backend. */
   resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
-  /** Decode text bytes for this backend. Custom backends default to UTF-8. */
-  decodeText?: (params: { buffer: Buffer; absolutePath: string }) => string;
+  /** Decode backend text, or retain complete UTF-8 bytes for range selection. */
+  decodeText?: (params: { buffer: Buffer; absolutePath: string }) => string | Buffer;
   readFile: (absolutePath: string, signal?: AbortSignal) => Promise<Buffer>;
   /** Check if file is readable (throw if not) */
-  access: (absolutePath: string) => Promise<void>;
+  access: (absolutePath: string, signal?: AbortSignal) => Promise<void>;
   /** Detect image MIME type, return null or undefined for non-images */
   detectImageMimeType?: (
     absolutePath: string,
@@ -165,7 +175,7 @@ interface ReadOperations {
 
 const defaultReadOperations: ReadOperations = {
   resolvePath: resolveLocalReadPath,
-  decodeText: ({ buffer }) => decodeWindowsTextFileBuffer({ buffer }),
+  decodeText: decodeReadTextBuffer,
   readFile: readLocalFile,
   access: assertLocalReadableFile,
 };
@@ -279,9 +289,10 @@ async function resolveReadToolInputPath(
 async function resolveReadToolPathFromAbsolute(
   ops: ReadOperations,
   absolutePath: string,
+  signal?: AbortSignal,
 ): Promise<{ absolutePath: string; note?: string }> {
   try {
-    await ops.access(absolutePath);
+    await ops.access(absolutePath, signal);
     return { absolutePath };
   } catch (error) {
     if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR")) {
@@ -291,7 +302,7 @@ async function resolveReadToolPathFromAbsolute(
     const matches: string[] = [];
     for (const candidate of getReadPathVariants(absolutePath)) {
       try {
-        await ops.access(candidate);
+        await ops.access(candidate, signal);
         matches.push(candidate);
       } catch (candidateError) {
         if (!hasErrnoCode(candidateError, "ENOENT") && !hasErrnoCode(candidateError, "ENOTDIR")) {
@@ -403,7 +414,7 @@ function formatReadResult(
     if (truncation.firstLineExceedsLimit) {
       text += `\n${theme.fg("warning", `[First line exceeds ${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit]`)}`;
     } else if (truncation.truncatedBy === "lines") {
-      text += `\n${theme.fg("warning", `[Truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines (${truncation.maxLines ?? DEFAULT_MAX_LINES} line limit)]`)}`;
+      text += `\n${theme.fg("warning", `[Truncated: showing ${truncation.outputLines}${truncation.totalLines === undefined ? "" : ` of ${truncation.totalLines}`} lines (${truncation.maxLines ?? DEFAULT_MAX_LINES} line limit)]`)}`;
     } else {
       text += `\n${theme.fg("warning", `[Truncated: ${truncation.outputLines} lines shown (${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit)]`)}`;
     }
@@ -421,7 +432,7 @@ export function createReadToolDefinition(
   const definition: ToolDefinition<typeof readToolInputSchema, ReadToolDetails> = {
     name: "read",
     label: "read",
-    description: `Read text/image file (jpg/png/gif/webp/bmp); images attach to model context. Text caps ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB. Continue with offset/limit, or cursor within a long line.`,
+    description: `Read text/image file (jpg/png/gif/webp/bmp); images attach to model context. Text caps ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB. Continue with offset/limit, or cursor within a long line. Totals are absent until EOF is reached.`,
     promptSnippet: "Read file contents",
     promptGuidelines: ["Use read to examine files and its offset, limit, or cursor to continue."],
     parameters: readToolInputSchema,
@@ -448,9 +459,10 @@ export function createReadToolDefinition(
             let absolutePath: string;
             let note: string | undefined;
             let buffer: Buffer;
+            let capturedText: ReadTextCapture | undefined;
             try {
-              // Share write/edit ordering through byte capture only. Decode the
-              // immutable snapshot below after releasing the path queue.
+              // Share write/edit ordering through capture, retaining only a bounded
+              // text snapshot before releasing the path queue for rendering.
               const inputPathResolution = resolveReadToolInputPath(ops, path, cwd);
               const queueKeysResolution = inputPathResolution.then(
                 async (absoluteInputPath) =>
@@ -465,15 +477,37 @@ export function createReadToolDefinition(
                 queueKeysResolution,
                 async () => {
                   const absoluteInputPath = await inputPathResolution;
-                  const resolved = await resolveReadToolPathFromAbsolute(ops, absoluteInputPath);
+                  const resolved = await resolveReadToolPathFromAbsolute(
+                    ops,
+                    absoluteInputPath,
+                    signal,
+                  );
                   assertFileToolNotAborted(signal);
                   return {
                     ...resolved,
-                    buffer: await ops.readFile(resolved.absolutePath, signal),
+                    ...(ops === defaultReadOperations
+                      ? await captureLocalReadFile(
+                          resolved.absolutePath,
+                          {
+                            offset: offset ?? 1,
+                            cursor,
+                            limit:
+                              limit === undefined
+                                ? undefined
+                                : normalizePositiveLimit(limit, DEFAULT_MAX_LINES),
+                            maxChars: Math.min(DEFAULT_MAX_BYTES, maxBytes) + 2,
+                          },
+                          signal,
+                        )
+                      : {
+                          buffer: await ops.readFile(resolved.absolutePath, signal),
+                          text: undefined,
+                        }),
                   };
                 },
+                signal,
               );
-              ({ absolutePath, note, buffer } = snapshot);
+              ({ absolutePath, note, buffer, text: capturedText } = snapshot);
             } catch (error) {
               if (
                 signal?.aborted ||
@@ -492,10 +526,13 @@ export function createReadToolDefinition(
                 },
               };
             }
-            const mimeType = await (ops.detectImageMimeType
-              ? ops.detectImageMimeType(absolutePath, buffer)
-              : detectSupportedImageMimeType(buffer));
-            const attachment = mimeType ? undefined : await classifyAttachmentBytes({ buffer });
+            const mimeType = capturedText
+              ? null
+              : await (ops.detectImageMimeType
+                  ? ops.detectImageMimeType(absolutePath, buffer)
+                  : detectSupportedImageMimeType(buffer));
+            const attachment =
+              mimeType || capturedText ? undefined : await classifyAttachmentBytes({ buffer });
             let content: (TextContent | ImageContent)[];
             let textDetails: Extract<ReadToolDetails, { kind: "text" | "truncated" }> | undefined;
             const modelHasVision = options?.modelHasVision ?? ctx?.model?.input.includes("image");
@@ -528,70 +565,62 @@ export function createReadToolDefinition(
                 content.push(processed.image);
               }
             } else {
-              const decodedText =
-                ops.decodeText?.({ buffer, absolutePath }) ?? buffer.toString("utf8");
-              const textContent = (
-                decodedText.startsWith("\uFEFF") ? decodedText.slice(1) : decodedText
-              ).replaceAll("\r\n", "\n");
               const startLine = offset === undefined ? 0 : offset - 1;
               const startLineDisplay = startLine + 1;
               const requestedLines =
                 limit === undefined ? undefined : normalizePositiveLimit(limit, DEFAULT_MAX_LINES);
-              let totalFileLines = 0;
-              let selectedStart = 0;
-              let selectedEnd = 0;
-              let selectedLineCount = 0;
-              let firstLineEnd = 0;
-              let selectedHasText = false;
-              // Count through EOF without materializing lines that the page budget may discard.
-              for (let start = 0; start < textContent.length;) {
-                const newline = textContent.indexOf("\n", start);
-                const end = newline === -1 ? textContent.length : newline;
-                if (
-                  totalFileLines >= startLine &&
-                  (requestedLines === undefined || selectedLineCount < requestedLines)
-                ) {
-                  if (selectedLineCount === 0) {
-                    selectedStart = start;
-                    firstLineEnd = end;
-                  }
-                  selectedEnd = end;
-                  selectedLineCount += 1;
-                  selectedHasText ||= end > start;
-                }
-                totalFileLines += 1;
-                start = end + 1;
+              if (!capturedText) {
+                const decodedText = ops.decodeText?.({ buffer, absolutePath }) ?? buffer;
+                const selected = createReadTextCapture({
+                  offset: startLineDisplay,
+                  cursor,
+                  limit: requestedLines,
+                  maxChars: Math.min(DEFAULT_MAX_BYTES, maxBytes) + 2,
+                });
+                selected.write(
+                  typeof decodedText === "string" && decodedText.startsWith("\uFEFF")
+                    ? decodedText.slice(1)
+                    : decodedText,
+                );
+                capturedText = selected.finish();
               }
-              const firstLineLength = firstLineEnd - selectedStart;
+              const {
+                totalLines: totalFileLines,
+                selectedLineCount,
+                firstLineLength,
+                selectedHasText,
+              } = capturedText;
               let outputText: string;
               if (totalFileLines === 0) {
                 outputText =
                   buffer.length === 0
                     ? "File is empty (0 bytes)."
                     : `File contains no readable text (${buffer.length} bytes).`;
-              } else if (startLine >= totalFileLines) {
+              } else if (totalFileLines !== undefined && startLine >= totalFileLines) {
                 outputText = `Offset ${offset} is beyond end of file (${totalFileLines} lines total). Retry with offset <= ${totalFileLines}.`;
               } else if (cursor > 0 && cursor >= firstLineLength) {
                 const nextLine =
-                  startLine + 1 < totalFileLines
+                  totalFileLines === undefined || startLine + 1 < totalFileLines
                     ? ` Use offset=${startLineDisplay + 1} to continue.`
                     : "";
                 outputText = `Cursor ${cursor} is at or beyond the end of line ${startLineDisplay} (${firstLineLength} characters).${nextLine}`;
               } else {
-                if (cursor > 0 && textContent.codePointAt(selectedStart + cursor - 1)! > 0xffff) {
+                if (cursor > 0 && capturedText.cursorSplitsSurrogatePair) {
                   throw new Error(
                     `Cursor ${cursor} splits a UTF-16 surrogate pair; retry with cursor=${cursor - 1} or cursor=${cursor + 1}.`,
                   );
                 }
                 const endLine = startLine + selectedLineCount;
-                const userLimitedLines = limit === undefined ? undefined : endLine - startLine;
-                const selectedContent = textContent.slice(
-                  selectedStart + cursor,
-                  endLine === totalFileLines ? textContent.length : selectedEnd,
-                );
+                const userLimitedLines =
+                  totalFileLines === undefined
+                    ? requestedLines
+                    : limit === undefined
+                      ? undefined
+                      : endLine - startLine;
                 const noteBytes = note ? Buffer.byteLength(`${note}\n`, "utf8") : 0;
                 const page = createBoundedReadTextPage({
-                  content: selectedContent,
+                  content: capturedText.content,
+                  totalBytes: capturedText.totalBytes,
                   startLine: startLineDisplay,
                   endLine,
                   totalLines: totalFileLines,

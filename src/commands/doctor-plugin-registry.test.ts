@@ -15,6 +15,7 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-help
 import * as stateDbReadOnly from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
+  checkPluginRegistryRepairPending,
   detectPluginRegistryHealthIssues,
   maybeRepairPluginRegistryState,
   maybeRepairStaleManagedNpmBundledPlugins,
@@ -96,6 +97,10 @@ async function createStaleLocalFixture() {
   const staleDir = path.join(stateDir, "old-checkout", "dist", "extensions", "discord");
   fs.mkdirSync(bundledDir, { recursive: true });
   fs.mkdirSync(staleDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(stateDir, "old-checkout", "package.json"),
+    JSON.stringify({ name: "openclaw" }),
+  );
   createCandidate(staleDir, "discord");
   await writePersistedInstalledPluginIndex(
     createCurrentIndexWithPathRecord({
@@ -125,6 +130,29 @@ async function createStaleLocalFixture() {
       },
     },
   };
+}
+
+async function createManagedNpmPeerLinkFixture() {
+  const stateDir = makeTempDir();
+  const managed = createManagedNpmPlugin({
+    stateDir,
+    id: "codex",
+    packageName: "codex-plugin",
+    version: "2026.5.3",
+    peerDependencies: {
+      openclaw: ">=2026.5.3",
+    },
+  });
+  await writePersistedInstalledPluginIndex(
+    createCurrentIndexWithNpmRecord({
+      pluginId: "codex",
+      packageName: "codex-plugin",
+      packageDir: managed.packageDir,
+      version: "2026.5.3",
+    }),
+    { stateDir },
+  );
+  return { stateDir, managed };
 }
 
 describe("maybeRepairPluginRegistryState", () => {
@@ -313,6 +341,74 @@ describe("maybeRepairPluginRegistryState", () => {
         prompter,
       }),
     ).resolves.toStrictEqual({ config: {} });
+  });
+
+  it("leaves a current registry untouched when discovery carries build metadata the store drops", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "bundled", "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    // Bundled packages declare worker entries and assets; the store keeps only bundledDist.
+    const build = {
+      bundledDist: true,
+      workerEntries: ["./worker.ts"],
+      openclawVersion: "2026.4.25",
+    };
+    const candidate = {
+      ...createBundledCandidate({
+        rootDir: pluginDir,
+        id: "demo",
+        packageName: "@openclaw/demo",
+        version: "2026.4.25",
+        bundledDist: true,
+      }),
+      packageManifest: { build },
+    };
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/demo", version: "2026.4.25", openclaw: { build } }),
+    );
+    const prompter = createDoctorPrompter({
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { repair: true, nonInteractive: true },
+    });
+    const params = { stateDir, candidates: [candidate], env: hermeticEnv(), config: {}, prompter };
+    await maybeRepairPluginRegistryState(params);
+    const databasePath = resolveInstalledPluginIndexStorePath({ stateDir });
+    // The -shm index changes on every read, so only the database and its WAL are compared.
+    const store = () =>
+      [databasePath, `${databasePath}-wal`].map((file) =>
+        fs.existsSync(file)
+          ? {
+              file,
+              bytes: fs.readFileSync(file).toString("base64"),
+              mtimeMs: fs.statSync(file).mtimeMs,
+            }
+          : { file },
+      );
+    const healthy = store();
+
+    await expect(maybeRepairPluginRegistryState(params)).resolves.toStrictEqual({ config: {} });
+    expect(store()).toStrictEqual(healthy);
+    await expect(checkPluginRegistryRepairPending(params)).resolves.toBe("none");
+
+    const addedDir = path.join(stateDir, "plugins", "added");
+    fs.mkdirSync(addedDir, { recursive: true });
+    const withAdded = { ...params, candidates: [candidate, createCandidate(addedDir, "added")] };
+    await expect(checkPluginRegistryRepairPending(withAdded)).resolves.toBe("work");
+    await expect(maybeRepairPluginRegistryState(withAdded)).resolves.toStrictEqual({
+      config: {},
+      pluginInventoryChanged: true,
+    });
+    const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
+    expect(persisted.plugins.map((plugin) => plugin.pluginId).toSorted()).toStrictEqual([
+      "added",
+      "demo",
+    ]);
+    expect(
+      persisted.plugins.find((plugin) => plugin.pluginId === "demo")?.packageBuild,
+    ).toStrictEqual({
+      bundledDist: true,
+    });
   });
 
   it("warns about stale managed npm packages that shadow bundled plugins", async () => {
@@ -601,47 +697,36 @@ describe("maybeRepairPluginRegistryState", () => {
     ]);
   });
 
-  it("warns about stale local bundled plugin install records that shadow bundled plugins", async () => {
-    const { stateDir, staleDir, params } = await createStaleLocalFixture();
+  it.each([false, true])(
+    "handles stale local bundled plugin install records with repair=%s",
+    async (shouldRepair) => {
+      const { stateDir, staleDir, bundledDir, params } = await createStaleLocalFixture();
+      await maybeRepairPluginRegistryState({ ...params, prompter: { shouldRepair } });
 
-    await maybeRepairPluginRegistryState({
-      ...params,
-      prompter: { shouldRepair: false },
-    });
-
-    const notes = vi.mocked(note).mock.calls.join("\n");
-    expect(notes).toContain("Local bundled plugin install records shadow bundled plugins");
-    expect(notes).toContain("discord");
-    expect(notes).toContain(staleDir);
-    const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
-    expect(persisted.installRecords).toHaveProperty("discord");
-  });
-
-  it("removes stale local bundled plugin install records during repair", async () => {
-    const { stateDir, bundledDir, params } = await createStaleLocalFixture();
-
-    await maybeRepairPluginRegistryState({
-      ...params,
-      prompter: { shouldRepair: true },
-    });
-
-    const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
-    expect(Object.keys(persisted.installRecords)).toEqual([]);
-    expect(Object.getPrototypeOf(persisted.installRecords)).toBeNull();
-    expect(persisted.refreshReason).toBe("migration");
-    expect(persisted.plugins).toStrictEqual([
-      expectedPluginIndexRecord({
-        pluginId: "discord",
-        rootDir: bundledDir,
-        origin: "bundled",
-        packageName: "@openclaw/discord",
-        packageVersion: "2026.5.20-beta.1",
-      }),
-    ]);
-    expect(vi.mocked(note).mock.calls.join("\n")).toContain(
-      "Removed stale local bundled plugin install record",
-    );
-  });
+      const notes = vi.mocked(note).mock.calls.join("\n");
+      const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
+      if (shouldRepair) {
+        expect(Object.keys(persisted.installRecords)).toEqual([]);
+        expect(Object.getPrototypeOf(persisted.installRecords)).toBeNull();
+        expect(persisted.refreshReason).toBe("migration");
+        expect(persisted.plugins).toStrictEqual([
+          expectedPluginIndexRecord({
+            pluginId: "discord",
+            rootDir: bundledDir,
+            origin: "bundled",
+            packageName: "@openclaw/discord",
+            packageVersion: "2026.5.20-beta.1",
+          }),
+        ]);
+        expect(notes).toContain("Removed stale local bundled plugin install record");
+      } else {
+        expect(notes).toContain("Local bundled plugin install records shadow bundled plugins");
+        expect(notes).toContain("discord");
+        expect(notes).toContain(staleDir);
+        expect(persisted.installRecords).toHaveProperty("discord");
+      }
+    },
+  );
 
   it("removes stale managed npm packages from the package lock during repair", async () => {
     const { stateDir, managed, params } = createBundledNpmFixture({ packageLock: true });
@@ -661,75 +746,32 @@ describe("maybeRepairPluginRegistryState", () => {
     expect(packageLock.dependencies).toHaveProperty("other-plugin");
   });
 
-  it("repairs managed npm openclaw peer links during registry repair", async () => {
-    const stateDir = makeTempDir();
-    const managed = createManagedNpmPlugin({
-      stateDir,
-      id: "codex",
-      packageName: "codex-plugin",
-      version: "2026.5.3",
-      peerDependencies: {
-        openclaw: ">=2026.5.3",
-      },
-    });
-    await writePersistedInstalledPluginIndex(
-      createCurrentIndexWithNpmRecord({
-        pluginId: "codex",
-        packageName: "codex-plugin",
-        packageDir: managed.packageDir,
-        version: "2026.5.3",
-      }),
-      { stateDir },
-    );
+  it.each([false, true])(
+    "handles managed npm openclaw peer links with repair=%s",
+    async (shouldRepair) => {
+      const { stateDir, managed } = await createManagedNpmPeerLinkFixture();
 
-    await maybeRepairPluginRegistryState({
-      stateDir,
-      env: hermeticEnv(),
-      config: {},
-      prompter: { shouldRepair: true },
-    });
+      await maybeRepairPluginRegistryState({
+        stateDir,
+        env: hermeticEnv(),
+        config: {},
+        prompter: { shouldRepair },
+      });
 
-    const linkPath = path.join(managed.packageDir, "node_modules", "openclaw");
-    expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
-    expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(process.cwd()));
-    expect(vi.mocked(note).mock.calls.join("\n")).toContain("Repaired OpenClaw host peer link");
-  });
-
-  it("warns about broken managed npm openclaw peer links without repairing them", async () => {
-    const stateDir = makeTempDir();
-    const managed = createManagedNpmPlugin({
-      stateDir,
-      id: "codex",
-      packageName: "codex-plugin",
-      version: "2026.5.3",
-      peerDependencies: {
-        openclaw: ">=2026.5.3",
-      },
-    });
-    await writePersistedInstalledPluginIndex(
-      createCurrentIndexWithNpmRecord({
-        pluginId: "codex",
-        packageName: "codex-plugin",
-        packageDir: managed.packageDir,
-        version: "2026.5.3",
-      }),
-      { stateDir },
-    );
-
-    await maybeRepairPluginRegistryState({
-      stateDir,
-      env: hermeticEnv(),
-      config: {},
-      prompter: { shouldRepair: false },
-    });
-
-    const linkPath = path.join(managed.packageDir, "node_modules", "openclaw");
-    const notes = vi.mocked(note).mock.calls.join("\n");
-    expect(notes).toContain("Managed npm OpenClaw host peer links need repair");
-    expect(notes).toContain("codex-plugin");
-    expect(notes).toContain("openclaw doctor --fix");
-    expect(fs.existsSync(linkPath)).toBe(false);
-  });
+      const linkPath = path.join(managed.packageDir, "node_modules", "openclaw");
+      const notes = vi.mocked(note).mock.calls.join("\n");
+      if (shouldRepair) {
+        expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+        expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(process.cwd()));
+        expect(notes).toContain("Repaired OpenClaw host peer link");
+      } else {
+        expect(notes).toContain("Managed npm OpenClaw host peer links need repair");
+        expect(notes).toContain("codex-plugin");
+        expect(notes).toContain("openclaw doctor --fix");
+        expect(fs.existsSync(linkPath)).toBe(false);
+      }
+    },
+  );
 
   it("reports an unreadable managed npm package without aborting doctor", async () => {
     const stateDir = makeTempDir();

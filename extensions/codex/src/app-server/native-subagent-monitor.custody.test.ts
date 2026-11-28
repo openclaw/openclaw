@@ -290,26 +290,34 @@ describe("native assignment completion custody", () => {
     await monitor.dispose();
     expect(source.live()).toHaveLength(0);
   });
-});
 
-describe("native completion custody and host recovery", () => {
-  it("does not exhaust delivery retries while the host recovery owns completion", async () => {
+  it("settles execution when a resumed child's first observed turn is the accepted submission", async () => {
     vi.useFakeTimers();
-    await using fixture = disposableMonitor();
-    const { client, runtime, monitor } = fixture;
-    runtime.deliverAgentHarnessCompletion.mockResolvedValue({
-      delivered: false,
-      path: "none",
-      recoveryPending: true,
+    const { client, runtime, monitor } = createMonitorFixture({
+      hasObservationBacking: () => true,
     });
-    await registerDetachedChild(client, monitor);
-    await client.notify(nativeCompletionNotification());
-    await vi.advanceTimersByTimeAsync(35_000);
-    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(8);
-    runtime.deliverAgentHarnessCompletion.mockResolvedValue({ delivered: true, path: "direct" });
-    await vi.advanceTimersByTimeAsync(5_000);
-    await vi.advanceTimersByTimeAsync(530_000);
-    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(9);
+    const source = createCustody();
+    runtime.captureAgentHarnessCompletionCustody.mockResolvedValue(source.root);
+    try {
+      const parent = await registerParent(monitor);
+      parent.bindTurn("parent-turn");
+      await client.item(
+        collabItem("resumeAgent", ["child-thread"], {
+          id: "resume-child",
+          agentsStates: { "child-thread": { status: "completed", message: "Earlier result" } },
+        }),
+      );
+      await submitFollowup(client);
+      await startTurn(client, "turn-b");
+      expect(source.executions.size).toBeGreaterThan(1);
+
+      await completeTurn(client, "turn-b", "A result");
+      await deliverInitialResult(client);
+      await parent.unregister();
+      expect(source.executions.size).toBe(0);
+    } finally {
+      await monitor.dispose();
+    }
   });
 });
 

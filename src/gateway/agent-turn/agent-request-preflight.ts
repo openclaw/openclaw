@@ -11,6 +11,7 @@ import {
   findAuthorizedSwarmCollectorRequest,
   findSwarmCollectorSession,
 } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { visibleParentInputProvenance } from "../../agents/subagents/spawn/subagent-capabilities.js";
 import { isSubagentSessionFromEntry } from "../../agents/subagents/spawn/subagent-depth-policy.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../../agents/subagents/swarm/swarm-output-schema.js";
@@ -21,7 +22,6 @@ import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isExecCompletionInputProvenance,
-  isMainSessionRestartRecoveryInputProvenance,
   isProgressCardRefreshInputProvenance,
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
@@ -63,8 +63,11 @@ export async function prepareAgentRequestPreflight(params: {
     return undefined;
   };
   const cfg = params.context.getRuntimeConfig();
+  // The declared mode is caller-chosen; only in-process or handshake-attested local backends qualify.
   const canUseInternalRuntimeHandoff =
-    params.client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND;
+    params.client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND &&
+    (params.client.internal?.syntheticClient === true ||
+      params.client.internal?.localBackendClient === true);
   const requestSessionKey = request.sessionKey?.trim();
   const parsedRequestSessionKey = requestSessionKey
     ? parseAgentSessionKey(requestSessionKey)
@@ -176,7 +179,6 @@ export async function prepareAgentRequestPreflight(params: {
   }
   const allowModelOverride =
     hasGatewayAdminScope(params.client) || params.client?.internal?.allowModelOverride === true;
-  const canUseCronRunContinuation = params.client?.internal?.cronRunContinuation === true;
   const expectedSessionResult = resolveExpectedExistingSessionConstraint({
     canUseInternalRuntimeHandoff,
     expectedExistingSessionId: request.expectedExistingSessionId,
@@ -222,7 +224,18 @@ export async function prepareAgentRequestPreflight(params: {
   if (isExecCompletionInputProvenance(inputProvenance) && !canUseInternalRuntimeHandoff) {
     return rejectInvalidRequest("Exec completion input is reserved for background exec owners.");
   }
-  if (inputProvenance?.kind === "inter_session" && inputProvenance.sourceTool === "sessions_send") {
+  // Restart input may wait for a surviving turn or a reconnecting node; only recovery stamps it.
+  if (
+    inputProvenance?.kind === "internal_system" &&
+    inputProvenance.sourceTool === "restart" &&
+    !canUseInternalRuntimeHandoff
+  ) {
+    return rejectInvalidRequest("Restart input is reserved for restart recovery.");
+  }
+  if (
+    inputProvenance?.kind === "inter_session" &&
+    (inputProvenance.sourceTool === "sessions_send" || inputProvenance.sourceRelation === "parent")
+  ) {
     const sourceSessionKey = inputProvenance.sourceSessionKey;
     const sourceAgentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
     const sourceTarget =
@@ -233,58 +246,57 @@ export async function prepareAgentRequestPreflight(params: {
           )
         : undefined;
     const sourceEntry = sourceTarget ? sourceTarget.store[sourceTarget.canonicalKey] : undefined;
-    let sourceIsSubagent = Boolean(
-      sourceTarget && isSubagentSessionFromEntry(sourceTarget.canonicalKey, sourceEntry),
-    );
-    if (
-      !sourceIsSubagent &&
-      sourceTarget &&
-      sourceEntry &&
-      (sourceEntry.parentSessionKey || sourceEntry.spawnedBy)
-    ) {
-      const [sourceAcp] = await readAcpSessionMetaForEntries({
-        entries: [
-          {
-            sessionKey: sourceTarget.canonicalKey,
-            agentId: sourceTarget.agentId,
-            entry: sourceEntry,
-          },
-        ],
-        cfg,
-      });
-      sourceIsSubagent = isSubagentSessionFromEntry(
-        sourceTarget.canonicalKey,
-        sourceEntry,
-        sourceAcp,
+    if (inputProvenance.sourceRelation === "parent") {
+      const target =
+        canUseInternalRuntimeHandoff && requestSessionKey && selectedAgentId
+          ? await withGatewaySessionStoreTarget(
+              { cfg, key: requestSessionKey, agentId: selectedAgentId, projection: "full" },
+              (value) => value,
+            )
+          : undefined;
+      if (
+        !target ||
+        !visibleParentInputProvenance(
+          sourceTarget?.canonicalKey,
+          target.canonicalKey,
+          target.store[target.canonicalKey],
+        ).sourceRelation
+      ) {
+        delete inputProvenance.sourceRelation;
+      }
+    }
+    if (inputProvenance.sourceTool === "sessions_send") {
+      let sourceIsSubagent = Boolean(
+        sourceTarget && isSubagentSessionFromEntry(sourceTarget.canonicalKey, sourceEntry),
       );
+      if (
+        !sourceIsSubagent &&
+        sourceTarget &&
+        sourceEntry &&
+        (sourceEntry.parentSessionKey || sourceEntry.spawnedBy)
+      ) {
+        const [sourceAcp] = await readAcpSessionMetaForEntries({
+          entries: [
+            {
+              sessionKey: sourceTarget.canonicalKey,
+              agentId: sourceTarget.agentId,
+              entry: sourceEntry,
+            },
+          ],
+          cfg,
+        });
+        sourceIsSubagent = isSubagentSessionFromEntry(
+          sourceTarget.canonicalKey,
+          sourceEntry,
+          sourceAcp,
+        );
+      }
+      if (sourceIsSubagent) {
+        inputProvenance.sourceRole = "subagent";
+      } else {
+        delete inputProvenance.sourceRole;
+      }
     }
-    if (sourceIsSubagent) {
-      inputProvenance.sourceRole = "subagent";
-    } else {
-      delete inputProvenance.sourceRole;
-    }
-  }
-  const isRestartRecoveryResumeRun =
-    canUseInternalRuntimeHandoff && isMainSessionRestartRecoveryInputProvenance(inputProvenance);
-  if (
-    (request.internalExecutionIdentityRetry !== undefined ||
-      request.internalExecutionIdentityRecoveryAttempt !== undefined) &&
-    !isRestartRecoveryResumeRun
-  ) {
-    return rejectInvalidRequest(
-      "internal execution identity recovery fields are reserved for main-session restart recovery.",
-    );
-  }
-  // Child recovery shares the restricted tool policy, but not main-session cycle ownership.
-  const canUseRestartRecoveryToolPolicy =
-    isRestartRecoveryResumeRun ||
-    (canUseInternalRuntimeHandoff &&
-      inputProvenance?.kind === "internal_system" &&
-      inputProvenance.sourceTool === "subagent_restart_recovery" &&
-      requestSessionKey !== undefined &&
-      inputProvenance.sourceSessionKey === requestSessionKey);
-  if (request.forceCodeModeTools === true && !canUseRestartRecoveryToolPolicy) {
-    return rejectInvalidRequest("forceCodeModeTools is reserved for native restart recovery.");
   }
   const sessionEffects =
     isOneShotModelRun || requestedInternalSessionEffects ? "internal" : request.sessionEffects;
@@ -302,7 +314,6 @@ export async function prepareAgentRequestPreflight(params: {
     runId,
     allowModelOverride,
     canUseInternalRuntimeHandoff,
-    canUseCronRunContinuation,
     expectedSession: expectedSessionResult.constraint,
     expectedExistingSessionId: expectedSessionResult.constraint?.sessionId,
     providerOverride: allowModelOverride ? request.provider : undefined,
@@ -314,7 +325,6 @@ export async function prepareAgentRequestPreflight(params: {
       groupSpace: request.groupSpace,
     }),
     inputProvenance,
-    isRestartRecoveryResumeRun,
     preserveUserFacingSessionModelState:
       canUseInternalRuntimeHandoff &&
       shouldPreserveUserFacingSessionStateForInputProvenance(inputProvenance),

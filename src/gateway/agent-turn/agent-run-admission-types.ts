@@ -3,7 +3,6 @@ import type {
   AdmittedRunOperatorAuthority,
   OperationalRunInstanceRef,
 } from "../../agents/admitted-run-context.js";
-import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import type {
   PreparedModelRuntimeLease,
   PreparedReplyDispatchRuntime,
@@ -16,7 +15,6 @@ import type { registerChatAbortController } from "../chat-abort.js";
 import type { OffloadedRef } from "../chat-attachments.js";
 import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
 import type { AgentDeliveryPhaseResult } from "./agent-delivery-phase.js";
-import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import type { PreparedAgentRunUserTurn, prepareAgentRunUserTurn } from "./agent-run-user-turn.js";
 import type { AgentTurnIo } from "./types.js";
 
@@ -48,7 +46,6 @@ export type PreparedAgentRunDispatch = PreparedAgentRunModelRuntime & {
   effectiveThinking?: string;
   effectiveAllowModelOverride: boolean;
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
-  restoredCronContinuationLifecycleRevision?: string;
   lifecycleStorePath?: string;
   resolvedThreadId?: string | number;
   reactivateSubagent: boolean;
@@ -57,9 +54,6 @@ export type PreparedAgentRunDispatch = PreparedAgentRunModelRuntime & {
   unpersistedOffloadedRefs: OffloadedRef[];
   userTurn: PreparedAgentRunUserTurn;
   workspaceOverride?: string;
-  restoreAdmittedRestartRecoveryInterrupted?: () => Promise<
-    MainSessionRecoveryPendingTarget | undefined
-  >;
 };
 
 export type PrepareAgentRunDispatchParams = Omit<
@@ -71,6 +65,7 @@ export type PrepareAgentRunDispatchParams = Omit<
   | "admittedSessionId"
   | "resolvedThreadId"
   | "freshChildStorePath"
+  | "senderIsOwner"
 > & {
   sourceWork: Promise<void>;
   needsImageUnderstanding?: boolean;
@@ -83,10 +78,6 @@ export type PrepareAgentRunDispatchParams = Omit<
   requestedSessionKey?: string;
   preAcceptedReservedSessionKey?: string;
   delivery: AgentDeliveryPhaseResult;
-  restoredCronContinuationIdentity?: Pick<
-    RestoredCronContinuation,
-    "lifecycleRevision" | "sessionId"
-  >;
   providerOverride?: string;
   modelOverride?: string;
   allowModelOverride: boolean;
@@ -96,10 +87,10 @@ export type PrepareAgentRunDispatchParams = Omit<
   ownerDeviceId?: string;
   pendingChatRun?: { sessionKey: string; agentId?: string };
   isOneShotModelRun: boolean;
-  isRestartRecoveryResumeRun: boolean;
   onUserTurnMediaPersisted: () => void;
   agentDedupeKeys: readonly string[];
   getOwnedAgentDedupeKeys: () => readonly string[];
+  releaseUnacceptedReservation: () => boolean;
   io: AgentTurnIo;
   acquireGatewayWorkAdmission: (scope: string) => Promise<void>;
   assertGatewayWorkAdmissionAllowed: () => SessionEntry | undefined;

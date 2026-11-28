@@ -84,7 +84,30 @@ it("accepts custom trigger literals in the manifest schema and runtime parser", 
   expect([customTriggers, dreaming]).toEqual([triggers, { enabled: true }]);
 });
 
+it("resolves storage environment references", () => {
+  vi.stubEnv("TEST_MEMORY_STORAGE_ACCESS_KEY", "env-access");
+  expect(
+    parse(
+      configWith({
+        storageOptions: {
+          region: "us-west-2",
+          access_key: "${TEST_MEMORY_STORAGE_ACCESS_KEY}",
+        },
+      }),
+    ).storageOptions,
+  ).toEqual({ region: "us-west-2", access_key: "env-access" });
+});
+
 it.each([
+  [{ captureMaxChars: 99 }, "captureMaxChars must be between 100 and 10000"],
+  [
+    { storageOptions: { secret_key: "${TEST_MEMORY_STORAGE_MISSING}" } },
+    "Environment variable TEST_MEMORY_STORAGE_MISSING is not set",
+  ],
+  [
+    { storageOptions: { region: "us-west-2", timeout: 30 } },
+    "storageOptions.timeout must be a string",
+  ],
   [
     { embedding: { provider: "", model: "text-embedding-3-small" } },
     "embedding.provider must not be empty",
@@ -94,5 +117,6 @@ it.each([
   [{ customTriggers: ["x".repeat(101)] }, "customTriggers.0 must be at most 100 characters"],
   [{ dreaming: true }, "dreaming config must be an object"],
 ])("rejects invalid config: %j", (overrides, message) => {
+  vi.stubEnv("TEST_MEMORY_STORAGE_MISSING", undefined);
   rejects(configWith(overrides), message);
 });

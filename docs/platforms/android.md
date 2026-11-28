@@ -22,7 +22,7 @@ The official Android app is available on [Google Play](https://play.google.com/s
 - Select an agent in the sidebar to view its credential status in **Settings → Providers & Models**. The page updates when the Gateway publishes model, credential, or config changes. Use **Refresh** to recheck model availability. Available model choices remain visible during background refreshes. A successful recovery clears the refresh warning automatically.
 - The sidebar marks sessions waiting for an answer or approval, including inactive sessions and collapsed groups. Tap the attention icon, hover over it, or focus it with a keyboard to read the oldest pending request and the count of additional requests of the same kind. The indicator clears when requests resolve, are canceled, or expire. Question previews never include answer drafts.
 - The sidebar and recent Threads view keep cron sessions and system-created checks out of ordinary chat lists, without changing saved pins. The selected conversation stays reachable; named work and human-created background conversations remain visible. Open **Threads → Automations** to find and reopen automation and system conversations, including previously pinned chats. This is a view filter, not a saved setting. **Sidebar → Pages pencil → Automations** shows scheduled jobs and their recent run summaries. Other sessions without creation metadata remain visible rather than being classified from their titles.
-- Long-press an eligible thread and choose **Snooze**: **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, when more than one hour away), **Tomorrow** (09:00 local), or **Next week** (next Monday at 09:00 local, omitted on Sundays). Snoozed sessions hide from Recent, Current, and sidebar recents. The **Snoozed** pill shows their wake times; **Wake session** brings one back early. Time expiry, a real inbound message, or a completed run wakes the session; pinning or archiving clears snooze too. Snooze syncs through the Gateway and never stops runs, messages, or automations. Archived, child, and protected sessions cannot be snoozed.
+- Long-press an eligible thread and choose **Snooze**: **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, when more than one hour away), **Tomorrow** (09:00 local), or **Next week** (next Monday at 09:00 local, omitted on Sundays). Snoozed sessions hide from Recent, Current, and sidebar recents. The **Snoozed** pill shows their wake times; **Wake session** brings one back early. Time expiry, a real inbound message, or a completed run wakes the session; archiving clears snooze too. Wake the session before adding a personal pin. Snooze syncs through the Gateway and never stops runs, messages, or automations. Archived, child, and protected sessions cannot be snoozed.
 - **Settings → OpenClaw** opens a dedicated Gateway settings assistant when the operator connection has `operator.admin` and the Gateway supports `openclaw.chat`. Its setup conversation stays separate from ordinary Chat, redacts secret replies locally, and moves to Chat only after you tap **Open Chat**.
 
 Its reply field switches to masked input for secret prompts. Tap it again if a prompt change closes the keyboard. Android sends sensitive replies without trimming them and clears unsent drafts when you leave this page or background the app.
@@ -41,6 +41,12 @@ others. The focused Gateway alone owns the Android node session and device
 capabilities; this prevents simultaneous Gateways from issuing camera,
 location, screen, or notification commands to the same phone. Android can
 suspend the secondary connections after the app leaves the foreground.
+
+Local Gateway discovery pauses when it has no active consumer. It remains
+available for cold background recovery of a saved discovered Gateway, for
+enabled secondary Gateways in the foreground, and while **Settings → Gateway →
+Discovered** or Gateway onboarding is open. Resuming a scan rebuilds the local
+list; an already accepted connection retains its own reconnect address.
 
 The sidebar defaults to **Home → Threads → Skills → Overview**. Existing
 personalized orders and pinned work pages are preserved; **Pages pencil → Edit pinned items →
@@ -108,6 +114,9 @@ any failure. Offline messages still use the durable queue.
 The Wear OS companion uses the paired Android phone's authenticated Gateway connection; the watch never receives or stores Gateway credentials. It can select agents and sessions, read bounded transcripts, send text or dictated replies, abort an active run, start realtime Talk inside the selected session, and connect or disconnect the paired phone's Gateway. It also offers local reply notifications, dark or light appearance, and optional automatic speech for replies. Agent and Gateway controls are capability-negotiated for staggered phone/watch updates. Realtime Talk streams microphone and playback audio over a temporary Wear OS Data Layer channel and stops when the selected phone, Gateway connection, or audio channel is lost.
 
 ## Install outside Google Play
+
+Current Android releases are independent of Gateway releases. Historical
+GitHub releases may include APKs; check the listed assets before downloading.
 
 Selected GitHub Releases include a universal `OpenClaw-Android.apk` and `OpenClaw-Android-SHA256SUMS.txt`. The APK is built from the release tag, signed with the OpenClaw Android release key, and carries GitHub Actions provenance. Android assets may be attached after a release becomes public. Select a release by its listed assets, not by the latest Gateway release tag.
 
@@ -343,7 +352,7 @@ Details and example CoreDNS config: [Bonjour](/gateway/bonjour).
 
 ### 3. Connect from Android
 
-Create a setup code in the [Control UI](/web/control-ui) (**Devices → Pair device**) or with `openclaw qr`.
+Create a setup code in the [Control UI](/web/control-ui) (**Devices → Connect a device**) or with `openclaw qr`.
 
 That mobile **setup code** (and its QR) is what Android **Scan QR or setup code** / **Enter setup code** accept. It is a different artifact from the gateway **join URL** minted by [`openclaw devices join-code`](/cli/devices#openclaw-devices-join-code) (`https://…/j/<code>`), which enrolls a headless node host via [`openclaw connect`](/cli/connect). Pasting a join URL or bare join code into Android setup is rejected — generate a fresh mobile QR/setup code with [`openclaw qr`](/cli/qr).
 
@@ -459,6 +468,10 @@ Permissions. The Permissions row shows the current access mode. Open the top-rig
 open context usage, latest-run tokens, and the cost breakdown. Viewing usage does not require
 permission to change session settings. A reported model-call total remains visible
 when no cost breakdown is available. Missing usage is shown as unknown.
+
+Choose **Chat actions** (⋮) → **Dashboard** to open the current session's
+[dashboard](/web/dashboards) in an embedded Control UI WebView. It requires a
+connected Gateway and uses the same operator identity as the app.
 Tap the model name to open a compact menu above the composer, search by model name,
 ID, or provider, and expand provider groups. Search accepts multiple terms and small
 typos in words of at least four letters, including swapped adjacent letters. Every
@@ -490,7 +503,8 @@ Open **Home** from the sidebar's **Pages** menu to chat, or select an existing s
 - Thread activity: search results and sidebar rows use each thread's own reported activity. An inactive run does not keep a working or queued indicator solely because its last status was running or queued.
 - Session selection: while the app is running, each Gateway and agent remembers the last chat you explicitly selected. Returning to an agent checks an older chat directly if it is outside the recent page; temporary lookup failures show an error without forgetting that choice.
 - Archiving the open session returns to the app's main chat only if that same session is still selected. Switching sessions, agents, or Gateways while the archive finishes preserves your newer selection. A successful archive also retires the archived chat's remembered selection even if its push notification is missed.
-- **New** in the sidebar creates and selects an independent chat for the selected agent without clearing the previous session. It preserves the existing model/provider, thinking, and Fast Mode inheritance behavior while appearing separately in Threads instead of beneath the previous chat or Home. Existing ordinary New chats also appear independently even when an older app recorded the previous chat as their parent; their history and stored settings are not changed. Forks, subagents, explicit worktree starts, and sessions without creation metadata keep their nesting. The sidebar and chat header show progress during creation and initial loading, and duplicate New actions are disabled. History refreshes do not cancel creation; selecting another session, agent, or Gateway while it finishes preserves that newer selection.
+- To delete a chat, archive it first, open **Threads → Archived**, long-press it, and choose **Delete…**. The chat is removed from the list; a copy of its messages is kept. **Cancel** leaves the chat unchanged.
+- **New chat** on Overview and **New** in the sidebar create and select an independent chat for the selected agent without clearing the previous session. An in-progress response does not block that New chat, and the original response keeps running. It preserves the existing model/provider, thinking, and Fast Mode inheritance behavior while appearing separately in Threads instead of beneath the previous chat or Home. Existing ordinary New chats also appear independently even when an older app recorded the previous chat as their parent; their history and stored settings are not changed. Forks, subagents, explicit worktree starts, and sessions without creation metadata keep their nesting. The sidebar and chat header show progress during creation and initial loading, and duplicate New actions are disabled. History refreshes do not cancel creation; selecting another session, agent, or Gateway while it finishes preserves that newer selection.
 - Offline history: cached transcripts update in the order live histories are accepted, so a delayed reconnect health check cannot restore an older snapshot. Switching sessions preserves queued cache updates for the session you left.
 - **Refresh chat** in chat actions reloads history and rechecks Gateway health without clearing pending messages. Chat readiness is separate from the Gateway connection: an empty connected thread shows **Chat not ready** while health is unconfirmed or a check has failed. Use **Refresh chat** to check again; **Gateway offline** indicates a disconnected Gateway. History failures do not stop subsequent health checks. Once Android observes a recovered run finish, a delayed history response does not bring back that run's Stop button or partial reply.
 - Send: `chat.send`. Outside an active Talk session, you can send text or staged attachments while the agent is working. A new draft brings back **Send**; clearing it restores **Stop**. The Gateway applies the existing [queue mode](/concepts/queue), so steering does not require stopping the current run. Sending remains disabled while another submission, attachment staging, or microphone capture owns the draft.
@@ -575,8 +589,8 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 - Gateway config changes refresh Android's cached Talk settings on the next use, without reconnecting or interrupting an active capture.
 - Android Talk uses realtime Gateway relay only when `talk.realtime.mode` is `realtime` and `talk.realtime.transport` is `gateway-relay`.
 - Phone relay Talk preserves accepted agent work when Talk fails, the app leaves the foreground, or the voice mode changes. The answer still appears in chat; explicit Stop cancels it. This requires a Gateway advertising `talk-session-close-disposition`; older Gateways and Wear Talk retain the aborting close behavior.
-- Enable **Settings → Voice → Listen for wake words** for foreground on-device
-  Voice Wake. Android advertises `voiceWake` only when enabled, on-device
+- Enable **Settings → Voice → Listen for wake words** for on-device Voice Wake,
+  including background listening while the node foreground service holds microphone access. Android advertises `voiceWake` only when enabled, on-device
   recognition and microphone permission are available, and wake words are
   synchronized with the current Gateway.
 - Additional Android command families (availability depends on device, permissions, and user settings):

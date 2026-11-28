@@ -1,5 +1,7 @@
 import { AgentHarnessProjectionSettlement } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
+  AgentHarnessModelRequestPolicyError,
+  AgentHarnessRuntimeUpdateRequiredError,
   classifyAgentHarnessTerminalOutcome,
   prepareAgentRunTerminalReply,
   type AgentMessage,
@@ -97,6 +99,8 @@ export abstract class CodexTurnProjection {
   /** Structured overloads may continue once the exact settled transcript is captured. */
   settledTurnFailureFinalizationAllowed = false;
   protected promptError: unknown;
+  /** Native message behind a host-owned prompt error; a bare completion keeps that error. */
+  private hostPromptErrorMessage: string | undefined;
   protected promptErrorSource: AttemptFailureSource | null = null;
   protected providerRefusal: CodexProviderRefusal | undefined;
   protected synthesizedMissingToolResultError: string | null = null;
@@ -169,7 +173,10 @@ export abstract class CodexTurnProjection {
     );
     this.contextTokens = options.initialContextTokens;
     this.contextTokensSource = options.initialContextTokens === undefined ? undefined : "resolved";
-    this.diagnostics = new CodexProjectionDiagnostics(threadId, turnId);
+    // Terminal diagnostics remain observable after ordinary projection is retired.
+    this.diagnostics = new CodexProjectionDiagnostics(threadId, turnId, (data) =>
+      emitCodexAgentEvent(this.params, { stream: "codex_app_server.diagnostic", data }),
+    );
     this.nativeToolLifecycleProjector = new CodexNativeToolLifecycleProjector(
       params,
       threadId,
@@ -186,7 +193,9 @@ export abstract class CodexTurnProjection {
         ? AbortSignal.any([options.runAbortSignal, this.projectionController.signal])
         : this.projectionController.signal,
     });
-    this.toolProgressProjection = new CodexToolProgressProjection(params);
+    this.toolProgressProjection = new CodexToolProgressProjection(params, (event) =>
+      this.emitAgentEvent(event),
+    );
     this.toolTranscriptProjection = new CodexToolTranscriptProjection(
       params,
       threadId,
@@ -228,7 +237,12 @@ export abstract class CodexTurnProjection {
     this.reasoningProjection = new CodexReasoningProjection(
       this.settlement.params,
       (event) => this.emitAgentEvent(event),
-      options.onNativePlanUpdate,
+      {
+        turnId,
+        nextTimestamp: this.transcriptCheckpoint.nextTimestamp,
+        checkpointMessage: this.transcriptCheckpoint.enqueue,
+        onNativePlanUpdate: options.onNativePlanUpdate,
+      },
     );
   }
 
@@ -356,7 +370,7 @@ export abstract class CodexTurnProjection {
       runParams,
       turnId,
       upstreamUserText,
-      reasoningText,
+      reasoningMessages: this.reasoningProjection.collectMessages(),
       asyncMessages,
       commentaryMessages,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,
@@ -451,6 +465,12 @@ export abstract class CodexTurnProjection {
     for (const toolResult of toolTelemetry.coreTtsToolResults ?? []) {
       transferTtsProvenance?.(toolResult, result, toolAutoDeliveryMediaUrls ?? []);
     }
+    this.diagnostics.recordNoAnswer(
+      runParams.runId,
+      result,
+      completedTurn,
+      toolTelemetry.finalSourceReplyDelivered === true,
+    );
     return result;
   }
 
@@ -476,14 +496,35 @@ export abstract class CodexTurnProjection {
       this.providerRefusal = refusal;
     }
     if (this.providerRefusal) {
+      if (this.promptError instanceof AgentHarnessModelRequestPolicyError) {
+        this.promptError = undefined;
+        this.promptErrorSource = null;
+        this.hostPromptErrorMessage = undefined;
+      }
+      return;
+    }
+    if (
+      (this.promptError instanceof AgentHarnessModelRequestPolicyError ||
+        this.promptError instanceof AgentHarnessRuntimeUpdateRequiredError) &&
+      params.codexErrorInfo == null &&
+      (!params.message || params.message === this.hostPromptErrorMessage)
+    ) {
       return;
     }
     this.promptError =
-      resolveCodexPromptError({
-        message: params.message,
-        codexErrorInfo: params.codexErrorInfo,
-        rateLimits: params.rateLimits,
-      }) ?? params.fallbackMessage;
+      resolveCodexPromptError(
+        {
+          message: params.message,
+          codexErrorInfo: params.codexErrorInfo,
+          rateLimits: params.rateLimits,
+        },
+        { model: this.params.modelId, ...this.options.codexRuntime },
+      ) ?? params.fallbackMessage;
+    this.hostPromptErrorMessage =
+      this.promptError instanceof AgentHarnessModelRequestPolicyError ||
+      this.promptError instanceof AgentHarnessRuntimeUpdateRequiredError
+        ? params.message
+        : undefined;
     this.promptErrorSource = params.promptErrorSource;
   }
 

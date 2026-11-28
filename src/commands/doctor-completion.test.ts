@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as noteModule from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { completionInstallError as wrappedFsError } from "../cli/completion-profile.test-support.js";
 import {
   COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
   formatCompletionReloadCommand,
@@ -12,6 +13,7 @@ import {
 import { createDoctorPrompterFixture as makePrompter } from "../flows/doctor-health-context.test-support.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
+  checkShellCompletionRepairPending,
   checkShellCompletionStatus,
   doctorShellCompletion,
   ensureCompletionCacheExists,
@@ -116,11 +118,6 @@ function expectCompletionNote(text: string) {
   expect(noteModule.note).toHaveBeenCalledWith(expect.stringContaining(text), "Shell completion");
 }
 
-function wrappedFsError(code: string, profilePath: string): Error {
-  const cause = Object.assign(new Error(code), { code, path: profilePath });
-  return new Error(`Failed to install completion: ${cause.message}`, { cause });
-}
-
 describe("doctorShellCompletion", () => {
   beforeEach(() => {
     installCompletionMock.mockReset();
@@ -162,10 +159,10 @@ describe("doctorShellCompletion", () => {
     },
   );
 
-  it("offers session recovery when completion is not installed after EPERM", async () => {
+  it.each(["EPERM", "ERR_INVALID_UTF8"])("offers session recovery after %s", async (code) => {
     const { profilePath } = await setupBashHome();
-    const failedPath = path.dirname(profilePath);
-    installCompletionMock.mockRejectedValue(wrappedFsError("EPERM", failedPath));
+    const failedPath = code === "EPERM" ? path.dirname(profilePath) : profilePath;
+    installCompletionMock.mockRejectedValue(wrappedFsError(code, failedPath));
     await expect(doctorShellCompletion(makePrompter(true, true))).resolves.not.toThrow();
 
     const command = formatCompletionReloadCommand(
@@ -175,6 +172,25 @@ describe("doctorShellCompletion", () => {
     expectCompletionNote(command);
     expectCompletionNote("session only");
     expectCompletionNote(failedPath);
+  });
+
+  it("reports pending work exactly where the repair would write", async () => {
+    await setupBashHome();
+    // Without a profile, only an interactive Doctor offers to install completion.
+    await expect(checkShellCompletionRepairPending({ nonInteractive: true })).resolves.toBe("none");
+    await doctorShellCompletion(makePrompter(true, false), { nonInteractive: true });
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+    expect(installCompletionMock).not.toHaveBeenCalled();
+    await expect(checkShellCompletionRepairPending({ nonInteractive: false })).resolves.toBe(
+      "work",
+    );
+
+    const { profilePath } = await setupBashHome(true);
+    const slowProfile = await fs.readFile(profilePath, "utf8");
+    await expect(checkShellCompletionRepairPending({ nonInteractive: true })).resolves.toBe("work");
+    expect(await fs.readFile(profilePath, "utf8")).toBe(slowProfile);
+    await doctorShellCompletion(makePrompter(true, false), { nonInteractive: true });
+    expect(installCompletionMock).toHaveBeenCalledTimes(1);
   });
 
   it("re-throws non-permission errors from installCompletion", async () => {

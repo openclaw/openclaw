@@ -6,13 +6,20 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  monotonicDeadlineAfter,
+  monotonicNow,
+  remainingMonotonicMs,
+} from "../shared/monotonic-time.js";
 import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
+import { McpOAuthDiagnosticError } from "./mcp-oauth-identity.js";
 
 type StartupState = {
   owner: AbortSignal;
   delayMs: number;
   retryAfterMs: number;
   message: string;
+  promptMessage?: string;
   pending?: Promise<void>;
   authorization?: AuthorizationObservation & { error: Error };
 };
@@ -42,6 +49,7 @@ let errorModule: Promise<typeof import("./mcp-error.js")> | undefined;
 export class McpStartupBackoffError extends Error {
   readonly retryAfterMs: number;
   readonly authorizationRequired: boolean;
+  readonly promptMessage?: string;
 
   constructor(
     state: StartupState,
@@ -58,10 +66,11 @@ export class McpStartupBackoffError extends Error {
     super(
       state.authorization
         ? state.message
-        : `${state.message}; server unavailable; retry after ${new Date(retryAfterMs).toISOString()}. Check server reachability or reload MCP after fixing it.`,
+        : `${state.message}; server unavailable; retry after ${new Date(Date.now() + remainingMonotonicMs(retryAfterMs)).toISOString()}. Check server reachability or reload MCP after fixing it.`,
     );
     this.retryAfterMs = retryAfterMs;
     this.authorizationRequired = state.authorization !== undefined;
+    this.promptMessage = state.promptMessage;
   }
 }
 
@@ -112,7 +121,7 @@ async function connectWithMcpStartupBackoff(
   }
   signal.throwIfAborted();
   const backoff = getMcpStartupBackoff(key, signal, recoveryRetryMs, authorizationKey);
-  if (backoff && Date.now() < backoff.retryAfterMs) {
+  if (backoff && monotonicNow() < backoff.retryAfterMs) {
     throw backoff;
   }
   const state: StartupState = startups.get(key) ?? {
@@ -151,8 +160,13 @@ async function connectWithMcpStartupBackoff(
       throw error;
     }
     state.delayMs = Math.min(state.delayMs * 2, 600_000);
-    state.retryAfterMs = Date.now() + state.delayMs;
+    state.retryAfterMs = monotonicDeadlineAfter(state.delayMs);
     state.message = redactMcpDiagnosticError(error);
+    const oauthError = collectErrorGraphCandidates(error, readErrorCauses).find(
+      (candidate) => candidate instanceof McpOAuthDiagnosticError,
+    );
+    state.promptMessage =
+      oauthError instanceof McpOAuthDiagnosticError ? oauthError.promptMessage : undefined;
     const reportFailure =
       !state.authorization ||
       !startups.has(authorizationKey) ||

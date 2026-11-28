@@ -1,6 +1,5 @@
 /** Resolves agent runtime config, including SecretRef materialization for agent command use. */
 
-import { collectClawToolPolicyCandidates } from "../claws/tool-policy-candidates.js";
 import {
   getAgentRuntimeCommandSecretTargetIds,
   getAgentRuntimeOptionalCommandSecretPaths,
@@ -15,6 +14,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
+import { collectTemplateToolPolicyCandidates } from "../templates/tool-policy-candidates.js";
 import { listAgentEntries } from "./agent-scope.js";
 import { measureAgentStartup } from "./startup-timing.js";
 
@@ -129,8 +129,8 @@ export async function resolveAgentRuntimeConfig(
       () => import("../secrets/runtime.js"),
       { config: cfg },
     );
-    const hasClawToolPolicies = collectClawToolPolicyCandidates(cfg).length > 0;
-    const [snapshot, provenance, clawToolPolicyRuntime] = await Promise.all([
+    const hasTemplateToolPolicies = collectTemplateToolPolicyCandidates(cfg).length > 0;
+    const [snapshot, provenance, templateToolPolicyRuntime] = await Promise.all([
       measureAgentStartup(
         "secrets-snapshot",
         () =>
@@ -142,18 +142,18 @@ export async function resolveAgentRuntimeConfig(
           }),
         { config: cfg },
       ),
-      hasClawToolPolicies
-        ? import("../claws/provenance-runtime-read.js").then(
-            ({ prepareClawInstallSchemaVersions }) =>
-              prepareClawInstallSchemaVersions({ artifactPreservingReadOnly: false }),
+      hasTemplateToolPolicies
+        ? import("../templates/provenance-runtime-read.js").then(
+            ({ prepareTemplateInstallSchemaVersions }) =>
+              prepareTemplateInstallSchemaVersions({ artifactPreservingReadOnly: false }),
           )
         : undefined,
-      hasClawToolPolicies ? import("../claws/tool-policy-runtime.js") : undefined,
+      hasTemplateToolPolicies ? import("../templates/tool-policy-runtime.js") : undefined,
     ]);
     provenance?.publish();
     secretsRuntime.activateSecretsRuntimeSnapshot(snapshot);
     // Activation publishes a clone; this caller retains the captured config.
-    clawToolPolicyRuntime?.prepareCapturedClawToolPolicyConsent(cfg, {});
+    templateToolPolicyRuntime?.prepareCapturedTemplateToolPolicyConsent(cfg, {});
   }
   return cfg;
 }

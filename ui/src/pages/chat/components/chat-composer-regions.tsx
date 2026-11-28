@@ -1,6 +1,9 @@
 import { createMemo, lazy, Show, untrack } from "solid-js";
+import { focusComposerInput } from "../../../lib/composer-input.ts";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { isChatRunWorking } from "../chat-run-working.ts";
+import { projectProgressCardRuntime } from "../chat-subagent-wait.ts";
+import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
@@ -36,8 +39,12 @@ export function ComposerQueue(view: { composer: ChatComposerProps; showAbortable
           onQueueRetry={canAct() ? view.composer.onQueueRetry : undefined}
           onQueueSteer={canAct() ? view.composer.onQueueSteer : undefined}
           onQueueMove={view.composer.onQueueMove}
+          queuePaused={view.composer.queuePaused}
+          onQueueResume={canAct() ? view.composer.onQueueResume : undefined}
+          onQueueClear={view.composer.onQueueClear}
           queuedEdit={view.composer.queuedEdit}
           onQueueRemove={view.composer.onQueueRemove}
+          onQueueCopy={view.composer.onQueueCopy}
         />
       </ChatLazyBoundary>
     </Show>
@@ -78,6 +85,12 @@ export function ComposerProgress(view: { composer: ChatComposerProps; shown: boo
             startedAt={view.composer.selectedSession?.startedAt}
             endedAt={view.composer.selectedSession?.endedAt}
             hasActiveRun={isChatRunWorking(view.composer)}
+            runtime={projectProgressCardRuntime(
+              view.composer.selectedSession,
+              view.composer,
+              view.composer.progressCard!.updatedAt,
+              view.composer.connected,
+            )}
             collapseComposerByDefault={view.composer.collapseTaskProgress}
             composerDisclosureContext={{
               presented: view.shown,
@@ -97,6 +110,33 @@ export function ComposerProgress(view: { composer: ChatComposerProps; shown: boo
           />
         </ChatLazyBoundary>
       </div>
+    </Show>
+  );
+}
+
+const InviteAccess = lazy(() => import("./chat-invite-access.tsx"), { export: "ChatInviteAccess" });
+export function ComposerInviteAccess(view: {
+  composer: ChatComposerProps;
+  context: ReturnType<typeof createChatComposerContext>;
+}) {
+  return (
+    <Show
+      when={
+        view.composer.mentionDirectory?.inviteAccessAvailable &&
+        view.composer.mentions?.some((mention) => mention.access !== undefined)
+      }
+    >
+      <ChatLazyBoundary>
+        <InviteAccess
+          text={view.context.visibleDraft}
+          mentions={view.composer.mentions ?? []}
+          options={view.context.state.mentionMenu.selectedInviteOptions}
+          onChange={(mentions) => {
+            view.context.mentionMenuHost.commitDraft(view.context.visibleDraft, mentions);
+            focusComposerInput(view.context.mentionMenuHost.getTextarea(), { preventScroll: true });
+          }}
+        />
+      </ChatLazyBoundary>
     </Show>
   );
 }

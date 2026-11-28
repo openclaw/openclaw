@@ -11,15 +11,9 @@ vi.mock("@openclaw/media-core/base64", async (importOriginal) => ({
 }));
 const image = { type: "image" as const, data: "image", mimeType: "image/jpeg" };
 const message = { role: "user" as const, content: [image], timestamp: 0 };
+const model = makeAnthropicTransportModel({ input: ["text", "image"] });
 const build = (messages: Context["messages"]) =>
-  buildAnthropicRequest(
-    makeAnthropicTransportModel({ input: ["text", "image"] }),
-    { messages },
-    undefined,
-    "transport",
-    false,
-    false,
-  );
+  buildAnthropicRequest(model, { messages }, undefined, "transport", false, false);
 
 beforeEach(() => {
   estimate.mockReset();
@@ -36,6 +30,7 @@ it("bounds normalized images across all messages in each request", async () => {
       params: { messages: expect.any(Array) },
     });
   }
+  expect(estimate).toHaveBeenCalledTimes(8);
   await expect(build(Array.from({ length: 5 }, () => message))).rejects.toThrow(
     "64 MB aggregate decoded safety limit",
   );
@@ -58,13 +53,9 @@ it("normalizes image batches incrementally and preserves text order", async () =
       return [...content];
     },
   });
-  const { params } = await build([
-    {
-      role: "user",
-      timestamp: 0,
-      content: [image, { type: "text", text: "between" }, { ...image, mimeType: "image/png" }],
-    },
-  ]);
+  const text = { type: "text" as const, text: "between" };
+  const content = [image, text, { ...image, mimeType: "image/png" }];
+  const { params } = await build([{ ...message, content }]);
   expect(sizes).toEqual([1, 1]);
   expect(params.messages[0]?.content).toEqual([
     { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "image" } },

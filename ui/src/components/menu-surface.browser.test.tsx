@@ -1,15 +1,15 @@
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
-import "../pages/chat/components/browser-tab-card.css";
-import { BrowserTabCardHost } from "../pages/chat/components/browser-tab-card.tsx";
+import { t } from "../lib/reactive/i18n.ts";
 import { renderComposerMenuOption as ComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
+import { Menu, type MenuProps } from "./solid/menu.tsx";
 import "../test-helpers/load-styles.ts";
 import "./agent-select-registration.ts";
 import "./menu-surface.ts";
-import { Menu, type MenuProps } from "./solid/menu.tsx";
+import overlayStyles from "./solid/overlay.css?inline";
 import "./resizable-divider.ts";
 
 // Nav's stacking context is below the resizer. Plain overlays need a top-layer
@@ -118,7 +118,7 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     ] as const) {
       onTestFinished(
         subscribeNativeOverlayOcclusion(
-          (occluded) => events.push(occluded),
+          (occlusion) => events.push(occlusion !== "live"),
           () => bounds,
         ),
       );
@@ -187,7 +187,10 @@ describe.skipIf(!hasPopoverApi)("agent picker surface", () => {
   it("stays opaque while the menu animates open", async () => {
     await useDesktopViewport();
     const picker = document.createElement("openclaw-agent-select");
-    picker.options = [{ value: "all", label: "All agents" }];
+    picker.options = [
+      { value: "all", label: "All agents" },
+      { value: "main", label: "Main agent" },
+    ];
     document.body.append(picker);
     await picker.updateComplete;
     const menu = picker.querySelector<HTMLElement>(".agent-select__menu")!;
@@ -200,6 +203,11 @@ describe.skipIf(!hasPopoverApi)("agent picker surface", () => {
     }
     expect(getComputedStyle(menu).opacity).toBe("1");
     expect(getComputedStyle(menu).scale).not.toBe("1");
+    await expect.poll(() => menu.querySelectorAll(".agent-select__option").length).toBe(2);
+    const options = menu.querySelectorAll<HTMLElement>(".agent-select__option");
+    expect(getComputedStyle(options[1]!).marginBlockStart).toBe(
+      getComputedStyle(menu).getPropertyValue("--menu-item-gap").trim(),
+    );
   });
 });
 
@@ -222,7 +230,10 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
           id: "parent",
           label: "Parent",
           class: className,
-          children: [{ id: "child", label: "Child", class: className }],
+          children: [
+            { id: "child", label: "Child", class: className },
+            { id: "child-next", label: "Next child", class: className },
+          ],
         },
         { id: "sibling", label: "Other action", class: className },
       ],
@@ -230,9 +241,11 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
     const parent = query(container, '[data-value="parent"]');
     const child = query(container, '[data-value="child"]');
     const sibling = query(container, '[data-value="sibling"]');
-    const highlight = colorSwatch(
-      input === "pointer" ? "var(--surface-selected-hover)" : "var(--surface-selected)",
-    );
+    const submenu = child.closest<HTMLElement>(".oc-menu")!;
+    const submenuShown = new Promise<void>((resolve) => {
+      submenu.addEventListener("overlay-after-show", () => resolve(), { once: true });
+    });
+    const highlight = colorSwatch("var(--surface-hover)");
 
     await openMenu(container);
     await expect.poll(() => document.activeElement).toBe(parent);
@@ -246,7 +259,14 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
       expect(document.activeElement).toBe(parent);
     }
     await expect.poll(() => parent.getAttribute("aria-expanded")).toBe("true");
-    // A loaded WebKit worker can sample the color transition just before the poll expires.
+    // Keyboard focus can precede submenu presentation and its final highlight transition.
+    await submenuShown;
+    expect(submenu.dataset.phase).toBe("open");
+    const gap = getComputedStyle(submenu).getPropertyValue("--menu-item-gap").trim();
+    expect(getComputedStyle(query(container, '[data-value="child-next"]')).marginBlockStart).toBe(
+      gap,
+    );
+    expect(getComputedStyle(sibling).marginBlockStart).toBe(gap);
     await Promise.all(parent.getAnimations().map((animation) => animation.finished));
     expect(getComputedStyle(parent).backgroundColor).toBe(highlight);
 
@@ -267,47 +287,80 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
   });
 });
 
-describe.skipIf(!hasPopoverApi)("action menu typography", () => {
-  it.each([390, 1440])(
-    "keeps plain and session actions at the same text scale at %ipx",
-    async (width) => {
-      const { page } = await import("vitest/browser");
-      await page.viewport(width, 900);
-      const host = document.createElement("div");
-      host.style.fontSize = "20px";
-      host.style.setProperty("--control-ui-text-scale", "1");
-      document.body.append(host);
-      mountSolid(
-        () => (
-          <>
-            <Menu
-              id="plain-action-typography"
-              label="Workspace actions"
-              items={[{ id: "copy-path", label: "Copy path" }]}
-            />
-            <Menu
-              id="session-action-typography"
-              label="Session actions"
-              class="session-menu"
-              items={[{ id: "copy-session", label: "Copy session", class: "session-menu__item" }]}
-            />
-          </>
-        ),
-        { container: host },
-      );
-      flush();
-      const plain = query(host, '[data-value="copy-path"]');
-      const session = query(host, '[data-value="copy-session"]');
-      await openMenu(host);
+it("keeps inferred group spacing inside menus and direct row gaps outside", async () => {
+  const style = document.head.appendChild(document.createElement("style"));
+  style.textContent = overlayStyles;
+  onTestFinished(() => style.remove());
+  const host = document.body.appendChild(document.createElement("openclaw-menu-surface"));
+  onTestFinished(() => host.remove());
+  host.style.setProperty("--menu-item-gap", "6px");
+  const item = '<button class="oc-menu-item">Action</button>';
+  const group = `<section>${item}</section>`;
+  const submenu = `<div><button class="oc-menu-item oc-menu-item--submenu">More</button><div class="oc-overlay oc-menu">${item}</div></div>`;
+  const overridden =
+    '<button class="oc-menu-item" style="margin-block-start: 11px">Override</button>';
+  for (const [name, first, second, menuClass, expected] of [
+    ["rows", item, item, "oc-menu", "6px"],
+    ["row then group", item, group, "oc-menu", "6px"],
+    ["group then row", group, item, "oc-menu", "6px"],
+    ["groups", group, group, "oc-menu", "6px"],
+    ["submenu then row", submenu, item, "oc-menu", "6px"],
+    [
+      "custom submenu marker then row",
+      '<div><button class="oc-menu-item--submenu">More</button></div>',
+      item,
+      "oc-menu",
+      "6px",
+    ],
+    ["popup exclusion", item, `<div class="oc-overlay">${item}</div>`, "oc-menu", "4px"],
+    ["row override", item, overridden, "oc-menu", "11px"],
+    ["standalone rows", item, item, "", "6px"],
+    ["unrelated groups", group, group, "", "0px"],
+  ] as const) {
+    host.innerHTML = `<div class="${menuClass}"><div><div class="spacing-pair">${first}${second}</div></div></div>`;
+    const target = query(host, ".spacing-pair").lastElementChild!;
+    await expect
+      .poll(() => getComputedStyle(target).marginBlockStart, { message: name })
+      .toBe(expected);
+  }
+  host.innerHTML = `<div class="oc-menu"><div class="outer">${group}${group}</div><div class="oc-menu" style="--menu-item-gap: 9px"><div class="inner">${group}${group}</div></div></div><div class="outside">${group}${group}</div>`;
+  for (const [selector, expected] of [
+    [".outer", "6px"],
+    [".inner", "9px"],
+    [".outside", "0px"],
+  ] as const) {
+    await expect
+      .poll(() => getComputedStyle(query(host, selector).lastElementChild!).marginBlockStart)
+      .toBe(expected);
+  }
+});
 
-      for (const scale of [1, 1.4]) {
-        host.style.setProperty("--control-ui-text-scale", String(scale));
-        const size = (item: HTMLElement) => Number.parseFloat(getComputedStyle(item).fontSize);
-        expect(size(plain)).toBeCloseTo(13 * scale, 1);
-        expect(size(plain)).toBeCloseTo(size(session), 1);
-      }
-    },
-  );
+it("spaces actual Menu groups around custom content", async () => {
+  const container = mountMenu({
+    id: "group-spacing",
+    label: "Actions",
+    items: [
+      { id: "before", label: "Before" },
+      { kind: "group", id: "group", items: [{ id: "grouped", label: "Grouped" }] },
+      {
+        kind: "content",
+        id: "custom",
+        content: (
+          <section>
+            <button class="oc-menu-item">Custom</button>
+          </section>
+        ),
+      },
+      { id: "after", label: "After" },
+    ],
+  });
+  const menu = await openMenu(container);
+  const gap = getComputedStyle(menu).getPropertyValue("--menu-item-gap").trim();
+  const grouped = query(menu, '[data-value="grouped"]').parentElement!;
+  const after = query(menu, '[data-value="after"]');
+  for (const target of [grouped, grouped.nextElementSibling!, after]) {
+    expect(getComputedStyle(target).marginBlockStart).toBe(gap);
+  }
 });
 
 describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
@@ -325,57 +378,8 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       await useDesktopViewport();
       document.documentElement.dataset.theme = theme;
       document.documentElement.dataset.themeMode = theme;
-      highlight = colorSwatch("var(--bg-hover)");
+      highlight = colorSwatch("var(--surface-hover)");
       host = document.body.appendChild(document.createElement("div"));
-    });
-
-    it("matches session menu geometry and theme inside browser cards", async () => {
-      const view = mountSolid(() => (
-        <BrowserTabCardHost
-          preview={{
-            kind: "browser-tab",
-            target: "host",
-            profile: "managed",
-            targetId: "tab-1",
-            url: "https://example.test/page",
-            title: "Example page",
-          }}
-        />
-      ));
-      flush();
-      const card = query(view.container, "openclaw-browser-tab-card");
-      // Hold the entry presentation like a stalled WebKit timeline on a loaded runner:
-      // the geometry, theme, and hover checks must not wait for it to settle.
-      card.style.setProperty("--oc-overlay-show-duration", "3600s");
-      const menu = await openAdmittedMenu(card, ".more");
-      const entry = menu.getAnimations();
-      expect(entry.length).toBeGreaterThan(0);
-      entry.forEach((animation) => animation.pause());
-      const item = query(card, '[value="copy-url"]');
-      mountMenu(
-        {
-          id: "browser-card-reference",
-          label: "Reference menu",
-          class: "session-menu",
-          items: [{ id: "reference", label: "Reference action", class: "session-menu__item" }],
-        },
-        host,
-      );
-      const referenceMenu = query(host, ".oc-menu");
-      const referenceItem = query(host, '[data-value="reference"]');
-      for (const property of ["background-color", "border-radius", "padding", "box-shadow"]) {
-        expect(getComputedStyle(menu).getPropertyValue(property)).toBe(
-          getComputedStyle(referenceMenu).getPropertyValue(property),
-        );
-      }
-      for (const property of ["min-height", "padding", "font-size", "color"]) {
-        expect(getComputedStyle(item).getPropertyValue(property)).toBe(
-          getComputedStyle(referenceItem).getPropertyValue(property),
-        );
-      }
-      await hoverBackground(item, highlight);
-      entry.forEach((animation) => animation.finish());
-      await expect.poll(() => menu.dataset.phase).toBe("open");
     });
 
     it("uses platform hover for slash suggestions", async () => {
@@ -434,18 +438,88 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
   });
 });
 
-/** Wait for open authority without waiting for the deliberately held entry animation. */
-async function openAdmittedMenu(host: HTMLElement, selector: string) {
-  const { page } = await import("vitest/browser");
-  const trigger = query(host, selector);
-  await page.elementLocator(trigger).click();
-  const menu = query(host, ".oc-menu");
-  await expect
-    .poll(() => ({
-      expanded: trigger.getAttribute("aria-expanded"),
-      shown: menu.matches(":popover-open"),
-      interactive: !menu.inert && ["opening", "open"].includes(menu.dataset.phase ?? ""),
-    }))
-    .toEqual({ expanded: "true", shown: true, interactive: true });
-  return menu;
-}
+describe.skipIf(!hasPopoverApi)("sidebar intrinsic rows", () => {
+  it("keeps multiline labels inside their highlight in a capped scrolling menu", async () => {
+    await import("../styles/sidebar-menus.css");
+    const { renderSidebarMenuAction } = await import("./app-sidebar-dropdown.tsx");
+    const host = mountMenu({
+      id: "multiline-menu",
+      label: "Multiline menu",
+      panelClass: "sidebar-customize-menu",
+      items: Array.from({ length: 20 }, (_, index) => ({
+        ...renderSidebarMenuAction(`row-${index}`, `Action ${index}`, "key"),
+        content: (
+          <span class="sidebar-openclaw-id__lines">
+            <span>Action {index}</span>
+            <span class="sidebar-openclaw-id__detail">
+              A wrapped secondary description that must fit inside its highlighted row.
+            </span>
+          </span>
+        ),
+      })),
+    });
+    const menu = await openMenu(host);
+    expect(menu.scrollHeight).toBeGreaterThan(menu.clientHeight);
+    for (const label of menu.querySelectorAll(".sidebar-openclaw-id__lines")) {
+      const row = label.closest(".oc-menu-item")!.getBoundingClientRect();
+      const bounds = label.getBoundingClientRect();
+      expect(bounds.top).toBeGreaterThanOrEqual(row.top);
+      expect(bounds.bottom).toBeLessThanOrEqual(row.bottom);
+    }
+  });
+
+  it.each(["Enter", "Space", "disabled"])(
+    "registers the signed-out native button: %s",
+    async (key) => {
+      await import("../styles/sidebar-menus.css");
+      const { openClawIdMenuEntries } = await import("./openclaw-id/account-menu.tsx");
+      const { page, userEvent } = await import("vitest/browser");
+      const selected = vi.fn();
+      const host = mountMenu({
+        id: "sign-in-menu",
+        label: "Account menu",
+        panelClass: "sidebar-customize-menu",
+        items: [
+          ...openClawIdMenuEntries({
+            status: { state: "on" },
+            link: { linked: false },
+            channel: "local_operator",
+            remoteAccessSetup: "local",
+            accountSignIn: "popup",
+            owner: true,
+            connection: { kind: "local" },
+            services: {
+              issuerUrl: null,
+              discoveryUrl: null,
+              loaderDomain: null,
+              clientId: key === "disabled" ? undefined : "fixture",
+            },
+          }),
+          { id: "settings", label: "Settings" },
+        ],
+        onSelect: selected,
+      });
+      const menu = await openMenu(host);
+      const button = menu.querySelector<HTMLButtonElement>('[data-value="openclaw-id:sign-in"]')!;
+      await expect
+        .element(page.elementLocator(button))
+        .toHaveAccessibleName("Sign in with OpenClaw ID");
+      expect(button.getAttribute("role")).toBe("button");
+      query(menu, '[data-value="settings"]').focus();
+      await userEvent.keyboard("{ArrowUp}");
+      if (key === "disabled") {
+        expect(button.disabled).toBe(true);
+        await expect
+          .element(page.elementLocator(button))
+          .toHaveAccessibleDescription(t("openclawId.signInUnconfigured"));
+        expect(document.activeElement).not.toBe(button);
+        button.click();
+        expect(selected).not.toHaveBeenCalled();
+      } else {
+        await expect.poll(() => document.activeElement).toBe(button);
+        await userEvent.keyboard(key === "Enter" ? "{Enter}" : " ");
+        expect(selected).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+});

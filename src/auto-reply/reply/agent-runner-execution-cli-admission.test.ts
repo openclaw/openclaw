@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { assert, expect, it, onTestFinished, vi } from "vitest";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
 import { buildCliRunResult } from "../../agents/cli-runner/cli-run-settlement.js";
@@ -23,6 +24,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import {
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
+  getRawExecuteAgentTurnForTest,
   createFollowupRun,
   expectMockCallArgFields,
   runInitialFallbackAttempt,
@@ -116,6 +118,95 @@ function rejectUnexpectedCompactionSuccessor(): never {
   throw new Error("Unexpected compaction successor during CLI admission test");
 }
 
+it.each([true, false])(
+  "retains native context only after provider execution (started=%s)",
+  async (providerStarted) => {
+    const { turn, followupRun } = await sessionFixture("agent:main:scheduled-context", {
+      lifecycleRevision: "current",
+    });
+    followupRun.run.inputProvenance = { kind: "internal_system", sourceTool: "cron_execution" };
+    useCliFallback();
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {
+        providerStarted,
+        agentMeta: {
+          sessionId: "native-id-is-not-the-host-writer",
+          ...(providerStarted
+            ? {
+                usage: { input: 9000, output: 500 },
+                lastCallUsage: {
+                  input: 100,
+                  output: 23,
+                  contextUsage: {
+                    state: "available" as const,
+                    promptTokens: 100,
+                    totalTokens: 123,
+                  },
+                },
+              }
+            : {}),
+        },
+      },
+    });
+    const { outcome } = await (await getRawExecuteAgentTurnForTest())(turn);
+    assert(outcome.kind === "settled");
+    expect(outcome.sessionWriter?.sessionId).toBe("session");
+    expect(outcome.autoCompactionCount).toBe(0);
+    expect(outcome.compaction).toEqual(
+      providerStarted
+        ? {
+            count: 0,
+            durable: [
+              {
+                kind: "durable",
+                count: 0,
+                target: outcome.sessionWriter,
+                currentContextSnapshot: { tokens: 123 },
+              },
+            ],
+          }
+        : undefined,
+    );
+  },
+);
+
+it("counts the native compactions a CLI turn completed toward the session", async () => {
+  const { turn } = await sessionFixture("agent:main:native-compactions", {
+    lifecycleRevision: "current",
+  });
+  useCliFallback();
+  const context = buildPreparedCliRunContext();
+  const output = {
+    text: "done",
+    nativeCompaction: {
+      compactionCount: 2,
+      compactionTokensBefore: 69_162,
+      compactionTokensAfter: 7_617,
+    },
+  };
+  state.runCliAgentMock.mockResolvedValueOnce(
+    buildCliRunResult({
+      context,
+      output,
+      preparedReply: prepareCliRunTerminalReply(context, output),
+      effectiveCliSessionId: "native-session",
+      bindingFlushOk: true,
+      usedHistoryPrompt: false,
+      userTurnHandled: true,
+      sessionBindingDisabled: false,
+      preparedContextAgentMeta: {},
+    }),
+  );
+  const { outcome } = await (await getRawExecuteAgentTurnForTest())(turn);
+  assert(outcome.kind === "settled");
+  expect(outcome.autoCompactionCount).toBe(2);
+  expect(outcome.compaction).toMatchObject({
+    count: 2,
+    durable: [{ kind: "durable", count: 2, target: outcome.sessionWriter }],
+  });
+});
+
 it("reads cold CLI fallback metadata while another connection holds a shared-state write transaction", async () => {
   const sessionKey = "agent:main:cli-read-contention";
   const binding = { sessionId: "existing-native-session" };
@@ -139,7 +230,12 @@ it("reads cold CLI fallback metadata while another connection holds a shared-sta
       holder = new DatabaseSync(resolveOpenClawStateSqlitePath());
       holder.exec("BEGIN IMMEDIATE");
       try {
-        expect(() => loadSessionEntry(scope)).toThrow(/database is locked/iu);
+        {
+          // Keep session readers cold while probing the shared writer lock without waiting.
+          using probe = new DatabaseSync(resolveOpenClawStateSqlitePath());
+          probe.exec("PRAGMA busy_timeout = 0");
+          expect(() => probe.exec("BEGIN IMMEDIATE")).toThrow(/database is locked/iu);
+        }
         return await runLocal();
       } finally {
         if (holder?.isTransaction) {
@@ -491,4 +587,33 @@ it("carries the admitted session permission and placement into the CLI grant", a
   expect(state.runCliAgentMock).toHaveBeenCalledOnce();
   await state.runCliAgentMock.mock.results[0]?.value;
   expect(result.kind).toBe("success");
+});
+
+it("refuses a participating CLI fallback before launching its backend", async () => {
+  const { turn, followupRun } = await sessionFixture("agent:main:participant-cli", {});
+  followupRun.operatorAuthority = createTestOperatorAuthority({
+    canonicalIdentity: null,
+    profileId: "guest",
+    scopes: [],
+    participationCeiling: {
+      kind: "send",
+      profileId: "guest",
+      sessionKey: "agent:main:participant-cli",
+      tools: ["read"],
+      permission: "workspace",
+      source: {
+        agentId: "main",
+        sessionId: "test",
+        lifecycleRevision: null,
+        creatorProfileId: "creator",
+        root: "/synthetic",
+      },
+    },
+  });
+  useCliFallback();
+  expect(await executeAgentTurn(turn)).toMatchObject({
+    kind: "final",
+    payload: { text: expect.stringContaining("Participating inputs require the OpenClaw runtime") },
+  });
+  expect(state.runCliAgentMock).not.toHaveBeenCalled();
 });

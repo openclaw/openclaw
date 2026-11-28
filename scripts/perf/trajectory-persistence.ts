@@ -25,6 +25,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { DB } from "../../src/state/openclaw-agent-db.generated.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -88,6 +89,18 @@ function fixture(index: number): EventInput[] {
   const systemPrompt = "Synthetic system instruction with ordinary prose. ".repeat(160);
   const messages = Array.from({ length: 24 }, (_, message) => ({
     role: message % 2 ? "assistant" : "user",
+    ...(message % 2
+      ? {
+          providerReplay: {
+            v: 1,
+            type: "anthropic-compaction",
+            data: "opaque".repeat(8192),
+            provider: "synthetic",
+            api: "synthetic",
+            model: "mock",
+          },
+        }
+      : {}),
     content: [{ type: "text", text: `Message ${message}. ${"Synthetic context. ".repeat(48)}` }],
   }));
   const tools = Array.from({ length: 40 }, (_, tool) => ({
@@ -225,12 +238,7 @@ try {
   await nextTurn();
   await nextTurn();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 8192,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 8192);
     sampling = true;
   }
   const memoryBefore = process.memoryUsage();

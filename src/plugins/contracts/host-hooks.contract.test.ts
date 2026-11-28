@@ -1,4 +1,5 @@
 import path from "node:path";
+import { setImmediate as waitForPluginEventHandlers } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginRegistryFixture,
@@ -50,11 +51,7 @@ import {
   patchPluginSessionExtension,
   projectPluginSessionExtensionsSync,
 } from "../host-hook-state.js";
-import {
-  buildPluginAgentTurnPrepareContext,
-  isPluginJsonValue,
-  type PluginTrustedToolPolicyRegistration,
-} from "../host-hooks.js";
+import { isPluginJsonValue, type PluginTrustedToolPolicyRegistration } from "../host-hooks.js";
 import { getPluginInstance } from "../plugin-instance-scope.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
@@ -74,12 +71,6 @@ import {
 import type { OpenClawPluginApi } from "../types.js";
 import { registerHostHookFixture } from "./host-hook-fixture.js";
 import { hostHookUiProjection } from "./test-helpers/host-hook-ui-projection.js";
-
-async function waitForPluginEventHandlers(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
 
 function createHostHookFixtureRegistry() {
   return createPluginRegistryFixture({
@@ -211,7 +202,6 @@ async function seedSession(storePath: string, fields: Partial<SessionEntry> = {}
 }
 
 type HostHookStateFixture = {
-  stateDir: string;
   storePath: string;
   tempConfig: { session: { store: string } } & Record<string, unknown>;
 };
@@ -231,7 +221,7 @@ async function withHostHookState(
   await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
     await withTempConfig({
       cfg: tempConfig,
-      run: async () => await run({ stateDir, storePath, tempConfig }),
+      run: async () => await run({ storePath, tempConfig }),
     });
   });
 }
@@ -243,34 +233,6 @@ describe("host-hook fixture plugin contract", () => {
     } finally {
       resetAgentEventsForTest();
     }
-  });
-
-  it("registers generic SDK seams without Plan Mode business logic", () => {
-    const { config, registry } = createHostHookFixtureRegistry();
-    registerInto(
-      { registry, config },
-      {
-        id: "host-hook-fixture",
-        name: "Host Hook Fixture",
-        origin: "workspace",
-        contracts: { tools: ["approval_fixture_tool"] },
-      },
-      registerHostHookFixture,
-    );
-
-    expect(registry.registry.sessionExtensions).toHaveLength(1);
-    expect(registry.registry.toolMetadata).toHaveLength(1);
-    expect(registry.registry.controlUiDescriptors).toHaveLength(1);
-    expect(registry.registry.runtimeLifecycles).toHaveLength(1);
-    expect(registry.registry.agentEventSubscriptions).toHaveLength(1);
-    expect(registry.registry.sessionSchedulerJobs).toHaveLength(1);
-    expect(registry.registry.commands.map((entry) => entry.command.name)).toEqual([
-      "host-hook-fixture",
-    ]);
-    expect(registry.registry.typedHooks.map((entry) => entry.hookName).toSorted()).toEqual([
-      "agent_turn_prepare",
-      "heartbeat_prompt_contribution",
-    ]);
   });
 
   it("rejects external plugins from trusted policy and reserved command ownership", () => {
@@ -729,18 +691,22 @@ describe("host-hook fixture plugin contract", () => {
   );
 
   it("validates plugin-owned JSON values as plain JSON-compatible data", () => {
-    expect(
-      isPluginJsonValue({
-        state: "waiting",
-        attempts: 1,
-        nested: [{ ok: true }, null],
-      }),
-    ).toBe(true);
+    const valid = { state: "waiting", attempts: 1, nested: [{ ok: true }, null] };
+    expect(isPluginJsonValue(valid)).toBe(true);
     expect(isPluginJsonValue({ value: Number.NaN })).toBe(false);
     expect(isPluginJsonValue({ value: undefined })).toBe(false);
-    expect(isPluginJsonValue(new Date(0))).toBe(false);
     expect(isPluginJsonValue(new Map([["state", "waiting"]]))).toBe(false);
     expect(isPluginJsonValue({ value: "x".repeat(70 * 1024) })).toBe(false);
+    let reads = 0;
+    const value = Object.create(null);
+    for (let index = 0; index < 513; index++) {
+      Object.defineProperty(value, `field${index}`, {
+        enumerable: true,
+        get: () => ++reads,
+      });
+    }
+    expect(isPluginJsonValue(value)).toBe(false);
+    expect(reads).toBe(0);
   });
 
   it("rejects non-JSON descriptor schemas before projecting Control UI descriptors", () => {
@@ -1165,40 +1131,25 @@ describe("host-hook fixture plugin contract", () => {
     );
   });
 
-  it("skips malformed persisted next-turn injection records during prompt assembly", () => {
-    const queuedContext = buildPluginAgentTurnPrepareContext({
-      queuedInjections: [
-        { ...injection("approval-plugin", "bad-text", "", "prepend_context"), text: 123 } as never,
-        {
-          ...injection("approval-plugin", "bad-placement", "wrong placement"),
-          placement: "middle_context",
-        } as never,
-        injection("approval-plugin", "valid", "  approval workflow resumed  "),
-      ],
-    });
-
-    expect(queuedContext).toEqual({ appendContext: "approval workflow resumed" });
-  });
-
-  it("rejects malformed next-turn injection input before persisting records", async () => {
-    for (const invalid of [
-      { placement: "middle_context" as never },
-      { ttlMs: Infinity },
-      { ttlMs: -1 },
-    ]) {
-      await expect(
-        enqueuePluginNextTurnInjection({
-          cfg: {},
-          pluginId: "approval-fixture",
-          injection: { sessionKey: "agent:main:main", text: "invalid", ...invalid },
-        }),
-      ).resolves.toEqual({ enqueued: false, id: "", sessionKey: "agent:main:main" });
-    }
-  });
-
-  it("reports duplicate next-turn injections as not newly enqueued", async () => {
+  it("rejects malformed next-turn injections and deduplicates valid ones", async () => {
     await withHostHookState(async ({ storePath, tempConfig }) => {
       await seedSession(storePath);
+      const before = loadSession(storePath);
+      for (const invalid of [
+        { placement: "middle_context" as never },
+        { ttlMs: Infinity },
+        { ttlMs: -1 },
+      ]) {
+        await expect(
+          enqueuePluginNextTurnInjection({
+            cfg: tempConfig,
+            pluginId: "approval-fixture",
+            injection: { sessionKey: "agent:main:main", text: "invalid", ...invalid },
+          }),
+        ).resolves.toEqual({ enqueued: false, id: "", sessionKey: "agent:main:main" });
+      }
+      expect(loadSession(storePath)).toEqual(before);
+
       const now = Date.now();
 
       const enqueue = (text: string, timestamp: number) =>
@@ -1228,7 +1179,7 @@ describe("host-hook fixture plugin contract", () => {
     });
   });
 
-  it("suppresses stale next-turn injections from plugins that are no longer loaded", async () => {
+  it("rejects malformed and inactive next-turn injections while draining", async () => {
     activateInjectors(
       ["active-injector"],
       ["disabled-injector", "disabled"],
@@ -1239,7 +1190,12 @@ describe("host-hook fixture plugin contract", () => {
         await seedSession(storePath, {
           pluginNextTurnInjections: {
             "active-injector": [
-              injection("active-injector", "active", "active prompt contribution"),
+              injection("active-injector", "active", "  active prompt contribution  "),
+              { ...injection("active-injector", "bad-text", ""), text: 123 } as never,
+              {
+                ...injection("active-injector", "bad-placement", "wrong placement"),
+                placement: "middle_context",
+              } as never,
             ],
             "disabled-injector": [
               injection("disabled-injector", "stale", "stale", "prepend_context"),
@@ -1250,22 +1206,24 @@ describe("host-hook fixture plugin contract", () => {
           },
         });
 
-        const { queuedInjections: drained } = await drainPluginNextTurnInjectionContext({
-          cfg: tempConfig,
-          sessionKey: "agent:main:main",
-        });
+        const { queuedInjections: drained, appendContext } =
+          await drainPluginNextTurnInjectionContext({
+            cfg: tempConfig,
+            sessionKey: "agent:main:main",
+          });
         expect(drained).toHaveLength(1);
         expect(drained[0]).toMatchObject({
           id: "active",
           pluginId: "active-injector",
-          text: "active prompt contribution",
+          text: "  active prompt contribution  ",
         });
+        expect(appendContext).toBe("active prompt contribution");
         expect(loadSession(storePath)?.pluginNextTurnInjections).toBeUndefined();
       },
       (storePath) => ({
         session: { store: storePath },
         plugins: {
-          entries: { "policy-blocked-injector": { hooks: { allowPromptInjection: false } } },
+          entries: { "policy-blocked-injector": { hooks: { allowPromptModification: false } } },
         },
       }),
     );

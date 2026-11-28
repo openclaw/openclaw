@@ -34,7 +34,7 @@ the Gateway host. Marketplace requests also require a local connection because
 marketplace names can resolve to host-local registrations. The CLI resolves local
 paths before sending the request. The Control UI continues to offer official and ClawHub sources only.
 
-Plugin dependencies installed by `claws add` retain the Claw batch lease;
+Plugin dependencies installed by `templates add` retain the Template batch lease;
 live activation of that batch is separate from this single-plugin command.
 
 ```bash
@@ -217,7 +217,7 @@ If a plugin you published on ClawHub is hidden or blocked by a registry scan, us
 
 ### ClawHub security audit
 
-Community ClawHub installs check the selected release's trust record before downloading. OpenClaw prints the outcome, exact audit overview, and details link. A Review outcome is informational and installation continues. If ClawHub disables download or returns a blocking moderation outcome, OpenClaw refuses the release. Direct official ClawHub plugin installs and bundled OpenClaw plugin sources bypass this release-trust check. When a Claw installs a plugin, the Claw flow checks release trust for official packages too and requires separate acknowledgement for Review outcomes.
+Community ClawHub installs check the selected release's trust record before downloading. OpenClaw prints the outcome, exact audit overview, and details link. A Review outcome is informational and installation continues. If ClawHub disables download or returns a blocking moderation outcome, OpenClaw refuses the release. Direct official ClawHub plugin installs and bundled OpenClaw plugin sources bypass this release-trust check. When a Template installs a plugin, the Template flow checks release trust for official packages too and requires separate acknowledgement for Review outcomes.
 
 ### Hook packs and npm specs
 
@@ -245,7 +245,11 @@ Use `git:<repo>` to install directly from a git repository. Supported forms: `gi
 
 Git installs clone into a temporary directory, check out the requested ref when present, then use the normal plugin directory installer, so manifest validation, operator install policy, package-manager install work, and install records behave like npm installs. Recorded git installs include the source URL/ref plus the resolved commit so `openclaw plugins update` can re-resolve the source later.
 
+A Git install with consistent recorded provenance is reported as `third-party-git`, not `provenance-invalid`. Pinning a commit identifies the selected revision; it does not grant official-plugin authority or permit hook agent turns.
+
 Reinstalling the same Git source and ref without `--force` refuses an existing managed checkout, even if the repository now declares a different plugin id. Use `openclaw plugins update <id>` for a tracked upgrade, or `openclaw plugins install git:<repo>@<ref> --force` to intentionally reinstall the same plugin id. `--force` does not migrate an existing install record to a different plugin id.
+
+After a managed host switches releases, OpenClaw refreshes Git plugin host links in the active profile and keeps each checkout and commit. Run `openclaw doctor --fix` for the affected profile from the current release, then restart its Gateway.
 
 After installing from git, use `openclaw plugins inspect <id> --runtime --json` to verify runtime registrations such as gateway methods and CLI commands. If the plugin registered a CLI root with `api.registerCli`, run that command directly through the OpenClaw root CLI, for example `openclaw demo-plugin ping`.
 
@@ -335,6 +339,12 @@ openclaw plugins install -l ./my-plugin
 requires a local path that already exists. For a noninteractive local link,
 pass `--force` after reviewing the source; it confirms provenance but does not
 copy or overwrite the linked directory.
+
+On POSIX systems, a local path is resolved the way the filesystem traverses it:
+in `./link/../my-plugin`, `link` is followed before `..` applies, so the plugin
+installed is the one `ls ./link/../my-plugin` shows. The final path segment
+keeps its spelling, so a linked install records a symlinked plugin directory
+as typed.
 
 <Note>
 Workspace-origin plugins discovered from a workspace extensions root are not

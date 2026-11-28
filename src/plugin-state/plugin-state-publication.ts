@@ -5,7 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../infra/sql-connection.js";
-import type { SqliteCommitReceipt } from "../infra/sqlite-commit-receipt.js";
+import type { SqliteCommitReceipt, SqliteCommittedFact } from "../infra/sqlite-commit-receipt.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../infra/sqlite-worker-contract.js";
 import {
   deferSqliteWorkerCommitReceipt,
@@ -25,6 +25,31 @@ type PluginStateRow = Selectable<DB["plugin_state_entries"]>;
 type EntryKey = Pick<PluginStateRow, "plugin_id" | "namespace" | "entry_key">;
 type Receipt = SqliteCommitReceipt<PluginStateRow>;
 type PluginStateChange = StateDomainChange<PluginStateRow>;
+type SubmittedFact = { kind: "submitted"; value: Omit<PluginStateRow, "value_json"> };
+
+function resolveSubmittedReceipt(
+  receipt: unknown,
+  submitted: ReadonlyMap<string, string> | undefined,
+): unknown {
+  if (!isRecord(receipt) || !(receipt.facts instanceof Map)) {
+    return receipt;
+  }
+  const facts: ReadonlyMap<unknown, unknown> = receipt.facts;
+  let resolved: Map<unknown, unknown> | undefined;
+  for (const [key, fact] of facts) {
+    if (!isRecord(fact) || fact.kind !== "submitted") {
+      continue;
+    }
+    const valueJson = typeof key === "string" ? submitted?.get(key) : undefined;
+    if (valueJson === undefined || !isRecord(fact.value)) {
+      // Finished admissions release their inputs; late references cannot publish partial rows.
+      return undefined;
+    }
+    resolved ??= new Map(facts);
+    resolved.set(key, { kind: "postimage", value: { ...fact.value, value_json: valueJson } });
+  }
+  return resolved ? { ...receipt, facts: resolved } : receipt;
+}
 
 export type PluginStatePublicationScope = {
   pluginId: string;
@@ -50,12 +75,20 @@ export type PluginStateReadDependency = {
   keys: readonly string[];
 };
 
+type ReadSource = Pick<OpenClawStateWorkerContext["admission"], "isCurrent" | "assertCurrent">;
 type PluginStateReadCapture = {
-  dependencies: PluginStateReadDependency[];
-  assertions: Array<() => void>;
+  dependencies?: PluginStateReadDependency[];
+  sources?: ReadSource[];
   accepting: boolean;
+  current: boolean;
   keyCount: number;
 };
+
+const emptyDependencies: readonly PluginStateReadDependency[] = Object.freeze([]);
+const activeReadCaptures = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginStateActiveReadCaptures"),
+  () => new Set<PluginStateReadCapture>(),
+);
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.pluginStatePublication"), () => ({
   reads: new AsyncLocalStorage<PluginStateReadCapture>(),
@@ -82,11 +115,84 @@ export function pluginStatePublicationKey(row: EntryKey): string {
   return JSON.stringify([row.plugin_id, row.namespace, toUSVString(row.entry_key)]);
 }
 
+/** Separate singleton so an older loaded copy of `state` keeps its original shape. */
+const reconciliation = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginStatePublicationReconciliation"),
+  () => ({
+    /** Bumped on every indeterminate outcome; a reconciliation only clears its own epoch. */
+    epochs: new Map<string | symbol, number>(),
+    active: new Map<string | symbol, Promise<boolean>>(),
+  }),
+);
+
 publication.subscribeFacts((change) => {
   if (change.kind === "unknown") {
     state.unavailable.add(change.identity);
+    reconciliation.epochs.set(
+      change.identity,
+      (reconciliation.epochs.get(change.identity) ?? 0) + 1,
+    );
+  }
+  if (change.kind === "committed" || change.kind === "unknown") {
+    for (const capture of activeReadCaptures) {
+      if (
+        capture.dependencies &&
+        pluginStateReadDependenciesAffected(capture.dependencies, change)
+      ) {
+        capture.current = false;
+        activeReadCaptures.delete(capture);
+      }
+    }
   }
 });
+
+export function isPluginStatePublicationUnavailable(identity: string | symbol): boolean {
+  return state.unavailable.has(identity);
+}
+
+/**
+ * Restore authority after an indeterminate outcome only from re-read committed truth.
+ * `confirmCommitted` must complete a committed read through the canonical writer queue for
+ * this identity, so the uncertain write has either landed or been discarded. Elapsed time,
+ * a cached view, or a failed confirmation never clears denial, and a newer indeterminate
+ * outcome observed while confirming keeps the identity latched. Concurrent callers share
+ * one confirmation per identity.
+ */
+export function reconcilePluginStatePublication(
+  identity: string | symbol,
+  confirmCommitted: () => Promise<void>,
+): Promise<boolean> {
+  if (!state.unavailable.has(identity)) {
+    return Promise.resolve(true);
+  }
+  const active = reconciliation.active.get(identity);
+  if (active) {
+    return active;
+  }
+  const epoch = reconciliation.epochs.get(identity);
+  const run = (async () => {
+    try {
+      await confirmCommitted();
+    } catch {
+      return false;
+    }
+    if (!state.unavailable.has(identity)) {
+      return true;
+    }
+    if (reconciliation.epochs.get(identity) !== epoch) {
+      return false;
+    }
+    state.unavailable.delete(identity);
+    reconciliation.epochs.delete(identity);
+    return true;
+  })().finally(() => {
+    if (reconciliation.active.get(identity) === run) {
+      reconciliation.active.delete(identity);
+    }
+  });
+  reconciliation.active.set(identity, run);
+  return run;
+}
 
 /** Owns committed-fact staging and observation; raw/foreign authority remains separate. */
 export const pluginStatePublication = {
@@ -96,9 +202,10 @@ export const pluginStatePublication = {
   subscribeFacts: publication.subscribeFacts,
 };
 
-/** Record the actual keyed store read without opening or inspecting another database. */
+/** Record the store's owned keys without opening or inspecting another database. */
 export function recordPluginStateReadDependency(
-  dependency: PluginStateReadDependency & { assertCurrent?: () => void },
+  dependency: PluginStateReadDependency,
+  source?: ReadSource,
 ): void {
   const capture = state.reads.getStore();
   if (!capture) {
@@ -111,10 +218,19 @@ export function recordPluginStateReadDependency(
   if (capture.keyCount > 10_000) {
     throw new Error("Plugin state ownership reads exceeded 10,000 dependency keys");
   }
-  const { assertCurrent, ...source } = dependency;
-  capture.dependencies.push({ ...source, keys: [...source.keys] });
-  if (assertCurrent) {
-    capture.assertions.push(assertCurrent);
+  if (capture.dependencies) {
+    capture.dependencies.push(dependency);
+  } else {
+    // A read can only overlap a receipt after it has recorded a dependency.
+    capture.dependencies = [dependency];
+    activeReadCaptures.add(capture);
+  }
+  if (source) {
+    if (capture.sources) {
+      capture.sources.push(source);
+    } else {
+      capture.sources = [source];
+    }
   }
 }
 
@@ -149,45 +265,28 @@ export function pluginStateReadDependenciesAffected(
 /** Keep the transient witness until its consumer installs the dependencies in its own cache. */
 export async function capturePluginStateReadDependencies<T>(read: () => Promise<T>) {
   const capture: PluginStateReadCapture = {
-    dependencies: [],
-    assertions: [],
     accepting: true,
+    current: true,
     keyCount: 0,
   };
-  let active = true;
-  let changed = false;
-  const stop = pluginStatePublication.subscribeFacts((change) => {
-    if (pluginStateReadDependenciesAffected(capture.dependencies, change)) {
-      changed = true;
-    }
-  });
   const release = () => {
-    active = false;
-    capture.accepting = false;
-    stop();
-  };
-  const assertCurrent = () => {
-    if (!active || changed) {
-      throw new Error("Plugin state changed while preparing session ownership");
-    }
-    for (const assertSourceCurrent of capture.assertions) {
-      assertSourceCurrent();
-    }
+    capture.current = capture.accepting = false;
+    activeReadCaptures.delete(capture);
   };
   try {
     const value = await state.reads.run(capture, read);
     capture.accepting = false;
     return {
       value,
-      dependencies: Object.freeze(capture.dependencies),
-      assertCurrent,
-      isCurrent() {
-        try {
-          assertCurrent();
-          return true;
-        } catch {
-          return false;
+      dependencies: capture.dependencies ? Object.freeze(capture.dependencies) : emptyDependencies,
+      assertCurrent() {
+        if (!capture.current) {
+          throw new Error("Plugin state changed while preparing session ownership");
         }
+        capture.sources?.forEach((source) => source.assertCurrent());
+      },
+      isCurrent() {
+        return capture.current && (capture.sources?.every((source) => source.isCurrent()) ?? true);
       },
       release,
     };
@@ -219,13 +318,27 @@ export function capturePluginStateReceipt<T>(db: EngineConnection, write: () => 
 /** Capture the whole native transaction before COMMIT, including keys changed by retention. */
 export function withPluginStateWorkerReceipt<T>(
   db: EngineConnection,
+  submitted: ReadonlyMap<string, string> | undefined,
   write: () => T,
   additionalFacts?: (result: T) => Record<string, unknown>,
 ): T {
   const { result, receipt: captured } = capturePluginStateReceipt(db, write);
   // Empty receipts distinguish a confirmed no-op from missing commit evidence.
   const metadata = additionalFacts?.(result);
-  const receipt = { ...metadata, ...captured };
+  const facts = submitted
+    ? new Map<string, SqliteCommittedFact<PluginStateRow> | SubmittedFact>(
+        [...captured.facts].map(([key, fact]) => {
+          if (fact.kind === "postimage") {
+            const { value_json, ...value } = fact.value;
+            if (submitted.get(key) === value_json) {
+              return [key, { kind: "submitted", value }];
+            }
+          }
+          return [key, fact];
+        }),
+      )
+    : captured.facts;
+  const receipt = { ...metadata, ...captured, facts };
   // Publication cannot make a previously valid large clear/import fail to commit.
   // Unbounded retained namespaces may exceed the transport even with keys alone.
   deferSqliteWorkerCommitReceipt(
@@ -252,7 +365,10 @@ function isRow(value: unknown): value is PluginStateRow {
   );
 }
 
-/** Deny affected pending writes; an indeterminate outcome retires the whole source. */
+/**
+ * Deny affected pending writes; an indeterminate outcome retires the whole source until
+ * `reconcilePluginStatePublication` confirms committed truth.
+ */
 export function assertPluginStatePublicationSettled(
   identity: string,
   scope?: PluginStatePublicationScope,
@@ -265,7 +381,7 @@ export function assertPluginStatePublicationSettled(
   }
 }
 
-/** Descriptive views may reload after unknown settlement; authority remains unavailable. */
+/** Descriptive views may reload after unknown settlement; authority waits for reconciliation. */
 export function hasPendingPluginStatePublication(
   identity: string,
   scope?: PluginStatePublicationScope,
@@ -361,26 +477,33 @@ export function beginPluginStatePublication(
 export function withPluginStatePublication(
   createAdmission: SqliteWorkerAdmissionFactory,
   context: OpenClawStateWorkerContext,
+  values: ReadonlyMap<string, string> | undefined,
   onCommitted?: (facts: unknown) => void,
   scope?: PluginStatePublicationScope,
   effect?: PluginStatePublicationEffect,
 ): SqliteWorkerAdmissionFactory {
+  let submitted = values;
   return (operation) => {
-    const owner = createAdmission(operation);
-    let pending: ReturnType<typeof beginPluginStatePublication>;
+    const pending = beginPluginStatePublication(
+      () => context.admission.identity.key,
+      context.assertPublicationCurrent ?? context.admission.assertCurrent,
+      scope,
+      effect,
+    );
+    let owner: ReturnType<SqliteWorkerAdmissionFactory>;
     try {
-      pending = beginPluginStatePublication(
-        () => context.admission.identity.key,
-        context.assertPublicationCurrent ?? context.admission.assertCurrent,
-        scope,
-        effect,
-      );
+      owner = createAdmission(operation);
     } catch (error) {
-      owner.admission.finish();
+      try {
+        pending.finish("completed");
+      } catch {
+        // The writer never started; preserve the original constructor failure.
+      }
       throw error;
     }
     let installed = false;
     observeSqliteWorkerAdmissionFinish(owner.admission, () => {
+      submitted = undefined;
       const settlement = owner.admission.settlement;
       // A completed rollback has no receipt; a committed write must publish before denial ends.
       pending.finish(
@@ -390,9 +513,14 @@ export function withPluginStatePublication(
       );
     });
     observeSqliteWorkerCommittedFacts(owner.admission, ({ facts }) => {
-      pending.install(facts);
+      const resolved = resolveSubmittedReceipt(facts, submitted);
+      if (resolved === undefined) {
+        pending.finish("unknown");
+        return;
+      }
+      pending.install(resolved);
       installed = true;
-      onCommitted?.(facts);
+      onCommitted?.(resolved);
     });
     return owner;
   };

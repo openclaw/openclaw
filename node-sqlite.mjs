@@ -38,18 +38,18 @@ export function detectCurrentSqliteCapabilities() {
 export function nodeRuntimeFailure(version, probe) {
   const label = `Node ${version ?? "unknown"}`;
   if (!probe.available) {
-    return `${label}: node:sqlite is unavailable; use 24.22.1+/26.12.1+ or a build with the fix.`;
+    return `${label}: node:sqlite is unavailable; use 24.16+/26.1+ or a build with the fix.`;
   }
   if (!probe.text && !probe.error) {
-    return `${label}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.22.1+/26.12.1+ or a build with the fix`;
+    return `${label}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix`;
   }
   if (probe.error || !probe.text || !probe.blob || !probe.json) {
-    return `${label}: node:sqlite NUL round-trip capability check failed; use 24.22.1+/26.12.1+ or a build with the fix.`;
+    return `${label}: node:sqlite NUL round-trip capability check failed; use 24.16+/26.1+ or a build with the fix.`;
   }
   if (!probe.version || !isSqliteWalResetSafeVersion(probe.version)) {
     return `${label}: SQLite ${probe.version ?? "unknown"} is not WAL-reset-safe; use SQLite 3.51.3+, 3.50.7+, or 3.44.6+ on its patched release line.`;
   }
-  // SQLite capabilities cannot establish that the TLS verifier rejects compromised keys.
+  // Keep incompatible Node release lines excluded even when a vendor binding passes.
   if (!isSupportedOpenClawNodeVersion(version)) {
     return `${label}: openclaw requires Node ${SUPPORTED_NODE_VERSION_RANGE.replace(" || ", ", or ")}.`;
   }

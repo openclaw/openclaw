@@ -1,20 +1,28 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { normalizeStoredOverrideModel } from "../agents/model-selection-persisted.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import { resolveSessionConfiguredDefault } from "../agents/session-model-ref.js";
-import type { SessionEntry } from "../config/sessions.js";
+import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { resolveSessionModelOverrideRouteResolution } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  resolveProjectedAgentRunModel,
+  type ProjectedAgentRunIndex,
+} from "../infra/agent-run-registry.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
+import { normalizeSessionSearchLiteral } from "../shared/session-search-text.js";
+import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
+import { readSessionFallbackModel } from "../status/session-fallback-model.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import { addSessionListSearchModelFields } from "./session-list-search-fields.js";
+import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
 import type {
   GatewaySessionModelSource,
   SessionListRowContext,
@@ -22,12 +30,13 @@ import type {
 import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 import {
   resolveGatewaySessionThinkingProjectionInternal,
+  resolveGatewaySessionUnconfiguredThinkingProjection,
   resolveSessionDisplayModelIdentityRefCached,
 } from "./session-utils-model.js";
 import type { SessionListModelCatalog } from "./session-utils.types.js";
 
 /** A conservative vocabulary of admitted identities; never reconstruct thinking facts to reject a query. */
-export function mayMatchSessionRowModelSearch(
+export function prepareSessionRowModelSearch(
   params: Pick<
     Parameters<typeof readSessionRowModelFacts>[0],
     "cfg" | "modelCatalog" | "rowContext"
@@ -52,8 +61,7 @@ export function mayMatchSessionRowModelSearch(
       }
     >;
   },
-  search: string,
-): boolean {
+): (search: string) => boolean {
   const fields = new Set<string>(["openclaw", "codex", "auto", "acpx", "-"]);
   const providers = new Set<string>();
   const models = new Set<string>();
@@ -69,7 +77,7 @@ export function mayMatchSessionRowModelSearch(
   const lower = (value: string) => {
     let text = lowercaseFields.get(value);
     if (text === undefined) {
-      text = normalizeLowercaseStringOrEmpty(value);
+      text = normalizeSessionSearchLiteral(value);
       lowercaseFields.set(value, text);
     }
     return text;
@@ -143,7 +151,7 @@ export function mayMatchSessionRowModelSearch(
     );
     runtime(row.preparedAcpMeta?.backend);
     const source = row.materialized?.source;
-    ref(source?.selectedModel.provider, source?.selectedModel.model);
+    ref(source?.selectedModel?.provider, source?.selectedModel?.model);
     ref(source?.rowModelIdentity.provider, source?.rowModelIdentity.model);
     if (source) {
       runtime(source.thinkingProjection.agentRuntime.id);
@@ -161,8 +169,10 @@ export function mayMatchSessionRowModelSearch(
         manifestPlugins: snapshot ?? [],
         configuredDefaultModelByAgent: params.rowContext.configuredDefaultModelByAgent,
       });
-      defaults.add(selected.provider);
-      ref(selected.provider, selected.model);
+      if (selected) {
+        defaults.add(selected.provider);
+        ref(selected.provider, selected.model);
+      }
     }
     for (const [id, model] of Object.entries(params.cfg.agents?.entries?.[agentId]?.models ?? {})) {
       ref(undefined, id);
@@ -197,12 +207,6 @@ export function mayMatchSessionRowModelSearch(
     for (const run of runs) {
       ref(undefined, run.model);
     }
-  }
-  for (const backend of resolveRuntimeCliBackends("metadata")) {
-    runtime(backend.id);
-  }
-  for (const { harness } of listRegisteredAgentHarnesses()) {
-    runtime(harness.id);
   }
   for (const snapshot of metadata) {
     for (const plugin of snapshot?.plugins ?? []) {
@@ -251,23 +255,37 @@ export function mayMatchSessionRowModelSearch(
   for (const field of modelFields) {
     add(field);
   }
-  if ([...fields].some((field) => field.includes(search))) {
-    return true;
-  }
-  // Bare historical models can infer a provider; rejection must cover every possible pairing.
-  if (search.includes("/")) {
-    for (const provider of providers) {
-      for (const model of models) {
-        modelFields.length = 0;
-        addSessionListSearchModelFields(modelFields, { provider, model });
-        if (modelFields.some((field) => field?.includes(search))) {
-          return true;
+  return (search) => {
+    for (const field of fields) {
+      if (field.includes(search)) {
+        return true;
+      }
+    }
+    // Direct runtime registration is live within a retained registry generation.
+    const matchesRuntime = (id: string) =>
+      normalizeSessionSearchLiteral(id).includes(search) ||
+      normalizeSessionSearchLiteral(normalizeOptionalAgentRuntimeId(id)).includes(search);
+    if (
+      resolveRuntimeCliBackends("metadata").some((backend) => matchesRuntime(backend.id)) ||
+      listRegisteredAgentHarnesses().some(({ harness }) => matchesRuntime(harness.id))
+    ) {
+      return true;
+    }
+    // Bare historical models can infer a provider; rejection covers every possible pairing.
+    if (search.includes("/")) {
+      for (const provider of providers) {
+        for (const model of models) {
+          if (`${provider}/${model}`.includes(search)) {
+            return true;
+          }
         }
       }
     }
-  }
-  return false;
+    return false;
+  };
 }
+
+const NO_ROW_MODEL_IDENTITY: { provider?: string; model?: string } = {};
 
 /** Search and row presentation share model policy without preparing unrelated row fields. */
 export function readSessionRowModelFacts(params: {
@@ -283,6 +301,7 @@ export function readSessionRowModelFacts(params: {
   rowContext: SessionListRowContext;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   lightweightListRow?: boolean;
+  runtimeResolution?: SessionRuntimeResolution;
 }) {
   const { cfg, key, agentId, source, rowContext } = params;
   const lightweight = params.lightweightListRow === true;
@@ -301,6 +320,20 @@ export function readSessionRowModelFacts(params: {
     allowPluginNormalization: !lightweight,
     manifestPlugins: metadataSnapshot === null ? [] : metadataSnapshot,
   });
+  if (!selectedModel) {
+    return {
+      selectedModel: undefined,
+      rowModelIdentity: NO_ROW_MODEL_IDENTITY,
+      thinkingProjection: resolveGatewaySessionUnconfiguredThinkingProjection({
+        cfg,
+        agentId,
+        sessionKey: key,
+        entry: params.entry,
+        preparedAcpMeta: params.preparedAcpMeta,
+      }),
+      catalogEntry: undefined,
+    };
+  }
   const { provider, model } = selectedModel;
   const rowModelIdentity = resolveSessionDisplayModelIdentityRefCached({
     cfg,
@@ -321,6 +354,7 @@ export function readSessionRowModelFacts(params: {
     sessionKey: key,
     entry: params.entry,
     preparedAcpMeta: params.preparedAcpMeta,
+    runtimeResolution: params.runtimeResolution,
     modelCatalog:
       rowModelCatalog ?? (lightweight || metadataSnapshot !== undefined ? [] : undefined),
     modelCatalogRouteVariants: preparedCatalog?.routeVariants,
@@ -337,4 +371,63 @@ export function readSessionRowModelFacts(params: {
     catalogEntry:
       rowModelCatalog && provider && model ? thinkingProjection.capacityCatalogEntry : undefined,
   };
+}
+
+export function resolveGatewaySessionActiveModel(params: {
+  cfg: OpenClawConfig;
+  active?: boolean;
+  activeModel?: { provider: string; model: string } | null;
+  terminalModel?: { modelProvider: string; model: string } | null;
+  agentId: string;
+  storeAgentId?: string;
+  sessionId?: string;
+  sessionKey: string;
+  projectedAgentRuns: ProjectedAgentRunIndex;
+  selectedModel?: { provider: string; model: string };
+  entry?: InternalSessionEntry;
+  storePath: string;
+}): { provider: string; model: string } | undefined {
+  const liveModel = resolveProjectedAgentRunModel({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    index: params.projectedAgentRuns,
+  });
+  if (params.active ?? liveModel !== undefined) {
+    return liveModel ?? undefined;
+  }
+  const { selectedModel } = params;
+  if (!params.entry?.fallbackNotice || !selectedModel) {
+    return undefined;
+  }
+
+  const fallbackEntry =
+    params.activeModel === undefined
+      ? readSessionFallbackModel({
+          selectedProvider: selectedModel.provider,
+          selectedModel: selectedModel.model,
+          sessionEntry: params.entry,
+          config: params.cfg,
+          terminalModel: params.terminalModel ?? null,
+          sessionScope: {
+            agentId: params.storeAgentId ?? params.agentId,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+          },
+        })
+      : params.activeModel
+        ? { modelProvider: params.activeModel.provider, model: params.activeModel.model }
+        : undefined;
+  const { selected, active } = resolveSelectedAndActiveModel({
+    selectedProvider: selectedModel.provider,
+    selectedModel: selectedModel.model,
+    sessionEntry: fallbackEntry ?? params.entry,
+  });
+  return resolveActiveFallbackState({
+    selectedModelRef: selected.label,
+    activeModelRef: active.label,
+    config: params.cfg,
+    state: params.entry,
+  }).active
+    ? { provider: active.provider, model: active.model }
+    : undefined;
 }

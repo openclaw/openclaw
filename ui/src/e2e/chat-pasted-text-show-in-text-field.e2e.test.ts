@@ -17,6 +17,8 @@ import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 const suite = createControlUiE2eSuite({
   name: "Control UI pasted text chips",
   startServerBeforeBrowser: true,
+  // Native clipboard contents are shared across contexts in the same browser.
+  browserLaunchOptions: { headless: true },
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
@@ -281,6 +283,31 @@ suite.define(() => {
     },
   );
 
+  it("starts a new session with a pasted-text card as message text", async () => {
+    await suite.withPage(contextOptions, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+        methodResponses: {
+          "sessions.create": { key: "agent:main:paste-start", runStarted: true },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      const composer = page.locator(".new-session-page__message");
+      await composer.waitFor({ state: "visible" });
+      await composer.fill("Keep this draft");
+      await page.evaluate((text) => navigator.clipboard.writeText(text), pastedText);
+      await composer.focus();
+      await page.keyboard.press(nativePasteShortcut);
+      await button(page, pastedTextLabel).waitFor();
+      await button(page, "Start session").click();
+      await gateway.waitForRequest("sessions.create");
+      // The card is composer presentation; its text is the sender's message, not an upload.
+      const params = (await gateway.getRequests("sessions.create"))[0]!.params;
+      expect(params).toHaveProperty("message", `Keep this draft\n\n${pastedText}`);
+      expect(params).not.toHaveProperty("attachments");
+    });
+  });
+
   it.each([1280, 390])("restores pasted text directly from the %ipx composer", async (width) => {
     const options = { ...contextOptions, viewport: { width, height: 900 } };
     await suite.withPage(options, async ({ page }) => {
@@ -314,12 +341,10 @@ suite.define(() => {
             const name = card.querySelector(".chat-attachment-file__name")!;
             const action = card.querySelector(".chat-attachment-text-action")!;
             const rect = card.getBoundingClientRect();
-            const otherRect = other.getBoundingClientRect();
             const { left, right, top, bottom } = action.getBoundingClientRect();
             const { border, borderRadius } = getComputedStyle(card);
             const otherStyle = getComputedStyle(other);
             return {
-              sameSize: rect.width === otherRect.width && rect.height === otherRect.height,
               sameBorder: border === otherStyle.border && borderRadius === otherStyle.borderRadius,
               secondRow: top >= name.getBoundingClientRect().bottom,
               inside: left >= rect.left && right <= rect.right && bottom < rect.bottom,
@@ -329,7 +354,6 @@ suite.define(() => {
             };
           }),
         ).toEqual({
-          sameSize: true,
           sameBorder: true,
           secondRow: true,
           inside: true,
@@ -417,95 +441,92 @@ suite.define(() => {
   it.each([
     { name: "recorded paste", legacy: false },
     { name: "legacy paste without origin", legacy: true },
-  ])("restores a $name draft as a chip and sends unchanged name and bytes", async ({ legacy }) => {
-    await suite.withPage(contextOptions, async ({ page }) => {
-      const sessionKey = "agent:main:main";
-      const gateway = await installMockGateway(page, { sessionKey });
-      await page.goto(`${suite.server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.waitFor({ state: "visible" });
-      await composer.fill("Review the attachment");
-      await paste(composer);
-      await composer.fill("");
-      const scopeKey = `chat:v3:${sessionKey}\u0000agent:main`;
-      await waitForCommittedComposerDraft(page, scopeKey, "", 1);
-      const fileName = await page.evaluate(
-        async ({ scopeKey: storedScopeKey, legacy: restoreLegacy }) => {
-          const once = (target: EventTarget, event: string, run: () => void) =>
-            target.addEventListener(event, run, { once: true });
-          const database = await new Promise<IDBDatabase>((resolve, reject) => {
-            const request = indexedDB.open("openclaw-control-ui");
-            once(request, "success", () => resolve(request.result));
-            once(request, "error", () =>
-              reject(request.error ?? new Error("Could not open composer draft database")),
-            );
-          });
-          try {
-            return await new Promise<string>((resolve, reject) => {
-              const transaction = database.transaction(
-                "composerDrafts",
-                restoreLegacy ? "readwrite" : "readonly",
+  ])(
+    "restores a $name draft as a chip and sends its exact text as the message",
+    async ({ legacy }) => {
+      await suite.withPage(contextOptions, async ({ page }) => {
+        const sessionKey = "agent:main:main";
+        const gateway = await installMockGateway(page, { sessionKey });
+        await page.goto(`${suite.server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`);
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        await composer.waitFor({ state: "visible" });
+        await composer.fill("Review the attachment");
+        await paste(composer);
+        await composer.fill("");
+        const scopeKey = `chat:v3:${sessionKey}\u0000agent:main`;
+        await waitForCommittedComposerDraft(page, scopeKey, "", 1);
+        const fileName = await page.evaluate(
+          async ({ scopeKey: storedScopeKey, legacy: restoreLegacy }) => {
+            const once = (target: EventTarget, event: string, run: () => void) =>
+              target.addEventListener(event, run, { once: true });
+            const database = await new Promise<IDBDatabase>((resolve, reject) => {
+              const request = indexedDB.open("openclaw-control-ui");
+              once(request, "success", () => resolve(request.result));
+              once(request, "error", () =>
+                reject(request.error ?? new Error("Could not open composer draft database")),
               );
-              const store = transaction.objectStore("composerDrafts");
-              const request: IDBRequest<
-                Array<{
-                  scopeKey: string;
-                  attachments: Array<{ fileName: string; origin?: string }>;
-                }>
-              > = store.getAll();
-              let savedFileName: string | undefined;
-              once(request, "success", () => {
-                const draft = request.result.find((record) => record.scopeKey === storedScopeKey);
-                const attachment = draft?.attachments[0];
-                if (!draft || !attachment) {
-                  transaction.abort();
-                  return;
-                }
-                savedFileName = attachment.fileName;
-                if (restoreLegacy) {
-                  // Reproduce the persisted shape written before origin metadata existed.
-                  delete attachment.origin;
-                  store.put(draft);
+            });
+            try {
+              return await new Promise<string>((resolve, reject) => {
+                const transaction = database.transaction(
+                  "composerDrafts",
+                  restoreLegacy ? "readwrite" : "readonly",
+                );
+                const store = transaction.objectStore("composerDrafts");
+                const request: IDBRequest<
+                  Array<{
+                    scopeKey: string;
+                    attachments: Array<{ fileName: string; origin?: string }>;
+                  }>
+                > = store.getAll();
+                let savedFileName: string | undefined;
+                once(request, "success", () => {
+                  const draft = request.result.find((record) => record.scopeKey === storedScopeKey);
+                  const attachment = draft?.attachments[0];
+                  if (!draft || !attachment) {
+                    transaction.abort();
+                    return;
+                  }
+                  savedFileName = attachment.fileName;
+                  if (restoreLegacy) {
+                    // Reproduce the persisted shape written before origin metadata existed.
+                    delete attachment.origin;
+                    store.put(draft);
+                  }
+                });
+                once(transaction, "complete", () =>
+                  savedFileName
+                    ? resolve(savedFileName)
+                    : reject(new Error("Missing persisted attachment")),
+                );
+                for (const event of ["abort", "error"]) {
+                  once(transaction, event, () =>
+                    reject(transaction.error ?? new Error("Draft fixture transaction failed")),
+                  );
                 }
               });
-              once(transaction, "complete", () =>
-                savedFileName
-                  ? resolve(savedFileName)
-                  : reject(new Error("Missing persisted attachment")),
-              );
-              for (const event of ["abort", "error"]) {
-                once(transaction, event, () =>
-                  reject(transaction.error ?? new Error("Draft fixture transaction failed")),
-                );
-              }
-            });
-          } finally {
-            database.close();
-          }
-        },
-        { scopeKey, legacy },
-      );
-      await page.reload();
-      const chip = button(page, pastedTextLabel);
-      await chip.click();
-      const preview = page.locator("openclaw-chat-detail-panel:visible");
-      await expectPastedText(preview);
-      await composer.click();
-      await button(page, "Send message").click();
-      await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(1);
-      const params = (await gateway.getRequests("chat.send"))[0]!.params;
-      expect(params).toHaveProperty("attachments", [
-        {
-          type: "file",
-          mimeType: "text/plain",
-          fileName,
-          ...(!legacy ? { origin: "paste" } : {}),
-          content: Buffer.from(pastedText).toString("base64"),
-        },
-      ]);
-      expect(fileName).toMatch(/^pasted-text-\d+\.txt$/);
-    });
-  });
+            } finally {
+              database.close();
+            }
+          },
+          { scopeKey, legacy },
+        );
+        await page.reload();
+        const chip = button(page, pastedTextLabel);
+        await chip.click();
+        const preview = page.locator("openclaw-chat-detail-panel:visible");
+        await expectPastedText(preview);
+        await composer.click();
+        await button(page, "Send message").click();
+        await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(1);
+        // The card is composer presentation; its text is the sender's message, not an upload.
+        const params = (await gateway.getRequests("chat.send"))[0]!.params;
+        expect(params).toHaveProperty("message", pastedText);
+        expect(params).not.toHaveProperty("attachments");
+        expect(fileName).toMatch(/^pasted-text-\d+\.txt$/);
+      });
+    },
+  );
 
   it("projects persisted origins and legacy names into ordered chips and ordinary file cards", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {

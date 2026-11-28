@@ -286,7 +286,10 @@ it("tracks Doctor ownership", async ({ auth: { agentDir, stateDir } }) => {
     await upsert(agentDir, key);
   }
   expect(sourceInspections).toBe(1);
-  const detected = detectSharedAuthStoreMigration({ stateDir, doctorOnlyStateMigrations: true });
+  const detected = await detectSharedAuthStoreMigration({
+    stateDir,
+    doctorOnlyStateMigrations: true,
+  });
   await migrateSharedAuthStore({ detected, stateDir });
   const inspectionsAfterDoctor = sourceInspections;
   await upsert(agentDir, "sk-after-doctor");
@@ -324,12 +327,12 @@ it("keeps legacy ownership while cleanup is pending", async ({ auth: { agentDir 
 
 it("keeps legacy ownership when inspection fails", async ({ auth: { agentDir } }) => {
   const sourcePath = resolveAuthProfileDatabasePath(agentDir);
-  const inspectIdentity = databaseIdentity.inspectDatabasePathIdentitySync;
+  const inspectIdentity = databaseIdentity.inspectDatabasePathIdentity;
   let sourceInspectionFailed = false;
   {
     using _ = vi
-      .spyOn(databaseIdentity, "inspectDatabasePathIdentitySync")
-      .mockImplementation((pathname) => {
+      .spyOn(databaseIdentity, "inspectDatabasePathIdentity")
+      .mockImplementation(async (pathname) => {
         if (!sourceInspectionFailed && path.resolve(pathname) === path.resolve(sourcePath)) {
           sourceInspectionFailed = true;
           throw Object.assign(new Error("permission denied"), { code: "EACCES" });

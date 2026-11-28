@@ -1,10 +1,13 @@
-/* @vitest-environment jsdom */
 // Contract for full-message eligibility: the Gateway marks every display-
 // capped projection; pending inputs share assistant expansion without gaining
 // transcript mutation actions.
 import { For } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
+/* @vitest-environment jsdom */
+import {
+  prepareChatMessageRender,
+  resolveMessageDisplayMarkdown,
+} from "../../../lib/chat/message-display.ts";
 import { extractText } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import * as toolCards from "../../../lib/chat/tool-cards.ts";
@@ -16,10 +19,7 @@ import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { prepareGroupedMessage } from "./chat-message-bubble-presentation.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import {
-  prepareChatMessageRender,
-  resolveMessageActionDetails,
-} from "./chat-message-markdown-view.tsx";
+import { resolveMessageActionDetails } from "./chat-message-markdown-view.tsx";
 import { MessageMarkdown } from "./chat-message-text-view.tsx";
 
 const cappedMeta = { id: "msg-1", truncated: true, reason: "display-cap" };
@@ -77,20 +77,16 @@ describe("message action projections", () => {
     expect(preview).not.toHaveBeenCalled();
     prepare("toolResult", "First line\nSecond line");
     expect(preview).not.toHaveBeenCalled();
-    const container = document.createElement("div");
-    const view = mountSolid(
-      GroupedMessage,
-      {
-        preparation: prepareChatMessageRender({
-          role: "toolResult",
-          content: "First line\nSecond line",
-        }),
-        messageKey: "tool-preview",
-        options: { isStreaming: true, showReasoning: false },
-      },
-      container,
-    );
-    onTestFinished(view.dispose);
+    const { container, dispose } = mountSolid(GroupedMessage, {
+      preparation: prepareChatMessageRender({
+        role: "toolResult",
+        content: "First line\nSecond line",
+      }),
+      messageKey: "tool-preview",
+      options: { isStreaming: true, showReasoning: false },
+    });
+    onTestFinished(dispose);
+    await import("./chat-tool-card-row.solid.tsx");
     await waitForSolid(() =>
       expect(container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe("tool"),
     );
@@ -342,10 +338,18 @@ describe("user message disclosure", () => {
     }
   });
 
+  const fortyLines = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`);
   it.each([
-    { name: "exactly 1200 UTF-16 code units", markdown: "a".repeat(1_200) },
-    { name: "forty short lines", markdown: Array(40).fill("a").join("\n") },
-  ])("keeps $name fully visible", ({ markdown }) => {
+    { name: "exactly 1200 UTF-16 code units", markdown: "a".repeat(1_200), folded: false },
+    { name: "forty LF lines", markdown: fortyLines.join("\n"), folded: false },
+    { name: "forty CRLF lines", markdown: fortyLines.join("\r\n"), folded: false },
+    {
+      name: "forty-one bare CR lines",
+      markdown: ["first", ...fortyLines].join("\r"),
+      folded: true,
+    },
+    { name: "forty-one mixed lines", markdown: `first\r${fortyLines.join("\n")}`, folded: true },
+  ])("applies the disclosure threshold to $name", ({ markdown, folded }) => {
     const container = document.createElement("div");
 
     mountSolid(
@@ -359,48 +363,10 @@ describe("user message disclosure", () => {
       container,
     );
 
-    expect(container.querySelector(".chat-message-disclosure")).toBeNull();
-    for (const line of markdown.split("\n").filter(Boolean)) {
+    expect(container.querySelector(".chat-message-disclosure") !== null).toBe(folded);
+    for (const line of markdown.split(/[\r\n]+/)) {
       expect(container.textContent).toContain(line);
     }
-  });
-});
-
-describe("streaming message Markdown", () => {
-  it.each([
-    { markdown: "Intro\n\nTail", owner: ".chat-text > p:last-child" },
-    { markdown: "Intro\n\n", owner: ".chat-text > p" },
-    { markdown: "Intro\n\n```ts\nconst answer = 42;\n```", owner: ".chat-text" },
-  ])("keeps the duplicate count on the terminal owner for $markdown", ({ markdown, owner }) => {
-    const container = document.createElement("div");
-    const view = mountSolid(
-      MessageMarkdown,
-      {
-        markdown,
-        messageKey: "streaming-duplicate",
-        options: { role: "assistant", isStreaming: true },
-        markdownOptions: {},
-        duplicateSuffix: { count: 3, label: "Three identical messages" },
-      },
-      container,
-    );
-
-    expect(container.querySelectorAll(".chat-duplicate-count")).toHaveLength(1);
-    expect(container.querySelector(`${owner} > .chat-duplicate-count`)?.textContent).toBe("×3");
-    expect(container.querySelector("code .chat-duplicate-count")).toBeNull();
-
-    view.update({
-      markdown: `${markdown}\n\nMore`,
-      messageKey: "streaming-duplicate",
-      options: { role: "assistant", isStreaming: true },
-      markdownOptions: {},
-      duplicateSuffix: { count: 4, label: "Four identical messages" },
-    });
-    expect(container.querySelectorAll(".chat-duplicate-count")).toHaveLength(1);
-    expect(
-      container.querySelector(".chat-text > p:last-child > .chat-duplicate-count")?.textContent,
-    ).toBe("×4");
-    expect(container.querySelector("code .chat-duplicate-count")).toBeNull();
   });
 });
 

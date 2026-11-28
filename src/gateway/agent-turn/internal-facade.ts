@@ -94,7 +94,6 @@ export function createInternalAgentTurnFacade(
         client: options.client,
         context,
         methodRegistry,
-        recoveryInput: dispatchOptions.recoveryInput,
         controllerInput: dispatchOptions.controllerInput,
         assertPreparationCurrent: dispatchOptions.assertAdmissionCurrent,
       });
@@ -171,7 +170,7 @@ export function createInternalAgentTurnFacade(
           const snapshot = watchdog?.snapshot();
           const decision = snapshot?.current ? watchdog?.decide() : undefined;
           const deadlineAtMs = decision
-            ? decision.action === "observe" || decision.action === "warn"
+            ? decision.action === "observe"
               ? Math.min(
                   snapshot?.executionDeadlineAtMs ?? Infinity,
                   decision.deadlineAtMs ?? Infinity,
@@ -345,6 +344,7 @@ export function createInternalAgentTurnFacade(
                 privateCompletion: dispatchOptions.privateCompletion,
                 replyExpectation: dispatchOptions.replyExpectation,
                 settleWakeReplay: dispatchOptions.settleWakeReplay,
+                subagentCompletions: dispatchOptions.subagentCompletions,
               });
             },
             {
@@ -484,7 +484,7 @@ export function createInternalAgentTurnFacade(
               options.client,
               async () => {
                 retainRoot?.();
-                const { createAgentTurnService } = await import("./agent-turn-service.js");
+                const { prepareExactAgentTurnWait } = await import("./agent-wait.js");
                 if (prepareDispatchCurrent) {
                   await prepareDispatchCurrent();
                 }
@@ -492,10 +492,7 @@ export function createInternalAgentTurnFacade(
                 entry?.assertOpen();
                 options.assertContextCurrent?.();
                 entry?.release();
-                const observation = await createAgentTurnService({
-                  context,
-                  isWebchatConnect,
-                }).waitForTurn(params);
+                const observation = await prepareExactAgentTurnWait(context, params).wait();
                 return observation.result;
               },
               {

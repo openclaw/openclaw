@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { restoreSessionColdTranscript } from "./session-cold-storage.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 
 vi.mock("./session-cold-storage.js", () => ({
   restoreSessionColdTranscript: vi.fn(async () => {}),
@@ -12,7 +12,10 @@ beforeEach(() => vi.clearAllMocks());
 
 describe("readRestoredSessionTranscript", () => {
   it.each([false, true])("reads a transcript with restoration needed: %s", async (cold) => {
-    const coldRead = { target: scope, readMetadata: vi.fn(async () => undefined) };
+    const coldRead = {
+      target: scope,
+      readMetadata: vi.fn(async () => ({ kind: "cold-metadata" as const, archive: undefined })),
+    };
     const text = cold ? "retained text" : "hot text";
     const read = vi.fn<() => string | Promise<string>>(() => (cold ? Promise.resolve(text) : text));
     if (cold) {

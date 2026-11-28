@@ -17,7 +17,6 @@ import {
   loadSkills,
   loadSkillCard,
   loadClawHubDetail,
-  loadClawHubSecurityVerdicts,
   refreshSkills,
   reconcileSkillsAgentId,
   saveSkillApiKey,
@@ -36,7 +35,11 @@ beforeEach(() => {
   state.skillsAgentId = "main";
   state.client = { request } as unknown as SkillsState["client"];
   state.runtimeConfig = {
-    runExternalMutation: async (task) => {
+    runExternalMutation: async (task, options) => {
+      // As executeConfigExternalMutation: canDispatch is checked right before the task runs.
+      if (options?.canDispatch?.() === false) {
+        return { ok: false, reason: "unavailable", error: options.dispatchError ?? "refused" };
+      }
       try {
         return {
           ok: true,
@@ -124,12 +127,15 @@ describe("loadSkills", () => {
       const pending = createDeferred<unknown>();
       request.mockReturnValue(pending.promise);
       state.skillsReport = createSkillCardReport("1.2.3");
-      const task =
-        kind === "inventory"
-          ? loadSkills(state)
-          : kind === "verdicts"
-            ? loadClawHubSecurityVerdicts(state, state.skillsReport)
-            : loadSkillCard(state, "agentreceipt");
+      if (kind === "verdicts") {
+        request.mockResolvedValueOnce(state.skillsReport);
+      }
+      const task = kind === "card" ? loadSkillCard(state, "agentreceipt") : loadSkills(state);
+      if (kind === "verdicts") {
+        await waitForFast(() =>
+          expect(request).toHaveBeenCalledWith("skills.securityVerdicts", { agentId: "main" }),
+        );
+      }
       const completion =
         kind === "inventory"
           ? state.skillsRead?.completion
@@ -304,7 +310,7 @@ describe("loadSkillCard", () => {
 
 it("requests the discovery feed when the query is empty", async () => {
   request.mockResolvedValue({ results: [] });
-  await expect(searchClawHub(state.client!, "   ")).resolves.toEqual([]);
+  await expect(searchClawHub(state.client!, { query: "   " })).resolves.toEqual({ results: [] });
   expect(request).toHaveBeenCalledWith(
     "skills.search",
     { query: undefined, limit: 20 },
@@ -376,7 +382,7 @@ describe("skill mutations", () => {
   it("saves API keys and reports success", async () => {
     request.mockResolvedValue({});
     state.skillEdits.github = "  sk-test  ";
-    await saveSkillApiKey(state, "github");
+    await saveSkillApiKey(state, "github", () => true);
     expect(request).toHaveBeenCalledWith("skills.update", {
       skillKey: "github",
       apiKey: "sk-test",
@@ -387,9 +393,22 @@ describe("skill mutations", () => {
     });
   });
 
+  it.each([
+    ["a stored reference", [false]],
+    ["an unknown stored source", [undefined]],
+    ["a reference stored while the save waited", [true, false]],
+  ])("never saves an API key over %s", async (_name, answers) => {
+    state.skillEdits.github = "new-key-not-real";
+    const replaceable = vi.fn<() => boolean | undefined>();
+    answers.forEach((answer) => replaceable.mockReturnValueOnce(answer));
+    await saveSkillApiKey(state, "github", replaceable);
+    expect(request).not.toHaveBeenCalled();
+    expect(state.skillMessages.github?.kind).toBe("error");
+  });
+
   it("does not clear an existing API key when its replacement is blank", async () => {
     state.skillEdits.github = "   ";
-    await saveSkillApiKey(state, "github");
+    await saveSkillApiKey(state, "github", () => true);
     expect(request).not.toHaveBeenCalled();
     expect(state.skillMessages.github).toBeUndefined();
     expect(state.skillOperation).toBeNull();
@@ -573,6 +592,7 @@ describe("skill mutations", () => {
       .mockResolvedValue({});
     await installFromClawHub(state, "github");
     expect(state.clawhubInstallMessage).toEqual({
+      ref: "github",
       kind: "success",
       text: `Installed github@1.2.3\n\n${warning}`,
     });
@@ -589,6 +609,7 @@ describe("skill mutations", () => {
     await installFromClawHub(state, "github");
     expect(request).toHaveBeenCalledOnce();
     expect(state.clawhubInstallMessage).toEqual({
+      ref: "github",
       kind: "error",
       text: `${message}\n\n${details.warning}`,
     });

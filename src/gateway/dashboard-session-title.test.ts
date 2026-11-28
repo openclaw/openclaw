@@ -14,7 +14,12 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // mock-isolation: Title routing uses fixture model choices without reading provider configuration.
-vi.mock("../agents/utility-model.js", () => ({ resolveUtilityModelRefForAgent: mocks.utility }));
+vi.mock("../agents/utility-model.js", () => ({
+  resolveUtilityModelSelectionForAgent: (params: unknown) => {
+    const modelRef: string | undefined = mocks.utility(params);
+    return modelRef ? { modelRef, source: "config" } : { disabled: "config" };
+  },
+}));
 // mock-isolation: Controlled label results exercise title lifecycle without live model requests.
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback: mocks.generate,
@@ -128,6 +133,27 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   });
 
   afterEach(() => vi.useRealTimers());
+
+  it.each([
+    ["Plan the release", 0],
+    ["[Wed 2026-10-28 12:00 PDT] Plan the release", 0],
+    ["/topic Plan the release", 1],
+    ["[Wed 2026-10-28 12:00 PDT] /skill topic Plan the release", 1],
+  ] as const)(
+    "prepares skill commands only when needed for %s",
+    async (userMessage, preparations) => {
+      mocks.prepareSkills.mockResolvedValue([
+        { name: "topic", skillName: "topic", description: "Discuss a topic" },
+      ]);
+      await expect(
+        prepareDashboardSessionTitle({ cfg, agentId: "main", userMessage }),
+      ).resolves.toBe("Release Planning");
+      expect(mocks.prepareSkills).toHaveBeenCalledTimes(preparations);
+      expect(mocks.generate).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ userMessage: "Plan the release", utilityOnly: true }),
+      );
+    },
+  );
 
   it.each(Object.entries(INTERNAL_WAKE_TRANSCRIPT_PROMPTS))(
     "does not generate a title from a %s wake",
@@ -280,9 +306,11 @@ describe("maybeGenerateDashboardSessionTitle", () => {
         reply.resolve();
         await pending;
       }
-      await expect(pending).resolves.toBe(outcome !== "renamed");
+      await expect(pending).resolves.toBe(false);
       if (outcome === "unavailable") {
-        expect(mocks.load().displayName).toMatch(/^[a-z]+-[a-z]+$/);
+        // A later send can retry without hiding the already released fallback.
+        expect(mocks.load().titleFallbackReady).toBe(true);
+        expect(mocks.load().displayName).toBeUndefined();
         expect(onFallback).toHaveBeenCalledOnce();
       } else {
         expect(mocks.load()).toMatchObject({ label: "My custom name" });
@@ -330,14 +358,36 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       await expect(background).resolves.toBe(backgroundFirst);
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(mocks.load()).toMatchObject({
-        displayName:
-          outcome !== "fallback" ? "Release Planning" : expect.stringMatching(/^[a-z]+-[a-z]+$/),
-      });
+      expect(mocks.load().displayName).toBe(
+        outcome !== "fallback" ? "Release Planning" : undefined,
+      );
       expect(onTitleStateChanged).toHaveBeenCalledTimes(backgroundFirst ? 0 : 2);
-      expectCalls(1, mocks.patch, mocks.generate);
+      expectCalls(1, mocks.patch);
+      // A dashboard request that joined a failed title retries it once.
+      expectCalls(outcome !== "fallback" ? 1 : 2, mocks.generate);
     },
   );
+
+  it("does not start another model call from a read overtaken by a successful title write", async () => {
+    const naming = pendingLabel();
+    const params = titleParams();
+    const first = maybeGenerateSessionTitle(params);
+    await naming.started;
+
+    const delayedRead = createDeferredCore<SessionEntry>();
+    mocks.load.mockReturnValueOnce(delayedRead.promise);
+    const duplicate = maybeGenerateSessionTitle(params);
+    try {
+      naming.resolve("Release Planning");
+      await expect(first).resolves.toBe(true);
+    } finally {
+      // The worker had read the unnamed row before the winning write committed.
+      delayedRead.resolve(baseEntry);
+      await duplicate;
+    }
+
+    expectCalls(1, mocks.generate, mocks.patch);
+  });
 
   it("retries a joined title write failure only once", async () => {
     const naming = pendingLabel(true);

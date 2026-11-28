@@ -12,6 +12,7 @@ import {
 import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 
@@ -50,6 +51,7 @@ function createV15Database(version: string | null = "2026.9.2") {
   closeOpenClawStateDatabaseForTest();
   const db = new DatabaseSync(databasePath);
   try {
+    restorePreTemplateStateIdentifiersForTest(db);
     addPreCutoverClientCredentialTablesForTest(db);
     removePreparedWorkerOwnershipColumns(db);
     db.exec(`

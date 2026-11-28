@@ -1,5 +1,5 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
-import "../../claws/tool-policy-runtime.js";
+import "../../templates/tool-policy-runtime.js";
 import assert from "node:assert/strict";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -22,9 +22,10 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import type { SessionWorkerPlacementContext } from "../worker-environments/session-placement-lifecycle.js";
 import {
-  prepareSessionPatchArchive,
+  prepareSessionPatchArchives,
   releaseSessionPatchArchive,
 } from "./sessions-patch-archive.js";
+import type { MutationOutcome, PreparedPatchTarget } from "./sessions-patch-types.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
@@ -49,30 +50,42 @@ afterAll(() => {
   vi.unstubAllEnvs();
 });
 
-function archive(key: string, entry: SessionEntry, placement: PlacementContext = {}) {
+async function archive(key: string, entry: SessionEntry, placement: PlacementContext = {}) {
   const context = createDirectChatContext({ getRuntimeConfig: () => cfg, ...placement });
   const scope = { canonicalKey: key, storePath };
-  return prepareSessionPatchArchive({
+  const target: PreparedPatchTarget = {
+    index: 0,
+    targetAgentId: "main",
+    archiveActor: undefined,
+    ...scope,
+    fullPatch: { key, archived: true, expectedSessionId: entry.sessionId },
+    initialEntry: entry,
+    initialTarget: {
+      agentId: "main",
+      ...scope,
+      storeKeys: [key],
+      store: { [key]: entry },
+    },
+    key,
+    lifecycleIdentities: [key, entry.sessionId],
+    requestedAgentId: "main",
+  };
+  const outcomes: (MutationOutcome | undefined)[] = [];
+  await prepareSessionPatchArchives({
     cfg,
     context,
-    commitGuard: () => undefined,
-    loadGatewayModelCatalogSnapshot: () => context.loadGatewayModelCatalogSnapshot(),
-    target: {
-      archiveActor: undefined,
-      ...scope,
-      fullPatch: { key, archived: true, expectedSessionId: entry.sessionId },
-      initialEntry: entry,
-      initialTarget: {
-        agentId: "main",
-        ...scope,
-        storeKeys: [key],
-        store: { [key]: entry },
-      },
-      key,
-      lifecycleIdentities: [key, entry.sessionId],
-      requestedAgentId: "main",
-    },
+    targets: [target],
+    mutationTargets: [{ key, commitGuard: () => undefined }],
+    outcomes,
+    loadCatalog: () => context.loadGatewayModelCatalogSnapshot(),
   });
+  const outcome = outcomes[0];
+  if (outcome) {
+    assert(!outcome.ok);
+    return outcome;
+  }
+  assert(target.archivePreparation);
+  return { ok: true as const, value: target.archivePreparation };
 }
 
 async function restore(key: string, entry: SessionEntry, placement: PlacementContext = {}) {
@@ -168,7 +181,15 @@ it.each(["archive", "restore"] as const)(
     expect(await settled).toMatchObject(
       operation === "restore"
         ? { error: expect.objectContaining({ message: expect.stringMatching(/is archived/) }) }
-        : { value: { ok: false } },
+        : {
+            value: {
+              ok: false,
+              error: {
+                code: "INVALID_REQUEST",
+                message: `Session ${key} changed before patch. Retry.`,
+              },
+            },
+          },
     );
     expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
       sessionId: entry.sessionId,

@@ -15,11 +15,14 @@ import {
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
-import type { PluginHookReplyDispatchResult } from "../../plugins/hooks.test-fixtures.js";
+import {
+  createHookRunnerWithRegistry,
+  type PluginHookReplyDispatchResult,
+} from "../../plugins/hooks.test-fixtures.js";
 import {
   captureSessionTarget,
   runSessionMutation,
@@ -98,6 +101,64 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     sessionStoreMocks.loadSessionStoreEntry.mockImplementation(readEntry);
     sessionStoreMocks.loadSessionEntry.mockImplementation(readEntry);
   });
+
+  it.each(["error", "timeout"] as const)(
+    "surfaces a started ACP hook %s without trying another runtime",
+    async (failure) => {
+      vi.useFakeTimers();
+      const started = createDeferred();
+      const release = createDeferred();
+      const effects: string[] = [];
+      const { runner } = createHookRunnerWithRegistry([
+        {
+          hookName: "reply_dispatch",
+          pluginId: "first-runtime",
+          priority: 10,
+          timeoutMs: 5,
+          handler: async () => {
+            effects.push("first-runtime");
+            started.resolve();
+            if (failure === "timeout") {
+              await release.promise;
+            }
+            throw new Error("ACP post hook failed");
+          },
+        },
+        {
+          hookName: "reply_dispatch",
+          pluginId: "next-runtime",
+          handler: async () => {
+            effects.push("next-runtime");
+          },
+        },
+      ]);
+      hookMocks.runner.hasHooks.mockImplementation((name) => name === "reply_dispatch");
+      hookMocks.runner.runReplyDispatch.mockImplementation(runner.runReplyDispatch);
+      const replyResolver = vi.fn<InternalGetReplyFromConfig>(async () => {
+        effects.push("ordinary-runtime");
+        return { text: "replayed task" };
+      });
+      const pending = dispatch({
+        ctx: { ...createHookCtx(), SessionKey: "agent:test:acp:hook-failure" },
+        replyResolver,
+      });
+      const outcome = pending.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await awaitGateBeforeSettlement(started.promise, pending, "ACP runtime did not start");
+        await vi.advanceTimersByTimeAsync(5);
+        expect(await outcome).toBeInstanceOf(Error);
+        expect(effects).toEqual(["first-runtime"]);
+        expect(replyResolver).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await outcome;
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([
     ["local command target from ACP source", false, false],
@@ -184,39 +245,68 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     );
   });
 
-  it("refuses restricted ACP takeover before invoking reply hooks", async () => {
-    const sessionKey = "agent:test:restricted-acp";
-    const entry = {
-      sessionId: "restricted-acp-session",
-      updatedAt: Date.now(),
-      acp: { backend: "acpx" },
-    };
-    sessionStoreMocks.entriesBySessionKey.set(sessionKey, entry);
-    sessionStoreMocks.loadSessionStoreEntry.mockReturnValue(entry);
-    sessionStoreMocks.loadSessionEntry.mockReturnValue(entry);
-    hookMocks.runner.hasHooks.mockReturnValue(true);
-    hookMocks.runner.runReplyDispatch.mockResolvedValue(handledReply);
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn<InternalGetReplyFromConfig>();
-    const guarded = { permissionMode: "guarded" as const, toolOverrides: { webSearch: false } };
+  it.each([false, true])(
+    "refuses restricted ACP takeover before invoking reply hooks (participation=%s)",
+    async (participation) => {
+      const sessionKey = "agent:test:restricted-acp";
+      const entry = {
+        sessionId: "restricted-acp-session",
+        updatedAt: Date.now(),
+        acp: { backend: "acpx" },
+      };
+      sessionStoreMocks.entriesBySessionKey.set(sessionKey, entry);
+      sessionStoreMocks.loadSessionStoreEntry.mockReturnValue(entry);
+      sessionStoreMocks.loadSessionEntry.mockReturnValue(entry);
+      hookMocks.runner.hasHooks.mockReturnValue(true);
+      hookMocks.runner.runReplyDispatch.mockResolvedValue(handledReply);
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn<InternalGetReplyFromConfig>();
+      const guarded = { permissionMode: "guarded" as const, toolOverrides: { webSearch: false } };
 
-    const result = await dispatch({
-      ctx: discordCtx(sessionKey),
-      dispatcher,
-      replyResolver,
-      replyOptions: { admittedSessionSettings: guarded },
-    });
+      const result = await dispatch({
+        ctx: discordCtx(sessionKey),
+        dispatcher,
+        replyResolver,
+        replyOptions: participation
+          ? {
+              operatorAuthority: createTestOperatorAuthority({
+                canonicalIdentity: null,
+                profileId: "participant",
+                scopes: [],
+                participationCeiling: {
+                  kind: "send",
+                  profileId: "participant",
+                  sessionKey,
+                  tools: ["read"],
+                  permission: "workspace",
+                  source: {
+                    agentId: "main",
+                    sessionId: "test",
+                    lifecycleRevision: null,
+                    creatorProfileId: "creator",
+                    root: "/synthetic",
+                  },
+                },
+              }),
+            }
+          : { admittedSessionSettings: guarded },
+      });
 
-    expect(hookMocks.runner.runReplyDispatch).not.toHaveBeenCalled();
-    expect(replyResolver).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        isError: true,
-        text: expect.stringContaining("cannot enforce its permission or tool policy"),
-      }),
-    );
-    expect(result.queuedFinal).toBe(true);
-  });
+      expect(hookMocks.runner.runReplyDispatch).not.toHaveBeenCalled();
+      expect(replyResolver).not.toHaveBeenCalled();
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          isError: true,
+          text: expect.stringContaining(
+            participation
+              ? "Participating inputs require the OpenClaw runtime"
+              : "cannot enforce its permission or tool policy",
+          ),
+        }),
+      );
+      expect(result.queuedFinal).toBe(true);
+    },
+  );
 });
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let runAfterReplyOperationClear: typeof import("../../sessions/session-controller.js").runAfterReplyOperationClear;
@@ -292,7 +382,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     clearAgentHarnesses();
   });
 
-  it.each(["allow-live", "wait", "database-replaced", "revoked", "cancelled"] as const)(
+  it.each(["allow-live", "wait", "database-replaced", "cancelled"] as const)(
     "retains the accepted input and physical owner across independent %s mutation",
     async (scenario) => {
       hookMocks.runner.hasHooks.mockReturnValue(false);
@@ -306,15 +396,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       const captured = createDeferred();
       const release = createDeferred();
       const abort = new AbortController();
-      let authorityCurrent = true;
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
+      const operatorAuthority = createTestOperatorAuthority({
         profileId: "retry-operator",
         scopes: ["operator.write"],
-        assertCurrent: () => {
-          if (!authorityCurrent) {
-            throw new Error("Original source authority revoked");
-          }
-        },
       });
       let paused = false;
       sessionStoreMocks.databaseEntryLoader = async (...args) => {
@@ -347,11 +431,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
           scope: mockSessionStorePath,
           identities: [sessionKey],
           kind: "read-marker",
-          policy: scenario === "allow-live" || scenario === "revoked" ? "allow-live" : "wait",
+          policy: scenario === "allow-live" ? "allow-live" : "wait",
           run: async () => {
-            if (scenario === "revoked") {
-              authorityCurrent = false;
-            }
             if (scenario === "cancelled") {
               abort.abort();
             }
@@ -370,12 +451,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
         release.resolve();
         if (scenario === "database-replaced") {
           await expect(pending).rejects.toThrow(/Session store.*changed/);
-          expect(replyResolver).not.toHaveBeenCalled();
-        } else if (scenario === "revoked") {
-          await pending.catch((error: unknown) => {
-            expect(error).toBeInstanceOf(Error);
-          });
-          expect(authorityCurrent).toBe(false);
           expect(replyResolver).not.toHaveBeenCalled();
         } else if (scenario === "cancelled") {
           await pending.catch((error: unknown) => {

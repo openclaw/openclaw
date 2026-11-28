@@ -32,7 +32,7 @@ it.each([false, true])("re-pins main and defers only if it moves again: %s", asy
   expect(r).toMatchObject({ sourceAtSetup: r.fresh, admittedSource: r.fresh });
   expect(r.workerRequests).toHaveLength(1);
   expect(r.workerRequests[0]?.ids).toEqual(["keep", "edit", "remove"].map(id));
-  expect(r.providerRequests).toHaveLength(21);
+  expect(r.providerRequests).toHaveLength(22);
   expect(r.providerRequests[0]?.proof).toEqual({
     [id("edit")]: "New locale proof {name}",
     [id("add")]: "Latest locale proof",
@@ -63,12 +63,15 @@ it.each([false, true])("re-pins main and defers only if it moves again: %s", asy
 
 it.each([
   [undefined, copies.keep, false],
-  ["glossary", "finalizer::Keep locale proof", true],
+  ["metadata", "finalizer::Keep locale proof", true],
 ] as const)(
   "preserves full-refresh worker compatibility: %s",
   async (change, expected, retranslatesKeep) => {
     const r = await harness.run({ fullRefresh: true, change });
     validated(r);
+    const workerIds = r.workerRequests.flatMap((request) => request.ids);
+    expect(workerIds).toHaveLength(26);
+    expect(new Set(workerIds).size).toBe(26);
     expect(r.workerRequests.flatMap((request) => request.ids)).toContain(id("keep"));
     expect(r.providerRequests.flatMap((request) => request.ids).includes(id("keep"))).toBe(
       retranslatesKeep,
@@ -109,7 +112,7 @@ it.each([
   expect(r.workerRequests.length).toBeGreaterThan(0);
   expect(r).toMatchObject({
     providerRequests: [],
-    publicationCalls: [],
+    publicationCalls: [expect.stringContaining("api --method GET repos/openclaw/openclaw/pulls")],
     publication: { branchExists: false },
   });
   expect(r.failure).toContain(error);

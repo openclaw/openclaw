@@ -5,7 +5,6 @@ import type { BackupRecordOutcomeParams, BackupStatusParams } from "./schema/bac
 import type * as BoardSchema from "./schema/board.js";
 import type { CanvasDocumentPreviewParams, CanvasDocumentViewParams } from "./schema/canvas.js";
 import type { CatalogBrowseParams, CatalogSearchKeywordsParams } from "./schema/catalog.js";
-import type * as ClawDraftSchema from "./schema/claw-drafts.js";
 import type { CommandsListParams } from "./schema/commands.js";
 import type { CronHistoryParams } from "./schema/cron.js";
 import type {
@@ -20,25 +19,32 @@ import type { LogsTailParams } from "./schema/logs-chat.js";
 import type * as PortalSchema from "./schema/portals.js";
 import type { PresenceActivityParams, PresenceQueryParams } from "./schema/presence.js";
 import type * as GitHubSchema from "./schema/session-github-publication.js";
+import type { SessionMemberSetAccessParams } from "./schema/sessions-sharing.js";
 import type { StorageLocationsListParams, StorageLocationsProbeParams } from "./schema/storage.js";
+import type * as TemplateDraftSchema from "./schema/template-drafts.js";
 import type {
   ThemesListParams,
   ThemesGetParams,
   ThemesSetParams,
   ThemesImportParams,
 } from "./schema/themes.js";
+import type * as ToolUsageSchema from "./schema/tools-catalog.js";
 import type { UiCommandParams, UiCommandReportParams } from "./schema/ui-command.js";
 import type { UpdateRunsGetParams, UpdateRunsListParams } from "./schema/update-runs.js";
 import type * as UsersSchema from "./schema/users.js";
 
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
 export type GatewayCoreRequestParams = {
+  "toolUsage.status": ToolUsageSchema.ToolUsageStatusParams;
+  "toolUsage.import": ToolUsageSchema.ToolUsageImportParams;
+  "toolUsage.reset": ToolUsageSchema.ToolUsageResetParams;
   "agents.avatar.generate": AgentsAvatarGenerateParams;
-  "claws.drafts.create": ClawDraftSchema.ClawsDraftsCreateParams;
-  "claws.drafts.read": ClawDraftSchema.ClawsDraftsReadParams;
-  "claws.drafts.save": ClawDraftSchema.ClawsDraftsSaveParams;
-  "claws.drafts.review": ClawDraftSchema.ClawsDraftsReviewParams;
-  "claws.drafts.publish": ClawDraftSchema.ClawsDraftsPublishParams;
+  "templates.drafts.create": TemplateDraftSchema.TemplatesDraftsCreateParams;
+  "templates.drafts.read": TemplateDraftSchema.TemplatesDraftsReadParams;
+  "templates.drafts.save": TemplateDraftSchema.TemplatesDraftsSaveParams;
+  "templates.drafts.review": TemplateDraftSchema.TemplatesDraftsReviewParams;
+  "templates.drafts.signIn": TemplateDraftSchema.TemplatesDraftsSignInParams;
+  "templates.drafts.publish": TemplateDraftSchema.TemplatesDraftsPublishParams;
   "catalog.browse": CatalogBrowseParams;
   "catalog.searchKeywords": CatalogSearchKeywordsParams;
   "backup.status": BackupStatusParams;
@@ -80,8 +86,10 @@ export type GatewayCoreRequestParams = {
   "portal.session.close": Static<typeof PortalSchema.SessionPortalCloseParamsSchema>;
   "portal.session.list": Static<typeof PortalSchema.SessionPortalListParamsSchema>;
   "portal.session.open": Static<typeof PortalSchema.SessionPortalOpenParamsSchema>;
+  "session.members.setAccess": SessionMemberSetAccessParams;
   "sessions.github.publish": GitHubSchema.SessionGitHubPublishParams;
   "sessions.github.action": GitHubSchema.SessionGitHubActionParams;
+  "sessions.github.readiness": Static<typeof GitHubSchema.SessionGitHubReadinessParamsSchema>;
   "sessions.github.options": Static<typeof GitHubSchema.SessionGitHubOptionsParamsSchema>;
   "sessions.github.status": Static<typeof GitHubSchema.SessionGitHubStatusParamsSchema>;
   "sessions.github.confirm": GitHubSchema.SessionGitHubConfirmParams;
@@ -101,6 +109,7 @@ export type GatewayCoreRequestParams = {
   "users.unlinkChannelIdentity": UsersSchema.UsersUnlinkChannelIdentityParams;
   "users.listChannelIdentities": UsersSchema.UsersListChannelIdentitiesParams;
   "users.unlinkAuthProfile": UsersSchema.UsersUnlinkAuthProfileParams;
+  "users.channelIdentity": Static<typeof UsersSchema.UsersChannelIdentityParamsSchema>;
   "users.github.status": Static<typeof UsersSchema.UsersGitHubStatusParamsSchema>;
   "users.github.authorize.start": Static<typeof UsersSchema.UsersGitHubAuthorizeStartParamsSchema>;
   "users.github.authorize.poll": Static<typeof UsersSchema.UsersGitHubAuthorizePollParamsSchema>;

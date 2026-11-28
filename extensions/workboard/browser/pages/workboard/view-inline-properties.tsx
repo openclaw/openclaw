@@ -14,7 +14,6 @@ import { AgentPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
 import { listen } from "../../lib/listener.ts";
-import { normalizeDraftLabels } from "../../lib/workboard/card-state.ts";
 import { updateWorkboardCardProperties } from "../../lib/workboard/mutations.ts";
 import { getWorkboardState } from "../../lib/workboard/runtime.ts";
 import {
@@ -34,6 +33,7 @@ import {
   type WorkboardProps,
 } from "./view-helpers.tsx";
 import { liveInputValue } from "./view-input-value.ts";
+import { LabelChoices } from "./view-label-choices.tsx";
 import { workboardPopoverRef } from "./view-popover.ts";
 function closePropertyPicker(input: HTMLInputElement) {
   const panel = input.closest<HTMLElement>("[popover]");
@@ -172,6 +172,7 @@ export function InlinePriority(input: {
           return updateWorkboardCardProperties({
             ...workboardMutationContext(input.workboard),
             card: input.card,
+            previewInline: true,
             patch: {
               priority,
             },
@@ -237,6 +238,7 @@ export function InlineAgent(input: {
             void updateWorkboardCardProperties({
               ...workboardMutationContext(input.workboard),
               card: input.card,
+              previewInline: true,
               patch: {
                 agentId,
               },
@@ -271,6 +273,7 @@ export function InlineText(props: InlineTextProps) {
   let base: WorkboardCard | undefined;
   let editing = false;
   let value = "";
+  let labels: string[] = [];
   let busy = false;
   const [saving, setSaving] = createOptimistic(false);
   const presentSaving = action(function* (
@@ -299,7 +302,7 @@ export function InlineText(props: InlineTextProps) {
       return false;
     }
     return props.field === "labels"
-      ? JSON.stringify(normalizeDraftLabels(value)) !== JSON.stringify(base.labels)
+      ? JSON.stringify(labels) !== JSON.stringify(base.labels)
       : value.trim() !== (base[props.field] ?? "").trim();
   };
   const finish = (restoreFocus = true) => {
@@ -352,7 +355,7 @@ export function InlineText(props: InlineTextProps) {
     const patch =
       field === "labels"
         ? {
-            labels: normalizeDraftLabels(value),
+            labels,
           }
         : {
             [field]: value,
@@ -362,11 +365,18 @@ export function InlineText(props: InlineTextProps) {
       const pending = updateWorkboardCardProperties({
         ...workboardMutationContext(owner),
         card: observed,
+        previewInline: field === "labels",
         patch,
       });
-      // Publish the owner's busy state before joining the saving transition.
-      await Promise.resolve();
-      saved = await presentSaving(pending);
+      if (field === "labels") {
+        // Keep the submitted draft for retry, not the popover while saving.
+        popover?.hidePopover();
+        saved = await pending;
+      } else {
+        // Publish the owner's busy state before joining the text editor's saving transition.
+        await Promise.resolve();
+        saved = await presentSaving(pending);
+      }
     } finally {
       disposeSaveFocus?.();
       disposeSaveFocus = undefined;
@@ -384,13 +394,23 @@ export function InlineText(props: InlineTextProps) {
       base =
         getWorkboardState(owner.host).cards.find((card) => card.id === observed.id) ?? observed;
       publish();
+      if (field === "labels" && restoreFocus) {
+        requestAnimationFrame(() => {
+          if (host.isConnected && doc.activeElement === doc.body) {
+            trigger?.focus({ preventScroll: true });
+          }
+        });
+      }
     }
   };
   const openEditor = () => {
     if (!base || !changed()) {
       base = props.card;
-      value =
-        props.field === "labels" ? props.card.labels.join(", ") : (props.card[props.field] ?? "");
+      if (props.field === "labels") {
+        labels = [...props.card.labels];
+      } else {
+        value = props.card[props.field] ?? "";
+      }
     }
     editing = true;
     publish();
@@ -443,7 +463,7 @@ export function InlineText(props: InlineTextProps) {
           : "workboard.fieldLabels",
     );
   const labelsPopoverId = () => `workboard-detail-labels-${props.card.id}`;
-  const triggerDisabled = () => disabled() && !(props.field === "labels" && changed() && !saving());
+  const triggerDisabled = () => disabled() && !(props.field === "labels" && changed() && !busy);
   const TriggerContent = () => (
     <span class="workboard-detail__text-value">
       {props.field === "labels" ? (
@@ -548,6 +568,7 @@ export function InlineText(props: InlineTextProps) {
             }
           } else if (
             event.key === "Enter" &&
+            props.field !== "labels" &&
             (event.target instanceof HTMLInputElement ||
               event.target instanceof HTMLTextAreaElement) &&
             (props.field !== "notes" || event.metaKey || event.ctrlKey)
@@ -558,18 +579,35 @@ export function InlineText(props: InlineTextProps) {
           }
         }}
       >
-        <Input
-          class="settings-input"
-          aria-label={fieldLabel()}
-          rows={props.field === "notes" ? 12 : undefined}
-          ref={(element: HTMLInputElement | HTMLTextAreaElement) => {
-            bindValue(element);
-            editorInput = element;
-          }}
-          disabled={saving() || (disabled() && !props.readOnly)}
-          readonly={props.readOnly}
-          onInput={input}
-        />
+        {props.field === "labels" ? (
+          <LabelChoices
+            owner={props.owner}
+            value={(revision(), labels)}
+            limit={12}
+            disabled={saving() || (disabled() && !props.readOnly)}
+            readOnly={props.readOnly}
+            inputRef={(element) => {
+              editorInput = element;
+            }}
+            onChange={(next) => {
+              labels = next;
+              publish();
+            }}
+          />
+        ) : (
+          <Input
+            class="settings-input"
+            aria-label={fieldLabel()}
+            rows={props.field === "notes" ? 12 : undefined}
+            ref={(element: HTMLInputElement | HTMLTextAreaElement) => {
+              bindValue(element);
+              editorInput = element;
+            }}
+            disabled={saving() || (disabled() && !props.readOnly)}
+            readonly={props.readOnly}
+            onInput={input}
+          />
+        )}
         <span class="workboard-detail__text-actions">
           <button
             type="button"

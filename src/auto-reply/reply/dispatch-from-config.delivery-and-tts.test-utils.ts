@@ -125,6 +125,8 @@ function createHeldDeliveryDispatcher() {
 beforeAll(globalBeforeAll0);
 
 describe("dispatchReplyFromConfig", () => {
+  const captionedTtsConfig = { tts: { auto: "always" } } satisfies OpenClawConfig;
+
   beforeEach(() => {
     clearRuntimeConfigSnapshot();
     describe0BeforeEach0();
@@ -1370,27 +1372,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(usesFullReplyRuntime(receivedCfg)).toBe(true);
   });
 
-  it("keeps a channel-captured config full when no prepared runtime exists", async () => {
-    setNoAbort();
-    const cfg = {
-      agents: { defaults: { userTimezone: "America/Los_Angeles" } },
-    } as OpenClawConfig;
-    let receivedCfg: OpenClawConfig | undefined;
-
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ Provider: "slack", Surface: "slack" }),
-      cfg,
-      dispatcher: createDispatcher(),
-      replyResolver: async (_ctx, _opts, cfgArg) => {
-        receivedCfg = cfgArg;
-        return { text: "hi" };
-      },
-    });
-
-    expect(receivedCfg).toBe(cfg);
-    expect(usesFullReplyRuntime(receivedCfg)).toBe(true);
-  });
-
   it("drops a removed Firecrawl SecretRef from Discord replies after config reload", async () => {
     setNoAbort();
     const cfg = {
@@ -2225,7 +2206,7 @@ describe("dispatchReplyFromConfig", () => {
           OriginatingChannel: "telegram",
           OriginatingTo: "original",
         }),
-        cfg: emptyConfig,
+        cfg: captionedTtsConfig,
         dispatcher: createDispatcher(),
         replyResolver: async () => ({ text: "voice caption" }),
       });
@@ -2250,7 +2231,7 @@ describe("dispatchReplyFromConfig", () => {
       return undefined;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
@@ -2276,7 +2257,7 @@ describe("dispatchReplyFromConfig", () => {
         OriginatingChannel: "telegram",
         OriginatingTo: "telegram:999",
       }),
-      cfg: emptyConfig,
+      cfg: captionedTtsConfig,
       dispatcher,
       replyResolver: async () => ({ text: "One captioned answer." }),
     });
@@ -2523,7 +2504,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "Deployment complete." };
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
       text: "The selected environment is ready.\nDeployment complete.",
@@ -2666,7 +2647,7 @@ describe("dispatchReplyFromConfig", () => {
       return undefined;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(firstFinalReplyPayload(dispatcher)).toEqual({ text: "Fallback text content." });
@@ -2686,7 +2667,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "Final text." };
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(firstFinalReplyPayload(dispatcher)).toEqual({ text: "Streamed text.\nFinal text." });
@@ -2709,7 +2690,7 @@ describe("dispatchReplyFromConfig", () => {
       return undefined;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(firstFinalReplyPayload(dispatcher)).toEqual({ text: "Streamed text." });
@@ -2728,7 +2709,7 @@ describe("dispatchReplyFromConfig", () => {
       throw new Error("provider unavailable");
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(firstFinalReplyPayload(dispatcher)).toEqual({ text: "Partial useful answer." });
@@ -2765,7 +2746,7 @@ describe("dispatchReplyFromConfig", () => {
 
       await dispatchReplyFromConfig({
         ctx,
-        cfg: emptyConfig,
+        cfg: captionedTtsConfig,
         dispatcher,
         replyOptions: { abortSignal: abortController.signal },
         replyResolver,
@@ -2794,7 +2775,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "Runtime status.", isStatusNotice: true };
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(vi.mocked(dispatcher.sendFinalReply).mock.calls).toEqual([
@@ -2829,7 +2810,7 @@ describe("dispatchReplyFromConfig", () => {
       return undefined;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(firstFinalReplyPayload(dispatcher)?.text).toBeUndefined();
@@ -2851,7 +2832,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "Visible final." };
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
       text: "Visible block. \nVisible final.",
@@ -2873,7 +2854,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: " speech.[[/tts:text]] Done." };
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
       text: "Visible.  Done.",
@@ -2895,7 +2876,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "Second paragraph." };
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
@@ -2907,12 +2888,6 @@ describe("dispatchReplyFromConfig", () => {
   it("keeps tagged-mode Telegram block text visible", async () => {
     setNoAbort();
     installCaptionedVoiceTestPlugin("telegram");
-    ttsMocks.state.statusSnapshot = {
-      autoMode: "tagged",
-      provider: "auto",
-      maxLength: 1500,
-      summarize: true,
-    };
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
     const replyResolver = async (
@@ -2923,7 +2898,12 @@ describe("dispatchReplyFromConfig", () => {
       return undefined;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: { tts: { auto: "tagged" } },
+      dispatcher,
+      replyResolver,
+    });
 
     expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "Plain tagged text." });
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -2950,7 +2930,6 @@ describe("dispatchReplyFromConfig", () => {
     },
   ])("keeps tagged TTS delivery single for $streamedText", async (testCase) => {
     setNoAbort();
-    ttsMocks.state.statusSnapshot.autoMode = "tagged";
     ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce(testCase.ttsReply);
     const dispatcher = createDispatcher();
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -2960,7 +2939,7 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
-      cfg: emptyConfig,
+      cfg: { tts: { auto: "tagged" } },
       dispatcher,
       replyResolver,
     });

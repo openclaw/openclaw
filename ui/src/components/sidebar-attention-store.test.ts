@@ -3,21 +3,24 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
-import type { CronStatus, ModelAuthStatusResult } from "../api/types.ts";
+import type { ModelAuthStatusResult } from "../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../app/connection-bootstrap.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { client as mockClient, createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import type { SidebarAttentionStore } from "../app/sidebar-attention-store.ts";
 import { outboxStorageScope } from "../lib/chat/outbox-payload-store.runtime.ts";
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
+import { readCronInventory } from "../lib/cron/inventory.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import {
   admitStoredChatComposerQueueItemResult,
   updateStoredChatComposerQueueItems,
 } from "../pages/chat/composer-queue-persistence.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
+  deferredCronFailurePrefix,
   dismissSidebarAttention,
   loadDismissals,
   resolveSidebarAttentionKey,
@@ -83,42 +86,12 @@ describe("sidebar attention source publication", () => {
   function expectCalls(
     request: ReturnType<typeof inventoryRequest>,
     count: number,
-    methods = ["cron.list", "cron.status"],
+    methods = ["cron.list"],
   ) {
     for (const method of methods) {
       const calls = request.mock.calls.filter(([name]) => name === method);
       expect(calls, method).toHaveLength(count);
     }
-  }
-  function inventoryGate(next?: string) {
-    const cronStatus = { enabled: true, triggersEnabled: true, jobs: 1 };
-    const list = pending(cronPage());
-    const status = pending<CronStatus>(cronStatus);
-    const auth = pending(emptyAuth());
-    let listCalls = 0;
-    const request = respond({
-      "cron.list": () => (++listCalls === 1 || !next ? list.promise : cronPage(next)),
-      "cron.status": () => status.promise,
-      "models.authStatus": () => auth.promise,
-    });
-    return {
-      list,
-      status,
-      cronStatus,
-      request,
-      finish(id?: string) {
-        list.resolve(cronPage(id));
-        status.resolve(cronStatus);
-        auth.resolve(emptyAuth());
-      },
-    };
-  }
-  function emitFinished(harness: ReturnType<typeof createGatewayHarness>) {
-    harness.emitEvent("cron", {
-      action: "finished",
-      jobId: "current",
-      job: eventJob({ id: "current" }),
-    });
   }
   function repeatEvent(emit: () => void) {
     for (let index = 0; index < 20; index++) {
@@ -161,23 +134,24 @@ describe("sidebar attention source publication", () => {
     );
     store = harness.attention;
     await vi.advanceTimersByTimeAsync(0);
-    expect(store.entries).toMatchObject([{ label: "retained" }]);
+    expect(store.hasFailedAutomation).toBe(true);
     const { hello, selfUser } = harness.gateway.snapshot;
     harness.update({ phase: "reconnecting", hello: null, selfUser: undefined });
-    expect(store.entries).toMatchObject([{ label: "retained" }]);
+    expect(store.hasFailedAutomation).toBe(true);
     harness.update({ phase: "connected", hello });
     await vi.advanceTimersByTimeAsync(0);
-    expect(store.entries).toMatchObject([{ label: "retained" }]);
+    expect(store.hasFailedAutomation).toBe(true);
     expect(reads).toBe(1);
     harness.update({ selfUser });
     await vi.advanceTimersByTimeAsync(0);
-    expect(store.entries).toMatchObject([{ label: "retained" }]);
+    expect(store.hasFailedAutomation).toBe(true);
     expect(reads).toBe(2);
-    refreshed.resolve(cronPage("refreshed"));
+    refreshed.resolve(cronPage());
     await vi.advanceTimersByTimeAsync(0);
-    expect(store.entries).toMatchObject([{ label: "refreshed" }]);
+    expect(store.hasFailedAutomation).toBe(false);
+    harness.emitEvent("cron", { action: "finished" });
     harness.update({ phase: "reconnecting", client: mockClient(async () => ({})) });
-    expect(store.entries).toEqual([]);
+    expect(store.hasFailedAutomation).toBe(false);
   });
 
   it("retains cron inventory without reviving stale auth when returning to an agent", async () => {
@@ -189,7 +163,6 @@ describe("sidebar attention source publication", () => {
     let mainAuthCalls = 0;
     const request = respond({
       "cron.list": () => inventory.promise,
-      "cron.status": () => ({ enabled: true, jobs: 1 }),
       "models.authStatus": (params) =>
         isRecord(params) && params.agentId === "main"
           ? (++mainAuthCalls === 1 ? oldAuth : currentAuth).promise
@@ -219,12 +192,12 @@ describe("sidebar attention source publication", () => {
     inventory.resolve(cronPage("incident"));
     currentAuth.resolve(emptyAuth(2));
     await vi.advanceTimersByTimeAsync(0);
-    expectLabels("incident");
+    expect(store?.hasFailedAutomation).toBe(true);
     expect(mainAuthCalls).toBe(2);
 
     oldAuth.resolve(missingAuth(1));
     await vi.advanceTimersByTimeAsync(0);
-    expectLabels("incident");
+    expect(store.entries).toEqual([]);
     expectCalls(request, 1);
     expect(modelAuthRequests(request)).toEqual([
       ["models.authStatus", { agentId: "main" }],
@@ -247,80 +220,78 @@ describe("sidebar attention source publication", () => {
       const harness = startAuthenticatedStore(request);
       store = harness.attention;
       await vi.advanceTimersByTimeAsync(0);
-      expectLabels("incident");
+      expect(store?.hasFailedAutomation).toBe(true);
 
       failed = true;
-      harness.emitEvent("cron", {});
-      await vi.advanceTimersByTimeAsync(0);
+      harness.emitEvent("cron.inventory.changed", {});
+      await vi.advanceTimersByTimeAsync(50);
       request.mockClear();
       harness.update(unavailable);
-      harness.emitEvent("cron", {});
+      harness.emitEvent("cron.inventory.changed", {});
       harness.emitEvent("config.changed", {});
       await vi.advanceTimersByTimeAsync(10 * 60_000);
       expect(request).not.toHaveBeenCalled();
-      expectLabels("incident");
+      expect(store?.hasFailedAutomation).toBe(true);
 
       failed = false;
       harness.update({ restartPending: false, suspensionPhase: "accepting" });
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
       expectCalls(request, 1);
-      expectLabels("incident");
+      expect(store?.hasFailedAutomation).toBe(true);
     },
   );
 
-  it.each(["cron.list", "cron.status"])(
-    "keeps cron inventory after recovering %s, visibility, and idle time",
-    async (failedMethod) => {
-      vi.useFakeTimers();
-      const setVisibility = visibilityControl();
-      let failuresRemaining = 2;
-      const request = vi.fn(async (method: string) => {
-        if (method === failedMethod && failuresRemaining > 0) {
-          failuresRemaining -= 1;
-          throw new Error("temporarily unavailable");
-        }
-        return method === "cron.list"
-          ? cronPage("incident")
-          : method === "cron.status"
-            ? { enabled: true, triggersEnabled: true, jobs: 1 }
-            : emptyAuth(Date.now());
-      });
-      const harness = gateway(request);
-      store = activate(harness);
-      await vi.advanceTimersByTimeAsync(0);
-      const cronCalls = () => request.mock.calls.filter(([name]) => name === "cron.list").length;
-      await vi.advanceTimersByTimeAsync(59_999);
-      expect(cronCalls()).toBe(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(cronCalls()).toBe(2);
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(cronCalls()).toBe(3);
-      expectLabels("incident");
-      await vi.advanceTimersByTimeAsync(30 * 60_000);
-      setVisibility("hidden");
-      await vi.advanceTimersByTimeAsync(60_001);
-      setVisibility("visible");
-      await vi.advanceTimersByTimeAsync(0);
-      expectCalls(request, 3);
-      expect(modelAuthRequests(request)).toHaveLength(1);
-      harness.emitEvent("config.changed", {});
-      await vi.advanceTimersByTimeAsync(0);
-      expectCalls(request, 4);
-      harness.update({ phase: "reconnecting" });
-      harness.update({ phase: "connected" });
-      await vi.advanceTimersByTimeAsync(0);
-      expectCalls(request, 5);
-    },
-  );
+  it("keeps cron inventory after recovering a read, visibility, and idle time", async () => {
+    vi.useFakeTimers();
+    const setVisibility = visibilityControl();
+    let failuresRemaining = 2;
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.list" && failuresRemaining > 0) {
+        failuresRemaining -= 1;
+        throw new Error("temporarily unavailable");
+      }
+      return method === "cron.list" ? cronPage("incident") : emptyAuth(Date.now());
+    });
+    const harness = gateway(request);
+    store = activate(harness);
+    await vi.advanceTimersByTimeAsync(0);
+    const cronCalls = () => request.mock.calls.filter(([name]) => name === "cron.list").length;
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(cronCalls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(cronCalls()).toBe(2);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(cronCalls()).toBe(3);
+    expect(store?.hasFailedAutomation).toBe(true);
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    setVisibility("hidden");
+    await vi.advanceTimersByTimeAsync(60_001);
+    setVisibility("visible");
+    await vi.advanceTimersByTimeAsync(0);
+    expectCalls(request, 3);
+    expect(modelAuthRequests(request)).toHaveLength(1);
+    harness.emitEvent("config.changed", {});
+    await vi.advanceTimersByTimeAsync(50);
+    expectCalls(request, 4);
+    harness.update({ phase: "reconnecting" });
+    harness.update({ phase: "connected" });
+    await vi.advanceTimersByTimeAsync(0);
+    expectCalls(request, 5);
+  });
 
   it.each(["account", "reconnect", "tenant"] as const)(
     "keeps snoozes isolated across %s switches and reloads",
     async (boundary) => {
       vi.stubGlobal("localStorage", createStorageMock());
-      const jobs = [...cronPage("dismissed-incident").jobs, ...cronPage("visible-incident").jobs];
       const request = inventoryRequest(
-        () => ({ ...cronPage(), jobs, total: jobs.length }),
-        jobs.length,
+        () => cronPage(),
+        () => ({
+          ts: 1,
+          providers: [
+            { provider: "openai", displayName: "OpenAI", status: "missing", profiles: [] },
+            { provider: "anthropic", displayName: "Anthropic", status: "missing", profiles: [] },
+          ],
+        }),
       );
       const harness = gateway(request);
       const profile = (id: string) => ({
@@ -342,11 +313,11 @@ describe("sidebar attention source publication", () => {
       connect("alice");
       store = activate(harness);
       await waitForFast(() => expect(store?.entries).toHaveLength(2));
-      store.dismiss({ kind: "cronFailed", signature: "dismissed-incident" });
-      expectLabels("visible-incident");
+      store.dismiss({ kind: "modelAuthExpired", signature: "agent:main\nopenai" });
+      expectLabels("Anthropic");
       if (boundary === "reconnect") {
         harness.update({ phase: "reconnecting", selfUser: null });
-        store.dismiss({ kind: "cronFailed", signature: "visible-incident" });
+        store.dismiss({ kind: "modelAuthExpired", signature: "agent:main\nanthropic" });
         expect(store.entries).toEqual([]);
       }
       connect("bob");
@@ -354,7 +325,7 @@ describe("sidebar attention source publication", () => {
       store.dispose();
       store = activate(harness);
       await waitForFast(() => expect(store?.entries).toHaveLength(2));
-      const dismissal = { kind: "cronFailed" as const, signature: "visible-incident" };
+      const dismissal = { kind: "modelAuthExpired" as const, signature: "agent:main\nanthropic" };
       if (boundary === "tenant") {
         store.dismiss(dismissal);
       } else {
@@ -365,33 +336,108 @@ describe("sidebar attention source publication", () => {
         dismissSidebarAttention(key, dismissal);
         globalThis.dispatchEvent(new StorageEvent("storage", { key }));
       }
-      expectLabels("dismissed-incident");
+      expectLabels("OpenAI");
       connect("alice");
-      await waitLabels(...(boundary === "reconnect" ? [] : ["visible-incident"]));
+      await waitLabels(...(boundary === "reconnect" ? [] : ["Anthropic"]));
     },
   );
 
+  it("imports saved automation dismissals without showing failures in the Inbox", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    const legacyImport = pending({ acknowledgedAtMs: 17 });
+    const deferredImport = pending({ acknowledgedAtMs: 23 });
+    const request = respond({
+      "cron.list": () => cronPage("archive"),
+      "models.authStatus": () => emptyAuth(),
+      "users.prefs.get": () => ({ status: "ok", entries: {} }),
+      "cron.acknowledgeFailure": (params) =>
+        isRecord(params) && params.id === "paused" ? legacyImport.promise : deferredImport.promise,
+    });
+    const harness = gateway(request, true);
+    const key = resolveSidebarAttentionKey(harness.gateway)!;
+    const deferredKey = deferredCronFailurePrefix(key) + "index";
+    localStorage.setItem(
+      key,
+      JSON.stringify({ cronFailed: ["paused"], openClawIdRecoveryUse: ["existing"] }),
+    );
+    localStorage.setItem(deferredKey, "23");
+    store = activate(harness);
+
+    await waitForFast(() => {
+      expect(request).toHaveBeenCalledWith("cron.acknowledgeFailure", {
+        id: "paused",
+        adopt: true,
+      });
+      expect(store?.hasFailedAutomation).toBe(true);
+    });
+    expectLabels();
+    expect(loadDismissals(key).cronFailed).toEqual(["paused"]);
+    legacyImport.resolve({ acknowledgedAtMs: 17 });
+
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("cron.acknowledgeFailure", {
+        id: "index",
+        failedAtMs: 23,
+      }),
+    );
+    expect(localStorage.getItem(deferredKey)).toBe("23");
+    deferredImport.resolve({ acknowledgedAtMs: 23 });
+
+    await waitForFast(() => expect(localStorage.getItem(deferredKey)).toBeNull());
+    expect(loadDismissals(key)).toEqual({ openClawIdRecoveryUse: ["existing"] });
+  });
+
+  it("keeps a saved account dismissal while its auth status is unavailable", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("localStorage", createStorageMock());
+    let status: ModelAuthStatusResult = {
+      ...emptyAuth(),
+      unavailable: { code: "PREPARED_MODEL_AUTH_UNAVAILABLE", message: "Auth status is preparing" },
+    };
+    const request = inventoryRequest(
+      () => cronPage(),
+      () => status,
+    );
+    const harness = gateway(request, true);
+    const dismissal = { kind: "modelAuthExpired", signature: "agent:main\nopenai" } as const;
+    const key = resolveSidebarAttentionKey(harness.gateway);
+    dismissSidebarAttention(key, dismissal);
+    store = activate(harness);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expectCalls(request, 1, ["models.authStatus"]);
+    expect(loadDismissals(key)).toEqual({ modelAuthExpired: [dismissal.signature] });
+
+    status = missingAuth(2);
+    harness.emitEvent("chat.metadata.changed", { agentId: "main", authChanged: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expectCalls(request, 2, ["models.authStatus"]);
+    expect(store.entries).toEqual([]);
+  });
+
   it("retires old-account health before the eager facade publishes a storage refresh", async () => {
-    let profile = "alice";
-    const request = inventoryRequest(() => cronPage(profile));
+    const otherAccount = deferred<CompactCronPage>();
+    const request = inventoryRequest(() =>
+      profile === "alice" ? cronPage("alice") : otherAccount.promise,
+    );
     const harness = gateway(request);
+    let profile = "alice";
     harness.update({ selfUser: { id: profile, name: profile } });
     store = activate(harness);
-    await waitLabels("alice");
-    const published: string[] = [];
+    await waitForFast(() => expect(store?.hasFailedAutomation).toBe(true));
+    const published: boolean[] = [];
     store.subscribe(() => {
       if (harness.gateway.snapshot.selfUser?.id === "bob") {
-        published.push(
-          ...(store?.entries.flatMap((entry) =>
-            entry.type === "attention" ? [entry.label] : [],
-          ) ?? []),
-        );
+        published.push(store?.hasFailedAutomation ?? false);
       }
     });
+
     profile = "bob";
     harness.update({ selfUser: { id: profile, name: profile } });
-    await waitLabels("bob");
-    expect(published).not.toContain("alice");
+    expect(published).not.toContain(true);
+    expect(store.hasFailedAutomation).toBe(false);
+    otherAccount.resolve(cronPage("bob"));
+    await waitForFast(() => expect(store?.hasFailedAutomation).toBe(true));
   });
 
   it("retires only the current account's scope-upgrade snooze before the Inbox mounts", () => {
@@ -418,6 +464,66 @@ describe("sidebar attention source publication", () => {
     expect(localStorage.getItem(legacyKey)).toBe(legacy);
   });
 
+  it("shows a finishing restart over a dismissed run and keeps that dismissal for later", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    const request = inventoryRequest(() => cronPage());
+    const harness = gateway(request, true);
+    harness.update({
+      hello: {
+        ...harness.gateway.snapshot.hello!,
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["update.run", "update.status"], events: [] },
+      },
+    });
+    const run = createUpdateRunFixture({
+      status: "succeeded",
+      phase: "finished",
+      finishedAtMs: Date.now() - 60_000,
+    });
+    const runDismissal = {
+      kind: "updateAvailable" as const,
+      signature: JSON.stringify(["run", run.runId]),
+    };
+    dismissSidebarAttention(resolveSidebarAttentionKey(harness.gateway), runDismissal);
+    const snapshot = {
+      approvalQueue: [],
+      updateRun: run,
+      updateRunAcknowledged: false,
+      updateCampaignStatusHydrated: true,
+      updateAvailable: null,
+      updateSchedule: {
+        channel: "stable",
+        autoEnabled: true,
+        campaign: {
+          id: "owed",
+          state: "countdown",
+          announcedAtMs: 0,
+          forceAtMs: 1,
+          updatedAtMs: 0,
+        },
+      },
+    };
+    const overlays = { snapshot, subscribe: () => () => undefined };
+    store = createStore(
+      harness.gateway,
+      undefined,
+      undefined,
+      undefined,
+      overlays as unknown as ApplicationContext["overlays"],
+    );
+    // Each loaded source reconciles stored dismissals before it publishes.
+    const published = vi.fn();
+    store.subscribe(published);
+    store.activate(SidebarAttentionStoreOwner);
+    await waitForFast(() => expect(published.mock.calls.length).toBeGreaterThanOrEqual(2));
+    expect(store.entries).toEqual([expect.objectContaining({ type: "update", dismissal: null })]);
+    expect(dismissalState(harness)).toEqual({ updateAvailable: [runDismissal.signature] });
+
+    // Turning automatic updates off retires the campaign; the dismissed outcome stays dismissed.
+    snapshot.updateSchedule = { channel: "stable", autoEnabled: false } as never;
+    expect(store.entries).toEqual([]);
+  });
+
   it.each(["ready", "hidden", "disposed"] as const)(
     "holds automatic cron inventory until chat is ready and respects a %s owner",
     async (boundary) => {
@@ -430,14 +536,14 @@ describe("sidebar attention source publication", () => {
         offsets.push(offset);
         return offset === 0
           ? {
-              ...cronPage("first"),
+              ...cronPage("first", "ok"),
               snapshotRevision: "inventory",
               total: 2,
               hasMore: true,
               nextOffset: 1,
             }
           : { ...cronPage("later"), snapshotRevision: "inventory", total: 2, offset: 1 };
-      }, 2);
+      });
       const client = mockClient(request);
       const harness = createGatewayHarness(client);
       bootstrap.setForegroundRoute("agent:main:current");
@@ -453,11 +559,11 @@ describe("sidebar attention source publication", () => {
       bootstrap.setForegroundPane({}, { sessionKey: "agent:main:current", client, ready: true });
       if (boundary === "ready") {
         await waitForFast(() => expect(offsets).toEqual([0, 1]));
-        await waitLabels("first", "later");
+        await waitForFast(() => expect(store?.hasFailedAutomation).toBe(true));
       } else {
         await Promise.resolve();
         expect(offsets).toEqual([]);
-        expect(request.mock.calls.filter(([method]) => method === "cron.status")).toEqual([]);
+        expect(store?.hasFailedAutomation).toBe(false);
       }
     },
   );
@@ -477,8 +583,8 @@ describe("sidebar attention source publication", () => {
         return offsets.length === 1
           ? { ...cronPage("previous"), total: 2, hasMore: true, nextOffset: 1 }
           : cronPage("current");
-      }, 2);
-      const { attention } = startAuthenticatedStore(request);
+      });
+      const { attention, emitEvent } = startAuthenticatedStore(request);
       store = attention;
       await waitForFast(() => expect(offsets).toEqual([0, 1]));
 
@@ -487,124 +593,221 @@ describe("sidebar attention source publication", () => {
       } else {
         attention.dispose();
       }
+      emitEvent("cron.inventory.changed", {});
       pendingAppend.resolve({ ...cronPage("changed"), total: 2, offset: 1 });
       await settleRefresh();
       expect(offsets).toEqual([0, 1]);
 
       if (boundary === "hidden") {
         setVisibility("visible");
-        await waitLabels("current");
+        await waitForFast(() => expect(store?.hasFailedAutomation).toBe(true));
         expect(offsets).toEqual([0, 1, 0]);
       }
     },
   );
 
-  it.each(["list", "status"] as const)(
-    "coalesces cron bursts until the whole inventory pair settles (%s first)",
-    async (first) => {
-      const gate = inventoryGate("latest");
-      const { request, cronStatus } = gate;
-      const harness = gateway(request, true);
-      store = activate(harness);
+  it("keeps the last known failure while hidden and catches up once on return", async () => {
+    const setVisibility = visibilityControl();
+    let listCalls = 0;
+    const request = inventoryRequest(
+      () => (++listCalls === 1 ? cronPage("previous") : cronPage()),
+      () => emptyAuth(),
+    );
+    const harness = startAuthenticatedStore(request);
+    store = harness.attention;
+    await waitForFast(() => expect(store?.hasFailedAutomation).toBe(true));
 
-      repeatEvent(() => emitFinished(harness));
-      expectCalls(request, 1);
-      expectCalls(request, 1, ["models.authStatus"]);
+    setVisibility("hidden");
+    repeatEvent(() => harness.emitEvent("cron.inventory.changed", {}));
+    expect(store.hasFailedAutomation).toBe(true);
+    expectCalls(request, 1);
 
-      if (first === "list") {
-        gate.list.resolve(cronPage("stale"));
-        await gate.list.promise;
-      } else {
-        gate.status.resolve(cronStatus);
-        await gate.status.promise;
-      }
-      await Promise.resolve();
-      expectCalls(request, 1);
+    setVisibility("visible");
+    await waitForFast(() => expect(store?.hasFailedAutomation).toBe(false));
+    expectCalls(request, 2);
+    expectCalls(request, 1, ["models.authStatus"]);
+  });
 
-      gate.list.resolve(cronPage("stale"));
-      gate.status.resolve(cronStatus);
-      await waitLabels("latest");
-      expectCalls(request, 2);
+  it("reads scoped failure membership without sorting display rows for each table page", async () => {
+    const names = vi.fn();
+    const jobs = Array.from({ length: 201 }, (_, index) => {
+      const id = `job-${index}`;
+      const job = cronPage(id, index === 200 ? "error" : "ok").jobs[0]!;
+      return Object.defineProperty(job, "name", {
+        get() {
+          names();
+          return id;
+        },
+      });
+    });
+    const offsets: number[] = [];
+    const request = inventoryRequest((params) => {
+      const offset = isRecord(params) ? Number(params.offset) : 0;
+      offsets.push(offset);
+      return {
+        jobs: jobs.slice(offset, offset + 200),
+        snapshotRevision: "membership",
+        total: jobs.length,
+        limit: 200,
+        offset,
+        hasMore: offset === 0,
+        nextOffset: offset === 0 ? 200 : null,
+      };
+    });
+    store = startAuthenticatedStore(request).attention;
+    await waitForFast(() => expect(store?.hasFailedAutomation).toBe(true));
+    expect(offsets).toEqual([0, 200]);
+    expect(names).not.toHaveBeenCalled();
+  });
+
+  it.each([{ job: null }, { job: {} }])(
+    "keeps the last failure and retries if a later page contains a malformed job ($job)",
+    async ({ job }) => {
+      vi.useFakeTimers();
+      const offsets: number[] = [];
+      const request = inventoryRequest((params) => {
+        const offset = isRecord(params) ? Number(params.offset) : 0;
+        offsets.push(offset);
+        if (offsets.length === 1) {
+          return cronPage("previous");
+        }
+        const page = cronPage("healthy", "ok");
+        if (offsets.length === 2) {
+          return { ...page, total: 2, hasMore: true, nextOffset: 1 };
+        }
+        if (offset === 1) {
+          return { ...page, jobs: [job], total: 2, offset };
+        }
+        return page;
+      });
+      const harness = startAuthenticatedStore(request);
+      store = harness.attention;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.hasFailedAutomation).toBe(true);
+
+      harness.emitEvent("cron.inventory.changed", {});
+      await vi.advanceTimersByTimeAsync(50);
+      expect(offsets).toEqual([0, 0, 1]);
+      expect(store.hasFailedAutomation).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(offsets).toEqual([0, 0, 1, 0]);
+      expect(store.hasFailedAutomation).toBe(false);
     },
   );
 
-  it.each(["settled", "pending with dismissal"] as const)(
-    "defers hidden inventory, preserving dismissals and catching up once (%s)",
-    async (initial) => {
-      vi.stubGlobal("localStorage", createStorageMock());
-      const setVisibility = visibilityControl();
-      vi.spyOn(Date, "now").mockReturnValue(120_000);
-      const pendingList = deferred<CompactCronPage>();
-      let listCalls = 0;
-      const request = inventoryRequest(
-        () => {
-          listCalls += 1;
-          return initial !== "settled" && listCalls === 1
-            ? pendingList.promise
-            : cronPage(listCalls === 1 ? "previous" : "current");
-        },
-        1,
-        () => ({ ts: 120_000, providers: [] }),
+  it.each(["malformed", "rejected"] as const)(
+    "applies live failures after a %s superseded request",
+    async (response) => {
+      vi.useFakeTimers();
+      const previous = pending<unknown>(cronPage());
+      let reads = 0;
+      const request = inventoryRequest(() =>
+        ++reads === 1 ? previous.promise : cronPage("incident", "ok"),
       );
       const harness = startAuthenticatedStore(request);
       store = harness.attention;
-      const key = resolveSidebarAttentionKey(harness.gateway);
-      if (initial === "settled") {
-        await waitLabels("previous");
+      const result = Promise.allSettled([
+        readCronInventory(harness.gateway.snapshot.client!, { compact: true }),
+      ]);
+      expectCalls(request, 1);
+      harness.emitEvent("cron.inventory.changed", {});
+      if (response === "malformed") {
+        previous.resolve({ ...cronPage("obsolete"), jobs: [null] });
       } else {
-        dismissSidebarAttention(key, { kind: "cronFailed", signature: "current" });
+        previous.reject(new Error("inventory unavailable"));
       }
-      setVisibility("hidden");
-      repeatEvent(() => emitFinished(harness));
-      pendingList.resolve(cronPage("previous"));
-      await waitLabels("previous");
-      expectCalls(request, 1, ["cron.list", "cron.status", "models.authStatus"]);
-      if (initial === "pending with dismissal") {
-        expect(loadDismissals(key)).toEqual({ cronFailed: ["current"] });
+      await vi.advanceTimersByTimeAsync(50);
+      if (response === "malformed") {
+        expect(await result).toMatchObject([
+          { status: "fulfilled", value: { jobs: [{ id: "incident" }] } },
+        ]);
+      } else {
+        expect(await result).toMatchObject([{ status: "rejected" }]);
       }
-      setVisibility("visible");
-      document.dispatchEvent(new Event("visibilitychange"));
-      await waitForFast(() => {
-        if (initial === "pending with dismissal") {
-          expect(store?.entries).toEqual([]);
-        } else {
-          expectLabels("current");
-        }
-      });
       expectCalls(request, 2);
-      expectCalls(request, 1, ["models.authStatus"]);
-      if (initial === "pending with dismissal") {
-        expect(loadDismissals(key)).toEqual({ cronFailed: ["current"] });
-      }
+      expect(store.hasFailedAutomation).toBe(false);
+      const job = eventJob();
+      harness.emitEvent("cron", { action: "finished", jobId: job.id, job });
+      expect(store.hasFailedAutomation).toBe(true);
+      expectCalls(request, 2);
     },
   );
 
-  it("publishes progress but retires dismissals only after a fresh complete inventory", async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    const pages = Array.from({ length: 5 }, () => pending(cronPage()));
-    let listCalls = 0;
-    const request = inventoryRequest(() => pages[listCalls++]!.promise);
-    const harness = gateway(request, true);
-    store = activate(harness);
-    pages[0]!.resolve(cronPage("dismissed"));
-    await waitForFast(() => expect(store?.entries).toHaveLength(1));
-    store.dismiss({ kind: "cronFailed", signature: "dismissed" });
+  it.each(["blocked", "needs_attention"] as const)(
+    "projects %s from scoped inventory and clears it on meaningful recovery or removal",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const lastMeaningfulResult = { outcome, summary: "Source access required", atMs: 10 };
+      const request = inventoryRequest(() => {
+        const page = cronPage("incident", "ok");
+        page.jobs[0]!.lastMeaningfulResult = lastMeaningfulResult;
+        return page;
+      });
+      const harness = startAuthenticatedStore(request);
+      store = harness.attention;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.hasFailedAutomation).toBe(true);
+      const publish = (job: ReturnType<typeof eventJob>, action = "finished") =>
+        harness.emitEvent("cron", { action, jobId: job.id, job });
+      const quiet = eventJob({
+        state: { lastRunStatus: "ok", lastRunAtMs: 20, lastMeaningfulResult },
+      });
+      publish(quiet);
+      publish({ ...quiet, state: { ...quiet.state, lastRunAtMs: 30 } });
+      expect(store.hasFailedAutomation).toBe(true);
+      publish({ ...quiet, enabled: false }, "scheduled");
+      expect(store.hasFailedAutomation).toBe(false);
+      publish(quiet, "scheduled");
+      expect(store.hasFailedAutomation).toBe(true);
+      for (const recovered of ["progress", "done"] as const) {
+        publish({
+          ...quiet,
+          state: {
+            lastRunStatus: "ok",
+            lastMeaningfulResult: { outcome: recovered, summary: "Source processed", atMs: 40 },
+          },
+        });
+        expect(store.hasFailedAutomation).toBe(false);
+        publish({ ...quiet, id: "outside-inventory" });
+        expect(store.hasFailedAutomation).toBe(false);
+        publish(quiet);
+        expect(store.hasFailedAutomation).toBe(true);
+      }
+      publish(quiet, "removed");
+      publish(quiet);
+      expect(store.hasFailedAutomation).toBe(false);
+      expectCalls(request, 1);
+    },
+  );
 
-    harness.emitEvent("cron", {});
-    for (const index of [1, 2]) {
-      await waitForFast(() => expect(listCalls).toBe(index + 1));
-      harness.emitEvent("cron", {});
-      pages[index]!.resolve(cronPage(`current-${index}`));
-      await waitLabels(`current-${index}`);
-      expect(dismissalState(harness)).toEqual({ cronFailed: ["dismissed"] });
-    }
-    pages[3]!.resolve({ ...cronPage("partial"), hasMore: true, total: 2, nextOffset: 1 });
-    await waitForFast(() => expect(listCalls).toBe(5));
-    expectLabels("current-2");
-    expect(dismissalState(harness)).toEqual({ cronFailed: ["dismissed"] });
-    pages[4]!.resolve({ ...cronPage("fresh"), snapshotRevision: "partial", total: 2, offset: 1 });
-    await waitLabels("partial", "fresh");
-    expect(dismissalState(harness)).toEqual({});
+  it("keeps the indicator while a replacement inventory is only partially loaded", async () => {
+    const remaining = deferred<CompactCronPage>();
+    let reads = 0;
+    const request = inventoryRequest(() => {
+      switch (++reads) {
+        case 1:
+          return cronPage("failed-job");
+        case 2:
+          return { ...cronPage("healthy-job", "ok"), total: 2, hasMore: true, nextOffset: 1 };
+        default:
+          return remaining.promise;
+      }
+    });
+    const harness = startAuthenticatedStore(request);
+    store = harness.attention;
+    await waitForFast(() => expect(store?.hasFailedAutomation).toBe(true));
+
+    harness.emitEvent("cron.inventory.changed", {});
+    await waitForFast(() => expectCalls(request, 3));
+    expect(store.hasFailedAutomation).toBe(true);
+    remaining.resolve({
+      ...cronPage("another-healthy-job", "ok"),
+      snapshotRevision: "healthy-job",
+      total: 2,
+      offset: 1,
+    });
+    await waitForFast(() => expect(store?.hasFailedAutomation).toBe(false));
   });
 
   it("queues auth invalidations, publishes progress, and keeps settled auth cached", async () => {
@@ -616,16 +819,13 @@ describe("sidebar attention source publication", () => {
     const harness = gateway(
       inventoryRequest(
         () => cronPage("failed-cron"),
-        1,
         () => auth[authCalls++]!.promise,
       ),
     );
     store = createStore(harness.gateway);
-    const publishedCounts: number[] = [];
-    store.subscribe(() => publishedCounts.push(store?.entries.length ?? 0));
     store.activate(SidebarAttentionStoreOwner);
-    await waitForFast(() => expect(store?.entries).toHaveLength(1));
-    expect(publishedCounts).toContain(1);
+    await waitForFast(() => expect(store?.hasFailedAutomation).toBe(true));
+    expect(store.entries).toEqual([]);
 
     for (const index of [0, 1]) {
       now += 60_001;
@@ -638,17 +838,26 @@ describe("sidebar attention source publication", () => {
       await waitForFast(() => expect(authCalls).toBe(index + 2));
       containsLabel(`Current ${index}`);
     }
-    repeatEvent(() => harness.emitEvent("cron", {}));
+    repeatEvent(() => harness.emitEvent("cron.inventory.changed", {}));
     auth[2]!.resolve(missingAuth(now, "Cached auth"));
     await waitForFast(() => containsLabel("Cached auth"));
-    containsLabel("failed-cron");
+    expect(store.hasFailedAutomation).toBe(true);
     now += 60_002;
-    repeatEvent(() => harness.emitEvent("cron", {}));
+    repeatEvent(() => harness.emitEvent("cron.inventory.changed", {}));
     await settleRefresh();
     document.dispatchEvent(new Event("visibilitychange"));
     expect(authCalls).toBe(3);
     containsLabel("Cached auth");
     invalidateModelAuthStatusRequests(harness.gateway.snapshot.client!);
+    harness.emitEvent("chat.metadata.changed", {
+      agentId: "other",
+      modelCatalogChanged: true,
+      authChanged: true,
+      commandsChanged: false,
+    });
+    await Promise.resolve();
+    expect(authCalls).toBe(3);
+    containsLabel("Cached auth");
     harness.emitEvent("chat.metadata.changed", {
       agentId: "main",
       usageUpdatedAt: now,
@@ -663,72 +872,57 @@ describe("sidebar attention source publication", () => {
     await waitForFast(() => containsLabel("Refreshed auth"));
   });
 
-  it.each([false, true])("preserves failed inventory (scheduler disabled=%s)", async (disabled) => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    const page = cronPage("overdue");
-    Object.assign(page.jobs[0]!, { lastRunStatus: "ok", nextRunAtMs: 1 });
+  it("preserves a known failure when a refresh fails", async () => {
     let failing = false;
-    const request = vi.fn(async (method: string) => {
-      if (failing && method === (disabled ? "cron.status" : "cron.list")) {
+    const request = inventoryRequest(() => {
+      if (failing) {
         throw new Error("temporarily unavailable");
       }
-      if (method === "cron.list") {
-        return page;
-      }
-      return method === "cron.status"
-        ? { enabled: !disabled, triggersEnabled: true, jobs: 1 }
-        : { ts: 1, providers: [] };
+      return cronPage("incident");
     });
     const harness = startAuthenticatedStore(request);
     store = harness.attention;
-    await settleRefresh();
-    expectLabels(...(disabled ? [] : ["overdue"]));
+    await waitForFast(() => expect(store?.hasFailedAutomation).toBe(true));
     failing = true;
-    harness.emitEvent("cron", {});
-    await settleRefresh();
-    expectLabels(...(disabled ? [] : ["overdue"]));
-    if (disabled) {
-      return;
-    }
-    harness.attention.dismiss({ kind: "cronOverdue", signature: "overdue@1" });
-    harness.emitEvent("cron", {});
-    await settleRefresh();
-    expect(dismissalState(harness)).toEqual({ cronOverdue: ["overdue@1"] });
-    failing = false;
-    harness.emitEvent("cron", {});
-    await settleRefresh();
-    expect(store?.entries).toEqual([]);
+    harness.emitEvent("cron.inventory.changed", {});
+    await waitForFast(() => expectCalls(request, 2));
+    expect(store.hasFailedAutomation).toBe(true);
   });
 
   it.each(["disconnect", "replace", "dispose"] as const)(
     "retires queued inventory and auth refreshes on %s",
     async (boundary) => {
       vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-      const gate = inventoryGate();
-      const { request, cronStatus } = gate;
+      const list = pending(cronPage());
+      const auth = pending(emptyAuth());
+      const request = respond({
+        "cron.list": () => list.promise,
+        "models.authStatus": () => auth.promise,
+      });
       const harness = gateway(request, true);
       store = createStore(harness.gateway);
       const publish = vi.fn();
       store.subscribe(publish);
       store.activate(SidebarAttentionStoreOwner);
-      harness.emitEvent("cron", {});
+      harness.emitEvent("cron.inventory.changed", {});
       document.dispatchEvent(new Event("visibilitychange"));
 
       if (boundary === "disconnect") {
         harness.update({ phase: "reconnecting" });
       } else if (boundary === "replace") {
         harness.update({
-          client: mockClient(inventoryRequest(() => cronPage("replacement"), cronStatus.jobs)),
+          client: mockClient(inventoryRequest(() => cronPage("replacement"))),
         });
-        await waitLabels("replacement");
+        await waitForFast(() => expect(store?.hasFailedAutomation).toBe(true));
       } else {
         store.dispose();
       }
       publish.mockClear();
-      gate.finish("retired");
+      list.resolve(cronPage("retired"));
+      auth.resolve(emptyAuth());
       await settleRefresh();
 
-      expectCalls(request, 1, ["cron.list", "cron.status", "models.authStatus"]);
+      expectCalls(request, 1, ["cron.list", "models.authStatus"]);
       expect(publish).not.toHaveBeenCalled();
     },
   );
@@ -741,7 +935,6 @@ describe("sidebar attention source publication", () => {
       const request = respond({
         "mentions.list": () => result,
         "cron.list": () => ({ ...cronPage(), snapshotRevision: "lifecycle" }),
-        "cron.status": () => ({ enabled: true, triggersEnabled: true, jobs: 0 }),
         "models.authStatus": () => emptyAuth(),
       });
       const harness = gateway(request);
@@ -787,8 +980,7 @@ describe("sidebar attention source publication", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
     const request = respond({
       "cron.list": () => cronPage("failed-job"),
-      "cron.status": () => ({ enabled: true, jobs: 1 }),
-      "models.authStatus": () => emptyAuth(),
+      "models.authStatus": () => missingAuth(1),
     });
     const client = mockClient(request);
     Object.defineProperties(client, {
@@ -831,8 +1023,7 @@ describe("sidebar attention source publication", () => {
     expect(store.entries.map((entry) => entry.type)).toEqual(["outbox", "attention"]);
     expect(sidebarInboxTabCounts(store.entries)).toMatchObject({
       all: 2,
-      system: 1,
-      automations: 1,
+      system: 2,
     });
     store.dismiss(dismissal!);
     expect(store.entries.map((entry) => entry.type)).toEqual(["attention"]);

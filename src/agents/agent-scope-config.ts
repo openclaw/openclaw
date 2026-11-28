@@ -77,7 +77,10 @@ export class AgentSelectionRequiredError extends Error {
 /** Per-agent config after applying agent defaults and normalizing scalar fields. */
 export type ResolvedAgentConfig = {
   name?: string;
+  description?: string;
+  recommendedPrompts?: AgentEntry["recommendedPrompts"];
   workspace?: string;
+  workspaceFileMode?: AgentEntry["workspaceFileMode"];
   agentDir?: string;
   model?: AgentEntry["model"];
   models?: AgentEntry["models"];
@@ -91,15 +94,18 @@ export type ResolvedAgentConfig = {
   toolProgressDetail?: AgentDefaultsConfig["toolProgressDetail"];
   reasoningDefault?: AgentEntry["reasoningDefault"];
   fastModeDefault?: AgentEntry["fastModeDefault"];
+  newSessionPermissionMode?: AgentEntry["newSessionPermissionMode"];
   contextInjection?: AgentEntry["contextInjection"];
   bootstrapMaxChars?: AgentEntry["bootstrapMaxChars"];
   bootstrapTotalMaxChars?: AgentEntry["bootstrapTotalMaxChars"];
+  sharedUserDir?: AgentEntry["sharedUserDir"];
   experimental?: AgentDefaultsConfig["experimental"];
   skills?: AgentEntry["skills"];
   memory?: AgentEntry["memory"];
   humanDelay?: AgentEntry["humanDelay"];
   typingMode?: AgentEntry["typingMode"];
   tts?: AgentEntry["tts"];
+  compaction?: AgentEntry["compaction"];
   contextLimits?: AgentContextLimitsConfig;
   heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
@@ -435,22 +441,37 @@ export function resolveMutableAgentEntry(
   return undefined;
 }
 
+/** Borrow the roster owner's prepared entry; mutable public callers keep clone-on-read. */
+export function readAgentConfigEntry(
+  cfg: OpenClawConfig,
+  agentId: string,
+): Readonly<AgentEntry> | undefined {
+  const id = normalizeAgentId(agentId);
+  const facts = readAgentRosterFacts(cfg);
+  const entry = facts
+    ? (facts.entryByNormalizedId ??= buildAgentEntryIndex(cfg)).get(id)?.entry
+    : resolveAgentEntry(cfg, id);
+  return (
+    entry ?? (!hasAgentRosterProperty(cfg) && id === LEGACY_IMPLICIT_AGENT_ID ? { id } : undefined)
+  );
+}
+
 /** Resolves merged config for one agent id. */
 export function resolveAgentConfig(
   cfg: OpenClawConfig,
   agentId: string,
 ): ResolvedAgentConfig | undefined {
-  const id = normalizeAgentId(agentId);
-  const entry: AgentEntry | undefined =
-    resolveAgentEntry(cfg, id) ??
-    (!hasAgentRosterProperty(cfg) && id === LEGACY_IMPLICIT_AGENT_ID ? { id } : undefined);
+  const entry = readAgentConfigEntry(cfg, agentId);
   if (!entry) {
     return undefined;
   }
   const agentDefaults = cfg.agents?.defaults;
   return {
     name: entry.name,
+    description: entry.description,
+    recommendedPrompts: entry.recommendedPrompts,
     workspace: entry.workspace,
+    workspaceFileMode: entry.workspaceFileMode ?? agentDefaults?.workspaceFileMode,
     agentDir: entry.agentDir,
     model: entry.model,
     ...(entry.models ? { models: entry.models } : {}),
@@ -464,9 +485,11 @@ export function resolveAgentConfig(
     toolProgressDetail: entry.toolProgressDetail ?? agentDefaults?.toolProgressDetail,
     reasoningDefault: entry.reasoningDefault,
     fastModeDefault: entry.fastModeDefault ?? agentDefaults?.fastModeDefault,
+    newSessionPermissionMode: entry.newSessionPermissionMode,
     contextInjection: entry.contextInjection,
     bootstrapMaxChars: entry.bootstrapMaxChars,
     bootstrapTotalMaxChars: entry.bootstrapTotalMaxChars,
+    sharedUserDir: entry.sharedUserDir,
     experimental: entry.experimental
       ? { ...agentDefaults?.experimental, ...entry.experimental }
       : agentDefaults?.experimental,
@@ -475,6 +498,7 @@ export function resolveAgentConfig(
     humanDelay: entry.humanDelay,
     typingMode: entry.typingMode ?? agentDefaults?.typingMode,
     tts: entry.tts,
+    ...(entry.compaction ? { compaction: entry.compaction } : {}),
     contextLimits: entry.contextLimits
       ? { ...agentDefaults?.contextLimits, ...entry.contextLimits }
       : agentDefaults?.contextLimits,
@@ -510,7 +534,7 @@ export function resolveAgentWorkspaceDir(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const id = normalizeAgentId(agentId);
-  const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
+  const configured = readAgentConfigEntry(cfg, id)?.workspace?.trim();
   if (configured) {
     return stripNullBytes(resolveUserPath(configured, env));
   }
@@ -569,7 +593,7 @@ export function resolveAgentWorkspaceProvisioning(
   },
 ): AgentWorkspaceProvisioning {
   const id = normalizeAgentId(agentId);
-  const entry = resolveAgentConfig(cfg, id);
+  const entry = readAgentConfigEntry(cfg, id);
   if (entry?.runtime?.type !== "acp") {
     return "standard";
   }
@@ -601,7 +625,7 @@ export function resolveAgentWorkspaceProvisioning(
  * (configured binding resolution) stay off embedded/default agent turns.
  */
 export function isImplicitAcpWorkspaceCandidate(cfg: OpenClawConfig, agentId: string): boolean {
-  const entry = resolveAgentConfig(cfg, normalizeAgentId(agentId));
+  const entry = readAgentConfigEntry(cfg, normalizeAgentId(agentId));
   return entry?.runtime?.type === "acp" && !entry.workspace?.trim();
 }
 
@@ -626,7 +650,7 @@ export function resolveEffectiveAgentDir(
   deps?: AgentDirResolutionEnv,
 ): string {
   const id = normalizeAgentId(agentId);
-  const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();
+  const configured = readAgentConfigEntry(cfg, id)?.agentDir?.trim();
   const env = deps?.env ?? process.env;
   return configured
     ? resolveUserPath(configured, env, deps?.homedir)

@@ -2,6 +2,7 @@ import type {
   ProjectRecord,
   ProjectRecent,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { foldSearchCase } from "../../../../src/shared/search-case.js";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
@@ -40,19 +41,24 @@ export function resolveProjectChip(params: {
 }> {
   const folder = params.folder.trim();
   const selectedProject = params.projects.find((project) => project.id === params.projectId);
-  const normalizedQuery = params.projectQuery.trim().toLowerCase();
+  const normalizedQuery = foldSearchCase(params.projectQuery.trim()).normalize("NFC");
+  // Recent holds five rows; the workspace row takes one when present.
+  const recentLimit = params.workspace ? 4 : 5;
   return {
     label: params.freshWorkspace
       ? t("newSession.newWorkspace")
       : selectedProject
-        ? selectedProject.displayName
+        ? (selectedProject.repositoryIdentity ?? selectedProject.displayName)
         : params.selectedRemoteProject?.identity
           ? params.selectedRemoteProject.identity
           : folder
             ? pathDisplayName(folder)
             : pathDisplayName(params.workspace) || t("newSession.folderPlaceholder"),
-    recents: normalizedQuery ? [] : params.recents.filter((recent) => recent.kind !== "project"),
+    recents: normalizedQuery
+      ? []
+      : params.recents.filter((recent) => recent.kind !== "project").slice(0, recentLimit),
     showWorkspace:
-      !normalizedQuery || pathDisplayName(params.workspace).toLowerCase().includes(normalizedQuery),
+      !normalizedQuery ||
+      foldSearchCase(pathDisplayName(params.workspace)).normalize("NFC").includes(normalizedQuery),
   };
 }

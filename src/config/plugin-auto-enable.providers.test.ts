@@ -1,5 +1,5 @@
 import { afterAll, expect, it } from "vitest";
-import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
+import { applyPluginAutoEnable, detectPluginAutoEnableCandidates } from "./plugin-auto-enable.js";
 import {
   makeIsolatedEnv,
   makeRegistry,
@@ -62,6 +62,71 @@ it.each<OpenClawConfig>([
   { models: { providers: { google: { baseUrl: "https://example.test", models: [] } } } },
 ])("auto-enables Google from auth or provider config: %j", (config) => {
   expectEnabled(restricted(config), "google");
+});
+
+it("reads configured models once across provider claims and skips auth profiles without claims", () => {
+  let modelReads = 0;
+  let profileReads = 0;
+  const config: OpenClawConfig = {
+    plugins: { allow: ["primary"], entries: { primary: { enabled: true } } },
+    agents: {
+      defaults: {
+        get utilityModel() {
+          modelReads++;
+          return { primary: "mixed/first", fallbacks: ["mixed/second"] };
+        },
+      },
+    },
+    auth: {
+      profiles: {
+        fixture: {
+          get provider() {
+            profileReads++;
+            return " PROFILE ";
+          },
+          mode: "api_key",
+        },
+      },
+    },
+    models: { providers: { " CONFIG ": { baseUrl: "https://example.test", models: [] } } },
+  };
+  let toolDeclarationReads = 0;
+  const primary = {
+    id: "primary",
+    channels: [],
+    providers: ["mixed"],
+    contracts: {
+      get tools() {
+        toolDeclarationReads++;
+        return ["sample-tool"];
+      },
+    },
+  };
+  const detect = (plugins: ManifestPlugin[]) =>
+    detectPluginAutoEnableCandidates({ config, env, manifestRegistry: makeRegistry(plugins) });
+  const modelCandidate = {
+    pluginId: "primary",
+    kind: "provider-model-configured",
+    modelRef: "mixed/first",
+  };
+  expect(detect([primary])).toEqual([modelCandidate]);
+  expect(modelReads).toBe(1);
+  expect(profileReads).toBe(0);
+
+  expect(
+    detect([
+      { ...primary, autoEnableWhenConfiguredProviders: ["absent", "MiXeD", "profile", "config"] },
+      { id: "other", channels: [], autoEnableWhenConfiguredProviders: ["MiXeD"] },
+    ]),
+  ).toEqual([
+    { pluginId: "primary", kind: "provider-auth-configured", providerId: "MiXeD" },
+    { pluginId: "primary", kind: "provider-auth-configured", providerId: "profile" },
+    { pluginId: "primary", kind: "provider-auth-configured", providerId: "config" },
+    modelCandidate,
+  ]);
+  expect(modelReads).toBe(2);
+  expect(profileReads).toBe(1);
+  expect(toolDeclarationReads).toBe(0);
 });
 
 it("auto-enables selected web search provider plugins under restrictive allowlists", () => {

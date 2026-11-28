@@ -6,6 +6,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { captureAgentWorkspaceReadiness } from "../agents/workspace-readiness.js";
 import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveEnvironmentKey } from "../shared/environment-key.js";
 import {
   getLoadedRuntimePluginRegistry,
   createRuntimePluginManifestLookup,
@@ -37,10 +38,7 @@ import {
   type PluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
-import {
-  createPluginToolFactoryContext,
-  type PluginToolOwnerContinuation,
-} from "./tool-factory-context.js";
+import { createPluginToolFactoryContext } from "./tool-factory-context.js";
 import {
   bindPluginToolCallbacks,
   createPluginToolFactoryResolver,
@@ -87,7 +85,7 @@ function resolvePluginToolLoadState(params: {
   toolAllowlist?: string[];
   toolDenylist?: string[];
   allowGatewaySubagentBinding?: boolean;
-  hasAuthForProvider?: (providerId: string) => boolean;
+  hasAuthForProvider?: OpenClawPluginToolContext["hasAuthForProvider"];
   env?: NodeJS.ProcessEnv;
   preparedRuntime?: PreparedPluginToolRuntime;
 }) {
@@ -96,7 +94,8 @@ function resolvePluginToolLoadState(params: {
   const preparedLoadContext = params.preparedRuntime?.loadContext;
   // The prepared runtime already owns one immutable Gateway plugin generation. Per-turn config
   // and workspace projections cannot invalidate that executable graph or reopen discovery.
-  const usePreparedRuntime = preparedLoadContext !== undefined && env === preparedLoadContext.env;
+  const usePreparedRuntime =
+    preparedLoadContext && resolveEnvironmentKey(params.env) === preparedLoadContext.environmentKey;
   const context = usePreparedRuntime
     ? preparedLoadContext
     : resolvePluginRuntimeLoadContext({
@@ -196,7 +195,6 @@ type PluginToolResolutionParams = {
   context: OpenClawPluginToolContext;
   /** Host-owned turn fence for factories and retained tool callbacks. */
   assertInvocationCurrent?: () => void;
-  ownerContinuation?: PluginToolOwnerContinuation;
   bindExecutionCapabilities?: Parameters<
     typeof createPluginToolFactoryContext
   >[0]["bindExecutionCapabilities"];
@@ -206,7 +204,7 @@ type PluginToolResolutionParams = {
   toolDenylist?: string[];
   suppressNameConflicts?: boolean;
   allowGatewaySubagentBinding?: boolean;
-  hasAuthForProvider?: (providerId: string) => boolean;
+  hasAuthForProvider?: OpenClawPluginToolContext["hasAuthForProvider"];
   env?: NodeJS.ProcessEnv;
   runtimeRegistry?: PluginRegistry;
   preparedRuntime?: PreparedPluginToolRuntime;
@@ -375,7 +373,7 @@ export type PluginToolRegistryAcquisition = {
 
 /** The serving owner retains this view before invoking factories or applying tool policy. */
 export async function acquireStandalonePluginToolRegistry(
-  params: Omit<PluginToolResolutionParams, "runtimeRegistry" | "preparedRuntime">,
+  params: Omit<PluginToolResolutionParams, "runtimeRegistry">,
 ): Promise<PluginToolRegistryAcquisition> {
   const loadState = resolvePluginToolLoadState(params);
   if (!loadState || loadState.onlyPluginIds.length === 0) {
@@ -393,7 +391,14 @@ export async function acquireStandalonePluginToolRegistry(
       }
       return resolvePluginToolsSynchronously(
         resolvePluginToolsFromRegistry(
-          { ...params, runtimeRegistry: acquisition.registry },
+          {
+            ...params,
+            preparedRuntime: {
+              loadContext: loadState.context,
+              metadataSnapshot: loadState.snapshot,
+              registry: acquisition.registry,
+            },
+          },
           loadState,
         ),
       );
@@ -447,10 +452,7 @@ function* resolvePluginToolsFromRegistry(
   inspection?.assertCurrent();
   // A supplied generation keeps its covered owners even when another plugin must
   // load. Registry caching owns reuse; every assembly calls current-context factories.
-  const toolOwners = new Map<
-    string,
-    { registry: PluginRegistry; tools: PluginToolRegistration[] }
-  >();
+  const owners = new Map<string, { registry: PluginRegistry; tools: PluginToolRegistration[] }>();
   const runtimeFacts = runtimeRegistry
     ? preparePluginToolRegistry(runtimeRegistry, snapshot)
     : undefined;
@@ -462,7 +464,7 @@ function* resolvePluginToolsFromRegistry(
       instance &&
       (instance.toolRegistrationComplete || runtimeFacts?.registrations.has(pluginId))
     ) {
-      toolOwners.set(pluginId, {
+      owners.set(pluginId, {
         registry: runtimeRegistry,
         tools: runtimeFacts?.registrations.get(pluginId) ?? [],
       });
@@ -474,7 +476,7 @@ function* resolvePluginToolsFromRegistry(
   // Failed registrations are settled facts of this inspection, not new cold-load requests.
   const missingPluginIds = onlyPluginIds.filter(
     (pluginId) =>
-      !toolOwners.has(pluginId) &&
+      !owners.has(pluginId) &&
       !settledPreparedOutcomes?.has(pluginId) &&
       !samePluginToolSource(inspection?.manifests.get(pluginId), snapshot.byPluginId.get(pluginId)),
   );
@@ -485,7 +487,7 @@ function* resolvePluginToolsFromRegistry(
     });
     const registrations = preparePluginToolRegistry(registry, snapshot).registrations;
     for (const pluginId of missingPluginIds) {
-      toolOwners.set(pluginId, { registry, tools: registrations.get(pluginId) ?? [] });
+      owners.set(pluginId, { registry, tools: registrations.get(pluginId) ?? [] });
     }
   }
   const blockedPlugins = new Set<string>();
@@ -494,11 +496,11 @@ function* resolvePluginToolsFromRegistry(
   // Loader manifest order owns duplicate precedence, independent of retained instances.
   const orderedManifests = loadState.loadOptions.manifestRegistry?.plugins ?? snapshot.plugins;
   for (const { id: pluginId } of orderedManifests) {
-    const owner = toolOwners.get(pluginId);
+    const owner = owners.get(pluginId);
     if (!owner) {
       continue;
     }
-    toolOwners.delete(pluginId);
+    owners.delete(pluginId);
     const { registry, tools: registrations } = owner;
     let trustedLocalMediaNames: Set<string> | undefined;
     const reportError = (entry: PluginToolRegistration, message: string) => {
@@ -583,7 +585,6 @@ function* resolvePluginToolsFromRegistry(
         registry: owner.registry,
         context: params.context,
         assertInvocationCurrent: params.assertInvocationCurrent,
-        ownerContinuation: params.ownerContinuation,
         bindExecutionCapabilities: params.bindExecutionCapabilities,
       });
       // Catalog discovery may construct tools without an admitted run; their V2 execution stays fenced.

@@ -3,10 +3,11 @@ import { Show, createUniqueId, onSettled } from "solid-js";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import "../../../components/tooltip.ts";
 import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
+import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import type { FileCopyFeedback } from "./chat-file-copy.ts";
@@ -17,7 +18,7 @@ import type { MobileFileBack } from "./chat-sidebar-content-types.ts";
 
 registerEnglishCatalog(registerChatMediaEnglish);
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 registerCodeBlocksEnglish();
 registerFilePreviewEnglish();
@@ -280,6 +281,9 @@ export function SidebarFileMobileTextControls(props: {
                 placeholder={t("common.search")}
                 ref={(element) => props.controls.searchInputRef?.(element)}
                 value={props.controls.query}
+                onBlur={clearCompositionEnd}
+                onCompositionEnd={recordCompositionEnd}
+                onKeyUp={clearCompositionEnd}
                 onInput={(event) => props.controls.onSearchInput(event.currentTarget.value)}
                 onKeyDown={(event) => {
                   if (event.key !== "Escape") {

@@ -25,13 +25,18 @@ plugins and connected apps remain available under the configured policy; owners 
 still browse and install plugins with `/codex plugins available` and
 `/codex plugins install <plugin>@<marketplace>`.
 
+Settled plugin metadata is cached in memory for up to one hour, measured by
+elapsed time rather than the host's wall clock. A clock correction does not
+force an early refresh or extend freshness. Runtime and marketplace scopes,
+explicit invalidation, and failed-catalog handling remain unchanged.
+
 ## Requirements
 
 - The agent runtime must be the native Codex harness.
 - `plugins.entries.codex.enabled` is `true`.
 - `plugins.entries.codex.config.codexPlugins.enabled` is `true`.
 - Codex app-server reports `0.149.0` or newer. The official plugin ships
-  `@openai/codex` `0.160.1` and may select a newer installed Codex; newer
+  `@openai/codex` `0.172.0` and may select a newer installed Codex; newer
   custom, remote, and macOS desktop-owned binaries continue with a
   compatibility warning and normal runtime validation.
 - The target Codex app-server can see the expected marketplace, plugin, and
@@ -49,6 +54,14 @@ still browse and install plugins with `/codex plugins available` and
 - OpenClaw excludes the `visualize@openai-bundled` skill from Codex threads.
   That skill emits Codex-specific inline visualization directives, while
   OpenClaw visualizations use the `show_widget` tool on supported surfaces.
+
+New OpenAI models can require a newer Codex version than your OpenClaw release
+bundles. The reporter-supplied minimum for GPT-6.2 is Codex `0.166.0`,
+which the current `0.172.0` bundle exceeds. For the evidence limits and
+upgrades between OpenClaw releases, see
+[Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
+With a ChatGPT/Codex login, select the **Codex** runtime for your session.
+Installing Codex alone does not fix automatic routing or grant model access.
 
 `codexPlugins` has no effect on OpenClaw-provider runs, ACP conversation
 bindings, or other harnesses, because those paths never create Codex
@@ -471,6 +484,17 @@ combined inventory in memory for one hour and refreshes stale or missing
 entries asynchronously. The cache is process-local; restarting the CLI or
 gateway drops it.
 
+When a configured plugin's app remains missing or inaccessible, readiness repair
+reuses a successful forced refresh for up to one minute within the same account,
+thread, and covered app set. The next turn after that interval can retry, so an
+unavailable connector does not force hosted discovery on every message or stay
+excluded indefinitely. Initial cold-runtime repair, installation, explicit cache
+invalidation, and `/codex plugins refresh` still refresh immediately. Native app
+policy checks continue on enabled-policy turns; reusing inventory grants no access.
+Runtime refresh invalidates cached thread readiness for that account/runtime too,
+so the next message can reconsider a newly connected app without waiting for the
+minute to elapse. Other accounts and runtimes retain their own cached readiness.
+
 Missing inventory methods, authentication errors, transport failures, and
 connector refresh failures do not admit app tools. Ordinary turns, including
 those using `allow_destructive_actions: "ask"`, can continue with native apps
@@ -709,13 +733,14 @@ Destructive plugin elicitations are allowed by default for configured Codex
 plugins, while unsafe schemas and ambiguous ownership are rejected:
 
 Set `read_only: true` on a configured plugin entry to limit its connected apps
-to tools explicitly marked read-only by `app/read`. Missing tool metadata and
-disabled tools fail closed. OpenClaw projects this restriction into native Codex
-tool permissions, including on thread recovery and side questions; an old saved
-tool grant cannot enable a write. All eligible read tools are available. This
-does not restrict individual actions within a tool or configure unrelated
-`mcp_servers` entries. If multiple enabled plugins own the same app, a read-only
-restriction from any owner remains in force. The default is `false`.
+to enabled actions that both `app/read` and the hosted MCP server mark read-only.
+OpenClaw binds each grant to the exact MCP tool name for that app and action.
+Missing or inconsistent metadata leaves the tool disabled. Thread recovery and
+side questions recheck the grants against the current inventory. The setting
+applies to whole tools within the plugin's connected apps. Separate MCP servers
+have their own `mcp_servers` configuration. If multiple enabled plugins own the
+same app, a read-only restriction from any owner remains in force. The default is
+`false`.
 
 - Global `allow_destructive_actions` defaults to `true`.
 - Per-plugin `allow_destructive_actions` overrides the global policy for

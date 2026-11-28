@@ -5,6 +5,7 @@ export async function runGatewayHealthJsonRoute(
   args: {
     rpc: Parameters<typeof import("../gateway-rpc.js").callGatewayFromCliWithTransport>[1];
     localPortOverride?: number;
+    signal?: AbortSignal;
   },
   runtime: RuntimeEnv,
 ): Promise<void> {
@@ -27,14 +28,18 @@ export async function runGatewayHealthJsonRoute(
   }
   try {
     const { callGatewayFromCliWithTransport } = await import("../gateway-rpc.js");
-    writeRuntimeJson(
-      runtime,
-      await callGatewayFromCliWithTransport("health", rpc, undefined, {
-        defaultTimeoutMs: 10_000,
-        sharedStateMode: "read-only",
-      }),
-    );
+    const result = await callGatewayFromCliWithTransport("health", rpc, undefined, {
+      defaultTimeoutMs: 10_000,
+      sharedStateMode: "read-only",
+      signal: args.signal,
+    });
+    if (!args.signal?.aborted) {
+      writeRuntimeJson(runtime, result);
+    }
   } catch (error) {
+    if (args.signal?.aborted) {
+      return;
+    }
     const {
       emitReachableGatewayAuthDiagnostic,
       emitGatewayHealthErrorJson,
@@ -49,6 +54,7 @@ export async function runGatewayHealthJsonRoute(
       password: rpc.password,
       localPortOverride: rpc.localPortOverride,
       json: true,
+      signal: args.signal,
     });
     if (handled) {
       return;

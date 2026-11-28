@@ -16,10 +16,7 @@ import {
   encodeWindowsLauncherScript,
   readScheduledTaskCommand as readCommand,
 } from "./schtasks-layout.js";
-import {
-  resolveScheduledTaskOwnedGatewayPids,
-  terminateScheduledTaskGatewayListeners,
-} from "./schtasks-process.js";
+import { terminateScheduledTaskGatewayListeners } from "./schtasks-process.js";
 import { startStartupEntry } from "./schtasks-runtime.js";
 
 type ChildEnvironment = { pid: number; value?: string; control?: string };
@@ -61,6 +58,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 describe.skipIf(process.platform !== "win32")("Windows launcher redirection ownership", () => {
   it.each([
     ["a >b & c", true],
+    ["C:\\Program Files\\OpenClaw\\", true],
     ["quoted expansion", true, "", '"%CD%\\gateway output.log"'],
     ['a "q" >b', false],
     ["comma target", false, ",extra"],
@@ -125,12 +123,14 @@ server.listen(port, "127.0.0.1", () => {
         String(port),
         "--msg",
         message,
+        "SENTINEL-NEXT",
       ];
       const content =
         buildTaskScript({
           programArguments,
           workingDirectory: dir,
           environment: {
+            OPENCLAW_STATE_DIR: path.join(dir, ".openclaw"),
             OPENCLAW_TEST_LAUNCHER_VALUE: "retained",
             OPENCLAW_TEST_LOG_PATH: "gateway.log output.log",
             NODE_OPTIONS: "",
@@ -138,7 +138,7 @@ server.listen(port, "127.0.0.1", () => {
         }).trimEnd() + ` >> ${redirectTarget} 2>&1\r\n`;
       const originalBytes = encodeCmd(content);
       await fs.writeFile(scriptPath, originalBytes);
-      const env = { OPENCLAW_TASK_SCRIPT: scriptPath };
+      const env = { OPENCLAW_TASK_SCRIPT: scriptPath, HOME: dir, USERPROFILE: dir };
       const launch = (): LaunchedChild => {
         const child = spawn(
           getWindowsCmdExePath(),
@@ -188,19 +188,6 @@ server.listen(port, "127.0.0.1", () => {
       expect(installed?.environment?.OPENCLAW_TEST_LAUNCHER_VALUE).toBe("retained");
       if (normalized) {
         expect(installed?.programArguments).toEqual(programArguments);
-        await expect(resolveScheduledTaskOwnedGatewayPids(env, { port })).resolves.toEqual([
-          observed.pid,
-        ]);
-        await expect(
-          resolveScheduledTaskOwnedGatewayPids(
-            env,
-            { port },
-            {
-              ...expectDefined(installed, "installed launcher"),
-              programArguments: [...programArguments, "--foreign"],
-            },
-          ),
-        ).resolves.toEqual([]);
       } else {
         // Ambiguous quoting and filename delimiters must not manufacture a
         // shortened installed command that could authorize another process.
@@ -212,7 +199,10 @@ server.listen(port, "127.0.0.1", () => {
           extraArgument ? redirectTarget : outputPath,
           "2>&1",
         ]);
-        await expect(resolveScheduledTaskOwnedGatewayPids(env, { port })).resolves.toEqual([]);
+        await expect(
+          terminateScheduledTaskGatewayListeners(env, { port, probeHosts: ["127.0.0.1"] }),
+        ).resolves.toEqual([]);
+        expect(() => process.kill(observed.pid, 0)).not.toThrow();
       }
       expect(await fs.readFile(scriptPath)).toEqual(originalBytes);
       if (normalized) {

@@ -5,7 +5,7 @@ import {
 import type { RegisteredStateReadCommand } from "../../state/openclaw-state-read-operation-registry.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
-import { registryAuthorityChanged } from "./errors.js";
+import { registryAuthorityChanged, WorktreeRecordNotFoundError } from "./errors.js";
 import type { WorktreeRegistryListOptions } from "./registry-read.kernel.js";
 import {
   captureWorktreeRegistryAuthority,
@@ -37,7 +37,7 @@ export async function readWorktreeRegistryCommand<
   const reply = await executeExistingOpenClawStateRead<Command>(
     { env: context.environment, path: context.admission.databasePath },
     command,
-    { context, current: true, signal },
+    { context, current: true, signal, preferIndependentWarmRead: true },
   );
   context.admission.assertCurrent();
   return reply;
@@ -260,7 +260,7 @@ export function requireActiveWorktreeRecord(
   record: ManagedWorktreeRecord | undefined,
 ): ManagedWorktreeRecord {
   if (!record || record.removedAt !== undefined) {
-    throw new Error(`unknown active worktree: ${id}`);
+    throw new WorktreeRecordNotFoundError(`unknown active worktree: ${id}`);
   }
   return record;
 }
@@ -271,7 +271,7 @@ export async function readRegistryWorktrees(
   context: OpenClawStateWorkerContext = captureWorktreeRunEndContext(env),
 ): Promise<ManagedWorktreeRecord[]> {
   return (
-    (await readWorktreeRegistryCommand(context, { type: "worktrees.list", input: options }))
+    (await readWorktreeRegistryCommand(context, { type: "worktrees.list", input: { ...options } }))
       ?.value ?? []
   );
 }
@@ -315,7 +315,7 @@ export async function getRegistryWorktreeProvisionedChunk(
   return (
     await readWorktreeRegistryCommand(captureWorktreeRunEndContext(env), {
       type: "worktrees.provisionedChunk",
-      input: params,
+      input: { ...params },
     })
   )?.value;
 }

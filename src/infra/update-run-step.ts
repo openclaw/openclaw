@@ -11,6 +11,13 @@ import type { UpdateStepResult } from "./update-step-result.js";
 
 type ResultStep = Omit<UpdateStepResult, "command" | "cwd" | "durationMs" | "recoverySteps">;
 
+function diagnosticStepKey(kind: string, name: string, index: number): string {
+  return truncateUtf16Safe(
+    `${kind}:${name}${index === 0 ? "" : `:${index + 1}`}`,
+    UPDATE_RUN_TEXT_LIMIT,
+  );
+}
+
 /** Preserve the failed outcome without attaching command or working-directory metadata. */
 export function createUpdateStepFailureError(step: ResultStep): Error {
   return new Error(summarizeUpdateStepFailure(step), {
@@ -92,11 +99,9 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
           : null,
       }
     : undefined;
-  const warnings = step.warnings?.length
-    ? step.warnings
-    : step.advisory
-      ? [step.advisory.message]
-      : [];
+  // An explicit empty list records settled warnings without regrading the
+  // original advisory exit as a failure or recreating its warning from display text.
+  const warnings = step.warnings ?? (step.advisory ? [step.advisory.message] : []);
   return [
     {
       step: text(step.name),
@@ -134,7 +139,7 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
       { kind: "diagnostic", messages: step.diagnostics ?? [] },
     ].flatMap(({ kind, messages }) =>
       messages.slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT).map((detail, index) => ({
-        step: text(`${kind}:${step.name}${index === 0 ? "" : `:${index + 1}`}`),
+        step: diagnosticStepKey(kind, step.name, index),
         status: "completed" as const,
         detail: text(detail),
       })),
@@ -154,33 +159,45 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
   ];
 }
 
-/** Add late advisory diagnostics to captured output without reopening or regrading history. */
-export function projectUpdateRunResultSteps(
-  record: UpdateRunRecord,
+/** Project current warnings and late diagnostics without reopening or regrading history. */
+export function projectUpdateRunResultSteps<T extends Pick<UpdateRunRecord, "steps">>(
+  record: T,
   additionalSteps: readonly UpdateStepResult[],
-): UpdateRunRecord {
+): T {
   if (additionalSteps.length === 0) {
     return record;
   }
+  const steps = new Map(record.steps.map((step) => [step.step, step]));
+  for (const step of additionalSteps) {
+    if (step.warnings !== undefined) {
+      // Explicit warnings replace the owner's previous list, including settlement.
+      // Match generated keys exactly; a prefix can include another step's warnings.
+      for (let index = 0; index < UPDATE_RUN_DIAGNOSTIC_LIMIT; index++) {
+        steps.delete(diagnosticStepKey("warning", step.name, index));
+      }
+    }
+    for (const projected of updateRunStepsFromResultStep(step)) {
+      steps.set(projected.step, projected);
+    }
+  }
   return {
     ...record,
-    steps: [
-      ...new Map(
-        [...record.steps, ...additionalSteps.flatMap(updateRunStepsFromResultStep)].map((step) => [
-          step.step,
-          step,
-        ]),
-      ).values(),
-    ],
+    steps: [...steps.values()],
   };
 }
 
 export function updateRunWarningMessages(steps: readonly UpdateRunStep[]): string[] {
+  // Earlier updates stored a completed retirement as a warning as well as a
+  // normal completion receipt. Treat the durable receipt as settled on read.
+  const modelRetirementCompleted = steps.some(
+    (step) => step.step === "finalize:doctor:model-retirement" && step.status === "completed",
+  );
   return [
     ...new Set(
       steps.flatMap((step) =>
         (step.step === "reconcile:settle" ||
           (step.status === "completed" && step.step.startsWith("warning:"))) &&
+        !(modelRetirementCompleted && step.step === "warning:finalize:doctor:model-retirement") &&
         step.detail
           ? [step.detail]
           : [],

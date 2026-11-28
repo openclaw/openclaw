@@ -1,4 +1,5 @@
 import { note } from "../../packages/terminal-core/src/note.js";
+import type { DoctorMaintenancePending } from "../commands/doctor-maintenance-pending.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -42,15 +43,33 @@ export async function writeDoctorGatewayConfig(
   }
 }
 
+/**
+ * Read-only. Under Gateway maintenance only the stray launchd job removal runs here; the
+ * managed service is repaired when Doctor restores it.
+ */
+export async function checkGatewayServicesRepairPending(
+  ctx: DoctorHealthFlowContext,
+): Promise<DoctorMaintenancePending> {
+  if (!ctx.gatewayMaintenanceActive) {
+    return "work";
+  }
+  const { checkMacForeignLaunchdJobRepairPending } =
+    await import("../commands/doctor-foreign-launchd-jobs.js");
+  return checkMacForeignLaunchdJobRepairPending(ctx.options, ctx.env ?? process.env);
+}
+
 export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   // Stray jobs can disrupt admitted maintenance; managed-service repair stays below the fence.
   const { noteMacForeignLaunchdJobs } = await import("../commands/doctor-foreign-launchd-jobs.js");
   await noteMacForeignLaunchdJobs(ctx.options, ctx.runtime, ctx.env ?? process.env);
-  if (ctx.gatewayMaintenanceActive) {
-    return;
-  }
   if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
     note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
+    return;
+  }
+  const { noteMacGatewayPlatformWarnings } = await import("../commands/doctor-platform-notes.js");
+  // Maintenance pins the launcher fingerprint; inspection here must remain read-only.
+  await noteMacGatewayPlatformWarnings(ctx.cfg, undefined, ctx.env ?? process.env);
+  if (ctx.gatewayMaintenanceActive) {
     return;
   }
   const { maybeRepairNodeServiceConfig } = await import("../commands/doctor-node-services.js");
@@ -63,7 +82,6 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
     maybeResolveDuelingSystemdGatewayScopes,
     maybeScanExtraGatewayServices,
   } = await import("../commands/doctor-gateway-services.js");
-  const { noteMacGatewayPlatformWarnings } = await import("../commands/doctor-platform-notes.js");
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
   await maybeResolveDuelingSystemdGatewayScopes(ctx.runtime, ctx.prompter);
   ctx.cfg = await maybeRepairGatewayServiceConfig(
@@ -77,7 +95,6 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
       writeConfig: (nextConfig) => writeDoctorGatewayConfig(ctx, nextConfig),
     },
   );
-  await noteMacGatewayPlatformWarnings(ctx.cfg);
 }
 
 export async function runHostDesktopHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -183,6 +200,11 @@ export async function runDevicePairingHealth(ctx: DoctorHealthFlowContext): Prom
   );
 }
 
+/** Under Gateway maintenance the daemon is repaired when Doctor restores the service. */
+export function repairsGatewayDaemon(ctx: DoctorHealthFlowContext): boolean {
+  return isDefaultInstallIdentity(ctx.env ?? process.env) && ctx.gatewayMaintenanceActive !== true;
+}
+
 export async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
     return;
@@ -192,7 +214,7 @@ export async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Prom
       await import("../commands/doctor-platform-notes.js");
     await noteMacDisabledGatewayLaunchAgent(ctx.env ?? process.env);
   }
-  if (ctx.gatewayMaintenanceActive) {
+  if (!repairsGatewayDaemon(ctx)) {
     return;
   }
   const { maybeRepairGatewayDaemon } = await import("../commands/doctor-gateway-daemon-flow.js");

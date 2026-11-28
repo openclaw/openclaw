@@ -1,6 +1,6 @@
 package ai.openclaw.app.chat
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.RpcResult
 import ai.openclaw.app.voice.LocalSpeechSpeaking
 import ai.openclaw.app.voice.TalkAudioPlaying
 import ai.openclaw.app.voice.TalkSpeakAudio
@@ -78,7 +78,7 @@ class MessageSpeechControllerTest {
             method = requestMethod
             params = requestParams
             timeoutMs = requestTimeoutMs
-            GatewaySession.RpcResult(
+            RpcResult(
               ok = true,
               payloadJson =
                 """{"audioBase64":"AQID","provider":"openai","outputFormat":"mp3","mimeType":"audio/mpeg","fileExtension":".mp3"}""",

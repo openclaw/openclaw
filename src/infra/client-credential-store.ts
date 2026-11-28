@@ -3,6 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { inspectDarwinAcl } from "@openclaw/fs-safe/permissions";
 import { resolveStateDir } from "../config/paths.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { openRootFileSync } from "./boundary-file-read.js";
 import {
@@ -21,7 +22,11 @@ import {
   CLIENT_CREDENTIAL_SCHEMA_VERSION,
 } from "./client-credential-schema.js";
 import { hasErrnoCode } from "./errno.js";
-import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import {
+  openNodeSqliteDatabase,
+  resolveExistingSqliteFileUri,
+  resolveReadOnlyShmSqliteFileUri,
+} from "./node-sqlite.js";
 import { preparePrivateStoreFileSync } from "./private-store-file.js";
 import {
   publishSqliteDatabaseAdmission,
@@ -29,11 +34,18 @@ import {
 } from "./sqlite-database-admission.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
-import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import {
+  runSqliteDeferredTransactionSync,
+  runSqliteImmediateTransactionSync,
+} from "./sqlite-transaction.js";
 import { readSqliteUserVersion, writeSqliteUserVersion } from "./sqlite-user-version.js";
 import { readDatabaseIdentityBirthtime, resolveDatabasePathKey } from "./sqlite-worker-identity.js";
-import { runUpdateSqliteMigration } from "./update-doctor-migration-attribution.js";
+import {
+  runUpdateSqliteMigration,
+  runUpdateSqliteMigrationAsync,
+} from "./update-doctor-migration-context.js";
 export type {
   ClientTokenRecord,
   ClientSocketRecord,
@@ -73,6 +85,50 @@ function assertPrivateAcl(pathname: string): void {
   }
 }
 
+/**
+ * Read-only: whether opening the existing store for migration custody would refuse it (an
+ * unsafe directory or file, a missing store, a wrong journal mode, schema or version, or
+ * failed integrity), the checks the custody below runs before admitting it. When it would
+ * admit, `inspect` decides from the same committed rows. Opens the file read-only and never
+ * creates, locks for writing or changes it.
+ */
+export function hasClientCredentialStoreMigrationWork(
+  env: NodeJS.ProcessEnv,
+  inspect: (database: DatabaseSync) => boolean,
+): boolean {
+  const pathname = resolveClientCredentialStorePath(env);
+  const directory = path.dirname(pathname);
+  const unsafe = (stat: fs.Stats) =>
+    (process.getuid !== undefined && stat.uid !== process.getuid()) ||
+    (process.platform !== "win32" && (stat.mode & 0o077) !== 0);
+  const parent = fs.lstatSync(directory, { throwIfNoEntry: false });
+  const file = fs.lstatSync(pathname, { throwIfNoEntry: false });
+  if (!parent?.isDirectory() || unsafe(parent) || !file?.isFile() || unsafe(file)) {
+    return true;
+  }
+  try {
+    assertPrivateAcl(directory);
+    assertPrivateAcl(pathname);
+  } catch {
+    return true;
+  }
+  using database = openNodeSqliteDatabase(pathname, { readOnly: true });
+  if (
+    // sqlite-allow-raw -- Read native journal policy, as custody admission does.
+    database.prepare("PRAGMA journal_mode").get()?.journal_mode !== "delete" ||
+    readSqliteUserVersion(database) !== CLIENT_CREDENTIAL_SCHEMA_VERSION
+  ) {
+    return true;
+  }
+  try {
+    assertSqliteSchemaContains(database, "Client credentials", CLIENT_CREDENTIAL_SCHEMA_SQL);
+    assertSqliteIntegrity(database, "Client credentials");
+  } catch {
+    return true;
+  }
+  return inspect(database);
+}
+
 export type ClientCredentialCustody = {
   database: DatabaseSync;
   path: string;
@@ -84,19 +140,87 @@ export type ClientCredentialCustody = {
   [Symbol.dispose](): void;
 };
 
+type CredentialAdmissionStep = {
+  database: DatabaseSync;
+  path: string;
+  created: boolean;
+  admit(this: void): void;
+};
+
 /** One admitted handle retains SQLite exclusion across individual commits. */
 export function openClientCredentialCustody(
+  ...args: Parameters<typeof openClientCredentialCustodySteps>
+): ClientCredentialCustody | undefined {
+  const operation = openClientCredentialCustodySteps(...args);
+  let step = operation.next();
+  while (!step.done) {
+    try {
+      step.value.admit();
+      step = operation.next();
+    } catch (error) {
+      step = operation.throw(error);
+    }
+  }
+  return step.value;
+}
+
+/** Doctor awaits generation admission before the same synchronous native transaction. */
+export async function openClientCredentialCustodyAsync(
+  ...args: Parameters<typeof openClientCredentialCustodySteps>
+): Promise<ClientCredentialCustody | undefined> {
+  resolveSqliteInspectionSignal(getAsyncWorkSignal())?.throwIfAborted();
+  const operation = openClientCredentialCustodySteps(...args);
+  let step = operation.next();
+  while (!step.done) {
+    try {
+      const admission = step.value;
+      await runUpdateSqliteMigrationAsync(admission.database, admission.path, admission.admit, {
+        created: admission.created,
+        retainExclusive: true,
+      });
+      step = operation.next();
+    } catch (error) {
+      step = operation.throw(error);
+    }
+  }
+  return step.value;
+}
+
+/** Retain custody across its asynchronous observation and settle the native write synchronously. */
+export function runClientCredentialTransactionAsync<T>(
+  owner: ClientCredentialCustody,
+  operation: () => T,
+): Promise<T> {
+  return runUpdateSqliteMigrationAsync(
+    owner.database,
+    owner.path,
+    () => owner.transaction(operation),
+    {
+      retainExclusive: true,
+    },
+  );
+}
+
+function* openClientCredentialCustodySteps(
   env: NodeJS.ProcessEnv,
   options: {
     createIfMissing?: boolean;
     readOnly?: boolean;
+    /**
+     * Inspection reads committed rows under a shared lock: a read-only connection, no
+     * exclusive custody and no write transaction. A hot rollback journal needs a writer,
+     * so that store is still admitted through read-only custody.
+     */
+    inspect?: boolean;
     migration?: boolean;
     timeoutMs?: number;
   } = {},
   execute?: (database: DatabaseSync) => void,
-): ClientCredentialCustody | undefined {
-  const createIfMissing = (options.createIfMissing ?? false) && !options.readOnly;
+): Generator<CredentialAdmissionStep, ClientCredentialCustody | undefined, void> {
+  const readOnly = options.readOnly === true || options.inspect === true;
+  const createIfMissing = (options.createIfMissing ?? false) && !readOnly;
   const pathname = resolveClientCredentialStorePath(env);
+  const inspect = options.inspect === true && !fs.existsSync(`${pathname}-journal`);
   const directory = path.dirname(pathname);
   const custodyKey = resolveDatabasePathKey(pathname);
   if (retainedPaths.has(custodyKey)) {
@@ -153,9 +277,14 @@ export function openClientCredentialCustody(
     }
     const identity = `${stat.dev}:${stat.ino}:${readDatabaseIdentityBirthtime(stat)}`;
     assertPrivateAcl(pathname);
-    db = openNodeSqliteDatabase(resolveExistingSqliteFileUri(pathname), {
-      timeout: options.timeoutMs ?? 5000,
-    });
+    db = inspect
+      ? openNodeSqliteDatabase(resolveReadOnlyShmSqliteFileUri(pathname), {
+          readOnly: true,
+          timeout: options.timeoutMs ?? 5000,
+        })
+      : openNodeSqliteDatabase(resolveExistingSqliteFileUri(pathname), {
+          timeout: options.timeoutMs ?? 5000,
+        });
     const database = db;
     if (
       // sqlite-allow-raw -- Read native journal policy before admission.
@@ -180,7 +309,10 @@ export function openClientCredentialCustody(
       if (closed) {
         throw new Error("Client credential custody is closed.");
       }
-      if (options.readOnly) {
+      if (inspect) {
+        return runSqliteDeferredTransactionSync(database, operation);
+      }
+      if (readOnly) {
         return runSqliteImmediateTransactionSync(database, operation);
       }
       return runUpdateSqliteMigration(
@@ -193,53 +325,70 @@ export function openClientCredentialCustody(
     const cached = admittedFiles.get(custodyKey);
     let initialized = false;
     let needsMetadataUpgrade = false;
-    transaction(() => {
-      // Acquire custody before retaining locks so competing openers can release their shared locks.
-      database.exec("PRAGMA locking_mode=EXCLUSIVE"); // sqlite-allow-raw -- Retain owner custody across operation commits.
-      if (
-        options.migration ||
-        cached?.identity !== identity ||
-        cached.version !== CLIENT_CREDENTIAL_SCHEMA_VERSION
-      ) {
-        const version = readSqliteUserVersion(database);
-        if (
-          version === 0 &&
-          !database.prepare("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").get() // sqlite-allow-raw -- Bootstrap only an empty native catalog.
-        ) {
-          if (!createIfMissing) {
-            throw new Error("Client credential store is empty; run openclaw doctor --fix.");
+    yield {
+      database,
+      path: pathname,
+      created,
+      admit: () =>
+        transaction(() => {
+          if (!inspect) {
+            // Acquire custody before retaining locks so competing openers can release their shared locks.
+            database.exec("PRAGMA locking_mode=EXCLUSIVE"); // sqlite-allow-raw -- Retain owner custody across operation commits.
           }
-          database.exec(CLIENT_CREDENTIAL_SCHEMA_SQL); // sqlite-allow-raw -- Canonical first-use schema DDL.
-          initialized = true;
-          writeSqliteUserVersion(database, CLIENT_CREDENTIAL_SCHEMA_VERSION);
-        } else {
-          if (version !== CLIENT_CREDENTIAL_SCHEMA_VERSION) {
-            throw new Error(
-              `Client credentials have unsupported schema version ${String(version)}. Use a compatible OpenClaw version.`,
-            );
+          if (
+            options.migration ||
+            cached?.identity !== identity ||
+            cached.version !== CLIENT_CREDENTIAL_SCHEMA_VERSION
+          ) {
+            const version = readSqliteUserVersion(database);
+            if (
+              version === 0 &&
+              !database.prepare("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").get() // sqlite-allow-raw -- Bootstrap only an empty native catalog.
+            ) {
+              if (!createIfMissing) {
+                throw new Error("Client credential store is empty; run openclaw doctor --fix.");
+              }
+              database.exec(CLIENT_CREDENTIAL_SCHEMA_SQL); // sqlite-allow-raw -- Canonical first-use schema DDL.
+              initialized = true;
+              writeSqliteUserVersion(database, CLIENT_CREDENTIAL_SCHEMA_VERSION);
+            } else {
+              if (version !== CLIENT_CREDENTIAL_SCHEMA_VERSION) {
+                throw new Error(
+                  `Client credentials have unsupported schema version ${String(version)}. Use a compatible OpenClaw version.`,
+                );
+              }
+              assertSqliteSchemaContains(
+                database,
+                "Client credentials",
+                CLIENT_CREDENTIAL_SCHEMA_SQL,
+              );
+              assertSqliteIntegrity(database, "Client credentials");
+            }
+            publishSqliteDatabaseAdmission(database, schemaAdmission, true);
           }
-          assertSqliteSchemaContains(database, "Client credentials", CLIENT_CREDENTIAL_SCHEMA_SQL);
-          assertSqliteIntegrity(database, "Client credentials");
-        }
-        publishSqliteDatabaseAdmission(database, schemaAdmission, true);
-      }
-      if (!options.migration) {
-        const admission = readClientCredentialAdmission(database);
-        const receipt = admitClientCredentialStore(database, env, {
-          initialize: initialized,
-          readOnly: options.readOnly ?? false,
-          stored: admission.stored,
-        });
-        needsMetadataUpgrade = receipt.sharedFile !== null && receipt.source === null;
-      }
-      // Bounded callers join admission and row work in this same exclusive transaction.
-      if (!initialized) {
-        execute?.(database);
-      }
-    });
+          if (!options.migration) {
+            const admission = readClientCredentialAdmission(database);
+            const receipt = admitClientCredentialStore(database, env, {
+              initialize: initialized,
+              readOnly,
+              stored: admission.stored,
+            });
+            needsMetadataUpgrade = receipt.sharedFile !== null && receipt.source === null;
+          }
+          // Bounded callers join admission and row work in this same exclusive transaction.
+          if (!initialized) {
+            execute?.(database);
+          }
+        }),
+    };
     // First-use schema creation survives cancellation of the caller's row write.
     if (initialized && execute) {
-      transaction(() => execute(database));
+      yield {
+        database,
+        path: pathname,
+        created,
+        admit: () => transaction(() => execute(database)),
+      };
     }
     if (!options.migration) {
       admittedFiles.set(custodyKey, { identity, version: CLIENT_CREDENTIAL_SCHEMA_VERSION });
@@ -254,7 +403,7 @@ export function openClientCredentialCustody(
         if (closed) {
           throw new Error("Client credential custody is closed.");
         }
-        if (options.readOnly && isClientCredentialMutation(operation)) {
+        if (readOnly && isClientCredentialMutation(operation)) {
           throw new Error("Client credential custody is read-only.");
         }
         const run = () => {
@@ -297,13 +446,38 @@ export function isClientCredentialMutation(operation: ClientCredentialOperation)
 export function runClientCredentialOperation(
   env: NodeJS.ProcessEnv,
   operation: ClientCredentialOperation,
-  options: { beforeCommit?: () => void; readOnly?: boolean } = {},
+  options: { beforeCommit?: () => void; readOnly?: boolean; inspect?: boolean } = {},
 ): ClientCredentialResult {
-  if (options.readOnly && isClientCredentialMutation(operation)) {
+  if ((options.readOnly || options.inspect) && isClientCredentialMutation(operation)) {
     throw new Error("Client credential custody is read-only.");
   }
   let result!: ClientCredentialResult;
   using owner = openClientCredentialCustody(
+    env,
+    {
+      createIfMissing: clientCredentialOperationCreatesStore(operation),
+      readOnly: options.readOnly,
+      inspect: options.inspect,
+    },
+    (database) => {
+      result = performClientCredentialOperation(database, operation, resolveStateDir(env));
+      options.beforeCommit?.();
+    },
+  );
+  return owner ? result : missingClientCredentialResult(env, operation);
+}
+
+/** Doctor retains this native owner while awaiting attribution; runtime uses its worker adapter. */
+export async function runClientCredentialOperationForDoctor(
+  env: NodeJS.ProcessEnv,
+  operation: ClientCredentialOperation,
+  options: { beforeCommit?: () => void; readOnly?: boolean } = {},
+): Promise<ClientCredentialResult> {
+  if (options.readOnly && isClientCredentialMutation(operation)) {
+    throw new Error("Client credential custody is read-only.");
+  }
+  let result!: ClientCredentialResult;
+  using owner = await openClientCredentialCustodyAsync(
     env,
     {
       createIfMissing: clientCredentialOperationCreatesStore(operation),

@@ -20,44 +20,153 @@ import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it.each([false, true])(
+    "shows a divider in desktop Details with preceding content: %s",
+    async (withPeople) => {
+      await suite.withPage(
+        { colorScheme: "dark", reducedMotion: "reduce", viewport: { width: 1440, height: 900 } },
+        async ({ page }) => {
+          const sessionKey = `agent:main:details-divider-${withPeople ? "multiple" : "single"}`;
+          const message =
+            "The revised layout is ready for review. Next, check it at a narrow width.";
+          await installMockGateway(page, {
+            sessionKey,
+            featureMethods: ["progressCard.get", "progressCard.refresh"],
+            historyMessages: [{ role: "assistant", content: "Review the revised layout." }],
+            methodResponses: {
+              "progressCard.get": {
+                card: { sessionKey, revision: 1, updatedAt: Date.now(), markdown: message },
+              },
+              "sessions.list": chatSessionListResponse([
+                {
+                  key: sessionKey,
+                  kind: "direct",
+                  label: "Layout review",
+                  createdActor: withPeople ? { type: "human", id: "ada", label: "Ada" } : undefined,
+                  updatedAt: 1,
+                },
+              ]),
+            },
+          });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          const details = await openChatDetails(page);
+          const progress = details.locator("openclaw-chat-details-progress");
+          await progress.getByRole("paragraph").filter({ hasText: message }).waitFor();
+          const groups = details.locator("[data-details-group]");
+          expect(
+            await groups.evaluateAll((nodes) =>
+              nodes.map((node) => node.getAttribute("data-details-group")),
+            ),
+          ).toEqual(withPeople ? ["people"] : []);
+          const border = (element: Element) => getComputedStyle(element).borderTopWidth;
+          if (withPeople) {
+            expect(await groups.evaluate(border)).toBe("0px");
+          }
+          expect(await progress.evaluate(border)).toBe(withPeople ? "1px" : "0px");
+        },
+      );
+    },
+  );
+
+  it("keeps focus in Details when Clear removes its trigger and restores the card on rejection", async () => {
+    await suite.withPage(
+      { reducedMotion: "reduce", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const sessionKey = "agent:main:clear-progress";
+        const card = {
+          sessionKey,
+          revision: 4,
+          updatedAt: Date.now(),
+          markdown: "Review the final layout.",
+        };
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          featureMethods: ["progressCard.get", "progressCard.put"],
+          heldMethods: ["progressCard.put"],
+          methodResponses: { "progressCard.get": { card } },
+          historyMessages: [{ role: "assistant", content: "The checklist is ready." }],
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const details = await openChatDetails(page);
+        const options = details.getByRole("button", { name: "Task progress options" });
+        await options.press("Enter");
+        await page
+          .getByRole("menuitem", { name: "Clear saved progress for everyone" })
+          .press("Enter");
+        expect((await gateway.waitForRequest("progressCard.put")).params).toEqual({
+          sessionKey,
+          expectedRevision: 4,
+        });
+        await options.waitFor({ state: "hidden" });
+        await expect
+          .poll(() => details.evaluate((panel) => panel === document.activeElement))
+          .toBe(true);
+        const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+        await composer.fill("Keep these edits.");
+        await gateway.rejectDeferred("progressCard.put", {
+          code: "UNAVAILABLE",
+          message: "Write unavailable",
+        });
+        await options.waitFor();
+        await page
+          .getByText("Could not clear saved progress card.", { exact: true })
+          .first()
+          .waitFor();
+        expect(await composer.inputValue()).toBe("Keep these edits.");
+        expect(await composer.evaluate((input) => input === document.activeElement)).toBe(true);
+      },
+    );
+  });
+
   it("opens inactive split-pane Details on the first click", async () => {
     const sessionKey = "agent:main:details-first-click";
-    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-      await installMockGateway(page, {
-        sessionKey,
-        historyMessages: [
-          { role: "assistant", content: [{ type: "text", text: "Details first-click fixture." }] },
-        ],
-      });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await page.getByText("Details first-click fixture.", { exact: true }).waitFor();
-      await selectChatLayoutAction(page, "Open split view");
-      const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
-      await polledCount(panes).toBe(2);
-      const left = panes.first();
-      await expect
-        .poll(() =>
-          left.evaluate((element) => element.classList.contains("chat-pane-cache__pane--active")),
-        )
-        .toBe(false);
-      const details = left.locator(".chat-details");
-      const neighborDetails = panes.last().locator(".chat-details");
-      expect(await neighborDetails.isVisible()).toBe(false);
-      await polledVisible(details).toBe(false);
-      await left.getByRole("button", { name: "Details", exact: true }).click();
-      await polledVisible(details).toBe(true);
-      expect(await details.evaluate((element) => element.hasAttribute("inert"))).toBe(false);
-      expect(await neighborDetails.isVisible()).toBe(false);
-      await expect
-        .poll(async () => Math.round((await details.boundingBox())?.width ?? 0))
-        .toBe(300);
-    });
+    await suite.withPage(
+      { reducedMotion: "reduce", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          sessionKey,
+          historyMessages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Details first-click fixture." }],
+            },
+          ],
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await page.getByText("Details first-click fixture.", { exact: true }).waitFor();
+        await selectChatLayoutAction(page, "Open split view");
+        const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
+        await polledCount(panes).toBe(2);
+        const left = panes.first();
+        await expect
+          .poll(() =>
+            left.evaluate((element) => element.classList.contains("chat-pane-cache__pane--active")),
+          )
+          .toBe(false);
+        const details = left.locator(".chat-details");
+        const neighborDetails = panes.last().locator(".chat-details");
+        expect(await neighborDetails.isVisible()).toBe(false);
+        await polledVisible(details).toBe(false);
+        await left.getByRole("button", { name: "Details", exact: true }).click();
+        await polledVisible(details).toBe(true);
+        expect(await details.evaluate((element) => element.hasAttribute("inert"))).toBe(false);
+        expect(await neighborDetails.isVisible()).toBe(false);
+        await expect
+          .poll(async () => Math.round((await details.boundingBox())?.width ?? 0))
+          .toBe(300);
+      },
+    );
   });
 
   it("docks Details in wide conversations and preserves manual intent, drafts, and independent scrolling", async () => {
     const sessionKey = "agent:main:details-progress";
     await suite.withPage(
-      { colorScheme: "light", locale: "en-US", viewport: { width: 1728, height: 1000 } },
+      {
+        colorScheme: "light",
+        locale: "en-US",
+        reducedMotion: "reduce",
+        viewport: { width: 1728, height: 1000 },
+      },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           sessionKey,
@@ -302,7 +411,10 @@ suite.define(() => {
         await page.setViewportSize({ width: 430, height: 900 });
         await trigger.waitFor({ state: "hidden" });
         expect(await details.isVisible()).toBe(false);
-        await page.getByRole("button", { name: "Panels", exact: true }).waitFor();
+        await page
+          .locator(".agent-chat__header--mobile")
+          .getByRole("button", { name: "Panels", exact: true })
+          .waitFor();
         const mobileDetails = await openChatDetails(page);
         const mobileProgress = mobileDetails.locator('[data-details-destination="task-progress"]');
         await mobileProgress.waitFor();

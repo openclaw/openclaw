@@ -6,7 +6,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
-import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
 import {
   createApplicationGateway,
   createApplicationGatewaySnapshot,
@@ -44,7 +43,11 @@ function gatewayWithSnapshot(client: GatewayBrowserClient | null, connected: boo
     phase: connected ? "connected" : "stopped",
     sessionKey: "main",
   });
-  return { snapshot, subscribe: () => () => undefined } as unknown as ApplicationContext["gateway"];
+  return {
+    snapshot,
+    subscribe: () => () => undefined,
+    subscribeEvents: () => () => undefined,
+  } as unknown as ApplicationContext["gateway"];
 }
 
 function requestGateway(request: Request) {
@@ -113,8 +116,10 @@ function createWorktreesPage(request?: Request, initial: ModelState = {}) {
         (button) => button.textContent?.trim() === label,
       )!;
     },
-    inputs: () => [
-      ...element.querySelectorAll<HTMLInputElement>('input.settings-input[type="text"]'),
+    draftControls: () => [
+      ...element.querySelectorAll<HTMLInputElement | HTMLButtonElement>(
+        'input.settings-input[type="text"], button#worktrees-create-repo, button#worktrees-base-ref',
+      ),
     ],
     async ready() {
       page.mount();
@@ -167,6 +172,17 @@ function settle() {
   return Promise.resolve();
 }
 
+async function selectReferenceOption(label: string) {
+  let option: HTMLElement | undefined;
+  await waitForSolid(() => {
+    option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (node) => node.textContent?.trim() === label,
+    );
+    expect(option).toBeDefined();
+  });
+  option!.click();
+}
+
 function waitForRead(request: Request, method = "worktrees.list", params: object = {}) {
   return waitForCall(
     request,
@@ -195,6 +211,8 @@ describe("WorktreesPage lifecycle", () => {
     await waitForRead(request);
     await waitForSolid(() => expect(page.element.textContent).toContain("Loading"));
     expect(page.element.textContent).not.toContain("No managed worktrees");
+    const cleanup = page.button("Clean up now");
+    expect(cleanup).toMatchObject({ disabled: true });
 
     first.reject(new Error("List unavailable"));
     await waitForSolid(() => expect(page.button("Retry")).toBeDefined());
@@ -205,6 +223,8 @@ describe("WorktreesPage lifecycle", () => {
     );
     expect(request).toHaveBeenCalledTimes(2);
     expect(page.query('[role="alert"]')).toBeNull();
+    expect(page.button("Clean up now")).toBe(cleanup);
+    expect(cleanup.disabled).toBe(false);
   });
 
   it("retains a rejected creation draft and releases its pending presentation", async () => {
@@ -220,7 +240,9 @@ describe("WorktreesPage lifecycle", () => {
       repoRoot: "/tmp/repo",
       name: "retained draft",
     });
-    await waitForSolid(() => expect(page.inputs().every((input) => input.disabled)).toBe(true));
+    await waitForSolid(() =>
+      expect(page.draftControls().every((input) => input.disabled)).toBe(true),
+    );
     created.reject(new Error("Creation unavailable"));
     await waitForSolid(() => expect(page.button("Create")?.disabled).toBe(false));
     expect(page.query<HTMLInputElement>('input[aria-label="Name"]')?.value).toBe("retained draft");
@@ -244,22 +266,6 @@ describe("WorktreesPage lifecycle", () => {
     expect(name).toMatchObject({ disabled: false, value: "local draft" });
   });
 
-  it("wires the selected worktrees tab to sessions navigation", async () => {
-    const page = createWorktreesPage().mount();
-    await settle();
-    expect(page.query("h1.page-title")?.textContent).toBe("Worktrees");
-    expect(page.query(".hub-page-header--stacked")).not.toBeNull();
-    expect(page.query(".page-subtitle")?.textContent).toContain(
-      "Isolated agent task checkouts and recovery snapshots.",
-    );
-    const selected = page.query<HTMLButtonElement>("#sessions-tab-worktrees")!;
-    selected.click();
-    expect(page.model.context.navigate).not.toHaveBeenCalled();
-    page.query<HTMLButtonElement>("#sessions-tab-sessions")!.click();
-    expect(page.model.context.navigate).toHaveBeenCalledExactlyOnceWith("sessions");
-    expect(selected.getAttribute("aria-selected")).toBe("true");
-  });
-
   it("keeps read-only viewers in browsing mode without branch or mutation RPCs", async () => {
     const record = worktree();
     const request = listRequest([record]);
@@ -273,7 +279,7 @@ describe("WorktreesPage lifecycle", () => {
     await waitForSolid(() => expect(page.model.records).toEqual([record]));
     await settle();
     expect(page.query(".callout.info")?.textContent).toContain(
-      "Worktree changes require operator.admin access.",
+      "You can view managed worktrees, but only admins can change them.",
     );
     expectDisabled(page, ["New worktree", "Clean up now", "Delete"]);
 
@@ -292,52 +298,17 @@ describe("WorktreesPage lifecycle", () => {
     expect(newWorktreeButton?.getAttribute("aria-expanded")).toBe("false");
     newWorktreeButton?.click();
     await settle();
-    expect(page.inputs()).toHaveLength(3);
+    expect(page.draftControls()).toHaveLength(3);
     expect(newWorktreeButton?.getAttribute("aria-expanded")).toBe("true");
 
     source.setScopes(["operator.read"]);
     await settle();
     expect(page.model.createOpen).toBe(false);
-    expect(page.inputs()).toHaveLength(0);
+    expect(page.draftControls()).toHaveLength(0);
     expect(newWorktreeButton?.disabled).toBe(true);
     expect(newWorktreeButton?.getAttribute("aria-expanded")).toBe("false");
     newWorktreeButton?.click();
     expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.create");
-  });
-
-  it("navigates a session-owned worktree with the face-preference marker", async () => {
-    // Without a cached session, only the in-app click carries the guessed-face marker.
-    const record = worktree("worktree-1", {
-      ownerKind: "session",
-      ownerId: "agent:main:thread:12345678-90ab-cdef-1234-567890abcdef",
-    });
-    const request = listRequest([record]);
-    const context = {
-      ...contextWithGateway(requestGateway(request)),
-      sessions: { state: { result: undefined } },
-      agents: { state: { agentsList: { mainKey: "main" } } },
-      agentSelection: { state: { selectedId: "main" } },
-    } as unknown as ApplicationContext;
-    const page = createWorktreesPage();
-    page.setContext(context);
-    page.mount();
-    await waitForSolid(() => expect(page.model.records.length).toBe(1));
-    await settle();
-
-    const docsLink = page.query<HTMLAnchorElement>(".page-subtitle a");
-    expect(docsLink?.textContent?.trim()).toBe("Learn more");
-    expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/managed-worktrees");
-
-    const link = [...page.element.querySelectorAll("a")].find((anchor) =>
-      anchor.getAttribute("href")?.includes("12345678"),
-    );
-    expect(link?.getAttribute("href")).toBe("/chat/main/1234567890abcdef1234567890abcdef");
-    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-
-    expect(context.navigate).toHaveBeenCalledWith("chat", {
-      pathname: "/chat/main/1234567890abcdef1234567890abcdef",
-      search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
-    });
   });
 
   it("serializes list refreshes and row mutations", async () => {
@@ -523,6 +494,9 @@ describe("WorktreesPage lifecycle", () => {
         operation: operation === "restore" ? "row" : operation,
         loading: operation === "gc",
       });
+      if (operation === "gc") {
+        await waitForSolid(() => expect(page.button("Loading…")).toMatchObject({ disabled: true }));
+      }
       source.emit(false);
       source.emit(true);
       expect(page.model.operation).not.toBe("create");
@@ -535,6 +509,11 @@ describe("WorktreesPage lifecycle", () => {
       }
       await running;
       expect(page.model).toMatchObject({ error: null, operation: null, loading: false });
+      if (operation === "gc") {
+        await waitForSolid(() =>
+          expect(page.button("Clean up now")).toMatchObject({ disabled: false }),
+        );
+      }
     },
   );
 
@@ -588,6 +567,24 @@ describe("WorktreesPage lifecycle", () => {
     expect(page.model.error).toBe("restore failed");
   });
 
+  it("does not offer list Retry after a delete confirmation replaces the refresh error", async () => {
+    const request = listRequest([worktree()]);
+    const page = await createWorktreesPage(request).ready();
+    request.mockRejectedValueOnce(new Error("Refresh unavailable"));
+    await page.model.load();
+    await waitForSolid(() => expect(page.button("Retry")).toBeDefined());
+
+    vi.mocked(showConfirmDialog).mockRejectedValueOnce(new Error("Confirmation unavailable"));
+    page.button("Delete").click();
+
+    await waitForSolid(() =>
+      expect(page.query('[role="alert"]')?.textContent).toContain("Confirmation unavailable"),
+    );
+    expect(page.button("Retry")).toBeUndefined();
+    expect(page.query('button[aria-label="Delete: worktree-1"]')).not.toBeNull();
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.remove");
+  });
+
   it("keeps an in-progress repository draft when the list refresh completes", async () => {
     const pendingList = deferred<unknown>();
     const request = vi.fn((method: string) =>
@@ -596,7 +593,14 @@ describe("WorktreesPage lifecycle", () => {
     const page = createWorktreesPage(request, { createOpen: true }).mount();
     await waitForRead(request);
 
-    const repository = page.query<HTMLInputElement>('input[aria-label="Repository"]')!;
+    page.query<HTMLButtonElement>("#worktrees-create-repo")!.click();
+    await selectReferenceOption("Enter another repository path…");
+    await waitForSolid(() =>
+      expect(page.query('input[aria-label="Enter another repository path…"]')).not.toBeNull(),
+    );
+    const repository = page.query<HTMLInputElement>(
+      'input[aria-label="Enter another repository path…"]',
+    )!;
     repository.value = "/tmp/new-repo";
     repository.dispatchEvent(new Event("input", { bubbles: true }));
     pendingList.resolve({ worktrees: [] });
@@ -629,7 +633,7 @@ describe("WorktreesPage lifecycle", () => {
     });
     await settle();
     const createButton = page.query<HTMLButtonElement>(".settings-row button.btn--sm");
-    expect(page.inputs().map((input) => input.disabled)).toEqual([true, true, true]);
+    expect(page.draftControls().map((input) => input.disabled)).toEqual([true, true, true]);
     expect([createButton?.disabled, toggleButton?.disabled]).toEqual([true, true]);
 
     toggleButton?.click();
@@ -642,7 +646,7 @@ describe("WorktreesPage lifecycle", () => {
 
     toggleButton?.click();
     await settle();
-    expect(page.inputs().map((input) => input.disabled)).toEqual([false, false, false]);
+    expect(page.draftControls().map((input) => input.disabled)).toEqual([false, false, false]);
   });
 
   it.each([undefined, "main"])(
@@ -665,6 +669,52 @@ describe("WorktreesPage lifecycle", () => {
       expect(request).toHaveBeenCalledWith("worktrees.create", { repoRoot: "/tmp/repo" });
     },
   );
+
+  it("retires old-repository branches and preserves an unlisted explicit ref after discovery and creation fail", async () => {
+    const old = deferred<unknown>();
+    const request = vi.fn((method: string, params?: { repoRoot?: string }) => {
+      if (method === "worktrees.branches") {
+        return params?.repoRoot === "/tmp/repo"
+          ? old.promise
+          : Promise.reject(new Error("No branch catalog"));
+      }
+      if (method === "worktrees.create") {
+        return Promise.reject(new Error("Creation unavailable"));
+      }
+      return Promise.resolve({ worktrees: [] });
+    });
+    const page = await createWorktreesPage(request, {
+      createOpen: true,
+      createRepoRoot: "/tmp/repo",
+      createBaseRef: "old-branch",
+      createBranches: ["old-branch"],
+    }).ready();
+    void page.model.loadCreateBranches();
+    await waitForRead(request, "worktrees.branches", { repoRoot: "/tmp/repo" });
+    page.model.setCreateRepository("/srv/custom");
+    expect(page.model.createBaseRef).toBe("");
+    expect(page.model.createBranches).toEqual([]);
+    old.resolve({ branches: [{ name: "old-branch" }] });
+    await page.model.loadCreateBranches();
+    expect(page.model.createBranches).toEqual([]);
+    page.query<HTMLButtonElement>("#worktrees-base-ref")!.click();
+    await selectReferenceOption("Enter a branch, tag, or commit…");
+    await waitForSolid(() =>
+      expect(page.query('input[aria-label="Enter a branch, tag, or commit…"]')).not.toBeNull(),
+    );
+    const ref = page.query<HTMLInputElement>(
+      'input[aria-label="Enter a branch, tag, or commit…"]',
+    )!;
+    ref.value = "v1.2.3";
+    ref.dispatchEvent(new Event("input", { bubbles: true }));
+    page.button("Create").click();
+    await waitForCall(request, "worktrees.create", { repoRoot: "/srv/custom", baseRef: "v1.2.3" });
+    await waitForSolid(() =>
+      expect(page.query('[role="alert"]')?.textContent).toContain("Creation unavailable"),
+    );
+    expect(page.query('input[aria-label="Enter a branch, tag, or commit…"]')).toBe(ref);
+    expect(ref.value).toBe("v1.2.3");
+  });
 
   it("ignores a stale branch failure after a newer request succeeds", async () => {
     const firstBranches = deferred<unknown>();

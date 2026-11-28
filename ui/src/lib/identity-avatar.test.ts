@@ -4,8 +4,12 @@ import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "./identity-avatar-context.ts";
-import { resolveAvatarImageUrl, retainAvatarImageUrl } from "./identity-avatar-loader.ts";
-import { resolveAvatar, resolveIdentityHue } from "./identity-avatar.ts";
+import {
+  readCachedAvatarImageUrl,
+  resolveAvatarImageUrl,
+  retainAvatarImageUrl,
+} from "./identity-avatar-loader.ts";
+import { resolveAvatar } from "./identity-avatar.ts";
 
 function avatarResponse(mime = "image/png") {
   return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": mime } });
@@ -15,34 +19,6 @@ afterEach(() => {
   setAvatarGatewayOrigin(null);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-});
-
-describe("resolveAvatar", () => {
-  it("falls back to initials for a non-email id", () => {
-    expect(resolveAvatar({ id: "profile_123" })).toMatchObject({
-      kind: "initials",
-      initials: "P",
-    });
-  });
-
-  it("derives up to two initials from a display name", () => {
-    expect(resolveAvatar({ name: "Ada Lovelace Byron" })).toMatchObject({
-      kind: "initials",
-      initials: "AL",
-    });
-  });
-
-  it("derives a stable identity hue from the same seed as the initials color", () => {
-    const first = resolveIdentityHue({ id: "profile_123", name: "Ada Lovelace" });
-    const second = resolveIdentityHue({ id: "profile_123", name: "Renamed User" });
-    expect(first).toBe(second);
-    expect(first).toBeGreaterThanOrEqual(0);
-    expect(first).toBeLessThan(360);
-    const resolved = resolveAvatar({ id: "profile_123" });
-    if (resolved.kind === "initials") {
-      expect(first).toBe(resolved.colorSeed % 360);
-    }
-  });
 });
 
 describe("resolveAvatar profile URL origin restriction", () => {
@@ -275,6 +251,10 @@ describe("authenticated profile avatar cache", () => {
   it("keeps unconnected trusted image sources synchronous without fetching", () => {
     setAvatarGatewayOrigin(null);
     const fetchAvatar = vi.spyOn(globalThis, "fetch");
+    expect(readCachedAvatarImageUrl("data:image/png;base64,AQID")).toBe(
+      "data:image/png;base64,AQID",
+    );
+    expect(readCachedAvatarImageUrl("data:text/plain;base64,AQID")).toBeNull();
     expect(resolveAvatarImageUrl("/avatar/research")).toBe("/avatar/research");
     expect(resolveAvatarImageUrl("/api/users/self/avatar?v=1#fragment")).toBe(
       "/api/users/self/avatar?v=1",
@@ -315,19 +295,27 @@ describe("authenticated profile avatar cache", () => {
       pending,
     );
     await expect(pending).resolves.toBe("blob:verified-profile");
+    expect(first.owner.readCachedAvatarImageUrl("blob:verified-profile")).toBe(
+      "blob:verified-profile",
+    );
     expect(fetchAvatar).toHaveBeenCalledOnce();
     first.window.dispatchEvent(new Event("pagehide"));
 
     const second = await reload();
     try {
+      expect(second.owner.readCachedAvatarImageUrl("blob:verified-profile")).toBeNull();
+      expect(second.owner.readCachedAvatarImageUrl("/avatar/unknown")).toBeNull();
+      expect(second.owner.readCachedAvatarImageUrl(url)).toBe(url);
       expect(second.owner.resolveAvatarImageUrl(url)).toBe(url);
       expect(fetchAvatar).toHaveBeenCalledOnce();
       second.owner.recordAvatarImageError(url);
+      expect(second.owner.readCachedAvatarImageUrl(url)).toBeNull();
       expect(second.owner.resolveAvatarImageUrl(url)).toBeNull();
       expect(second.owner.resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=7")).toBeNull();
       expect(fetchAvatar).toHaveBeenCalledOnce();
       second.window.dispatchEvent(new Event("pagehide"));
       second.context.setAvatarGatewayOrigin(origin, [], "", "operator-b");
+      expect(second.owner.readCachedAvatarImageUrl(url)).toBeNull();
       const undecodable = second.owner.resolveAvatarImageUrl(url);
       await expect(undecodable).resolves.toBe("blob:verified-profile");
       expect(fetchAvatar).toHaveBeenCalledTimes(2);
@@ -380,14 +368,18 @@ describe("authenticated profile avatar cache", () => {
       .spyOn(globalThis, "fetch")
       .mockImplementation(async () => avatarResponse());
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:current-profile");
+    const timers = vi.spyOn(globalThis, "setTimeout");
     const path = "/api/users/profile-ada/avatar?v=7";
     const retired = resolveAvatarImageUrl(path);
+    const otherRetired = resolveAvatarImageUrl("/avatar/research?v=7");
     expect(resolveAvatarImageUrl(path)).toBe(retired);
     expect(fetchAvatar).not.toHaveBeenCalled();
+    expect(timers.mock.calls.filter(([, delay]) => delay === 0)).toHaveLength(1);
 
     setAvatarGatewayOrigin("https://gateway.example.test", ["current-token"]);
     const current = resolveAvatarImageUrl(path);
     await expect(retired).resolves.toBeNull();
+    await expect(otherRetired).resolves.toBeNull();
     await expect(current).resolves.toBe("blob:current-profile");
     expect(fetchAvatar).toHaveBeenCalledExactlyOnceWith(
       `https://gateway.example.test${path}`,

@@ -233,7 +233,10 @@ export async function readScheduledTaskCommand(
 
 export async function readStartupEntryCommand(
   startupEntryPath: string,
-  options?: { onLauncherContent?: LauncherContentObserver; deadline?: number },
+  options?: Pick<GatewayServiceReadOptions, "onEffectiveExecutable"> & {
+    onLauncherContent?: LauncherContentObserver;
+    deadline?: number;
+  },
 ): Promise<GatewayServiceCommandConfig> {
   const command = await readWindowsTaskCommand(
     { kind: "startup-entry", path: startupEntryPath },
@@ -405,6 +408,7 @@ async function readWindowsTaskCommand(
         ...(action.workingDirectory ? { workingDirectory: action.workingDirectory } : {}),
       };
       assertCommandProfile(command);
+      options?.onEffectiveExecutable?.(action.path);
       return command;
     }
     if (launchers?.length === 0) {
@@ -508,6 +512,9 @@ async function readWindowsTaskCommand(
           }
         : {}),
     };
+    if (requireEffective && programArguments[0]) {
+      options?.onEffectiveExecutable?.(programArguments[0]);
+    }
     return {
       ...managedDefinition,
       ...(action?.workingDirectory
@@ -607,7 +614,12 @@ export function buildTaskScript({
   }
   let commandArguments = programArguments;
   if (environment?.OPENCLAW_SERVICE_KIND === "gateway") {
-    commandArguments = [...programArguments, WINDOWS_TASK_SUPERVISOR_FLAG];
+    // Converted installations already run the resident launcher; do not nest the legacy supervisor.
+    if (
+      !programArguments.some((argument) => /(?:^|[\\/])openclaw-launcher\.mjs$/iu.test(argument))
+    ) {
+      commandArguments = [...programArguments, WINDOWS_TASK_SUPERVISOR_FLAG];
+    }
     // Legacy VBS launchers supply their own outer owner; direct tasks own CMD.
     lines.push(DIRECT_TASK_LAUNCHER_MARKER);
   }

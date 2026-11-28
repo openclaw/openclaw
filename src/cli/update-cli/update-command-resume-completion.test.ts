@@ -68,6 +68,61 @@ async function legacyResume(metadata?: boolean) {
 
 describe("update completion ownership", () => {
   it.each([false, true])(
+    "retires the settled model warning (other advisory=%s)",
+    async (otherAdvisory) => {
+      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+      const deferred = "Model retirement deferred until configured plugin installation converges.";
+      const unrelated = "An unrelated Doctor advisory remains.";
+      // Retirement waits for plugin convergence only when it has a model reference to decide.
+      await state.writeConfig({
+        plugins: { enabled: false },
+        update: { channel: "stable" },
+        agents: {
+          defaults: { model: { primary: "ghost-provider/model-a", fallbacks: ["openai/gpt-5.5"] } },
+        },
+      });
+      await writeScenario("repair", {
+        runDoctorConfigFlow: true,
+        doctorWarningsByInvocation: [[deferred, ...(otherAdvisory ? [unrelated] : [])], []],
+      });
+      mocks.plugins.mockImplementationOnce(async () => {
+        expect(listUpdateRuns()[0]?.steps).toContainEqual(
+          expect.objectContaining({
+            step: "finalize:doctor:model-retirement",
+            status: "skipped",
+          }),
+        );
+        return unchangedPluginResult();
+      });
+
+      await runRegisteredCli({
+        register: registerUpdateCli,
+        argv: ["update", "repair", "--yes", "--no-restart", "--json"],
+      });
+
+      const [run] = listUpdateRuns();
+      expect(run).toMatchObject({ status: "succeeded" });
+      expect(run?.steps).toContainEqual(
+        expect.objectContaining({
+          step: "finalize:doctor:model-retirement",
+          status: "completed",
+        }),
+      );
+      expect(reportedResult("repair")).toMatchObject({ status: otherAdvisory ? "warning" : "ok" });
+      expect(reportedResult("repair")).toHaveProperty(
+        "postUpdate.doctor",
+        otherAdvisory ? { status: "warning", warnings: [unrelated] } : { status: "ok" },
+      );
+      const warnings = updateRunWarningMessages(run?.steps ?? []);
+      expect(warnings).not.toContain(deferred);
+      expect(warnings).not.toContain(
+        "Deferred model retirement repair completed after plugin convergence.",
+      );
+      expect(warnings.includes(unrelated)).toBe(otherAdvisory);
+    },
+  );
+
+  it.each([false, true])(
     "reconciles a delayed Doctor warning against current pending state (pending again=%s)",
     async (pendingAgain) => {
       const pending = {

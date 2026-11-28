@@ -21,6 +21,7 @@ import {
   resolveConfiguredSubagentSpawnModelSelection,
   resolveThinkingDefault,
 } from "../../model-selection.js";
+import { buildThinkingCatalog } from "../../model-thinking-default-core.js";
 import type { PreparedSpawnThreadBinding } from "../../spawn-plan.js";
 import { buildSpawnThreadBinding } from "./spawn-thread-binding.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
@@ -55,7 +56,6 @@ type AcpSpawnInitializedSession = Awaited<
 
 export type AcpSpawnInitializedRuntime = {
   initialized: AcpSpawnInitializedSession;
-  sessionId: string;
   sessionEntry: SessionEntry;
 };
 
@@ -106,9 +106,10 @@ export function resolveAcpSpawnRuntimeOptions(params: {
   });
   if (thinkingPlan.status === "error") {
     const { provider, model: modelId } = splitModelRef(model);
+    const catalog = buildThinkingCatalog({ cfg: params.cfg, provider, model: modelId });
     return {
       ok: false,
-      error: `Invalid thinking level "${thinkingPlan.thinkingCandidateRaw}". Use one of: ${formatThinkingLevels(provider, modelId)}.`,
+      error: `Invalid thinking level "${thinkingPlan.thinkingCandidateRaw}". Use one of: ${formatThinkingLevels(provider, modelId, ", ", catalog)}.`,
     };
   }
 
@@ -173,7 +174,6 @@ export async function initializeAcpSpawnRuntime(params: {
 
   return {
     initialized,
-    sessionId: initialized.sessionEntry.sessionId,
     sessionEntry: initialized.sessionEntry,
   };
 }

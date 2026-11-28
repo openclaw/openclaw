@@ -36,6 +36,12 @@ final class SidebarAttentionUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["You're connected"].waitForExistence(timeout: 60))
         app.buttons["Go to Chat"].tap()
         XCTAssertTrue(app.staticTexts["Your research workspace is ready."].waitForExistence(timeout: 30))
+        let sidebar = app.buttons["RootTabs.Sidebar.Show"]
+        let pendingElsewhere = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "Needs approval"), object: sidebar)
+        XCTAssertEqual(XCTWaiter.wait(for: [pendingElsewhere], timeout: 15), .completed)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "chat-session-approval").firstMatch.exists)
+        self.capture(app, named: "approval-in-other-session")
         self.openSidebar(app)
         let review = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Pending review")).firstMatch
         XCTAssertTrue(review.waitForExistence(timeout: 15), app.debugDescription)
@@ -44,11 +50,12 @@ final class SidebarAttentionUITests: XCTestCase {
         self.capture(app, named: "sidebar-pending")
 
         let question = app.buttons.matching(identifier: "sidebar-attention-question").firstMatch
-        let approval = app.buttons.matching(identifier: "sidebar-attention-approval").firstMatch
+        let reviewNeedsApproval = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@", "Needs approval"), object: review)
+        XCTAssertEqual(XCTWaiter.wait(for: [reviewNeedsApproval], timeout: 10), .completed)
         XCTAssertTrue(
             question.waitForExistence(timeout: 10),
             "Inactive thread questions must be discoverable in the sidebar")
-        XCTAssertFalse(approval.exists, "Each row must show only its oldest pending request kind")
         XCTAssertTrue(question.label.contains("Which draft should we review first?"))
         XCTAssertTrue(question.label.contains("2 more questions"))
         let threadQuestion = try XCTUnwrap(
@@ -92,15 +99,15 @@ final class SidebarAttentionUITests: XCTestCase {
             historyAfter,
             historyBefore,
             "Opening attention details must not navigate to the inactive conversation")
-        app.buttons["RootTabs.Sidebar.Destination.overview"].tap()
-        XCTAssertTrue(app.staticTexts["Agent session"].waitForExistence(timeout: 10), app.debugDescription)
+        app.buttons["RootTabs.Sidebar.Destination.settings"].tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), app.debugDescription)
         self.openSidebar(app)
         XCTAssertTrue(
             question.waitForExistence(timeout: 10),
             "Questions must stay available after navigating away from Chat")
         question.tap()
         XCTAssertTrue(app.staticTexts["Which draft should we review first?"].waitForExistence(timeout: 5))
-        self.capture(app, named: "overview-question-details")
+        self.capture(app, named: "settings-question-details")
         let priorReadbacks = try await self.approvalReadbackCount(fixture, id: "attention-approval-6")
         try await self.changeFixture(fixture, path: "approvals/expire-last")
         try await self.waitForApprovalReadback(fixture, id: "attention-approval-6", after: priorReadbacks)
@@ -123,34 +130,30 @@ final class SidebarAttentionUITests: XCTestCase {
             app.staticTexts["Waiting for approval"].exists,
             "The dismissed popover must not turn into another request's details")
         XCTAssertTrue(question.waitForNonExistence(timeout: 10))
-        XCTAssertTrue(
-            approval.waitForExistence(timeout: 10),
-            "The next request kind must appear after questions settle")
-        XCTAssertTrue(approval.label.contains("Inspect the synthetic review folder"))
-        let loadedApprovals = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label CONTAINS %@", "4 more approvals"), object: approval)
-        XCTAssertEqual(XCTWaiter.wait(for: [loadedApprovals], timeout: 10), .completed)
-        let threadApproval = try XCTUnwrap(
-            app.buttons.matching(identifier: "sidebar-attention-approval")
-                .allElementsBoundByIndex.first { $0.isHittable && abs($0.frame.midY - review.frame.midY) < 2 },
-            "The inactive Pending review row must expose its own approval details button")
-        threadApproval.tap()
-        XCTAssertTrue(app.staticTexts["Waiting for approval"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Inspect the synthetic review folder"].exists)
-        XCTAssertTrue(app.staticTexts["4 more approvals"].exists)
-        self.capture(app, named: "approval-details")
-        self.dismissPopover(app)
+        XCTAssertTrue((review.value as? String)?.contains("Needs approval") == true)
+        review.tap()
+        let commandCard = app.descendants(matching: .any).matching(identifier: "chat-session-approval").firstMatch
+        XCTAssertTrue(commandCard.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["echo synthetic-review"].exists)
+        XCTAssertEqual(sidebar.value as? String ?? "", "")
+        XCTAssertTrue(app.buttons["Allow once"].exists)
+        XCTAssertTrue(app.buttons["Deny"].exists)
+        self.capture(app, named: "approval-in-session")
         try await self.changeFixture(fixture, path: "approvals/cancel")
-        XCTAssertTrue(approval.waitForNonExistence(timeout: 10))
+        XCTAssertTrue(commandCard.waitForNonExistence(timeout: 10))
+        self.openSidebar(app)
+        XCTAssertFalse((review.value as? String)?.contains("Needs approval") == true)
         self.capture(app, named: "sidebar-cleared")
     }
 
     private func openSidebar(_ app: XCUIApplication) {
-        let show = app.buttons["RootTabs.Sidebar.Show"]
-        if show.exists, show.isHittable {
-            show.tap()
+        let home = app.buttons["RootTabs.Sidebar.Destination.chat"]
+        if !home.exists {
+            let show = app.buttons["RootTabs.Sidebar.Show"]
+            XCTAssertTrue(show.waitForExistence(timeout: 5))
+            show.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         }
-        XCTAssertTrue(app.buttons["RootTabs.Sidebar.Destination.chat"].waitForExistence(timeout: 10))
+        XCTAssertTrue(home.waitForExistence(timeout: 10))
     }
 
     private func dismissPopover(_ app: XCUIApplication) {

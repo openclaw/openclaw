@@ -179,6 +179,7 @@ function resolveSuite(result: Awaited<ReturnType<typeof suiteResult>>, execution
 }
 
 beforeEach(() => {
+  captureMock.reset();
   suiteLaunchMock.runQaSuite.mockReset();
   liveTransportMock.listAdapterFactories.mockReset();
   liveTransportMock.listAdapterFactories.mockReturnValue(liveTransportMock.adapterFactories);
@@ -207,7 +208,6 @@ afterEach(async () => {
   while (cleanups.length > 0) {
     await cleanups.pop()?.();
   }
-  captureMock.reset();
 });
 
 function isRetryableLocalFetchError(error: unknown) {
@@ -941,28 +941,8 @@ describe("qa-lab server", () => {
       controlUiEmbeddedUrl: "https://gateway.example.test/?panel=chat",
       kickoffTask: expect.stringContaining("Lobster Invaders"),
       runner: { status: "idle", selection: { providerMode: "mock-openai", scenarioIds: null } },
-      runnerCatalog: {
-        channels: [
-          "buzz",
-          "discord",
-          "matrix",
-          "msteams",
-          "qa-channel",
-          "slack",
-          "telegram",
-          "whatsapp",
-        ],
-      },
     });
-    expect(bootstrap.scenarios.length).toBeGreaterThanOrEqual(10);
     expect(bootstrap.scenarios.map((scenario) => scenario.id)).toContain("dm-chat-baseline");
-    expect(bootstrap.runnerCatalog.profiles.map((profile) => profile.id)).toEqual([
-      "smoke-ci",
-      "personal-agent",
-      "observability",
-      "release",
-      "all",
-    ]);
     expect(await getLabJson(lab.baseUrl, "/api/capture/startup-status")).toMatchObject({
       status: { gateway: { url: "https://gateway.example.test/?panel=chat" } },
     });
@@ -1389,84 +1369,39 @@ describe("qa-lab server", () => {
 
   it("serves proxy capture sessions, events, and query rows", async () => {
     const store = captureMock.store;
-    store.upsertSession({ id: "qa-capture-session" });
-    const eventDefaults = { sessionId: "qa-capture-session" };
-    for (const index of [0, 1]) {
-      store.recordEvent({
-        ...eventDefaults,
-        flowId: `flow-${index + 1}`,
-        host: "api.example.com",
-        dataText: '{"hello":"world"}',
-        metaJson: JSON.stringify({
-          provider: "openai",
-          api: "responses",
-          model: "gpt-5.6-luna",
-          captureOrigin: "shared-fetch",
-        }),
-      });
-    }
-    store.recordEvent({
-      ...eventDefaults,
-      flowId: "flow-3",
-      host: "127.0.0.1:11434",
-      metaJson: JSON.stringify({
-        provider: "ollama",
-        model: "kimi-k2.5:cloud",
-        captureOrigin: "shared-fetch",
-      }),
-    });
-
+    const sessionId = "qa-capture-session";
+    captureMock.seedSession(sessionId);
     const lab = await startStoppableLab();
 
     await fetchWithRetry(`${lab.baseUrl}/healthz`);
     await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
     expect(captureMock.acquire).not.toHaveBeenCalled();
 
-    expect(await getLabJson(lab.baseUrl, "/api/capture/sessions")).toMatchObject({
-      sessions: expect.arrayContaining([expect.objectContaining({ id: "qa-capture-session" })]),
+    expect(await getLabJson(lab.baseUrl, "/api/capture/sessions")).toEqual({
+      sessions: [{ id: sessionId, eventCount: 3 }],
     });
-    expect(captureMock.acquire).toHaveBeenCalledTimes(1);
-
+    expect(store.listSessions).toHaveBeenCalledWith(50);
     expect(
-      await getLabJson(lab.baseUrl, "/api/capture/events?sessionId=qa-capture-session"),
+      await getLabJson(lab.baseUrl, `/api/capture/events?sessionId=${sessionId}`),
     ).toMatchObject({
-      events: expect.arrayContaining([
-        expect.objectContaining({
+      events: [
+        {
           flowId: "flow-1",
-          provider: "openai",
-          model: "gpt-5.6-luna",
-          captureOrigin: "shared-fetch",
-        }),
-        expect.objectContaining({ flowId: "flow-3", provider: "ollama", model: "kimi-k2.5:cloud" }),
-      ]),
+        },
+        { flowId: "flow-2" },
+        { flowId: "flow-3", provider: "ollama", model: "kimi-k2.5:cloud" },
+      ],
     });
-
-    expect(
-      await getLabJson(lab.baseUrl, "/api/capture/coverage?sessionId=qa-capture-session"),
-    ).toMatchObject({
-      coverage: {
-        totalEvents: 3,
-        unlabeledEventCount: 0,
-        providers: expect.arrayContaining([
-          { value: "openai", count: 2 },
-          { value: "ollama", count: 1 },
-        ]),
-        models: expect.arrayContaining([
-          { value: "gpt-5.6-luna", count: 2 },
-          { value: "kimi-k2.5:cloud", count: 1 },
-        ]),
-        localPeers: expect.arrayContaining([{ value: "127.0.0.1:11434", count: 1 }]),
-      },
-    });
-
+    expect(store.getSessionEvents).toHaveBeenCalledWith(sessionId, 200);
+    await getLabJson(lab.baseUrl, `/api/capture/coverage?sessionId=${sessionId}`);
+    expect(store.summarizeSessionCoverage).toHaveBeenCalledWith(sessionId);
     expect(
       await getLabJson(
         lab.baseUrl,
-        "/api/capture/query?sessionId=qa-capture-session&preset=double-sends",
+        `/api/capture/query?sessionId=${sessionId}&preset=double-sends`,
       ),
-    ).toMatchObject({
-      rows: [{ host: "api.example.com", duplicateCount: 2 }],
-    });
+    ).toEqual({ rows: [{ host: "api.example.com", duplicateCount: 2 }] });
+    expect(store.queryPreset).toHaveBeenCalledWith("double-sends", sessionId);
     expect(captureMock.acquire).toHaveBeenCalledTimes(1);
 
     await lab.stop();

@@ -98,6 +98,7 @@ it("keeps the normal Code Mode surface through failure, inspection, and multiple
       disableMessageTool: false,
       disableTools: false,
       model,
+      contextTokenBudget: model.contextWindow,
     },
   });
 

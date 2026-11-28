@@ -16,11 +16,15 @@ import {
   recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import { withUpdateRunRead } from "../../infra/update-run-read-admission.js";
 import { isAcknowledgedAbandonedUpdateRun } from "../../infra/update-run-record.js";
+import { readPluginCohortRecoveryPairRows } from "../../infra/update-run-recovery-store.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
+import { beginUpdatePluginCohort } from "../../plugins/update-cohort-recovery.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { updateRepairCommand } from "./update-repair-command.js";
 
 const { createRepairState, mocks, pluginResult } = await import("./update-repair.test-support.js");
@@ -57,6 +61,28 @@ function seedHistory(ageMs: number, reason = "abandoned") {
   return finishUpdateRun(run.runId, { status: "failed", reason });
 }
 const seedPair = () => [seedHistory(4 * ABANDONED_UPDATE_RUN_MS), seedHistory(60_000)] as const;
+async function seedForeignCohort() {
+  using _ = vi.spyOn(Date, "now").mockReturnValue(Date.now() - 2 * ABANDONED_UPDATE_RUN_MS);
+  const { runId } = createUpdateRun({ trigger: "cli" });
+  const run = recordUpdateRunPhase(runId, "verifying");
+  const runtime = { root: state.root, nodePath: process.execPath, buildId: null };
+  const pair = await withUpdateCommandExecutor(runId, async (executor) => {
+    const fence = await executor.enter(state.root);
+    return await beginUpdatePluginCohort({
+      runId,
+      installKey: state.root,
+      from: { ...runtime, version: "1.0.0" },
+      to: { ...runtime, version: "2.0.0" },
+      env: state.env,
+      fence,
+    });
+  });
+  const readRows = () =>
+    withUpdateRunRead(({ db }) => readPluginCohortRecoveryPairRows(db, pair.cohort), {
+      env: state.env,
+    });
+  return { run, rows: readRows(), readRows };
+}
 function jsonResult() {
   return vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0];
 }
@@ -99,14 +125,16 @@ it("acknowledges captured history behind 99 newer successful updates", async () 
 });
 
 it.each(["ok", "warning"] as const)(
-  "acknowledges multiple rows only after %s convergence, excluding a newly admitted row",
+  "acknowledges foreign reserved history only after %s convergence, excluding a newly admitted row",
   async (status) => {
     const [old, recent] = seedPair();
     const unrelated = seedHistory(30_000, "doctor-failed");
+    const foreign = await seedForeignCohort();
     let admitted: ReturnType<typeof seedHistory> | undefined;
     mocks.plugins.mockImplementationOnce(async () => {
       expect(getUpdateRun(old.runId)).toEqual(old);
       expect(getUpdateRun(recent.runId)).toEqual(recent);
+      expect(getUpdateRun(foreign.run.runId)).toEqual(foreign.run);
       admitted = seedHistory(0);
       return { ...pluginResult, status };
     });
@@ -114,9 +142,21 @@ it.each(["ok", "warning"] as const)(
     for (const run of [old, recent]) {
       expect(isAcknowledgedAbandonedUpdateRun(getUpdateRun(run.runId)!)).toBe(true);
     }
+    expect(getUpdateRun(foreign.run.runId)).toMatchObject({
+      status: "failed",
+      reason: "abandoned",
+    });
+    expect(isAcknowledgedAbandonedUpdateRun(getUpdateRun(foreign.run.runId)!)).toBe(true);
+    expect(foreign.readRows()).toEqual(foreign.rows);
+    expect(mocks.doctor).toHaveBeenCalledOnce();
+    expect(mocks.plugins).toHaveBeenCalledOnce();
     expect(getUpdateRun(unrelated.runId)).toEqual(unrelated);
     expect(getUpdateRun(admitted!.runId)).toEqual(admitted);
-    expect(jsonResult()).toMatchObject({ status, reconciledRuns: [recent.runId, old.runId] });
+    expect(jsonResult()).toMatchObject({
+      status,
+      coreUpdate: "completed",
+      reconciledRuns: [foreign.run.runId, recent.runId, old.runId],
+    });
     expect(await abandonedWarnings()).toEqual([expect.stringContaining(admitted!.runId)]);
   },
 );
@@ -125,6 +165,7 @@ it.each(["doctor", "convergence", "error", "retained recovery"] as const)(
   "preserves history when repair fails in %s",
   async (phase) => {
     const [old, recent] = seedPair();
+    const foreign = await seedForeignCohort();
     if (phase === "retained recovery") {
       await fs.mkdir(
         path.join(path.dirname(resolveOpenClawStateSqlitePath()), ".openclaw-restore-retained"),
@@ -135,13 +176,15 @@ it.each(["doctor", "convergence", "error", "retained recovery"] as const)(
       mocks[phase].mockRejectedValueOnce(new Error("failed"));
     }
     await expect(repair()).rejects.toThrow(
-      phase === "retained recovery" ? "full-state recovery is deferred" : undefined,
+      phase === "retained recovery" ? "Interrupted shared-database publication left" : undefined,
     );
     if (phase === "retained recovery") {
       expect(mocks.doctor).not.toHaveBeenCalled();
     }
     expect(getUpdateRun(old.runId)).toEqual(old);
     expect(getUpdateRun(recent.runId)).toEqual(recent);
+    expect(getUpdateRun(foreign.run.runId)).toEqual(foreign.run);
+    expect(foreign.readRows()).toEqual(foreign.rows);
     if (phase !== "retained recovery") {
       expect(await abandonedWarnings()).toHaveLength(2);
     }

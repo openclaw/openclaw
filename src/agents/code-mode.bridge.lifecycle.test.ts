@@ -8,9 +8,21 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
+import type { OpenClawPluginToolContext } from "../plugins/types.js";
+import * as childAdapter from "../process/supervisor/adapters/child.js";
+import * as processSupervisor from "../process/supervisor/index.js";
+import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
+import { readSessionWatchdogFailure } from "../sessions/session-controller.watchdog-error.js";
+import { SESSION_WATCHDOG_QUIET_TOOL_MS } from "../sessions/session-controller.watchdog-state.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
+import type { CodeModeExecutorId } from "./code-mode-executor-types.js";
 import { disposeAllCodeModeRuns, waitForPendingBridgeSettlement } from "./code-mode-state.js";
 import { createSubscribedCodeModeHarness as subscribeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
@@ -24,15 +36,18 @@ import {
   waitUntilCompleted,
 } from "./code-mode.test-support.js";
 import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.tools.start.js";
+import { installSessionPlacementAdmissionProvider } from "./session-placement-admission.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { fakeTool } from "./test-helpers/fake-tool.js";
+import { DEFAULT_AGENT_TIMEOUT_MS } from "./timeout.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 const harnessDisposers: Array<() => void> = [];
+const executors = ["node", "quickjs"] as const;
 function createHarness(params: Parameters<typeof subscribeHarness>[0]) {
   const harness = subscribeHarness(params);
   if (!params.sessionManager) {
@@ -58,6 +73,7 @@ function createHarness(params: Parameters<typeof subscribeHarness>[0]) {
       harness.executeTool({
         tool: target,
         toolName: target.name,
+        toolId: `openclaw:${overrides.sourceName ?? "core"}:${target.name}`,
         source: "openclaw",
         toolCallId,
         input: {},
@@ -74,6 +90,7 @@ async function inSession(
     manager: SessionManager;
     harness: ReturnType<typeof createHarness>;
   }) => Promise<void>,
+  executor?: CodeModeExecutorId,
 ) {
   await withStateDirEnv(`code-mode-${name}-`, async () => {
     const scope = {
@@ -84,8 +101,8 @@ async function inSession(
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const manager = SessionManager.open(scope);
-    manager.appendMessage({ role: "user", content: "Read records", timestamp: 1 });
-    const harness = createHarness({ name, sessionManager: manager });
+    await manager.appendMessageAsync({ role: "user", content: "Read records", timestamp: 1 });
+    const harness = createHarness({ name, executor, sessionManager: manager });
     try {
       await run({ scope, manager, harness });
     } finally {
@@ -115,48 +132,437 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     clearRuntimeConfigSnapshot();
   });
 
-  it("admits nested activity when consecutive assistant responses reuse exec_0", async () => {
-    await inSession("reused-exec-id", async ({ scope, manager, harness }) => {
-      const target = fakeTool("read_record", "Read a record");
-      harness.add(target);
-      for (const value of ["first", "second"]) {
-        const toolCall = {
-          type: "toolCall" as const,
-          id: "exec_0",
-          name: "exec",
-          arguments: { code: `return await read_record({ value: "${value}" });` },
-        };
-        const assistantMessage = makeAssistantMessageFixture({
-          responseId: `chatcmpl-${value}`,
-          content: [toolCall],
-          stopReason: "toolUse",
-        });
-        manager.appendMessage(assistantMessage);
-        const details = resultDetails(
-          await runWithAgentToolExecutionContext({ assistantMessage, toolCall }, () =>
-            harness.exec.execute(toolCall.id, toolCall.arguments),
-          ),
-        );
-        const result = await waitUntilCompleted({ details, waitTool: harness.wait });
-        expectCompleted(result, expect.objectContaining({ input: { value } }));
-      }
-
-      const activities = await harness.readNestedActivities();
-      expect(activities).toMatchObject([
-        { details: { input: { value: "first" }, parentToolCallId: "exec_0", isError: false } },
-        { details: { input: { value: "second" }, parentToolCallId: "exec_0", isError: false } },
-      ]);
-      expect(new Set(activities.map(({ details }) => details.toolCallId)).size).toBe(2);
-      const admitted = SessionManager.open(scope)
-        .getEntries()
-        .flatMap((entry) =>
-          entry.type === "message" ? [readNestedToolActivity(entry.message)] : [],
+  it.each([undefined, 1_800_000])(
+    "preserves an off-VM wait when stop recovery aborts and drains exec (deadline=%s)",
+    async (deadline) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(0);
+      const harness = createHarness({ name: "await-diagnostic", timeoutMs: 2_000 });
+      const operation = harness.replyOperation;
+      operation.setPhase("running");
+      operation.attachBackend({
+        kind: "embedded",
+        runId: harness.runId,
+        cancel: () => {
+          harness.runAbortController.abort();
+          operation.complete();
+        },
+      });
+      const watchdogAttempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+      const started = createDeferred();
+      const target = tool(
+        "stalled",
+        "Wait for an external operation",
+        async (_id, _args, signal) => {
+          recordDiagnosticToolExecutionDeadline(deadline);
+          started.resolve();
+          await new Promise<void>((resolve) => {
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+          return jsonResult({ done: true });
+        },
+      );
+      const surface = applyCodeModeCatalog({
+        ...harness,
+        tools: [...harness.tools, target],
+        toolHookContext: { runId: harness.runId, watchdogAttempt },
+      });
+      const exec = expectDefined(
+        surface.tools.find((entry) => entry.name === "exec"),
+        "exec",
+      );
+      const execution = exec
+        .execute(
+          "await-cell",
+          { code: "return await stalled({});", awaitResults: true },
+          harness.runAbortController.signal,
         )
-        .filter(Boolean);
-      expect(admitted).toEqual(activities);
-      expect(manager.buildSessionContext().messages.some(readNestedToolActivity)).toBe(false);
-    });
-  });
+        .catch((error: unknown) => error);
+      let releasePlacement: (() => void) | undefined;
+      try {
+        await started.promise;
+        // The host can dispatch before the worker publishes its parked frontier.
+        await vi.waitFor(() =>
+          expect(
+            readSessionWatchdogFailure(operation.watchdog.describeStop().error)?.pendingTools[0]
+              ?.awaiting,
+          ).toHaveLength(1),
+        );
+        const stoppedAtMs = (deadline ?? 0) + SESSION_WATCHDOG_QUIET_TOOL_MS + 1;
+        releasePlacement = installSessionPlacementAdmissionProvider({
+          assertCompactionSuccessorAllowed() {},
+          executeLocalTurn: async (_claim, runLocal) => await runLocal(),
+          executeTurn: async (_claim, _params, runLocal) => await runLocal(),
+          recoverTerminalTurn: async (_session, assertCurrent) => {
+            assertCurrent?.();
+            harness.runAbortController.abort();
+            await execution;
+            expect(operation.watchdog.snapshot().tools).toEqual([]);
+            vi.setSystemTime(stoppedAtMs + 150);
+            return undefined;
+          },
+        });
+        vi.setSystemTime(stoppedAtMs);
+        await operation.watchdog.tick(Date.now());
+        await vi.waitFor(() => expect(operation.abortSignal.aborted).toBe(true));
+        expect(readSessionWatchdogFailure(operation.abortSignal.reason)?.pendingTools).toEqual([
+          {
+            toolName: "exec",
+            toolCallId: "await-cell",
+            elapsedMs: stoppedAtMs,
+            explicitDeadline: false,
+            awaiting: [
+              {
+                kind: "bridge",
+                method: "callValue",
+                deadlineAtMs: deadline ?? null,
+                elapsedMs: stoppedAtMs,
+              },
+            ],
+          },
+          {
+            toolName: "stalled",
+            toolCallId: expect.any(String),
+            elapsedMs: stoppedAtMs,
+            explicitDeadline: deadline !== undefined,
+          },
+        ]);
+      } finally {
+        releasePlacement?.();
+        harness.runAbortController.abort();
+        await execution;
+      }
+    },
+  );
+
+  it.each([
+    { name: "default timeout", args: {}, deadlineSource: "default", stopPhase: undefined },
+    {
+      name: "explicit timeout",
+      args: { timeoutSeconds: 1800 },
+      deadlineSource: "explicit",
+      stopPhase: undefined,
+    },
+    {
+      name: "disabled timeout during preparation",
+      args: { timeoutSeconds: 0 },
+      deadlineSource: "none",
+      stopPhase: "preparing",
+    },
+    {
+      name: "disabled timeout after spawn",
+      args: { timeoutSeconds: 0 },
+      deadlineSource: "none",
+      stopPhase: "running",
+    },
+    {
+      name: "service preparation",
+      args: { background: true },
+      deadlineSource: "none",
+      stopPhase: "preparing",
+    },
+  ] as const)(
+    "attributes sandbox exec liveness: $name",
+    async ({ args, deadlineSource, stopPhase }) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(10);
+      const supervisor = createProcessSupervisor();
+      vi.spyOn(processSupervisor, "getProcessSupervisor").mockReturnValue(supervisor);
+      const completed = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
+      const kill = vi.fn((signal?: NodeJS.Signals) => {
+        completed.resolve({ code: null, signal: signal ?? "SIGTERM" });
+      });
+      const adapter: Awaited<ReturnType<typeof childAdapter.createChildAdapter>>["adapter"] = {
+        supportsRawOutput: true,
+        onStdout: () => undefined,
+        onStderr: () => undefined,
+        onExit: () => undefined,
+        onError: () => undefined,
+        wait: () => completed.promise,
+        kill,
+        dispose: () => undefined,
+      };
+      const preparing = createDeferred();
+      const preparation = createDeferred();
+      const spawned = createDeferred();
+      let processStartedAt = 0;
+      vi.spyOn(childAdapter, "createChildAdapter").mockImplementation(async () => {
+        processStartedAt = Date.now();
+        spawned.resolve();
+        return { adapter, ready: Promise.resolve() };
+      });
+      const harness = createHarness({ name: "real-exec-deadline", timeoutMs: 2_000 });
+      const operation = harness.replyOperation;
+      operation.setPhase("running");
+      const cancel = vi.fn(() => {
+        harness.runAbortController.abort();
+        operation.complete();
+      });
+      operation.attachBackend({ kind: "embedded", runId: harness.runId, cancel });
+      const watchdogAttempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+      const target = createExecTool({
+        host: "sandbox",
+        allowBackground: true,
+        notifyOnExit: false,
+        preparedStoreEnvironment: { env: {} },
+        preparedSubagentExecution: false,
+        sandbox: {
+          containerName: "synthetic-sandbox",
+          workspaceDir: process.cwd(),
+          containerWorkdir: "/workspace",
+          buildExecSpec: async () => {
+            preparing.resolve();
+            await preparation.promise;
+            return {
+              argv: ["synthetic-sandbox", "sleep", "3600"],
+              env: {},
+              cwd: process.cwd(),
+              stdinMode: "pipe-closed",
+              prepareCurrent: async () => {},
+            };
+          },
+        },
+      });
+      const surface = applyCodeModeCatalog({
+        ...harness,
+        tools: [...harness.tools, wrapToolWithBeforeToolCallHook(target, { runId: harness.runId })],
+        toolHookContext: { runId: harness.runId, sessionKey: harness.sessionKey, watchdogAttempt },
+      });
+      const outer = expectDefined(
+        surface.tools.find((entry) => entry.name === "exec"),
+        "exec",
+      );
+      const execution = outer.execute(
+        "real-deadline-cell",
+        {
+          code: `return await exec(${JSON.stringify({ command: "sleep 3600", ...args })});`,
+          awaitResults: true,
+        },
+        harness.runAbortController.signal,
+      );
+      const settled = execution.catch((error: unknown) => error);
+      const pendingExec = (error = operation.watchdog.describeStop().error) =>
+        expectDefined(
+          readSessionWatchdogFailure(error)?.pendingTools.find(
+            ({ toolCallId }) => toolCallId !== "real-deadline-cell",
+          ),
+          "nested exec diagnostic",
+        );
+      const expectedAwaiting = (phase: "preparing" | "running") => [
+        { kind: "exec", phase, deadlineSource },
+      ];
+      try {
+        await preparing.promise;
+        expect(pendingExec()).toMatchObject({
+          explicitDeadline: deadlineSource !== "none",
+          awaiting: expectedAwaiting("preparing"),
+        });
+        if (stopPhase !== "running") {
+          await vi.advanceTimersByTimeAsync(900_001);
+          await operation.watchdog.tick(Date.now());
+          await vi.waitFor(() =>
+            expect(operation.watchdog.snapshot().recovery?.status).not.toBe("pending"),
+          );
+        }
+        if (stopPhase === "preparing") {
+          await vi.waitFor(() => expect(operation.abortSignal.aborted).toBe(true));
+        } else {
+          expect(operation.abortSignal.reason).toBeUndefined();
+          if (!stopPhase) {
+            await vi.advanceTimersByTimeAsync(99_999);
+          }
+          preparation.resolve();
+          await spawned.promise;
+          await vi.waitFor(() =>
+            expect(pendingExec().awaiting).toEqual(expectedAwaiting("running")),
+          );
+          if (stopPhase === "running") {
+            await vi.advanceTimersByTimeAsync(900_001);
+            await operation.watchdog.tick(Date.now());
+            await vi.waitFor(() => expect(operation.abortSignal.aborted).toBe(true));
+          } else {
+            // Cross the dispatch allowance too: spawn must publish its later enforced deadline.
+            await vi.advanceTimersByTimeAsync(processStartedAt + 1_800_000 - 1 - Date.now());
+            await operation.watchdog.tick(Date.now());
+            expect(operation.abortSignal.reason).toBeUndefined();
+            expect(kill).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(2);
+            const result = resultDetails(await execution);
+            expect(result, JSON.stringify(result)).toMatchObject({
+              status: "completed",
+              value: { status: "failed", failureKind: "overall-timeout" },
+            });
+            expect(kill).toHaveBeenCalledWith("SIGTERM");
+            expect(cancel).not.toHaveBeenCalled();
+          }
+        }
+        if (stopPhase) {
+          expect(pendingExec(operation.abortSignal.reason)).toEqual({
+            toolName: "exec",
+            toolCallId: expect.any(String),
+            elapsedMs: expect.any(Number),
+            explicitDeadline: false,
+            awaiting: expectedAwaiting(stopPhase),
+          });
+        }
+      } finally {
+        harness.runAbortController.abort();
+        preparation.resolve();
+        completed.resolve({ code: null, signal: "SIGTERM" });
+        await settled;
+        await supervisor.shutdown();
+        resetProcessRegistryForTests();
+        vi.restoreAllMocks();
+      }
+    },
+  );
+
+  it.each(["finite", "unlimited"] as const)(
+    "keeps quiet nested Auto Review alive within its %s parent allowance, then reaps a hang",
+    async (parent) => {
+      await import("./session-placement-admission.js");
+      const { createAutoReviewTool } = await loadBundledPluginFacade<{
+        createAutoReviewTool: (context: OpenClawPluginToolContext<2>) => AnyAgentTool | null;
+      }>({ pluginId: "autoreview", artifactBasename: "api.js" });
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(10);
+      const harness = createHarness({ name: `review-${parent}`, timeoutMs: 2_000 });
+      const operation = harness.replyOperation;
+      operation.setPhase("running");
+      const cancel = vi.fn(() => {
+        harness.runAbortController.abort();
+        operation.complete();
+      });
+      operation.attachBackend({ kind: "embedded", runId: harness.runId, cancel });
+      const watchdogAttempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+      const bound = parent === "finite" ? 1_800_000 : Date.now() + DEFAULT_AGENT_TIMEOUT_MS;
+      const started = createDeferred();
+      const review = expectDefined(
+        createAutoReviewTool({
+          assertInvocationCurrent() {},
+          assertCompleteResult() {},
+          modelExecution: {
+            cliEntryPath: "/fixture/openclaw.mjs",
+            async run() {
+              throw new Error("The stalled helper must not start a reviewer");
+            },
+          },
+          sandbox: {
+            workspaceDir: "/guest/repo",
+            installedSkillRoots: { autoreview: "/protected/autoreview" },
+            run: async ({ signal }) => {
+              started.resolve();
+              return await new Promise<never>((_, reject) => {
+                signal?.addEventListener(
+                  "abort",
+                  () => reject(new DOMException("Cancelled", "AbortError")),
+                  { once: true },
+                );
+              });
+            },
+          },
+        }),
+        "Auto Review",
+      );
+      const surface = applyCodeModeCatalog({
+        ...harness,
+        tools: [...harness.tools, wrapToolWithBeforeToolCallHook(review, { runId: harness.runId })],
+        toolHookContext: {
+          runId: harness.runId,
+          sessionKey: harness.sessionKey,
+          watchdogAttempt,
+          getRunAbortDeadlineAtMs: () => (parent === "finite" ? bound : undefined),
+        },
+      });
+      const exec = expectDefined(
+        surface.tools.find((entry) => entry.name === "exec"),
+        "exec",
+      );
+      const execution = wrapToolWithBeforeToolCallHook(exec, { watchdogAttempt }).execute(
+        "review-cell",
+        { code: "return await autoreview({ mode: 'local' });", awaitResults: true },
+        harness.runAbortController.signal,
+      );
+      // Observe cancellation immediately, including the pre-fix watchdog abort.
+      const settled = execution.catch((error: unknown) => error);
+      try {
+        await started.promise;
+        // Drive the owning watchdog boundary independently of bridge timers.
+        vi.setSystemTime(Date.now() + SESSION_WATCHDOG_QUIET_TOOL_MS + 1);
+        await operation.watchdog.tick(Date.now());
+        await vi.waitFor(() =>
+          expect(operation.watchdog.snapshot().recovery?.status).not.toBe("pending"),
+        );
+        expect(operation.abortSignal.reason).toBeUndefined();
+        expect(cancel).not.toHaveBeenCalled();
+        expect(new Set(operation.watchdog.snapshot().tools.map((entry) => entry.toolName))).toEqual(
+          new Set(["autoreview", "exec"]),
+        );
+        vi.setSystemTime(bound + SESSION_WATCHDOG_QUIET_TOOL_MS - 1);
+        expect((await operation.watchdog.tick(Date.now())).action).toBe("observe");
+        vi.setSystemTime(bound + SESSION_WATCHDOG_QUIET_TOOL_MS + 1);
+        await operation.watchdog.tick(Date.now());
+        await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+        expect(operation.abortSignal.reason).toMatchObject({ staleReason: "no_activity" });
+        await settled;
+      } finally {
+        harness.runAbortController.abort();
+        await settled;
+      }
+    },
+  );
+
+  it.each(executors)(
+    "%s admits nested activity when consecutive assistant responses reuse exec_0",
+    async (executor) => {
+      await inSession(
+        "reused-exec-id",
+        async ({ scope, manager, harness }) => {
+          const target = fakeTool("read_record", "Read a record");
+          harness.add(target);
+          for (const value of ["first", "second"]) {
+            const toolCall = {
+              type: "toolCall" as const,
+              id: "exec_0",
+              name: "exec",
+              arguments: { code: `return await read_record({ value: "${value}" });` },
+            };
+            const assistantMessage = makeAssistantMessageFixture({
+              responseId: `chatcmpl-${value}`,
+              content: [toolCall],
+              stopReason: "toolUse",
+            });
+            await manager.appendMessageAsync(assistantMessage);
+            const details = resultDetails(
+              await runWithAgentToolExecutionContext({ assistantMessage, toolCall }, () =>
+                harness.exec.execute(toolCall.id, toolCall.arguments),
+              ),
+            );
+            const result = await waitUntilCompleted({ details, waitTool: harness.wait });
+            expect(result.status, JSON.stringify(result)).toBe("completed");
+            expectCompleted(result, expect.objectContaining({ input: { value } }));
+          }
+          expect(target.execute).toHaveBeenCalledTimes(2);
+
+          const activities = await harness.readNestedActivities();
+          expect(activities).toMatchObject([
+            { details: { input: { value: "first" }, parentToolCallId: "exec_0", isError: false } },
+            { details: { input: { value: "second" }, parentToolCallId: "exec_0", isError: false } },
+          ]);
+          expect(new Set(activities.map(({ details }) => details.toolCallId)).size).toBe(2);
+          const admitted = SessionManager.open(scope)
+            .getEntries()
+            .flatMap((entry) =>
+              entry.type === "message" ? [readNestedToolActivity(entry.message)] : [],
+            )
+            .filter(Boolean);
+          expect(admitted).toEqual(activities);
+          expect(manager.buildSessionContext().messages.some(readNestedToolActivity)).toBe(false);
+        },
+        executor,
+      );
+    },
+  );
 
   it.each(["redacted", "rejected"])(
     "preserves nested source delivery when output is %s",
@@ -280,301 +686,331 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     }
   });
 
-  it("keeps direct sessions_yield handoff successful while closing sibling Code Mode cells", async () => {
-    const harness = createHarness({ name: "yield-handoff" });
-    const handoffReason = { code: "sessions_yield", turnHandoff: true } as const;
-    const onYield = vi.fn(() => harness.runAbortController.abort(handoffReason));
-    const target = wrapToolWithAbortSignal(
-      createSessionsYieldTool({
-        sessionId: harness.sessionId,
-        claimYield: () => true,
-        onYield,
-      }),
-      harness.runAbortController.signal,
-    );
-    const surface = harness.add(target);
-    const parked = await harness.run("await yield_control(); return 'unreachable';");
-    expect(parked.status).toBe("waiting");
-    expect(
-      harness.catalogRef.current?.entries.some((entry) => entry.name === "sessions_yield"),
-    ).toBe(false);
-    const direct = expectDefined(
-      surface.tools.find((entry) => entry.name === "sessions_yield"),
-      "direct handoff tool",
-    );
-    expect(resultDetails(await direct.execute("yield-handoff", {}))).toMatchObject({
-      status: "yielded",
-    });
-    expect(onYield).toHaveBeenCalledOnce();
-    expect(testing.activeRuns.size).toBe(0);
-    await expect(harness.wait.execute("closed-sibling", { runId: parked.runId })).rejects.toBe(
-      handoffReason,
-    );
-  });
+  it.each(executors)(
+    "%s keeps direct sessions_yield handoff successful while closing sibling Code Mode cells",
+    async (executor) => {
+      const harness = createHarness({ name: "yield-handoff", executor });
+      const handoffReason = { code: "sessions_yield", turnHandoff: true } as const;
+      const onYield = vi.fn(() => harness.runAbortController.abort(handoffReason));
+      const target = wrapToolWithAbortSignal(
+        createSessionsYieldTool({
+          sessionId: harness.sessionId,
+          claimYield: () => true,
+          onYield,
+        }),
+        harness.runAbortController.signal,
+      );
+      const surface = harness.add(target);
+      const parked = await harness.run("await yield_control(); return 'unreachable';");
+      expect(parked.status).toBe("waiting");
+      expect(
+        harness.catalogRef.current?.entries.some((entry) => entry.name === "sessions_yield"),
+      ).toBe(false);
+      const direct = expectDefined(
+        surface.tools.find((entry) => entry.name === "sessions_yield"),
+        "direct handoff tool",
+      );
+      expect(resultDetails(await direct.execute("yield-handoff", {}))).toMatchObject({
+        status: "yielded",
+      });
+      expect(onYield).toHaveBeenCalledOnce();
+      expect(testing.activeRuns.size).toBe(0);
+      await expect(harness.wait.execute("closed-sibling", { runId: parked.runId })).rejects.toBe(
+        handoffReason,
+      );
+    },
+  );
 
-  it("releases only the parked owner after catalog closure without wait", async () => {
-    const owner = createHarness({ name: "parked-catalog" });
-    const survivor = createHarness({ name: "survivor-catalog" });
-    const code = 'setTimeout(() => {}, 60_000); await yield_control("pause"); return "done";';
-    applyCodeModeCatalog(owner);
-    applyCodeModeCatalog(survivor);
+  it.each(executors)(
+    "%s releases only the parked owner after catalog closure without wait",
+    async (executor) => {
+      const owner = createHarness({ name: "parked-catalog", executor });
+      const survivor = createHarness({ name: "survivor-catalog", executor });
+      const code = 'setTimeout(() => {}, 60_000); await yield_control("pause"); return "done";';
+      applyCodeModeCatalog(owner);
+      applyCodeModeCatalog(survivor);
 
-    const parked = await owner.run(code);
-    const other = await survivor.run(code);
-    for (const result of [parked, other]) {
-      expect(result).toMatchObject({ status: "waiting", runId: expect.any(String) });
-    }
-    const ownerId = parked.runId as string;
-    const survivorId = other.runId as string;
-    const ownerState = snapshot(ownerId);
-    const survivorState = snapshot(survivorId);
-    const pending = pendingCall(ownerId, "sleep");
-    const otherPending = pendingCall(survivorId, "sleep");
-    expect(pending.settled).toBeUndefined();
-    expect(otherPending.settled).toBeUndefined();
-    expect(ownerState.continuation.retainedBytes).toBeGreaterThan(0);
-    expect(testing.resumingRunIds.size).toBe(0);
+      const parked = await owner.run(code);
+      const other = await survivor.run(code);
+      for (const result of [parked, other]) {
+        expect(result).toMatchObject({ status: "waiting", runId: expect.any(String) });
+      }
+      const ownerId = parked.runId as string;
+      const survivorId = other.runId as string;
+      const ownerState = snapshot(ownerId);
+      const survivorState = snapshot(survivorId);
+      const pending = pendingCall(ownerId, "sleep");
+      const otherPending = pendingCall(survivorId, "sleep");
+      expect(pending.settled).toBeUndefined();
+      expect(otherPending.settled).toBeUndefined();
+      expect(ownerState.continuation.retainedBytes).toBeGreaterThan(0);
+      expect(testing.resumingRunIds.size).toBe(0);
 
-    // Both exec calls have returned; no wait is in flight to perform owner cleanup.
-    clearToolSearchCatalog(owner);
-    expect([...testing.activeRuns.keys()]).toEqual([survivorId]);
-    await waitForPendingBridgeSettlement([pending], { kind: "awaiting" });
-    expect(() => pending.reply.take()).toThrow("unavailable");
-    expect(testing.activeRuns.get(survivorId)).toBe(survivorState);
-    expect(otherPending.settled).toBeUndefined();
-  });
+      // Both exec calls have returned; no wait is in flight to perform owner cleanup.
+      clearToolSearchCatalog(owner);
+      expect([...testing.activeRuns.keys()]).toEqual([survivorId]);
+      await waitForPendingBridgeSettlement([pending], { kind: "awaiting" });
+      expect(() => pending.reply.take()).toThrow("unavailable");
+      expect(testing.activeRuns.get(survivorId)).toBe(survivorState);
+      expect(otherPending.settled).toBeUndefined();
+    },
+  );
 
-  it("transfers parked ownership across refresh and repeated resumes before completion", async () => {
-    const owner = createHarness({ name: "transfer-complete" });
-    applyCodeModeCatalog(owner);
-    let controller = new AbortController();
-    let result = await owner.run(
-      `await yield_control("first");
+  it.each(executors)(
+    "%s transfers parked ownership across refresh and repeated resumes before completion",
+    async (executor) => {
+      const owner = createHarness({ name: "transfer-complete", executor });
+      applyCodeModeCatalog(owner);
+      let controller = new AbortController();
+      let result = await owner.run(
+        `await yield_control("first");
                 await yield_control("second");
                 await yield_control("third");
                 return "done";`,
-      controller.signal,
-      "transfer-exec",
-    );
-    expect(result.status, JSON.stringify(result)).toBe("waiting");
-    const runId = result.runId as string;
-    controller.abort(new Error("exec observer finished"));
-    applyCodeModeCatalog(owner);
-    addClientToolsToToolCatalog({
-      enabled: true,
-      ...owner,
-      tools: [fakeTool("client_probe", "Client probe")],
-    });
+        controller.signal,
+        "transfer-exec",
+      );
+      expect(result.status, JSON.stringify(result)).toBe("waiting");
+      const runId = result.runId as string;
+      controller.abort(new Error("exec observer finished"));
+      applyCodeModeCatalog(owner);
+      addClientToolsToToolCatalog({
+        enabled: true,
+        ...owner,
+        tools: [fakeTool("client_probe", "Client probe")],
+      });
 
-    for (let index = 0; index < 2; index += 1) {
-      controller = new AbortController();
-      result = await owner.resume(runId, `transfer-wait-${index}`, controller.signal);
-      expect(result).toMatchObject({ status: "waiting", runId });
-      controller.abort(new Error("wait observer finished"));
-    }
+      for (let index = 0; index < 2; index += 1) {
+        controller = new AbortController();
+        result = await owner.resume(runId, `transfer-wait-${index}`, controller.signal);
+        expect(result).toMatchObject({ status: "waiting", runId });
+        controller.abort(new Error("wait observer finished"));
+      }
 
-    const finalState = snapshot(runId);
-    const pending = finalState.pending;
-    expectCompleted(await owner.resume(runId, "transfer-complete"), "done");
-    expectNoCells();
-    await waitForPendingBridgeSettlement(pending, {
-      kind: "draining",
-      requiredRequestIds: pending.map((entry) => entry.id),
-    });
-    expect(getEventListeners(finalState.owner.signal, "abort")).toHaveLength(0);
-    expect(finalState.owner.signal.aborted).toBe(true);
-    expect(owner.catalogRef.onDispose?.size ?? 0).toBe(0);
-  });
+      const finalState = snapshot(runId);
+      const pending = finalState.pending;
+      expectCompleted(await owner.resume(runId, "transfer-complete"), "done");
+      expectNoCells();
+      await waitForPendingBridgeSettlement(pending, {
+        kind: "draining",
+        requiredRequestIds: pending.map((entry) => entry.id),
+      });
+      expect(getEventListeners(finalState.owner.signal, "abort")).toHaveLength(0);
+      expect(finalState.owner.signal.aborted).toBe(true);
+      expect(owner.catalogRef.onDispose?.size ?? 0).toBe(0);
+    },
+  );
 
-  it("does not publish a snapshot after its catalog closes during wait", async () => {
-    // Worker startup must not consume the host budget before close_owner dispatches.
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const owner = createHarness({ name: "close-during-wait" });
-    const closeOwner = tool("close_owner", "Close the run catalog", async () => {
-      clearToolSearchCatalog(owner);
-      return jsonResult({ closed: true });
-    });
-    owner.add(closeOwner);
-    const parked = await owner.run(`await yield_control("initial");
+  it.each(executors)(
+    "%s does not publish a snapshot after its catalog closes during wait",
+    async (executor) => {
+      // Worker startup must not consume the host budget before close_owner dispatches.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const owner = createHarness({ name: "close-during-wait", executor });
+      const closeOwner = tool("close_owner", "Close the run catalog", async () => {
+        clearToolSearchCatalog(owner);
+        return jsonResult({ closed: true });
+      });
+      owner.add(closeOwner);
+      const parked = await owner.run(`await yield_control("initial");
             await close_owner({});
             await yield_control("closed");
             return "unreachable";`);
-    expect(parked.status).toBe("waiting");
-    expect(await owner.resume(parked.runId, "close-during-wait")).toMatchObject({
-      status: "failed",
-      code: "aborted",
-    });
-    expect(owner.catalogRef.current).toBeUndefined();
-    expectNoCells();
-    expect(countActiveToolExecutions(owner.runId)).toBe(0);
-  });
-
-  it("does not return a closed snapshot when owner abort races the wait deadline", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const owner = createHarness({
-      name: "abort-wait-deadline",
-      timeoutMs: 1_500,
-    });
-    const lifecycle = vi.spyOn(owner.subscription, "runToolLifecycle");
-    const started = createDeferred();
-    const stalled = tool("stalled", "Await cancellation", async () => {
-      started.resolve();
-      return await new Promise<never>(() => {});
-    });
-    owner.add(stalled);
-    try {
-      const execution = owner.run("return await stalled({});", undefined, "deadline-exec");
-      await started.promise;
-      await vi.advanceTimersByTimeAsync(1_500);
-      const parked = await execution;
       expect(parked.status).toBe("waiting");
-      const waiting = owner.resume(parked.runId, "deadline-wait");
-      vi.advanceTimersByTime(1_499);
-      owner.runAbortController.abort();
-      expect(await waiting).toMatchObject({ status: "failed", code: "aborted" });
-      expectNoCells();
-      // Abort returns before nested transcript and terminal finalization; join its owner.
-      expect(lifecycle).toHaveBeenCalledOnce();
-      await expect(lifecycle.mock.results[0]?.value).rejects.toThrow("Aborted");
-      expect(countActiveToolExecutions(owner.runId)).toBe(0);
-    } finally {
-      lifecycle.mockRestore();
-    }
-  });
-
-  it("keeps sequential exclusion after cell cancellation until implementation rejection", async () => {
-    const harness = createHarness({
-      name: "sequential-cancel-reject",
-      timeoutMs: 2_000,
-    });
-    const controller = new AbortController();
-    const started = createDeferred();
-    const downstream = createDeferred();
-    const events: string[] = [];
-    let calls = 0;
-    const target = tool("ordered_target", "Write without observing cancellation", async () => {
-      const call = ++calls;
-      events.push(`${call}:start`);
-      try {
-        if (call === 1) {
-          started.resolve();
-          await downstream.promise;
-        }
-      } finally {
-        events.push(`${call}:settled`);
-      }
-      return jsonResult({ call });
-    });
-    target.executionMode = "sequential";
-    harness.add(target);
-    try {
-      const first = harness.run(
-        "return await ordered_target({});",
-        controller.signal,
-        "cancelled-cell",
-      );
-      await started.promise;
-      controller.abort();
-      expect(await first).toMatchObject({ status: "failed", code: "aborted" });
-      expect(harness.runAbortController.signal.aborted).toBe(false);
-      expect(events).toEqual(["1:start"]);
-
-      // The first write outlives its observer; await the worker's real monotonic deadline.
-      const following = await harness.run(
-        "return await ordered_target({});",
-        undefined,
-        "following-cell",
-      );
-      expect(following.status).toBe("waiting");
-      expect(events).toEqual(["1:start"]);
-
-      downstream.reject(new Error("late implementation failure"));
-      expectCompleted(await waitUntilCompleted({ details: following, waitTool: harness.wait }), {
-        call: 2,
+      expect(await owner.resume(parked.runId, "close-during-wait")).toMatchObject({
+        status: "failed",
+        code: "aborted",
       });
-      expect(events).toEqual(["1:start", "1:settled", "2:start", "2:settled"]);
+      expect(owner.catalogRef.current).toBeUndefined();
       expectNoCells();
-    } finally {
-      downstream.resolve();
-    }
-  });
+      expect(countActiveToolExecutions(owner.runId)).toBe(0);
+    },
+  );
 
-  it.each(["expire", "shutdown"])(
-    "settles an abort-ignoring subscribed tool exactly once after %s",
-    async (close) => {
+  it.each(executors)(
+    "%s does not return a closed snapshot when owner abort races the wait deadline",
+    async (executor) => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const downstream = createDeferred();
+      const owner = createHarness({
+        name: "abort-wait-deadline",
+        executor,
+        timeoutMs: 1_500,
+      });
+      const lifecycle = vi.spyOn(owner.subscription, "runToolLifecycle");
       const started = createDeferred();
-      const toolAbort = vi.fn();
+      const stalled = tool("stalled", "Await cancellation", async () => {
+        started.resolve();
+        return await new Promise<never>(() => {});
+      });
+      const watchdogAttempt = owner.replyOperation.watchdog.attachAttempt({ assertCurrent() {} });
+      owner.add(wrapToolWithBeforeToolCallHook(stalled, { watchdogAttempt, runId: owner.runId }));
+      try {
+        const execution = owner.run("return await stalled({});", undefined, "deadline-exec");
+        await started.promise;
+        expect(owner.replyOperation.watchdog.snapshot().tools).toMatchObject([
+          {
+            toolName: "stalled",
+            toolCallId: expect.stringMatching(/^tool_call:deadline-exec:[^:]+:stalled:1$/),
+          },
+        ]);
+        await vi.advanceTimersByTimeAsync(1_500);
+        const parked = await execution;
+        expect(parked.status).toBe("waiting");
+        const waiting = owner.resume(parked.runId, "deadline-wait");
+        vi.advanceTimersByTime(1_499);
+        owner.runAbortController.abort();
+        expect(await waiting).toMatchObject({ status: "failed", code: "aborted" });
+        expectNoCells();
+        // Abort returns before nested transcript and terminal finalization; join its owner.
+        expect(lifecycle).toHaveBeenCalledOnce();
+        await expect(lifecycle.mock.results[0]?.value).rejects.toThrow("Aborted");
+        expect(countActiveToolExecutions(owner.runId)).toBe(0);
+      } finally {
+        lifecycle.mockRestore();
+      }
+    },
+  );
+
+  it.each(executors)(
+    "%s keeps sequential exclusion after cell cancellation until implementation rejection",
+    async (executor) => {
       const harness = createHarness({
-        name: `closure-${close}`,
+        name: "sequential-cancel-reject",
+        executor,
         timeoutMs: 2_000,
       });
-      const target = tool(
-        "stalled_target",
-        "Ignore cancellation",
-        async (_toolCallId, _input, signal) => {
-          expectDefined(signal, "nested tool cancellation signal").addEventListener(
-            "abort",
-            toolAbort,
-          );
-          started.resolve();
-          await downstream.promise;
-          return jsonResult({ late: true });
-        },
-      );
-      const continuation = jsonTool("continue_after_target", { continued: true });
-      harness.add(target, continuation);
-
+      const controller = new AbortController();
+      const started = createDeferred();
+      const downstream = createDeferred();
+      const events: string[] = [];
+      let calls = 0;
+      const target = tool("ordered_target", "Write without observing cancellation", async () => {
+        const call = ++calls;
+        events.push(`${call}:start`);
+        try {
+          if (call === 1) {
+            started.resolve();
+            await downstream.promise;
+          }
+        } finally {
+          events.push(`${call}:settled`);
+        }
+        return jsonResult({ call });
+      });
+      target.executionMode = "sequential";
+      harness.add(target);
       try {
-        const execution = harness.run(
-          `const target = stalled_target({});
-                try { await target; } catch (error) { return error.message; }
-                return await continue_after_target({});`,
-          undefined,
-          `code-call-${close}`,
+        const first = harness.run(
+          "return await ordered_target({});",
+          controller.signal,
+          "cancelled-cell",
         );
         await started.promise;
-        await vi.advanceTimersByTimeAsync(2_000);
-        const suspended = await execution;
-        expect(suspended.status).toBe("waiting");
-        expect(countActiveToolExecutions(harness.runId)).toBe(1);
+        controller.abort();
+        expect(await first).toMatchObject({ status: "failed", code: "aborted" });
+        expect(harness.runAbortController.signal.aborted).toBe(false);
+        expect(events).toEqual(["1:start"]);
 
-        const parked = snapshot(suspended.runId);
-        const pending = pendingCall(suspended.runId, "callValue");
-        const waiting =
-          close === "expire" ? undefined : harness.resume(suspended.runId, `code-wait-${close}`);
+        // The first write outlives its observer; await the worker's real monotonic deadline.
+        const following = await harness.run(
+          "return await ordered_target({});",
+          undefined,
+          "following-cell",
+        );
+        expect(following.status).toBe("waiting");
+        expect(events).toEqual(["1:start"]);
 
-        if (close === "expire") {
-          parked.expiresAt = performance.now() - 1;
-          testing.removeExpiredRuns();
-        } else {
-          await disposeAllCodeModeRuns();
-        }
-
-        if (waiting) {
-          const result = await waiting;
-          expect(result.status).not.toBe("waiting");
-        } else {
-          await waitForPendingBridgeSettlement([pending], { kind: "awaiting" });
-          await expect(harness.resume(suspended.runId, "code-wait-after-expiry")).rejects.toThrow(
-            "code mode run is unavailable or expired",
-          );
-        }
-        expect(() => pending.reply.take()).toThrow("unavailable");
-        await vi.waitFor(() => expect(countActiveToolExecutions(harness.runId)).toBe(0));
-        expect(toolAbort).toHaveBeenCalledOnce();
-        expect(harness.subscription.getItemLifecycle().activeCount).toBe(0);
+        downstream.reject(new Error("late implementation failure"));
+        expectCompleted(await waitUntilCompleted({ details: following, waitTool: harness.wait }), {
+          call: 2,
+        });
+        expect(events).toEqual(["1:start", "1:settled", "2:start", "2:settled"]);
         expectNoCells();
-
-        downstream.resolve();
-        await Promise.resolve();
-        expect(target.execute).toHaveBeenCalledOnce();
-        expect(continuation.execute).not.toHaveBeenCalled();
-        expect(toolAbort).toHaveBeenCalledOnce();
       } finally {
         downstream.resolve();
       }
     },
   );
+
+  describe.each(executors)("%s subscribed closure", (executor) => {
+    it.each(["expire", "shutdown"])(
+      "settles an abort-ignoring subscribed tool exactly once after %s",
+      async (close) => {
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        const downstream = createDeferred();
+        const started = createDeferred();
+        const toolAbort = vi.fn();
+        const harness = createHarness({
+          name: `closure-${close}`,
+          executor,
+          timeoutMs: 2_000,
+        });
+        const target = tool(
+          "stalled_target",
+          "Ignore cancellation",
+          async (_toolCallId, _input, signal) => {
+            expectDefined(signal, "nested tool cancellation signal").addEventListener(
+              "abort",
+              toolAbort,
+            );
+            started.resolve();
+            await downstream.promise;
+            return jsonResult({ late: true });
+          },
+        );
+        const continuation = jsonTool("continue_after_target", { continued: true });
+        harness.add(target, continuation);
+
+        try {
+          const execution = harness.run(
+            `const target = stalled_target({});
+                try { await target; } catch (error) { return error.message; }
+                return await continue_after_target({});`,
+            undefined,
+            `code-call-${close}`,
+          );
+          await started.promise;
+          await vi.advanceTimersByTimeAsync(2_000);
+          const suspended = await execution;
+          expect(suspended.status).toBe("waiting");
+          expect(countActiveToolExecutions(harness.runId)).toBe(1);
+
+          const parked = snapshot(suspended.runId);
+          const pending = pendingCall(suspended.runId, "callValue");
+          const waiting =
+            close === "expire" ? undefined : harness.resume(suspended.runId, `code-wait-${close}`);
+
+          if (close === "expire") {
+            parked.expiresAt = performance.now() - 1;
+            testing.removeExpiredRuns();
+          } else {
+            await disposeAllCodeModeRuns();
+          }
+
+          if (waiting) {
+            const result = await waiting;
+            expect(result.status).not.toBe("waiting");
+          } else {
+            await waitForPendingBridgeSettlement([pending], { kind: "awaiting" });
+            await expect(harness.resume(suspended.runId, "code-wait-after-expiry")).rejects.toThrow(
+              "code mode run is unavailable or expired",
+            );
+          }
+          expect(() => pending.reply.take()).toThrow("unavailable");
+          await vi.waitFor(() => expect(countActiveToolExecutions(harness.runId)).toBe(0));
+          expect(toolAbort).toHaveBeenCalledOnce();
+          expect(harness.subscription.getItemLifecycle().activeCount).toBe(0);
+          expectNoCells();
+
+          downstream.resolve();
+          await Promise.resolve();
+          expect(target.execute).toHaveBeenCalledOnce();
+          expect(continuation.execute).not.toHaveBeenCalled();
+          expect(toolAbort).toHaveBeenCalledOnce();
+        } finally {
+          downstream.resolve();
+        }
+      },
+    );
+  });
 });

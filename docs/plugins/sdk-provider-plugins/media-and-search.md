@@ -65,6 +65,14 @@ merging a nested value such as voice settings.
     memory search. The retired memory-specific registrar and manifest
     contract are no longer accepted.
 
+    If a model embeds images or audio into the same space as text, return them
+    from `mediaModalities({ model })` (for example `["image", "audio"]`), and
+    send `inline-data` parts of `EmbeddingInput` in the request. Omitting media
+    capability means text only. Memory rejects unsupported configured modalities
+    unless the user sets `memory.search.multimodal.allowPartial`. The older
+    `supportsMultimodalEmbeddings({ model })` boolean is deprecated; `true` still
+    counts as image and audio.
+
     OpenAI-compatible endpoints can use `createRemoteEmbeddingProvider`
     from `openclaw/plugin-sdk/memory-core-host-engine-embeddings`. Its optional
     `buildRequestFields(kind)` callback returns extra JSON fields for
@@ -105,6 +113,15 @@ merging a nested value such as voice settings.
     This optional field preserves existing plugin contracts, index contents,
     and embedding-cache identities.
 
+    The returned `runtime` can set `inlineIndexConcurrency` to cap how many
+    non-batch file indexing jobs memory runs at once. Use a positive safe
+    integer; omit it to keep the host default of 4. Invalid declarations are
+    ignored, and provider batch jobs keep their own concurrency. Servers that
+    answer requests in arrival order on the same host, such as Ollama and the
+    managed `local` llama-server, declare 1 so a search does not queue behind
+    several indexing requests. The generic OpenAI-compatible adapter declares 1
+    only when its base URL is a loopback address.
+
     `embed` and `embedBatch` accept an optional `onUsage` call option. A provider
     that reports usage calls it once per successful upstream request, before
     resolving, with `{ promptTokens, totalTokens }` or `undefined` when that
@@ -133,6 +150,20 @@ merging a nested value such as voice settings.
 
   </Tab>
   <Tab title="Image and video generation">
+    Image providers serving distinct native protocols can declare
+    `capabilitiesByModel` on the existing provider contract. The host uses an
+    exact model entry for mode, geometry and output normalization; models without
+    an entry retain the provider-wide `capabilities`. These static format facts
+    never replace live catalog eligibility or credential checks.
+
+    Direct and catalog-scoped GenerateContent image consumers can share
+    `buildGoogleImageGenerationBody` and `parseGoogleImageGenerationResponse`
+    from `openclaw/plugin-sdk/image-generation`. The body helper preserves the
+    native inline-image and geometry mapping. The parser accepts an optional
+    Base64 normalization callback so the direct Google plugin retains its
+    ProtoJSON alphabet policy. Callers own credentials, model/route eligibility,
+    complete HTTP delivery, cancellation and qualified output bounds.
+
     OpenAI-compatible image adapters can use `createOpenAiCompatibleImageGenerationProvider`
     from `openclaw/plugin-sdk/image-generation`. Adapters with custom request handling can
     use `inlineOpenAiCompatibleImageUrls` before `parseOpenAiCompatibleImageResponse`.
@@ -353,6 +384,10 @@ merging a nested value such as voice settings.
     requests and check cancellation after asynchronous work. Existing
     one-argument implementations remain valid; OpenClaw rejects late fetch
     results after cancellation before publishing them to its fetch cache.
+
+    Forward the same signal to `resolveCitationRedirectUrl(url, signal)` when
+    enriching search citations. Caller cancellation rejects with its original
+    reason; ordinary redirect failures and timeouts keep the original URL.
 
   </Tab>
 </Tabs>

@@ -6,7 +6,10 @@ import {
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { defineCodexBuildState } from "../build-state.js";
-import { interruptCodexTurnAndWaitBestEffort } from "./attempt-client-cleanup.js";
+import {
+  interruptCodexTurnAndWaitBestEffort,
+  terminateCodexBackgroundTerminals,
+} from "./attempt-client-cleanup.js";
 import {
   claimCodexAppServerLiveThread,
   hasCodexAppServerLiveThread,
@@ -15,6 +18,10 @@ import {
 } from "./client-runtime.js";
 import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
+import {
+  getCodexNativeProcessClient,
+  type CodexNativeProcessAuthority,
+} from "./native-process-authority.js";
 import type {
   MonitorOptions,
   NativeDescendantCancellation,
@@ -80,10 +87,12 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
     runtime,
     retainClient,
     retainParentThread,
+    nativeProcessAuthority,
     ...registration
   }: NativeParentRegistration &
     Pick<MonitorOptions, "retainClient" | "retainParentThread"> & {
       client: CodexAppServerClient;
+      nativeProcessAuthority?: CodexNativeProcessAuthority;
       runtime?: NativeSubagentMonitorRuntime;
     }): Promise<ParentRegistrationHandle> {
     let monitor = monitors.get(client);
@@ -237,7 +246,23 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
       });
       monitors.set(client, monitor);
     }
-    return monitor.registerParent(registration);
+    return monitor.registerParent({
+      ...registration,
+      cancelChildProcesses: async (childThreadId, childTurnId, assertCurrent) => {
+        assertCurrent();
+        if (nativeProcessAuthority?.requiresProcessAdmission) {
+          await getCodexNativeProcessClient(client).cancelTurn(childThreadId, childTurnId);
+        } else {
+          await terminateCodexBackgroundTerminals(
+            client,
+            childThreadId,
+            false,
+            undefined,
+            assertCurrent,
+          );
+        }
+      },
+    });
   }
 
   return {

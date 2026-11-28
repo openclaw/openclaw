@@ -29,7 +29,6 @@ import {
 } from "./package-update-swap.assertions.test-support.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
-import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 type SwapFixture = Awaited<ReturnType<typeof createPackageSwapFixture>> & { base: string };
@@ -296,57 +295,49 @@ describe("package verification bounds", () => {
       await expect(fs.readFile(manifest, "utf8")).resolves.toHaveLength(1024 * 1024);
     }));
 
-  it.each(["launcher", "launcher directory"] as const)(
+  it.for(["launcher", "launcher directory"] as const)(
     "bounds the initial %s observation",
-    (entry) =>
+    (entry, { signal }) =>
       withSwap(async ({ params, launcher }) => {
         const lstat = fs.lstat.bind(fs);
-        const readdir = fs.readdir.bind(fs);
         const opendir = fs.opendir.bind(fs);
-        const blocked = createDeferredCore();
+        const entered = createDeferredCore();
+        const blocked = createDeferredCore<never>();
         const target = entry === "launcher" ? launcher : params.stage.layout.binDir;
-        let entered = false;
-        const block = async (file: unknown) => {
-          if (!entered && String(file) === target) {
-            entered = true;
-            await blocked.promise;
+        const block = (file: unknown) => {
+          if (String(file) === target) {
+            entered.resolve();
+            return blocked.promise;
           }
+          return undefined;
         };
-        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-          await block(args[0]);
-          return lstat(...args);
-        });
-        vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
-          await block(args[0]);
-          return readdir(...args);
-        });
-        vi.spyOn(fs, "opendir").mockImplementation(async (...args) => {
-          await block(args[0]);
-          return opendir(...args);
-        });
+        vi.spyOn(fs, "lstat").mockImplementation((...args) => block(args[0]) ?? lstat(...args));
+        vi.spyOn(fs, "opendir").mockImplementation((...args) => block(args[0]) ?? opendir(...args));
         const beforeActivate = vi.fn();
         const onLiveMutation = vi.fn();
+        vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
         const update = swapStagedPackageInstall({
           ...params,
           beforeActivate,
           onLiveMutation,
           timeoutMs: 200,
         });
-        let timer: ReturnType<typeof setTimeout> | undefined;
         try {
-          const result = await Promise.race([
+          await waitForGate(
+            entered.promise,
             update,
-            new Promise<"pending">((resolve) => {
-              timer = setTimeout(() => resolve("pending"), 750);
-            }),
-          ]);
-          expect(entered).toBe(true);
+            signal,
+            `${entry} observation was not reached`,
+          );
+          await vi.advanceTimersByTimeAsync(200);
+          const result = await withinTest(update, signal);
           expect(result).toMatchObject({ status: "failed" });
+          expect(result.step.stderrTail).toContain("Package rollback verification timed out");
           expectNoCalls(beforeActivate, onLiveMutation);
         } finally {
-          clearTimeout(timer);
-          blocked.resolve();
-          await update;
+          blocked.reject(new Error("stalled launcher observation released during teardown"));
+          vi.useRealTimers();
+          await Promise.allSettled([update, blocked.promise]);
         }
       }),
   );
@@ -452,7 +443,7 @@ describe("npm rollback content diagnostics", () => {
   it.each(["rewrite cache", "contents", "cache symlink", "cache during scan"])(
     "verifies retained bytes after %s",
     (change) =>
-      withSwap(async ({ params, packageRoot, launcher, base }) => {
+      withSwap(async ({ params, packageRoot, launcher }) => {
         const modules = path.join(packageRoot, "node_modules");
         await fs.mkdir(modules);
         await fs.writeFile(path.join(modules, ".package-lock.json"), '{"lockfileVersion":3}');
@@ -499,16 +490,6 @@ describe("npm rollback content diagnostics", () => {
           if (change === "contents") {
             expect(rollback.stderrTail).toContain("sha256");
           }
-          const report = await prepareUpdateFailureReport(
-            {
-              attemptId: "content-drift",
-              result: { mode: "npm", status: "error", steps: [], durationMs: 0 },
-              recordedRun: { runId: "content-drift", steps },
-            },
-            { env: {}, stateDir: base },
-          );
-          expect(report.body).toContain(name);
-          expect(report.body).not.toContain(base);
         }
       }),
   );

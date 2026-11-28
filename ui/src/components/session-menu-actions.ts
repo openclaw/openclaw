@@ -1,5 +1,4 @@
 import type { GatewaySessionRow } from "../api/types.ts";
-import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { registerSessionPlacementEnglish } from "../i18n/locales/en-session-placement.ts";
 import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
@@ -14,7 +13,6 @@ import {
 import { createSessionOwnerMenu } from "./session-owner-menu.ts";
 import "../styles/sidebar-menus.css";
 
-registerSessionOrganizationEnglish();
 registerSessionPlacementEnglish();
 
 export type SessionMenuData = {
@@ -28,6 +26,7 @@ export type SessionMenuData = {
   unread: boolean;
   archived: boolean;
   snoozedUntil: number | null;
+  snoozeTime?: number;
   hiddenFromInvolvingMe?: boolean;
   communication?: GatewaySessionRow["communication"];
   effectiveCommunication?: GatewaySessionRow["effectiveCommunication"];

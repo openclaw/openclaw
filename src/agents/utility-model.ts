@@ -6,13 +6,20 @@ import {
   hasUtilityModelSeparationMigrationMarker,
   resolveLegacyImplicitPrimaryModelRef,
 } from "../config/utility-model-separation-migration.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveNativeModelPrimary } from "./agent-scope.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
+import { getPublishedPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
+import {
+  resolveAutomaticUtilityModel,
+  selectUtilityModel,
+  type AutomaticUtilityModelParams,
+  type UtilityModelSelection,
+  type UtilityModelSelectionParams,
+} from "./utility-model-selection.js";
 import { readUtilityModelSetting } from "./utility-model-setting.js";
 
 /** Legacy utility settings did not remove the ordinary implicit primary route. */
@@ -55,81 +62,53 @@ export function resolveConfiguredSetupModelForAgent(params: {
     : undefined;
 }
 
-/**
- * Automatic utility model for an already-resolved primary provider (manifest
- * `modelCatalog.providers.<id>.defaultUtilityModel`), or undefined when the
- * provider does not declare one. Reads only the process-current plugin
- * metadata snapshot, so the lookup stays synchronous and cheap; contexts
- * without a snapshot simply get no derived default.
- */
-export function resolveAutomaticUtilityModelRef(params: {
-  cfg: OpenClawConfig;
-  primaryProvider: string;
-  primaryModelRef?: string;
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
-}): string | undefined {
-  const provider = params.primaryProvider.trim().toLowerCase();
-  if (!provider) {
+function readPublishedModelCatalog(params: { config: OpenClawConfig; agentId: string }) {
+  try {
+    const owner = getPublishedPreparedModelCatalogOwnerSnapshot(params);
+    return owner?.readFullModelCatalog?.() ?? owner?.modelCatalog;
+  } catch {
+    // A catalog acquisition failure is not proof that a configured model disappeared.
     return undefined;
   }
-  const snapshot =
-    params.metadataSnapshot ??
-    getCurrentPluginMetadataSnapshot({
-      config: params.cfg,
-      allowWorkspaceScopedSnapshot: true,
-    });
-  if (!snapshot) {
-    return undefined;
-  }
-  for (const plugin of snapshot.plugins) {
-    const defaultUtilityModel = plugin.modelCatalog?.providers?.[provider]?.defaultUtilityModel;
-    const modelId = defaultUtilityModel?.trim();
-    if (modelId) {
-      const derived = `${provider}/${modelId}`;
-      // Automatic routing stays with the primary model's explicit auth owner.
-      const profile = params.primaryModelRef
-        ? splitTrailingAuthProfile(params.primaryModelRef).profile
-        : undefined;
-      return profile ? `${derived}@${profile}` : derived;
-    }
-  }
-  return undefined;
+}
+
+/** The agent's published inventory, read only when automatic selection needs it. */
+const publishedCatalogFor = (cfg: OpenClawConfig, agentId: string | undefined) =>
+  agentId ? () => readPublishedModelCatalog({ config: cfg, agentId }) : undefined;
+
+/** Automatic selection shared by utility execution and the model-picker preview. */
+export function resolveAutomaticUtilityModelRef(
+  params: Omit<AutomaticUtilityModelParams, "readCatalog" | "modelPolicy">,
+): string | undefined {
+  const automatic = resolveAutomaticUtilityModel({
+    ...params,
+    readCatalog: publishedCatalogFor(params.cfg, params.agentId),
+  });
+  return "modelRef" in automatic ? automatic.modelRef : undefined;
 }
 
 /**
- * The utility model ref to use for the agent, or undefined when utility
- * routing is disabled or no default exists. Callers with a session-specific
- * selection pass both primary fields so automatic routing keeps that session's
- * provider and auth owner.
+ * The one owner of utility model choice: a selection with provenance, or the
+ * reason no utility model runs. Callers with a session-specific selection pass
+ * both primary fields so automatic routing keeps that session's provider and
+ * auth owner; callers acting for a session owner pass that owner's role policy.
  */
-export function resolveUtilityModelRefForAgent(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  /** Pass when the caller already resolved the primary provider. */
-  primaryProvider?: string;
-  /** Pass with primaryProvider to carry a session-specific auth profile. */
-  primaryModelRef?: string;
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
-}): string | undefined {
-  const setting = readUtilityModelSetting(params.cfg, params.agentId);
-  if (setting.kind === "explicit") {
-    return setting.modelRef;
-  }
-  if (setting.kind === "disabled") {
-    return undefined;
-  }
-  const provider =
-    params.primaryProvider?.trim() ||
-    resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId }).provider;
-  return (
-    resolveAutomaticUtilityModelRef({
-      cfg: params.cfg,
-      primaryProvider: provider,
-      primaryModelRef:
-        params.primaryModelRef?.trim() || resolveNativeModelPrimary(params.cfg, params.agentId),
-      metadataSnapshot: params.metadataSnapshot,
-    }) ?? setting.fallbacks.find((ref) => ref.trim())?.trim()
-  );
+export function resolveUtilityModelSelectionForAgent(
+  params: Omit<UtilityModelSelectionParams, "readCatalog">,
+): UtilityModelSelection {
+  return selectUtilityModel({
+    ...params,
+    readCatalog: publishedCatalogFor(params.cfg, params.agentId),
+  });
+}
+
+export function resolveUtilityModelRefForAgent(
+  // A ref alone drops the disabled reason, and simple completion would then fall
+  // back to the main model; role-aware callers use the selection.
+  params: Omit<UtilityModelSelectionParams, "readCatalog" | "modelPolicy">,
+): string | undefined {
+  const selection = resolveUtilityModelSelectionForAgent(params);
+  return "modelRef" in selection ? selection.modelRef : undefined;
 }
 
 /** Candidate runtime for an automatic utility model; preparation checks auth availability. */
@@ -145,20 +124,32 @@ export function resolveAutomaticUtilityRuntimeOverride(params: {
   if (readUtilityModelSetting(params.cfg, params.agentId).kind !== "auto") {
     return undefined;
   }
-  const primary = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
+  const primary = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    manifestPlugins: params.metadataSnapshot?.plugins,
+  });
   const utilityProvider = params.utilityProvider.trim().toLowerCase();
-  if (!primary.provider || !primary.model || primary.provider.toLowerCase() !== utilityProvider) {
+  if (!primary || primary.provider.toLowerCase() !== utilityProvider) {
     return undefined;
   }
   // The observer passes its derived ref back as modelRef. Match that exact model
   // so other same-provider selections keep their own runtime and billing route.
-  const automaticRef = resolveAutomaticUtilityModelRef({
+  const automatic = resolveAutomaticUtilityModel({
     cfg: params.cfg,
+    agentId: params.agentId,
     primaryProvider: primary.provider,
+    primaryModelId: primary.model,
+    primaryModelRef: resolveNativeModelPrimary(params.cfg, params.agentId),
     metadataSnapshot: params.metadataSnapshot,
+    readCatalog: publishedCatalogFor(params.cfg, params.agentId),
   });
-  const utilityRef = `${utilityProvider}/${params.utilityModelId.trim().toLowerCase()}`;
-  if (automaticRef?.toLowerCase() !== utilityRef) {
+  const utilityRef = utilityProvider + "/" + params.utilityModelId.trim().toLowerCase();
+  if (
+    !("modelRef" in automatic) ||
+    automatic.source !== "declared" ||
+    splitTrailingAuthProfile(automatic.modelRef).model.toLowerCase() !== utilityRef
+  ) {
     return undefined;
   }
   const derived = resolveAgentHarnessPolicy({

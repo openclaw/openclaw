@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { vi } from "vitest";
 import { listBundledChannelPluginMetadata } from "../../../../plugins/bundled-channel-runtime.js";
-import { resolvePluginRootPublicSurfacePath } from "../../../../plugins/public-surface-runtime.js";
+import { resolvePluginRootPublicSurfaceLocation } from "../../../../plugins/public-surface-runtime.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../../test-utils/bundled-plugin-public-surface.js";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../../", import.meta.url));
@@ -40,16 +40,16 @@ function resolveBundledChannelContractArtifactUrl(pluginId: string, entryBaseNam
   if (!metadata) {
     throw new Error(`missing bundled channel plugin '${pluginId}'`);
   }
-  const modulePath = resolvePluginRootPublicSurfacePath({
+  const location = resolvePluginRootPublicSurfaceLocation({
     pluginRoot: metadata.rootDir,
     pluginId,
     entrySource: metadata.source.built,
     artifactBasename: `${normalizedEntryBaseName}.js`,
   });
-  if (!modulePath) {
+  if (!location) {
     throw new Error(`missing ${entryBaseName} for bundled channel plugin '${pluginId}'`);
   }
-  return pathToFileURL(modulePath).href;
+  return pathToFileURL(location.modulePath).href;
 }
 
 /** Imports a generated bundled channel artifact through the contract boundary. */

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { sidebarPanelFixtureParams } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
@@ -12,7 +12,13 @@ import {
   getPaneTestRuntime,
 } from "./chat-pane.test-support.ts";
 import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
-import { isSidebarSlotVisible, openSlot } from "./sidebar-layout.ts";
+import {
+  ensureSidebarConversation,
+  isSidebarSlotVisible,
+  openSlot,
+  promoteSidebarPanel,
+  sidebarMainPanel,
+} from "./sidebar-layout.ts";
 
 const panelCases = [
   { key: "b", slot: "workspace", altKey: false },
@@ -71,6 +77,24 @@ function shortcutPane() {
 afterEach(() => document.body.replaceChildren());
 
 describe("chat pane sidebar toggles", () => {
+  it("keeps native mobile restoration chat-first without changing saved layouts or explicit dashboard routes", () => {
+    Object.assign(window, { __OPENCLAW_NATIVE_EMBED__: { platform: "ios", formFactor: "pad" } });
+    onTestFinished(() => {
+      Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_EMBED__");
+    });
+    const { pane } = shortcutPane();
+    pane.routeFace = "chat";
+    const layout = ensureSidebarConversation(openSlot({ columns: [] }, "dashboard"));
+    const dashboard = layout.columns[0]!.panels.find((panel) => panel.slot === "dashboard")!;
+    const saved = { ...promoteSidebarPanel(layout, dashboard.id), open: true, expanded: true };
+    const restored = pane.restorePaneSidebarLayout(saved);
+    expect(restored).toMatchObject({ open: false, expanded: false });
+    expect(sidebarMainPanel(restored)?.slot).toBe("conversation");
+    expect(saved.expanded).toBe(true);
+    pane.routeFace = "dashboard";
+    expect(pane.restorePaneSidebarLayout(saved)).toBe(saved);
+  });
+
   it("does not open Side Chat with session-only permission", () => {
     const { pane, state, dispatch, visible } = shortcutPane();
     const menuActions = () =>

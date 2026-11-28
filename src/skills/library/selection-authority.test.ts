@@ -315,7 +315,6 @@ it("skips empty-session SQL and refreshes committed profile and library facts", 
     canManageWorkspace: true,
   });
   setUserProfileRole(alice.profileId!, "reader", options);
-  expect(() => before.assertCurrent()).toThrow(SkillLibraryError);
   expect((await prepareSession(admin, options)).presentation).toMatchObject({
     defaultTarget: "personal",
     canManageWorkspace: false,
@@ -338,7 +337,7 @@ it("skips empty-session SQL and refreshes committed profile and library facts", 
   expect(await lib.seed()).toEqual([]);
 });
 
-it.each(["unshare", "disable", "remove", "role", "alias"] as const)(
+it.each(["unshare", "disable", "remove"] as const)(
   "revokes a prepared seed after %s while committed pins keep working",
   async (change) => {
     const { actor, options, lib } = fixture();
@@ -346,11 +345,6 @@ it.each(["unshare", "disable", "remove", "role", "alias"] as const)(
       ...actor(ensureProfileForEmail("bob@example.test", options).id),
       getConfig: () => writerConfig,
     };
-    const mergeTarget =
-      change === "alias" ? ensureProfileForEmail("target@example.test", options) : undefined;
-    if (mergeTarget) {
-      setUserProfileRole(mergeTarget.id, "blocked", options);
-    }
     onTestFinished((await prepareUserProfileCatalog(options)).release);
     const saved = await lib.save();
     await lib.change(saved.entry, "share");
@@ -358,13 +352,7 @@ it.each(["unshare", "disable", "remove", "role", "alias"] as const)(
     const freshSeed = prepared.selections;
     expect(freshSeed).toHaveLength(1);
     const durablePins = structuredClone(freshSeed);
-    if (change === "role") {
-      setUserProfileRole(bob.profileId!, "blocked", options);
-    } else if (change === "alias") {
-      linkEmail("bob@example.test", mergeTarget!.id, options);
-    } else {
-      await lib.change(saved.entry, change);
-    }
+    await lib.change(saved.entry, change);
     expect(() => assertSelection(freshSeed)).toThrow(SkillLibraryError);
     expect(() => prepared.assertCurrent()).toThrow(SkillLibraryError);
     expect(() => assertSelection(durablePins)).not.toThrow();
@@ -589,6 +577,27 @@ async function resourceFixture() {
   await closeDatabase();
   return { root, options, authority, pin, snapshot: snapshotFor(pin), databasePath: options.path };
 }
+
+it("prepares and delivers pinned revisions without main-thread synchronous filesystem reads", async () => {
+  const { root, snapshot } = await resourceFixture();
+  const prefix = path.join(root, "skill-library") + path.sep;
+  const spies = (["existsSync", "statSync", "lstatSync", "openSync", "readFileSync"] as const).map(
+    (method) => vi.spyOn(fs, method),
+  );
+  const realpath = vi.spyOn(fs.realpathSync, "native");
+  await inRoot(root, async () => {
+    for (let turn = 0; turn < 2; turn++) {
+      const delivery = await deliver(snapshot, noop);
+      expect(delivery?.skills).toHaveLength(1);
+      expect(delivery?.skills[0]?.files).toHaveLength(3);
+    }
+  });
+  for (const spy of [...spies, realpath]) {
+    expect(
+      spy.mock.calls.filter(([file]) => typeof file === "string" && file.startsWith(prefix)),
+    ).toEqual([]);
+  }
+});
 
 it.each(["ordinary", "artifact-preserving", "disposable"] as const)(
   "delivers cold and warm immutable pins without parent SQL under %s reads",

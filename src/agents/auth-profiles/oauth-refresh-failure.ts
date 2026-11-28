@@ -7,6 +7,7 @@ import {
 import { normalizeBoundedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -85,7 +86,7 @@ function formatRedactedOAuthRefreshError(error: unknown, secrets: string[]): str
 }
 
 const oauthRefreshCleanupAggregates = new WeakSet<AggregateError>();
-// Duplicated module graphs share provenance without mutating provider-owned errors.
+// Duplicated module graphs share provenance separately from provider-owned error properties.
 // Weak keys keep each receipt bound to the lifetime of its owner-created wrapper.
 const settledRefreshFailures = resolveGlobalSingleton(
   Symbol.for("openclaw.settledOAuthRefreshFailures"),
@@ -134,6 +135,10 @@ const OAUTH_REFRESH_FAILURE_SUMMARY_MAX_CHARS = 500;
 
 /** The refresh owner records failed external work only after its durable cleanup settles. */
 export function markOAuthRefreshFailureSettled(error: Error, initiatingError: Error = error): void {
+  materializeErrorStack(error);
+  if (initiatingError !== error) {
+    materializeErrorStack(initiatingError);
+  }
   settledRefreshFailures.set(error, initiatingError);
 }
 
@@ -227,6 +232,9 @@ export class OAuthRefreshFailureError extends Error {
     );
   }
 }
+
+/** A running Gateway owns the shared credential; this process may not refresh it. */
+export class OAuthRefreshOwnerError extends OAuthRefreshFailureError {}
 
 function createOAuthRefreshUserFacingCause(cause: unknown): unknown {
   if (cause instanceof Error && "code" in cause && cause.code === "refresh_contention") {
@@ -552,7 +560,7 @@ export function buildAuthProfileUnusableHint(params: {
       // The legacy runtime has no auth method of its own. Recovery creates a
       // supported Google API-key profile and then selects it for that runtime.
       const command = formatCliCommand("openclaw models auth login --provider google");
-      return `Gemini CLI OAuth cannot be repaired by OpenClaw. Connect Google with an AI Studio API key using ${formatInlineCodeSpan(command)}, then select that Google profile for the Gemini CLI runtime.`;
+      return `Gemini CLI OAuth cannot be repaired by OpenClaw. Connect Google with a Gemini API key using ${formatInlineCodeSpan(command)}, then select that Google profile for the Gemini CLI runtime.`;
     }
     const command = buildOAuthRefreshFailureLoginCommand(params.provider, {
       profileId: params.profileId,

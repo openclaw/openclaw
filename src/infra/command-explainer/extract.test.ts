@@ -308,6 +308,27 @@ describe("command explainer tree-sitter runtime", () => {
     await expectSourceRisk('cat <<< "hello"', { kind: "here-string" });
   });
 
+  it.each([
+    ["x=$((y)); :", true],
+    ["x=${z:y}; :", true],
+    ["x=${!y}; :", true],
+    ['x="${y@P}"; :', true],
+    ["x=(${arr[y]}); :", true],
+    ["x[y]=1; :", true],
+    ["x=([y]=1); :", true],
+    ["x=([y]+=1); :", true],
+    ["x+=([y]=1); :", true],
+    ["x=([0]=1); :", true],
+    ["x=(one two); :", false],
+    ["x=$HOME; :", false],
+    ["x='$((y))'; :", false],
+    ["x=$((y)) env", false],
+    ["declare x=${y:z}", false],
+  ])("marks recursively evaluated standalone assignments: %s", async (source, flagged) => {
+    const explanation = await explainShellCommand(source);
+    expect(explanation.risks.some((risk) => risk.kind === "dynamic-assignment")).toBe(flagged);
+  });
+
   it.each`
     name                       | source                                                                     | executable
     ${"command substitutions"} | ${"$( ".repeat(5_000) + "/approve abc123 allow-once" + " )".repeat(5_000)} | ${"/approve"}

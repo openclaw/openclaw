@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { tokTypes } from "acorn";
-import type { CatalogSource } from "./tool-search-types.js";
+import type { CatalogSource } from "./tool-search-protocol.js";
 
 type CompactCatalogEntry = {
   id: string;
@@ -10,6 +10,8 @@ type CompactCatalogEntry = {
   description: string;
   input?: string;
   output?: string;
+  /** Set for on-demand tools, which run only as their own top-level call. */
+  call?: string;
 };
 
 export type CodeModeCatalogBinding = Omit<CompactCatalogEntry, "id"> & {
@@ -95,8 +97,18 @@ export function createCodeModeCatalogBindings(
       callableName = suffixedCallableName(candidate.base, candidate.entry.id, used);
     }
     used.add(callableName);
-    const { id, source, name, label, description, input, output } = candidate.entry;
-    bindings.push({ id, source, name, label, description, input, output, callableName });
+    const { id, source, name, label, description, input, output, call } = candidate.entry;
+    const binding: CodeModeCatalogBinding = {
+      id,
+      source,
+      name,
+      label,
+      description,
+      input,
+      output,
+      callableName,
+    };
+    bindings.push(call ? { ...binding, call } : binding);
   }
   bindings.sort((left, right) => left.callableName.localeCompare(right.callableName));
   return bindings;

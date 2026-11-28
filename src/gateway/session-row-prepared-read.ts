@@ -1,4 +1,5 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import type { SessionMemberPermissionLevel } from "../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareProjectedAgentRunProgressState } from "../infra/agent-run-registry.js";
@@ -6,6 +7,8 @@ import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { PreparedRepositoryWorkspace } from "../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
+import type { createSessionRowChildActivity } from "./session-row-child-activity.js";
+import type { createSessionRowChildVisibility } from "./session-row-child-visibility.js";
 import * as records from "./session-row-projection-record.js";
 import type { SessionSharingTarget } from "./session-sharing-policy.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
@@ -58,7 +61,7 @@ export function projectPreparedSessionRunState(
 }
 
 export function toProjectedSessionSharingTarget(
-  record: records.MaterializedRow,
+  record: records.SelectionRow,
 ): SessionSharingTarget {
   return {
     agentId: record.agentId,
@@ -73,6 +76,8 @@ export function toProjectedSessionSharingTarget(
 export type SessionRowSelectionPreparationOptions = {
   metadataOnly?: boolean;
   includeCatalog?: boolean;
+  requireCurrentCatalog?: boolean;
+  catalogSignal?: AbortSignal;
 };
 
 export type SessionRowPreparationOptions = {
@@ -88,7 +93,22 @@ export class SessionRowFactsPending extends Error {
   }
 }
 
+/** Only failed row materialization can request a catalog rebind, never its consumer. */
+export class SessionRowCatalogPending extends Error {
+  constructor() {
+    // RPC formatters include causes; keep model-facing plugin errors out of the response.
+    super("Session model catalog is unavailable; refresh and try again.");
+  }
+}
+
 export type SessionRowReadView = {
+  readChildVisibility: ReturnType<typeof createSessionRowChildVisibility>["read"];
+  readChildActivity(
+    record: records.MaterializedRow,
+    now: number,
+    excluded?: ReadonlySet<string>,
+    exclusionRevision?: object,
+  ): ReturnType<ReturnType<typeof createSessionRowChildActivity>["read"]>;
   describe(
     query: records.Lookup,
     captured?: records.Row,
@@ -96,17 +116,28 @@ export type SessionRowReadView = {
   ): records.MaterializedRow | undefined;
   readSource(row: records.MaterializedRow): CapturedSessionEntryReadSource | undefined;
   readMembership(query: records.Lookup): ReadonlySet<string> | undefined;
+  hasMembership(
+    storePath: string,
+    sessionKey: string,
+    identityId: string,
+    agentId: string,
+  ): boolean;
+  memberAccess(
+    storePath: string,
+    sessionKey: string,
+    identityId: string,
+  ): SessionMemberPermissionLevel | undefined;
   present(
     record: records.MaterializedRow,
     options?: records.SnapshotOptions,
   ): ReturnType<typeof records.present>;
   selectEntries(query: { key: string }): records.EntryRow[];
   readonly physicalPaths: (locator: string, agentId?: string) => readonly string[];
-  readonly state: {
+  readonly state: Readonly<{
     cfg: OpenClawConfig;
     policyConfig: OpenClawConfig;
     rowContext: SessionListRowContext;
-  };
+  }>;
 };
 
 export type PreparedPrivateSessionRepository = {
@@ -198,6 +229,14 @@ export function readPreparedSessionRows<T>(
     }
   };
   const read: SessionRowReadView = {
+    readChildVisibility(...args) {
+      assertActive();
+      return owner.readChildVisibility(...args);
+    },
+    readChildActivity(...args) {
+      assertActive();
+      return owner.readChildActivity(...args);
+    },
     readSource(row) {
       assertActive();
       return owner.readSource(row);
@@ -213,6 +252,16 @@ export function readPreparedSessionRows<T>(
       }
       const row = privateRows.get(key);
       return captured && !records.isCurrentGeneration(captured, row) ? undefined : row;
+    },
+    memberAccess(storePath, sessionKey, identityId) {
+      assertActive();
+      return owner.memberAccess(storePath, sessionKey, identityId);
+    },
+    hasMembership(storePath, sessionKey, identityId, agentId) {
+      assertActive();
+      return isIncognitoSessionKey(sessionKey)
+        ? (read.readMembership({ agentId, storePath, key: sessionKey })?.has(identityId) ?? false)
+        : owner.hasMembership(storePath, sessionKey, identityId, agentId);
     },
     readMembership(query) {
       assertActive();
@@ -246,7 +295,11 @@ export function readPreparedSessionRows<T>(
     },
     get state() {
       assertActive();
-      return { ...state, policyConfig: owner.getPolicyConfig() };
+      const policyConfig = owner.getPolicyConfig();
+      if (state.policyConfig !== policyConfig) {
+        state = { ...state, policyConfig };
+      }
+      return state;
     },
   };
   try {

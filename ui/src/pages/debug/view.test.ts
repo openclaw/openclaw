@@ -1,13 +1,10 @@
 import { getQueriesForElement } from "@solidjs/testing-library";
 import { createComponent, flush } from "solid-js";
 import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
-import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { i18n } from "../../i18n/index.ts";
-import { zh_CN } from "../../i18n/locales/zh-CN.ts";
 import type { CommandLaneDiagnostics } from "../../lib/gateway-diagnostics.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -138,23 +135,13 @@ it("tolerates out-of-range event timestamps", async () => {
   expect(h.page.textContent).not.toContain("Invalid Date");
 });
 
-it("updates security audit labels with the locale and keeps the command monospace", async () => {
-  const h = mountPage({
-    status: () => ({ securityAudit: { summary: { critical: 0, warn: 1, info: 2 } } }),
-  });
+it("keeps Manual RPC available while snapshots load", async () => {
+  const status = hold<unknown>({});
+  const h = mountPage({ status: () => status.promise });
+  expect(h.page.querySelector('select[aria-label="Method"]')).not.toBeNull();
+  status.resolve({});
   await h.ready();
-  expect(h.query(".settings-status")?.textContent).toContain("1 warning");
-  await i18n.setLocale("zh-CN");
-  flush();
-  const chinese = flattenTranslations(zh_CN);
-  expect(h.query(".settings-status")?.className).toContain("settings-status--warn");
-  expect(normalizedText(h.query(".settings-status"))).toBe(
-    [
-      chinese.get("debug.security.warnings")?.replace("{count}", "1"),
-      chinese.get("debug.security.info")?.replace("{count}", "2"),
-    ].join(" · "),
-  );
-  expect(h.query(".settings-row__desc .mono")?.textContent).toBe("openclaw security audit --deep");
+  expect(h.page.querySelector('select[aria-label="Method"]')).not.toBeNull();
 });
 
 it.each(["global", "per-session"] as const)(
@@ -334,10 +321,10 @@ it.each(["reconnecting", "offline"] as const)("disables refresh while %s", async
   expect(h.refreshButton().disabled).toBe(true);
   const text = normalizedText(h.query(".settings-section"));
   if (phase === "offline") {
-    expect(text).toContain("Offline");
-    expect(text).toContain("Connect to the Gateway to refresh diagnostics.");
+    expect(text).toContain("Disconnected");
+    expect(text).toContain("Reconnect to refresh diagnostics.");
   } else {
-    expect(text).not.toContain("Offline");
+    expect(text).not.toContain("Disconnected");
   }
 });
 
@@ -422,4 +409,68 @@ it("preserves snapshots and independent RPC errors through model failure and rec
   h.snapshots("recovered");
   expect(h.alert()).toBeNull();
   expect(h.page.textContent).toContain("manual request failed");
+});
+
+it.each(["response", "error"] as const)(
+  "keeps the submitted method on a manual RPC %s while the next draft changes",
+  async (outcome) => {
+    const pending = hold<unknown>({});
+    const h = mountPage({
+      "manual.first": () => pending.promise,
+      "manual.latest": () => ({ result: "next response" }),
+    });
+    await h.ready();
+    h.call("manual.first");
+    const select = h.page.querySelector<HTMLSelectElement>('select[aria-label="Method"]')!;
+    const section = select.closest(".settings-section")!;
+    select.value = "manual.latest";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    flush();
+    h.params('{"next":true}');
+    if (outcome === "error") {
+      pending.reject(new Error("first request failed"));
+    } else {
+      pending.resolve({ result: "first response" });
+    }
+    await waitForSolid(() => expect(section.querySelector("pre")).not.toBeNull());
+    const result = section.querySelector("pre")!;
+    expect.soft(result.getAttribute("aria-label")).toMatch(/^manual\.first:/u);
+    expect
+      .soft(result.closest(".settings-row")?.querySelector(".settings-row__title")?.textContent)
+      .toBe("manual.first");
+    expect(select.value).toBe("manual.latest");
+    expect(h.page.querySelector("textarea")?.value).toBe('{"next":true}');
+    h.call("manual.latest");
+    await waitForSolid(() => expect(section.textContent).toContain("next response"));
+    expect(section.querySelector("pre")?.getAttribute("aria-label")).toBe("manual.latest: OK");
+    expect(
+      section.querySelector("pre")?.closest(".settings-row")?.querySelector(".settings-row__title")
+        ?.textContent,
+    ).toBe("manual.latest");
+    expect(h.request).toHaveBeenCalledWith("manual.first", {});
+    expect(h.request).toHaveBeenCalledWith("manual.latest", { next: true });
+  },
+);
+
+it("disables manual Call without a selected method or a connection, then restores the draft on reconnect", async () => {
+  const h = mountPage({ "manual.latest": () => ({ result: "connected response" }) });
+  await h.ready();
+  const call = h.page.querySelector<HTMLButtonElement>("button.primary")!;
+  const select = h.page.querySelector<HTMLSelectElement>('select[aria-label="Method"]')!;
+  expect.soft(call.disabled).toBe(true);
+  select.value = "manual.latest";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  flush();
+  expect(call.disabled).toBe(false);
+  h.source.publish({ ...h.source.gateway.snapshot, phase: "reconnecting" });
+  flush();
+  expect.soft(call.disabled).toBe(true);
+  call.click();
+  expect(h.request.mock.calls.some(([method]) => method === "manual.latest")).toBe(false);
+  h.source.publish({ ...h.source.gateway.snapshot, phase: "connected" });
+  flush();
+  expect(call.disabled).toBe(false);
+  expect(select.value).toBe("manual.latest");
+  call.click();
+  await waitForSolid(() => expect(h.page.textContent).toContain("connected response"));
 });

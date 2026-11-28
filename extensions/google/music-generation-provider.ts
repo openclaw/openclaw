@@ -17,9 +17,10 @@ import {
   DEFAULT_GOOGLE_MUSIC_MODEL,
   GOOGLE_MAX_INPUT_IMAGES,
   GOOGLE_PRO_MUSIC_MODEL,
+  resolveGoogleMusicSupportedFormats,
 } from "./generation-provider-metadata.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
-import { resolveGoogleGenerativeAiApiOrigin } from "./provider-policy.js";
+import { resolveGoogleGenerativeAiSdkHttpOptions } from "./src/google-api-base-url.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 
@@ -49,7 +50,7 @@ export const googleMusicGenerationProvider: MusicGenerationProvider = {
 
     const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_MUSIC_MODEL;
     if (req.format) {
-      const supportedFormats = model === GOOGLE_PRO_MUSIC_MODEL ? ["mp3", "wav"] : ["mp3"];
+      const supportedFormats = resolveGoogleMusicSupportedFormats(model);
       if (!supportedFormats.includes(req.format)) {
         throw new Error(
           `Google music generation model ${model} supports ${supportedFormats.join(", ")} output.`,
@@ -58,22 +59,19 @@ export const googleMusicGenerationProvider: MusicGenerationProvider = {
     }
 
     const configured = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
-    const configuredBaseUrl = configured
-      ? resolveGoogleGenerativeAiApiOrigin(configured)
-      : undefined;
+    const httpOptions = resolveGoogleGenerativeAiSdkHttpOptions(configured);
     const operationTimeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const deadline = createProviderOperationDeadline({
       timeoutMs: operationTimeoutMs,
       label: "Google music generation",
     });
-    let generated: { tracks: GeneratedMusicAsset[]; lyrics: string[] } | undefined;
     // Lyria promises audio for successful Clip responses, but has returned
     // unblocked text-only payloads transiently. Never retry explicit stops.
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const client = createGoogleGenAI({
         apiKey,
         httpOptions: {
-          ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
+          ...httpOptions,
           timeout: resolveProviderOperationTimeoutMs({
             deadline,
             defaultTimeoutMs: operationTimeoutMs,
@@ -137,29 +135,24 @@ export const googleMusicGenerationProvider: MusicGenerationProvider = {
           );
         }
       }
-      generated = { tracks, lyrics };
-      if (generated.tracks.length > 0) {
-        break;
+      if (tracks.length > 0) {
+        return {
+          tracks,
+          ...(lyrics.length > 0 ? { lyrics } : {}),
+          model,
+          metadata: {
+            inputImageCount: req.inputImages?.length ?? 0,
+            instrumental: req.instrumental === true,
+            ...(normalizeOptionalString(req.lyrics) ? { requestedLyrics: true } : {}),
+            ...(req.format ? { requestedFormat: req.format } : {}),
+          },
+        };
       }
       const terminalReason = resolveTerminalNoAudioReason(response);
       if (terminalReason) {
         throw new Error(`Google music generation returned no audio: ${terminalReason}`);
       }
     }
-    if (!generated || generated.tracks.length === 0) {
-      throw new Error("Google music generation response missing audio data");
-    }
-    const { tracks, lyrics } = generated;
-    return {
-      tracks,
-      ...(lyrics.length > 0 ? { lyrics } : {}),
-      model,
-      metadata: {
-        inputImageCount: req.inputImages?.length ?? 0,
-        instrumental: req.instrumental === true,
-        ...(normalizeOptionalString(req.lyrics) ? { requestedLyrics: true } : {}),
-        ...(req.format ? { requestedFormat: req.format } : {}),
-      },
-    };
+    throw new Error("Google music generation response missing audio data");
   },
 };

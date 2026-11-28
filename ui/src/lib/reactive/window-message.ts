@@ -1,8 +1,13 @@
 import { listen } from "./listener.ts";
 
-type Subscription = { callback: (event: MessageEvent) => void };
+type Subscription = {
+  callback: (event: MessageEvent) => void;
+  order: number;
+};
 type MessagePool = {
-  sources: Map<MessageEventSource, Set<Subscription>>;
+  subscriptions: Map<MessageEventSource | HTMLIFrameElement, Set<Subscription>>;
+  frames: Set<HTMLIFrameElement>;
+  nextOrder: number;
   stop: () => void;
 };
 
@@ -11,22 +16,50 @@ const pools = new WeakMap<Window, MessagePool>();
 /** Route frame messages by source; payload and authority checks stay with each frame owner. */
 export function observeWindowMessage(
   view: Window,
-  source: WindowProxy,
+  source: WindowProxy | HTMLIFrameElement,
   callback: (event: MessageEvent) => void,
 ): () => void {
   let pool = pools.get(view);
   if (!pool) {
-    const sources = new Map<MessageEventSource, Set<Subscription>>();
+    const subscriptions: MessagePool["subscriptions"] = new Map();
+    const frames = new Set<HTMLIFrameElement>();
+    const frameBySource = new WeakMap<MessageEventSource, HTMLIFrameElement>();
     pool = {
-      sources,
+      subscriptions,
+      frames,
+      nextOrder: 0,
       stop: listen(view, "message", (event) => {
-        const subscribers = event.source && sources.get(event.source);
-        if (!subscribers) {
+        const sender = event.source;
+        if (!sender) {
           return;
         }
-        const delivery = [...subscribers];
+        // A retained element can acquire a new WindowProxy. Cache the lookup,
+        // not the binding: only its current contentWindow can deliver messages.
+        let frame = frameBySource.get(sender);
+        if (!frame || !frames.has(frame) || frame.contentWindow !== sender) {
+          frame = undefined;
+          for (const candidate of frames) {
+            if (candidate.contentWindow === sender) {
+              frame = candidate;
+              frameBySource.set(sender, frame);
+              break;
+            }
+          }
+        }
+        const direct = subscriptions.get(sender);
+        const current = frame && subscriptions.get(frame);
+        if (!direct && !current) {
+          return;
+        }
+        const delivery =
+          direct && current
+            ? [...direct, ...current].toSorted((left, right) => left.order - right.order)
+            : [...(direct ?? current!)];
         for (const subscriber of delivery) {
-          if (!subscribers.has(subscriber)) {
+          if (
+            !direct?.has(subscriber) &&
+            !(current?.has(subscriber) && frame?.contentWindow === sender)
+          ) {
             continue;
           }
           try {
@@ -39,21 +72,23 @@ export function observeWindowMessage(
     };
     pools.set(view, pool);
   }
-  let subscribers = pool.sources.get(source);
-  if (!subscribers) {
-    subscribers = new Set();
-    pool.sources.set(source, subscribers);
+  // Reading contentWindow at registration can initialize the child's context.
+  if (source instanceof HTMLIFrameElement) {
+    pool.frames.add(source);
   }
-  const subscription = { callback };
+  const subscription: Subscription = { callback, order: pool.nextOrder++ };
+  const subscribers = pool.subscriptions.get(source) ?? new Set<Subscription>();
+  pool.subscriptions.set(source, subscribers);
   subscribers.add(subscription);
   return () => {
-    if (!subscribers.delete(subscription)) {
+    if (!subscribers.delete(subscription) || subscribers.size > 0) {
       return;
     }
-    if (subscribers.size === 0) {
-      pool.sources.delete(source);
+    pool.subscriptions.delete(source);
+    if (source instanceof HTMLIFrameElement) {
+      pool.frames.delete(source);
     }
-    if (pool.sources.size === 0) {
+    if (pool.subscriptions.size === 0) {
       pool.stop();
       pools.delete(view);
     }

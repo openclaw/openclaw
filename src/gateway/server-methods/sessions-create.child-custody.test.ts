@@ -15,6 +15,7 @@ import {
 import { callInProcessGatewayToolWithCreation } from "../../agents/tools/in-process-gateway.js";
 import { prepareSandboxSessionTools } from "../../agents/tools/sessions-operator-authority.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import { readReplySourceInput } from "../../auto-reply/reply/reply-source-binding.js";
 import { withVisibleWorkSessionReporter } from "../../auto-reply/reply/visible-work-sessions.js";
 import {
   bindChildSessionPublication,
@@ -48,7 +49,7 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail, syncGitHubIdentity } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { withOperatorToolGatewayAuthority } from "../server-plugin-in-process-dispatch.js";
 import {
@@ -160,8 +161,7 @@ async function createHostedChildFixture({
   const signal = new AbortController();
   const beforeInputCommit = vi.fn(() => {});
   const registry = getTestPluginRegistry();
-  // A real approval hook keeps input queued until execution promotes it; neither
-  // the pending-input owner nor its transcript writer is replaced by a test double.
+  // Keep the real input commit hook so origin closure must fence the write itself.
   registry.typedHooks.push({
     pluginId: "child-custody-fixture",
     hookName: "before_message_write",
@@ -189,7 +189,10 @@ async function createHostedChildFixture({
         }),
       );
     }
-    // The real reply admission owner rejects a missing persistence result before inference.
+    // Committed input survives origin closure, but later effects still need live authority.
+    const input = expectDefined(readReplySourceInput(replyOptions), "accepted child source");
+    input.abortSignal.throwIfAborted();
+    input.sourceAdapter?.authority?.assertCurrent?.();
     const persisted = await recorder.persistApproved();
     persistenceResult(persisted);
     if (!persisted) {
@@ -217,7 +220,7 @@ async function createHostedChildFixture({
     );
   const captured = system
     ? undefined
-    : await captureGatewayOperatorRunAuthority({
+    : await prepareGatewayOperatorRunAuthority({
         client: identifiedClient(profile.id),
         context,
         sourceAuthority: { assertCurrent: guard("source", "original operator source revoked") },
@@ -362,11 +365,9 @@ async function createHostedChildFixture({
           throw new Error("public source revoked");
         }
       });
-      admitChildSessionPublication(ingressContext, admitted.operationalRunInstance, () => {
-        if (caller.receiptAuthority?.() === false) {
-          throw new Error("public source run closed");
-        }
-      });
+      admitChildSessionPublication(ingressContext, admitted.operationalRunInstance, () =>
+        caller.receiptAuthority?.(),
+      );
     },
     send,
     sendNested,
@@ -413,7 +414,7 @@ function userMessages(scope: ReturnType<ChildFixture["scope"]>) {
   );
 }
 
-async function expectQueued(
+async function expectCommitted(
   fixture: ChildFixture,
   accepted: { runStarted: boolean; sessionId: string },
 ) {
@@ -422,9 +423,13 @@ async function expectQueued(
   expect(accepted.sessionId).toBe(scope.sessionId);
   await fixture.dispatchEntered;
   const pending = await listSessionPendingInputs(scope);
-  expect(pending).toMatchObject({ total: 1, items: [{ state: "queued" }] });
-  expect(userMessages(scope)).toEqual([]);
-  return { scope, pending };
+  expect(pending).toEqual({ total: 0, items: [] });
+  const transcript = userMessages(scope);
+  expect(transcript).toHaveLength(1);
+  expect(transcript[0]).toMatchObject({
+    message: { content: "Continue independently.", provenance: { kind: "inter_session" } },
+  });
+  return { scope, transcript };
 }
 
 describe("hosted creation transfers accepted child input", () => {
@@ -559,7 +564,7 @@ describe("hosted creation transfers accepted child input", () => {
       human: true,
     },
     { name: "canonical historical alias", options: { mergedParentCreator: true }, human: true },
-    { name: "different human owner", options: { mismatchedParentOwner: true }, human: false },
+    { name: "different human owner", options: { mismatchedParentOwner: true }, human: true },
   ])("assigns child ownership for a $name", async ({ options, human }) => {
     await using fixture = await createHostedChildFixture(options);
     await fixture.send();
@@ -597,15 +602,16 @@ describe("hosted creation transfers accepted child input", () => {
     { system: false, toolInvocation: true },
     { system: true, toolInvocation: true },
   ])(
-    "continues after parent closure (system=$system, inherited invocation=$toolInvocation)",
+    "continues after parent closure and source permission changes (system=$system, inherited invocation=$toolInvocation)",
     async (options) => {
       await using fixture = await createHostedChildFixture(options);
       const accepted = await fixture.send();
-      await expectQueued(fixture, accepted);
+      await expectCommitted(fixture, accepted);
       if (options.toolInvocation) {
         fixture.closeInvocation();
       }
       fixture.closeParent();
+      fixture.revoke.source();
       await fixture.finish();
       expect(fixture.provider).toHaveBeenCalledOnce();
       expect(userMessages(fixture.scope())).toHaveLength(1);
@@ -619,35 +625,16 @@ describe("hosted creation transfers accepted child input", () => {
     },
   );
 
-  it.each([
-    ["invocation", false],
-    ["invocation", true],
-    ["parent", false],
-    ["parent", true],
-  ] as const)(
-    "retains %s authority through child input COMMIT (system=%s)",
-    async (boundary, system) => {
-      await using fixture = await createHostedChildFixture({
-        system,
-        toolInvocation: boundary === "invocation",
+  it.each([false, true])(
+    "retains invocation authority through child input COMMIT (system=%s)",
+    async (system) => {
+      await using fixture = await createHostedChildFixture({ system, toolInvocation: true });
+      fixture.beforeInputCommit.mockImplementation(fixture.closeInvocation);
+      await expect(fixture.send()).resolves.toMatchObject({
+        ok: true,
+        runStarted: false,
+        runError: { code: "UNAVAILABLE", message: "Error: inherited tool invocation closed" },
       });
-      fixture.beforeInputCommit.mockImplementation(
-        boundary === "invocation" ? fixture.closeInvocation : fixture.closeParent,
-      );
-      const creating = fixture.send();
-      if (boundary === "invocation") {
-        await expect(creating).resolves.toMatchObject({
-          ok: true,
-          runStarted: false,
-          runError: { code: "UNAVAILABLE", message: "Error: inherited tool invocation closed" },
-        });
-      } else {
-        await expect(creating).rejects.toThrow(
-          system
-            ? "agent tool caller authority is no longer active"
-            : "operator execution authority is no longer active",
-        );
-      }
       expect(fixture.beforeInputCommit).toHaveBeenCalledOnce();
       expect(await listSessionPendingInputs(fixture.scope())).toEqual({ items: [], total: 0 });
       expect(userMessages(fixture.scope())).toEqual([]);
@@ -656,12 +643,12 @@ describe("hosted creation transfers accepted child input", () => {
     },
   );
 
-  it.each(["source", "host", "signal", "gateway", "replacement"] as const)(
-    "retains the original %s boundary after child ACK and parent closure",
+  it.each(["host", "signal", "gateway", "replacement"] as const)(
+    "finishes admitted input after %s changes unless its physical target is replaced",
     async (change) => {
       await using fixture = await createHostedChildFixture();
       const accepted = await fixture.send();
-      const { scope, pending } = await expectQueued(fixture, accepted);
+      const { scope, transcript } = await expectCommitted(fixture, accepted);
       fixture.closeParent();
       if (change === "replacement") {
         replaceSessionEntrySync(scope, { sessionId: "successor-child", updatedAt: Date.now() });
@@ -669,14 +656,11 @@ describe("hosted creation transfers accepted child input", () => {
         fixture.revoke[change]();
       }
       await fixture.finish();
-      expect(fixture.provider).not.toHaveBeenCalled();
-      expect(userMessages(scope)).toEqual([]);
-      expect(await listSessionPendingInputs(scope)).toMatchObject({
-        total: 1,
-        items: [{ id: pending.items[0]?.id, state: "interrupted" }],
-      });
+      expect(fixture.provider).toHaveBeenCalledTimes(change === "replacement" ? 0 : 1);
+      expect(userMessages(scope)).toEqual(transcript);
+      expect(await listSessionPendingInputs(scope)).toEqual({ total: 0, items: [] });
+      expect(fixture.persistenceResult).toHaveBeenCalledTimes(change === "replacement" ? 0 : 1);
       if (change === "replacement") {
-        expect(fixture.persistenceResult).toHaveBeenCalledExactlyOnceWith(undefined);
         expect(loadSessionEntry(scope)?.sessionId).toBe("successor-child");
         expect(userMessages({ ...scope, sessionId: "successor-child" })).toEqual([]);
       }

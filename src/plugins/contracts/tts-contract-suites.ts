@@ -5,7 +5,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import {
   createEmptyPluginRegistry,
-  pluginRegistrationContractRegistry,
+  getPluginRegistrationContracts,
   setActivePluginRegistry,
 } from "../../plugin-sdk/plugin-test-runtime.js";
 import { withEnv, withEnvAsync } from "../../plugin-sdk/test-env.js";
@@ -32,7 +32,7 @@ let sanitizeTtsErrorForLog: TtsRuntimeModule["testApi"]["sanitizeTtsErrorForLog"
 
 const SPEECH_PROVIDER_ENV_KEYS = [
   ...new Set(
-    pluginRegistrationContractRegistry.flatMap((entry) =>
+    getPluginRegistrationContracts().flatMap((entry) =>
       entry.speechProviderIds.flatMap((providerId) => entry.providerEnvVars[providerId] ?? []),
     ),
   ),
@@ -86,8 +86,6 @@ function createResolvedModel(provider: string, modelId: string) {
       contextWindow: 128000,
       maxTokens: 8192,
     } satisfies Model<"openai-completions">,
-    authStorage: { profiles: {} },
-    modelRegistry: { find: vi.fn() },
   };
 }
 

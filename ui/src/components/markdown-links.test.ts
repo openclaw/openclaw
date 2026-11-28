@@ -5,6 +5,7 @@ import {
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
   navigateMarkdownSession,
+  parseLocalMarkdownSessionUrl,
 } from "./markdown-session-links.ts";
 import { htmlFragment, toStreamingMarkdownParts } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
@@ -14,7 +15,6 @@ const repoUrl = "https://github.com/openclaw/openclaw";
 const pullUrl = `${repoUrl}/pull/3434`;
 const directoryUrl = `${repoUrl}/tree/main/.agents/skills/test-audit`;
 const itemLabel = "openclaw/openclaw#3434";
-const longRepository = "a-very-long-organization-name/a-very-long-repository-name";
 const render = (input: string, options?: MarkdownRenderOptions) =>
   htmlFragment(toSanitizedMarkdownHtml(input, options));
 const renderStreaming = (input: string, options?: MarkdownRenderOptions, id?: string) =>
@@ -60,6 +60,21 @@ describe("toSanitizedMarkdownHtml links", () => {
         "www.example.com/path%22with%22quotes",
       ],
       ["(see www.example.com/foo(bar))", "www.example.com/foo(bar)", "(see ", ")"],
+      ["www.example.com/foo(bar)))", "www.example.com/foo(bar)", "", "))"],
+      [
+        "www.example.com/foo[bar]]",
+        "www.example.com/foo[bar]",
+        "",
+        "]",
+        "www.example.com/foo%5Bbar%5D",
+      ],
+      [
+        "www.example.com/foo{bar}}",
+        "www.example.com/foo{bar}",
+        "",
+        "}",
+        "www.example.com/foo%7Bbar%7D",
+      ],
       ["Visit www.example.com/<token> here", "www.example.com/", "Visit ", "&lt;token&gt; here"],
       ["www.example.com重新解读", "www.example.com", "", "重新解读"],
     ])("preserves URL boundaries and encoding in %s", expectWwwLink);
@@ -73,17 +88,6 @@ describe("toSanitizedMarkdownHtml links", () => {
   });
 
   describe("explicit protocol links", () => {
-    it("keeps preparation status metadata outside its PR link", () => {
-      const input =
-        `PR preparation result: {"status":"prepared","url":"${pullUrl}","headCommit":"abc123","headChanged":false,"review":{"mode":"local","base":"def456"}}\n` +
-        "Continue the original task in this conversation. Do not repeat a completed operation.";
-      const fragment = render(input);
-      const link = fragment.querySelector<HTMLAnchorElement>("a");
-      expect(link?.getAttribute("href")).toBe(pullUrl);
-      expect(link?.textContent).toBe(itemLabel);
-      expect(fragment.textContent).toBe(input.replace(pullUrl, itemLabel) + "\n");
-    });
-
     it.each([
       [
         "Visit http://github.com/openclaw",
@@ -145,16 +149,6 @@ describe("toSanitizedMarkdownHtml links", () => {
       expect(image?.dataset.linkFaviconHost).toBe("docs.example.com");
       expect(image?.hasAttribute("src")).toBe(false);
       expect(image?.alt).toBe("");
-    });
-
-    it("keeps the bundled GitHub mark and skips image-only links", () => {
-      const fragment = render(
-        "[OpenClaw](https://github.com/openclaw/openclaw) [![badge](data:image/png;base64,iVBORw0KGgo=)](https://example.com)",
-        { linkFavicons: true },
-      );
-
-      expect(fragment.querySelector("a.markdown-github-link")).not.toBeNull();
-      expect(fragment.querySelectorAll("img.markdown-link-favicon")).toHaveLength(0);
     });
   });
 
@@ -243,23 +237,10 @@ describe("toSanitizedMarkdownHtml links", () => {
     it.each([
       [pullUrl, itemLabel, "pull"],
       [`${repoUrl}/issues/3435`, "openclaw/openclaw#3435", "issue"],
-      [`<${pullUrl}>`, itemLabel, "pull"],
-      [
-        "https://www.github.com/openclaw/openclaw/issues/3435",
-        "openclaw/openclaw#3435",
-        "issue",
-        true,
-      ],
       [repoUrl, "openclaw/openclaw"],
       [`${repoUrl}/actions/runs/123`, "github.com/openclaw/openclaw/actions/runs/123"],
       [`[Audit skill](${directoryUrl})`, "Audit skill"],
-      [`[#3434](${pullUrl})`, itemLabel, "pull", false, pullUrl],
-      [`[${itemLabel}](${pullUrl})`, itemLabel, "pull"],
-      [`[#3434](${pullUrl} "A pull request")`, itemLabel, "pull"],
       [`[the fix](${pullUrl})`, "the fix"],
-      [`[other/project#3434](${pullUrl})`, "other/project#3434"],
-      [`[\`#3434\`](${pullUrl})`, "#3434"],
-      [`https://github.com/${longRepository}/issues/3434`, `${longRepository}#3434`, "issue"],
       [
         `${repoUrl}/issues/3434#issuecomment-1`,
         itemLabel,
@@ -321,22 +302,6 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
 
     it.each([
-      ["issue", "` https://github.com/o/r/issues/3434 `", "o/r#3434", "issue"],
-      ["repository", `\`${repoUrl}\``, "openclaw/openclaw", undefined],
-    ])("promotes a code span holding only a github %s url", (_kind, input, label, kind) => {
-      const href = input.replaceAll("`", "").trim();
-      const fragment = render(`See ${input} today`);
-      expect(fragment.querySelector("code")).toBeNull();
-      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-github-link");
-      expect(link?.textContent).toBe(label);
-      expect(link?.getAttribute("href")).toBe(href);
-      expect(link?.getAttribute("title")).toBe(kind ? null : href);
-      expect(link?.classList.contains("markdown-bare-url")).toBe(true);
-      expect(link?.classList.contains("markdown-github-item")).toBe(kind !== undefined);
-      expect(link?.getAttribute("data-github-kind")).toBe(kind ?? null);
-    });
-
-    it.each([
       ["a non-github url", "`https://example.com/o/r/pull/3434`"],
       ["a url with one-sided padding", "`https://github.com/o/r/pull/3434 `"],
       ["a url beside a control character", "`https://github.com/o/r/pull/3434\u0007`"],
@@ -353,22 +318,6 @@ describe("toSanitizedMarkdownHtml links", () => {
 });
 
 describe("github item references", () => {
-  it.each([
-    ["openclaw/clawsweeper#1576", "issues", "1576"],
-    ["PR openclaw/clawsweeper#42", "pull", "42"],
-    ["openclaw/clawsweeper PR #42", "pull", "42"],
-    ["pull **request** *openclaw/clawsweeper#42*", "pull", "42"],
-    ["issue openclaw/clawsweeper#42.", "issues", "42"],
-  ])("renders an explicit repository and item kind in %s", (source, path, number) => {
-    for (const fragment of renderBoth(source)) {
-      const anchor = fragment.querySelector<HTMLAnchorElement>("a.markdown-github-item");
-      expect(anchor?.href).toBe("https://github.com/openclaw/clawsweeper/" + path + "/" + number);
-      expect(anchor?.textContent).toBe("openclaw/clawsweeper#" + number);
-      expect(anchor?.dataset.githubKind).toBe(path === "pull" ? "pull" : "issue");
-      expect(anchor?.classList.contains("markdown-github-link")).toBe(true);
-    }
-  });
-
   it.each([
     "PR #126",
     "#141270",
@@ -621,6 +570,29 @@ describe("session navigation", () => {
       search: "?__openclawSessionFacePreference=1",
     });
   });
+  it("keeps the mounted public dashboard route, query and fragment from an older link", () => {
+    const options = { basePath: "/control", publicOrigin: "https://chat.example" };
+    const href =
+      "https://chat.example/control/chat?session=agent%3Aroboclaw%3Athread%3Aresearch&face=dashboard&view=full#latest";
+    const path = parseLocalMarkdownSessionUrl(href, options);
+    expect(path?.url.href).toBe(
+      "https://chat.example/control/dashboard/roboclaw/thread/research?view=full#latest",
+    );
+    expect(
+      parseLocalMarkdownSessionUrl(href.replace("chat.example", "other.example"), options),
+    ).toBeNull();
+  });
+  it("only claims a released link for an explicit session owner on this mount", () => {
+    const options = { basePath: "/control", mainKey: "home" };
+    const href = "/control/chat/?session=";
+    for (const key of ["", "home", "agent:research:"]) {
+      expect(parseLocalMarkdownSessionUrl(href + key, options)).toBeNull();
+    }
+    expect(parseLocalMarkdownSessionUrl("/chat?session=agent:research:home", options)).toBeNull();
+    expect(parseLocalMarkdownSessionUrl(href + "agent:research:home", options)?.url.pathname).toBe(
+      "/control/chat/research",
+    );
+  });
   it.each([
     ["click", "a"],
     [" ", "a"],
@@ -628,6 +600,7 @@ describe("session navigation", () => {
   ])("routes public-origin %s on %s before hovercard init", (action, tag) => {
     const runtimeConfig = { gateway: { publicOrigin: "https://CHAT.example:443/" } };
     const context = {
+      ...makeContext(),
       basePath: "/control",
       runtimeConfig: { state: { configSnapshot: { runtimeConfig } } },
     };

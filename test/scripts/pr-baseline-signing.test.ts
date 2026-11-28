@@ -8,19 +8,17 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { describe, expect, it } from "vitest";
 import {
   createBaselineFixture,
   failRestore,
+  reuseBaselineFixture,
   signBaselineRequest,
 } from "./pr-baseline-native.test-support.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterAll);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
-
-function createSigningContext() {
-  const f = createBaselineFixture(dirs.make("openclaw-pr-signing-"), 1);
+const fixture = reuseBaselineFixture((root) => {
+  const f = createBaselineFixture(root, 1);
   f.pass("prepare-baseline-refresh", f.manifest(f.advanceMain("initial upstream")));
   const credit = "Co-authored-by: Ada Example <ada@example.invalid>";
   f.prepGit("commit", "--allow-empty", "-qm", `fix: complete the reviewed correction\n\n${credit}`);
@@ -40,10 +38,10 @@ function createSigningContext() {
   f.git(f.repo, "config", "user.signingKey", join(f.root, "unavailable-key"));
   const requestArgs = [...f.successor(baseline), "--signer", signer];
   return { f, credit, source, baseline, before, requestArgs };
-}
+});
 
 function createSignedContext() {
-  const context = createSigningContext();
+  const context = fixture();
   const { f, credit, requestArgs } = context;
   const signed = signBaselineRequest(f, requestArgs);
   expect(signed.message).toBe(
@@ -54,7 +52,7 @@ function createSignedContext() {
 
 describePosix("native baseline signing handoff", () => {
   it("seals a published successor request and rejects changed inputs", () => {
-    const { f, source, before, requestArgs } = createSigningContext();
+    const { f, source, before, requestArgs } = fixture();
     const refuseRequest = (message: string, extra: NodeJS.ProcessEnv = {}) => {
       const result = f.run("prepare-baseline-signing-request", requestArgs, extra);
       expect(result.status, result.stdout + result.stderr).not.toBe(0);
@@ -72,10 +70,7 @@ describePosix("native baseline signing handoff", () => {
     const receipt = before["prepare-push-result.env"]!;
     rmSync(f.local("prepare-push-result.env"));
     refuseRequest("Baseline admission requires the native publication result");
-    writeFileSync(
-      f.local("prepare-push-result.env"),
-      receipt.toString().replaceAll(source, f.incoming),
-    );
+    f.writeLocal("prepare-push-result.env", receipt.toString().replaceAll(source, f.incoming));
     refuseRequest("Baseline admission requires the native publication result");
     const alias = f.prepGit(
       "commit-tree",
@@ -85,12 +80,12 @@ describePosix("native baseline signing handoff", () => {
       "-m",
       "test: hosted publication alias",
     );
-    writeFileSync(
-      f.local("prep.env"),
+    f.writeLocal(
+      "prep.env",
       before["prep.env"]!.toString().replace(`PREP_HEAD_SHA=${source}`, `PREP_HEAD_SHA=${alias}`),
     );
-    writeFileSync(
-      f.local("prepare-push-result.env"),
+    f.writeLocal(
+      "prepare-push-result.env",
       receipt
         .toString()
         .replace(`PUSH_PREP_HEAD_SHA=${source}`, `PUSH_PREP_HEAD_SHA=${alias}`)
@@ -189,7 +184,6 @@ if (process.argv[1]?.endsWith('/baseline-refresh.mjs') && process.argv[2] === 'c
       expect(result.stdout + result.stderr).toContain(message);
       expect(f.prepGit("rev-parse", "refs/heads/pr-42-prep")).toBe(source);
       expect(existsSync(f.local("review-transition.json"))).toBe(false);
-      return result;
     };
     writeFileSync(response, signed.bytes.toString().replace(source, baseline));
     refuse("Signed commit payload differs");

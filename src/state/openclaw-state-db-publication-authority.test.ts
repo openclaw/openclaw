@@ -30,6 +30,7 @@ import {
 } from "./openclaw-state-db.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 
@@ -78,6 +79,7 @@ function createV17PublicationState(options: { populated?: boolean; deferred?: bo
   const databasePath = initial.path;
   closeOpenClawStateDatabaseForTest();
   using legacy = openNodeSqliteDatabase(databasePath);
+  restorePreTemplateStateIdentifiersForTest(legacy);
   addPreCutoverClientCredentialTablesForTest(legacy);
   if (options.populated !== false) {
     for (const table of authorityTables) {

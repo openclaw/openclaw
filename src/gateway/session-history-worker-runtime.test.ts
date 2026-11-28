@@ -702,16 +702,19 @@ it.each([
     try {
       const reply = page("shared result");
       const bytes = new TextEncoder().encode(JSON.stringify(reply.page.messages));
+      const activity = new TextEncoder().encode('[{"messageId":"tool","items":[]}]');
       const deflated = new Uint8Array([0, 0, 255, 255]);
       if (encoded) {
         reply.page.messages = [];
         reply.page.encodedResponse = {
           messages: bytes,
+          activity,
           messagesBytes: bytes.byteLength,
           responseHistoryBytes: 1024,
-          omission: { omittedCount: 1, normalizedBytes: 2048 },
+          omission: { omittedCount: 1 },
         };
         reply.page.encodedMessagesDeflate = deflated;
+        reply.page.messageModelIndex = { byteLength: bytes.byteLength, rowCount: 1, ranges: [] };
       }
       queued[0]!.result.resolve(reply);
       const results = await settled;
@@ -728,8 +731,12 @@ it.each([
         for (const result of pages) {
           // A coalesced page transfers its immutable wire buffer only once.
           expect(result.encodedResponse?.messages).toBe(bytes);
+          expect(result.encodedResponse?.activity).toBe(activity);
           expect(result.encodedMessagesDeflate).toBe(deflated);
+          expect(result.messageModelIndex).toEqual(reply.page.messageModelIndex);
         }
+        pages[0]!.messageModelIndex!.ranges.push(1, 2);
+        expect(pages[1]!.messageModelIndex!.ranges).toEqual([]);
         pages[0]!.encodedResponse!.omission!.omittedCount = 9;
         expect(pages[1]!.encodedResponse!.omission!.omittedCount).toBe(1);
       }

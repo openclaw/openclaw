@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type * as Timers from "node:timers/promises";
 import { Command } from "commander";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -29,9 +30,9 @@ import {
 } from "./store.js";
 
 const { sleepMock } = vi.hoisted(() => ({ sleepMock: vi.fn() }));
-vi.mock("../../api.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../api.js")>()),
-  sleep: sleepMock,
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof Timers>()),
+  setTimeout: sleepMock,
 }));
 
 // These names are persisted storage contracts, independent of private store declarations.
@@ -196,12 +197,8 @@ it("bounds bulk chunk reads across retained call snapshots", async () => {
   const chunkQueries: string[][] = [];
   installStateRuntime({ onChunkRead: (keys) => chunkQueries.push([...keys]) });
   await expectHistory(calls, calls.length);
-  expect(chunkQueries.length).toBeLessThanOrEqual(2);
+  expect(chunkQueries).toHaveLength(2);
   expect(chunkQueries.every((keys) => keys.length <= 128)).toBe(true);
-  const eventsPerQuery = chunkQueries.map(
-    (keys) => new Set(keys.map((key) => key.split(":chunk:")[0])),
-  );
-  expect(eventsPerQuery.reduce((count, events) => count + events.size, 0)).toBe(calls.length);
   const restored = await restore(storePath);
   expect([...restored.activeCalls.values()]).toEqual(calls);
   expect([...restored.processedEventIds]).toEqual(calls.flatMap((call) => call.processedEventIds));

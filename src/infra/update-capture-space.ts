@@ -3,6 +3,7 @@ import { collectErrorGraphCandidates } from "./errors.js";
 type UpdateCaptureSpace = {
   requiredBytes: number;
   availableBytes: number;
+  volume?: "backup" | "rollback";
 };
 
 /** Capture refusal is distinct from update failure; its caller decides whether to continue. */

@@ -15,7 +15,7 @@ import { dispatchAssembledChannelTurn } from "./lifecycle.js";
 import {
   createCtx,
   createRecordInboundSession,
-  createDispatch,
+  createDirectDeliveryDispatch,
   createReplyDispatchReceipt,
   expectDispatched,
 } from "./run-channel-turn.delivery.test-helpers.js";
@@ -59,7 +59,7 @@ function dispatchTestAssembledTurn(overrides: Partial<AssembledChannelTurn>) {
 }
 function runDelivery(
   delivery: AssembledChannelTurn["delivery"],
-  dispatch = createDispatch(),
+  dispatch: Dispatch,
   overrides: Partial<AssembledChannelTurn> = {},
 ) {
   return dispatchTestAssembledTurn({
@@ -83,13 +83,16 @@ describe("channel turn pipeline", () => {
     const onError = vi.fn();
 
     await expect(
-      runDelivery({
-        deliver: async () => ({ messageIds: ["om-visible"], visibleReplySent: true }),
-        onDelivered: () => {
-          throw observerError;
+      runDelivery(
+        {
+          deliver: async () => ({ messageIds: ["om-visible"], visibleReplySent: true }),
+          onDelivered: () => {
+            throw observerError;
+          },
+          onError,
         },
-        onError,
-      }),
+        createDirectDeliveryDispatch(),
+      ),
     ).rejects.toBe(observerError);
 
     fixture.expectMessagesSent(["reply", "om-visible"]);

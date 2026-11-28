@@ -170,15 +170,21 @@ function pruneAfterInsert(
     pruned = true;
   }
   if (retention.rowCount > AUDIT_EVENT_MAX_ROWS) {
-    const overflowCutoff = kysely
+    const rowCount =
+      normalizeSqliteNumber(
+        executeSqliteQueryTakeFirstSync(
+          db,
+          kysely.selectFrom("audit_events").select((eb) => eb.fn.countAll<number>().as("count")),
+        )?.count ?? null,
+      ) ?? 0;
+    const overflowIds = kysely
       .selectFrom("audit_events")
       .select("sequence")
-      .orderBy("sequence", "desc")
-      .offset(AUDIT_EVENT_MAX_ROWS - AUDIT_EVENT_PRUNE_BATCH_ROWS)
-      .limit(1);
+      .orderBy("sequence", "asc")
+      .limit(Math.max(0, rowCount - (AUDIT_EVENT_MAX_ROWS - AUDIT_EVENT_PRUNE_BATCH_ROWS)));
     const overflow = executeSqliteQuerySync(
       db,
-      kysely.deleteFrom("audit_events").where("sequence", "<=", overflowCutoff),
+      kysely.deleteFrom("audit_events").where("sequence", "in", overflowIds),
     );
     const deleted = Number(overflow.numAffectedRows ?? 0n);
     if (deleted > 0) {
@@ -208,9 +214,15 @@ function pruneAfterInsert(
   auditEventRetention.set(db, { ...retention, nextSequence });
 }
 
-function getAuditAutocommitRetention(db: EngineConnection, now: number, at: number, count: 1 | 2) {
+function getAuditSingleStatementRetention(
+  db: EngineConnection,
+  now: number,
+  at: number,
+  count: 1 | 2,
+  inPlainBatch = false,
+) {
   const retention = auditEventRetention.get(db);
-  return !db.isTransaction &&
+  return (!db.isTransaction || inPlainBatch) &&
     !isPostgresSqlConnection(db) &&
     retention &&
     retention.rowCount + count <= AUDIT_EVENT_MAX_ROWS &&
@@ -234,6 +246,7 @@ export function recordAuditEventInDatabase(
   input: AuditEventInput,
   options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
   eventId: string = randomUUID(),
+  inPlainBatch = false,
 ): AuditEventRecord | undefined {
   const executionToken =
     input.kind === "message" && input.direction === "outbound"
@@ -246,17 +259,28 @@ export function recordAuditEventInDatabase(
   try {
     const retention =
       input.kind !== "message"
-        ? getAuditAutocommitRetention(db, Date.now(), input.occurredAt, 1)
+        ? getAuditSingleStatementRetention(db, Date.now(), input.occurredAt, 1, inPlainBatch)
         : undefined;
     if (retention) {
       const values = bindAuditEvent(db, input, eventId);
-      // Validate the complete result before autocommit; even a duplicate
+      // Validate the complete result before the statement; even a duplicate
       // source consumes an AUTOINCREMENT sequence.
       const record = rowToAuditEvent({ ...values, sequence: retention.nextSequence });
       const queries = getAuditEventQueries(db);
-      const inserted = runOpenClawStateWriteTransaction(() => queries.insert(values), options, {
-        singleStatement: true,
-      });
+      // The batch owns admission and commit. SQLite ABORT undoes this complete
+      // statement; retention and terminal bindings never enter this path.
+      const inserted = inPlainBatch
+        ? queries.insert(values)
+        : runOpenClawStateWriteTransaction(() => queries.insert(values), options, {
+            singleStatement: true,
+          });
+      if (inPlainBatch) {
+        stageSqliteTransactionState(db, {
+          commit: () => {},
+          rollback: () => auditEventRetention.delete(db),
+          invalidate: () => auditEventRetention.delete(db),
+        });
+      }
       retention.nextSequence += 1;
       if (inserted) {
         retention.rowCount += 1;
@@ -317,7 +341,7 @@ export function recordAuditRunInDatabase(
   }
   const queries = getAuditEventQueries(db);
   try {
-    const retention = getAuditAutocommitRetention(
+    const retention = getAuditSingleStatementRetention(
       db,
       Date.now(),
       Math.min(start.occurredAt, finish.occurredAt),

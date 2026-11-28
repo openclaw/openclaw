@@ -46,15 +46,14 @@ function fullRowByteLength(
 }
 
 type DeliveredAncestor = { key: string; content: string; chars: number; revision: string };
-const preparedAncestors = new WeakMap<
-  SessionRow,
-  {
-    row: SessionRow;
-    identity: string;
-    content: string;
-    chars: number;
-  }
->();
+type PreparedAncestor = {
+  row: SessionRow;
+  identity: string;
+  content: string;
+  chars: number;
+  certified?: WeakRef<SessionRow>;
+};
+const preparedAncestors = new WeakMap<SessionRow, PreparedAncestor>();
 
 /** Prepare immutable viewer content once, before consulting connection delivery history. */
 export function prepareSessionAncestor(row: SessionRow) {
@@ -63,7 +62,7 @@ export function prepareSessionAncestor(row: SessionRow) {
     return cached;
   }
   const serialized = JSON.stringify(row.snapshotAt === undefined ? row : { ...row, snapshotAt: 0 });
-  const prepared = {
+  const prepared: PreparedAncestor = {
     row,
     identity: JSON.stringify([row.agentId, row.key]),
     content: createHash("sha256").update(serialized).digest("base64url"),
@@ -199,13 +198,29 @@ export class ConnectionSessionRows {
       let result: SessionRowWire | undefined;
       let encoding: string | undefined;
       if (retain && previous && sameGeneration) {
-        const patch = { ...header, base: previous.version, ...diff(previous.fields, fields, row) };
-        const patchJSON = JSON.stringify(patch);
-        const patchBytes = Buffer.byteLength(patchJSON);
+        const delta = diff(previous.fields, fields, row);
+        const patchHeader = { ...header, base: previous.version };
+        const prefix = JSON.stringify(patchHeader).slice(0, -1);
+        const prefixBytes = Buffer.byteLength(prefix);
+        let serialized = delta.encoding;
+        if (!serialized) {
+          const json = JSON.stringify({ ...patchHeader, ...delta.patch });
+          // Keep a view of the first encoding, not a second large body string.
+          delta.encoding = serialized = {
+            suffix: json.slice(prefix.length),
+            utf8Bytes: Buffer.byteLength(json) - prefixBytes,
+            headers: new Map([[prefix, json]]),
+          };
+        }
+        const patchBytes = prefixBytes + serialized.utf8Bytes;
         // Each serialized member needs at least `"":0,` (five bytes), plus the outer braces.
         if (patchBytes < 5 * fields.fieldCount + 1 || patchBytes < fullRowByteLength(row, header)) {
-          result = patch;
-          encoding = patchJSON;
+          result = { ...patchHeader, ...delta.patch };
+          encoding = serialized.headers.get(prefix);
+          if (encoding === undefined) {
+            encoding = `${prefix}${serialized.suffix}`;
+            serialized.headers.set(prefix, encoding);
+          }
         }
       }
       encoded.push(encoding);
@@ -232,7 +247,8 @@ export class ConnectionSessionRows {
     const ancestorSessions: SessionRow[] = [];
     const ancestorSessionRefs: SessionAncestorRef[] = [];
     let updates: Map<string, DeliveredAncestor | undefined> | undefined;
-    for (const { row, identity, content, chars } of rows) {
+    for (const prepared of rows) {
+      const { row, identity, content, chars } = prepared;
       const snapshotAt = row.snapshotAt;
       const previous = this.#rows.get(identity);
       if (
@@ -249,7 +265,13 @@ export class ConnectionSessionRows {
         });
         continue;
       }
-      ancestorSessions.push({ ...row, ancestorRevision: revision });
+      // Share within synchronous fanout without retaining idle rows' encoded bytes/field vectors.
+      let certified = prepared.certified?.deref();
+      if (certified?.ancestorRevision !== revision) {
+        certified = { ...row, ancestorRevision: revision };
+        prepared.certified = new WeakRef(certified);
+      }
+      ancestorSessions.push(certified);
       (updates ??= new Map()).set(
         identity,
         snapshotAt !== undefined && chars <= MAX_CONTENT_CHARS

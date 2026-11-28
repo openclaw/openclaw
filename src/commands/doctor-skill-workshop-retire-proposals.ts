@@ -1,4 +1,4 @@
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -12,8 +12,10 @@ import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { pathExists, root } from "../infra/fs-safe.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { readMainTableList } from "../infra/sqlite-strict.js";
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { isUpdateRehearsalReadOnlyPath } from "../infra/update-rehearsal-paths.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
@@ -24,17 +26,34 @@ import {
   readWorkspaceSupportFile,
   restoreWorkspaceSkillMutation,
 } from "../skills/lifecycle/workspace-skill-write.js";
-import {
-  resolveWorkshopDraftsDir,
-  resolveWorkshopSkillsDir,
-} from "../skills/workshop/skills-root.js";
+import { resolveAgentSkillsRoot } from "../skills/loading/skill-paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { dropRetiredSkillWorkshopProposalTables } from "../state/openclaw-state-db-table-retirements.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+
+// The skill-workshop plugin's manifest `agentSkillsDir`, and the drafts folder inside it that
+// proposal-era exports retire into. This migration runs even while the plugin is disabled.
+function resolveWorkshopSkillsDir(
+  config: OpenClawConfig,
+  agentId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return resolveAgentSkillsRoot({ config, agentId, dirName: "workshop-skills", env });
+}
+
+function resolveWorkshopDraftsDir(
+  config: OpenClawConfig,
+  agentId: string,
+  env?: NodeJS.ProcessEnv,
+): string {
+  return path.join(resolveWorkshopSkillsDir(config, agentId, env), ".drafts");
+}
 
 // Retired proposal storage: `<state>/skill-workshop/proposals/<id>/[generations/<uuid>/]PROPOSAL.md`
 // plus support files beside the draft; pre-SQLite bundles also carry `proposal.json`.
@@ -149,14 +168,16 @@ function parseUnfinishedApply(
   return { proposalId, skillFile, previousContent, supportFiles };
 }
 
+const RETIRED_PROPOSAL_TABLES = [
+  "skill_workshop_proposals",
+  "skill_workshop_proposal_events",
+  "skill_workshop_proposal_rollbacks",
+  "skill_workshop_collection_reviews",
+] as const;
+
 function readDatabaseProposals(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
   const { db } = openOpenClawStateDatabase({ env });
-  const hasTables = [
-    "skill_workshop_proposals",
-    "skill_workshop_proposal_events",
-    "skill_workshop_proposal_rollbacks",
-    "skill_workshop_collection_reviews",
-  ].some((table) => tableExists(db, table));
+  const hasTables = RETIRED_PROPOSAL_TABLES.some((table) => tableExists(db, table));
   const proposals: RetiredProposal[] = [];
   const unfinishedApplies: UnfinishedApply[] = [];
   // Every proposal id with a row, whatever its status; their bundles need no sidecar.
@@ -448,6 +469,41 @@ async function exportProposal(
   return "exported";
 }
 
+function earlierExportDirs(config: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
+  return listAgentIds(config)
+    .map((agentId) => path.join(resolveWorkshopSkillsDir(config, agentId, env), EARLIER_EXPORT_DIR))
+    .filter((from) => !isUpdateRehearsalReadOnlyPath(from, env));
+}
+
+/**
+ * Whether retirement has anything to do: a retired proposal table, legacy proposal files, or an
+ * earlier Doctor export still under the archive. It reads the state database's catalog through a
+ * read-only connection and never opens it for writing. PostgreSQL state is not read here.
+ */
+export function hasSkillWorkshopProposalRetirementWork(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  const { config, env } = params;
+  if (isStatePostgres()) {
+    throw new Error("Skill Workshop proposal tables are read through the PostgreSQL state owner.");
+  }
+  if (
+    existsSync(path.join(resolveStateDir(env), LEGACY_PROPOSALS_DIR)) ||
+    earlierExportDirs(config, env).some((from) => existsSync(from))
+  ) {
+    return true;
+  }
+  const databasePath = resolveOpenClawStateSqlitePath(env);
+  if (!existsSync(databasePath)) {
+    return false;
+  }
+  using db = openNodeSqliteDatabase(databasePath, { readOnly: true });
+  // The live catalog, not admitted schema facts an earlier connection published.
+  const tables = new Set(readMainTableList(db).map((row) => row.name));
+  return RETIRED_PROPOSAL_TABLES.some((table) => tables.has(table));
+}
+
 /** Moves drafts that earlier Doctor runs exported under the archive into the drafts inbox. */
 async function moveEarlierExports(
   config: OpenClawConfig,
@@ -658,6 +714,13 @@ export async function retireSkillWorkshopProposals(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<MigrationMessages> {
   const env = params.env ?? process.env;
+  // Read first: a store with nothing to retire is never opened for writing or locked.
+  if (
+    !isStatePostgres() &&
+    !hasSkillWorkshopProposalRetirementWork({ config: params.config, env })
+  ) {
+    return { changes: [], warnings: [] };
+  }
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   if (maintenance?.ownsSchemaMaintenance) {
     return await maintenance.run(() =>

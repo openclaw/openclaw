@@ -4,10 +4,24 @@ import type {
   SessionPlacementSandboxParams,
 } from "../../agents/session-placement-admission.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { assertWorkerSandboxEnvironment } from "./placement-target.js";
 import type { WorkerTurnLauncherOptions } from "./worker-turn-launcher.types.js";
 
 const loadPlacementSandbox = createLazyRuntimeModule(() => import("./placement-sandbox.js"));
+
+/** Execution and read-only previews select the same saved remote sandbox. */
+export function isActiveRemoteExecPlacementForSession(
+  placement: WorkerSessionPlacementRecord | undefined,
+  session: Pick<SessionPlacementSandboxParams, "agentId" | "sessionKey">,
+): placement is Extract<WorkerSessionPlacementRecord, { state: "active" }> {
+  return (
+    placement?.state === "active" &&
+    placement.executionMode === "remote-exec" &&
+    placement.agentId === session.agentId &&
+    placement.sessionKey === session.sessionKey
+  );
+}
 
 /** Keep the prepared placement and remote sandbox under one disposable lifetime. */
 export async function prepareWorkerTurnSandbox(
@@ -25,12 +39,7 @@ export async function prepareWorkerTurnSandbox(
     return { sandbox, assertCurrent, [Symbol.dispose]: () => lifetime.dispose() };
   };
   const placement = prepared.placement;
-  if (
-    placement?.state !== "active" ||
-    placement.executionMode !== "remote-exec" ||
-    placement.agentId !== params.agentId ||
-    placement.sessionKey !== params.sessionKey
-  ) {
+  if (!isActiveRemoteExecPlacementForSession(placement, params)) {
     return retain(null);
   }
   const workspace = await options.resolveWorkspace({

@@ -8,13 +8,15 @@ import type { AgentMessage } from "../runtime/index.js";
 
 export { estimateToolResultTextChars };
 
-const getToolResultContentBudget = memoizeFrozenPlainDataProjection((content: unknown[]) =>
-  content.reduce<number>(
-    (total, block) =>
-      total + (isToolResultTextBlock(block) ? estimateToolResultTextChars(block.text) : 0),
-    0,
-  ),
-);
+const getToolResultContentBudget = memoizeFrozenPlainDataProjection((content: unknown[]) => {
+  let chars = 0;
+  for (const block of content) {
+    if (isToolResultTextBlock(block)) {
+      chars += prepareToolResultTextChars(block, block.text, 1);
+    }
+  }
+  return chars;
+});
 
 export function getToolResultTextBudget(msg: AgentMessage): number {
   if (!msg || msg.role !== "toolResult") {
@@ -36,34 +38,24 @@ export function getToolResultHistoryTextBudget(messages: AgentMessage[]) {
   return { textLengths, totalChars, largestChars };
 }
 
-// Reuse scans across guard passes; the block owns the lifetime and text is its revision.
-const toolResultTextEstimates = new WeakMap<
-  object,
-  { text: string; minimumRawWeight: number; chars: number }
->();
-
-export function readPreparedToolResultTextChars(
-  block: object,
-  text: string,
-  minimumRawWeight: number,
-): number | undefined {
-  const cached = toolResultTextEstimates.get(block);
-  return cached?.text === text && cached.minimumRawWeight === minimumRawWeight
-    ? cached.chars
-    : undefined;
-}
+type ToolResultTextEstimate = { text: string; minimumRawWeight: number; chars: number };
+// Initial model history is writable. Text is the revision; weak block keys own its lifetime.
+// Keep history's default weight separate from the guard's floor without retaining every floor.
+const defaultTextEstimates = new WeakMap<object, ToolResultTextEstimate>();
+const weightedTextEstimates = new WeakMap<object, ToolResultTextEstimate>();
 
 export function prepareToolResultTextChars(
   block: object,
   text: string,
   minimumRawWeight: number,
 ): number {
-  const cached = readPreparedToolResultTextChars(block, text, minimumRawWeight);
-  if (cached !== undefined) {
-    return cached;
+  const estimates = minimumRawWeight === 1 ? defaultTextEstimates : weightedTextEstimates;
+  const cached = estimates.get(block);
+  if (cached?.text === text && cached.minimumRawWeight === minimumRawWeight) {
+    return cached.chars;
   }
   const chars = estimateToolResultTextChars(text, { minimumRawWeight });
-  toolResultTextEstimates.set(block, { text, minimumRawWeight, chars });
+  estimates.set(block, { text, minimumRawWeight, chars });
   return chars;
 }
 
@@ -77,6 +69,67 @@ export function isToolResultTextBlock(
   return (
     (type === "text" || type === "toolResult") && typeof Reflect.get(block, "text") === "string"
   );
+}
+
+export const MIN_KEEP_CHARS = 2_000;
+
+export function resolveEffectiveMinKeepChars(
+  maxChars: number,
+  options: StringCharBudgetOptions & { minKeepChars?: number },
+  suffixFactory: (truncatedChars: number) => string,
+): number {
+  const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
+  const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
+  const suffixFloor = estimateToolResultTextChars(suffixFactory(1), budgetOptions);
+  return Math.max(0, Math.min(minKeepChars, maxChars - suffixFloor));
+}
+
+/** Keep a whole text prefix and a single notice when per-block notices cannot fit. */
+export function keepToolResultTextPrefix(
+  blocks: { block: unknown; textChars: number }[],
+  maxChars: number,
+  suffix: (omittedChars: number) => string,
+  options: StringCharBudgetOptions,
+): unknown[] {
+  const rawChars = blocks.reduce(
+    (sum, { block }) => sum + (isToolResultTextBlock(block) ? block.text.length : 0),
+    0,
+  );
+  const noticeBudget = estimateToolResultTextChars(suffix(rawChars), options);
+  let remaining = Math.max(0, maxChars - noticeBudget);
+  let omittedChars = 0;
+  let noticeIndex = -1;
+  const retained = blocks.flatMap(({ block, textChars }, index) => {
+    if (!isToolResultTextBlock(block)) {
+      return [block];
+    }
+    if (omittedChars === 0 && textChars <= remaining) {
+      remaining -= textChars;
+      return [block];
+    }
+    omittedChars += block.text.length;
+    if (noticeIndex === -1) {
+      // Keep the notice at the first omitted text position so text-only checkpoints
+      // can restore the prefix among the canonical non-text blocks.
+      noticeIndex = index;
+      return [block];
+    }
+    return [];
+  });
+  const notice = sliceToolResultTextToBudget(
+    suffix(omittedChars),
+    Math.min(maxChars, noticeBudget + remaining),
+    options,
+  );
+  const firstOmitted = retained[noticeIndex];
+  if (isToolResultTextBlock(firstOmitted)) {
+    retained[noticeIndex] = {
+      ...firstOmitted,
+      text: notice,
+      ...(typeof firstOmitted.content === "string" ? { content: notice } : {}),
+    };
+  }
+  return retained;
 }
 
 function sliceToolResultTextBudget(

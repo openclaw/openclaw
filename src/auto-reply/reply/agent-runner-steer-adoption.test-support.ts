@@ -24,7 +24,7 @@ export function createSteerParams(
     sessionKey: key,
     sessionCtx: {},
     resolvedQueue: { mode: "steer", debounceMs: 0 },
-    restartRecoverySourceTurnId: undefined,
+    sourceTurnId: undefined,
     replyOperationRunState: undefined,
     touchActiveSessionEntry: async () => {},
     typingSignals: createTypingSignaler({ typing, mode: "never" }),

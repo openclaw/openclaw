@@ -9,19 +9,15 @@ import {
   type SessionsRewindParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ErrorCode } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
-import type {
-  SessionBranchSwitchMutationResult,
-  SessionMessageCutMutationResult,
-} from "../../config/sessions/session-accessor.js";
 import { mutateSqliteSessionAtMessage } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
 import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
+import type { SessionMessageCutResult as MessageCutMutationResult } from "../../config/sessions/session-message-cut.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import {
   captureSessionTarget,
   isCompetingSessionControllerWorkActive,
@@ -63,10 +59,13 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { prepareSessionForkFilesystemRoot } from "./session-create-root.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { resolveEditorMediaAttachments } from "./session-rewind-editor-media.js";
+import { rejectSessionMessageCutFailure } from "./session-rewind-failure-log.js";
 import { prepareRewindRepositoryEntries } from "./session-rewind-repository-entries.js";
 import { waitForTerminalSessionRunSettlement } from "./session-run-settlement.js";
 import { listSessionBranchesForGateway } from "./sessions-branches-list.js";
 import {
+  createLocalMessageCutGuards,
+  EXTERNAL_CONVERSATION_ERROR,
   prepareUpstreamForkCurrentGuard,
   resolveUpstreamForkHarness,
 } from "./sessions-fork-runtime-guard.js";
@@ -75,13 +74,6 @@ import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./typ
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 type MessageCutAction = "fork" | "rewind" | "switch";
-type MessageCutMutationResult =
-  | SessionMessageCutMutationResult
-  | SessionBranchSwitchMutationResult
-  | { status: "conflict" };
-
-const EXTERNAL_CONVERSATION_ERROR =
-  "Session history changes are unavailable because this session is owned by an external agent harness.";
 
 export const sessionRewindHandlers: GatewayRequestHandlers = {
   "sessions.branches.list": defineValidatedGatewayHandler(
@@ -177,7 +169,8 @@ async function mutatePreparedSessionAtMessage({
   const reject = (message: string, code: ErrorCode = ErrorCodes.INVALID_REQUEST) =>
     respond(false, undefined, errorShape(code, message));
   const { sessionMutationCommitGuard, sessionMutationAuthorization } = options;
-  const commitGuard = () => {
+  const assertMutationCurrent = () => {
+    assertSourceCurrent();
     sessionMutationCommitGuard?.();
     sessionMutationAuthorization?.assertCurrent();
   };
@@ -187,8 +180,7 @@ async function mutatePreparedSessionAtMessage({
     withGatewaySessionEntryReadOnly(
       { key: sessionKey, cfg, agentId: requestedAgentId, excludeInternalEffects: true },
       async (current) => {
-        assertSourceCurrent();
-        commitGuard();
+        assertMutationCurrent();
         return current;
       },
     );
@@ -217,10 +209,6 @@ async function mutatePreparedSessionAtMessage({
       return;
     }
   }
-  const assertMutationCurrent = () => {
-    assertSourceCurrent();
-    commitGuard();
-  };
   const initialSessionId = initial.entry.sessionId;
   const initialLifecycleRevision = initial.entry.lifecycleRevision;
   const upstreamContext = captureSessionUpstreamLinkReadSource();
@@ -235,7 +223,7 @@ async function mutatePreparedSessionAtMessage({
     if (error instanceof SessionMutationAuthorizationChangedError) {
       throw error;
     }
-    reject(`Failed to ${action} the local session. Try again.`, ErrorCodes.UNAVAILABLE);
+    rejectSessionMessageCutFailure(action, "upstream presence", error, reject);
     return;
   }
   using preparedUpstream = upstreamPresence;
@@ -469,7 +457,7 @@ async function mutatePreparedSessionAtMessage({
       }
       const forkWorkspace =
         action === "fork"
-          ? prepareSessionForkFilesystemRoot({
+          ? await prepareSessionForkFilesystemRoot({
               cfg,
               parent: current.entry,
               targetAgentId: current.agentId,
@@ -477,6 +465,7 @@ async function mutatePreparedSessionAtMessage({
               sandboxRequired: sandbox === "required",
             })
           : undefined;
+      assertMutationCurrent();
       if (forkWorkspace && !forkWorkspace.ok) {
         respond(false, undefined, forkWorkspace.error);
         return;
@@ -502,18 +491,15 @@ async function mutatePreparedSessionAtMessage({
         sessionStoreKey: current.canonicalKey,
         storePath: current.storePath,
       };
-      const upstreamChanged = new SessionMutationAuthorizationChangedError(
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          action === "fork" ? "Session changed; retry fork." : EXTERNAL_CONVERSATION_ERROR,
-        ),
-      );
-      const assertLocalUpstreamCurrent = () => {
-        if (preparedUpstream.current()) {
-          throw upstreamChanged;
-        }
-      };
+      const localGuards = createLocalMessageCutGuards({
+        action,
+        context,
+        hasUpstream: () => preparedUpstream.current(),
+      });
       try {
+        if (action === "fork" && current.entry.visibility === "draft") {
+          localGuards.assertForkVisibilityAllowed("draft");
+        }
         if (action === "fork" && current.entry.repositoryWorkspaceId) {
           const repositories = getSessionRepositoryWorkspaceStore();
           const repositorySource = captureOpenClawStateWorkerContext({ path: repositories.path });
@@ -535,7 +521,7 @@ async function mutatePreparedSessionAtMessage({
           };
           const assertRepositoryCurrent = () => {
             assertRepositoryOwnerCurrent();
-            assertLocalUpstreamCurrent();
+            localGuards.assertUpstreamCurrent();
             const sourceEntry = repositoryEntries?.readSource();
             if (
               sourceEntry?.sessionId !== initialSessionId ||
@@ -547,6 +533,7 @@ async function mutatePreparedSessionAtMessage({
           };
           assertRepositoryCurrent();
           const forked = await forkSessionRepositoryWorkspace({
+            branchPrefix: cfg.repositoryBranchPrefix,
             sourceWorkspaceId: current.entry.repositoryWorkspaceId,
             agentId: current.agentId,
             sessionKey: targetKey,
@@ -574,23 +561,20 @@ async function mutatePreparedSessionAtMessage({
           memory ? undefined : expectedState,
           {
             sourceRepositoryWorkspaceId: forkRepository?.sourceWorkspaceId,
-            assertUpstreamCurrent: assertLocalUpstreamCurrent,
+            assertUpstreamCurrent: localGuards.assertUpstreamCurrent,
+            assertForkVisibilityAllowed: localGuards.assertForkVisibilityAllowed,
           },
         );
         repositoryForkCommitted = result.status === "created";
       } catch (error) {
-        if (error === upstreamChanged) {
-          respond(false, undefined, upstreamChanged.error);
+        if (error === localGuards.upstreamChanged) {
+          respond(false, undefined, localGuards.upstreamChanged.error);
           return;
         }
         if (error instanceof SessionMutationAuthorizationChangedError) {
           throw error;
         }
-        if (error instanceof ModelSelectionLockedError) {
-          reject(error.message);
-          return;
-        }
-        reject(`Failed to ${action} the local session. Try again.`, ErrorCodes.UNAVAILABLE);
+        rejectSessionMessageCutFailure(action, "local mutation", error, reject);
         return;
       } finally {
         if (forkRepository && !repositoryForkCommitted) {
@@ -618,7 +602,7 @@ async function mutatePreparedSessionAtMessage({
           "already-active": `branch is already active: ${entryId}`,
           "not-user-message": `entry is not a user message: ${entryId}`,
           "off-active-path": `message entry is not on the active path: ${entryId}`,
-          "unsupported-storage": `session transcript storage does not support ${actionLabel}`,
+          "unsupported-storage": `chat history storage does not support ${actionLabel}`,
           failed: `failed to ${actionLabel} session`,
         }[result.status];
         reject(

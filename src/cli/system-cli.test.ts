@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const callGatewayFromCli = vi.fn();
@@ -8,7 +9,8 @@ const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } =
   createCliRuntimeCapture();
 
 // mock-isolation: Exercise command registration without opening a live Gateway connection.
-vi.mock("./gateway-rpc.js", () => ({
+vi.mock("./gateway-rpc.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway-rpc.js")>()),
   addGatewayClientOptions: (command: Command) => command,
   callGatewayFromCli,
 }));
@@ -42,16 +44,16 @@ describe("system-cli", () => {
     expect(runtimeErrors[0]).toContain("unwakeable-session-key");
   });
 
-  it("writes JSON when invalid wake mode fails", async () => {
-    await expect(
-      runCli(["system", "event", "--text", "hello", "--mode", "later", "--json"]),
-    ).rejects.toThrow("__exit__:1");
-    const failure = {
-      ok: false,
-      error: { type: "cli_error", message: "--mode must be now or next-heartbeat" },
-    };
-    expect(runtimeLogs).toEqual([JSON.stringify(failure, null, 2)]);
-    expect(runtimeErrors).toEqual([]);
+  it.each([
+    [["--text", "hello", "--mode", "later"], "--mode must be now or next-heartbeat"],
+    [["--text", "   "], "--text is required."],
+  ] as const)("hands %j refusals to the CLI failure owner", async (args, message) => {
+    await expect(runCli(["system", "event", ...args, "--json"])).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: expect.stringContaining(message),
+    });
+    expect([runtimeLogs, runtimeErrors]).toEqual([[], []]);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 
@@ -74,14 +76,17 @@ describe("system-cli", () => {
       { mode: "next-heartbeat", text: "ping", sessionKey: "agent:main:telegram:dm:42" },
       "ok",
     ],
-    [["presence"], "system-presence", undefined, '{\n  "ok": true\n}'],
-  ] as const)("routes system %j to gateway", async (args, method, params, output) => {
-    await runCli(["system", ...args]);
+    [["presence"], "system-presence", undefined, undefined],
+  ] as const)("settles interrupted system %j", async (args, method, params, output) => {
+    const scope = new AsyncWorkScope();
+    const pending = scope.run(() => runCli(["system", ...args]));
+    scope.beginClose();
+    await pending;
     expect(callGatewayFromCli.mock.calls[0]?.slice(0, 3)).toEqual([
       method,
       expect.any(Object),
       params,
     ]);
-    expect(runtimeLogs).toEqual([output]);
+    expect(runtimeLogs).toEqual(output ? [output] : []);
   });
 });

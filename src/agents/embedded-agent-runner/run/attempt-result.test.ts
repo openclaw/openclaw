@@ -41,7 +41,9 @@ type ResultInput = {
   messagingToolSentMediaUrls?: string[];
   didSendViaMessagingTool?: boolean;
   assistantTexts?: readonly string[];
+  finalPresentation?: EmbeddedRunAttemptResult["finalPresentation"];
   allowedToolNames?: string[];
+  capabilityToolNames?: string[];
 };
 
 function createResultFixture(params: ResultInput = {}) {
@@ -92,7 +94,10 @@ function createResultFixture(params: ResultInput = {}) {
     lifecycle: { readYieldState: () => ({ yieldDetected: false }) },
     prepared: {
       toolCatalog: {
-        toolSearchRunPlan: { liveAllowedToolNames: new Set(params?.allowedToolNames) },
+        toolSearchRunPlan: {
+          liveAllowedToolNames: new Set(params?.allowedToolNames),
+          capabilityToolNames: new Set(params?.capabilityToolNames),
+        },
       },
       bootstrap: { bootstrapPromptWarning: {} },
       systemPrompt: { systemPromptReport: undefined },
@@ -107,7 +112,16 @@ function createResultFixture(params: ResultInput = {}) {
         trajectoryRecorder: params?.trajectoryRecorder,
       },
     },
-    preparedStreamRuntime: { stream: { subscription }, cache: {} },
+    preparedStreamRuntime: {
+      stream: {
+        subscription,
+        getFinalPresentation: (assistant: EmbeddedRunAttemptResult["lastAssistant"]) =>
+          assistant === params.currentAttemptCompletedAssistant
+            ? params.finalPresentation
+            : undefined,
+      },
+      cache: {},
+    },
   };
   return { input, state, settled, prompt, hookRunner };
 }
@@ -154,6 +168,7 @@ describe("attempt result projection", () => {
     [["Legacy context.", "Signed answer."], "Legacy context.\nSigned answer.", 1],
     [["Legacy context.", "Signed answer.\n\nNO_REPLY"], "Signed answer.", 1],
   ])("preserves native answer boundaries for %j", (parts, text, signedIndex) => {
+    const finalPresentation = { blocks: [{ type: "text" as const, text: "Answer summary" }] };
     const assistant = makeAssistantMessageFixture({
       stopReason: "stop",
       content: parts.map((part, index) => ({
@@ -168,7 +183,9 @@ describe("attempt result projection", () => {
       currentAttemptCompletedAssistant: assistant,
       assistantTexts: parts,
       hasSuccessfulModelResponse: true,
+      finalPresentation,
     });
+    expect(result.finalPresentation).toEqual(finalPresentation);
     expect(result.preparedTerminalReply).toEqual({
       text,
       terminalReply: { disposition: "visible", text },
@@ -201,6 +218,71 @@ describe("attempt result projection", () => {
       ).toBe(expected);
     },
   );
+
+  it.each([false, true])("corrects deferred text calls only when available: %s", (available) => {
+    const assistant = textAssistant(
+      "<tool_call>\n<function=skills_read>\n<parameter=name>\nbriefing\n</parameter>\n</function>\n</tool_call>",
+    );
+    expect(
+      completeResult({
+        currentAttemptCompletedAssistant: assistant,
+        allowedToolNames: ["dispatch_action"],
+        capabilityToolNames: available ? ["skills_read"] : [],
+      }).textToolCallAttempt,
+    ).toBe(available ? true : undefined);
+  });
+
+  it("detects a rendered tool call without rewriting its source", () => {
+    const call = '{"name":"write","arguments":{"path":"proof.txt","content":"OK"}}';
+    const text = `</think>\n\n${call}\n</tool_call>`;
+    const assistant = textAssistant(text);
+    const result = completeResult({
+      currentAttemptCompletedAssistant: assistant,
+      allowedToolNames: ["read", "write"],
+      toolMetas: [{ toolName: "read", replaySafe: true, isError: false }],
+    });
+
+    expect(result.textToolCallAttempt).toBe(true);
+    expect(result.textToolCallName).toBe("write");
+    expect(assistant.content).toEqual([{ type: "text", text }]);
+    expect(
+      completeResult({
+        currentAttemptCompletedAssistant: textAssistant(
+          `Here is an example:\n\`\`\`xml\n${text}\n\`\`\``,
+        ),
+        allowedToolNames: ["write"],
+      }).textToolCallAttempt,
+    ).toBeUndefined();
+  });
+
+  it("preserves an example split across Responses commentary and final-answer items", () => {
+    const commentary = "Here is an example";
+    const example =
+      '```json\n{"name":"write","arguments":{"path":"proof.txt","content":"OK"}}\n```';
+    const assistant = textAssistant("", {
+      api: "openai-responses",
+      content: [
+        {
+          type: "text",
+          text: commentary,
+          textSignature: JSON.stringify({ v: 1, id: "comment", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: example,
+          textSignature: JSON.stringify({ v: 1, id: "answer", phase: "final_answer" }),
+        },
+      ],
+    });
+    const result = completeResult({
+      currentAttemptCompletedAssistant: assistant,
+      assistantTexts: [commentary, example],
+      allowedToolNames: ["write"],
+    });
+
+    expect(result.textToolCallAttempt).toBeUndefined();
+    expect(result.preparedTerminalReply?.text).toBe(example);
+  });
 
   it("keeps the settled result snapshot when an output hook replaces live state", () => {
     const assistant = makeAssistantMessageFixture({ content: [{ type: "text", text: "settled" }] });

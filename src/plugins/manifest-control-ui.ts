@@ -27,7 +27,7 @@ export function normalizeManifestControlUi(
   if (
     !isRecord(value) ||
     Object.keys(value).some(
-      (key) => !["entry", "styles", "activation", "settingsViews"].includes(key),
+      (key) => !["entry", "styles", "panelIcon", "activation", "settingsViews"].includes(key),
     )
   ) {
     return err("controlUi contains an unknown field");
@@ -90,6 +90,16 @@ export function normalizeManifestControlUi(
     return err("controlUi.styles must be an array of at most 16 stylesheets");
   }
   const assetPrefix = entry.slice(0, entry.lastIndexOf("/") + 1);
+  const panelIcon =
+    typeof value.panelIcon === "string" ? value.panelIcon.replace(/^\.\//u, "") : undefined;
+  if (
+    value.panelIcon !== undefined &&
+    (!panelIcon ||
+      panelIcon.length > 512 ||
+      !/^(?:[\w-][\w.-]*\/)*[\w-][\w.-]*\.svg$/u.test(panelIcon))
+  ) {
+    return err("controlUi.panelIcon must be a plugin-relative SVG path");
+  }
   const styles: string[] = [];
   for (const rawStyle of value.styles ?? []) {
     const style = typeof rawStyle === "string" ? rawStyle.replace(/^\.\//u, "") : "";
@@ -106,6 +116,7 @@ export function normalizeManifestControlUi(
   }
   return ok({
     entry,
+    ...(panelIcon ? { panelIcon } : {}),
     ...(styles.length > 0 ? { styles } : {}),
     ...(value.activation === "settings-only" ? { activation: value.activation } : {}),
     ...(settingsViews.length > 0 ? { settingsViews } : {}),

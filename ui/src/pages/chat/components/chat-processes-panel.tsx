@@ -139,9 +139,6 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             ]}
             type="button"
             aria-label={t("chat.processesPanel.stop", { name: stopProps.row.name })}
-            title={
-              props.mobile ? undefined : t("chat.processesPanel.stop", { name: stopProps.row.name })
-            }
             disabled={stop.stopping()}
             onClick={() => void stop.stop()}
           >
@@ -208,7 +205,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                     <span class="chat-processes__activity">
                       <span
                         class={{
-                          "chat-processes__shimmer": !data().stopping.has(row().instanceId),
+                          "text-shimmer": !data().stopping.has(row().instanceId),
                         }}
                       >
                         {data().stopping.has(row().instanceId)
@@ -288,7 +285,6 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
     const Detail = (detailProps: { loading: boolean; retry: () => void }) => {
       let output!: HTMLDivElement;
       let back!: HTMLButtonElement;
-      const titleScrollState = useScrollState(true, false);
       const savePosition = () => {
         const id = selected();
         if (id && output) {
@@ -298,6 +294,24 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       onSettled(() => {
         back.focus({ preventScroll: true });
       });
+      const outputInfo = (row: SessionProcessSummary) => (
+        <div class="chat-processes__output-info">
+          {props.mobile && (
+            <strong class="chat-processes__identity" title={row.name}>
+              <bdi>{row.name}</bdi>
+            </strong>
+          )}
+          <div class="chat-processes__metadata" data-status={row.status}>
+            <span class="chat-processes__status">{status(row)}</span>
+            <span>{elapsed(row)}</span>
+            {row.exitCode != null && (
+              <span>{t("chat.processesPanel.exitCode", { code: String(row.exitCode) })}</span>
+            )}
+            {props.mobile && row.exitReason && <span>{row.exitReason}</span>}
+          </div>
+          {!props.mobile && row.exitReason && <p class="chat-processes__note">{row.exitReason}</p>}
+        </div>
+      );
       const Output = (outputProps: { row: SessionProcessSummary }) => {
         const scrollState = useScrollState();
         onSettled(() => {
@@ -321,6 +335,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             ]}
             onScroll={savePosition}
           >
+            {props.mobile && outputInfo(outputProps.row)}
             {props.mobile && <h3>{t("chat.processesPanel.output")}</h3>}
             <Show
               when={outputProps.row.tail || props.mobile}
@@ -337,7 +352,11 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             >
               <pre>{outputProps.row.tail || t("chat.processesPanel.noOutput")}</pre>
             </Show>
-            {!props.mobile && outputNotes(outputProps.row)}
+            {props.mobile ? (
+              <footer class="chat-processes__output-notice">{outputNotes(outputProps.row)}</footer>
+            ) : (
+              outputNotes(outputProps.row)
+            )}
           </div>
         );
       };
@@ -397,15 +416,19 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                 }}
               >
                 <Icon name="chevronLeft" />
+                {props.mobile &&
+                  t(
+                    navigation.fromDetails
+                      ? "chat.processesPanel.backToDetails"
+                      : "chat.processesPanel.back",
+                  )}
               </button>
             </span>
-            <strong
-              class="chat-processes__detail-name"
-              ref={titleScrollState}
-              title={props.mobile ? undefined : selectedRow()?.name}
-            >
-              {selectedRow()?.name}
-            </strong>
+            {!props.mobile && (
+              <strong class="chat-processes__detail-name" title={selectedRow()?.name}>
+                <bdi>{selectedRow()?.name}</bdi>
+              </strong>
+            )}
             <Show when={selectedRow()}>
               {(row) => (
                 <>
@@ -433,7 +456,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             when={selectedRow()}
             fallback={
               <Show
-                when={detailProps.loading}
+                when={detailProps.loading && !data().hasResult}
                 fallback={
                   <div class="chat-processes__empty" role="status">
                     {t(
@@ -452,23 +475,8 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
           >
             {(row) => (
               <>
-                <div class="chat-processes__output-info">
-                  {props.mobile && <strong class="chat-processes__identity">{row().name}</strong>}
-                  <div class="chat-processes__metadata" data-status={row().status}>
-                    <span class="chat-processes__status">{status(row())}</span>
-                    <span>{elapsed(row())}</span>
-                    {row().exitCode != null && (
-                      <span>
-                        {t("chat.processesPanel.exitCode", { code: String(row().exitCode) })}
-                      </span>
-                    )}
-                  </div>
-                  {row().exitReason && <p class="chat-processes__note">{row().exitReason}</p>}
-                </div>
+                {!props.mobile && outputInfo(row())}
                 <Output row={row()} />
-                {props.mobile && (
-                  <footer class="chat-processes__output-notice">{outputNotes(row())}</footer>
-                )}
               </>
             )}
           </Show>
@@ -495,7 +503,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             when={rows().length}
             fallback={
               <Show
-                when={data().hasResult && !data().error && !contentProps.loading}
+                when={data().hasResult && !data().error}
                 fallback={
                   <Show
                     when={contentProps.loading}

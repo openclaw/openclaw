@@ -13,6 +13,7 @@ import { executeSqliteQuerySync } from "./kysely-sync.js";
 import { nativeBoundaryTestEntrypoints } from "./native-boundary-runtime.test-support.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { managedHandoffBootSchema } from "./update-managed-service-handoff-boot-schema.js";
 import {
   createManagedHandoffLeaseDatabase,
   leaseQueries,
@@ -20,10 +21,7 @@ import {
 } from "./update-managed-service-handoff-database.js";
 import type { ManagedHandoffLeaseStoreOptions } from "./update-managed-service-handoff-lease-types.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
-import {
-  managedHandoffBootSchema,
-  parseManagedHandoffLeasePayload,
-} from "./update-managed-service-handoff-schema.js";
+import { parseManagedHandoffLeasePayload } from "./update-managed-service-handoff-schema.js";
 
 const { readProcessAncestry, readProcessIdentity } = vi.hoisted(() => ({
   readProcessAncestry: vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessAncestry>(),
@@ -136,9 +134,9 @@ describe("managed handoff boot identities", () => {
     });
     expect(spawnSyncMock).toHaveBeenCalledTimes(1);
   });
-  it("keeps Linux boot IDs on their existing procfs path", async () => {
+  it.each(["linux", "android"] as const)("reads %s boot IDs from procfs", async (platform) => {
     const read = vi.spyOn(fs, "readFileSync").mockReturnValue(`${uuid}\n`);
-    await withMockedPlatform("linux", async () => {
+    await withMockedPlatform(platform, async () => {
       expect(store.bootIdentity()).toEqual({ platform: "linux", identity: uuid });
     });
     expect(read).toHaveBeenCalledWith("/proc/sys/kernel/random/boot_id", "utf8");

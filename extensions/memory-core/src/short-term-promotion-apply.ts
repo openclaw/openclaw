@@ -24,11 +24,11 @@ import { applyMemoryConsolidationPlan, consolidateMemory } from "./dreaming-cons
 import { buildBudgetedMemoryAppend } from "./memory-budget-append.js";
 import { DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 import { pruneMemoryEntryOrigins, reserveMemoryEntryOrigins } from "./memory-entry-origins.js";
+import { commitMemoryRewrite } from "./memory-rewrite.js";
 import { readWorkspaceFile } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import {
   buildPromotionMarker,
-  commitMemoryContent,
   extractPromotionKeys,
   hashMemoryContent,
   isAtomicReplacePermissionError,
@@ -45,7 +45,7 @@ import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-rec
 import { rehydratePromotionCandidate } from "./short-term-promotion-rehydrate.js";
 import { readStore, writeStore } from "./short-term-promotion-store.js";
 import type {
-  ApplyShortTermPromotionsOptions,
+  PromotionThresholdOptions,
   ApplyShortTermPromotionsResult,
   PromotionCandidate,
   PromotionRejectionCategory,
@@ -57,6 +57,45 @@ import {
   resolvePromotionThresholds,
 } from "./short-term-promotion-utils.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
+import type { WorkspaceFileMode } from "./workspace-file-mode.js";
+
+type ApplyShortTermPromotionsOptions = PromotionThresholdOptions & {
+  agentId?: string;
+  workspaceAgentIds?: readonly string[];
+  workspaceDir: string;
+  workspaceFileMode?: WorkspaceFileMode;
+  candidates: PromotionCandidate[];
+  limit?: number;
+  nowMs?: number;
+  timezone?: string;
+  /**
+   * Maximum size of MEMORY.md on disk after a promotion write, in
+   * characters. When the post-write size would exceed this budget, the
+   * oldest auto-promotion sections may be compacted out, within
+   * `maxPriorEntryLossFraction`, so the file stays bounded and bootstrap
+   * injection keeps reaching new sessions. Pass `0` to disable compaction. Defaults to
+   * `DEFAULT_MEMORY_FILE_MAX_CHARS`. See #73691.
+   */
+  memoryFileMaxChars?: number;
+  /**
+   * Maximum visible size of each promoted short-term snippet in MEMORY.md, in
+   * estimated tokens. This keeps daily journal ranges from being copied
+   * wholesale into long-term memory while preserving the candidate's provenance
+   * metadata.
+   */
+  maxPromotedSnippetTokens?: number;
+  /** Maximum fraction of prior entries a promotion write may remove. */
+  maxPriorEntryLossFraction?: number;
+  consolidation?: {
+    subagent?: import("./dreaming-narrative.js").DreamingCompletion;
+    model?: string;
+    timeoutMs?: number;
+    logger: {
+      info: (message: string) => void;
+      warn: (message: string) => void;
+    };
+  };
+};
 
 const MEMORY_WRITE_LOCK_OPTIONS = {
   retries: { retries: 100, factor: 1.2, minTimeout: 25, maxTimeout: 250 },
@@ -334,6 +373,11 @@ export async function applyShortTermPromotions(
   let alreadyWritten = rehydratedSelected.filter((candidate) => existingMarkers.has(candidate.key));
   let toAppend = rehydratedSelected.filter((candidate) => !existingMarkers.has(candidate.key));
   const consolidationBaseMemoryHash = hashMemoryContent(existingMemory);
+  // Provenance readers classify the physical target, so record there, not at the alias.
+  const resolveMemoryProvenancePath = async () =>
+    path
+      .relative(await resolveMemoryWritePath(workspaceDir, workspaceDir), memoryWritePath)
+      .replaceAll(path.sep, "/");
   const plannedCandidateFingerprints = new Map(
     toAppend.map((candidate) => [candidate.key, consolidationCandidateFingerprint(candidate)]),
   );
@@ -466,9 +510,11 @@ export async function applyShortTermPromotions(
           operations: consolidationPlan.operations,
         });
         try {
-          await commitMemoryContent({
+          await commitMemoryRewrite({
             workspaceDir,
+            workspaceFileMode: options.workspaceFileMode,
             filePath: memoryWritePath,
+            relativePath: await resolveMemoryProvenancePath(),
             tempPrefix: `${path.basename(memoryPath)}.promotion`,
             expectedHash: consolidationBaseMemoryHash,
             content: consolidationResult.content,
@@ -532,9 +578,11 @@ export async function applyShortTermPromotions(
           } else {
             // Append fallback keeps the historical read-modify-replace contract. Policy accepts
             // its external-editor race because OpenClaw writers remain serialized by this sweep lock.
-            await commitMemoryContent({
+            await commitMemoryRewrite({
               workspaceDir,
+              workspaceFileMode: options.workspaceFileMode,
               filePath: memoryWritePath,
+              relativePath: await resolveMemoryProvenancePath(),
               tempPrefix: `${path.basename(memoryPath)}.promotion`,
               expectedHash: hashMemoryContent(existingMemory),
               expectedContent: existingMemory,

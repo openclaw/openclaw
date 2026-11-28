@@ -23,7 +23,7 @@ import { buildChromeMcpRouteSnapshot } from "../chrome-mcp.snapshot-result.js";
 import { flattenChromeMcpSnapshotToAriaResult } from "../chrome-mcp.snapshot.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "../constants.js";
 import {
-  assertBrowserNavigationAllowed,
+  assertChromeMcpNavigationAllowed,
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
@@ -36,6 +36,7 @@ import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
   normalizeBrowserScreenshot,
 } from "../screenshot.js";
+import { resolveProfileHeadless } from "../server-context.availability.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
   getPreviousSnapshotKeys,
@@ -53,10 +54,7 @@ import {
   withPlaywrightRouteContext,
   withRouteTabContext,
 } from "./agent.shared.js";
-import {
-  captureBrowserOperationTarget,
-  resolveOperationTargetOutcome,
-} from "./agent.snapshot-target.js";
+import * as snapshotTarget from "./agent.snapshot-target.js";
 import { resolveSnapshotPlan } from "./agent.snapshot.plan.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
@@ -143,9 +141,10 @@ export function registerBrowserAgentSnapshotRoutes(
       ctx,
       targetId,
       run: async ({ profileCtx, tab, cdpUrl, signal, assertCurrent }) => {
+        await snapshotTarget.assertTabNotCrashed(ctx, profileCtx.profile.name, tab, signal);
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
-          await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
+          await assertChromeMcpNavigationAllowed({ url, ...ssrfPolicyOpts });
           const result = await navigateChromeMcpPage({
             profileName: profileCtx.profile.name,
             profile: profileCtx.profile,
@@ -161,7 +160,7 @@ export function registerBrowserAgentSnapshotRoutes(
         if (!pw) {
           return;
         }
-        const resolveRelayTarget = await captureBrowserOperationTarget({
+        const resolveRelayTarget = await snapshotTarget.captureBrowserOperationTarget({
           ctx,
           profileName: profileCtx.profile.name,
           targetId: tab.targetId,
@@ -182,7 +181,7 @@ export function registerBrowserAgentSnapshotRoutes(
               : {}),
             ...browserNavigationPolicyForProfile(ctx, profileCtx),
           });
-          const currentTargetId = await resolveOperationTargetOutcome({
+          const currentTargetId = await snapshotTarget.resolveOperationTargetOutcome({
             actedOnTargetId: tab.targetId,
             operationTargetId: result.targetId,
             resolveRelayTarget,
@@ -241,13 +240,12 @@ export function registerBrowserAgentSnapshotRoutes(
     const element = toStringOrEmpty(body.element) || undefined;
     const labels = toBoolean(body.labels) ?? false;
     const type = body.type === "jpeg" ? "jpeg" : "png";
-    let timeoutMs: number;
+    let timeoutMs = DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
     try {
       const timeoutMsRaw = readRoutePositiveInteger(body.timeoutMs, "timeoutMs");
-      timeoutMs =
-        timeoutMsRaw !== undefined
-          ? normalizeBrowserTimerDelayMs(timeoutMsRaw)
-          : DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
+      if (timeoutMsRaw !== undefined) {
+        timeoutMs = normalizeBrowserTimerDelayMs(timeoutMsRaw);
+      }
     } catch (err) {
       return jsonError(res, 400, String(err instanceof Error ? err.message : err));
     }
@@ -261,8 +259,10 @@ export function registerBrowserAgentSnapshotRoutes(
       res,
       ctx,
       targetId,
+      preserveWarmup: toBoolean(req.query.operatorInput) === false,
       enforceCurrentUrlAllowed: true,
       run: async ({ profileCtx, tab, cdpUrl, signal }) => {
+        await snapshotTarget.assertTabNotCrashed(ctx, profileCtx.profile.name, tab, signal);
         const jsonScreenshot = (image: Awaited<ReturnType<typeof saveBrowserScreenshot>>) => {
           const { imagePath, imageType: _imageType, ...details } = image;
           res.json({ ok: true, path: imagePath, targetId: tab.targetId, url: tab.url, ...details });
@@ -346,12 +346,12 @@ export function registerBrowserAgentSnapshotRoutes(
             type,
             timeoutMs,
             signal,
+            headless: await resolveProfileHeadless(ctx.state(), profileCtx.profile.name),
           };
           capture = labels
             ? await pw.screenshotWithLabelsViaPlaywright({ ...screenshotOptions, refs: snap?.refs })
             : await pw.takeScreenshotViaPlaywright(screenshotOptions);
         } else {
-          const profileRuntime = ctx.state().profiles.get(profileCtx.profile.name);
           capture = {
             buffer: await captureScreenshot({
               wsUrl: tab.wsUrl ?? "",
@@ -360,9 +360,7 @@ export function registerBrowserAgentSnapshotRoutes(
               format: type,
               quality: type === "jpeg" ? 85 : undefined,
               timeoutMs,
-              headless:
-                profileRuntime?.running?.headless ??
-                (await profileRuntime?.externalBrowserMode?.headless),
+              headless: await resolveProfileHeadless(ctx.state(), profileCtx.profile.name),
             }),
           };
         }
@@ -412,6 +410,7 @@ export function registerBrowserAgentSnapshotRoutes(
             });
           }
           await req.assertCurrent?.(profileCtx.profile);
+          await snapshotTarget.assertTabNotCrashed(ctx, profileCtx.profile.name, tab, signal);
           const jsonSnapshot = (snapshot: Record<string, unknown>) =>
             res.json({
               ok: true,
@@ -663,6 +662,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 type: "png",
                 timeoutMs: plan.timeoutMs,
                 signal,
+                headless: await resolveProfileHeadless(ctx.state(), profileCtx.profile.name),
               });
               image = await saveBrowserScreenshot(labeled, "png");
             }
