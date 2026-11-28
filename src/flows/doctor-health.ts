@@ -396,7 +396,7 @@ async function runDoctorHealthFlowWithResult(
         discovery.preparedTranscriptArchives = preparedArchiveDiscovery?.preparedTranscriptArchives;
       }
       const { loadAndMaybeMigrateDoctorConfig } = await import("../commands/doctor-config-flow.js");
-      await startup.traceDoctorConfigFlowPending(tracePending, options);
+      await startup.traceDoctorConfigFlowPending(tracePending, options, schemas);
       const configResult = await measure("doctor.config-flow", () =>
         loadAndMaybeMigrateDoctorConfig({
           options,
