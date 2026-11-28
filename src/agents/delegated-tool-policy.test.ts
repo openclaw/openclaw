@@ -94,7 +94,7 @@ function childProfile(cfg = config(), extra: Parameters<typeof profile>[1] = {})
 function selectChild(
   cfg: OpenClawConfig,
   floor: NonNullable<Parameters<typeof select>[0]>["floor"],
-  extra: Parameters<typeof select>[0] = {},
+  extra: Parameters<typeof select>[0],
 ) {
   return select({
     config: cfg,
@@ -110,7 +110,7 @@ function project(p: ReturnType<typeof profile>, toolNames: string[]) {
 function descendantStore(
   sessionKey: string,
   delegatedToolPolicy: ReturnType<typeof select>,
-  extra: { spawnDepth?: number; inheritedToolAllow?: string[] } = {},
+  extra: { spawnDepth?: number; inheritedToolAllow?: string[] },
 ) {
   return {
     [child]: entry(),

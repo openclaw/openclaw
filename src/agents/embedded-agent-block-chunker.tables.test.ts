@@ -14,7 +14,7 @@ function capture(maxChars = 1200) {
   const chunker = new EmbeddedBlockChunker({ minChars: maxChars === 100 ? 50 : 800, maxChars });
   const chunks: string[] = [];
   const metadata: BlockChunkMetadata[] = [];
-  const drain = (force = false) =>
+  const drain = (force: boolean) =>
     chunker.drain({
       force,
       emit: (text, details) => {
