@@ -129,6 +129,18 @@ fields, so optional inputs stay optional. Custom proxy endpoints keep their
 existing compatibility policy. An explicit `compat.supportsStrictMode: false`
 omits the strict field.
 
+## Spending budget errors
+
+OpenRouter can return HTTP 403 when a guardrail, workspace, or API-key spending
+budget is exhausted. OpenClaw classifies these documented budget failures as
+billing problems, not failed sign-ins. Signing in again does not raise the budget.
+Wait for the reported reset time, or ask your organization administrator to raise
+the applicable limit. A lifetime workspace budget does not reset automatically.
+Other permission or content-policy refusals are not spending-budget failures.
+
+See OpenRouter's [budget error reference](https://openrouter.ai/docs/api_reference/errors-and-debugging#budget-errors)
+and [workspace budgets](https://openrouter.ai/docs/guides/features/workspaces/workspace-budgets).
+
 ## Typed decisions
 
 ### Parallel Decisions Fast
