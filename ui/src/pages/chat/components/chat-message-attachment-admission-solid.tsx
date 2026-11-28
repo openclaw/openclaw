@@ -37,10 +37,12 @@ function AdmissionContent(props: Pick<AttachmentAdmissionProps, "render">): JSX.
 export function createChatAttachmentAdmission(scope: () => string, immediate: () => boolean) {
   let element: Element | undefined;
   let admission: ReturnType<typeof createAdmission> | undefined;
-  const key = createMemo(() => JSON.stringify([scope(), immediate()]));
+  // Only changes to the admission key may reset an already admitted attachment.
+  const key = createMemo(() => [scope(), immediate()] as const, {
+    equals: (previous, next) => previous[0] === next[0] && previous[1] === next[1],
+  });
   const current = createMemo(() => {
-    key();
-    admission = createAdmission(immediate(), () => element);
+    admission = createAdmission(key()[1], () => element);
     return admission;
   });
   const observeElement = (next: Element | undefined) => {
