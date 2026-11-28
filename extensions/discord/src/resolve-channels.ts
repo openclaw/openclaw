@@ -12,6 +12,7 @@ type DiscordChannelSummary = {
   id: string;
   name: string;
   guildId: string;
+  parentId?: string | null;
   type?: number;
   archived?: boolean;
 };
@@ -53,7 +54,7 @@ type FetchChannelResult =
   | { status: "forbidden" }
   | { status: "invalid" };
 
-async function fetchChannel(
+export async function fetchChannel(
   token: string,
   fetcher: typeof fetch,
   channelId: string,
@@ -81,6 +82,7 @@ async function fetchChannel(
       id: raw.id,
       name: typeof raw.name === "string" ? raw.name : "",
       guildId: raw.guild_id,
+      parentId: raw.parent_id,
       type: raw.type,
     },
   };

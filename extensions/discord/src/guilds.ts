@@ -17,6 +17,7 @@ export type DiscordGuildChannel = {
   name?: string | null;
   type?: number;
   guild_id?: string;
+  parent_id?: string | null;
   thread_metadata?: { archived?: boolean };
 };
 
@@ -42,17 +43,22 @@ export function searchDiscordGuildMembers(
   );
 }
 
+export type DiscordGuild = { id: string; name: string };
+
+export function fetchDiscordGuildsPage(
+  token: string,
+  fetcher: typeof fetch,
+  options?: { timeoutMs?: number },
+) {
+  return fetchDiscord<DiscordGuild[]>("/users/@me/guilds", token, fetcher, options);
+}
+
 export async function listGuilds(
   token: string,
   fetcher: typeof fetch,
   options?: { timeoutMs?: number },
 ): Promise<DiscordGuildSummary[]> {
-  const raw = await fetchDiscord<Array<{ id?: string; name?: string }>>(
-    "/users/@me/guilds",
-    token,
-    fetcher,
-    options,
-  );
+  const raw = await fetchDiscordGuildsPage(token, fetcher, options);
   return raw.flatMap((guild) =>
     typeof guild.id === "string" && typeof guild.name === "string"
       ? [{ id: guild.id, name: guild.name, slug: normalizeDiscordSlug(guild.name) }]
