@@ -48,6 +48,8 @@ export type McpCatalogTool = {
   appExtensions?: McpAppToolExtensions;
   uiResourceUri?: string;
   uiVisibility?: Array<"app" | "model">;
+  /** The server marked this tool `_meta["anthropic/alwaysLoad"]: true` (load upfront under tool search). */
+  alwaysLoad?: true;
   /** Listed by the server but excluded from OpenClaw's callable tool catalog. */
   excludedFromOpenClawCatalog?: true;
   deniedBySession?: true;

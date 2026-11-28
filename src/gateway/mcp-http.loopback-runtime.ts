@@ -335,28 +335,41 @@ const MCP_CAPTURE_HEADERS = {
   "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
 } as const;
 
-function createMcpServerConfig(port: number, headers: Record<string, string>, alwaysLoad = true) {
+// `undefined` leaves the server value unset; it must not fall back to a default.
+function createMcpServerConfig(
+  port: number,
+  headers: Record<string, string>,
+  alwaysLoad: boolean | undefined,
+) {
   return {
     mcpServers: {
       openclaw: {
         type: "http",
         url: `http://127.0.0.1:${port}/mcp`,
-        alwaysLoad,
+        ...(alwaysLoad === undefined ? {} : { alwaysLoad }),
         headers,
       },
     },
   };
 }
 
-/** Build the MCP server config injected into agents for loopback tool access. */
-export function createMcpLoopbackServerConfig(port: number, options?: { deferTools?: boolean }) {
+/**
+ * Build the MCP server config injected into agents for loopback tool access.
+ * Deferred runs normally pin `alwaysLoad: false`. When a listed tool carries the
+ * upstream per-tool upfront hint, leave the server value unset instead: Claude
+ * Code lets an explicit server value override per-tool hints.
+ */
+export function createMcpLoopbackServerConfig(
+  port: number,
+  options?: { deferTools?: boolean; perToolLoadingHints?: boolean },
+) {
   return createMcpServerConfig(
     port,
     { ...MCP_AUTH_HEADERS, ...MCP_CAPTURE_HEADERS },
-    !options?.deferTools,
+    !options?.deferTools ? true : options.perToolLoadingHints ? undefined : false,
   );
 }
 
 export function createMcpAttachGrantServerConfig(port: number) {
-  return createMcpServerConfig(port, MCP_AUTH_HEADERS);
+  return createMcpServerConfig(port, MCP_AUTH_HEADERS, true);
 }

@@ -181,6 +181,10 @@ when it discovers them instead of placing every schema in the initial prompt.
 `tools.toolSearch: false` (or `{ enabled: false }`) keeps definitions upfront.
 On this native route the setting controls deferral; OpenClaw's search modes and
 catalog selectors apply to the embedded Tool Search surface, not Claude's search.
+A configured MCP tool that its server marks with `_meta["anthropic/alwaysLoad"]: true`
+keeps that mark through OpenClaw's bridge, so Claude loads that tool upfront
+while the rest stay deferred. With `tools.toolSearch: false` every tool loads
+upfront anyway.
 
 Changing only this loading hint preserves the stored native Claude conversation.
 Prompt changes can still restart a warm process and resume that conversation;

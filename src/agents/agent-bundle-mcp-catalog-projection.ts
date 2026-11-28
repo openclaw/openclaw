@@ -134,6 +134,7 @@ export function projectBundleMcpServerCatalog({
       inputSchema: tool.inputSchema,
       fallbackDescription: `Provided by bundle MCP server "${serverName}" (${launchDescription}).`,
       ...readMcpToolUiMetadata(tool),
+      ...(tool._meta?.["anthropic/alwaysLoad"] === true ? { alwaysLoad: true as const } : {}),
       ...(excludedFromOpenClawCatalog ? { excludedFromOpenClawCatalog: true as const } : {}),
       ...(deniedBySession ? { deniedBySession: true } : {}),
       codexAnnotations: normalizeMcpCodexToolAnnotations(tool.annotations),

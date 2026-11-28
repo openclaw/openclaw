@@ -18,6 +18,8 @@ export type PluginToolMcpMeta = {
   instructions?: string;
   /** Trusted requester OAuth sign-in bootstrap; exempt from per-call MCP approval. */
   oauthConnectBootstrap?: true;
+  /** The upstream server asked Claude-style clients to load this tool upfront under tool search. */
+  alwaysLoad?: true;
   codexApproval?: {
     mode?: McpCodexToolApprovalMode;
     annotations?: McpCodexToolAnnotations;

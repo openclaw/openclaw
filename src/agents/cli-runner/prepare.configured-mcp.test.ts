@@ -8,6 +8,7 @@ import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { mintMcpLoopbackClientGrant as MintMcpLoopbackClientGrant } from "../../gateway/mcp-grant-store.js";
 import { handleMcpJsonRpc } from "../../gateway/mcp-http.handlers.js";
+import { createMcpLoopbackServerConfig } from "../../gateway/mcp-http.loopback-runtime.js";
 import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
@@ -44,7 +45,10 @@ import { resolveMcpTransportConfig } from "../mcp-transport-config.js";
 import { getTextContent } from "../test-helpers/agent-tools-fs-helpers.js";
 import { mockCliMcpPreparation } from "./prepare-mcp.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
-import { resetCliRunnerPrepareTestDeps } from "./prepare.test-support.js";
+import {
+  resetCliRunnerPrepareTestDeps,
+  setCliRunnerPrepareTestDeps,
+} from "./prepare.test-support.js";
 
 const PROBE_SERVER_INSTRUCTIONS =
   "PROBE_GUIDANCE: echo one word per call.\n" +
@@ -53,7 +57,13 @@ const PROBE_SERVER_INSTRUCTIONS =
 
 const claudeBackend = createClaudeMcpCliBackend();
 
-async function startProbeServer() {
+const ECHO_TOOL = {
+  name: "echo",
+  description: "Echo a word.",
+  inputSchema: { type: "object", properties: { word: { type: "string" } } },
+};
+
+async function startProbeServer(listedTools: readonly Record<string, unknown>[] = [ECHO_TOOL]) {
   const state = {
     calls: 0,
     authorizations: [] as string[],
@@ -114,15 +124,7 @@ async function startProbeServer() {
             instructions: PROBE_SERVER_INSTRUCTIONS,
           }
         : message.method === "tools/list"
-          ? {
-              tools: [
-                {
-                  name: "echo",
-                  description: "Echo a word.",
-                  inputSchema: { type: "object", properties: { word: { type: "string" } } },
-                },
-              ],
-            }
+          ? { tools: listedTools }
           : message.method === "tools/call"
             ? {
                 content: [{ type: "text", text: `probe:${message.params?.arguments?.word}` }],
@@ -367,6 +369,135 @@ describe("configured MCP servers on CLI turns", () => {
       expect(probeServer.calls).toBe(deny.length > 0 ? 0 : childAllow ? 2 : 3);
     },
   );
+  it("keeps an upstream upfront-loading hint through the loopback under tool search", async () => {
+    const { sessionTarget } = fixture.session;
+    const wordSchema = { type: "object", properties: { word: { type: "string" } } };
+    const probeServer = await startProbeServer([
+      {
+        name: "marked",
+        description: "Marked tool.",
+        inputSchema: wordSchema,
+        _meta: { "anthropic/alwaysLoad": true },
+      },
+      { name: "unmarked", description: "Unmarked tool.", inputSchema: wordSchema },
+    ]);
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [{ ...claudeBackend, nativeToolSearch: "ToolSearch" }],
+    });
+    // Write the production loopback entry Claude Code receives, not the fixed test entry.
+    setCliRunnerPrepareTestDeps({ createMcpLoopbackServerConfig });
+    const scheduler = createTestGatewayScheduler();
+    const turns: Record<string, unknown>[] = [];
+    const resumeHashes = new Set<string | undefined>();
+    try {
+      await setSessionMcpRuntimeScheduler(scheduler);
+      for (const { toolSearch, deny } of [
+        { toolSearch: true, deny: [] },
+        // An explicit opt-out still loads every tool upfront.
+        { toolSearch: false, deny: [] },
+        // A denied marked tool is neither listed nor able to undo server-wide deferral.
+        { toolSearch: true, deny: ["probe__marked"] },
+      ]) {
+        const config: OpenClawConfig = {
+          session: { store: sessionTarget.storePath },
+          plugins: { enabled: false },
+          tools: { allow: ["read", "probe__*"], deny, toolSearch },
+          mcp: {
+            servers: {
+              probe: {
+                transport: "streamable-http",
+                url: `http://127.0.0.1:${probeServer.port}/mcp`,
+              },
+            },
+          },
+        };
+        const context = await fixture.prepare({
+          sessionKey: sessionTarget.sessionKey,
+          sessionId: sessionTarget.sessionId,
+          provider: "claude-cli",
+          model: "opus",
+          modelHasVision: false,
+          sourceReplyDeliveryMode: "automatic",
+          config,
+        });
+        try {
+          const args = context.preparedBackend.backend.args ?? [];
+          const bundle = JSON.parse(
+            fs.readFileSync(args[args.indexOf("--mcp-config") + 1] ?? "", "utf-8"),
+          ) as { mcpServers: Record<string, Record<string, unknown>> };
+          const minted = mintGrant.mock.lastCall?.[0];
+          const scoped = await resolveMcpLoopbackScopedTools({
+            cfg: config,
+            context: minted!.context,
+            admittedRunContext: context.params.admittedRunContext,
+            ...(minted!.bundledTools ? { bundledTools: minted!.bundledTools } : {}),
+          });
+          const listed = (await handleMcpJsonRpc({
+            message: { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+            tools: scoped.tools,
+            toolSchema: buildMcpToolSchema(scoped.tools),
+          })) as { result: { tools: Array<{ name: string; _meta?: unknown }> } };
+          const called = (await handleMcpJsonRpc({
+            message: {
+              jsonrpc: "2.0",
+              id: 2,
+              method: "tools/call",
+              params: { name: "probe__marked", arguments: { word: "hi" } },
+            },
+            tools: scoped.tools,
+            toolSchema: buildMcpToolSchema(scoped.tools),
+          })) as { result?: { content?: Array<{ text?: string }>; isError?: boolean } };
+          turns.push({
+            discovery: context.params.cliToolAvailability?.discovery,
+            alwaysLoad: Object.hasOwn(bundle.mcpServers.openclaw ?? {}, "alwaysLoad")
+              ? bundle.mcpServers.openclaw?.alwaysLoad
+              : "unset",
+            probeTools: listed.result.tools
+              .filter((tool) => tool.name.startsWith("probe__"))
+              .map((tool) =>
+                tool._meta ? { name: tool.name, _meta: tool._meta } : { name: tool.name },
+              ),
+            markedCall:
+              !called.result || called.result.isError
+                ? "refused"
+                : called.result.content?.[0]?.text,
+          });
+          resumeHashes.add(context.preparedBackend.mcpResumeHash);
+        } finally {
+          await context.preparedBackend.cleanup?.();
+        }
+      }
+    } finally {
+      await disposeAllSessionMcpRuntimes();
+      await scheduler.stop();
+      await probeServer.close();
+    }
+    const marked = { name: "probe__marked", _meta: { "anthropic/alwaysLoad": true } };
+    expect(turns).toEqual([
+      {
+        discovery: ["ToolSearch"],
+        // Claude Code lets an explicit server value override the per-tool hint.
+        alwaysLoad: "unset",
+        probeTools: [marked, { name: "probe__unmarked" }],
+        markedCall: "probe:hi",
+      },
+      {
+        discovery: undefined,
+        alwaysLoad: true,
+        probeTools: [marked, { name: "probe__unmarked" }],
+        markedCall: "probe:hi",
+      },
+      {
+        discovery: ["ToolSearch"],
+        alwaysLoad: false,
+        probeTools: [{ name: "probe__unmarked" }],
+        markedCall: "refused",
+      },
+    ]);
+    // Only the loading hint differs, so a stored native Claude session still resumes.
+    expect([...resumeHashes]).toEqual([expect.stringMatching(/^[0-9a-f]{64}$/)]);
+  });
   it.each(["shared", "per-requester OAuth", "resolver"] as const)(
     "binds %s MCP servers to each claude-cli turn's sender with one stable catalog",
     async (mode) => {

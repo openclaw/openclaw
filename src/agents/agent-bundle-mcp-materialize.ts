@@ -186,6 +186,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
         operation: "tool",
         ...(instructions ? { instructions } : {}),
         ...(tool.oauthConnectBootstrap ? { oauthConnectBootstrap: true } : {}),
+        ...(tool.alwaysLoad ? { alwaysLoad: true } : {}),
         ...(tool.excludedFromOpenClawCatalog || appOnly
           ? { excludedFromOpenClawCatalog: true }
           : {}),
