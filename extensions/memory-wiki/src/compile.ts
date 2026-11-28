@@ -1,9 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
-import { retryTransientMemoryRead } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
@@ -14,7 +10,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { listMemoryWikiPagePaths } from "./bounded-walk.js";
 import {
   assessClaimFreshness,
   assessPageFreshness,
@@ -28,6 +23,7 @@ import {
   type WikiClaimHealth,
   type WikiFreshness,
 } from "./claim-health.js";
+import { readPageSummaries, refreshPageSummaries } from "./compile-scan.js";
 import {
   readMemoryWikiDashboardState,
   setMemoryWikiDashboardState,
@@ -35,22 +31,14 @@ import {
   type MemoryWikiCompiledCacheSnapshot,
 } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import {
-  buildMemoryWikiImportInsights,
-  projectMemoryWikiImportInsight,
-} from "./import-insights.js";
-import {
-  appendMemoryWikiLog,
-  hashMemoryWikiVaultSources,
-  loadMemoryWikiVaultIdentity,
-} from "./log.js";
+import { buildMemoryWikiImportInsights } from "./import-insights.js";
+import { appendMemoryWikiLog, loadMemoryWikiVaultIdentity } from "./log.js";
 import {
   decodeWikiPageUtf8,
   formatWikiLink,
   isUnmanagedRawSourceSummary,
   parseWikiMarkdown,
   renderWikiMarkdown,
-  scanWikiPageSummary,
   type WikiClaim,
   type WikiPageSummary,
   type WikiRelationship,
@@ -63,10 +51,8 @@ import { buildRelatedPageIndex, selectRelatedPages } from "./related-pages.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { readExistingWikiPageUtf8, writeManagedMarkdownFile } from "./vault-page-write.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
-import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
+import { buildMemoryWikiOverview } from "./wiki-overview.js";
 import { WIKI_PAGE_GROUPS, type WikiPageKind } from "./wiki-page-kinds.js";
-
-const READ_PAGE_SUMMARIES_CONCURRENCY = 16;
 
 type DashboardPageDefinition = {
   title: string;
@@ -413,98 +399,6 @@ type CompileMemoryWikiOptions = {
   sourcePageWrites?: "update" | "preserve";
   signal?: AbortSignal;
 };
-
-function scanPageSummary(params: Parameters<typeof scanWikiPageSummary>[0]) {
-  const scan = scanWikiPageSummary(params);
-  if (scan.status !== "valid") {
-    return { scan, importInsight: null, overviewItem: null };
-  }
-  const { parsed, ...summaryScan } = scan;
-  return {
-    scan: summaryScan,
-    importInsight: projectMemoryWikiImportInsight(scan.page, parsed),
-    overviewItem: projectMemoryWikiOverviewItem(scan.page, parsed.body),
-  };
-}
-
-// Keep at most 16 MiB of projections from each of the four most recent vaults.
-// Disk reads and source hashing still run on every pass, including cache hits.
-const pageSummaryCaches = new Map<string, Map<string, { digest: Buffer; summary: string }>>();
-
-async function readPageSummaries(rootDir: string, signal?: AbortSignal) {
-  const previous = pageSummaryCaches.get(rootDir);
-  const next: NonNullable<typeof previous> = new Map();
-  let cachedBytes = 0;
-  const filePaths = (
-    await Promise.all(
-      WIKI_PAGE_GROUPS.map(async (group) =>
-        (await listMemoryWikiPagePaths(rootDir, group.dir)).toSorted((left, right) =>
-          left.localeCompare(right),
-        ),
-      ),
-    )
-  ).flat();
-  signal?.throwIfAborted();
-  const sourceDigests: Array<[string, Buffer]> = [];
-
-  const readResult = await runTasksWithConcurrency({
-    tasks: filePaths.map((relativePath) => async () => {
-      signal?.throwIfAborted();
-      const absolutePath = path.join(rootDir, relativePath);
-      const bytes = await retryTransientMemoryRead(
-        () => fs.readFile(absolutePath),
-        `read wiki page ${absolutePath}`,
-      );
-      signal?.throwIfAborted();
-      const digest = createHash("sha256").update(bytes).digest();
-      sourceDigests.push([relativePath, digest]);
-      // Large imported pages are parsed off the request path, but the compiler
-      // still yields between pages so background recovery cannot starve Gateway ticks.
-      await yieldToEventLoop();
-      signal?.throwIfAborted();
-      const candidate = previous?.get(relativePath);
-      const cached = candidate?.digest.equals(digest) ? candidate : undefined;
-      const result: ReturnType<typeof scanPageSummary> = cached
-        ? JSON.parse(cached.summary)
-        : scanPageSummary({ absolutePath, relativePath, raw: bytes.toString("utf8") });
-      // Serialization detaches substrings from large source pages and keeps
-      // mutable compile results separate from the retained cache.
-      const summary = cached?.summary ?? JSON.stringify(result);
-      cachedBytes += Buffer.byteLength(summary);
-      if (cachedBytes <= 16 * 1024 * 1024) {
-        next.set(relativePath, { digest, summary });
-      }
-      return result;
-    }),
-    limit: READ_PAGE_SUMMARIES_CONCURRENCY,
-    errorMode: "stop",
-  });
-  if (readResult.hasError) {
-    throw readResult.firstError;
-  }
-  signal?.throwIfAborted();
-  pageSummaryCaches.delete(rootDir);
-  pageSummaryCaches.set(rootDir, next);
-  if (pageSummaryCaches.size > 4) {
-    pageSummaryCaches.delete(pageSummaryCaches.keys().next().value!);
-  }
-
-  return {
-    sourceGeneration: hashMemoryWikiVaultSources(sourceDigests),
-    pages: readResult.results
-      .flatMap(({ scan }) => (scan.status === "valid" ? [scan.page] : []))
-      .toSorted((left, right) => left.title.localeCompare(right.title)),
-    frontmatterErrors: readResult.results.flatMap(({ scan }) =>
-      scan.status === "invalid-frontmatter" ? [scan.error] : [],
-    ),
-    importInsights: readResult.results.flatMap(({ importInsight }) =>
-      importInsight ? [importInsight] : [],
-    ),
-    overviewItems: readResult.results.flatMap(({ overviewItem }) =>
-      overviewItem ? [overviewItem] : [],
-    ),
-  };
-}
 
 function formatPageLink(
   config: ResolvedMemoryWikiConfig,
@@ -901,7 +795,7 @@ async function compileMemoryWikiVaultUnlocked(
           ...(options?.signal ? { signal: options.signal } : {}),
         });
   if (updatedFiles.length > 0) {
-    scan = await readPageSummaries(rootDir, options?.signal);
+    scan = await refreshPageSummaries(rootDir, scan, updatedFiles, options?.signal);
     pages = scan.pages;
   }
   const dashboardUpdatedFiles = await refreshDashboardPages({
@@ -912,7 +806,7 @@ async function compileMemoryWikiVaultUnlocked(
   });
   updatedFiles.push(...dashboardUpdatedFiles);
   if (dashboardUpdatedFiles.length > 0) {
-    scan = await readPageSummaries(rootDir, options?.signal);
+    scan = await refreshPageSummaries(rootDir, scan, dashboardUpdatedFiles, options?.signal);
     pages = scan.pages;
   }
   const compiledSnapshot = buildCompiledCacheSnapshot(scan);
