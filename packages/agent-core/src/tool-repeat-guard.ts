@@ -7,14 +7,9 @@
  * through it is exempt exactly as a direct one. Committed user input resets the streak.
  */
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import { prepareDispatchArguments, readDispatchCall } from "./dispatch-call.js";
 import { copyInternalToolResultState } from "./internal-hooks.js";
-import type {
-  AgentTool,
-  AgentToolCall,
-  AgentToolResult,
-  ToolRepeatable,
-  ToolRepeatableTarget,
-} from "./types.js";
+import type { AgentTool, AgentToolCall, AgentToolResult, ToolRepeatable } from "./types.js";
 
 export const TOOL_REPEAT_LIMIT_CODE = "tool_repeat_limit";
 export const TOOL_REPEAT_NOTE_AT = 3;
@@ -48,11 +43,24 @@ function isRepeatable(repeatable: ToolRepeatable | undefined, args: unknown): bo
     return true;
   }
   if (repeatable && "dispatch" in repeatable) {
-    const { idArgument, inputArgument, targets } = repeatable.dispatch;
-    const id = readArgument(args, idArgument);
-    const target: ToolRepeatableTarget | undefined =
-      typeof id === "string" && Object.hasOwn(targets, id) ? targets[id] : undefined;
-    return target !== undefined && isRepeatable(target, readArgument(args, inputArgument));
+    // Classify with the dispatcher's own argument reader, so every call form it executes
+    // resolves to the same target and input here.
+    const { targets, aliases } = repeatable.dispatch;
+    const targetId = (value: string) =>
+      Object.hasOwn(targets, value)
+        ? value
+        : Object.hasOwn(aliases, value)
+          ? aliases[value]
+          : undefined;
+    const call = readDispatchCall(prepareDispatchArguments(args), (value) => {
+      const id = targetId(value);
+      return id === undefined ? [] : [id];
+    });
+    if ("error" in call) {
+      return false;
+    }
+    const id = targetId(call.id);
+    return id !== undefined && isRepeatable(targets[id], call.input);
   }
   const action = readArgument(args, "action");
   return typeof action === "string" && repeatable?.actions.includes(action) === true;

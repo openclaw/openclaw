@@ -1,6 +1,7 @@
 import { Agent, type AgentEvent, type AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { prepareDispatchArguments } from "../../packages/agent-core/src/dispatch-call.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import {
@@ -27,10 +28,7 @@ import {
   singleToolCallStreamFn as createSingleToolCallStreamFn,
   toolSearchTestModel as model,
 } from "./tool-search-loop.test-support.js";
-import {
-  prepareToolSearchDispatcherArguments,
-  readToolSearchCallArgs,
-} from "./tool-search-request.js";
+import { readToolSearchCallArgs } from "./tool-search-request.js";
 import {
   formatToolSearchControlError,
   formatToolSearchControlResult,
@@ -156,7 +154,7 @@ describe("Tool Search dispatcher argument preparation", () => {
       input: { id: 1, args: { id: "example_tool" } },
     },
   ])("leaves $label unchanged", ({ input }) => {
-    expect(prepareToolSearchDispatcherArguments(input)).toBe(input);
+    expect(prepareDispatchArguments(input)).toBe(input);
   });
 
   describe("through the real agent loop", () => {

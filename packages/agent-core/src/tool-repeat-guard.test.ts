@@ -58,14 +58,13 @@ describe("observeToolRepeat", () => {
     expect(verdicts.at(-1)).toMatchObject({ kind: "note", toolName: "ghost", count: 3 });
   });
 
-  it("applies a dispatcher's declaration for the target its call names", () => {
+  it("applies a dispatcher's declaration for the target its call names, in every call form", () => {
     const dispatcher: AgentTool = {
       ...makeTool("dispatch"),
       repeatable: {
         dispatch: {
-          idArgument: "id",
-          inputArgument: "args",
-          targets: { wait: true, jobs: { actions: ["status"] } },
+          targets: { "core:wait": true, "core:jobs": { actions: ["status"] } },
+          aliases: { wait: "core:wait", jobs: "core:jobs" },
         },
       },
     };
@@ -75,11 +74,26 @@ describe("observeToolRepeat", () => {
         observeToolRepeat(state, call("dispatch", args), dispatcher),
       ).at(-1);
     };
-    expect(verdictAt({ id: "wait", args: { ids: ["a"] } })).toBeUndefined();
-    expect(verdictAt({ id: "jobs", args: { action: "status" } })).toBeUndefined();
-    expect(verdictAt({ id: "jobs", args: { action: "cancel" } })).toMatchObject({ kind: "note" });
-    expect(verdictAt({ id: "read", args: {} })).toMatchObject({ kind: "note" });
-    expect(verdictAt({ id: "toString", args: {} })).toMatchObject({ kind: "note" });
+    // Every form the dispatcher executes: id or alias, args/input/dotted/flattened, wrapped.
+    for (const args of [
+      { id: "core:wait", args: { ids: ["a"] } },
+      { id: "wait", args: { ids: ["a"] } },
+      { toolId: "jobs", input: { action: "status" } },
+      { name: "jobs", "args.action": "status" },
+      { id: "jobs", action: "status" },
+      { args: { id: "jobs", action: "status" } },
+    ]) {
+      expect(verdictAt(args), JSON.stringify(args)).toBeUndefined();
+    }
+    for (const args of [
+      { id: "jobs", args: { action: "cancel" } },
+      { id: "jobs", action: "cancel" },
+      { id: "read", args: {} },
+      { id: "toString", args: {} },
+      { args: {} },
+    ]) {
+      expect(verdictAt(args), JSON.stringify(args)).toMatchObject({ kind: "note" });
+    }
   });
 
   it("skips tools that declare themselves repeatable and resets the streak", () => {

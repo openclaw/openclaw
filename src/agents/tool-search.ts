@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
+import { prepareDispatchArguments } from "../../packages/agent-core/src/dispatch-call.js";
 import {
   attachInternalToolResultContentSource,
   copyInternalToolResultState,
@@ -39,7 +40,6 @@ import {
   type ToolSearchMode,
 } from "./tool-search-protocol.js";
 import {
-  prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
   readToolSearchId,
   readToolSearchRequest,
@@ -367,7 +367,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       description:
         "Load the full input schema and metadata, including complete server instructions, for one tool id or name. Use this when the input is not already clear or when discovery returned instructionsHint.",
       parameters: describeParameters,
-      prepareArguments: prepareToolSearchDispatcherArguments,
+      prepareArguments: prepareDispatchArguments,
       execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
         const described = await runtime.describe(readToolSearchId(args), {
           parentToolCallId: toolCallId,
@@ -387,7 +387,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       description:
         "Call an exact Tool Search result id or name through OpenClaw. Invalid arguments to OpenClaw and MCP tools return the input schema; retry from that error. Use tool_describe for a full description; do not invent values the task does not supply.",
       parameters: callParameters,
-      prepareArguments: prepareToolSearchDispatcherArguments,
+      prepareArguments: prepareDispatchArguments,
       execute: async (
         toolCallId: string,
         args: unknown,

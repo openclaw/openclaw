@@ -40,9 +40,11 @@ export function createFamilyVisibility(params: {
 }
 
 /**
- * dispatch_action's repeat-guard declaration: each deferred trusted tool's own `repeatable`,
- * by catalog id and by unique name, so a poll through the dispatcher is exempt exactly as a
- * direct call would be.
+ * dispatch_action's repeat-guard declaration: each deferred trusted tool's own `repeatable`
+ * by catalog id, with its name as an alias when unique, so a poll through the dispatcher is
+ * exempt exactly as a direct call would be. Only exempt tools are listed: a call naming a
+ * listed tool beside an unlisted one through two selectors reads as exempt here while the
+ * dispatcher refuses it as ambiguous; that refused call is never stopped for repeating.
  */
 export function dispatchRepeatable(
   entries: readonly ToolSearchCatalogEntry[],
@@ -52,6 +54,7 @@ export function dispatchRepeatable(
     nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1);
   }
   const targets: Record<string, ToolRepeatableTarget> = {};
+  const aliases: Record<string, string> = {};
   for (const { id, name, source, tool, directVisible } of entries) {
     const repeatable = source === "openclaw" && "repeatable" in tool ? tool.repeatable : undefined;
     if (directVisible || repeatable === undefined) {
@@ -61,11 +64,9 @@ export function dispatchRepeatable(
       continue;
     }
     targets[id] = repeatable;
-    if (nameCounts.get(name) === 1) {
-      targets[name] = repeatable;
+    if (nameCounts.get(name) === 1 && name !== id) {
+      aliases[name] = id;
     }
   }
-  return Object.keys(targets).length > 0
-    ? { dispatch: { idArgument: "id", inputArgument: "args", targets } }
-    : undefined;
+  return Object.keys(targets).length > 0 ? { dispatch: { targets, aliases } } : undefined;
 }

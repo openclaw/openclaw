@@ -132,12 +132,15 @@ export const WorkerToolSurfaceSchema = closedObject({
             ...RepeatableTargetSchemas,
             closedObject({
               dispatch: closedObject({
-                idArgument: Type.String({ minLength: 1, maxLength: 64 }),
-                inputArgument: Type.String({ minLength: 1, maxLength: 64 }),
                 targets: Type.Record(
                   Type.String({ minLength: 1, maxLength: 256 }),
                   Type.Union(RepeatableTargetSchemas),
-                  { maxProperties: 512 },
+                  { maxProperties: 256 },
+                ),
+                aliases: Type.Record(
+                  Type.String({ minLength: 1, maxLength: 256 }),
+                  Type.String({ minLength: 1, maxLength: 256 }),
+                  { maxProperties: 256 },
                 ),
               }),
             }),

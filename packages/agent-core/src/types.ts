@@ -490,8 +490,8 @@ export interface AgentTool<
   /**
    * Identical consecutive calls are expected (polling, waiting); skip the repeat guard.
    * `actions` limits the exemption to calls whose `action` argument is listed. `dispatch`
-   * declares a tool that runs another tool named by one argument with the input in another;
-   * the guard then applies that target's own declaration. Plain data, so the declaration
+   * declares a dispatcher (see `readDispatchCall`): the guard applies the declaration of the
+   * target its call names, by target id or by a unique alias. Plain data, so the declaration
    * crosses the worker wire unchanged.
    */
   repeatable?: ToolRepeatable;
@@ -503,9 +503,9 @@ export type ToolRepeatable =
   | ToolRepeatableTarget
   | {
       readonly dispatch: {
-        readonly idArgument: string;
-        readonly inputArgument: string;
         readonly targets: Readonly<Record<string, ToolRepeatableTarget>>;
+        /** Unique alternate selector (a tool name) -> target id. */
+        readonly aliases: Readonly<Record<string, string>>;
       };
     };
 
