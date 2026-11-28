@@ -1,5 +1,6 @@
 import { createMemo, Errored, For, Loading, onSettled, Show } from "solid-js";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
+import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
@@ -193,7 +194,7 @@ function PickerDialog(props: {
                               group().choices.length
                                 ? [
                                     ...group().choices.map((choice) => choice.label),
-                                    ...(group().apiKeyProvider
+                                    ...(group().apiKeyProviders.length
                                       ? [t("modelProviders.status.apiKey")]
                                       : []),
                                   ].join(" · ")
@@ -257,17 +258,33 @@ function PickerDialog(props: {
                         )}
                       </For>
                     </div>
-                    <Show when={provider().apiKeyProvider}>
-                      <LoginOption
-                        buttonRef={props.controller.setApiKeyChoice.bind(props.controller)}
-                        label={t("modelProviders.status.apiKey")}
-                        hint={t("modelProviders.login.apiKeyHint")}
-                        apiKey
-                        card
-                        disabled={current().disabled}
-                        onClick={() => current().onApiKey()}
-                      />
-                    </Show>
+                    <For
+                      each={provider().apiKeyProviders}
+                      keyed={(apiKeyProvider) => apiKeyProvider}
+                    >
+                      {(apiKeyProvider, index) => (
+                        <LoginOption
+                          buttonRef={(element) => {
+                            if (index() === 0) {
+                              props.controller.setApiKeyChoice(element);
+                            }
+                          }}
+                          label={
+                            // A combined card names each key's owner so the key reaches the right one.
+                            provider().apiKeyProviders.length > 1
+                              ? t("modelProviders.login.apiKeyFor", {
+                                  provider: providerDisplayLabel(apiKeyProvider()),
+                                })
+                              : t("modelProviders.status.apiKey")
+                          }
+                          hint={t("modelProviders.login.apiKeyHint")}
+                          apiKey
+                          card
+                          disabled={current().disabled}
+                          onClick={() => current().onApiKey(apiKeyProvider())}
+                        />
+                      )}
+                    </For>
                   </section>
                 </>
               )}

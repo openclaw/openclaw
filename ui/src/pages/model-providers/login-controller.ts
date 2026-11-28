@@ -416,7 +416,11 @@ export function createModelProviderLogin(options: {
       onProvider: (providerId: string) => {
         const selected = groups.find((group) => group.id === providerId);
         // In the picker only a lone key skips ahead; a sign-in method keeps its method step.
-        if (!canSelect() || !selected || (selected.apiKeyProvider && enter(selected, authStatus))) {
+        if (
+          !canSelect() ||
+          !selected ||
+          (selected.apiKeyProviders.length && enter(selected, authStatus))
+        ) {
           return;
         }
         setProvider(providerId);
@@ -425,12 +429,12 @@ export function createModelProviderLogin(options: {
         onSettled(focusPickerTarget);
       },
       onChoice: (selected: LoginChoice) => canSelect() && startChoice(selected, picker.allowSetup),
-      onApiKey: () => {
-        if (!canSelect() || !provider?.apiKeyProvider) {
+      onApiKey: (apiKeyProvider: string) => {
+        if (!canSelect() || !provider?.apiKeyProviders.includes(apiKeyProvider)) {
           return;
         }
         reset();
-        options.onApiKey?.(provider.apiKeyProvider);
+        options.onApiKey?.(apiKeyProvider);
       },
       onUseProfile: (profileId: string) => {
         if (recovery && currentPicker === picker && picker.isCurrent()) {

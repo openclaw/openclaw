@@ -1098,6 +1098,7 @@ const enSettings = {
       noAccounts: "No saved accounts for this provider yet.",
       connectAccount: "Add an account",
       apiKeyHint: "Use an API key from your provider account.",
+      apiKeyFor: "{provider} API key",
       compareMethods: "Compare sign-in methods",
       searchProviders: "Search providers…",
       noMatches: "No providers match your search.",
