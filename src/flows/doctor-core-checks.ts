@@ -599,7 +599,7 @@ const workspaceSuggestionsCheck: CoreHealthCheck = {
       scopes.map(async ({ agentId, workspaceDir, labelAgent }) => {
         const prefix = labelAgent ? `Agent "${agentId}": ` : "";
         const notes: string[] = [];
-        for await (const text of collectWorkspaceSuggestionNotes(workspaceDir)) {
+        for await (const text of collectWorkspaceSuggestionNotes(workspaceDir, { cfg: ctx.cfg })) {
           notes.push(text);
         }
         return notes.map((text) =>

@@ -667,7 +667,9 @@ export function resolveFinalDoctorHealthContributions(params: {
           ctx.cfg,
         )) {
           const prefix = labelAgent ? `Agent "${agentId}": ` : "";
-          for await (const suggestion of collectWorkspaceSuggestionNotes(workspaceDir)) {
+          for await (const suggestion of collectWorkspaceSuggestionNotes(workspaceDir, {
+            cfg: ctx.cfg,
+          })) {
             note(`${prefix}${suggestion}`, "Workspace");
           }
         }
