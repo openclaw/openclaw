@@ -13,6 +13,7 @@ import {
 } from "./lib/ci-ios-smoke-plan.mjs";
 import {
   BOAT_HOSTED_PREPARED_WORKSPACE,
+  transferMeasuredCompactGroup,
   resolveBoatNodeTestCapacity,
 } from "./lib/ci-node-test-capacity.mts";
 import { resolveSkillsPythonTargets } from "./lib/ci-skills-python-plan.mjs";
@@ -1538,7 +1539,26 @@ const workerCachePreset = (shard) => {
 };
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
 const packedNodeTestRows = [];
-const nodeTestShards = targetNodeTestShards
+// Only move the exact measured Agent Chat stripe into a qualified serial row.
+// FRV #4838 and #4842 have identical donor and recipient inventories.
+const nodeTestShards = (
+  isCanonicalRepository &&
+  compactReleaseMatrixRows &&
+  splitRuntimeJobs &&
+  testRuntimeMode === "dual-all" &&
+  releaseScope === "full"
+    ? transferMeasuredCompactGroup(targetNodeTestShards, [
+        [
+          "agentic-control-plane-agent-chat-hosted-2",
+          "196b723a33e9e3d420f320f320c77d83a83dd94f46b88f913bb88789add73ab3",
+        ],
+        [
+          "agentic-gateway-server-isolated-hosted-20",
+          "7b4d8011e2d9b8c47015e4fed2930f2cc0a514b8872d2fe539907f876a519685",
+        ],
+      ])
+    : targetNodeTestShards
+)
   .toSorted(
     (a, b) =>
       Number(b.runner === "runson-c8i-8xlarge") - Number(a.runner === "runson-c8i-8xlarge") ||
