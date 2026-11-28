@@ -86,6 +86,84 @@ describe("memory forget source removal", () => {
     ).toMatchObject({ sources: [{ path: "memory/retained.md", source: "memory" }] });
   });
 
+  it("counts fts and vector rows past the sqlite bind-variable limit for one selected session", async () => {
+    const { db, path: databasePath } = openOpenClawAgentDatabase({ agentId: "main" });
+    db.exec("CREATE VIRTUAL TABLE memory_index_chunks_fts USING fts5(id, path, source)");
+    expect(
+      (
+        await storage.loadSqliteVecExtension({
+          db: requireNativeSqliteDatabase(db),
+        })
+      ).ok,
+    ).toBe(true);
+    db.exec(
+      "CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[2])",
+    );
+    const total = 34000;
+    const insertChunk = db.prepare(`INSERT INTO memory_index_chunks
+      (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+      VALUES (?, 'sessions/main/target', 'sessions', 1, 1, 'hash', 'test', '', x'', 1)`);
+    const insertFts = db.prepare(
+      "INSERT INTO memory_index_chunks_fts (id, path, source) VALUES (?, 'sessions/main/target', 'sessions')",
+    );
+    const insertVec = db.prepare(
+      "INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)",
+    );
+    db.exec("BEGIN");
+    for (let index = 0; index < total; index += 1) {
+      insertChunk.run(`chunk-${index}`);
+      insertFts.run(`chunk-${index}`);
+      insertVec.run(`chunk-${index}`, new Float32Array([1, 0]));
+    }
+    db.exec("COMMIT");
+    const plan = await readMemoryForgetIndexInWorker({
+      kind: "forget-index-plan" as const,
+      agentId: "main",
+      databasePath,
+      stateDir: h.stateDir,
+      changedPaths: [],
+      removedPaths: [],
+      sessionIds: ["target"],
+      excludedSessionIds: [],
+      entryKeys: [],
+      corpusSnippets: [],
+    });
+    expect(plan.chunks).toHaveLength(total);
+    expect(plan.ftsRows).toBe(total);
+    expect(plan.vectorRows).toBe(total);
+  });
+
+  it("applies a forget past the sqlite bind-variable limit without stranding chunks", async () => {
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
+    expect((await storage.loadSqliteVecExtension({ db })).ok).toBe(true);
+    const indexData = memoryIndexFixture(db);
+    db.exec(
+      "CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[2])",
+    );
+    const total = 34000;
+    const archivePath = "sessions/main/target.jsonl.deleted.2026-08-25T10-00-00.000Z.zst";
+    indexData.source(archivePath, "sessions", "remove");
+    indexData.chunk("keeper", "sessions/main/keeper");
+    const insertVec = db.prepare(
+      "INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)",
+    );
+    insertVec.run("keeper", new Float32Array([1, 0]));
+    for (let index = 0; index < total; index += 1) {
+      indexData.chunk(`chunk-${index}`, archivePath);
+      insertVec.run(`chunk-${index}`, new Float32Array([1, 0]));
+    }
+    const preview = await forget({ sessionIds: ["target"], dryRun: true });
+    expect(preview.artifacts.indexChunks).toBe(total);
+    const result = await forget({ sessionIds: ["target"] });
+    expect(result.dryRun).toBe(false);
+    expect(db.prepare("SELECT id FROM memory_index_chunks ORDER BY id").all()).toEqual([
+      { id: "keeper" },
+    ]);
+    expect(db.prepare("SELECT id FROM memory_index_chunks_vec ORDER BY id").all()).toEqual([
+      { id: "keeper" },
+    ]);
+  });
+
   it("retains planning input and placement across dispatch without creating missing stores", async () => {
     const options = { agentId: "main", env: { OPENCLAW_STATE_DIR: h.stateDir } };
     const db = openOpenClawAgentDatabase(options).db;
