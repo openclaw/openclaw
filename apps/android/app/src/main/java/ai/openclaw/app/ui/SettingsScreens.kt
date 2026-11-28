@@ -47,6 +47,7 @@ import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.reconcileRestoredAction
 import ai.openclaw.app.setAppLanguage
+import ai.openclaw.app.ui.chat.isOnDeviceDictationAvailable
 import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListItem
@@ -643,6 +644,7 @@ private fun VoiceSettingsScreen(
   onBack: () -> Unit,
 ) {
   val context = LocalContext.current
+  val dictationAvailable = remember(context) { isOnDeviceDictationAvailable(context) }
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
   val preferredAudioInputDevice by viewModel.preferredAudioInputDevice.collectAsState()
   val voiceCaptureMode by viewModel.voiceCaptureMode.collectAsState()
@@ -770,11 +772,20 @@ private fun VoiceSettingsScreen(
         }
       }
       Text(text = nativeString("Talk Provider Setup"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-      Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-        VoiceSetupReadinessRow(title = nativeString("Realtime Talk"), state = talkSetupReadiness.realtimeTalk, icon = Icons.Default.GraphicEq)
-        VoiceSetupReadinessRow(title = nativeString("Dictation"), state = talkSetupReadiness.dictation, icon = Icons.Default.Mic)
-      }
+      VoiceSetupReadinessRow(title = nativeString("Realtime Talk"), state = talkSetupReadiness.realtimeTalk, icon = Icons.Default.GraphicEq)
       Text(text = nativeString("Microphone"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      VoiceSetupActionRow(
+        title = nativeString("Dictation"),
+        subtitle =
+          if (dictationAvailable) {
+            nativeString("On-device speech recognition is available.")
+          } else {
+            nativeString("On-device speech recognition is unavailable.")
+          },
+        icon = Icons.Default.Mic,
+        statusText = if (dictationAvailable) nativeString("Available") else nativeString("Unavailable"),
+        ready = dictationAvailable,
+      )
       AudioInputDevicePanel(
         devices = audioInputDevices,
         preferredDeviceKey = preferredAudioInputDevice,

@@ -2,6 +2,7 @@ import { validateCronRunParams } from "../../../packages/gateway-protocol/src/in
 import type { CronRunParams } from "../../../packages/gateway-protocol/src/schema/cron.types.js";
 import { cronRunRecordToRunLogEntry } from "../../cron/run-history-detail.js";
 import { normalizeCronRunJobId } from "../../cron/run-history.js";
+import { cronRunEntryHasExactId } from "../../cron/run-link.js";
 import { canRetryArchivedCronJob } from "../../cron/service/one-shot-schedule.js";
 import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
 import { cronStoreKey } from "../../cron/store/key.js";
@@ -129,7 +130,8 @@ export const cronRunHandler = defineValidatedGatewayHandler(
       fail("Gateway process changed after preflight");
       return;
     }
-    if (params.retryRunId === undefined) {
+    const { retryRunId } = params;
+    if (retryRunId === undefined) {
       return await runExistingCronJob(options);
     }
     const id = resolveCronJobId(params);
@@ -152,8 +154,8 @@ export const cronRunHandler = defineValidatedGatewayHandler(
     };
     try {
       const { records } = await readCronRunHistoryCandidates(storeKey, id);
-      const matches = records.filter(
-        (record) => cronRunRecordToRunLogEntry(record)?.runId === params.retryRunId,
+      const matches = records.filter((record) =>
+        cronRunEntryHasExactId(cronRunRecordToRunLogEntry(record), retryRunId),
       );
       const [record] =
         matches.length === 1

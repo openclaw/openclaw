@@ -115,6 +115,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       sessionId: session.runParams.sessionId,
       tokenBudget: 200_000,
       force: true,
+      reason: "timeout",
       compactionTarget: "budget",
       runtimeContext: {
         trigger: "timeout_recovery",

@@ -48,6 +48,7 @@ import type * as records from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
   prepareSessionRowPublicationView,
+  retainSessionRowView,
   type PublicationView,
   type SessionRowView,
 } from "./session-row-publication.js";
@@ -617,15 +618,11 @@ export function prepareProjectedSessionPresentation(
         row.childSessions = row.childSessions.filter((childKey) => !excluded.has(childKey));
       }
     }
-    if (signature !== undefined) {
+    if (views && signature !== undefined) {
       // Shared-fact replies never send this raw row; encode only at the wire boundary.
       const snapshot = freezeSessionRow(definedSessionRowFields(row), previous?.row);
       const view = { facts: recipientFacts, row: snapshot };
-      if (variants) {
-        variants.push(view);
-      } else {
-        views?.set(signature, [view]);
-      }
+      retainSessionRowView(views, signature, view);
       recipientFacts = [];
       return projectModels(snapshot, view);
     }

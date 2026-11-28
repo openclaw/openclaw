@@ -15,6 +15,7 @@ import {
   withProgress,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import {
+  resolveMemorySearchConfig,
   resolveMemorySearchIndexConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -209,6 +210,7 @@ export async function runMemoryStatus(
     agentId: string;
     status: ReturnType<MemoryManager["status"]>;
     excludedConfiguredSources?: "sessions"[];
+    skippedMultimodalModalities?: string[];
     embeddingProbe?: MemoryEmbeddingProbeResult;
     indexError?: string;
     scan?: MemorySourceScan;
@@ -292,6 +294,8 @@ export async function runMemoryStatus(
         ...(resolveMemorySearchIndexConfig(agentCfg, agentId)?.sessionSourceExcluded
           ? { excludedConfiguredSources: ["sessions"] }
           : {}),
+        skippedMultimodalModalities: resolveMemorySearchConfig(agentCfg, agentId)?.multimodal
+          .skippedModalities,
         embeddingProbe,
         indexError,
         scan,
@@ -320,6 +324,7 @@ export async function runMemoryStatus(
       agentId,
       status,
       excludedConfiguredSources,
+      skippedMultimodalModalities,
       embeddingProbe,
       indexError,
       scan,
@@ -359,6 +364,9 @@ export async function runMemoryStatus(
         : null,
       extraPaths.length
         ? `${label("Extra paths")} ${info(terminalText`${extraPaths.join(", ")}`)}`
+        : null,
+      skippedMultimodalModalities?.length
+        ? `${label("Skipped media")} ${warn(terminalText`${skippedMultimodalModalities.join(", ")} (not supported by the embedding model)`)}`
         : null,
       `${label("Indexed")} ${success(indexedLabel)}`,
       `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,

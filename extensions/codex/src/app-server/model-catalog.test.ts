@@ -377,10 +377,54 @@ describe("Codex app-server model catalog", () => {
     },
   );
 
+  it("discovers once per catalog app-server, account revision, scope and Codex cache TTL", async () => {
+    listModelsMock.mockResolvedValue(opaqueCatalog());
+    const first = await owner.load(catalogParams, undefined);
+    expect(first.entries).toHaveLength(1);
+    expect(await owner.load(catalogParams, undefined)).toEqual(first);
+    expect(read()).toEqual({ accountType: "apiKey", authMode: "api_key" });
+    expect(listModelsMock).toHaveBeenCalledTimes(1);
+    await owner.load({ ...catalogParams, workspaceDir: "/tmp/other-workspace" }, undefined);
+    expect(listModelsMock).toHaveBeenCalledTimes(2);
+    rpc.epoch += 1;
+    await owner.load(catalogParams, undefined);
+    expect(listModelsMock).toHaveBeenCalledTimes(3);
+    const now = performance.now();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(now + 300_001);
+    try {
+      await owner.load(catalogParams, undefined);
+    } finally {
+      clock.mockRestore();
+    }
+    expect(listModelsMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("lists again for each account an unowned app-server switches to without notifying", async () => {
+    // Same client and account revision: only the account Codex reports changes.
+    const accounts = {
+      a: { account: { type: "chatgpt", email: "a@example.test" }, requiresOpenaiAuth: true },
+      b: { account: { type: "apiKey" }, requiresOpenaiAuth: true },
+    };
+    const listed: string[] = [];
+    let current: keyof typeof accounts = "a";
+    rpc.request.mockImplementation(async () => accounts[current]);
+    listModelsMock.mockImplementation(async () => {
+      listed.push(current);
+      return opaqueCatalog();
+    });
+    for (const account of ["a", "a", "b", "b", "a"] as const) {
+      current = account;
+      await owner.load(catalogParams, undefined);
+    }
+    // One listing per account change; a repeat on the same account reuses its own list.
+    expect(listed).toEqual(["a", "b", "a"]);
+  });
+
   it("revokes prior readiness on failed or disabled refresh", async () => {
     listModelsMock.mockResolvedValue(opaqueCatalog());
     await owner.load(catalogParams, undefined);
     expect(read()).toEqual({ accountType: "apiKey", authMode: "api_key" });
+    rpc.epoch += 1;
     rpc.request.mockRejectedValueOnce(new Error("synthetic account failure"));
     await expect(owner.load(catalogParams, undefined)).rejects.toThrow("synthetic account failure");
     expect(read()).toBeUndefined();
@@ -410,6 +454,7 @@ describe("Codex app-server model catalog", () => {
       disposedStarted.resolve();
       return disposed.promise;
     });
+    rpc.epoch += 1;
     const late = owner.load(catalogParams, undefined);
     await disposedStarted.promise;
     owner.dispose();

@@ -517,7 +517,7 @@ describe("createOllamaStreamFn thinking events", () => {
       const usage = doneEvent(events)?.message.usage;
       const contextUsage =
         totalTokens === undefined
-          ? undefined
+          ? { state: "unavailable" }
           : { state: "available", promptTokens: promptCount, totalTokens };
       expect(usage).toMatchObject({
         input: expectedInput,
@@ -525,7 +525,7 @@ describe("createOllamaStreamFn thinking events", () => {
         cacheRead,
         cacheWrite: 0,
         cacheTelemetry: { state: cacheRead ? "available" : "unavailable" },
-        usageReport: { state: contextUsage ? "available" : "unavailable" },
+        usageReport: { state: contextUsage.state },
         totalTokens: expectedInput + cacheRead + expectedOutput,
       });
       expect(usage?.contextUsage).toEqual(contextUsage);

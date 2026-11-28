@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import { resolveCronCompletionStatus } from "../../../cron/completion-status.js";
 import { parseAbsoluteTimeMs } from "../../../cron/parse.js";
 import {
@@ -13,8 +12,8 @@ import { canRetryArchivedCronJob } from "../../../cron/service/one-shot-schedule
 import { resolveCronStoreKeyInDatabase } from "../../../cron/store/paths.js";
 import { archiveCronRunDefinitionInDatabase } from "../../../cron/store/run-history.kernel.js";
 import type { CronRunHistoryWrite } from "../../../cron/store/run-history.types.js";
-import type { CronStoredJob } from "../../../cron/types.js";
 import type { EngineConnection } from "../../../infra/sql-connection.js";
+import { resolveStoredCronJobOwner } from "./store-repair.js";
 
 function hasJobIdentity(
   job: Record<string, unknown>,
@@ -147,7 +146,7 @@ function endedOneTimeCronHistory(
     storeKey,
     jobId: id,
     runId: `doctor-ended:${id}:${startedAt}`,
-    agentId: tryResolveCronJobEffectiveAgentId(job as CronStoredJob),
+    agentId: resolveStoredCronJobOwner(job),
     startedAt,
     endedAt: entry.ts,
     status: cronRunStorageStatus(entry),

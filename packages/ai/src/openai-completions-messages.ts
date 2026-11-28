@@ -40,17 +40,6 @@ type ChatCompletionContentPartVideo = {
   video_url: { url: string };
 };
 
-/** Whether replayed messages require a tools marker for proxy compatibility. */
-export function hasToolCallHistory(messages: ProviderContext["messages"]): boolean {
-  return messages.some(
-    (message) =>
-      message.role === "toolResult" ||
-      (message.role === "assistant" &&
-        Array.isArray(message.content) &&
-        message.content.some((block) => block.type === "toolCall")),
-  );
-}
-
 /** Convert a normalized transcript to OpenAI Chat Completions messages. */
 export function convertMessages(
   model: ProviderModel,
@@ -65,8 +54,6 @@ export function convertMessages(
 ): ChatCompletionMessageParam[] {
   const params: ChatCompletionMessageParam[] = [];
   const supportsTools = options.supportsTools !== false;
-  const declaredToolNames =
-    options.declaredToolNames ?? new Set(context.tools?.map((tool) => tool.name));
   const nativeToolCalls = new Map<string, boolean>();
 
   const normalizeToolCallId = (id: string): string => {
@@ -187,7 +174,8 @@ export function convertMessages(
           nonEmptyThinkingBlocks.push(block);
         } else if (block.type === "toolCall") {
           const native =
-            declaredToolNames.has(block.name) ||
+            !options.declaredToolNames ||
+            options.declaredToolNames.has(block.name) ||
             Reflect.get(block, NATIVE_HISTORICAL_TOOL_CALL) === true;
           nativeToolCalls.set(block.id, native);
           if (supportsTools && native) {

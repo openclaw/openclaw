@@ -10,6 +10,7 @@ import {
 } from "./registry/subagent-control-scope.js";
 import { killAllControlledSubagentRuns } from "./registry/subagent-control.js";
 import type { SubagentRequestSessionOrigin } from "./registry/subagent-exec-request-ownership.js";
+import { hasRequesterTurnYielded } from "./registry/subagent-requester-turn-custody.js";
 import { isSameSubagentRunOwner } from "./registry/subagent-run-generation.js";
 
 export async function abortControlledSubagents(params: {
@@ -133,7 +134,7 @@ export async function abortControlledSubagents(params: {
             // captures the parent's current lifecycle owner instead of reviving them.
             const requesterTurnRunId =
               params.yieldedRequesterRunId ??
-              (entry.requesterTurnYielded ? entry.requesterTurnRunId : undefined);
+              (hasRequesterTurnYielded(entry) ? entry.requesterTurnRunId : undefined);
             return selected.ownsRoot(entry) &&
               entry.requesterSessionKey === controller.controllerSessionKey &&
               (entry.requesterAgentId ?? controller.controllerAgentId) ===

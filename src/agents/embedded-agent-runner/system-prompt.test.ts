@@ -218,7 +218,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).toContain("Subagent-only command guidance.");
     expect(prompt).toContain("## Promised Work");
-    expect(prompt).toContain("`running` is not completion.");
+    expect(prompt).toContain(
+      "Arrange follow-up for background or delegated work and report the result.",
+    );
     expect(prompt.match(/## Promised Work/g)).toHaveLength(1);
   });
 

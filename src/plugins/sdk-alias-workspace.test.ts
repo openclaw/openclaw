@@ -23,7 +23,7 @@ function writeWorkspacePackageEntry(params: {
     mkdirSafeDir(path.dirname(filename));
     fs.writeFileSync(filename, "export {};\n", "utf-8");
   }
-  return { srcFile, distFile };
+  return { distFile };
 }
 
 describe("plugin workspace package export aliases", () => {

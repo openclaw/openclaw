@@ -1,5 +1,13 @@
 const CRON_EXECUTION_ID_RE = /^cron:(.+):(\d+)$/u;
 
+/** Retry requires the public run ID; session and execution links are aliases for navigation. */
+export function cronRunEntryHasExactId(
+  entry: { runId?: string } | null,
+  requestedRunId: string,
+): boolean {
+  return entry?.runId === requestedRunId;
+}
+
 /**
  * Notifications link runs by execution id (`cron:<jobId>:<startedAtMs>`), while
  * ledger entries carry public run ids (receipt UUIDs, `manual:<...>` ids) that
@@ -10,7 +18,7 @@ export function cronRunEntryMatchesLink(
   linkedRunId: string,
   entry: { jobId: string; runId?: string; sessionId?: string; runAtMs?: number },
 ): boolean {
-  if (entry.runId === linkedRunId || entry.sessionId === linkedRunId) {
+  if (cronRunEntryHasExactId(entry, linkedRunId) || entry.sessionId === linkedRunId) {
     return true;
   }
   const match = CRON_EXECUTION_ID_RE.exec(linkedRunId);

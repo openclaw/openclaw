@@ -63,11 +63,7 @@ export function cronRunResultHistory(
     result.endedAt,
     result.errorReason,
   );
-  const {
-    state: _state,
-    runtimeAuthority: _runtimeAuthority,
-    ...definition
-  } = result.job as import("../types.js").CronStoredJob;
+  const { state: _state, runtimeAuthority: _runtimeAuthority, ...definition } = result.job;
   const retryAvailable =
     endedOneTime && result.completionStatus !== "succeeded" && canRetryArchivedCronJob(result.job);
   entry.jobName = result.job.displayName ?? result.job.name;

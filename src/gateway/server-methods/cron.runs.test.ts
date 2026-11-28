@@ -60,6 +60,7 @@ it("retries an ended one-time definition only for an administrator without expos
     });
     await cron.remove(job.id);
     const entry = makeRun(job.id, "failed-build-run", {
+      sessionId: "failed-build-session",
       jobName: job.name,
       status: "error",
       error: "staging unavailable",
@@ -94,6 +95,16 @@ it("retries an ended one-time definition only for an administrator without expos
         );
       }
       persistArchivedJob({ ...job, state: undefined });
+      // Retry requires the public run ID even when a transcript link uniquely identifies the run.
+      expectError(
+        await invokeCron(
+          context,
+          "cron.run",
+          { id: job.id, retryRunId: "failed-build-session" },
+          { client: admin },
+        ),
+        expect.objectContaining({ message: expect.stringContaining("no longer has a retryable") }),
+      );
       const history = await invokeCron(
         context,
         "cron.runs",
