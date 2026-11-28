@@ -8,6 +8,7 @@ import {
   hasLongWindowRateLimitEvidence,
   resolveRetryAfterMs,
 } from "../agents/failover/retry-evidence.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../agents/prepared-model-runtime-generation-scope.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import {
   ACTIVITY_SUMMARY_FORMAT_REVISION,
@@ -580,7 +581,12 @@ export function createSessionActivitySummaries(deps: {
         continue;
       }
       // Recaps outlive requesting runs, but still owe cleanup to inherited connection work.
-      const work = trackAsyncWork(() => run(state))
+      // They select the current plugin generation, never the finished run's retiring one.
+      const work = trackAsyncWork(() =>
+        runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+          runOutsidePluginRuntimeGenerationScope(() => run(state)),
+        ),
+      )
         .catch((error: unknown) => {
           log.debug("Activity recap background work failed", { error: formatErrorMessage(error) });
         })
