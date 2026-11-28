@@ -51,35 +51,12 @@ suite.define(() => {
       const runId = "composer-scroll-run";
       const gateway = await installMockGateway(page, {
         historyMessages: history("Composer wheel history", baseTs),
-        featureMethods: [
-          "chat.metadata",
-          "chat.startup",
-          "progressCard.get",
-          "taskSuggestions.list",
-        ],
-        methodResponses: {
-          "taskSuggestions.list": {
-            suggestions: [
-              {
-                id: "scroll-suggestion",
-                title: "Inspect the wheel forwarding",
-                prompt: "Inspect transcript and composer scrolling.",
-                tldr: "Keep the transcript responsive.",
-                cwd: "/projects/example",
-                sessionKey: "main",
-                agentId: "main",
-                createdAt: baseTs,
-              },
-            ],
-          },
-        },
+        featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
         inFlightRun: { runId, text: "Reviewing the workspace." },
         sessionInfo: { key: "agent:main:main", activeRunIds: [runId], hasActiveRun: true },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByText("Composer wheel history 49").waitFor();
-      const suggestion = page.locator(".task-suggestion__title");
-      await suggestion.waitFor();
       await waitForChatScrollIdle(page);
       const thread = page.locator(".chat-thread");
       const composer = page.locator(".agent-chat__composer-combobox textarea");
@@ -169,7 +146,7 @@ suite.define(() => {
         (await page.locator(".agent-chat__composer-shell").boundingBox())!.y,
       );
 
-      for (const target of [latest, suggestion]) {
+      for (const target of [latest]) {
         await target.hover();
         const beforeOverlay = await scrollTop(thread);
         await page.mouse.wheel(0, -120);

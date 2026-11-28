@@ -69,7 +69,6 @@ function createReconnectRequest(
     "sessions.list": sessionsResult([], 0),
     "sessions.messages.subscribe": (params: { key: string }) => ({ key: params.key }),
     "question.list": { questions: [] },
-    "taskSuggestions.list": { suggestions: [] },
     "sessions.companion.state": { exchanges: [] },
     ...handlers,
   });

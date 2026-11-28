@@ -19,7 +19,7 @@ import { readCatalogRoute } from "../../lib/sessions/catalog-read-method.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
-import { ChatPaneTaskSuggestions } from "./chat-pane-task-suggestions.ts";
+import { ChatPaneSharing } from "./chat-pane-sharing.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { scheduleChatScroll } from "./scroll.ts";
@@ -30,7 +30,7 @@ function isOutboundSessionShare(key: CatalogSessionKey): boolean {
   return key.catalogId === "openclaw" && key.hostId.startsWith("gateway:");
 }
 
-export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
+export abstract class ChatPaneCatalog extends ChatPaneSharing {
   protected readonly catalogAccess = projectChatFields<{
     route?: {
       catalogId: string;
