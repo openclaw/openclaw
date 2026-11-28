@@ -147,6 +147,9 @@ export function createTelegramDraftStream(params: {
   let streamVisibleSinceMs: number | undefined;
   let lastSentPreviewKey = "";
   let lastDeliveredText = "";
+  // A bounded preview fallback shows only the first plain chunk; the final
+  // answer must re-send the full content instead of trusting this frame.
+  let previewFallbackTruncated = false;
   let lastRequestedText = "";
   let attemptedText = "";
   let lastRequestedPreview: TelegramDraftPreview | undefined;
@@ -216,16 +219,18 @@ export function createTelegramDraftStream(params: {
     assertPlatformSendAuthorized?.();
     const targetMessageId = streamMessageId;
     if (typeof targetMessageId === "number") {
-      const acceptedSnapshot = await editTelegramDraftMessage({
+      const accepted = await editTelegramDraftMessage({
         api: params.api,
         chatId,
         messageId: targetMessageId,
         page,
         linkPreviewParams,
         warn: params.warn,
+        previewFallback: !streamState.final,
         request: (send) => previewRequest(assertPlatformSendAuthorized, send),
       });
-      streamMessageSnapshot = acceptedSnapshot;
+      streamMessageSnapshot = accepted.snapshot;
+      previewFallbackTruncated = accepted.truncated;
       return true;
     }
     messageSendAttempted = true;
@@ -240,6 +245,7 @@ export function createTelegramDraftStream(params: {
           sendMessageParams,
           linkPreviewParams,
           warn: params.warn,
+          previewFallback: !streamState.final,
           assertCurrentSend: () => {
             if (streamState.stopped) {
               throw new TelegramRequestNotStartedError("Telegram preview stopped");
@@ -272,6 +278,7 @@ export function createTelegramDraftStream(params: {
       streamMessageSnapshot = sent.snapshot;
       streamProviderMessage = sent.message;
       streamVisibleSinceMs = Date.now();
+      previewFallbackTruncated = sent.truncated;
     };
     try {
       if (params.validateProviderMessage) {
@@ -300,7 +307,10 @@ export function createTelegramDraftStream(params: {
       page.richMessage?.skip_entity_detection === true,
       disableLinkPreview,
     ]);
-    if (renderedPreviewKey === lastSentPreviewKey) {
+    // A truncated preview fallback must not mask the final answer's re-send:
+    // the same rendered content still has to be delivered in full.
+    const finalRedeliveryAfterTruncatedPreview = streamState.final && previewFallbackTruncated;
+    if (renderedPreviewKey === lastSentPreviewKey && !finalRedeliveryAfterTruncatedPreview) {
       return true;
     }
     if (
@@ -336,7 +346,20 @@ export function createTelegramDraftStream(params: {
         // Telegram already shows exactly this text; count the edit as delivered.
         settleAuthorization();
         consecutivePreviewFailures = 0;
-        streamMessageSnapshot = toDraftSnapshot(page);
+        // A bounded plain fallback can equal the visible text while the requested page
+        // holds the whole answer. Recording that page would claim the truncated tail was
+        // delivered, so keep the visible snapshot unless this page is fully on screen.
+        const pageExceedsPreviewFallback =
+          !streamState.final &&
+          page.richMessage !== undefined &&
+          page.plainText.length > TELEGRAM_TEXT_CHUNK_LIMIT;
+        if (pageExceedsPreviewFallback) {
+          // The visible message is only this page's first bounded chunk, so the final
+          // answer still owes the tail even though the edit itself was accepted.
+          previewFallbackTruncated = true;
+        } else {
+          streamMessageSnapshot = toDraftSnapshot(page);
+        }
         return true;
       }
       // Roll back the dedupe snapshot so the retried tick is not skipped as a no-op.
@@ -458,7 +481,13 @@ export function createTelegramDraftStream(params: {
       finalPagePlan = undefined;
       const sent = await sendOrEditPlannedPage(firstPage, fullPreview.complete, disableLinkPreview);
       if (sent) {
-        lastDeliveredText = pages.length === 1 ? trimmed : firstPage.plainText.trimEnd();
+        // A truncated plain fallback is what is actually visible; recording the
+        // requested text there would let stop() skip re-delivering the remainder.
+        lastDeliveredText = previewFallbackTruncated
+          ? (streamMessageSnapshot?.text.trimEnd() ?? "")
+          : pages.length === 1
+            ? trimmed
+            : firstPage.plainText.trimEnd();
       }
       return sent;
     }
@@ -608,6 +637,7 @@ export function createTelegramDraftStream(params: {
     streamProviderMessage = undefined;
     streamVisibleSinceMs = undefined;
     lastSentPreviewKey = "";
+    previewFallbackTruncated = false;
     if (!continueFinalPagination) {
       finalPagePlan = undefined;
       lastRequestedText = "";

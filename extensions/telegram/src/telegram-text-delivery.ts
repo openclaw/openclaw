@@ -175,6 +175,12 @@ type TelegramTextPageSender<TPlain, THtml, TRich> = {
   /** Drafts keep HTML transport for source-mode pages even when the rendered text is empty. */
   html?: boolean;
   fallbackLimit?: number;
+  /**
+   * The page replaces one visible message (a live draft preview). Its formatted
+   * send cannot paginate, so a degrade to plain text keeps only the first
+   * bounded chunk instead of chaining extra messages.
+   */
+  singleFallbackPart?: boolean;
 };
 
 // Yield outside the transport fallback catch. Observing an accepted message may
@@ -217,11 +223,12 @@ export async function* sendTelegramTextPageParts<TPlain, THtml, TRich>(
     yield { result: delivery.result, page };
     return;
   }
-  for (const [index, text] of delivery.chunks.entries()) {
+  const chunks = params.singleFallbackPart ? delivery.chunks.slice(0, 1) : delivery.chunks;
+  for (const [index, text] of chunks.entries()) {
     yield {
       result: await params.sender.sendPlain(
         text,
-        page.richMessage ? { index, count: delivery.chunks.length } : undefined,
+        page.richMessage ? { index, count: chunks.length } : undefined,
         delivery.label,
         page.literalOnly ? [{ type: "pre", offset: 0, length: text.length }] : undefined,
       ),
