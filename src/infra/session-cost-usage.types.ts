@@ -1,9 +1,8 @@
-// Shared session cost and usage accounting type contracts.
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { Usage } from "../llm/types.js";
-import type {
-  SessionUsageTimePoint as SharedSessionUsageTimePoint,
-  SessionUsageTimeSeries as SharedSessionUsageTimeSeries,
+export type {
+  SessionUsageTimePoint,
+  SessionUsageTimeSeries,
 } from "../shared/session-usage-timeseries-types.js";
 
 export type CostBreakdown = Partial<Usage["cost"]>;
@@ -20,10 +19,11 @@ export type UsageCostTranscriptFile = {
   inode?: number;
   eventCount?: number;
   maxSeq?: number;
+  generation?: string | null;
+  cold?: boolean;
 };
 
 export type ParsedTranscriptEntry = {
-  message: Record<string, unknown>;
   role?: "user" | "assistant";
   timestamp?: Date;
   durationMs?: number;
@@ -35,6 +35,18 @@ export type ParsedTranscriptEntry = {
   stopReason?: string;
   toolNames: string[];
   toolResultCounts: { total: number; errors: number };
+};
+
+/**
+ * Canonical latency inputs for one full transcript scan.
+ *
+ * `userTimestamps` names each billed reply's own user turn, so a displaced path
+ * measures inside itself. `activeUserTimestamp` is the continuation cursor the
+ * next append-only scan measures its first reply against.
+ */
+export type UsageRollupTiming = {
+  userTimestamps: WeakMap<ParsedTranscriptEntry, number>;
+  activeUserTimestamp?: number;
 };
 
 export type CostUsageTotals = {
@@ -50,6 +62,11 @@ export type CostUsageTotals = {
   cacheReadCost: number;
   cacheWriteCost: number;
   missingCostEntries: number;
+  /**
+   * Input tokens of calls whose provider reported no cache read/write split. Their
+   * cache use is unknown, so cache hit rates leave them out instead of counting misses.
+   */
+  cacheUnmeasuredInput: number;
   /** Missing-cost entry counts keyed by the raw `provider/model` attribution. */
   missingCostByModel?: Record<string, number>;
 };
@@ -69,14 +86,17 @@ export type CostUsageSummary = {
     pendingFiles: number;
     staleFiles: number;
     refreshedAt?: number;
+    partial?: { reason: "aggregate-boundary"; message: string };
   };
 };
 
 export type UsageCacheStatus = NonNullable<CostUsageSummary["cacheStatus"]>;
 
+export type UsageCivilDays = { from: string; through: string };
+
 export type UsageDailyBucket =
-  | { mode: "utc-offset"; utcOffsetMinutes: number }
-  | { mode: "time-zone"; timeZone: string };
+  | { mode: "utc-offset"; utcOffsetMinutes: number; civilDays?: never }
+  | { mode: "time-zone"; timeZone: string; civilDays?: UsageCivilDays };
 
 type SessionDailyUsage = CostUsageTotals & {
   date: string; // YYYY-MM-DD
@@ -112,6 +132,9 @@ export type SessionLatencyStats = {
   p95Ms: number;
   minMs: number;
   maxMs: number;
+  timedMs?: number;
+  timedTokens?: number;
+  timedCost?: number;
 };
 
 export type SessionDailyLatency = SessionLatencyStats & {
@@ -150,6 +173,9 @@ export type SessionModelUsage = {
 };
 
 export type SessionCostSummary = CostUsageTotals & {
+  computedAt?: number;
+  staleSince?: number;
+  refreshing?: boolean;
   sessionId?: string;
   sessionFile?: string;
   firstActivity?: number;
@@ -173,10 +199,6 @@ export type DiscoveredSession = {
   sessionFile: string;
   mtime: number;
 };
-
-export type SessionUsageTimePoint = SharedSessionUsageTimePoint;
-
-export type SessionUsageTimeSeries = SharedSessionUsageTimeSeries;
 
 export type SessionLogEntry = {
   timestamp: number;

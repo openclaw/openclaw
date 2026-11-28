@@ -73,7 +73,6 @@ internal class WearTalkTestFixture(
     WearRealtimeTalkClient.ActiveAttempt(
       nodeId = "phone-a",
       attemptId = "attempt-1",
-      generation = 1L,
       resources = WearRealtimeTalkClient.ChannelResources(channel, input, output),
     )
 

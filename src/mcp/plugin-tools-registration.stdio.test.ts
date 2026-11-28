@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
-import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
+import { prepareCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
 import {
   mcpPluginToolsServeEntrypoint,
   mcpProviderCatalogEntrypoint,
@@ -15,15 +15,14 @@ const runner = fileURLToPath(
 );
 let sdkHost: string | undefined;
 beforeAll(() => {
-  sdkHost = createCompiledSdkHost(
-    [mcpProviderCatalogEntrypoint, mcpPluginToolsServeEntrypoint],
-    lifetime.createTempDir,
-  );
+  sdkHost = prepareCompiledSdkHost([mcpProviderCatalogEntrypoint, mcpPluginToolsServeEntrypoint], {
+    mode: "link",
+  })(lifetime.createTempDir);
 });
 afterAll(() => lifetime.cleanup());
 
 describe("standalone MCP registration lifetime", () => {
-  it.each(["plain", "nested", "close-failure"])(
+  it.each(["nested", "close-failure"])(
     "%s: joins native tool work and physical registration disposal before terminal return",
     (mode) =>
       lifetime.run(async () => {

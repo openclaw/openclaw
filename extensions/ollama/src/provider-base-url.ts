@@ -1,8 +1,4 @@
-// Ollama provider module implements model/runtime integration.
-import type {
-  ModelProviderConfig,
-  ModelDefinitionConfig,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 
 export function resolveOllamaBaseUrlForRun(params: {
@@ -12,25 +8,22 @@ export function resolveOllamaBaseUrlForRun(params: {
   return params.providerBaseUrl?.trim() || params.modelBaseUrl?.trim() || OLLAMA_DEFAULT_BASE_URL;
 }
 
-/** Provider config input type — partial config without required `models`. */
-type OllamaProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
-  models?: ModelDefinitionConfig[];
-};
+export function resolveOllamaChatUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  const normalizedBase = trimmed.replace(/\/v1$/i, "");
+  return `${normalizedBase || OLLAMA_DEFAULT_BASE_URL}/api/chat`;
+}
 
 export function readProviderBaseUrl(
-  provider: OllamaProviderConfigInput | undefined,
+  provider: Partial<ModelProviderConfig> | undefined,
 ): string | undefined {
   if (!provider) {
     return undefined;
   }
-  if (
-    Object.hasOwn(provider, "baseUrl") &&
-    typeof provider.baseUrl === "string" &&
-    provider.baseUrl.trim()
-  ) {
+  if (Object.hasOwn(provider, "baseUrl") && provider.baseUrl?.trim()) {
     return provider.baseUrl.trim();
   }
-  const alternate = provider as OllamaProviderConfigInput & { baseURL?: unknown };
+  const alternate = provider as Partial<ModelProviderConfig> & { baseURL?: unknown };
   if (
     Object.hasOwn(alternate, "baseURL") &&
     typeof alternate.baseURL === "string" &&

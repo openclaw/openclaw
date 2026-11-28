@@ -8,14 +8,14 @@ const readlineState = vi.hoisted(() => {
   const question = vi.fn(async () => "");
   const close = vi.fn();
   const listeners = new Map<string, Set<() => void>>();
-  const once = vi.fn((event: string, listener: () => void) => {
+  const once = (event: string, listener: () => void) => {
     const current = listeners.get(event) ?? new Set<() => void>();
     current.add(listener);
     listeners.set(event, current);
-  });
-  const off = vi.fn((event: string, listener: () => void) => {
+  };
+  const off = (event: string, listener: () => void) => {
     listeners.get(event)?.delete(listener);
-  });
+  };
   const emit = (event: string) => {
     const current = [...(listeners.get(event) ?? [])];
     listeners.delete(event);
@@ -27,7 +27,7 @@ const readlineState = vi.hoisted(() => {
     listeners.clear();
   };
   const createInterface = vi.fn(() => ({ question, close, once, off }));
-  return { question, close, createInterface, emit, off, once, resetListeners };
+  return { question, close, createInterface, emit, resetListeners };
 });
 
 vi.mock("node:readline/promises", () => ({
@@ -41,8 +41,6 @@ beforeEach(() => {
   readlineState.question.mockResolvedValue("");
   readlineState.close.mockClear();
   readlineState.createInterface.mockClear();
-  readlineState.off.mockClear();
-  readlineState.once.mockClear();
   readlineState.resetListeners();
 });
 
@@ -73,12 +71,15 @@ describe("promptYesNo", () => {
   });
 
   it("rejects when input closes before an answer is received", async () => {
-    readlineState.question.mockReturnValueOnce(new Promise<string>(() => {}));
+    const answer = Promise.withResolvers<string>();
+    readlineState.question.mockReturnValueOnce(answer.promise);
 
-    const result = promptYesNo("Continue?");
+    const result = promptYesNo("Continue?", true);
+    const rejected = expect(result).rejects.toThrow(PromptInputClosedError);
     readlineState.emit("close");
+    answer.resolve("y");
 
-    await expect(result).rejects.toThrow(PromptInputClosedError);
+    await rejected;
     expect(readlineState.close).toHaveBeenCalledTimes(1);
   });
 });

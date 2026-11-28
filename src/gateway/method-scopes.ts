@@ -1,6 +1,6 @@
-// Gateway method authorization scope resolver.
-// Maps static and plugin-defined gateway methods to operator scopes.
-import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { SessionPermissionNarrowingPatchFields } from "../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import {
   isAdminOnlyNodeInvokeCommand,
   isBrowserProxyNodeInvokeCommand,
@@ -16,7 +16,6 @@ import { resolveDynamicSessionMutationRequiredScope } from "../shared/session-me
 import { isAgentSessionResetCommand } from "./agent-command-policy.js";
 import {
   isCoreGatewayMethodClassified,
-  isCoreNodeGatewayMethod,
   isDynamicOperatorGatewayMethod,
   resolveCoreOperatorGatewayMethodScope,
 } from "./methods/core-method-policy.js";
@@ -24,14 +23,18 @@ import { isForbiddenBrowserProxyMutation } from "./node-browser-proxy-policy.js"
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
+  CRON_SCOPE,
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  SESSION_WRITE_SCOPE,
+  TALK_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
   isOperatorScope,
   type OperatorScope,
 } from "./operator-scopes.js";
+import { isParticipantPublicationMethod } from "./session-method-policy.js";
 
 export {
   ADMIN_SCOPE,
@@ -54,6 +57,25 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   TALK_SECRETS_SCOPE,
 ];
 
+/** These handlers enforce the authenticated runtime's account and conversation boundary. */
+export function resolveAgentRuntimeCronScope(method: string): typeof CRON_SCOPE | undefined {
+  switch (method) {
+    case "cron.add":
+    case "cron.update":
+    case "cron.remove":
+    case "cron.run":
+    case "cron.get":
+    case "cron.list":
+    case "cron.runs":
+    case "cron.history":
+    case "cron.scratch.get":
+    case "cron.scratch.set":
+      return CRON_SCOPE;
+    default:
+      return undefined;
+  }
+}
+
 function resolveScopedMethod(method: string): OperatorScope | undefined {
   // Node/dynamic sentinels are not operator scopes.
   const explicitScope = resolveCoreOperatorGatewayMethodScope(method);
@@ -71,22 +93,17 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   return pluginScope === "node" || pluginScope === "dynamic" ? undefined : pluginScope;
 }
 
-/** Returns true when a method requires the approvals operator scope. */
 export function isApprovalMethod(method: string): boolean {
   return resolveScopedMethod(method) === APPROVALS_SCOPE;
 }
 
-/** Returns true when a method is reserved for node-role clients instead of operators. */
-export function isNodeRoleMethod(method: string): boolean {
-  return isCoreNodeGatewayMethod(method);
-}
-
 function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] | undefined {
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
+  const record = asOptionalRecord(params);
+  if (!record) {
     return undefined;
   }
-  const pluginId = normalizeSessionActionParam((params as { pluginId?: unknown }).pluginId);
-  const actionId = normalizeSessionActionParam((params as { actionId?: unknown }).actionId);
+  const pluginId = normalizeOptionalString(record.pluginId);
+  const actionId = normalizeOptionalString(record.actionId);
   if (!pluginId || !actionId) {
     return undefined;
   }
@@ -107,9 +124,10 @@ function resolveSessionActionLeastPrivilegeScopes(params: unknown): OperatorScop
   if (registeredScopes) {
     return registeredScopes;
   }
-  if (params && typeof params === "object" && !Array.isArray(params)) {
-    const pluginId = normalizeSessionActionParam((params as { pluginId?: unknown }).pluginId);
-    const actionId = normalizeSessionActionParam((params as { actionId?: unknown }).actionId);
+  const record = asOptionalRecord(params);
+  if (record) {
+    const pluginId = normalizeOptionalString(record.pluginId);
+    const actionId = normalizeOptionalString(record.actionId);
     if (pluginId && actionId) {
       // A standalone CLI/tool caller may be talking to a gateway whose live
       // plugin registry is not present in this local process. Avoid under-scoping
@@ -130,18 +148,26 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   if (method === "plugins.sessionAction") {
     return resolveSessionActionLeastPrivilegeScopes(params);
   }
+  const record = asOptionalRecord(params);
+  if (method === "sessions.github.action") {
+    return [
+      record?.action === "create_issue" ||
+      record?.action === "create_comment" ||
+      record?.action === "inspect_pr" ||
+      record?.action === "prepare_pr" ||
+      record?.action === "refresh_base" ||
+      record?.action === "edit" ||
+      record?.action === "request_review" ||
+      record?.action === "upload_evidence" ||
+      (record?.action === "ready" && record.publishingSessionKey === undefined)
+        ? SESSION_WRITE_SCOPE
+        : WRITE_SCOPE,
+    ];
+  }
   if (method === "agent") {
-    const message =
-      params && typeof params === "object" && !Array.isArray(params)
-        ? (params as { message?: unknown }).message
-        : undefined;
-    return isAgentSessionResetCommand(message) ? [ADMIN_SCOPE] : [WRITE_SCOPE];
+    return isAgentSessionResetCommand(record?.message) ? [ADMIN_SCOPE] : [WRITE_SCOPE];
   }
   if (method === "node.invoke") {
-    const record =
-      params && typeof params === "object" && !Array.isArray(params)
-        ? (params as { command?: unknown; params?: unknown })
-        : undefined;
     const command = record?.command;
     // Invalid persistent-profile mutations must reach the handler's precise fail-closed
     // rejection instead of being disguised as an admin-scope failure.
@@ -154,48 +180,27 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
     return isAdminOnlyNodeInvokeCommand(command) ? [ADMIN_SCOPE] : [WRITE_SCOPE];
   }
   if (method === "talk.config") {
-    const includeSecrets =
-      params && typeof params === "object" && !Array.isArray(params)
-        ? (params as { includeSecrets?: unknown }).includeSecrets
-        : undefined;
-    return includeSecrets === true ? [READ_SCOPE, TALK_SECRETS_SCOPE] : [READ_SCOPE];
+    return record?.includeSecrets === true ? [READ_SCOPE, TALK_SECRETS_SCOPE] : [READ_SCOPE];
   }
   if (method === "environments.list") {
-    const runtimeId =
-      params && typeof params === "object" && !Array.isArray(params) && "runtimeId" in params
-        ? params.runtimeId
-        : undefined;
+    const runtimeId = record && "runtimeId" in record ? record.runtimeId : undefined;
     // Match the handler: every nonempty runtime ID needs command eligibility access.
     return typeof runtimeId === "string" && runtimeId ? [WRITE_SCOPE] : [READ_SCOPE];
   }
   if (method === "channels.pairing.approve") {
-    const bootstrapCommandOwner =
-      params && typeof params === "object" && !Array.isArray(params)
-        ? (params as { bootstrapCommandOwner?: unknown }).bootstrapCommandOwner
-        : undefined;
-    return bootstrapCommandOwner === true ? [PAIRING_SCOPE, ADMIN_SCOPE] : [PAIRING_SCOPE];
+    return record?.bootstrapCommandOwner === true ? [PAIRING_SCOPE, ADMIN_SCOPE] : [PAIRING_SCOPE];
   }
   if (method === "fs.listDir") {
-    const targetsNode =
-      params !== null &&
-      typeof params === "object" &&
-      !Array.isArray(params) &&
-      Object.hasOwn(params, "nodeId");
+    const targetsNode = record && Object.hasOwn(record, "nodeId");
     return [targetsNode ? ADMIN_SCOPE : WRITE_SCOPE];
   }
-  if (method === "sessions.patch") {
-    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
-  }
-  if (method === "sessions.patchMany") {
-    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
-  }
-  if (method === "sessions.create") {
-    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
-  }
-  if (method === "sessions.dispatch") {
-    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
-  }
-  if (method === "sessions.move") {
+  if (
+    method === "sessions.patch" ||
+    method === "sessions.patchMany" ||
+    method === "sessions.create" ||
+    method === "sessions.dispatch" ||
+    method === "sessions.move"
+  ) {
     return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
   }
   if (method === "sessions.delete") {
@@ -211,7 +216,6 @@ function findMissingOperatorScope(
   return requiredScopes.find((scope) => !operatorScopeSatisfied(scope, scopes));
 }
 
-/** Returns the narrowest known operator scopes needed to call a gateway method. */
 export function resolveLeastPrivilegeOperatorScopesForMethod(
   method: string,
   params?: unknown,
@@ -266,7 +270,35 @@ export function projectOperatorScopesForMethod(params: {
   });
 }
 
-/** Checks whether a presented operator scope set authorizes a gateway method call. */
+/**
+ * Narrows a least-privilege request to a stored grant only when the method's
+ * session-scoped alternative authorizes it. Any other gap keeps the request,
+ * so the Gateway's scope-upgrade flow still applies.
+ */
+export function fitOperatorScopesToGrant(params: {
+  method: string;
+  requestParams: unknown;
+  scopes: OperatorScope[];
+  grantedScopes: readonly string[];
+}): OperatorScope[] {
+  const { method, requestParams, scopes, grantedScopes } = params;
+  if (
+    roleScopesAllow({ role: "operator", requestedScopes: scopes, allowedScopes: grantedScopes })
+  ) {
+    return scopes;
+  }
+  const fitted = projectOperatorScopesForMethod({
+    method,
+    requestParams,
+    requestedScopes: scopes,
+    allowedScopes: grantedScopes,
+  }).filter(isOperatorScope);
+  return fitted.length > 0 &&
+    authorizeOperatorScopesForMethod(method, fitted, requestParams).allowed
+    ? fitted
+    : scopes;
+}
+
 export function authorizeOperatorScopesForMethod(
   method: string,
   scopes: readonly string[],
@@ -280,9 +312,10 @@ export function authorizeOperatorScopesForMethod(
   if (isDynamicOperatorGatewayMethod(method)) {
     if (method === "plugins.sessionAction") {
       const registeredScopes = resolveSessionActionRegisteredScopes(params);
-      if (!registeredScopes && params && typeof params === "object" && !Array.isArray(params)) {
-        const pluginId = normalizeSessionActionParam((params as { pluginId?: unknown }).pluginId);
-        const actionId = normalizeSessionActionParam((params as { actionId?: unknown }).actionId);
+      const record = asOptionalRecord(params);
+      if (!registeredScopes && record) {
+        const pluginId = normalizeOptionalString(record.pluginId);
+        const actionId = normalizeOptionalString(record.actionId);
         if (!pluginId || !actionId) {
           // Malformed dynamic params cannot be matched to a plugin action. Any valid operator scope
           // may proceed so the handler can return the precise validation error.
@@ -316,7 +349,6 @@ export function authorizeOperatorScopesForMethod(
   );
 }
 
-/** Checks a method registry's already-resolved static scope against presented operator scopes. */
 export function authorizeOperatorScopesForRequiredScope(
   requiredScope: OperatorScope,
   scopes: readonly string[],
@@ -331,7 +363,10 @@ export function authorizeOperatorScopesForRequiredScope(
   if (
     ((requiredScope === READ_SCOPE && sessionScope === "operator.sessions.read") ||
       ((requiredScope === WRITE_SCOPE ||
-        (requiredScope === QUESTIONS_SCOPE && method?.startsWith("question."))) &&
+        requiredScope === TALK_SCOPE ||
+        (requiredScope === QUESTIONS_SCOPE && method?.startsWith("question.")) ||
+        // The handler binds a non-admin restore to the caller's own session worktree.
+        (requiredScope === ADMIN_SCOPE && method === "worktrees.restore")) &&
         sessionScope === "operator.sessions.write")) &&
     operatorScopeSatisfied(sessionScope, scopes)
   ) {
@@ -340,13 +375,34 @@ export function authorizeOperatorScopesForRequiredScope(
   return { allowed: false, missingScope: requiredScope };
 }
 
-/** Returns true when a method has any core, node, dynamic, reserved, or plugin scope policy. */
+/** Pending target-bound requirement, never an operator scope or an implicit creation grant. */
+export function requiresSessionParticipation(
+  method: string,
+  scopes: readonly string[],
+  params: unknown,
+): boolean {
+  if (!operatorScopeSatisfied("operator.sessions.read", scopes)) {
+    return false;
+  }
+  if (
+    isParticipantPublicationMethod(method, params) ||
+    ["chat.send", "chat.abort", "session.typing", "session.suggestions.add"].includes(method)
+  ) {
+    return true;
+  }
+  const patch = asOptionalRecord(params);
+  return (
+    method === "sessions.patch" &&
+    Boolean(
+      patch &&
+      ["read-only", "guarded", "workspace"].includes(String(patch.permissionMode)) &&
+      Object.keys(patch).every((key) =>
+        SessionPermissionNarrowingPatchFields.some((field) => field === key),
+      ),
+    )
+  );
+}
+
 export function isGatewayMethodClassified(method: string): boolean {
-  if (isNodeRoleMethod(method)) {
-    return true;
-  }
-  if (isDynamicOperatorGatewayMethod(method)) {
-    return true;
-  }
   return isCoreGatewayMethodClassified(method) || resolveScopedMethod(method) !== undefined;
 }

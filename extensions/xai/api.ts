@@ -1,4 +1,3 @@
-// Xai API module exposes the plugin public contract.
 export {
   applyXaiModelCompat,
   HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,

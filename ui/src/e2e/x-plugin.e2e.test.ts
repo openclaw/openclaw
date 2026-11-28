@@ -1,0 +1,234 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  defaultControlUiFeatureMethods,
+  reconnectMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
+
+const pluginRoot = fileURLToPath(new URL("../../../extensions/x/", import.meta.url));
+const suite = createControlUiE2eSuite({ name: "X native plugin" });
+const desktop = { width: 1280, height: 1000 };
+
+function snapshot(accountId = "primary", enabled = false) {
+  return {
+    accountId,
+    accounts: [
+      { accountId: "primary", username: "example_bot" },
+      { accountId: "secondary", username: "example_help" },
+    ],
+    entries: [
+      {
+        userId: "101",
+        username: accountId === "primary" ? "example_maint" : "example_helper",
+        name: "Example maintainer",
+        configured: true,
+        editable: false,
+      },
+    ],
+    guests: {
+      enabled,
+      maxMentionsPerAuthorPerDay: 5,
+      admittedToday: 2,
+      rateLimitedToday: 1,
+    },
+    spend: {
+      dayUsd: 0.25,
+      cycleUsd: 2.5,
+      dailyLimitUsd: 5,
+      monthlyLimitUsd: 50,
+      cycleStart: "2026-10-01",
+    },
+  };
+}
+
+suite.define(() => {
+  it("uses one registered page heading in a native embed without an advertised tab", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, serviceWorkers: "block" },
+      async ({ page }) => {
+        await page.addInitScript(() =>
+          Object.assign(window, {
+            __OPENCLAW_NATIVE_EMBED__: { platform: "ios", formFactor: "phone" },
+          }),
+        );
+        await installNativePluginMockGateway(page, {
+          nativePlugins: [{ pluginId: "x", rootDir: pluginRoot, source: "src/control-ui.tsx" }],
+          controlUiTabs: [],
+          featureMethods: [...defaultControlUiFeatureMethods, "x.allowlist.list"],
+          methodResponses: { "x.allowlist.list": snapshot() },
+        });
+        await page.goto(`${suite.server.baseUrl}plugin?plugin=x&id=replies`);
+        await page.getByText("@example_maint", { exact: true }).waitFor();
+        await page
+          .locator(".native-embed-header")
+          .getByRole("heading", { name: "X replies", level: 1 })
+          .waitFor();
+        expect(await page.getByRole("heading", { name: "X replies", level: 1 }).count()).toBe(1);
+        await page.getByRole("heading", { name: "Guest mode", exact: true }).waitFor();
+      },
+    );
+  });
+
+  it("builds and mounts X, manages accounts, and retires pending reads with their authority", async () => {
+    await suite.withPage(
+      { viewport: desktop, locale: "en-US", serviceWorkers: "block" },
+      async ({ page }) => {
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const gateway = await installNativePluginMockGateway(page, {
+          nativePlugins: [{ pluginId: "x", rootDir: pluginRoot, source: "src/control-ui.tsx" }],
+          operatorScopes: ["operator.admin"],
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "x.allowlist.list",
+            "x.allowlist.add",
+            "x.allowlist.remove",
+            "x.guests.set",
+          ],
+          methodResponses: {
+            "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
+            "x.allowlist.list": snapshot(),
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}plugin?plugin=x&id=replies`);
+        const surface = page.locator(".x-replies");
+        const button = (name: string) => surface.getByRole("button", { name, exact: true });
+        const expectMutation = async (method: string, fields: Record<string, unknown>) => {
+          expect((await gateway.waitForRequest(method)).params).toEqual({
+            accountId: "primary",
+            ...fields,
+          });
+        };
+        const account = surface.getByRole("combobox", { name: "X account" });
+        const handle = surface.getByRole("textbox", { name: "Add by X handle" });
+        const guestMode = surface.getByRole("switch", { name: "Guest mode" });
+        await surface.getByText("@example_maint", { exact: true }).waitFor();
+        const retainedRow = await surface
+          .getByRole("row")
+          .filter({ hasText: "@example_maint" })
+          .elementHandle();
+        expect(await account.inputValue()).toBe("primary");
+        expect(await surface.getByText("Read-only", { exact: true }).count()).toBe(1);
+        expect((await gateway.waitForRequest("plugins.controlUi.report")).params).toMatchObject({
+          reports: [{ pluginId: "x", status: "activated" }],
+        });
+
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          for (const viewport of [desktop, { width: 390, height: 844 }]) {
+            const frame = await takeControlUiScreenshotFrame(page, surface, [handle, guestMode], {
+              animations: "disabled",
+              viewport,
+            });
+            await writeFile(
+              path.join(suite.artifactDir, `x-replies-${viewport.width}.png`),
+              frame.png,
+            );
+          }
+          await page.setViewportSize(desktop);
+        }
+
+        const badHandle = await gateway.deferNext("x.allowlist.add");
+        await handle.fill("@example-bad");
+        await button("Add account").click();
+        await gateway.waitForRequest("x.allowlist.add", { after: badHandle });
+        await gateway.rejectDeferred("x.allowlist.add", {
+          code: "INVALID_REQUEST",
+          message: "Synthetic diagnostic that should not appear on the page",
+          details: { xHandleRequired: true },
+        });
+        const invalidHandle = surface.getByRole("alert");
+        await expect
+          .poll(() => invalidHandle.textContent())
+          .toBe(
+            "OpenClaw didn’t add the account. Enter an X handle with up to 15 letters, numbers, or underscores.",
+          );
+        await expect.poll(() => handle.inputValue()).toBe("@example-bad");
+
+        const addRequest = { accountId: "primary", username: "@example_new" };
+        const budget = await gateway.deferNext("x.allowlist.add", addRequest);
+        await handle.fill("@example_new");
+        await button("Add account").click();
+        await gateway.waitForRequest("x.allowlist.add", { after: budget, match: addRequest });
+        await gateway.rejectDeferred("x.allowlist.add", {
+          code: "UNAVAILABLE",
+          message: "Synthetic X API details",
+          details: { xBudgetResumesAt: Date.UTC(2030, 0, 2, 3) },
+        });
+        await expect
+          .poll(() => surface.getByRole("alert").textContent())
+          .toContain("The X API budget is spent. Paid lookups can resume at ");
+
+        const added = snapshot();
+        added.entries.push({
+          userId: "202",
+          username: "example_new",
+          name: "Example contributor",
+          configured: false,
+          editable: true,
+        });
+        await gateway.setMethodResponse("x.allowlist.add", added);
+        await handle.fill("@example_new");
+        await button("Add account").click();
+        await gateway.waitForRequest("x.allowlist.add", {
+          after: budget + 1,
+          match: addRequest,
+        });
+        await surface.getByText("@example_new", { exact: true }).waitFor();
+        expect(await retainedRow?.evaluate((element) => element.isConnected)).toBe(true);
+        await expect.poll(() => handle.inputValue()).toBe("");
+        await surface.getByText("Account added. Its mentions can now receive replies.").waitFor();
+
+        await gateway.setMethodResponse("x.allowlist.remove", snapshot());
+        await button("Remove stored entry for @example_new").click();
+        await expectMutation("x.allowlist.remove", { userId: "202" });
+        await surface.getByText("@example_new", { exact: true }).waitFor({ state: "detached" });
+
+        await gateway.setMethodResponse("x.guests.set", snapshot("primary", true));
+        await guestMode.click();
+        await expectMutation("x.guests.set", { enabled: true });
+        await expect.poll(() => guestMode.getAttribute("aria-checked")).toBe("true");
+
+        await gateway.setMethodResponse("x.allowlist.list", snapshot("secondary"));
+        await account.selectOption("secondary");
+        await gateway.waitForRequest("x.allowlist.list", { match: { accountId: "secondary" } });
+        await surface.getByText("@example_helper", { exact: true }).waitFor();
+        expect(await surface.getByText("@example_maint", { exact: true }).count()).toBe(0);
+
+        const pending = await gateway.deferNext("x.allowlist.list");
+        await button("Refresh").click();
+        await gateway.waitForRequest("x.allowlist.list", { after: pending });
+        await gateway.setOperatorScopes(["operator.read"]);
+        await reconnectMockGateway(page, gateway);
+        const denied = surface.getByText("You need admin access to manage X replies.");
+        await denied.waitFor();
+        await gateway.resolveDeferred("x.allowlist.list", added);
+        expect(await handle.count()).toBe(0);
+        expect(await denied.isVisible()).toBe(true);
+
+        await gateway.setOperatorScopes(["operator.admin"]);
+        await reconnectMockGateway(page, gateway);
+        await surface.getByText("@example_helper", { exact: true }).waitFor();
+        const retired = await gateway.deferNext("x.allowlist.list");
+        await button("Refresh").click();
+        await gateway.waitForRequest("x.allowlist.list", { after: retired });
+        const pages = await openSidebarPages(page);
+        await pages.getByRole("link", { name: "Customize", exact: true }).click();
+        await surface.waitFor({ state: "detached" });
+        await gateway.resolveDeferred("x.allowlist.list", added);
+        // Each choice closes the page menu; wait for that before reopening it.
+        await pages.waitFor({ state: "hidden" });
+        await openSidebarPages(page);
+        await pages.getByRole("link", { name: "X replies", exact: true }).click();
+        await surface.getByText("@example_helper", { exact: true }).waitFor();
+        expect(await surface.getByText("@example_new", { exact: true }).count()).toBe(0);
+        expect(pageErrors).toEqual([]);
+      },
+    );
+  });
+});

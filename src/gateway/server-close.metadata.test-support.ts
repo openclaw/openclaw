@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
@@ -18,58 +19,39 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { startGatewayServerCore } from "./server-start.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { reserveGatewayTestListener } from "./test-helpers.listener.js";
+// Keep cold source transformation of mandatory startup code outside behavior-test deadlines.
+import "./server-reload-managed.js";
 
 export async function createGatewayMetadataCloseFixture(label: string) {
   const original = captureActivePluginRegistrySnapshot();
-  const state = await createOpenClawTestState({
-    label,
-    layout: "home",
-    env: {
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-      VITEST: "1",
-    },
-  });
+  const state = await createOpenClawTestState({ label, layout: "home", env: KERNEL_TEST_ENV });
   const pluginId = "metadata-fixture";
   const rootDir = state.path(pluginId);
   await fs.mkdir(rootDir);
-  await fs.writeFile(
-    path.join(rootDir, "package.json"),
-    JSON.stringify({
-      name: pluginId,
-      version: "1.0.0",
-      type: "commonjs",
-      openclaw: { extensions: ["./index.cjs"] },
-    }),
-  );
-  await fs.writeFile(
-    path.join(rootDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: pluginId,
-      activation: { onStartup: true },
-      configSchema: { type: "object", properties: {} },
-    }),
-  );
-  await fs.writeFile(
-    path.join(rootDir, "index.cjs"),
-    `module.exports = { id: ${JSON.stringify(pluginId)}, register() {} };`,
-  );
+  const write = (name: string, source: string) => fs.writeFile(path.join(rootDir, name), source);
+  const writeJson = (name: string, value: unknown) => write(name, JSON.stringify(value));
+  await writeJson("package.json", {
+    name: pluginId,
+    version: "1.0.0",
+    type: "commonjs",
+    openclaw: { extensions: ["./index.cjs"] },
+  });
+  await writeJson("openclaw.plugin.json", {
+    id: pluginId,
+    activation: { onStartup: true },
+    configSchema: { type: "object", properties: {} },
+  });
+  await write("index.cjs", `module.exports = { id: ${JSON.stringify(pluginId)}, register() {} };`);
   const source = path.join(rootDir, "callback.cjs");
   const dependency = path.join(rootDir, "lazy.mjs");
   const event = `${label}-setup`;
   const listeners = process.listenerCount(event);
   const writeCallback = async (value: string) => {
-    await fs.writeFile(dependency, `export const value = ${JSON.stringify(value)};`);
-    await fs.writeFile(
-      source,
+    await write("lazy.mjs", `export const value = ${JSON.stringify(value)};`);
+    await write(
+      "callback.cjs",
       `module.exports = (lifecycle) => {
         const listener = () => {};
         process.on(${JSON.stringify(event)}, listener);
@@ -119,7 +101,7 @@ export async function createGatewayMetadataCloseFixture(label: string) {
       return monitor;
     });
   setActivePluginRegistry(createEmptyPluginRegistry());
-  return {
+  const fixture = {
     state,
     config,
     kernels,
@@ -159,7 +141,7 @@ export async function createGatewayMetadataCloseFixture(label: string) {
           port,
           auth: { mode: "token", token },
           controlUi: { enabled: false },
-          reload: { mode: "off" },
+          reload: config.gateway?.reload ?? { mode: "off" },
         },
       });
       const factory = vi
@@ -208,5 +190,49 @@ export async function createGatewayMetadataCloseFixture(label: string) {
         auditFactory.mockRestore();
       }
     },
+    async startServer() {
+      const port = await reservePort();
+      const server = await fixture.start(port);
+      const kernel = kernels.get(port);
+      assert(kernel);
+      return { server, kernel, port };
+    },
   };
+  return fixture;
+}
+
+export async function createIncognitoCloseSession(
+  fixture: Awaited<ReturnType<typeof createGatewayMetadataCloseFixture>>,
+  sessionKey: string,
+  sessionId: string,
+  entry: Partial<SessionEntry> = {},
+) {
+  const { memorySessionActorOwners } =
+    await import("../config/sessions/session-actor-memory-owner.js");
+  const { resolveIncognitoOpenClawAgentSqlitePath } =
+    await import("../state/openclaw-agent-db.paths.js");
+  const database = { agentId: "main", env: fixture.state.env };
+  const owner = memorySessionActorOwners.get({
+    agentId: database.agentId,
+    path: resolveIncognitoOpenClawAgentSqlitePath(database),
+  });
+  const authority = { assertCurrent() {}, authorize() {} };
+  const target = { ...database, sessionKey, sessionId, storePath: owner.path };
+  const actor = await owner.acquire(
+    { database: owner.identity, sessionKey },
+    { assertCurrent() {}, assertReadable() {} },
+  );
+  try {
+    const created = await actor.storage!.mutate(
+      {
+        type: "session.entry.create",
+        input: { entry: { sessionId, updatedAt: 1, incognito: true, ...entry } },
+      },
+      authority,
+    );
+    return { owner, actor, authority, target, created };
+  } catch (error) {
+    await actor.release();
+    throw error;
+  }
 }

@@ -3,6 +3,8 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ProviderFastModePolicyContext,
+  ProviderModelAuthPolicy,
+  ProviderModelAuthPolicyContext,
   ProviderModelRouteResolution,
   ProviderNativeWebSearchPolicyContext,
   ProviderNormalizeModelCatalogIdContext,
@@ -15,20 +17,10 @@ import type {
   ProviderNormalizeConfigContext,
   ProviderResolveConfigApiKeyContext,
 } from "./provider-config-context.types.js";
-import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
 } from "./provider-thinking.types.js";
-
-type ProviderProjectConfiguredModelRowContext = {
-  config?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-  provider: string;
-  modelId: string;
-  model: ProviderRuntimeModel;
-};
 
 type ProviderProjectRealtimeVoicePublicConfigContext = {
   providerConfig: Record<string, unknown>;
@@ -61,12 +53,19 @@ export type InspectEmbeddingProviderSetup = (params: {
 
 /** Provider policy hooks supported by bundled and trusted official plugins. */
 export type ProviderPolicySurface = {
+  resolveModelAuthPolicy?: (
+    ctx: ProviderModelAuthPolicyContext,
+  ) => ProviderModelAuthPolicy | undefined;
   resolveFastModeSupport?: (ctx: ProviderFastModePolicyContext) => boolean | undefined;
+  /** Known model/route service tiers; undefined retains account discovery and route defaults. */
+  resolveServiceTiers?: (ctx: ProviderFastModePolicyContext) => readonly string[] | undefined;
   deprecatedProfileIds?: readonly string[];
   normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
   applyConfigDefaults?: (
     ctx: ProviderApplyConfigDefaultsContext,
   ) => OpenClawConfig | null | undefined;
+  /** Default cadence used only when provisioning a fresh proactive automation. */
+  resolveProactiveCadenceMs?: (ctx: ProviderApplyConfigDefaultsContext) => number | undefined;
   resolveConfigApiKey?: (ctx: ProviderResolveConfigApiKeyContext) => string | null | undefined;
   resolveThinkingProfile?: (
     ctx: ProviderDefaultThinkingPolicyContext,
@@ -89,9 +88,6 @@ export type ProviderPolicySurface = {
 
 /** Provider policy hooks loaded only from bundled plugin public artifacts. */
 export type BundledProviderPolicySurface = ProviderPolicySurface & {
-  projectConfiguredModelRow?: (
-    ctx: ProviderProjectConfiguredModelRowContext,
-  ) => ProviderRuntimeModel | null | undefined;
   projectRealtimeVoicePublicProjection?: (
     ctx: ProviderProjectRealtimeVoicePublicConfigContext,
   ) => RealtimeVoicePublicProjection | null | undefined;

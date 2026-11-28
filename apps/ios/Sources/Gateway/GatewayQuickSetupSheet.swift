@@ -63,10 +63,8 @@ struct GatewayQuickSetupSheet: View {
                                 self.connecting = true
                                 Task {
                                     let err = await self.gatewayController.connectWithDiagnostics(candidate)
-                                    await MainActor.run {
-                                        self.connecting = false
-                                        self.connectError = err
-                                    }
+                                    self.connecting = false
+                                    self.connectError = err
                                 }
                             } label: {
                                 Group {
@@ -137,15 +135,9 @@ struct GatewayQuickSetupSheet: View {
             .navigationTitle("Quick Setup")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        self.quickSetupDismissed = true
-                        self.dismiss()
-                    } label: {
-                        Text("Close")
-                            .font(OpenClawType.subheadSemiBold)
-                    }
-                    .buttonStyle(OpenClawCloseButtonStyle())
+                OpenClawSheetCloseItem {
+                    self.quickSetupDismissed = true
+                    self.dismiss()
                 }
             }
         }
@@ -215,7 +207,7 @@ struct GatewayQuickSetupSheet: View {
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
         }
-        if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem) {
+        if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem, toasts: self.appModel.toasts) {
             return
         }
         guard problem.retryable else { return }

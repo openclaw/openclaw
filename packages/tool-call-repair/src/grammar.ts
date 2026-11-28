@@ -57,7 +57,6 @@ export function consumeLineBreak(text: string, start: number): number | null {
 
 export type StructuralLineBreakOptions = {
   lineBreakOffsets: ReadonlySet<number>;
-  usedLineBreakOffsets?: Set<number>;
 };
 
 export function consumeStructuralLineBreakAfterHorizontalWhitespace(
@@ -72,7 +71,6 @@ export function consumeStructuralLineBreakAfterHorizontalWhitespace(
   }
   for (let offset = start; offset <= right; offset += 1) {
     if (options?.lineBreakOffsets.has(offset)) {
-      options.usedLineBreakOffsets?.add(offset);
       return offset;
     }
   }
@@ -153,6 +151,19 @@ export function indexOfAsciiMarkerIgnoreCase(text: string, marker: string, start
   return -1;
 }
 
+/** Scan at most one character beyond the accepted tool-name limit. */
+export function scanToolCallNameEnd(
+  text: string,
+  start: number,
+  isNameChar = isXmlishNameChar,
+): number {
+  let end = start;
+  while (isNameChar(text[end]) && end - start < 121) {
+    end += 1;
+  }
+  return end;
+}
+
 /** Uncapped structural scan shared by parsing, stripping, and stream buffering. */
 export function scanXmlishToolCall(
   text: string,
@@ -175,9 +186,7 @@ export function scanXmlishToolCall(
     }
     cursor += FUNCTION_OPEN.length;
     const nameStart = cursor;
-    while (isXmlishNameChar(text[cursor]) && cursor - nameStart < 121) {
-      cursor += 1;
-    }
+    cursor = scanToolCallNameEnd(text, nameStart);
     name = { start: nameStart, end: cursor };
     syntax = "function";
     if (cursor - nameStart > 120) {
@@ -193,9 +202,7 @@ export function scanXmlishToolCall(
   } else if (text[cursor] === "[") {
     cursor += 1;
     const firstNameStart = cursor;
-    while (isPlainTextToolNameChar(text[cursor]) && cursor - firstNameStart < 121) {
-      cursor += 1;
-    }
+    cursor = scanToolCallNameEnd(text, firstNameStart, isPlainTextToolNameChar);
     if (cursor - firstNameStart > 120) {
       return { kind: "invalid", at: cursor };
     }
@@ -209,9 +216,7 @@ export function scanXmlishToolCall(
       syntax = "tool-bracket";
       cursor += 1;
       const nameStart = cursor;
-      while (isPlainTextToolNameChar(text[cursor]) && cursor - nameStart < 121) {
-        cursor += 1;
-      }
+      cursor = scanToolCallNameEnd(text, nameStart, isPlainTextToolNameChar);
       name = { start: nameStart, end: cursor };
       if (cursor - nameStart > 120) {
         return { kind: "invalid", at: cursor };
@@ -283,10 +288,7 @@ export function scanXmlishToolCall(
     }
     if (startsWithAsciiMarkerIgnoreCase(text, markerStart, PARAMETER_OPEN)) {
       const nameStart = markerStart + PARAMETER_OPEN.length;
-      let nameEnd = nameStart;
-      while (isXmlishNameChar(text[nameEnd]) && nameEnd - nameStart < 121) {
-        nameEnd += 1;
-      }
+      const nameEnd = scanToolCallNameEnd(text, nameStart);
       if (nameEnd - nameStart > 120) {
         return { kind: "invalid", at: markerStart, candidate: candidate(markerStart) };
       }
@@ -318,4 +320,42 @@ export function scanXmlishToolCall(
     }
     return { kind: "invalid", at: markerStart, candidate: candidate(markerStart) };
   }
+}
+
+export type JsonObjectScanState = {
+  depth: number;
+  escaped: boolean;
+  inString: boolean;
+};
+
+/** Continue the same object scan across parser spans or bounded stream chunks. */
+export function scanJsonObject(
+  text: string,
+  start: number,
+  state: JsonObjectScanState = { depth: 0, escaped: false, inString: false },
+): { end: number; kind: "complete" | "prefix"; state: JsonObjectScanState } {
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (state.inString) {
+      if (state.escaped) {
+        state.escaped = false;
+      } else if (char === "\\") {
+        state.escaped = true;
+      } else if (char === '"') {
+        state.inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      state.inString = true;
+    } else if (char === "{") {
+      state.depth += 1;
+    } else if (char === "}") {
+      state.depth -= 1;
+      if (state.depth === 0) {
+        return { kind: "complete", end: index + 1, state };
+      }
+    }
+  }
+  return { kind: "prefix", end: text.length, state };
 }

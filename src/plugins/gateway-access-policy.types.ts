@@ -1,3 +1,4 @@
+import type { GatewayOperatorAccessCause } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export type GatewayAccessGrantRef = Readonly<{ pluginId: string; grantId: string }>;
@@ -8,13 +9,20 @@ export type PluginGatewayAccessAuthority = Readonly<{
   grantId?: string;
   assertCurrent: () => void;
   signal: AbortSignal;
+  /** Owner-recorded diagnostic only; never substitutes for the signal or live assertion. */
+  readonly failureCause?: GatewayOperatorAccessCause;
 }>;
 
 type GatewayAccessPolicyContext = {
   config: OpenClawConfig;
   /** The person's effective operator role explicitly names this policy's plugin. */
   requiredByRole: boolean;
-  profile: { profileId: string; emails: readonly string[]; assignedRole: string | null };
+  profile: {
+    profileId: string;
+    emails: readonly string[];
+    githubAccountIds?: readonly number[];
+    assignedRole: string | null;
+  };
 };
 
 export type PluginGatewayAccessPolicy = {

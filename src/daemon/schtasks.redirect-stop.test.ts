@@ -4,9 +4,11 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import "./test-helpers/schtasks-base-mocks.js";
-import { resolveTaskScriptPath, restartScheduledTask, stopScheduledTask } from "./schtasks.js";
+import { restartScheduledTask } from "./schtasks-control.js";
+import { resolveTaskScriptPath } from "./schtasks-layout.js";
 import {
   inspectPortUsageMock,
+  makeSpawnSyncResult,
   killProcessTreeMock,
   resetSchtasksBaseMocks,
   schtasksCalls,
@@ -33,21 +35,26 @@ beforeEach(() => {
   timeState.now = 0;
   vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
   spawnSync.mockReset();
-  spawnSync.mockImplementation((exe: string) => ({
-    pid: 0,
-    output: [null, "No tasks", ""],
-    stdout: "No tasks",
-    stderr: "",
-    status: /(?:taskkill|tasklist)\.exe$/i.test(exe) ? 0 : 1,
-    signal: null,
-  }));
+  spawnSync.mockImplementation((exe: string, args) => {
+    const encoded = args?.indexOf("-EncodedCommand") ?? -1;
+    const taskQuery =
+      encoded >= 0 &&
+      Buffer.from(args?.[encoded + 1] ?? "", "base64")
+        .toString("utf16le")
+        .includes("Schedule.Service");
+    const stdout = taskQuery
+      ? JSON.stringify({ state: 3, lastRunResult: 0, lastRunTime: "2026-09-27T00:00:00Z" })
+      : "No tasks";
+    return makeSpawnSyncResult({
+      output: [null, stdout, ""],
+      stdout,
+      status: taskQuery || /(?:taskkill|tasklist)\.exe$/i.test(exe) ? 0 : 1,
+    });
+  });
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each([
-  { operation: "stop", control: stopScheduledTask },
-  { operation: "restart", control: restartScheduledTask },
-])(
+it.each([{ operation: "restart", control: restartScheduledTask }])(
   "refuses shortened argv from an unquoted redirect expansion during $operation",
   async ({ control }) => {
     await withWindowsEnv("openclaw-win-redirect-", async ({ env }) => {

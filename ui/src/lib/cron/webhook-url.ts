@@ -6,14 +6,11 @@ export function resolveCronWebhookDeliveryError(deliveryTo: string): string | un
   }
   // Preserve the form's literal prefix requirement; URL also accepts shorthand.
   if (!hasHttpUrlPrefix(target)) {
+    return "cron.errors.webhookUrlProtocol";
+  }
+  const parsed = URL.parse(target);
+  if (!parsed || parsed.hostname.includes("%")) {
     return "cron.errors.webhookUrlInvalid";
   }
-  try {
-    const parsed = new URL(target);
-    return parsed.username || parsed.password || parsed.hostname.includes("%")
-      ? "cron.errors.webhookUrlInvalid"
-      : undefined;
-  } catch {
-    return "cron.errors.webhookUrlInvalid";
-  }
+  return parsed.username || parsed.password ? "cron.errors.webhookUrlWithCredentials" : undefined;
 }

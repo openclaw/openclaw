@@ -3,16 +3,15 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { loadGlobalRuntimeDotEnvFiles, loadWorkspaceDotEnvFile } from "../infra/dotenv.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
-import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { isRemoteAgentDispatchInvocation, resolveCliArgvInvocation } from "./argv-invocation.js";
 import { resolveCliContainerTarget } from "./container-target.js";
-import { resolveGatewayCatalogCommandPath } from "./gateway-run-argv.js";
+import { isGatewayRunInvocationArgv } from "./gateway-run-argv.js";
 
 /** Load `.env` files for normal CLI commands without overriding existing process env. */
-export function loadCliDotEnv(opts?: { loadGlobalEnv?: boolean; quiet?: boolean }) {
-  const quiet = opts?.quiet ?? true;
+export function loadCliDotEnv(opts?: { loadGlobalEnv?: boolean }) {
   const cwd = tryProcessCwd();
   if (cwd) {
-    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { quiet });
+    loadWorkspaceDotEnvFile(path.join(cwd, ".env"));
   }
 
   if (opts?.loadGlobalEnv === false) {
@@ -22,7 +21,6 @@ export function loadCliDotEnv(opts?: { loadGlobalEnv?: boolean; quiet?: boolean 
   // were already set or loaded from CWD. This includes the Ubuntu fresh-install
   // gateway.env compatibility path.
   loadGlobalRuntimeDotEnvFiles({
-    quiet,
     stateEnvPath: path.join(resolveStateDir(process.env), ".env"),
   });
 }
@@ -39,14 +37,12 @@ export async function loadCliDotEnvForEarlyDiagnostic(
   if (invocation.commandPath[0] === "agent" && invocation.commandPath[1] === "exec") {
     return;
   }
-  if (invocation.primary === "agent" && !argv.includes("--local")) {
+  if (isRemoteAgentDispatchInvocation(invocation)) {
     const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
-    await loadGatewayDispatchCliDotEnv({ quiet: true });
+    await loadGatewayDispatchCliDotEnv();
     return;
   }
-  const gatewayPath = resolveGatewayCatalogCommandPath(argv);
-  const isGatewayRun =
-    !invocation.hasHelpOrVersion &&
-    (gatewayPath?.length === 1 || (gatewayPath?.length === 2 && gatewayPath[1] === "run"));
-  loadCliDotEnv({ loadGlobalEnv: !isGatewayRun, quiet: true });
+  loadCliDotEnv({
+    loadGlobalEnv: invocation.hasHelpOrVersion || !isGatewayRunInvocationArgv(argv),
+  });
 }

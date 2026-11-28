@@ -1,7 +1,6 @@
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
-import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import { isGatewayAdmin } from "./session-sharing.js";
+import { isGatewayAdmin, prepareProjectedSessionSharing } from "./session-sharing.js";
 import { resolveSessionStoreAgentId } from "./session-store-key.js";
 
 /** Keep shared group settings visible only where every member session is mutable. */
@@ -24,7 +23,12 @@ export async function filterMutableSessionGroupRecords<T extends { name: string 
     await projection.prepareMembership();
   } while (projection.needsMembershipPreparation());
   const records = params.records();
-  const prepared = prepareProjectedSessionPresentation(projection, params.client);
+  const sharing = prepareProjectedSessionSharing({
+    cfg: projection.state.policyConfig,
+    client: params.client,
+    isMember: (target, identityId) =>
+      projection.hasMembership(target.storePath, target.storeKey, identityId),
+  });
   const allowed = new Set(records.map((record) => record.name));
   for (const [name, targetRefs] of projection.sessionGroupTargets()) {
     if (!allowed.has(name)) {
@@ -32,8 +36,8 @@ export async function filterMutableSessionGroupRecords<T extends { name: string 
     }
     for (const ref of targetRefs) {
       const agentId = resolveSessionStoreAgentId(projection.state.cfg, ref.sessionKey, ref.agentId);
-      const target = prepared.target({ agentId, key: ref.sessionKey });
-      if (!target || prepared.sharing.authorizeTarget(target)) {
+      const target = projection.sharingTarget({ agentId, key: ref.sessionKey });
+      if (!target || sharing.authorizeTarget(target)) {
         allowed.delete(name);
         break;
       }

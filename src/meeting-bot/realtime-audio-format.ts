@@ -1,4 +1,10 @@
-import { convertPcmToMulaw8k, mulawToPcm, resamplePcm } from "../talk/audio-codec.js";
+import {
+  convertPcmToMulaw8k,
+  createStreamingPcmResampler,
+  mulawToPcm,
+  pcmToMulaw,
+  resamplePcm,
+} from "../talk/audio-codec.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
@@ -12,14 +18,22 @@ export function resolveMeetingRealtimeAudioFormat(audioFormat: MeetingRealtimeAu
     : REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ;
 }
 
-export function convertMeetingBridgeAudioForStt(
-  audio: Buffer,
-  audioFormat: MeetingRealtimeAudioFormat,
-): Buffer {
-  if (audioFormat === "g711-ulaw-8khz") {
-    return audio;
-  }
-  return convertPcmToMulaw8k(audio, 24_000);
+export function createMeetingCaptureMulawEncoder() {
+  let resampler: ReturnType<typeof createStreamingPcmResampler> | undefined;
+  return {
+    process(pcm: Buffer): Buffer {
+      resampler ??= createStreamingPcmResampler(24_000, 8_000);
+      return pcmToMulaw(resampler.process(pcm));
+    },
+    drain(): Buffer | undefined {
+      if (!resampler) {
+        return undefined;
+      }
+      const tail = resampler.flush();
+      resampler = undefined;
+      return pcmToMulaw(tail);
+    },
+  };
 }
 
 export function convertMeetingTtsAudioForBridge(
@@ -56,15 +70,13 @@ function sourceTelephonyTtsFormat(
     return "pcm";
   }
   if (
-    normalized === "mulaw" ||
-    normalized === "ulaw" ||
     normalized.includes("mu-law") ||
     normalized.includes("mulaw") ||
     normalized.includes("ulaw")
   ) {
     return "mulaw";
   }
-  if (normalized === "alaw" || normalized.includes("a-law") || normalized.includes("alaw")) {
+  if (normalized.includes("a-law") || normalized.includes("alaw")) {
     return "alaw";
   }
   throw new Error(`Unsupported telephony TTS output format for ${platformName}: ${outputFormat}`);

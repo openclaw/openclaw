@@ -1,16 +1,45 @@
-/**
- * Builds runtime context prompt fragments and custom session messages.
- */
-import type { Context, UserMessage } from "../../../llm/types.js";
 import {
-  INTERNAL_RUNTIME_CONTEXT_BEGIN,
-  INTERNAL_RUNTIME_CONTEXT_END,
+  setRuntimeContextDataRanges,
+  type RuntimeContextDataRange,
+} from "@openclaw/llm-core/types";
+import { z } from "zod";
+import {
+  escapeRuntimeContextFooter,
+  hasRuntimeContextMarker,
+  isRuntimeContextMessage,
+  labelRuntimeContextText,
+  RUNTIME_CONTEXT_HEADER,
+  setRuntimeContextRetention,
+  type Context,
+  type UserMessage,
+} from "../../../llm/types.js";
+import {
+  memoizeFrozenPlainDataProjection,
+  isDeeplyFrozenPlainData,
+} from "../../../shared/immutable-data.js";
+import { PROJECTED_PROMPT_UPDATE } from "../../embedded-agent-helpers/turns.js";
+import {
+  isOpenClawSystemUpdateMessage,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+  STEERING_RUNTIME_CONTEXT,
+  SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
+  RUNTIME_EVENT_USER_PROMPT,
+  projectRuntimeContextFragments,
+  type CurrentInboundPromptContext,
   type RuntimeContextFragment,
 } from "../../internal-runtime-context.js";
-import type { CurrentInboundPromptContext } from "./params.js";
+import type { AgentMessage } from "../../runtime/index.js";
 
-const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
+const RETAIN_STEERING_RUNTIME_CONTEXT = Symbol.for("openclaw.retainSteeringRuntimeContext");
+
+/** Configure transcript retention for steering-owned runtime context. */
+export function setSteeringRuntimeContextRetention(session: object, retain: boolean): void {
+  Reflect.set(session, RETAIN_STEERING_RUNTIME_CONTEXT, retain);
+}
+
+export function shouldRetainSteeringRuntimeContext(session: object): boolean {
+  return Reflect.get(session, RETAIN_STEERING_RUNTIME_CONTEXT) === true;
+}
 
 /** Hidden custom transcript message that carries runtime context into model conversion. */
 export type RuntimeContextCustomMessage = {
@@ -18,21 +47,33 @@ export type RuntimeContextCustomMessage = {
   customType: string;
   content: string;
   display: false;
-  details: {
-    source: "openclaw-runtime-context";
-    runtimeContextCarrier: true;
-    fragments?: RuntimeContextFragment[];
-  };
+  details:
+    | {
+        source: "openclaw-runtime-context";
+        runtimeContextCarrier: true;
+        fragments?: RuntimeContextFragment[];
+      }
+    | {
+        kind: "prompt-update" | "runtime-context";
+        turnScoped: boolean;
+        replay?: "append";
+        fragments?: never;
+        dataRanges?: RuntimeContextDataRange[];
+      };
   timestamp: number;
 };
 
-/** Appends turn additions to both full and resumed projections without changing their provenance. */
+/** Adds turn context without separating an inline prompt header from its user text. */
 export function appendCurrentInboundContext(
   context: CurrentInboundPromptContext | undefined,
   fragments: RuntimeContextFragment[],
   legacyText = fragments.map((fragment) => fragment.text).join("\n\n"),
 ): CurrentInboundPromptContext {
-  const append = (text?: string) => [text, legacyText].filter(Boolean).join("\n\n");
+  // A space joiner binds the existing context's trailing header to the user body.
+  // Later additions must precede that context in both full and resumed prompts.
+  const inline = context?.promptJoiner === " ";
+  const append = (text?: string) =>
+    (inline ? [legacyText, text] : [text, legacyText]).filter(Boolean).join("\n\n");
   return {
     ...context,
     text: append(context?.text),
@@ -47,7 +88,6 @@ export function appendCurrentInboundContext(
   };
 }
 
-/** Combines inbound context and the current prompt using the channel-provided joiner. */
 export function buildCurrentInboundPrompt(params: {
   context: CurrentInboundPromptContext | undefined;
   prompt: string;
@@ -59,6 +99,58 @@ export function buildCurrentInboundPrompt(params: {
       : params.context?.text;
   const prefix = contextText?.trim() ?? "";
   return [prefix, params.prompt].filter(Boolean).join(params.context?.promptJoiner ?? "\n\n");
+}
+
+/** Bind context to its queued user turn without changing user-authored bytes. */
+export function attachSteeringRuntimeContext(
+  message: AgentMessage,
+  context: CurrentInboundPromptContext | undefined,
+): void {
+  if (!context) {
+    return;
+  }
+  const fragments = (
+    context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }]
+  ).filter((fragment) => fragment.text.trim());
+  const runtimeContext = buildRuntimeContextCustomMessage(
+    projectRuntimeContextFragments(fragments),
+    fragments,
+  );
+  if (!runtimeContext) {
+    return;
+  }
+  // The enumerable symbol survives in-memory message copies but never enters
+  // transcript JSON or provider payloads. Queue cancellation stays atomic.
+  for (const target of [runtimeContext, message]) {
+    Object.defineProperty(target, STEERING_RUNTIME_CONTEXT, {
+      configurable: true,
+      enumerable: true,
+      value: runtimeContext,
+    });
+  }
+}
+
+/** Materialize an attached carrier immediately before its owning user turn. */
+export function materializeSteeringRuntimeContext(messages: AgentMessage[]): AgentMessage[] {
+  if (!messages.some((message) => Reflect.get(message, STEERING_RUNTIME_CONTEXT))) {
+    return messages;
+  }
+  const projected: AgentMessage[] = [];
+  for (const message of messages) {
+    const runtimeContext = Reflect.get(message, STEERING_RUNTIME_CONTEXT);
+    if (runtimeContext && projected.at(-1) !== runtimeContext) {
+      projected.push(runtimeContext);
+    }
+    projected.push(message);
+  }
+  return projected;
+}
+
+/** Returns the carrier bound to this queued user turn. */
+export function getSteeringRuntimeContext(
+  message: AgentMessage,
+): RuntimeContextCustomMessage | undefined {
+  return Reflect.get(message, STEERING_RUNTIME_CONTEXT);
 }
 
 /** Selects explicit producer context without interpreting any prompt text as provenance. */
@@ -74,7 +166,7 @@ export function resolveRuntimeContextPromptParts(params: {
   const runtimeOnly =
     !transcriptPrompt.trim() && Boolean(runtimeContext) && params.allowRuntimeOnly !== false;
   const prompt = runtimeOnly
-    ? OPENCLAW_RUNTIME_EVENT_USER_PROMPT
+    ? RUNTIME_EVENT_USER_PROMPT
     : transcriptPrompt || params.effectivePrompt;
   return {
     prompt,
@@ -87,32 +179,133 @@ export function resolveRuntimeContextPromptParts(params: {
   };
 }
 
-export function buildRuntimeContextMessageContent(runtimeContext: string): string {
-  // The stable system prompt explains the markers once; leak strippers use the delimiters.
-  return [INTERNAL_RUNTIME_CONTEXT_BEGIN, runtimeContext, INTERNAL_RUNTIME_CONTEXT_END].join("\n");
+const retainedRuntimeContexts = [undefined, false, true].map((retained) =>
+  memoizeFrozenPlainDataProjection((message: Context["messages"][number]) => {
+    if (!isRuntimeContextMessage(message)) {
+      return message;
+    }
+    const projected = { ...message };
+    setRuntimeContextRetention(projected, retained);
+    return projected;
+  }),
+);
+
+export function applyRuntimeContextCarrierRetention(
+  messages: Context["messages"],
+  appendOnlyRuntimeContext: boolean | undefined,
+): void {
+  messages.forEach((message, index) => {
+    if (isRuntimeContextMessage(message)) {
+      if (isDeeplyFrozenPlainData(message)) {
+        const project =
+          retainedRuntimeContexts[
+            appendOnlyRuntimeContext === undefined ? 0 : appendOnlyRuntimeContext ? 2 : 1
+          ]!;
+        messages[index] = project(message);
+      } else {
+        setRuntimeContextRetention(message, appendOnlyRuntimeContext);
+      }
+    }
+  });
 }
 
-/** Creates a non-displayed custom transcript message for runtime context, if any exists. */
 export function buildRuntimeContextCustomMessage(
   runtimeContext: string | undefined,
   fragments?: RuntimeContextFragment[],
+  inHistorySystemUpdates = false,
 ): RuntimeContextCustomMessage | undefined {
   const trimmedRuntimeContext = runtimeContext?.trim();
   if (!trimmedRuntimeContext) {
     return undefined;
   }
-  return {
-    role: "custom",
-    customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-    content: buildRuntimeContextMessageContent(trimmedRuntimeContext),
-    display: false,
-    details: {
-      source: "openclaw-runtime-context",
-      runtimeContextCarrier: true,
-      ...(fragments?.length ? { fragments } : {}),
-    },
-    timestamp: Date.now(),
+  if (inHistorySystemUpdates) {
+    return buildSystemUpdateMessage(
+      trimmedRuntimeContext,
+      "runtime-context",
+      true,
+      undefined,
+      fragments,
+    );
+  }
+  return buildContextCustomMessage(trimmedRuntimeContext, OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE, {
+    source: "openclaw-runtime-context",
+    runtimeContextCarrier: true,
+    ...(fragments?.length ? { fragments } : {}),
+  });
+}
+
+export function buildSystemUpdateMessage(
+  content: string,
+  kind: "prompt-update" | "runtime-context",
+  turnScoped: boolean,
+  replay?: "append",
+  fragments?: RuntimeContextFragment[],
+): RuntimeContextCustomMessage {
+  const dataRanges: RuntimeContextDataRange[] = [];
+  const rendered =
+    kind === "runtime-context" && fragments?.length
+      ? projectRuntimeContextFragments(fragments, dataRanges)
+      : content;
+  return buildContextCustomMessage(rendered, SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE, {
+    kind,
+    turnScoped,
+    ...(replay ? { replay } : {}),
+    ...(dataRanges.length ? { dataRanges } : {}),
+  });
+}
+
+const systemUpdateDetailsSchema = z.object({
+  kind: z.enum(["prompt-update", "runtime-context"]),
+  turnScoped: z.boolean(),
+  dataRanges: z
+    .array(z.object({ start: z.int().nonnegative(), end: z.int().positive() }))
+    .optional(),
+});
+
+/** Preserve runtime context when a route cannot send native system updates. */
+export function projectSystemUpdateMessage(
+  message: AgentMessage,
+  inHistorySystemUpdates: boolean,
+): AgentMessage | undefined {
+  if (message.role !== "custom" || !isOpenClawSystemUpdateMessage(message)) {
+    return undefined;
+  }
+  const details = systemUpdateDetailsSchema.safeParse(message.details);
+  if (!details.success) {
+    return undefined;
+  }
+  const { kind, turnScoped, dataRanges } = details.data;
+  if (!inHistorySystemUpdates && kind === "runtime-context") {
+    return {
+      ...message,
+      customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+      details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
+    };
+  }
+  const projected: UserMessage & {
+    [PROJECTED_PROMPT_UPDATE]?: true;
+  } = {
+    role: "user",
+    content: message.content,
+    timestamp: message.timestamp,
   };
+  if (inHistorySystemUpdates) {
+    projected.operatorMessage = { turnScoped };
+    if (kind === "runtime-context" && dataRanges?.length) {
+      setRuntimeContextDataRanges(projected, dataRanges);
+    }
+  } else {
+    projected[PROJECTED_PROMPT_UPDATE] = true;
+  }
+  return projected;
+}
+
+function buildContextCustomMessage(
+  content: string,
+  customType: string,
+  details: RuntimeContextCustomMessage["details"],
+): RuntimeContextCustomMessage {
+  return { role: "custom", customType, content, display: false, details, timestamp: Date.now() };
 }
 
 /** Project per-request instructions into the transient carrier without changing history. */
@@ -123,40 +316,35 @@ export function prependRuntimeContextForModel(
   if (!runtimeContext.trim()) {
     return messages;
   }
-  const carrierIndex = messages.findIndex(
-    (message) => message.role === "user" && message.runtimeContextCarrier === true,
-  );
+  const carrierIndex = messages.findIndex(hasRuntimeContextMarker);
   const carrier = messages[carrierIndex];
   const prepend = (text: string) =>
-    text.startsWith(`${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n`)
-      ? `${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n${runtimeContext}\n\n${text.slice(INTERNAL_RUNTIME_CONTEXT_BEGIN.length + 1)}`
-      : buildRuntimeContextMessageContent([runtimeContext, text].filter(Boolean).join("\n\n"));
-  if (carrier?.role !== "user") {
+    text.startsWith(`${RUNTIME_CONTEXT_HEADER}\n`)
+      ? `${RUNTIME_CONTEXT_HEADER}\n${escapeRuntimeContextFooter(runtimeContext)}\n\n${text.slice(RUNTIME_CONTEXT_HEADER.length + 1)}`
+      : labelRuntimeContextText([runtimeContext, text].filter(Boolean).join("\n\n"));
+  if (!carrier || carrier.role !== "user" || !hasRuntimeContextMarker(carrier)) {
     return [
       ...messages,
       {
         role: "user",
         content: prepend(""),
-        runtimeContextCarrier: true,
         timestamp: messages.at(-1)?.timestamp ?? 0,
+        runtimeContext: {},
       },
     ];
   }
   const content = carrier.content;
   const firstTextIndex =
     typeof content === "string" ? -1 : content.findIndex((part) => part.type === "text");
-  const updated: UserMessage = {
-    ...carrier,
-    content:
-      typeof content === "string"
-        ? prepend(content)
-        : firstTextIndex < 0
-          ? [{ type: "text", text: prepend("") }, ...content]
-          : content.map((part, index) =>
-              index === firstTextIndex && part.type === "text"
-                ? Object.assign({}, part, { text: prepend(part.text) })
-                : part,
-            ),
-  };
-  return messages.map((message, index) => (index === carrierIndex ? updated : message));
+  const updatedContent: typeof content =
+    typeof content === "string"
+      ? prepend(content)
+      : firstTextIndex < 0
+        ? [{ type: "text", text: prepend("") }, ...content]
+        : content.map((part, index) =>
+            index === firstTextIndex && part.type === "text"
+              ? Object.assign({}, part, { text: prepend(part.text) })
+              : part,
+          );
+  return messages.with(carrierIndex, { ...carrier, content: updatedContent });
 }

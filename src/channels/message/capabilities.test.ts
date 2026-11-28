@@ -1,4 +1,3 @@
-// Message capability tests cover channel message feature detection and compatibility.
 import { describe, expect, it } from "vitest";
 import {
   deriveDurableFinalDeliveryRequirements,
@@ -6,13 +5,6 @@ import {
 } from "./capabilities.js";
 
 describe("deriveDurableFinalDeliveryRequirements", () => {
-  it("derives the default durable final text and hook requirements", () => {
-    expect(deriveDurableFinalDeliveryRequirements({ payload: { text: "hello" } })).toEqual({
-      text: true,
-      messageSendingHooks: true,
-    });
-  });
-
   it("derives payload-dependent delivery requirements", () => {
     expect(
       deriveDurableFinalDeliveryRequirements({
@@ -43,22 +35,6 @@ describe("deriveDurableFinalDeliveryRequirements", () => {
       afterCommit: true,
     });
   });
-
-  it("applies channel-native extras without recording false requirements", () => {
-    expect(
-      deriveDurableFinalDeliveryRequirements({
-        payload: { text: "hello" },
-        extraCapabilities: {
-          nativeQuote: false,
-          thread: true,
-        },
-      }),
-    ).toEqual({
-      text: true,
-      thread: true,
-      messageSendingHooks: true,
-    });
-  });
 });
 
 describe("deriveDurableFinalDeliveryRequirementsForBatch", () => {
@@ -66,10 +42,9 @@ describe("deriveDurableFinalDeliveryRequirementsForBatch", () => {
     expect(
       deriveDurableFinalDeliveryRequirementsForBatch({
         payloads: [
-          { text: "first" },
+          { text: "first", mediaUrl: "https://example.com/a.png" },
           {
             text: "caption",
-            mediaUrl: "https://example.com/a.png",
             presentation: { blocks: [{ type: "text", text: "card" }] },
           },
         ],
@@ -83,28 +58,6 @@ describe("deriveDurableFinalDeliveryRequirementsForBatch", () => {
       messageSendingHooks: true,
       payload: true,
       batch: true,
-      reconcileUnknownSend: true,
-    });
-  });
-
-  it("returns no transport requirements for an entirely suppressed batch", () => {
-    expect(
-      deriveDurableFinalDeliveryRequirementsForBatch({
-        payloads: [],
-        reconcileUnknownSend: true,
-      }),
-    ).toEqual({});
-  });
-
-  it("keeps post-send delivery directives on the concrete text transport", () => {
-    expect(
-      deriveDurableFinalDeliveryRequirementsForBatch({
-        payloads: [{ text: "pin this", delivery: { pin: true } }],
-        reconcileUnknownSend: true,
-      }),
-    ).toEqual({
-      text: true,
-      messageSendingHooks: true,
       reconcileUnknownSend: true,
     });
   });

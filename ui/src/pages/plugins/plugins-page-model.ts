@@ -3,10 +3,14 @@ import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-ma
 import type {
   PluginCatalogItem,
   PluginDiscoveryDetailResult,
+  PluginDiscoveryEntry,
   PluginListResult,
   PluginInstallRequest,
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
+import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
+import type { PluginRowMessage } from "./plugin-row-message.tsx";
+import type { PluginToolPreview } from "./tool-preview.tsx";
 
 registerPluginManagementEnglish();
 
@@ -15,17 +19,51 @@ export type PluginMutationAction = "install" | "enable" | "disable" | "uninstall
 export type PluginsPageDetail = {
   catalog?: PluginDiscoveryDetailResult;
   catalogLoading?: boolean;
-  tools?: Array<{ name: string; description?: string }>;
+  tools?: PluginToolPreview[];
   pluginId: string;
   inspection: PluginsInspectResult | null;
-  error: string | null;
 };
 
 export type PluginsPageCatalogDetail = {
   id: string;
+  preview?: PluginCatalogIdentity;
   result: PluginDiscoveryDetailResult | null;
-  error: string | null;
+  error?: string;
 };
+
+export type PluginCatalogIdentity = {
+  id: string;
+  catalog: Pick<
+    PluginDiscoveryEntry["catalog"],
+    "name" | "summary" | "author" | "official" | "imageUrl"
+  >;
+};
+
+export function createPluginsPageState(): {
+  result: PluginListResult | null;
+  error: string | null;
+  busy: Record<string, PluginMutationAction>;
+  messages: Record<string, PluginRowMessage>;
+  detail: PluginsPageDetail | null;
+  iconUrls: Record<string, string>;
+  catalogIconUrls: Record<string, string>;
+  pageNotice: PluginRowMessage | null;
+  catalogDetail: PluginsPageCatalogDetail | null;
+  installedDetailTab: InstalledPluginDetailTab;
+} {
+  return {
+    result: null,
+    error: null,
+    busy: {},
+    messages: {},
+    detail: null,
+    iconUrls: {},
+    catalogIconUrls: {},
+    pageNotice: null,
+    catalogDetail: null,
+    installedDetailTab: "readme",
+  };
+}
 
 export function mergePluginCatalogItem(
   current: PluginListResult | null,
@@ -47,13 +85,18 @@ export function mergePluginCatalogItem(
 export function pluginMutationBlockedReason(params: {
   connected: boolean;
   hasAdminAccess: boolean;
+  actorKind: "member" | "browser";
   mutationAllowed: boolean | undefined;
 }): string | null {
   if (!params.connected) {
     return t("pluginsPage.connectToChange");
   }
   if (!params.hasAdminAccess) {
-    return t("pluginsPage.adminRequired");
+    return t(
+      params.actorKind === "member"
+        ? "pluginsPage.adminAccessRequired"
+        : "pluginsPage.adminRequired",
+    );
   }
   return params.mutationAllowed === false ? t("pluginsPage.changesDisabled") : null;
 }

@@ -10,7 +10,8 @@ import {
   resolvePluginInstallInvalidConfigPolicy,
   type PluginInstallRequestContext,
 } from "../plugins/install-config.js";
-import { resolvePluginInstallPreactionRequest } from "./plugin-install-config-policy.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
+import { allowsPluginInstallConfigRecovery } from "./plugin-install-config-policy.js";
 import { resolvePluginInstallPreflight } from "./plugins-install-preflight.js";
 
 const mocks = vi.hoisted(() => ({
@@ -42,39 +43,26 @@ describe("selected bundled install config recovery", () => {
 
   it.each(
     ["fixture-recovery", "@fixture/recovery", "@fixture/recovery@1.2.3"].flatMap((raw) =>
-      [true, false].flatMap((allowInvalidConfigRecovery) =>
-        [false, true].map((sourceCheckout) => ({
-          raw,
-          allowInvalidConfigRecovery,
-          sourceCheckout,
-        })),
-      ),
+      [true, false].map((allowInvalidConfigRecovery) => ({
+        raw,
+        allowInvalidConfigRecovery,
+      })),
     ),
   )(
-    "uses selected metadata for $raw (recovery=$allowInvalidConfigRecovery, checkout=$sourceCheckout)",
-    async ({ raw, allowInvalidConfigRecovery, sourceCheckout }) => {
+    "uses selected metadata for $raw (recovery=$allowInvalidConfigRecovery)",
+    async ({ raw, allowInvalidConfigRecovery }) => {
       const root = tempDirs.make("plugin-preflight-config-");
       const pluginId = "fixture-recovery";
-      const localPath = path.join(root, sourceCheckout ? "dist/extensions" : "bundled", pluginId);
+      const localPath = path.join(root, "bundled", pluginId);
       fs.mkdirSync(localPath, { recursive: true });
-      if (sourceCheckout) {
-        for (const name of [".git", "src", "extensions"]) {
-          fs.mkdirSync(path.join(root, name));
-        }
-        fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-        fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
-      }
-      fs.writeFileSync(
-        path.join(localPath, "package.json"),
-        JSON.stringify({
-          name: "@fixture/recovery",
-          openclaw: { install: { allowInvalidConfigRecovery } },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(localPath, "openclaw.plugin.json"),
-        JSON.stringify({ id: pluginId, configSchema: { type: "object", properties: {} } }),
-      );
+      writeFixtureJsonSync(path.join(localPath, "package.json"), {
+        name: "@fixture/recovery",
+        openclaw: { install: { allowInvalidConfigRecovery } },
+      });
+      writeFixtureJsonSync(path.join(localPath, "openclaw.plugin.json"), {
+        id: pluginId,
+        configSchema: { type: "object", properties: {} },
+      });
       mocks.bundled.clear();
       mocks.bundled.set(pluginId, { pluginId, localPath, npmSpec: "@fixture/recovery" });
       const config = { channels: { [pluginId]: { token: "preserved" } } };
@@ -86,7 +74,7 @@ describe("selected bundled install config recovery", () => {
         issues: [{ path: `channels.${pluginId}`, message: `unknown channel id: ${pluginId}` }],
       });
 
-      const selectsBundle = !sourceCheckout || raw === pluginId;
+      const selectsBundle = raw === pluginId;
       const allowsRecovery = selectsBundle && allowInvalidConfigRecovery;
       const assertAdmission = async (request: PluginInstallRequestContext | null) => {
         expect(request).not.toBeNull();
@@ -109,14 +97,8 @@ describe("selected bundled install config recovery", () => {
         .command("plugins")
         .command("install")
         .argument("<spec>")
-        .hook("preAction", async (_command, actionCommand) => {
-          await assertAdmission(
-            resolvePluginInstallPreactionRequest({
-              actionCommand,
-              commandPath: ["plugins", "install"],
-              argv,
-            }),
-          );
+        .hook("preAction", (_command, actionCommand) => {
+          expect(allowsPluginInstallConfigRecovery(actionCommand)).toBe(allowsRecovery);
         })
         .action(async () => {
           const preflight = await resolvePluginInstallPreflight({
@@ -131,7 +113,12 @@ describe("selected bundled install config recovery", () => {
           expect(preflight.sourcePlan?.request).toEqual(
             selectsBundle
               ? { source: "bundled", pluginId, spec: raw }
-              : { source: "npm", spec: raw, mode: "install" },
+              : {
+                  source: "clawhub",
+                  packageName: "@fixture/recovery",
+                  version: raw.endsWith("@1.2.3") ? "1.2.3" : undefined,
+                  mode: "install",
+                },
           );
           await assertAdmission(preflight.request);
         });

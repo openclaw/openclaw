@@ -1,7 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { isOpenClawStateWriteContentionError } from "../state/openclaw-state-ownership.js";
 import { formatErrorMessage } from "./errors.js";
 import { trimLogTail } from "./restart-sentinel.js";
+import { isSqliteSchemaVersionError } from "./sqlite-user-version.js";
 import {
   PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
   normalizeUpdatePostInstallDoctorWarnings,
@@ -13,7 +15,7 @@ import {
   createUpdateFailureFact,
   normalizeUpdateFailureFacts,
 } from "./update-failure-facts.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export function createPackageVerificationFailureStep(
   root: string,
@@ -42,41 +44,22 @@ export type PackagePostInstallVerifier = (
   results: UpdateStepResult[],
 ) => Promise<UpdateStepResult | null>;
 
-function isNormalProcessExit(step: {
-  signal?: NodeJS.Signals | null;
-  killed?: boolean;
-  outputLimitExceeded?: boolean;
-  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
-}): boolean {
-  return (
-    step.termination !== "timeout" &&
-    step.termination !== "no-output-timeout" &&
-    step.termination !== "signal" &&
-    step.killed !== true &&
-    step.outputLimitExceeded !== true &&
-    (step.signal === undefined || step.signal === null)
-  );
-}
-
 export function markPackagePostInstallDoctorAdvisory<
-  T extends {
-    exitCode: number | null;
-    stderrTail?: string | null;
-    signal?: NodeJS.Signals | null;
-    killed?: boolean;
-    outputLimitExceeded?: boolean;
-    termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
-    advisory?: UpdateStepResult["advisory"];
-    failureFacts?: UpdateStepResult["failureFacts"];
-  },
+  T extends Pick<
+    UpdateStepResult,
+    | "exitCode"
+    | "stderrTail"
+    | "signal"
+    | "killed"
+    | "outputLimitExceeded"
+    | "termination"
+    | "advisory"
+    | "failureFacts"
+  >,
 >(
   step: T,
   result: UpdatePostInstallDoctorResult | null,
-): T & {
-  advisory?: UpdateStepResult["advisory"];
-  warnings?: UpdateStepResult["warnings"];
-  failureFacts?: UpdateStepResult["failureFacts"];
-} {
+): T & Pick<UpdateStepResult, "advisory" | "warnings" | "failureFacts"> {
   if (result?.status === "error" || result?.failureFacts?.length) {
     const failureFacts = result.failureFacts?.length
       ? result.failureFacts
@@ -95,7 +78,12 @@ export function markPackagePostInstallDoctorAdvisory<
   }
   if (
     !result ||
-    !isNormalProcessExit(step) ||
+    step.termination === "timeout" ||
+    step.termination === "no-output-timeout" ||
+    step.termination === "signal" ||
+    step.killed === true ||
+    step.outputLimitExceeded === true ||
+    (step.signal !== undefined && step.signal !== null) ||
     !(
       (step.exitCode === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE &&
         result.status === "advisory") ||
@@ -152,12 +140,48 @@ function failedVerification(root: string, code: string, message: string): Update
   };
 }
 
-function missingPackageVerificationStep(root: string): UpdateStepResult {
-  return failedVerification(
-    root,
-    "verification-result-missing",
-    "Required post-install verification did not produce a result; Gateway activation is unsafe.",
-  );
+export async function deferPackageStateVerification(
+  params: {
+    root: string;
+    restart?: boolean;
+    migrationRecorded?: boolean;
+    results?: UpdateStepResult[];
+    progress:
+      | { onStepComplete?: (step: UpdateStepResult & { index: number; total: number }) => unknown }
+      | undefined;
+    assertCurrent: () => void;
+  },
+  error: unknown,
+): Promise<UpdateStepResult> {
+  // Snapshot discovery wraps admission errors; typed outer refusals retain their meaning.
+  const cause =
+    error instanceof Error && error.constructor === Error ? (error.cause ?? error) : error;
+  const candidateOwnsVerification =
+    (params.migrationRecorded === true || params.restart === false) &&
+    isSqliteSchemaVersionError(cause);
+  if (
+    !candidateOwnsVerification &&
+    (params.restart !== false || !isOpenClawStateWriteContentionError(cause))
+  ) {
+    throw error;
+  }
+  const step: UpdateStepResult = {
+    name: "post-install-verify",
+    command: "verify installed package",
+    cwd: params.root,
+    durationMs: 0,
+    exitCode: null,
+    advisory: {
+      kind: "recoverable-maintenance",
+      message: candidateOwnsVerification
+        ? "Post-install state verification deferred to the candidate after candidate migration; this updater cannot reopen the newer schema. Keep the installed candidate and recovery backups, and run openclaw update status and openclaw doctor after startup completes."
+        : "Post-install state verification deferred: another process holds the state database. With --no-restart, the package Gateway may restart itself after replacement. Run openclaw update status and openclaw doctor after it is ready. Keep recovery backups until verification completes.",
+    },
+  };
+  params.results?.push(step);
+  await params.progress?.onStepComplete?.({ ...step, index: 0, total: 0 });
+  params.assertCurrent();
+  return step;
 }
 
 export function failedPackageVerificationStep(
@@ -197,7 +221,14 @@ export async function runPackagePostInstallVerification(
 ): Promise<UpdateStepResult> {
   const results: UpdateStepResult[] = [];
   try {
-    return (await verify(root, results)) ?? missingPackageVerificationStep(root);
+    return (
+      (await verify(root, results)) ??
+      failedVerification(
+        root,
+        "verification-result-missing",
+        "Required post-install verification did not produce a result; Gateway activation is unsafe.",
+      )
+    );
   } catch (error) {
     return failedPackageVerificationStep(root, error, results.at(-1));
   }

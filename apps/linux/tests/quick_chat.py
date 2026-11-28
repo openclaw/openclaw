@@ -8,6 +8,7 @@ import struct
 import threading
 import time
 
+from gateway_switch import start_private_vault, stop_private_vault
 from inline_browser import FixtureHandler, GatewayFixture
 from window_chrome import WindowChromeFixture
 
@@ -43,6 +44,7 @@ class QuickChatFixture(GatewayFixture):
         super().__init__(artifacts_dir)
         self.RequestHandlerClass = QuickChatHandler
         self.chrome = WindowChromeFixture(None)
+        self.vault = None
         self.lock = threading.RLock()
         self.clients = set()
         self.requests = []
@@ -57,6 +59,7 @@ class QuickChatFixture(GatewayFixture):
 
     def start(self):
         self.chrome.start()
+        self.vault = start_private_vault(self.chrome)
         super().start()
 
     def request(self, client, frame):
@@ -189,12 +192,8 @@ class QuickChatFixture(GatewayFixture):
             ).unpack()[0])
             return value if value["ready"] else None
 
-        ready = self.chrome.until(state, "the isolated native Gateway connection")
-        bus.call_sync(
-            "ai.openclaw.Desktop", "/ai/openclaw/Desktop", "ai.openclaw.Desktop1", "Activate",
-            GLib.Variant("(ssss)", (ready["routeId"], "quickchat", "", "")), None,
-            Gio.DBusCallFlags.NONE, 2000, None,
-        )
+        self.chrome.until(state, "the isolated native Gateway connection")
+        self.chrome.command("xdotool", "key", "--clearmodifiers", "ctrl+shift+space")
 
     def exercise(self, app, _binary, wait, Atspi):
         self.activate(app)
@@ -254,7 +253,19 @@ class QuickChatFixture(GatewayFixture):
         wait("Quick Chat message", ("entry", "text", "text entry"), predicate=lambda node:
              node.get_state_set().contains(Atspi.StateType.SHOWING))
         self.capture("collapsed", expanded=False)
-        fill("Summarize the release notes.")
+        self.chrome.until(
+            lambda: int(self.quickchat_window, 16)
+            == int(self.chrome.command("xdotool", "getactivewindow")),
+            "native Quick Chat keyboard focus",
+        )
+        self.chrome.command(
+            "xdotool", "type", "--clearmodifiers", "--delay", "10", "Summarize the release notes.",
+        )
+        self.chrome.until(
+            lambda: value() == "Summarize the release notes.",
+            "typing without clicking Quick Chat",
+        )
+        self.record("global shortcut accepts typing without a click")
         click("Send message")
         first = self.wait_for_send(1)
         self.reply(first, FIRST_REPLY)
@@ -370,6 +381,7 @@ class QuickChatFixture(GatewayFixture):
         self.shutdown()
         self.server_close()
         self.server_thread.join(timeout=5)
+        stop_private_vault(self.vault)
         self.chrome.close()
         if self.artifacts_dir is not None:
             (self.artifacts_dir / "quick-chat-results.json").write_text(json.dumps({

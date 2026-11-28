@@ -1,32 +1,20 @@
-// Gateway method runtime helpers dispatch plugin calls through the in-process gateway.
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import {
+  prepareResolvedSessionSend,
+  type ResolvedSessionSendInput,
+} from "../config/sessions/resolved-session-send.js";
 import { dispatchGatewayMethodInProcessRaw } from "../gateway/server-plugins.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 
+class GatewayMethodDispatchForbidden extends Error {}
+
 /** Error envelope returned by in-process Gateway method dispatch. */
-export type GatewayMethodDispatchError = {
-  /** Stable machine-readable error code returned by the Gateway method. */
-  code: string;
-  /** Human-readable error summary safe to forward to the plugin caller. */
-  message: string;
-  /** Optional structured method-specific diagnostics. */
-  details?: unknown;
-  /** Whether the caller can retry the same request without changing params. */
-  retryable?: boolean;
-  /** Suggested delay before retrying when the Gateway can estimate backoff. */
-  retryAfterMs?: number;
-};
+export type GatewayMethodDispatchError = NonNullable<GatewayMethodDispatchResponse["error"]>;
 
 /** Response envelope returned to plugins after dispatching a Gateway method. */
-export type GatewayMethodDispatchResponse = {
-  /** True when the Gateway method completed and `payload` contains its result. */
-  ok: boolean;
-  /** Method-specific result payload for successful responses. */
-  payload?: unknown;
-  /** Gateway error envelope for failed responses. */
-  error?: GatewayMethodDispatchError;
-  /** Optional response metadata that plugins may pass through unchanged. */
-  meta?: Record<string, unknown>;
-};
+export type GatewayMethodDispatchResponse = SchemaContract<
+  Awaited<ReturnType<typeof dispatchGatewayMethodInProcessRaw>>
+>;
 
 /** Dispatch controls for plugin-initiated Gateway method calls. */
 export type GatewayMethodDispatchOptions = {
@@ -52,7 +40,7 @@ export async function dispatchGatewayMethod(
     // Gateway methods can mutate/control local runtime state; require the
     // authenticated request scope recorded by the plugin loader contract.
     const pluginLabel = scope?.pluginId ? ` for plugin "${scope.pluginId}"` : "";
-    throw new Error(
+    throw new GatewayMethodDispatchForbidden(
       `Gateway method dispatch is reserved for authenticated plugin HTTP routes or RPC handlers that declare contracts.gatewayMethodDispatch: ["authenticated-request"]${pluginLabel}.`,
     );
   }
@@ -66,4 +54,23 @@ export async function dispatchGatewayMethod(
     ...(options?.expectFinal !== undefined ? { expectFinal: options.expectFinal } : {}),
     ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
   });
+}
+
+/** Submit a message to the physical session returned by catalog resolution in this caller's Gateway scope. */
+export async function sendToResolvedSession(
+  input: ResolvedSessionSendInput,
+): Promise<"accepted" | "forbidden" | "unconfirmed"> {
+  const send = prepareResolvedSessionSend(input);
+  if (!send) {
+    return "unconfirmed";
+  }
+  try {
+    const reply = await dispatchGatewayMethod("chat.send", send.params);
+    if (!reply.ok && reply.error?.code === "FORBIDDEN") {
+      return "forbidden";
+    }
+    return reply.ok && send.acknowledged(reply.payload) ? "accepted" : "unconfirmed";
+  } catch (error) {
+    return error instanceof GatewayMethodDispatchForbidden ? "forbidden" : "unconfirmed";
+  }
 }

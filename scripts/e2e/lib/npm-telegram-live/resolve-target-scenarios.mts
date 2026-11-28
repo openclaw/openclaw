@@ -4,17 +4,20 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const PARTIAL_FAILURE_RECOVERY_SCENARIO = "telegram-partial-failure-recovery";
-const SETTLED_EMPTY_RESPONSE_SCENARIO = "telegram-empty-response-after-write-recovery";
-const PROGRESS_TOOL_VISIBILITY_SCENARIO = "telegram-progress-tool-visibility";
-const PROVIDER_FAILURE_BEFORE_OUTPUT_SCENARIO = "telegram-provider-failure-before-output";
-const QUEUE_INVALID_MODE_SCENARIO = "telegram-queue-invalid-mode";
-const RICH_INLINE_COMPOSITION_SCENARIO = "telegram-rich-inline-composition";
-const POLICY_HOT_RELOAD_SCENARIOS = [
+const SOURCE_GATED_SCENARIOS = [
+  "telegram-empty-response-after-write-recovery",
+  "telegram-prepared-delivery-recovery",
+  "telegram-progress-tool-visibility",
+  "telegram-provider-failure-before-output",
+  "telegram-queue-invalid-mode",
+  "telegram-rich-inline-composition",
   "telegram-policy-hot-reload",
   "telegram-group-policy-hot-reload",
 ];
 const REPEATED_COMMAND_SCENARIO =
   "qa/scenarios/channels/telegram-repeated-command-authorization.yaml";
+const CONTEXT_SCENARIO = "qa/scenarios/channels/telegram-context-command.yaml";
+const TRUSTED_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 const SILENT_DENIAL = "              - waitForNoOutbound:\n                  quietMs: 3000\n";
 const EXPLICIT_DENIAL =
   "              - waitForOutbound:\n" +
@@ -37,12 +40,34 @@ function resolveFrozenTelegramCommandScenario(sourceRoot: string): string | unde
   }
   // Target source selects a known contract; only trusted tooling supplies executable YAML.
   // Retire this projection when no supported frozen release returns explicit denials.
-  const trustedRoot = fileURLToPath(new URL("../../../../", import.meta.url));
-  const trusted = readFileSync(path.join(trustedRoot, REPEATED_COMMAND_SCENARIO), "utf8");
+  const trusted = readFileSync(path.join(TRUSTED_ROOT, REPEATED_COMMAND_SCENARIO), "utf8");
   if (trusted.split(SILENT_DENIAL).length !== 2 || trusted.includes(EXPLICIT_DENIAL)) {
     throw new Error("trusted Telegram repeated-command denial action changed");
   }
   return trusted.replace(SILENT_DENIAL, EXPLICIT_DENIAL);
+}
+
+function resolveFrozenTelegramContextScenario(sourceRoot: string): string | undefined {
+  const report = readSource(sourceRoot, "src/auto-reply/reply/commands-context-report.ts");
+  // Only the known legacy default selects list. Current targets must still
+  // prove the bare command's card; never select a fixture based on a live reply.
+  if (!report?.includes('if (!sub || sub === "help") {')) {
+    return undefined;
+  }
+  const currentConfig =
+    "      commandText: /context\n" +
+    "      replyMarker: Prompt budget\n" +
+    "      expectedDetails: /context list\n";
+  const trusted = readFileSync(path.join(TRUSTED_ROOT, CONTEXT_SCENARIO), "utf8");
+  if (trusted.split(currentConfig).length !== 2) {
+    throw new Error("trusted Telegram context command fixture changed");
+  }
+  return trusted.replace(
+    currentConfig,
+    "      commandText: /context list\n" +
+      "      replyMarker: Context breakdown\n" +
+      '      expectedDetails: "System prompt ("\n',
+  );
 }
 
 function readSource(sourceRoot: string, relativePath: string): string | undefined {
@@ -66,53 +91,10 @@ function isPrePartialFailureRecoveryTarget(sourceRoot: string): boolean {
   );
 }
 
-function isPreSettledEmptyResponseTarget(sourceRoot: string): boolean {
-  return (
-    readSource(
-      sourceRoot,
-      "qa/scenarios/channels/telegram-empty-response-after-write-recovery.yaml",
-    ) === undefined
-  );
-}
-
-function isPreProgressToolVisibilityTarget(sourceRoot: string): boolean {
-  return (
-    readSource(sourceRoot, "qa/scenarios/channels/telegram-progress-tool-visibility.yaml") ===
-    undefined
-  );
-}
-
-function isPreProviderFailureBeforeOutputTarget(sourceRoot: string): boolean {
-  return (
-    readSource(sourceRoot, "qa/scenarios/channels/telegram-provider-failure-before-output.yaml") ===
-    undefined
-  );
-}
-
-function isPreQueueInvalidModeTarget(sourceRoot: string): boolean {
-  return (
-    readSource(sourceRoot, "qa/scenarios/channels/telegram-queue-invalid-mode.yaml") === undefined
-  );
-}
-
-function isPreRichInlineCompositionTarget(sourceRoot: string): boolean {
-  return (
-    readSource(sourceRoot, "qa/scenarios/channels/telegram-rich-inline-composition.yaml") ===
-    undefined
-  );
-}
-
 export function resolveFrozenTelegramScenarioOmissions(sourceRoot: string): string[] {
   return [
     ...(isPrePartialFailureRecoveryTarget(sourceRoot) ? [PARTIAL_FAILURE_RECOVERY_SCENARIO] : []),
-    ...(isPreSettledEmptyResponseTarget(sourceRoot) ? [SETTLED_EMPTY_RESPONSE_SCENARIO] : []),
-    ...(isPreProgressToolVisibilityTarget(sourceRoot) ? [PROGRESS_TOOL_VISIBILITY_SCENARIO] : []),
-    ...(isPreProviderFailureBeforeOutputTarget(sourceRoot)
-      ? [PROVIDER_FAILURE_BEFORE_OUTPUT_SCENARIO]
-      : []),
-    ...(isPreQueueInvalidModeTarget(sourceRoot) ? [QUEUE_INVALID_MODE_SCENARIO] : []),
-    ...(isPreRichInlineCompositionTarget(sourceRoot) ? [RICH_INLINE_COMPOSITION_SCENARIO] : []),
-    ...POLICY_HOT_RELOAD_SCENARIOS.filter(
+    ...SOURCE_GATED_SCENARIOS.filter(
       (scenario) => readSource(sourceRoot, `qa/scenarios/channels/${scenario}.yaml`) === undefined,
     ),
   ];
@@ -131,22 +113,35 @@ function main(): void {
   if (actualSha !== selectedSha) {
     throw new Error("frozen Telegram source checkout does not match package source SHA");
   }
-  const commandScenario = resolveFrozenTelegramCommandScenario(sourceRoot);
-  if (commandScenario !== undefined) {
-    const overlayDir = mkdtempSync(
+  const allowOmissions = process.env.OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS === "1";
+  const overlays = [
+    {
+      scenario: CONTEXT_SCENARIO,
+      fixture: resolveFrozenTelegramContextScenario(sourceRoot),
+      env: "OPENCLAW_NPM_TELEGRAM_CONTEXT_SCENARIO",
+      description: "context list breakdown",
+    },
+    {
+      scenario: REPEATED_COMMAND_SCENARIO,
+      fixture: allowOmissions ? resolveFrozenTelegramCommandScenario(sourceRoot) : undefined,
+      env: "OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO",
+      description: "explicit authorization denial",
+    },
+  ];
+  let overlayDir: string | undefined;
+  for (const { scenario, fixture, env, description } of overlays) {
+    if (fixture === undefined) {
+      continue;
+    }
+    overlayDir ??= mkdtempSync(
       path.join(path.dirname(path.resolve(sourceRoot)), "telegram-contract-"),
     );
-    const overlay = path.join(overlayDir, path.basename(REPEATED_COMMAND_SCENARIO));
-    writeFileSync(
-      overlay,
-      `# Frozen package source ${actualSha}: explicit authorization denial.\n${commandScenario}`,
-    );
-    appendFileSync(output, `OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO=${overlay}\n`);
-    process.stdout.write(
-      `Telegram repeated-command authorization: explicit denial contract from ${actualSha}\n`,
-    );
+    const overlay = path.join(overlayDir, path.basename(scenario));
+    writeFileSync(overlay, `# Frozen package source ${actualSha}: ${description}.\n${fixture}`);
+    appendFileSync(output, `${env}=${overlay}\n`);
+    process.stdout.write(`Telegram ${description} contract from ${actualSha}\n`);
   }
-  const omittedScenarios = resolveFrozenTelegramScenarioOmissions(sourceRoot);
+  const omittedScenarios = allowOmissions ? resolveFrozenTelegramScenarioOmissions(sourceRoot) : [];
   if (omittedScenarios.length > 0) {
     appendFileSync(
       output,

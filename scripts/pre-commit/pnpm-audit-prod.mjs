@@ -16,7 +16,6 @@ import {
   pnpmLockfileDocuments,
   resolveSnapshot,
 } from "../lib/pnpm-lockfile-documents.mjs";
-export { parseSnapshotKey, stripVersionDecorators } from "../lib/pnpm-lockfile-documents.mjs";
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 const BULK_ADVISORY_PATH = "/-/npm/v1/security/advisories/bulk";
@@ -109,6 +108,14 @@ export function collectProdResolvedPackagesFromLockfile(lockfileText) {
   const versionsByPackage = new Map();
   const seenSnapshots = new Set();
   const queue = [...lockfile.importers];
+  // tsdown.ai bundles this development dependency into the shipped AI runtime.
+  const bundledMistral = lockfile.importerRoots
+    .get("packages/ai")
+    ?.get("devDependencies")
+    ?.find(({ dependencyName }) => dependencyName === "@mistralai/mistralai");
+  if (bundledMistral) {
+    queue.push(bundledMistral);
+  }
 
   while (queue.length > 0) {
     const next = queue.pop();
@@ -584,7 +591,7 @@ export async function runPnpmAuditProd({
         reason: `No matching ${normalizedMinSeverity} or higher advisories returned by npm bulk for production dependencies.`,
       };
       stdout.write(
-        `${result.reason} Upstream repository advisories were not checked; this is not comprehensive vulnerability clearance.\n`,
+        `${result.reason} Upstream repository advisories were not checked; this is not a full vulnerability assessment.\n`,
       );
       return 0;
     }

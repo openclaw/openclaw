@@ -10,6 +10,7 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Placement error Unicode boundary" });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const storagePrefix = "openclaw.new-session.session-placement-recovery.v1:";
 const storageWarning = "Recovery could not be saved in this tab. Keep this page open.\n";
 
@@ -19,9 +20,14 @@ suite.define(() => {
     async (writeFails) => {
       const viewport = { width: 1280, height: 900 };
       await suite.withPage(
-        { viewport, recordVideo: { dir: suite.artifactDir, size: viewport } },
+        {
+          viewport,
+          ...(captureUiProof ? { recordVideo: { dir: suite.artifactDir, size: viewport } } : {}),
+        },
         async ({ page }) => {
           const sessionKey = "agent:cloud:unicode-placement-proof";
+          const sessions = createdSessionListResult(sessionKey);
+          const [session] = sessions.sessions;
           const message = "Keep this task after a Unicode placement failure";
           const lead = "Unicode placement diagnostic: ";
           const prefix = writeFails ? storageWarning : "";
@@ -50,11 +56,11 @@ suite.define(() => {
                 repositoryStatus: "git",
               },
               "sessions.create": { key: sessionKey },
-              "sessions.list": createdSessionListResult(sessionKey),
-              "sessions.describe": { session: {} },
+              "sessions.list": sessions,
+              "sessions.describe": { session },
               "chat.history": {
                 messages: [],
-                sessionInfo: { hasActiveRun: false, status: "done" },
+                sessionInfo: { ...session, hasActiveRun: false, status: "done" },
               },
             },
           });
@@ -62,7 +68,7 @@ suite.define(() => {
           await gateway.waitForRequest("environments.list");
           await page.locator("#new-session-where-trigger").click();
           await page
-            .locator("wa-popover.new-session-page__where-popover")
+            .locator(".oc-popover.new-session-page__where-popover")
             .getByRole("button", { name: "aws", exact: true })
             .click();
           await page.locator(".new-session-page__message").fill(message);
@@ -92,7 +98,7 @@ suite.define(() => {
           const alert = page.getByRole("alert").filter({ hasText: lead });
           await expect(alert).toBeVisible();
           await alert.locator("summary").click();
-          const detail = alert.locator("pre");
+          const detail = alert.locator(".lazy-view-error__detail");
           await expect(detail).toBeVisible();
           const rendered = await detail.textContent();
           const renderedWellFormed =
@@ -128,7 +134,9 @@ suite.define(() => {
               }),
             )
             .toBe(true);
-          await page.screenshot({ path: path.join(suite.artifactDir, "paused-error.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "paused-error.png") });
+          }
           await writeFile(
             path.join(suite.artifactDir, "diagnostic.json"),
             JSON.stringify(

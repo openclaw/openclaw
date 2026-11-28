@@ -1,23 +1,25 @@
-// Skill upload store persists uploaded skill archives before installation.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
+import { isValidBase64 } from "@openclaw/media-core/base64";
+import type {
+  SkillsUploadBeginParams,
+  SkillsUploadChunkParams,
+  SkillsUploadCommitParams,
+} from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { DEFAULT_MAX_ARCHIVE_BYTES_ZIP } from "../../infra/archive.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { createAsyncLock } from "../../infra/json-files.js";
-import { withTempWorkspace } from "../../infra/private-temp-workspace.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
+import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { validateRequestedSkillSlug } from "./install-paths.js";
 import { SkillUploadRequestError } from "./upload-store-error.js";
-import {
-  resolveSkillUploadDatabaseOptions,
-  type SkillUploadMetadataRow,
-} from "./upload-store.sqlite.js";
-import type { SkillUploadWorkerOperations } from "./upload-store.worker.js";
+import type { SkillUploadMetadataRow } from "./upload-store.sqlite.js";
+import type { SkillUploadWorkerOperations } from "./upload-store.worker-contract.js";
 type SkillUploadScope = Pick<SqliteWorkerStore<SkillUploadWorkerOperations>, "execute">;
 
 /** Time window in which uploaded skill archive chunks may be committed. */
@@ -32,71 +34,9 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
 const UPLOAD_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-type SkillUploadStoreOptions = OpenClawStateDatabaseOptions & {
-  installLeaseHeartbeatMs?: number;
-  installLeaseMs?: number;
-  tempRootDir?: string;
-  ttlMs?: number;
-};
+const uploads = new KeyedAsyncQueue();
 
-const locks = new Map<string, { lock: ReturnType<typeof createAsyncLock>; references: number }>();
-
-type SkillUploadRecord = {
-  version: 1;
-  kind: "skill-archive";
-  uploadId: string;
-  slug: string;
-  force: boolean;
-  sizeBytes: number;
-  sha256?: string;
-  actualSha256?: string;
-  receivedBytes: number;
-  archivePath: string;
-  createdAt: number;
-  expiresAt: number;
-  committed: boolean;
-  committedAt?: number;
-  idempotencyKeyHash?: string;
-};
-
-export type SkillUploadStore = ReturnType<typeof createSkillUploadStore>;
-
-type BeginParams = {
-  kind: "skill-archive";
-  slug: string;
-  sizeBytes: number;
-  sha256?: string;
-  force?: boolean;
-  idempotencyKey?: string;
-};
-
-type ChunkParams = {
-  uploadId: string;
-  offset: number;
-  dataBase64: string;
-};
-
-type CommitParams = {
-  uploadId: string;
-  sha256?: string;
-};
-
-async function withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  let entry = locks.get(key);
-  if (!entry) {
-    entry = { lock: createAsyncLock(), references: 0 };
-    locks.set(key, entry);
-  }
-  entry.references += 1;
-  try {
-    return await entry.lock(fn);
-  } finally {
-    entry.references -= 1;
-    if (entry.references === 0) {
-      locks.delete(key);
-    }
-  }
-}
+type SkillUploadRecord = ReturnType<typeof toSkillUploadRecord>;
 
 export function normalizeSkillUploadSha256(value: string | undefined): string | undefined {
   if (value === undefined) {
@@ -153,31 +93,13 @@ function validateIdempotencyKey(value: string | undefined): string | undefined {
   return normalized;
 }
 
-function resolvePositiveDuration(value: number | undefined, fallback: number): number {
-  return value !== undefined && Number.isSafeInteger(value) && value > 0 ? value : fallback;
-}
-
 function decodeBase64Chunk(dataBase64: string): Buffer {
   const normalized = dataBase64.trim();
   if (normalized.length > MAX_SKILL_UPLOAD_BASE64_LENGTH) {
     throw new SkillUploadRequestError("upload chunk exceeds maximum size");
   }
-  if (!normalized || normalized.length % 4 !== 0) {
+  if (!isValidBase64(normalized)) {
     throw new SkillUploadRequestError("invalid dataBase64");
-  }
-  const paddingLength = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
-  const contentLength = normalized.length - paddingLength;
-  for (let index = 0; index < contentLength; index += 1) {
-    const code = normalized.charCodeAt(index);
-    const isBase64Character =
-      (code >= 0x41 && code <= 0x5a) ||
-      (code >= 0x61 && code <= 0x7a) ||
-      (code >= 0x30 && code <= 0x39) ||
-      code === 0x2b ||
-      code === 0x2f;
-    if (!isBase64Character) {
-      throw new SkillUploadRequestError("invalid dataBase64");
-    }
   }
   const decoded = Buffer.from(normalized, "base64");
   if (decoded.length < 1) {
@@ -199,54 +121,32 @@ async function cleanupExpiredUploads(
     if (uploadId === excludeUploadId) {
       continue;
     }
-    await withLock(`${lockRoot}:upload:${uploadId}`, async () => {
+    await uploads.enqueue(`${lockRoot}:upload:${uploadId}`, async () => {
       await scope.execute({ type: "skillUploads.deleteExpired", input: { uploadId } });
     });
   }
 }
 
-function toSkillUploadRecord(row: SkillUploadMetadataRow, archivePath: string): SkillUploadRecord {
+function toSkillUploadRecord(row: SkillUploadMetadataRow, archivePath: string) {
   return {
-    version: 1,
-    kind: "skill-archive",
-    uploadId: row.upload_id,
     slug: row.slug,
     force: row.force === 1,
-    sizeBytes: row.size_bytes,
-    ...(row.sha256 ? { sha256: row.sha256 } : {}),
     ...(row.actual_sha256 ? { actualSha256: row.actual_sha256 } : {}),
-    receivedBytes: row.received_bytes,
     archivePath,
-    createdAt: row.created_at,
-    expiresAt: row.expires_at,
-    committed: row.committed === 1,
-    ...(row.committed_at !== null ? { committedAt: row.committed_at } : {}),
-    ...(row.idempotency_key_hash ? { idempotencyKeyHash: row.idempotency_key_hash } : {}),
   };
 }
 
-function createSkillUploadStore(options?: SkillUploadStoreOptions) {
-  const stateOptions = resolveSkillUploadDatabaseOptions(options ?? {});
-  const ttlMs = options?.ttlMs ?? SKILL_UPLOAD_TTL_MS;
-  const tempRootDir = options?.tempRootDir;
-  const installLeaseMs = resolvePositiveDuration(
-    options?.installLeaseMs,
-    SKILL_UPLOAD_INSTALL_LEASE_MS,
-  );
-  const installLeaseHeartbeatMs = resolvePositiveDuration(
-    options?.installLeaseHeartbeatMs,
-    SKILL_UPLOAD_INSTALL_HEARTBEAT_MS,
-  );
-
-  return {
-    async begin(params: BeginParams) {
-      const request = { ...params };
-      const context = captureOpenClawStateWorkerContext(stateOptions);
-      const root = context.admission.databasePath;
-      return await withLock(`${root}:begin`, async () => {
-        const { runOpenClawStateWorkerOperation } =
-          await import("../../state/openclaw-state-worker-store.js");
-        return runOpenClawStateWorkerOperation(context, async (scope) => {
+export const defaultSkillUploadStore = {
+  async begin(params: SkillsUploadBeginParams, assertCommitAllowed?: () => void) {
+    const request = { ...params };
+    const context = captureOpenClawStateWorkerContext();
+    const root = context.admission.databasePath;
+    return await uploads.enqueue(`${root}:begin`, async () => {
+      const { runOpenClawStateWorkerOperation } =
+        await import("../../state/openclaw-state-worker-store.js");
+      return runOpenClawStateWorkerOperation(
+        context,
+        async (scope) => {
           await cleanupExpiredUploads(scope, root);
           if (request.kind !== "skill-archive") {
             throw new SkillUploadRequestError("unsupported upload kind");
@@ -266,144 +166,169 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
               sha256,
               force,
               keyHash,
-              ttlMs,
+              ttlMs: SKILL_UPLOAD_TTL_MS,
             },
           });
-        });
-      });
-    },
+        },
+        uploadWriteAdmission(context, assertCommitAllowed),
+      );
+    });
+  },
 
-    async chunk(params: ChunkParams) {
-      const uploadId = validateUploadId(params.uploadId);
-      const offset = validateOffset(params.offset);
-      const decoded = decodeBase64Chunk(params.dataBase64);
-      const context = captureOpenClawStateWorkerContext(stateOptions);
-      const root = context.admission.databasePath;
-      const { runOpenClawStateWorkerOperation } =
-        await import("../../state/openclaw-state-worker-store.js");
-      return runOpenClawStateWorkerOperation(context, async (scope) => {
+  async chunk(params: SkillsUploadChunkParams, assertCommitAllowed?: () => void) {
+    const uploadId = validateUploadId(params.uploadId);
+    const offset = validateOffset(params.offset);
+    const decoded = decodeBase64Chunk(params.dataBase64);
+    const context = captureOpenClawStateWorkerContext();
+    const root = context.admission.databasePath;
+    const { runOpenClawStateWorkerOperation } =
+      await import("../../state/openclaw-state-worker-store.js");
+    return runOpenClawStateWorkerOperation(
+      context,
+      async (scope) => {
         await cleanupExpiredUploads(scope, root, uploadId);
-        return withLock(`${root}:upload:${uploadId}`, () =>
+        return uploads.enqueue(`${root}:upload:${uploadId}`, () =>
           scope.execute({
             type: "skillUploads.chunk",
             input: { uploadId, offset, decoded },
           }),
         );
-      });
-    },
+      },
+      uploadWriteAdmission(context, assertCommitAllowed),
+    );
+  },
 
-    async commit(params: CommitParams) {
-      const uploadId = validateUploadId(params.uploadId);
-      const requestedSha = normalizeSkillUploadSha256(params.sha256);
-      const context = captureOpenClawStateWorkerContext(stateOptions);
-      return await withLock(`${context.admission.databasePath}:upload:${uploadId}`, async () => {
-        const { executeOpenClawStateWorker } =
-          await import("../../state/openclaw-state-worker-store.js");
-        return executeOpenClawStateWorker(context, {
-          type: "skillUploads.commit",
-          input: { uploadId, requestedSha },
-        });
-      });
-    },
-
-    async withCommittedUpload<T>(
-      uploadIdRaw: string,
-      action: (record: SkillUploadRecord, controls: { remove: () => Promise<void> }) => Promise<T>,
-    ): Promise<T> {
-      const uploadId = validateUploadId(uploadIdRaw);
-      const context = captureOpenClawStateWorkerContext(stateOptions);
-      return withLock(`${context.admission.databasePath}:upload:${uploadId}`, async () => {
+  async commit(params: SkillsUploadCommitParams, assertCommitAllowed?: () => void) {
+    const uploadId = validateUploadId(params.uploadId);
+    const requestedSha = normalizeSkillUploadSha256(params.sha256);
+    const context = captureOpenClawStateWorkerContext();
+    return await uploads.enqueue(
+      `${context.admission.databasePath}:upload:${uploadId}`,
+      async () => {
         const { runOpenClawStateWorkerOperation } =
           await import("../../state/openclaw-state-worker-store.js");
-        const { withSkillUploadInstallOwner } = await import("./upload-store-install-owner.js");
-        const owner = randomUUID();
-        return withSkillUploadInstallOwner(context, { uploadId, owner }, (claimStarted) =>
-          runOpenClawStateWorkerOperation(context, async (scope) => {
-            claimStarted();
-            const row = await scope.execute({
-              type: "skillUploads.claim",
-              input: {
-                uploadId,
-                leaseOwner: owner,
-                installLeaseMs,
-              },
-            });
-            context.admission.assertCurrent();
-            let renewal: Promise<void> | undefined;
-            let renewalPaused = 0;
-            let installing = true;
-            const heartbeat = setInterval(() => {
-              if (!installing || renewalPaused || renewal) {
-                return;
-              }
-              renewal = scope
-                .execute({
-                  type: "skillUploads.renew",
-                  input: {
-                    uploadId,
-                    owner,
-                    installLeaseMs,
-                  },
-                })
-                .then(
-                  () => undefined,
-                  () => undefined,
-                )
-                .finally(() => {
-                  renewal = undefined;
-                });
-            }, installLeaseHeartbeatMs);
-            heartbeat.unref();
-            try {
-              return await withTempWorkspace(
-                {
-                  rootDir: tempRootDir ?? resolvePreferredOpenClawTmpDir(),
-                  prefix: "openclaw-skill-upload-",
-                },
-                async (tmp) => {
-                  const archivePath = path.join(tmp.dir, "archive.zip");
-                  await fs.writeFile(archivePath, row.archive_blob, { mode: 0o600 });
-                  context.admission.assertCurrent();
-                  return action(toSkillUploadRecord(row, archivePath), {
-                    remove: async () => {
-                      renewalPaused += 1;
-                      try {
-                        await renewal;
-                        const result = await scope.execute({
-                          type: "skillUploads.consume",
-                          input: {
-                            uploadId,
-                            owner,
-                          },
-                        });
-                        if (result === "not-owner") {
-                          throw new SkillUploadRequestError(
-                            "upload install lease is no longer active",
-                          );
-                        }
-                      } finally {
-                        renewalPaused -= 1;
-                      }
-                    },
-                  });
-                },
-              );
-            } finally {
-              installing = false;
-              clearInterval(heartbeat);
-              await renewal;
-            }
-          }),
+        const result = await runOpenClawStateWorkerOperation(
+          context,
+          (scope) =>
+            scope.execute({
+              type: "skillUploads.commit",
+              input: { uploadId, requestedSha },
+            }),
+          uploadWriteAdmission(context, assertCommitAllowed),
         );
-      });
-    },
+        context.admission.assertCurrent();
+        return result;
+      },
+    );
+  },
+
+  async withCommittedUpload<T>(
+    uploadIdRaw: string,
+    action: (record: SkillUploadRecord, controls: { remove: () => Promise<void> }) => Promise<T>,
+  ): Promise<T> {
+    const uploadId = validateUploadId(uploadIdRaw);
+    const context = captureOpenClawStateWorkerContext();
+    return uploads.enqueue(`${context.admission.databasePath}:upload:${uploadId}`, async () => {
+      const { runOpenClawStateWorkerOperation } =
+        await import("../../state/openclaw-state-worker-store.js");
+      const { withSkillUploadInstallOwner } = await import("./upload-store-install-owner.js");
+      const owner = randomUUID();
+      return withSkillUploadInstallOwner(context, { uploadId, owner }, (claimStarted) =>
+        runOpenClawStateWorkerOperation(context, async (scope) => {
+          claimStarted();
+          const row = await scope.execute({
+            type: "skillUploads.claim",
+            input: {
+              uploadId,
+              leaseOwner: owner,
+              installLeaseMs: SKILL_UPLOAD_INSTALL_LEASE_MS,
+            },
+          });
+          context.admission.assertCurrent();
+          let renewal: Promise<void> | undefined;
+          let renewalPaused = 0;
+          let installing = true;
+          const heartbeat = setInterval(() => {
+            if (!installing || renewalPaused || renewal) {
+              return;
+            }
+            renewal = scope
+              .execute({
+                type: "skillUploads.renew",
+                input: {
+                  uploadId,
+                  owner,
+                  installLeaseMs: SKILL_UPLOAD_INSTALL_LEASE_MS,
+                },
+              })
+              .then(
+                () => undefined,
+                () => undefined,
+              )
+              .finally(() => {
+                renewal = undefined;
+              });
+          }, SKILL_UPLOAD_INSTALL_HEARTBEAT_MS);
+          heartbeat.unref();
+          try {
+            return await withTempWorkspace(
+              {
+                rootDir: resolvePreferredOpenClawTmpDir(),
+                prefix: "openclaw-skill-upload-",
+              },
+              async (tmp) => {
+                const archivePath = path.join(tmp.dir, "archive.zip");
+                await fs.writeFile(archivePath, row.archive_blob, { mode: 0o600 });
+                context.admission.assertCurrent();
+                return action(toSkillUploadRecord(row, archivePath), {
+                  remove: async () => {
+                    renewalPaused += 1;
+                    try {
+                      await renewal;
+                      const result = await scope.execute({
+                        type: "skillUploads.consume",
+                        input: {
+                          uploadId,
+                          owner,
+                        },
+                      });
+                      if (result === "not-owner") {
+                        throw new SkillUploadRequestError(
+                          "upload install lease is no longer active",
+                        );
+                      }
+                    } finally {
+                      renewalPaused -= 1;
+                    }
+                  },
+                });
+              },
+            );
+          } finally {
+            installing = false;
+            clearInterval(heartbeat);
+            await renewal;
+          }
+        }),
+      );
+    });
+  },
+};
+
+/** The callback is pure host policy; worker transactions recheck it before effects and COMMIT. */
+function uploadWriteAdmission(
+  context: ReturnType<typeof captureOpenClawStateWorkerContext>,
+  assertCommitAllowed?: () => void,
+) {
+  const assertCurrent = () => {
+    assertCommitAllowed?.();
+    context.admission.assertCurrent();
+    context.maintenanceScope?.assertAdmission();
   };
-}
-
-export const defaultSkillUploadStore = createSkillUploadStore();
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.skillUploadStoreTestApi")] = {
-    createSkillUploadStore,
+  return {
+    assertCurrent,
+    createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+      context.admission.databasePath,
+    ]),
   };
 }

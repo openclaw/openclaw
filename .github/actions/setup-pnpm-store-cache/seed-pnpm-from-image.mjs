@@ -5,37 +5,29 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 
 const packageManager = process.argv[2];
-const imageVersion = "12.3.4";
-const imageWrapperHash =
-  "961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457";
-const imageNativeHashes = {
-  x64: "d99a8e9523e47f05f5879711f853e259ff3e17eda1653ff74ef8542b9b22807ab06900888aaf11ec21b186774ab3adc9b5c2e2d9ad50a68fb05ff128c9f8f225",
+// Authenticate the wrapper and native executable selected by the repository pin.
+const version = "12.15.0";
+const wrapperHash =
+  "b3951d6d6ff4a9f13dc7cf56cd28d2b8eb37dbcc9c68e52e1e1191873ea9f82a017287ab50baadc5ccc494f036c67c0e47eb13608c2fa36f47711b61ea128e61";
+const nativeHashes = {
+  x64: "c9cf9095947ef7e9ebdbd2787d1ce13286a98314c10e776affea5eca8ab55d4b9f9d01677db5d4305b9d0c82b31e2e78e658a71aa98e9977e7d0da2e7cd81c3a",
   arm64:
-    "b7bd40540ecb46a88a4f2679c4c61a65cda7e437dda4c6dfa2466e8883971c138cd371029c5d2de226306810ea26056394a6143b0685fdb4506a318d038709e3",
+    "a8c2fff1a097b2587cb5dff0e14f8724da94719dbe9ba11f4db592708cd9466c8fb1114dfb10782cfd54fe1ca6c5cd6248988ab46e7a1c9c767ef504ad61481b",
 };
-// The repository already selects 12.4.2. Authenticate both stages of its
-// bootstrap without changing that pin or routing downloads through Node fetch.
-const currentVersion = "12.4.2";
-const currentWrapperHash =
-  "08adc6613180275c7c9edada39dcf08c9c61ad4e7eaf330a4f3461f102b0f907423454d117f98e72d47fef0616070644d7bffc973a6a57f5090a6d7c368b07c9";
-const currentNativeHashes = {
-  x64: "fe96edd145536bc34c0e1cce58b4117d9e86f5138a5e524f66dc7ce3906ac967dcee10ab5978532c177bd323b6cbcf84f8858dde81ccd6cfc9b0840d1a4d72be",
-  arm64:
-    "d9d4a20d7ca1c7e4531ec7b0c5ec7c7ff8d58ea417589da8a30e240951c459d64a781a60331bd9e9f1e44c050125782a85b2880c7bee3656413fb8097d458be4",
-};
-const current = packageManager === `pnpm@${currentVersion}+sha512.${currentWrapperHash}`;
-const version = current ? currentVersion : imageVersion;
-const wrapperHash = current ? currentWrapperHash : imageWrapperHash;
-const nativeHash = (current ? currentNativeHashes : imageNativeHashes)[process.arch];
+const current = packageManager === `pnpm@${version}+sha512.${wrapperHash}`;
+const nativeHash = nativeHashes[process.arch];
 const archiveRoot = "/opt/crabbox/toolchain-archives";
 const cachedArchives = process.env.PNPM_CONFIG_STORE_DIR
   ? join(process.env.PNPM_CONFIG_STORE_DIR, "toolchain")
   : undefined;
 const registry = "https://registry.npmjs.org";
 const registryConfigured = (process.env.COREPACK_NPM_REGISTRY || registry).replace(/\/$/u, "");
+// Curl's built-in retry policy already distinguishes transient HTTP responses.
+// Retry only transport exits here so permanent HTTP failures still fail once.
+const retryableCurlStatuses = new Set([5, 6, 7, 18, 35, 52, 55, 56, 92]);
 // These native archives are glibc builds. Windows seeds only the authenticated
 // wrapper; pnpm owns its native binary selection and signature verification.
-let supportedCurrentHost = !current;
+let supportedCurrentHost = false;
 if (current && process.platform === "linux") {
   try {
     supportedCurrentHost = Boolean(process.report?.getReport().header.glibcVersionRuntime);
@@ -94,23 +86,33 @@ if (
           ? `${registry}/pnpm/-/${name}`
           : `${registry}/@pnpm/exe.linux-${process.arch}/-/${name}`;
         console.error(`Downloading pinned pnpm archive ${name}`);
-        const fetched = spawnSync(
-          "curl",
-          [
-            "--fail",
-            "--location",
-            "--silent",
-            "--show-error",
-            "--connect-timeout",
-            "10",
-            "--max-time",
-            "120",
-            "--output",
-            destination,
-            url,
-          ],
-          { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" },
-        );
+        const curlArgs = [
+          "--fail",
+          "--location",
+          "--silent",
+          "--show-error",
+          "--connect-timeout",
+          "10",
+          "--max-time",
+          "120",
+          "--retry",
+          "2",
+          "--retry-delay",
+          "2",
+          "--output",
+          destination,
+          url,
+        ];
+        let fetched;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          fetched = spawnSync("curl", curlArgs, {
+            stdio: ["ignore", "ignore", "pipe"],
+            encoding: "utf8",
+          });
+          if (fetched.error || !retryableCurlStatuses.has(fetched.status)) {
+            break;
+          }
+        }
         if (fetched.error || fetched.status !== 0) {
           throw new Error(`Cannot download pinned pnpm archive ${name}: ${fetched.stderr}`, {
             cause: fetched.error,

@@ -54,36 +54,23 @@ class ChatMarkdownTest {
   }
 
   @Test
-  fun authoredDetailsSummaryDoesNotUseLocalizedFallback() {
+  fun authoredDetailsSummaryStaysVerbatim() {
     val disclosure =
       parseChatMarkdownBlocks("<details>\n<summary>Details</summary>\n\nBody\n\n</details>")
         .single() as ChatMarkdownRenderBlock.Disclosure
-    var fallbackEvaluated = false
-    val rendered =
-      chatMarkdownDisclosureSummarySource(disclosure.summary) {
-        fallbackEvaluated = true
-        "Localized details"
-      }
-
     assertEquals("Details", disclosure.summary)
-    assertEquals("Details", rendered)
-    assertEquals(false, fallbackEvaluated)
   }
 
   @Test
-  fun detailsWithoutSummaryUseLocalizedDefaultLabel() {
+  fun detailsWithoutSummaryLeaveDefaultToRenderer() {
     val disclosure =
       parseChatMarkdownBlocks("<details>\n\nBody\n\n</details>").single() as ChatMarkdownRenderBlock.Disclosure
 
     assertNull(disclosure.summary)
-    assertEquals(
-      "Localized details",
-      chatMarkdownDisclosureSummarySource(disclosure.summary) { "Localized details" },
-    )
   }
 
   @Test
-  fun emptyDetailsSummaryAfterProseUsesLocalizedDefault() {
+  fun emptyDetailsSummaryAfterProseLeavesDefaultToRenderer() {
     val blocks =
       parseChatMarkdownBlocks(
         "Intro\n\n<details>\n<summary></summary>\n\nBody\n\n</details>",
@@ -93,10 +80,6 @@ class ChatMarkdownTest {
 
     assertEquals("Intro", (intro.firstChild as org.commonmark.node.Text).literal)
     assertNull(disclosure.summary)
-    assertEquals(
-      "Localized details",
-      chatMarkdownDisclosureSummarySource(disclosure.summary) { "Localized details" },
-    )
   }
 
   @Test
@@ -290,6 +273,22 @@ class ChatMarkdownTest {
   }
 
   @Test
+  fun displayMathRecognizesBareCarriageReturnsBetweenProseAndEquation() {
+    for ((open, close) in listOf("$$" to "$$", "\\[" to "\\]")) {
+      val source = "First note.\r\r$open\ra^2\r+b^2\r$close\r\rResult follows."
+
+      assertEquals(
+        listOf(
+          ChatMarkdownSourceBlock.Markdown("First note."),
+          ChatMarkdownSourceBlock.Math("a^2\n+b^2"),
+          ChatMarkdownSourceBlock.Markdown("Result follows."),
+        ),
+        segmentChatMarkdown(source, isStreaming = false),
+      )
+    }
+  }
+
+  @Test
   fun displayMathIgnoresFencedAndInlineCode() {
     val fenced = "```tex\n$$\nx + y\n$$\n```"
     val inline = "`$$ x + y $$`"
@@ -340,7 +339,8 @@ class ChatMarkdownTest {
 
   @Test
   fun oversizedDisplayMathUsesCodeFallback() {
-    val latex = "é".repeat(CHAT_MATH_MAX_BYTES / 2 + 1)
+    // The authored CRLF puts the payload one UTF-8 byte over the limit.
+    val latex = "é".repeat(CHAT_MATH_MAX_BYTES / 2 - 1) + "\r\nx"
 
     assertEquals(
       listOf(ChatMarkdownSourceBlock.MathFallback(latex)),
@@ -420,6 +420,23 @@ class ChatMarkdownTest {
       FontStyle.Italic,
       emphasis.fontStyle,
     )
+  }
+
+  @Test
+  fun imageAltTextKeepsInlineCodeLiteral() {
+    val annotated =
+      buildChatInlineMarkdown(
+        "![Open **`setup.json`** now](https://example.com/diagram.png)",
+      )
+
+    assertEquals("Open setup.json now", annotated.text)
+  }
+
+  @Test
+  fun imageAltTextKeepsCodeOnlyFallback() {
+    val annotated = buildChatInlineMarkdown("![`setup.json`](https://example.com/diagram.png)")
+
+    assertEquals("setup.json", annotated.text)
   }
 
   @Test

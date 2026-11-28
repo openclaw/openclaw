@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import type { ZaloFetch } from "./api.js";
 import { probeZalo } from "./probe.js";
 
@@ -8,13 +9,18 @@ describe("probeZalo", () => {
     const fetcher = vi.fn<ZaloFetch>(async () =>
       Response.json({
         ok: true,
-        result: { account_name: "test-bot", account_type: "BASIC", id: "bot-1" },
+        result: {
+          account_name: "test-bot",
+          account_type: "BASIC",
+          id: "bot-1",
+          can_join_groups: false,
+        },
       }),
     );
 
     await expect(probeZalo(" token ", 5000, fetcher)).resolves.toMatchObject({
       ok: true,
-      bot: { account_name: "test-bot", id: "bot-1" },
+      bot: { account_name: "test-bot", account_type: "BASIC", id: "bot-1", can_join_groups: false },
       elapsedMs: expect.any(Number),
     });
     expect(fetcher.mock.calls[0]?.[0]).toContain("/bottoken/getMe");
@@ -47,19 +53,9 @@ describe("probeZalo", () => {
         }),
       );
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback Zalo API address");
-    }
+    const port = await listenOnLoopback(server);
     const originalApiUrl = process.env.ZALO_API_URL;
-    process.env.ZALO_API_URL = `http://127.0.0.1:${String(address.port)}`;
+    process.env.ZALO_API_URL = `http://127.0.0.1:${String(port)}`;
 
     try {
       await expect(probeZalo("controlled-token", 1000)).resolves.toMatchObject({
@@ -73,9 +69,7 @@ describe("probeZalo", () => {
         process.env.ZALO_API_URL = originalApiUrl;
       }
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await server[Symbol.asyncDispose]();
     }
   });
 

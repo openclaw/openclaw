@@ -91,28 +91,23 @@ export function resolveProgressDisclosure(
     case "takeover":
       return { ...state, gestures: 0, distancePx: 0 };
     case "extent":
+    case "click": {
+      const open = event.type === "click" ? event.open : event.extent > 0;
+      const manualOpen =
+        event.type === "click" ? event.open : event.extent === 0 ? false : event.extent;
       return {
         ...state,
-        open: event.extent > 0,
-        manualOpen: event.extent === 0 ? false : event.extent,
-        manualReopens: state.manualReopens + Number(!state.open && event.extent > 0),
+        open,
+        manualOpen,
+        manualReopens: state.manualReopens + Number(!state.open && open),
         gestures: 0,
         distancePx: 0,
       };
+    }
     case "clamp":
       return typeof state.manualOpen === "number" && state.manualOpen > event.limit
         ? { ...state, manualOpen: event.limit, open: event.limit > 0 }
         : state;
-    case "click":
-      return {
-        ...state,
-        open: event.open,
-        manualOpen: event.open,
-        manualReopens: state.manualReopens + Number(!state.open && event.open),
-        gestures: 0,
-        distancePx: 0,
-      };
   }
-  const unreachable: never = event;
-  return unreachable;
+  return event satisfies never;
 }

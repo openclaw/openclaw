@@ -1,7 +1,6 @@
 import type { GatewayRestartIntent } from "./restart-intent.js";
 
 export type RestartDeferralHooks = {
-  onDeferring?: (pending: number) => void;
   onStillPending?: (pending: number, elapsedMs: number) => void;
   onReady?: () => void;
   onTimeout?: (pending: number | undefined, elapsedMs: number) => void;
@@ -27,15 +26,12 @@ export type RestartAuditInfo = {
   changedPaths?: string[];
 };
 
-function summarizeChangedPaths(paths: string[] | undefined, maxPaths = 6): string | null {
+function summarizeChangedPaths(paths: string[] | undefined): string | null {
   if (!Array.isArray(paths) || paths.length === 0) {
     return null;
   }
-  if (paths.length <= maxPaths) {
-    return paths.join(",");
-  }
-  const head = paths.slice(0, maxPaths).join(",");
-  return `${head},+${paths.length - maxPaths} more`;
+  const head = paths.slice(0, 6).join(",");
+  return paths.length > 6 ? `${head},+${paths.length - 6} more` : head;
 }
 
 export function formatRestartAudit(audit: RestartAuditInfo | undefined): string {

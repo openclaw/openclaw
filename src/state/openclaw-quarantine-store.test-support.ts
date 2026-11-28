@@ -2,6 +2,46 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
+import {
+  serializeSqliteFileGeneration,
+  type SqliteFileGeneration,
+} from "../infra/sqlite-file-generation.js";
+import type { OpenClawDatabaseKind } from "./openclaw-quarantine-error.js";
+import { ensureOpenClawQuarantineStore } from "./openclaw-quarantine-store.js";
+import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
+
+/** Seed a historical quarantine without restoring the retired runtime verifier. */
+export function seedOpenClawDatabaseQuarantine(options: {
+  env?: NodeJS.ProcessEnv;
+  generation?: SqliteFileGeneration;
+  kind: OpenClawDatabaseKind;
+  path: string;
+  reason: string;
+}): void {
+  const env = options.env ?? process.env;
+  ensureOpenClawQuarantineStore(env);
+  const storePath = resolveQuarantineStorePath(env);
+  const { DatabaseSync } = requireNodeSqlite();
+  const database = new DatabaseSync(storePath);
+  try {
+    database
+      .prepare(`INSERT OR REPLACE INTO quarantined_databases
+        (path, kind, reason, quarantined_at, verified_generation) VALUES (?, ?, ?, ?, ?)`)
+      .run(
+        path.resolve(options.path),
+        options.kind,
+        options.reason,
+        Date.now(),
+        options.generation ? serializeSqliteFileGeneration(options.generation) : null,
+      );
+  } finally {
+    database.close();
+  }
+  // Tests can seed after readers are warm; their next read must load the persisted fixture.
+  revokeSqliteDatabaseAdmissionsForPath(storePath);
+  revokeSqliteDatabaseAdmissionsForPath(options.path);
+}
 
 /** Inspect persisted rows independently of quarantine admission and generation policy. */
 export function readPersistedQuarantineRow(pathname: string, options: { env: NodeJS.ProcessEnv }) {

@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatAgentActivity
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatMessageProvenance
@@ -39,30 +40,81 @@ class ChatToolResultProjectionTest {
   }
 
   @Test
-  fun matchedFailuresOnlyCollapseWhenALaterAnswerExists() {
+  fun matchedOutcomesOnlyKeepLateFailuresOutsideCompletedWork() {
     val call = ChatToolActivity("call-1", "bash", "command: check draft", null, false)
-    val failure = call.copy(name = "tool", detail = null, result = "Draft check failed", isError = true)
     val earlier = ChatToolActivity("earlier", "read", "path: draft.md", null, false)
     val earlierResult = earlier.copy(result = "Draft read")
-    for (mixed in listOf(false, true)) {
-      val invocation =
-        activity("call", "toolCall", call).let {
-          if (mixed) it.copy(content = listOf(ChatMessageContent(text = "Checking the draft")) + it.content) else it
+    val descriptor = ChatAgentActivity("tool:call-1", "tool", "end", "Check draft", toolCallId = "call-1")
+    val outcomes =
+      listOf(
+        Triple(null, true, WorkedToolOutcome.Failed),
+        Triple(listOf(descriptor.copy(status = "skipped")), false, WorkedToolOutcome.Skipped),
+        Triple(listOf(descriptor.copy(status = "failed")), true, WorkedToolOutcome.Failed),
+        Triple(listOf(descriptor.copy(status = "blocked")), true, WorkedToolOutcome.Blocked),
+        Triple(listOf(descriptor.copy(status = "completed")), false, null),
+        Triple(listOf(descriptor), false, WorkedToolOutcome.Unknown),
+        Triple(emptyList<ChatAgentActivity>(), false, null),
+      )
+    for ((prepared, needsReply, outcome) in outcomes) {
+      for (rawError in if (prepared == null) listOf(true) else listOf(true, false)) {
+        val rawResult = call.copy(name = "tool", detail = null, result = "Result detail", isError = rawError)
+        for (mixed in listOf(false, true)) {
+          val invocation =
+            activity("call", "toolCall", call).let {
+              if (mixed) it.copy(content = listOf(ChatMessageContent(text = "Checking the draft")) + it.content) else it
+            }
+          val answer = text("final").copy(phase = "final_answer")
+          val result = activity("result", "toolResult", rawResult).copy(activity = prepared)
+          for (late in listOf(false, true)) {
+            val history = listOf(text("prompt", "user"), text("commentary"), activity("earlier", "toolCall", earlier), activity("earlier-result", "toolResult", earlierResult), invocation) + if (late) listOf(answer, result) else listOf(result, answer)
+            val built = timeline(history)
+            assertEquals(2, built.items.filterIsInstance<ChatTimelineItem.ToolActivity>().sumOf { it.tools.size })
+            val collapsed = prepareChatHistory(history, "main", "main").buildTimeline(0, emptyList(), null)
+            val exposed = late && needsReply
+            val projected = call.copy(result = rawResult.result, isError = rawError, activity = prepared?.singleOrNull(), activityPrepared = prepared != null)
+            assertEquals(
+              "prepared=$prepared rawError=$rawError mixed=$mixed late=$late",
+              if (exposed) (if (mixed) emptyList() else listOf(earlierResult)) + projected else emptyList(),
+              collapsed.items.filterIsInstance<ChatTimelineItem.ToolActivity>().flatMap { it.tools },
+            )
+            assertEquals(
+              if (!exposed && outcome != null) mapOf(outcome to 1) else emptyMap(),
+              collapsed.items
+                .filterIsInstance<ChatTimelineItem.WorkedSummary>()
+                .single()
+                .outcomes,
+            )
+            assertEquals(listOf("final", "prompt"), collapsed.items.filterIsInstance<ChatTimelineItem.Message>().map { it.message.id })
+          }
         }
-      val answer = text("final").copy(phase = "final_answer")
-      val result = activity("result", "toolResult", failure)
-      for (late in listOf(false, true)) {
-        val history = listOf(text("prompt", "user"), text("commentary"), activity("earlier", "toolCall", earlier), activity("earlier-result", "toolResult", earlierResult), invocation) + if (late) listOf(answer, result) else listOf(result, answer)
-        val built = timeline(history)
-        assertEquals(2, built.items.filterIsInstance<ChatTimelineItem.ToolActivity>().sumOf { it.tools.size })
-        val collapsed = prepareChatHistory(history, "main", "main").buildTimeline(0, emptyList(), null)
-        assertEquals(
-          "mixed=$mixed late=$late",
-          if (late) (if (mixed) emptyList() else listOf(earlierResult)) + call.copy(result = failure.result, isError = true) else emptyList(),
-          collapsed.items.filterIsInstance<ChatTimelineItem.ToolActivity>().flatMap { it.tools },
-        )
-        assertEquals(listOf("final", "prompt"), collapsed.items.filterIsInstance<ChatTimelineItem.Message>().map { it.message.id })
       }
+    }
+  }
+
+  @Test
+  fun preparedTerminalCallsSettleWithoutRawResultsWhileUnknownCallsStayVisible() {
+    val call = ChatToolActivity("call-1", "read", "path: draft.md", null, false)
+    val descriptor = ChatAgentActivity("tool:call-1", "tool", "end", "Read draft", toolCallId = "call-1")
+    for ((prepared, visible) in listOf(
+      listOf(descriptor.copy(status = "skipped")) to false,
+      listOf(descriptor.copy(status = "completed")) to false,
+      listOf(descriptor.copy(status = "failed")) to true,
+      listOf(descriptor.copy(status = "blocked")) to true,
+      listOf(descriptor) to true,
+      listOf(descriptor.copy(phase = "start", status = "running")) to true,
+      null to true,
+    )) {
+      val history = listOf(text("prompt", "user"), text("commentary"), text("final").copy(phase = "final_answer", runId = "run"), activity("call", "toolCall", call).copy(activity = prepared, runId = "run"))
+      val timeline = prepareChatHistory(history, "main", "main").buildTimeline(0, emptyList(), null)
+      assertEquals("prepared=$prepared", if (visible) 1 else 0, timeline.items.filterIsInstance<ChatTimelineItem.ToolActivity>().size)
+      assertEquals(
+        if (prepared?.singleOrNull()?.status == "skipped") mapOf(WorkedToolOutcome.Skipped to 1) else emptyMap(),
+        timeline.items
+          .filterIsInstance<ChatTimelineItem.WorkedSummary>()
+          .single()
+          .outcomes,
+      )
+      assertEquals(listOf("final", "prompt"), timeline.items.filterIsInstance<ChatTimelineItem.Message>().map { it.message.id })
     }
   }
 

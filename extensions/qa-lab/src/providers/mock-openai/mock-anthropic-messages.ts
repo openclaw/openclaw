@@ -1,4 +1,3 @@
-// QA Lab Anthropic Messages wire adapter.
 import {
   buildAnthropicFailureResponse,
   buildAnthropicMessageResponse,
@@ -23,9 +22,9 @@ export function normalizeAnthropicMessagesRequest(body: AnthropicMessagesRequest
 } {
   const model =
     typeof body.model === "string" && body.model.trim() !== "" ? body.model : "claude-opus-4-8";
-  const input = convertAnthropicMessagesToResponsesInput({
-    messages: Array.isArray(body.messages) ? body.messages : [],
-  });
+  const input = convertAnthropicMessagesToResponsesInput(
+    Array.isArray(body.messages) ? body.messages : [],
+  );
   const instructions = normalizeAnthropicSystemToString(body.system);
   return {
     body: {

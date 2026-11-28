@@ -18,8 +18,8 @@ import {
   shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
 import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
-import type { TelegramPollRegistryEntry } from "./poll-registry.js";
 import { hasTelegramQuestionCallbackPrefix } from "./question-callback-data.js";
+import { getPreparedTelegramWidgetQuery } from "./widgets/widget-query-context.js";
 
 const TELEGRAM_READ_ONLY_COMMAND_KEYS = new Set([
   "agents",
@@ -54,6 +54,8 @@ type TelegramSequentialKeyContext = {
     channel_post?: Message;
     edited_channel_post?: Message;
     callback_query?: { message?: Message; data?: string };
+    /** Bot API 10.4 widget tap; it routes like a callback on its widget's chat. */
+    widget_query?: { chat?: { id?: number } };
     message_reaction?: {
       chat?: { id?: number; type?: string; is_forum?: boolean; is_direct_messages?: boolean };
       message_id?: number;
@@ -73,15 +75,7 @@ function getTelegramMessageReactionSequentialKey(
   ) {
     return `telegram:${reaction.chat.id}:message:${reaction.message_id}`;
   }
-  const msg =
-    ctx.message ??
-    ctx.channelPost ??
-    ctx.editedMessage ??
-    ctx.editedChannelPost ??
-    ctx.update?.message ??
-    ctx.update?.edited_message ??
-    ctx.update?.channel_post ??
-    ctx.update?.edited_channel_post;
+  const msg = getTelegramSequentialMessage(ctx);
   const isForum = resolveTelegramMessageForumFlagHint({
     chatType: msg?.chat?.type,
     isForum: msg?.chat?.is_forum,
@@ -93,7 +87,6 @@ function getTelegramMessageReactionSequentialKey(
     : undefined;
 }
 
-/** Registry key for a text command, or undefined when the text is not one. */
 function resolveTelegramCommandKeyForControlLane(params: {
   rawText?: string;
   botUsername?: string;
@@ -116,24 +109,6 @@ function resolveTelegramCommandKeyForControlLane(params: {
   )?.key;
 }
 
-export function isTelegramReadOnlyControlLaneText(params: {
-  rawText?: string;
-  botUsername?: string;
-}): boolean {
-  // Read-only commands must not supersede pending work when they enter the control lane.
-  // Diagnostics and export commands materialize state and remain on the ordinary lane.
-  const key = resolveTelegramCommandKeyForControlLane(params);
-  return key !== undefined && TELEGRAM_READ_ONLY_COMMAND_KEYS.has(key);
-}
-
-function isTelegramActiveRunControlLaneText(params: {
-  rawText?: string;
-  botUsername?: string;
-}): boolean {
-  const key = resolveTelegramCommandKeyForControlLane(params);
-  return key !== undefined && TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS.has(key);
-}
-
 export function isTelegramControlLaneText(params: {
   rawText?: string;
   botUsername?: string;
@@ -146,10 +121,24 @@ export function isTelegramControlLaneText(params: {
   if (isAbortRequestText(params.rawText, abortCommandOptions)) {
     return true;
   }
-  if (isTelegramActiveRunControlLaneText(params)) {
-    return true;
-  }
-  return isTelegramReadOnlyControlLaneText(params);
+  const key = resolveTelegramCommandKeyForControlLane(params);
+  return (
+    key !== undefined &&
+    (TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS.has(key) || TELEGRAM_READ_ONLY_COMMAND_KEYS.has(key))
+  );
+}
+
+function getTelegramSequentialMessage(ctx: TelegramSequentialKeyContext): Message | undefined {
+  return (
+    ctx.message ??
+    ctx.channelPost ??
+    ctx.editedMessage ??
+    ctx.editedChannelPost ??
+    ctx.update?.message ??
+    ctx.update?.edited_message ??
+    ctx.update?.channel_post ??
+    ctx.update?.edited_channel_post
+  );
 }
 
 export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
@@ -163,66 +152,41 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     const prepared = getPreparedTelegramPollAnswer(update);
     const entry = prepared?.entry;
     if (entry) {
-      return getTelegramPollAnswerSequentialKey(entry);
+      const threadId = "id" in entry.threadSpec ? entry.threadSpec.id : undefined;
+      return threadId == null
+        ? `telegram:${entry.chat.id}`
+        : `telegram:${entry.chat.id}:topic:${threadId}`;
     }
     // Missing historical registry entries do no work, but keep duplicate answers
     // for the same unknown poll together while the handler records the miss.
     return `telegram:poll:${pollId}`;
   }
-  const msg =
-    ctx.message ??
-    ctx.channelPost ??
-    ctx.editedMessage ??
-    ctx.editedChannelPost ??
-    ctx.update?.message ??
-    ctx.update?.edited_message ??
-    ctx.update?.channel_post ??
-    ctx.update?.edited_channel_post ??
-    ctx.update?.callback_query?.message;
-  const chatId = msg?.chat?.id ?? ctx.chat?.id;
+  const msg = getTelegramSequentialMessage(ctx) ?? ctx.update?.callback_query?.message;
+  const chatId = msg?.chat?.id ?? ctx.chat?.id ?? ctx.update?.widget_query?.chat?.id;
+  const chatLane = typeof chatId === "number" ? `telegram:${chatId}` : "telegram";
   const rawText = msg?.text ?? msg?.caption;
   const botUsername = ctx.me?.username;
   if (isTelegramControlLaneText({ rawText, botUsername })) {
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:control`;
-    }
-    return "telegram:control";
+    return `${chatLane}:control`;
   }
   if (isBtwRequestText(rawText, botUsername ? { botUsername } : undefined)) {
     const messageId = msg?.message_id;
-    if (typeof chatId === "number" && typeof messageId === "number") {
-      return `telegram:${chatId}:btw:${messageId}`;
-    }
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:btw`;
-    }
-    return "telegram:btw";
+    return typeof chatId === "number" && typeof messageId === "number"
+      ? `${chatLane}:btw:${messageId}`
+      : `${chatLane}:btw`;
   }
   const callbackData = ctx.update?.callback_query?.data;
   if (hasTelegramQuestionCallbackPrefix(callbackData)) {
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:question`;
-    }
-    return "telegram:question";
+    return `${chatLane}:question`;
   }
   if (
     hasTelegramApprovalCallbackPrefix(callbackData) ||
     (callbackData && parseExecApprovalCommandText(callbackData) !== null)
   ) {
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:approval`;
-    }
-    return "telegram:approval";
+    return `${chatLane}:approval`;
   }
-  // Raw durable-ingress fixtures and malformed updates can carry a partial
-  // message. Treat missing chat identity as an unknown lane instead of
-  // crashing before the queue records the update.
-  //
-  // General forum topic (topic:1) messages lack both `is_topic_message` and
-  // `is_forum` in the payload, so the forum flag hint is undefined. Fall back
-  // to the in-memory cache (populated by earlier messages or getChat calls)
-  // so the lane key resolves to `telegram:${chatId}:topic:1` rather than the
-  // base lane, preventing a cross-lane session-init race.
+  // Partial ingress updates use the unknown lane. General-topic messages can
+  // omit both forum flags; retain the cached hint to prevent a base-lane/topic:1 race.
   const forumHint = msg?.chat
     ? resolveTelegramMessageForumFlagHint({
         chatType: msg.chat.type,
@@ -237,26 +201,26 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   const threadSpec = msg?.chat
     ? resolveTelegramMessageThreadSpec(msg, forumHint ?? cachedForumFlag)
     : undefined;
-  const threadId =
+  // widget_query omits its topic; the prepared sent-widget origin supplies it.
+  const dmThreadId =
     threadSpec?.scope === "dm"
+      ? threadSpec.id
+      : !msg && update?.widget_query
+        ? getPreparedTelegramWidgetQuery(update)?.messageThreadId
+        : undefined;
+  const threadId =
+    threadSpec?.scope === "dm" || dmThreadId !== undefined
       ? shouldUseTelegramDmThreadSession({
-          dmThreadId: threadSpec.id,
+          dmThreadId,
           botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
         })
-        ? threadSpec.id
+        ? dmThreadId
         : undefined
       : threadSpec?.id;
   if (typeof chatId === "number") {
     return threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
   }
   return "telegram:unknown";
-}
-
-function getTelegramPollAnswerSequentialKey(entry: TelegramPollRegistryEntry): string {
-  const threadId = "id" in entry.threadSpec ? entry.threadSpec.id : undefined;
-  return threadId == null
-    ? `telegram:${entry.chat.id}`
-    : `telegram:${entry.chat.id}:topic:${threadId}`;
 }
 
 export function getTelegramSequentialConstraints(

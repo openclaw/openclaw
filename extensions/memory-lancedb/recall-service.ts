@@ -15,13 +15,15 @@ export function startMemoryRecall(params: {
     task: async (deadlineAtMs) => {
       let vector: number[];
       try {
-        vector = await params.embed(() => Math.max(1, deadlineAtMs - Date.now()));
+        vector = await params.embed(() =>
+          Math.max(1, Math.floor(deadlineAtMs - performance.now())),
+        );
       } catch (error) {
         throw new MemoryRecallEmbeddingError(error);
       }
       params.beforeSearch?.();
       phase = "search";
-      return await params.search(vector, Math.max(0, deadlineAtMs - Date.now()));
+      return await params.search(vector, Math.max(0, Math.floor(deadlineAtMs - performance.now())));
     },
   });
   return {

@@ -1,23 +1,56 @@
 import fs from "node:fs";
 import path from "node:path";
-import { API } from "typescript/unstable/sync";
+import { serverFS } from "typescript/fs";
+import { API, type Diagnostic } from "typescript/sync";
+import { createDeclarationFileSystem } from "./native-declaration-filesystem.mts";
 import { formatNativeTypeScriptDiagnostics } from "./native-typescript-diagnostics.mts";
 
 /** Read config roots/options without loading their semantic source graph. */
 export function readNativeTypeScriptConfig(options: {
   cwd: string;
   configFileName: string;
-  readFile?: (file: string) => string | null;
+  readFile?: (file: string) => string | undefined;
+  assertInput?: (file: string) => string;
+}) {
+  using reader = createNativeTypeScriptConfigReader(options);
+  return reader.read(options.configFileName);
+}
+
+/** Reuse the compiler within one synchronous config-reading batch. */
+export function createNativeTypeScriptConfigReader(options: {
+  cwd: string;
+  readFile?: (file: string) => string | undefined;
+  assertInput?: (file: string) => string;
 }) {
   const cwd = path.resolve(options.cwd);
-  const configFileName = path.resolve(cwd, options.configFileName);
   const contents = new Map<string, string>();
   const readFile = options.readFile ?? ((file: string) => fs.readFileSync(file, "utf8"));
+  const view = options.assertInput
+    ? createDeclarationFileSystem(cwd, options.assertInput, new Map())
+    : undefined;
+  let readFailure: Error | undefined;
+  const assertValid = () => {
+    view?.assertValid();
+    if (readFailure !== undefined) {
+      throw readFailure;
+    }
+  };
   let parsing = true;
   const api = new API({
     cwd,
     fs: {
+      directoryExists: serverFS.useOS,
+      fileExists: serverFS.useOS,
+      getAccessibleEntries: serverFS.useOS,
+      realpath: serverFS.useOS,
+      stat: serverFS.useOS,
+      writeFile: serverFS.useOS,
+      removeFile: serverFS.useOS,
+      ...view?.filesystem,
       readFile(file) {
+        if (view && !view.filesystem.fileExists(file)) {
+          return undefined;
+        }
         const cached = contents.get(file);
         if (cached !== undefined) {
           return cached;
@@ -29,7 +62,7 @@ export function readNativeTypeScriptConfig(options: {
         }
         try {
           const text = readFile(file);
-          if (text !== null) {
+          if (text !== undefined) {
             contents.set(file, text);
           }
           return text;
@@ -39,30 +72,52 @@ export function readNativeTypeScriptConfig(options: {
             "code" in error &&
             (error.code === "ENOENT" || error.code === "ENOTDIR")
           ) {
-            return null;
+            return undefined;
           }
-          throw error;
+          readFailure ??= error instanceof Error ? error : new Error(String(error));
+          return undefined;
         }
       },
     },
   });
-  try {
-    const parsed = api.parseConfigFile(configFileName);
-    const configFiles = [...contents.keys()].toSorted();
-    parsing = false;
-    const snapshot = api.updateSnapshot({ openProjects: [configFileName] });
-    const project = snapshot.getProject(configFileName);
-    if (!project) {
-      throw new Error(`Native TypeScript did not open config ${configFileName}`);
+  const read = (file: string) => {
+    const configFileName = path.resolve(cwd, file);
+    contents.clear();
+    readFailure = undefined;
+    parsing = true;
+    try {
+      const parsed = api.parseConfigFile(configFileName);
+      assertValid();
+      const syntax = api.readConfigFile(configFileName);
+      assertValid();
+      const configFiles = [...contents.keys()].toSorted();
+      let diagnostics: readonly Diagnostic[] = parsed.errors;
+      if (syntax.error) {
+        // Parsed options omit root JSON syntax errors; readConfigFile reports only
+        // the first. Open a project only for the complete malformed-config report.
+        parsing = false;
+        const snapshot = api.createSnapshot({
+          openProjects: [configFileName],
+          ensurePrograms: true,
+        });
+        assertValid();
+        const project = snapshot.getConfiguredProject(configFileName);
+        if (!project) {
+          throw new Error(`Native TypeScript did not open config ${configFileName}`);
+        }
+        diagnostics = project.program.getConfigFileParsingDiagnostics();
+        assertValid();
+      }
+      if (diagnostics.length) {
+        throw new Error(
+          `Invalid TypeScript config ${configFileName}:\n${formatNativeTypeScriptDiagnostics(diagnostics)}`,
+        );
+      }
+      return { ...parsed, configFiles };
+    } catch (error) {
+      assertValid();
+      throw error;
     }
-    const diagnostics = project.program.getConfigFileParsingDiagnostics();
-    if (diagnostics.length) {
-      throw new Error(
-        `Invalid TypeScript config ${configFileName}:\n${formatNativeTypeScriptDiagnostics(diagnostics)}`,
-      );
-    }
-    return { ...parsed, configFiles };
-  } finally {
-    api.close();
-  }
+  };
+  return { read, [Symbol.dispose]: () => api.close() };
 }

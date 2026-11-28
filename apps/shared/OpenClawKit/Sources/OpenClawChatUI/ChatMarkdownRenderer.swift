@@ -29,24 +29,43 @@ struct ChatMarkdownRenderer: View {
 
         case response
         case thinking
+        case document
+
+        private var usesTranscriptSize: Bool {
+            #if os(iOS)
+            self == .response
+            #else
+            false
+            #endif
+        }
+
+        var bodyScale: CGFloat {
+            self.usesTranscriptSize ? OpenClawChatTypography.transcriptBodySize / OpenClawChatTypography.bodySize : 1
+        }
 
         var headingStyle: HeadingStyle {
-            self == .response ? .hierarchy : .prose
+            self == .thinking ? .prose : .hierarchy
         }
 
         var proseFont: Font {
-            self == .response
-                ? OpenClawChatTypography.body
-                : OpenClawChatTypography.callout.italic()
+            if self.usesTranscriptSize { return OpenClawChatTypography.transcriptBody }
+            return self == .thinking ? OpenClawChatTypography.callout.italic() : OpenClawChatTypography.body
+        }
+
+        func tableCellFont(isHeader: Bool) -> Font {
+            isHeader ? self.proseFont.weight(.semibold) : self.proseFont
         }
 
         var inlineMath: InlineMathTypography {
-            self == .response ? .body : .callout
+            if self.usesTranscriptSize {
+                return .init(size: OpenClawChatTypography.transcriptBodySize, relativeTo: .body)
+            }
+            return self == .thinking ? .callout : .body
         }
 
         func headingFont(level: Int) -> Font {
             switch self.headingStyle {
-            case .hierarchy: OpenClawChatTypography.heading(level: level)
+            case .hierarchy: OpenClawChatTypography.heading(level: level, transcript: self.usesTranscriptSize)
             case .prose: self.proseFont
             }
         }
@@ -60,32 +79,40 @@ struct ChatMarkdownRenderer: View {
         let relativeTo: Font.TextStyle
     }
 
-    let snapshot: ChatMarkdownRenderSnapshot
+    private enum Input {
+        case text(String, isComplete: Bool)
+        case snapshot(ChatMarkdownRenderSnapshot)
+    }
+
+    private let input: Input
+    @State private var preparation = ChatMarkdownPreparation()
     let context: Context
     let variant: ChatMarkdownVariant
     let typography: Typography
     let textColor: Color
 
-    static func styledText(_ content: String, font: Font) -> SwiftUI.Text {
-        SwiftUI.Text(content)
-            .font(font)
-    }
-
     var reveal: ChatMarkdownProseReveal?
 
+    @Environment(\.self) private var environment
     @ScaledMetric private var inlineMathFontSize: CGFloat
+    /// Together with the stack spacing, leave one body em beside a quote.
+    @ScaledMetric(relativeTo: .body) private var quoteGap: CGFloat = 7
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openURL) private var parentOpenURL
+    @Environment(\.openClawToastPresenter) private var toastPresenter
+    /// macOS only: the iPhone confirms through its toast instead.
+    @State private var copiedFilePath: String?
 
     init(
         text: String,
         context: Context,
         variant: ChatMarkdownVariant,
-        typography: Typography = .response,
+        typography: Typography = .document,
         textColor: Color,
         isComplete: Bool = true)
     {
         self.init(
-            snapshot: ChatMarkdownRenderSnapshot(text: text, isComplete: isComplete),
+            input: .text(text, isComplete: isComplete),
             context: context,
             variant: variant,
             typography: typography,
@@ -96,11 +123,28 @@ struct ChatMarkdownRenderer: View {
         snapshot: ChatMarkdownRenderSnapshot,
         context: Context,
         variant: ChatMarkdownVariant,
-        typography: Typography = .response,
+        typography: Typography = .document,
         textColor: Color,
         reveal: ChatMarkdownProseReveal? = nil)
     {
-        self.snapshot = snapshot
+        self.init(
+            input: .snapshot(snapshot),
+            context: context,
+            variant: variant,
+            typography: typography,
+            textColor: textColor,
+            reveal: reveal)
+    }
+
+    private init(
+        input: Input,
+        context: Context,
+        variant: ChatMarkdownVariant,
+        typography: Typography,
+        textColor: Color,
+        reveal: ChatMarkdownProseReveal? = nil)
+    {
+        self.input = input
         self.context = context
         self.variant = variant
         self.typography = typography
@@ -112,44 +156,146 @@ struct ChatMarkdownRenderer: View {
             relativeTo: inlineMath.relativeTo)
     }
 
+    @Environment(\.openClawChatMarkdownFileLinks) private var fileLinksEnabled
+    @Environment(\.openClawChatMarkdownFileLabels) private var inheritedFileLabels
+    #if os(iOS)
+    @Environment(\.openClawChatColumn) private var column
+    @Environment(\.openClawReadingPosition) private var readingPosition
+    @Environment(\.openClawReadingAnswerRun) private var readingAnswerRun
+    #endif
+
+    /// Block position distinguishes repeated prefixes; the prefix tolerates live/final whitespace changes.
+    static func readerBlockKey(_ block: ChatMarkdownRenderedBlock, index: Int) -> String? {
+        let prose: ChatMarkdownProse
+        switch block {
+        case let .prose(value): prose = value
+        case let .heading(_, value): prose = value
+        default: return nil
+        }
+        let key = String(String(prose.attributed.characters).filter { !$0.isWhitespace }.prefix(48))
+        return key.isEmpty ? nil : "\(index):\(key)"
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(self.snapshot.blocks.enumerated()), id: \.offset) { entry in
-                self.blockView(entry.element, index: entry.offset)
+        let snapshot = self.snapshot
+        let fileLabels = self.fileLabels(for: snapshot)
+        return VStack(alignment: .leading, spacing: 10 * self.typography.bodyScale) {
+            ForEach(Array(snapshot.blocks.enumerated()), id: \.offset) { entry in
+                self.blockView(
+                    entry.element,
+                    index: entry.offset,
+                    isLast: entry.offset == snapshot.blocks.count - 1,
+                    fileLabels: fileLabels)
+                    #if os(iOS)
+                        .background {
+                            if let owner = self.readingPosition,
+                               let run = self.readingAnswerRun,
+                               let key = Self.readerBlockKey(entry.element, index: entry.offset)
+                            {
+                                ChatReadingRowMarker(key: .answerBlock(run: run, block: key), owner: owner)
+                            }
+                        }
+                    #endif
             }
 
-            if !self.snapshot.images.isEmpty {
-                InlineImageList(images: self.snapshot.images)
+            if !snapshot.images.isEmpty {
+                InlineImageList(images: snapshot.images)
+                    #if os(iOS)
+                        .frame(
+                            maxWidth: self.typography == .document ? nil : self.column.bubbleAndMediaMaxWidth,
+                            alignment: self.context == .user ? .trailing : .leading)
+                    #endif
             }
+        }
+        .environment(\.openClawChatMarkdownFileLabels, fileLabels)
+        .environment(\.openURL, OpenURLAction { url in
+            guard let file = ChatMarkdownInlineChips.fileTarget(from: url) else {
+                self.parentOpenURL(url)
+                return .handled
+            }
+            // No file viewer exists on this surface yet; copying keeps the path usable.
+            ChatPasteboard.copy(file.path)
+            if let toastPresenter {
+                toastPresenter.post(.copied(String(localized: "Path copied")))
+            } else {
+                self.copiedFilePath = file.path
+            }
+            return .handled
+        })
+        .overlay(alignment: .topTrailing) {
+            if self.copiedFilePath != nil {
+                Label(String(localized: "Path copied"), systemImage: "doc.on.doc")
+                    .font(OpenClawChatTypography.captionSemiBold)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.regularMaterial, in: Capsule())
+                    .transition(.opacity)
+                    .accessibilityHidden(true)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: self.copiedFilePath)
+        .sensoryFeedback(.success, trigger: self.copiedFilePath) { _, copied in copied != nil }
+        .task(id: self.copiedFilePath) {
+            guard self.copiedFilePath != nil else { return }
+            AccessibilityNotification.Announcement(String(localized: "Path copied")).post()
+            try? await Task.sleep(for: .seconds(1.6))
+            self.copiedFilePath = nil
+        }
+    }
+
+    private var snapshot: ChatMarkdownRenderSnapshot {
+        switch self.input {
+        case let .text(text, isComplete):
+            self.preparation.snapshot(
+                text: text,
+                isComplete: isComplete,
+                defaultDisclosureSummary: String(localized: "Details"))
+        case let .snapshot(snapshot):
+            snapshot
         }
     }
 
     @ViewBuilder
-    private func blockView(_ block: ChatMarkdownRenderedBlock, index: Int) -> some View {
+    private func blockView(
+        _ block: ChatMarkdownRenderedBlock,
+        index: Int,
+        isLast: Bool,
+        fileLabels: [String: String]?) -> some View
+    {
         switch block {
         case let .prose(prose):
-            self.proseText(prose, index: index)
+            self.proseText(prose, index: index, fileLabels: fileLabels, font: self.typography.proseFont)
                 .font(self.typography.proseFont)
                 .foregroundStyle(self.textColor)
                 .tint(self.linkColor)
                 .textSelection(.enabled)
-                .lineSpacing(self.variant == .compact ? 2 : 4)
+                .lineSpacing((self.variant == .compact ? 2 : 4) * self.typography.bodyScale)
                 .modifier(ChatInlineMathAccessibilityModifier(label: prose.inlineAccessibilityText))
         case let .heading(level, prose):
-            self.proseText(prose, index: index)
-                .font(self.typography.headingFont(level: level))
+            let font = self.typography.headingFont(level: level)
+            self.proseText(prose, index: index, fileLabels: fileLabels, font: font)
+                .font(font)
                 .foregroundStyle(self.textColor)
                 .tint(self.linkColor)
                 .textSelection(.enabled)
-                .lineSpacing(self.variant == .compact ? 2 : 4)
+                .lineSpacing((self.variant == .compact ? 2 : 4) * self.typography.bodyScale)
                 .modifier(ChatInlineMathAccessibilityModifier(label: prose.inlineAccessibilityText))
                 .accessibilityAddTraits(.isHeader)
         case let .code(code):
-            ChatCodeBlockView(block: code)
+            ChatCodeBlockView(block: code, bodyScale: self.typography.bodyScale)
         case let .math(math):
-            ChatMathBlockView(block: math, textColor: self.textColor)
+            ChatMathBlockView(block: math, textColor: self.textColor, bodyScale: self.typography.bodyScale)
         case let .table(table):
-            ChatMarkdownTableView(table: table)
+            #if os(iOS)
+            if self.fileLinksEnabled {
+                self.tableView(table).tint(self.linkColor)
+            } else {
+                self.tableView(table)
+            }
+            #else
+            self.tableView(table)
+            #endif
         case let .list(list):
             self.listView(list)
         case let .disclosure(disclosure):
@@ -159,10 +305,32 @@ struct ChatMarkdownRenderer: View {
                 variant: self.variant,
                 typography: self.typography,
                 textColor: self.textColor)
+        case let .quote(blocks):
+            // Web chat-text blockquote: a 2pt bar, 12pt to the text, ink at 78% (text.css).
+            ChatMarkdownRenderer(
+                snapshot: ChatMarkdownRenderSnapshot(blocks: blocks),
+                context: self.context,
+                variant: self.variant,
+                typography: self.typography,
+                textColor: self.textColor.opacity(0.78))
+                .padding(EdgeInsets(top: 2, leading: 12, bottom: 2, trailing: 10))
+                .overlay(alignment: .leading) {
+                    Capsule()
+                        .fill(self.textColor.opacity(0.16))
+                        .frame(width: 2)
+                        .padding(.vertical, 2)
+                        .accessibilityHidden(true)
+                }
+                .padding(.top, index > 0 ? self.quoteGap * self.typography.bodyScale : 0)
+                .padding(.bottom, isLast ? 0 : self.quoteGap * self.typography.bodyScale)
         case .thematicBreak:
             Divider()
                 .accessibilityHidden(true)
         }
+    }
+
+    func tableView(_ table: ChatMarkdownTable) -> ChatMarkdownTableView {
+        ChatMarkdownTableView(table: table, typography: self.typography)
     }
 
     func listView(_ list: ChatMarkdownList) -> ChatMarkdownListView {
@@ -171,23 +339,39 @@ struct ChatMarkdownRenderer: View {
             context: self.context,
             variant: self.variant,
             typography: self.typography,
-            textColor: self.textColor)
+            textColor: self.textColor,
+            isStreaming: !self.snapshot.isComplete)
     }
 
-    private func proseText(_ prose: ChatMarkdownProse, index: Int) -> SwiftUI.Text {
+    private func proseText(
+        _ prose: ChatMarkdownProse, index: Int, fileLabels: [String: String]?, font: Font) -> SwiftUI.Text
+    {
         guard let reveal = self.reveal, reveal.blockIndex == index else {
             return prose.renderedText(
                 fontSize: self.inlineMathFontSize,
+                font: font,
+                environment: self.environment,
                 textColor: self.textColor,
-                colorScheme: self.colorScheme)
+                colorScheme: self.colorScheme,
+                fileLabels: fileLabels)
         }
         return prose.revealedText(
             frame: revealedOpacities(state: reveal.state, now: reveal.now),
             textColor: self.textColor)
     }
 
+    /// File chips only in message bodies' response text (web `fileLinks`); the outermost renderer
+    /// labels them across its whole message and hands those labels to nested renderers.
+    private func fileLabels(for snapshot: ChatMarkdownRenderSnapshot) -> [String: String]? {
+        guard self.fileLinksEnabled, self.typography != .thinking else { return nil }
+        return self.inheritedFileLabels ?? ChatMarkdownInlineChips.shortestFileLabels(snapshot.filePaths)
+    }
+
     private var linkColor: Color {
-        self.context == .user ? self.textColor : OpenClawChatTheme.accent
+        #if os(iOS)
+        if self.fileLinksEnabled { return OpenClawChatTheme.messageLink }
+        #endif
+        return self.context == .user ? self.textColor : OpenClawChatTheme.accent
     }
 }
 
@@ -197,30 +381,91 @@ struct ChatMarkdownProseReveal {
     let now: TimeInterval
 }
 
+/// One mounted renderer owns one prepared source, not a history of Markdown prefixes.
+/// This is intentionally not observable: preparation derives synchronously from the
+/// view's current input and must not schedule another render or show stale content.
+@MainActor
+final class ChatMarkdownPreparation {
+    private struct Input: Equatable {
+        let text: String
+        let isComplete: Bool
+        let defaultDisclosureSummary: String
+    }
+
+    private var prepared: (input: Input, snapshot: ChatMarkdownRenderSnapshot)?
+
+    func snapshot(
+        text: String,
+        isComplete: Bool,
+        defaultDisclosureSummary: String) -> ChatMarkdownRenderSnapshot
+    {
+        let input = Input(
+            text: text,
+            isComplete: isComplete,
+            defaultDisclosureSummary: defaultDisclosureSummary)
+        if let prepared = self.prepared, prepared.input == input {
+            return prepared.snapshot
+        }
+        let snapshot = ChatMarkdownRenderSnapshot(
+            text: text,
+            isComplete: isComplete,
+            defaultDisclosureSummary: defaultDisclosureSummary)
+        self.prepared = (input, snapshot)
+        return snapshot
+    }
+}
+
 @MainActor
 struct ChatMarkdownRenderSnapshot {
     let blocks: [ChatMarkdownRenderedBlock]
     let images: [ChatMarkdownPreprocessor.InlineImage]
+    let isComplete: Bool
+    let filePaths: [String]
 
-    init(text: String, isComplete: Bool, preparesReveal: Bool = false) {
+    init(
+        text: String,
+        isComplete: Bool,
+        preparesReveal: Bool = false,
+        defaultDisclosureSummary: String = String(localized: "Details"))
+    {
+        self.isComplete = isComplete
         let processed = ChatMarkdownPreprocessor.preprocess(markdown: text)
-        self.blocks = ChatMarkdownBlockSegmenter.segments(
+        let segments = ChatMarkdownBlockSegmenter.segments(
             markdown: processed.cleaned,
-            isComplete: isComplete).map {
-            Self.renderedBlock($0, isComplete: isComplete, preparesReveal: preparesReveal)
+            isComplete: isComplete)
+        let lastProseIndex: Int? = if preparesReveal, !isComplete {
+            segments.lastIndex {
+                if case .prose = $0 {
+                    return true
+                }
+                return false
+            }
+        } else {
+            nil
+        }
+        self.blocks = segments.enumerated().map { index, block in
+            Self.renderedBlock(
+                block,
+                isComplete: isComplete,
+                preparesReveal: preparesReveal && (isComplete || index == lastProseIndex),
+                defaultDisclosureSummary: defaultDisclosureSummary)
         }
         self.images = processed.images
+        self.filePaths = Self.filePaths(in: self.blocks)
     }
 
     init(blocks: [ChatMarkdownRenderedBlock], images: [ChatMarkdownPreprocessor.InlineImage] = []) {
         self.blocks = blocks
         self.images = images
+        self.isComplete = true
+        self.filePaths = Self.filePaths(in: blocks)
     }
 
     private static func renderedBlock(
         _ block: ChatMarkdownBlock,
         isComplete: Bool,
-        preparesReveal: Bool) -> ChatMarkdownRenderedBlock
+        preparesReveal: Bool,
+        defaultDisclosureSummary: String) -> ChatMarkdownRenderedBlock
     {
         switch block {
         case let .prose(markdown):
@@ -234,7 +479,8 @@ struct ChatMarkdownRenderSnapshot {
                 prose: ChatMarkdownProse(
                     markdown: heading.markdown,
                     isComplete: isComplete,
-                    preparesReveal: false))
+                    preparesReveal: false,
+                    isHeading: true))
         case let .code(code):
             .code(code)
         case let .math(math):
@@ -247,7 +493,7 @@ struct ChatMarkdownRenderSnapshot {
             .disclosure(ChatMarkdownRenderedDisclosure(
                 summary: ChatMarkdownProse(
                     markdown: chatMarkdownDisclosureSummarySource(disclosure.summary) {
-                        String(localized: "Details")
+                        defaultDisclosureSummary
                     },
                     isComplete: true,
                     preparesReveal: false),
@@ -258,8 +504,17 @@ struct ChatMarkdownRenderSnapshot {
                     Self.renderedBlock(
                         $0,
                         isComplete: isComplete,
-                        preparesReveal: false)
+                        preparesReveal: false,
+                        defaultDisclosureSummary: defaultDisclosureSummary)
                 }))
+        case let .quote(blocks):
+            .quote(blocks.map {
+                Self.renderedBlock(
+                    $0,
+                    isComplete: isComplete,
+                    preparesReveal: false,
+                    defaultDisclosureSummary: defaultDisclosureSummary)
+            })
         case .thematicBreak:
             .thematicBreak
         }
@@ -273,6 +528,44 @@ struct ChatMarkdownRenderSnapshot {
             return false
         }
     }
+
+    /// Every file reference in the message, nested lists and tables included, so labels are
+    /// shortest-unique across the whole message (markdown-parser.ts:378-385), not per block.
+    private static func filePaths(in blocks: [ChatMarkdownRenderedBlock]) -> [String] {
+        blocks.flatMap { block -> [String] in
+            switch block {
+            case let .prose(prose), let .heading(_, prose):
+                prose.filePaths
+            case let .table(table):
+                (table.header + table.rows.flatMap(\.self))
+                    .filter(ChatMarkdownInlineChips.mayContainFileReference)
+                    .flatMap { ChatMarkdownInlineChips.filePaths(in: ChatMarkdownInlineChips.inlineMarkdown($0)) }
+            case let .list(list):
+                self.filePaths(in: list)
+            case let .disclosure(disclosure):
+                disclosure.summary.filePaths + self.filePaths(in: disclosure.blocks)
+            case let .quote(blocks):
+                self.filePaths(in: blocks)
+            case .code, .math, .thematicBreak:
+                []
+            }
+        }
+    }
+
+    private static func filePaths(in list: ChatMarkdownList) -> [String] {
+        list.items.flatMap(\.content).flatMap { content -> [String] in
+            switch content {
+            case let .markdown(markdown):
+                ChatMarkdownInlineChips.mayContainFileReference(markdown)
+                    ? ChatMarkdownRenderSnapshot(text: markdown, isComplete: true).filePaths
+                    : []
+            case let .list(nested):
+                self.filePaths(in: nested)
+            case .code:
+                []
+            }
+        }
+    }
 }
 
 enum ChatMarkdownRenderedBlock {
@@ -283,6 +576,7 @@ enum ChatMarkdownRenderedBlock {
     case table(ChatMarkdownTable)
     case list(ChatMarkdownList)
     case disclosure(ChatMarkdownRenderedDisclosure)
+    case quote([ChatMarkdownRenderedBlock])
     case thematicBreak
 }
 
@@ -326,7 +620,7 @@ private struct ChatMarkdownDisclosureView: View {
                 variant: self.variant,
                 typography: self.typography,
                 textColor: self.textColor)
-                .padding(.top, self.variant == .compact ? 4 : 6)
+                .padding(.top, (self.variant == .compact ? 4 : 6) * self.typography.bodyScale)
         } label: {
             ChatMarkdownRenderer(
                 snapshot: ChatMarkdownRenderSnapshot(blocks: [.prose(self.disclosure.summary)]),
@@ -338,6 +632,9 @@ private struct ChatMarkdownDisclosureView: View {
                     self.disclosure.summary.inlineAccessibilityText
                         ?? String(self.disclosure.summary.attributed.characters))
         }
+        #if os(iOS)
+        .disclosureGroupStyle(ChatInlineDisclosureStyle())
+        #endif
         .tint(self.context == .user ? self.textColor : OpenClawChatTheme.accent)
     }
 }
@@ -360,15 +657,15 @@ struct ChatMarkdownProse {
         case math(ChatInlineMathSpan)
     }
 
-    init(markdown: String, isComplete: Bool, preparesReveal: Bool) {
+    init(markdown: String, isComplete: Bool, preparesReveal: Bool, isHeading: Bool = false) {
         // preparesReveal belongs only to the streaming snapshot. Keep that path
         // on its single AttributedString build; completed snapshots alone split
         // prose for inline image interpolation.
         let inlineContent = isComplete && !preparesReveal
-            ? Self.makeInlineContent(markdown: markdown)
+            ? Self.makeInlineContent(markdown: markdown, isHeading: isHeading)
             : nil
         let attributed = inlineContent == nil
-            ? Self.parseMarkdown(markdown)
+            ? Self.parseMarkdown(markdown, isHeading: isHeading)
             : AttributedString()
         let plainText = preparesReveal ? String(attributed.characters) : ""
         let wordRanges = preparesReveal
@@ -392,16 +689,6 @@ struct ChatMarkdownProse {
         }
     }
 
-    // periphery:ignore - package tests inspect parsed math spans without exposing renderer internals.
-    var inlineMathLatex: [String] {
-        self.inlineContent?.compactMap { content in
-            if case let .math(span) = content {
-                return span.latex
-            }
-            return nil
-        } ?? []
-    }
-
     var inlineAccessibilityText: String? {
         guard let inlineContent else { return nil }
         return inlineContent.reduce(into: "") { text, content in
@@ -414,16 +701,35 @@ struct ChatMarkdownProse {
         }
     }
 
+    /// File references marked in this prose block, in order.
+    var filePaths: [String] {
+        guard let inlineContent else { return ChatMarkdownInlineChips.filePaths(in: self.attributed) }
+        return inlineContent.flatMap { content -> [String] in
+            guard case let .text(attributed) = content else { return [] }
+            return ChatMarkdownInlineChips.filePaths(in: attributed)
+        }
+    }
+
     func renderedText(
         fontSize: CGFloat,
+        font: Font,
+        environment: EnvironmentValues,
         textColor: Color,
-        colorScheme: ColorScheme) -> SwiftUI.Text
+        colorScheme: ColorScheme,
+        fileLabels: [String: String]?) -> SwiftUI.Text
     {
-        guard let inlineContent else { return SwiftUI.Text(self.attributed) }
+        guard let inlineContent else {
+            return ChatMarkdownInlineChips.text(
+                self.attributed,
+                fileLabels: fileLabels,
+                font: font,
+                environment: environment)
+        }
         return inlineContent.reduce(SwiftUI.Text("")) { text, content in
             switch content {
             case let .text(attributed):
-                return text + SwiftUI.Text(attributed)
+                return text + ChatMarkdownInlineChips.text(
+                    attributed, fileLabels: fileLabels, font: font, environment: environment)
             case let .math(span):
                 guard let rendered = ChatInlineMathImageCache.image(
                     latex: span.latex,
@@ -453,7 +759,7 @@ struct ChatMarkdownProse {
         }
     }
 
-    private static func makeInlineContent(markdown: String) -> [InlineContent]? {
+    private static func makeInlineContent(markdown: String, isHeading: Bool) -> [InlineContent]? {
         let pieces = ChatInlineMathScanner.pieces(in: markdown)
         guard pieces.contains(where: { piece in
             if case .markdown = piece {
@@ -487,7 +793,7 @@ struct ChatMarkdownProse {
             }
         }
 
-        let attributed = self.parseMarkdown(substitutedMarkdown)
+        let attributed = self.parseMarkdown(substitutedMarkdown, isHeading: isHeading)
         var content: [InlineContent] = []
         var cursor = attributed.startIndex
         for replacement in replacements {
@@ -556,13 +862,24 @@ struct ChatMarkdownProse {
         }
     }
 
-    private static func parseMarkdown(_ markdown: String) -> AttributedString {
+    private static func parseMarkdown(_ markdown: String, isHeading: Bool) -> AttributedString {
         let displayMarkdown = ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: markdown)
         let options = AttributedString.MarkdownParsingOptions(
             interpretedSyntax: .full,
             failurePolicy: .returnPartiallyParsedIfPossible)
-        return (try? AttributedString(markdown: displayMarkdown, options: options))
+        let parsed = (try? AttributedString(markdown: displayMarkdown, options: options))
             ?? AttributedString(displayMarkdown)
+        // Foundation stores block boundaries as presentation intents, without newline
+        // characters. SwiftUI Text needs explicit separators, including on the reveal path.
+        var rendered = AttributedString()
+        for (_, range) in parsed.runs[\.presentationIntent] {
+            if !rendered.characters.isEmpty {
+                let trailingNewlines = rendered.characters.suffix(2).reversed().prefix { $0 == "\n" }.count
+                rendered.append(AttributedString(String(repeating: "\n", count: 2 - trailingNewlines)))
+            }
+            rendered.append(AttributedString(parsed[range]))
+        }
+        return ChatMarkdownInlineChips.decorate(rendered, isHeading: isHeading)
     }
 
     private static func tailPieces(
@@ -628,25 +945,14 @@ enum ChatMarkdownDisplayPreprocessor {
         guard lines.count > 1 else { return normalized }
         let codeLines = self.codeLineIndices(in: normalized)
 
-        var output = ""
-        for index in lines.indices {
-            output += lines[index]
-
-            guard index < lines.index(before: lines.endIndex) else {
-                continue
-            }
-
-            if !codeLines.contains(index),
-               !codeLines.contains(index + 1),
-               self.shouldPreserveSoftBreak(after: lines[index], before: lines[index + 1])
-            {
-                output += "  \n"
-            } else {
-                output += "\n"
-            }
-        }
-
-        return output
+        return lines.indices.map { index in
+            guard index < lines.index(before: lines.endIndex),
+                  !codeLines.contains(index),
+                  !codeLines.contains(index + 1),
+                  self.shouldPreserveSoftBreak(after: lines[index], before: lines[index + 1])
+            else { return lines[index] }
+            return lines[index] + "  "
+        }.joined(separator: "\n")
     }
 
     private static func codeLineIndices(in markdown: String) -> Set<Int> {

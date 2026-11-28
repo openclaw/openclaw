@@ -17,10 +17,11 @@ export function resolveVoiceCallAgentId(
       });
 }
 
-/** Keep one agent owner for the full call, including legacy stored records. */
-export function resolveCallAgentId(
-  call: Pick<CallRecord, "agentId">,
-  config: Pick<VoiceCallConfig, "agentId">,
-): string {
-  return normalizeAgentId(call.agentId ?? config.agentId);
+export function resolveCallAgentId(call: Pick<CallRecord, "agentId">): string {
+  if (!call.agentId?.trim()) {
+    throw new Error(
+      "Voice Call has no recorded agent owner. Start a new call and hang up any remaining call with your provider; saved history is unchanged.",
+    );
+  }
+  return normalizeAgentId(call.agentId);
 }

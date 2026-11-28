@@ -39,7 +39,6 @@ export function copyAttemptDeliveryState(
           previous.messagingToolSourceReplyPayloads,
         )
       : attempt.messagingToolSourceReplyPayloads,
-    heartbeatToolResponse: attempt.heartbeatToolResponse ?? previous?.heartbeatToolResponse,
     successfulCronAdds: previous?.successfulCronAdds
       ? previous.successfulCronAdds + (attempt.successfulCronAdds ?? 0)
       : attempt.successfulCronAdds,

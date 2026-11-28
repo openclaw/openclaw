@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import * as onboardInference from "../commands/onboard-inference.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
@@ -17,44 +17,30 @@ afterEach(async () => {
 
 it.each([false, true])(
   "retires repeated provider discovery after callback settlement (failed: %s)",
-  async (failed) => {
-    await withOpenClawTestState({ label: "setup-discovery-lifetime" }, async (state) => {
+  (failed) =>
+    withOpenClawTestState({ label: "setup-discovery-lifetime" }, async (state) => {
       const id = "discovery-lifetime-fixture";
-      const pluginDir = state.statePath("extensions", id);
       const nativeEvent = `${id}-${path.basename(state.root)}`;
       const observationEvent = `${nativeEvent}-observation`;
       const releaseEvent = `${nativeEvent}-release`;
       const nativeBefore = process.listenerCount(nativeEvent);
       const modelRef = `${id}/local-model`;
-      await fs.mkdir(pluginDir, { recursive: true });
-      await fs.writeFile(
-        path.join(pluginDir, "package.json"),
-        JSON.stringify({
-          name: id,
-          version: "1.0.0",
-          type: "module",
-          openclaw: { extensions: ["./index.ts"] },
-        }),
-      );
-      await fs.writeFile(
-        path.join(pluginDir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id,
-          providers: [id],
-          configSchema: { type: "object", properties: {} },
-          providerAuthChoices: [
-            {
-              provider: id,
-              method: "local",
-              choiceId: id,
-              choiceLabel: "Local discovery fixture",
-              appGuidedDiscovery: true,
-            },
-          ],
-        }),
-      );
-      await fs.writeFile(
-        path.join(pluginDir, "index.ts"),
+      await state.writeJson(`extensions/${id}/openclaw.plugin.json`, {
+        id,
+        providers: [id],
+        configSchema: { type: "object", properties: {} },
+        providerAuthChoices: [
+          {
+            provider: id,
+            method: "local",
+            choiceId: id,
+            choiceLabel: "Local discovery fixture",
+            appGuidedDiscovery: true,
+          },
+        ],
+      });
+      await state.writeText(
+        `extensions/${id}/index.ts`,
         `
         export default { id: ${JSON.stringify(id)}, register(api) {
           const listener = () => {};
@@ -84,29 +70,23 @@ it.each([false, true])(
         gateway: { mode: "local" },
         plugins: {
           allow: [id],
-          load: { paths: [pluginDir] },
+          load: { paths: [state.statePath("extensions", id)] },
           entries: { [id]: { enabled: true } },
           slots: { memory: "none" },
         },
       };
       await state.writeConfig(config);
+      const backend = vi.spyOn(onboardInference, "detectInferenceBackends").mockResolvedValue([]);
       try {
         for (let iteration = 0; iteration < 2; iteration++) {
           const started = createDeferredCore();
           const phases: string[] = [];
           const observe = (phase: string) => {
             phases.push(phase);
-            if (phase === "detect") {
-              started.resolve();
-            }
+            started.resolve();
           };
           process.on(observationEvent, observe);
-          const work = detectSetupInference(
-            {
-              detectInferenceBackends: async () => [],
-            },
-            "main",
-          );
+          const work = detectSetupInference("main");
           try {
             await Promise.race([started.promise, work]);
             expect(phases).toEqual(["detect"]);
@@ -116,19 +96,13 @@ it.each([false, true])(
               lease.assertOwned(),
             );
             process.emit(releaseEvent);
-            const result = await work;
-            expect(result.candidates).toEqual(
-              failed
-                ? []
-                : [
-                    expect.objectContaining({
-                      kind: `provider-auto:${id}`,
-                      modelRef,
-                      detail: "fixture available",
-                      credentials: true,
-                    }),
-                  ],
-            );
+            const candidate = expect.objectContaining({
+              kind: `provider-auto:${id}`,
+              modelRef,
+              detail: "fixture available",
+              credentials: true,
+            });
+            expect((await work).candidates).toEqual(failed ? [] : [candidate]);
             expect(phases).toEqual(["detect", "dispose"]);
             expect(process.listenerCount(nativeEvent)).toBe(nativeBefore);
             expect(process.listenerCount(releaseEvent)).toBe(0);
@@ -146,11 +120,11 @@ it.each([false, true])(
         ).toEqual(new Set([id]));
         expect(process.listenerCount(nativeEvent)).toBe(nativeBefore);
       } finally {
+        backend.mockRestore();
         // Restore only this fixture's events when running the regression against its leaking predecessor.
         process.removeAllListeners(nativeEvent);
         process.removeAllListeners(releaseEvent);
         process.removeAllListeners(observationEvent);
       }
-    });
-  },
+    }),
 );

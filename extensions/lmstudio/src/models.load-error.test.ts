@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
 
 describe("LM Studio model-load error transport", () => {
@@ -26,15 +27,8 @@ describe("LM Studio model-load error transport", () => {
       response.writeHead(responseStatus, { "Content-Type": "application/json" });
       response.end(responseStatus === 200 ? JSON.stringify({ status: reflected }) : reflected);
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
+    const port = await listenOnLoopback(server);
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("LM Studio test server did not bind to a local port");
-      }
       for (const [status, expected] of [
         [502, "LM Studio model load failed (502): upstream rejected ***; proxy ***"],
         [200, "LM Studio model load returned unexpected status: upstream rejected ***; proxy ***"],
@@ -42,7 +36,7 @@ describe("LM Studio model-load error transport", () => {
         responseStatus = status;
         await expect(
           ensureLmstudioModelLoaded({
-            baseUrl: `http://127.0.0.1:${address.port}`,
+            baseUrl: `http://127.0.0.1:${port}`,
             modelKey: "qwen3-8b-instruct",
             apiKey: "sk-test",
             headers: { "X-Proxy-Auth": "opaque-short" },
@@ -50,9 +44,7 @@ describe("LM Studio model-load error transport", () => {
         ).rejects.toThrow(expected);
       }
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await server[Symbol.asyncDispose]();
     }
   });
 });

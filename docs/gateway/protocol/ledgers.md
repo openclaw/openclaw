@@ -1,14 +1,13 @@
 ---
-summary: "Audit ledger and task ledger RPCs, their scopes, cursors, and payloads"
+summary: "Audit ledger RPCs, scopes, cursors, and payloads"
 read_when:
   - Reading the audit ledger over the Gateway protocol
-  - Listing or watching task ledger entries from a client
 title: "Gateway protocol ledger RPCs"
 sidebarTitle: "Ledger RPCs"
 doc-schema-version: 1
 ---
 
-The two append-only ledgers a client can read over the protocol: the audit ledger and the task ledger.
+The audit ledger is available through the Gateway protocol.
 
 ## Audit ledger RPC
 
@@ -147,49 +146,3 @@ only when its filters do not require message kind, direction, or channel
 support.
 
 Use [`openclaw audit`](/cli/audit) for text queries and bounded JSON exports.
-
-## Task ledger RPCs
-
-Operator clients inspect and cancel gateway background task records through
-the task ledger RPCs (`packages/gateway-protocol/src/schema/tasks.ts`). These
-return sanitized task summaries, not raw runtime state.
-
-- `tasks.list` requires `operator.read`.
-  - Params: optional `status` (`"queued"`, `"running"`, `"completed"`,
-    `"failed"`, `"cancelled"`, or `"timed_out"`) or an array of those statuses,
-    optional `agentId`, optional `sessionKey`, optional `limit` from `1` to
-    `500`, optional string `cursor`, and optional `sortBy` (`"updatedAt"` or
-    `"endedAt"`). Ordering is descending; omitted `sortBy` uses last activity.
-    Use `"endedAt"` with terminal status filters when page membership must
-    reflect completion order. Legacy terminal rows without a stored `endedAt`
-    use their recorded terminal activity time, then creation time, as the
-    canonical completion timestamp before pagination.
-  - Result: `{ "tasks": TaskSummary[], "nextCursor"?: string }`.
-  - Cursors are bound to the current task data, caller access, and task database.
-    If those change, request a fresh first page. Unrelated database lifecycle
-    activity preserves the cursor.
-  - A stale cursor returns `INVALID_REQUEST` with `details.reason` identifying
-    `access-changed`, `tasks-changed`, or `page-invalid` (the selected page lost
-    validity before the response). The message names the cause and instructs
-    the caller to restart pagination without a cursor.
-  - Failed session-metadata reads return `UNAVAILABLE` with the recorded cause
-    instead of an empty or partial page when an existing store cannot be read,
-    its schema is not ready, or a required table is missing. An absent database
-    is an empty metadata store; normal task visibility rules still apply.
-    Genuinely empty authorized results remain successful empty pages.
-- `tasks.get` requires `operator.read`.
-  - Params: `{ "taskId": string }`.
-  - Result: `{ "task": TaskSummary }`.
-  - Missing task ids return the gateway not-found error shape.
-- `tasks.cancel` requires `operator.write`.
-  - Params: `{ "taskId": string, "reason"?: string }`.
-  - Result: `{ "found": boolean, "cancelled": boolean, "reason"?: string, "task"?: TaskSummary }`.
-  - `found` reports whether the ledger had a matching task. `cancelled`
-    reports whether the runtime accepted or recorded cancellation.
-
-`TaskSummary` includes `id`, `status`, and optional metadata: `kind`,
-`runtime`, `title`, `agentId`, `sessionKey`, `childSessionKey`, `ownerKey`,
-`runId`, `taskId`, `flowId`, `parentTaskId`, `sourceId`, timestamps, progress,
-terminal summary, and sanitized error text. `agentId` identifies the agent
-executing the task; `sessionKey` and `ownerKey` preserve requester and control
-context.

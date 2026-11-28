@@ -1,8 +1,6 @@
-/** Pure helpers for doctor skill readiness repairs. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
 
-/** Returns allowed skills that are unusable in the current runtime environment. */
 export function collectUnavailableAgentSkills(report: SkillStatusReport): SkillStatusEntry[] {
   return report.skills.filter(
     (skill) =>

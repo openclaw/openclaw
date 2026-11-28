@@ -13,19 +13,7 @@ type MediaProviderKey =
   | "videoGenerationProviders";
 type MediaProviderOptions = { cfg: OpenClawConfig; prepared?: PreparedModelRuntimeSnapshot };
 
-export function acquireImageGenerationToolProviders(params: MediaProviderOptions) {
-  return acquireMediaGenerationToolProviders("imageGenerationProviders", params);
-}
-
-export function acquireMusicGenerationToolProviders(params: MediaProviderOptions) {
-  return acquireMediaGenerationToolProviders("musicGenerationProviders", params);
-}
-
-export function acquireVideoGenerationToolProviders(params: MediaProviderOptions) {
-  return acquireMediaGenerationToolProviders("videoGenerationProviders", params);
-}
-
-async function acquireMediaGenerationToolProviders<K extends MediaProviderKey>(
+export async function acquireMediaGenerationToolProviders<K extends MediaProviderKey>(
   key: K,
   params: MediaProviderOptions,
 ) {

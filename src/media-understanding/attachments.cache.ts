@@ -3,6 +3,7 @@
 import { realpathSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import {
   classifyAttachmentBytes,
   type AttachmentClassification,
@@ -16,12 +17,12 @@ import { resolveStateDir } from "../config/paths.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { readFileHandleBounded } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, openLocalFileSafely, type OpenResult } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { buildRandomTempFilePath } from "../infra/temp-download.js";
+import { logWarn } from "../logger.js";
 import {
-  readRemoteMediaBuffer,
+  readRemoteMediaBufferWithHeaders,
   type MediaFetchRetryOptions,
   MediaFetchError,
 } from "../media/fetch.js";
@@ -62,11 +63,25 @@ type AttachmentCacheEntry = {
   lastLocalError?: MediaUnderstandingSkipError;
 };
 
-function maxBytesError(params: { attachmentIndex: number; maxBytes: number }) {
+export function maxBytesError(params: { attachmentIndex: number; maxBytes: number }) {
   return new MediaUnderstandingSkipError(
     "maxBytes",
-    `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
+    `Attachment ${params.attachmentIndex + 1} exceeds the size limit of ${params.maxBytes} bytes.`,
   );
+}
+
+function localFileSkipError(index: number, error: FsSafeError): MediaUnderstandingSkipError {
+  const label = `Attachment ${index + 1}`;
+  if (error.code === "not-found") {
+    return new MediaUnderstandingSkipError(
+      "empty",
+      `The file for attachment ${index + 1} does not exist.`,
+    );
+  }
+  if (error.code === "not-file") {
+    return new MediaUnderstandingSkipError("empty", `${label} path is not a regular file.`);
+  }
+  return new MediaUnderstandingSkipError("blocked", `${label} path is outside allowed roots.`);
 }
 
 let defaultLocalPathRoots: readonly string[] | undefined;
@@ -143,14 +158,12 @@ export type MediaAttachmentCacheOptions = {
 export class MediaAttachmentCache {
   private readonly entries = new Map<number, AttachmentCacheEntry>();
   private readonly stagedPaths = new Set<string>();
-  private readonly attachments: MediaAttachment[];
   private readonly localPathRoots: readonly string[];
   private readonly ssrfPolicy: SsrFPolicy | undefined;
   private readonly fallbackWorkspaceDir?: string;
   private canonicalLocalPathRoots?: Promise<readonly string[]>;
 
   constructor(attachments: MediaAttachment[], options?: MediaAttachmentCacheOptions) {
-    this.attachments = attachments;
     this.ssrfPolicy = options?.ssrfPolicy;
     this.localPathRoots =
       options?.includeDefaultLocalPathRoots === false
@@ -167,8 +180,10 @@ export class MediaAttachmentCache {
     attachmentIndex: number;
     maxBytes: number;
     timeoutMs: number;
+    signal?: AbortSignal;
   }): Promise<MediaBufferResult> {
     const entry = await this.ensureEntry(params.attachmentIndex);
+    params.signal?.throwIfAborted();
     const url = remoteFetchUrl(entry.attachment.url);
     if (entry.bufferResult) {
       if (entry.bufferResult.size > params.maxBytes) {
@@ -178,6 +193,7 @@ export class MediaAttachmentCache {
     }
 
     const local = await this.withLocalFile(entry, () => this.readEntryLocalBuffer(entry, params));
+    params.signal?.throwIfAborted();
     if (local) {
       return local;
     }
@@ -193,12 +209,13 @@ export class MediaAttachmentCache {
     }
 
     try {
-      const fetched = await readRemoteMediaBuffer({
+      const fetched = await readRemoteMediaBufferWithHeaders({
         url,
         timeoutMs: params.timeoutMs,
         maxBytes: params.maxBytes,
         ssrfPolicy: this.ssrfPolicy,
         retry: REMOTE_MEDIA_FETCH_RETRY,
+        ...(params.signal ? { requestInit: { signal: params.signal } } : {}),
       });
       const classification = await classifyAttachmentBytes({
         buffer: fetched.buffer,
@@ -206,8 +223,9 @@ export class MediaAttachmentCache {
         // Channel-declared MIME leads; the transport Content-Type stays a
         // secondary hint so byte detection can refine stale declarations.
         declaredMime: concreteMime(entry.attachment.mime),
-        additionalMimeHints: [fetched.contentType],
+        additionalMimeHints: [fetched.contentType, fetched.headerContentType],
       });
+      params.signal?.throwIfAborted();
       entry.bufferResult = {
         buffer: fetched.buffer,
         classification,
@@ -217,6 +235,7 @@ export class MediaAttachmentCache {
       };
       return entry.bufferResult;
     } catch (err) {
+      params.signal?.throwIfAborted();
       if (err instanceof MediaFetchError && err.code === "max_bytes") {
         throw maxBytesError(params);
       }
@@ -261,16 +280,7 @@ export class MediaAttachmentCache {
         if (err.code === "too-large") {
           throw maxBytesError(params);
         }
-        if (err.code === "not-file" || err.code === "not-found") {
-          throw new MediaUnderstandingSkipError(
-            "empty",
-            `Attachment ${params.attachmentIndex + 1} path is not a regular file.`,
-          );
-        }
-        throw new MediaUnderstandingSkipError(
-          "blocked",
-          `Attachment ${params.attachmentIndex + 1} path is outside allowed roots.`,
-        );
+        throw localFileSkipError(params.attachmentIndex, err);
       }
       throw err;
     } finally {
@@ -341,12 +351,9 @@ export class MediaAttachmentCache {
   }
 
   /** Returns a local path for providers that cannot accept buffers, creating a temp file if needed. */
-  async getPath(params: {
-    attachmentIndex: number;
-    maxBytes: number;
-    timeoutMs: number;
-  }): Promise<string> {
+  async getPath(params: Parameters<MediaAttachmentCache["getBuffer"]>[0]): Promise<string> {
     const entry = await this.ensureEntry(params.attachmentIndex);
+    params.signal?.throwIfAborted();
     const local = await this.withLocalFile(entry, async () => {
       await (await this.prepareLocalFile(entry))?.handle.close().catch(() => {});
       const size = entry.statSize;
@@ -358,6 +365,7 @@ export class MediaAttachmentCache {
       }
       return undefined;
     });
+    params.signal?.throwIfAborted();
     if (local) {
       return local;
     }
@@ -376,11 +384,13 @@ export class MediaAttachmentCache {
       extension,
     });
     this.stagedPaths.add(tmpPath);
-    await fs.writeFile(tmpPath, bufferResult.buffer).catch(async (error: unknown) => {
-      // A failed attempt cannot remove another borrower's file; retain failed removals for cleanup.
-      await this.removeStagedPath(tmpPath);
-      throw error;
-    });
+    await fs
+      .writeFile(tmpPath, bufferResult.buffer, { signal: params.signal })
+      .catch(async (error: unknown) => {
+        // A failed attempt cannot remove another borrower's file; retain failed removals for cleanup.
+        await this.removeStagedPath(tmpPath);
+        throw error;
+      });
     entry.tempPath = tmpPath;
     return tmpPath;
   }
@@ -399,6 +409,9 @@ export class MediaAttachmentCache {
       await fs.unlink(tmpPath);
     } catch (error) {
       if (!hasErrnoCode(error, "ENOENT")) {
+        logWarn(
+          `media-understanding: could not remove staged attachment ${tmpPath}; remove it manually if it remains: ${String(error)}`,
+        );
         return;
       }
     }
@@ -414,22 +427,13 @@ export class MediaAttachmentCache {
   }
 
   private async ensureEntry(attachmentIndex: number): Promise<AttachmentCacheEntry> {
-    const existing = this.entries.get(attachmentIndex);
-    if (existing) {
-      if (!existing.localResolutionAttempted) {
-        existing.resolvedPath = await this.resolveLocalPath(existing.attachment);
-        existing.localResolutionAttempted = true;
-      }
-      return existing;
+    const entry: AttachmentCacheEntry = this.entries.get(attachmentIndex) ?? {
+      attachment: { index: attachmentIndex },
+    };
+    if (!entry.localResolutionAttempted) {
+      entry.resolvedPath = await this.resolveLocalPath(entry.attachment);
+      entry.localResolutionAttempted = true;
     }
-    const attachment = this.attachments.find((item) => item.index === attachmentIndex) ?? {
-      index: attachmentIndex,
-    };
-    const entry: AttachmentCacheEntry = {
-      attachment,
-      resolvedPath: await this.resolveLocalPath(attachment),
-      localResolutionAttempted: true,
-    };
     this.entries.set(attachmentIndex, entry);
     return entry;
   }
@@ -514,37 +518,17 @@ export class MediaAttachmentCache {
       }
       if (err instanceof FsSafeError) {
         entry.resolvedPath = undefined;
-        if (err.code === "not-file") {
-          throw new MediaUnderstandingSkipError(
-            "empty",
-            `Attachment ${entry.attachment.index + 1} path is not a regular file.`,
-          );
-        }
-        if (err.code !== "not-found") {
-          throw new MediaUnderstandingSkipError(
-            "blocked",
-            `Attachment ${entry.attachment.index + 1} path is outside allowed roots.`,
-          );
-        }
-      } else {
-        throw new MediaUnderstandingSkipError(
-          "blocked",
-          `Attachment ${entry.attachment.index + 1} could not be canonicalized.`,
-        );
+        throw localFileSkipError(entry.attachment.index, err);
       }
-      entry.resolvedPath = undefined;
-      if (shouldLogVerbose()) {
-        logVerbose(`Failed to read attachment ${entry.attachment.index + 1}: ${String(err)}`);
-      }
-      return undefined;
+      throw new MediaUnderstandingSkipError(
+        "blocked",
+        `Attachment ${entry.attachment.index + 1} could not be canonicalized.`,
+      );
     }
   }
 
   private async getCanonicalLocalPathRoots(): Promise<readonly string[]> {
-    if (this.canonicalLocalPathRoots) {
-      return await this.canonicalLocalPathRoots;
-    }
-    this.canonicalLocalPathRoots = (async () =>
+    return await (this.canonicalLocalPathRoots ??= (async () =>
       mergeInboundPathRoots(
         this.localPathRoots,
         await Promise.all(
@@ -555,7 +539,6 @@ export class MediaAttachmentCache {
             return await fs.realpath(root).catch(() => root);
           }),
         ),
-      ))();
-    return await this.canonicalLocalPathRoots;
+      ))());
   }
 }

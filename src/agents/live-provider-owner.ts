@@ -1,6 +1,4 @@
 /**
- * Live provider ownership helpers.
- *
  * Live provider checks use this to decide when two provider ids belong to the
  * same plugin owner without repeating manifest/provider resolution work.
  */

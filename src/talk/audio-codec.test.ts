@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { createStreamingPcmResampler, resamplePcm } from "./audio-codec.js";
+import { createStreamingPcmResampler, mulawToPcmInto, resamplePcm } from "./audio-codec.js";
+
+describe("mulawToPcmInto", () => {
+  it.each([2, 3])("writes PCM into a destination at byte offset %i", (offset) => {
+    const mulaw = Buffer.from([0x00, 0x80, 0x7f, 0xff, 0x10, 0x90]);
+    const storage = Buffer.alloc(offset + mulaw.length * 2 + 1, 0x55);
+    const destination = storage.subarray(offset, -1);
+
+    mulawToPcmInto(mulaw, destination);
+
+    expect(destination).toEqual(Buffer.from("84827c7d0000000084c17c3e", "hex"));
+    expect(storage.subarray(0, offset)).toEqual(Buffer.alloc(offset, 0x55));
+    expect(storage.at(-1)).toBe(0x55);
+  });
+
+  it.each([3, 5])("rejects a %i-byte destination before writing a sample", (length) => {
+    const destination = Buffer.alloc(length, 0x55);
+
+    expect(() => mulawToPcmInto(Buffer.from([0x00, 0x80]), destination)).toThrow(RangeError);
+    expect(destination).toEqual(Buffer.alloc(length, 0x55));
+  });
+});
 
 function createSine(sampleRate: number, durationMs: number): Buffer {
   const sampleCount = Math.floor((sampleRate * durationMs) / 1_000);
@@ -23,6 +44,17 @@ function processInFrames(input: Buffer, inputRate: number, outputRate: number) {
   chunks.push(resampler.flush());
   return chunks;
 }
+
+it.each([
+  [239, 439],
+  [240, 441],
+  [241, 442],
+])("resamples %i samples at 24 kHz to %i at 44.1 kHz", (inputSamples, outputSamples) => {
+  const input = Buffer.alloc(inputSamples * 2, 0x2a);
+  const expected = Buffer.alloc(outputSamples * 2, 0x2a);
+  expect(resamplePcm(input, 24_000, 44_100)).toEqual(expected);
+  expect(Buffer.concat(processInFrames(input, 24_000, 44_100))).toEqual(expected);
+});
 
 describe("createStreamingPcmResampler", () => {
   it("matches whole-buffer resampling across 20 ms chunk boundaries", () => {

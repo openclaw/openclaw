@@ -22,12 +22,14 @@ The trust boundaries and data flows these threats cross are defined in the [thre
 | **Residual risk**       | Medium - public gateways discoverable                                |
 | **Recommendations**     | Document secure deployment, add rate limiting on discovery endpoints |
 
-## T-RECON-002: Channel integration probing
+<a id="t-recon-002-channel-integration-probing" />
+
+## T-RECON-002: Channel integration discovery
 
 | Attribute               | Value                                                              |
 | ----------------------- | ------------------------------------------------------------------ |
 | **ATLAS ID**            | AML.T0006 - Active Scanning                                        |
-| **Description**         | Attacker probes messaging channels to identify AI-managed accounts |
+| **Description**         | Attacker checks messaging channels to identify AI-managed accounts |
 | **Attack vector**       | Sending test messages, observing response patterns                 |
 | **Affected components** | All channel integrations                                           |
 | **Current mitigations** | None specific                                                      |

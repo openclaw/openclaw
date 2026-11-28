@@ -7,23 +7,24 @@ scenario:
   coverage:
     primary:
       - telegram.built-in-commands
-  objective: Verify Telegram context help reaches native command routing.
+  objective: Verify Telegram returns the prompt budget through native command routing.
   successCriteria:
-    - The context command returns the context list shortcut.
-    - The reply explains the inline shortcut.
+    - The context command returns the expected budget report and supporting detail.
   codeRefs:
-    - src/auto-reply/reply/commands-context.ts
+    - src/auto-reply/reply/commands-context-report.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
     kind: flow
     channel: telegram
-    summary: Run Telegram context help and verify the list shortcut.
+    summary: Run the native Telegram context command and verify its budget report.
     config:
-      expectedAny: [/context list, Inline shortcut]
+      commandText: /context
+      replyMarker: Prompt budget
+      expectedDetails: /context list
 
 flow:
   steps:
-    - name: context returns shortcut help
+    - name: context returns prompt budget
       actions:
         - resetTransport: true
         - set: startIndex
@@ -33,16 +34,16 @@ flow:
             conversation: { id: telegram-command-room, kind: channel }
             senderId: qa-command-operator
             senderName: QA Command Operator
-            text: /context
+            text: { ref: config.commandText }
             nativeCommand: { name: context }
         - waitForOutbound:
             conversation: { id: telegram-command-room, kind: channel }
             sinceIndex: { ref: startIndex }
-            textIncludes: /context list
+            textIncludes: { ref: config.replyMarker }
             timeoutMs: 60000
           saveAs: reply
         - assert:
-            expr: "config.expectedAny.every((needle) => reply.text.includes(needle))"
+            expr: "reply.text.includes(config.replyMarker) && reply.text.includes(config.expectedDetails)"
             message:
               expr: "`context reply missing expected text: ${reply.text}`"
       detailsExpr: reply.text

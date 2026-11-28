@@ -1,7 +1,7 @@
 import Foundation
 
-enum ChatCompactTokenCountFormatter {
-    static func string(_ tokens: Double) -> String {
+public enum ChatCompactTokenCountFormatter {
+    public static func string(_ tokens: Double) -> String {
         if tokens >= 1_000_000 {
             return "\(self.oneDecimal(tokens / 1_000_000))M"
         }

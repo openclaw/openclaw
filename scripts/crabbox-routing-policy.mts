@@ -48,10 +48,9 @@ export function crabboxProviderChain({
   const cloudFallback = ["azure", "aws"];
   switch (workload) {
     case "ci-fast":
-      return available(["blacksmith-testbox", "daytona", ...cloudFallback], providers);
     case "ci-proof":
     case "release-proof":
-      return available(["blacksmith-testbox", "daytona", ...cloudFallback], providers);
+      return available(["ascii-box", "daytona", ...cloudFallback], providers);
     case "interactive":
       return available(["daytona", ...cloudFallback], providers);
     case "desktop":
@@ -62,19 +61,6 @@ export function crabboxProviderChain({
     default:
       return available([normalizedConfigured], providers);
   }
-}
-
-export function selectReadyCrabboxProvider<T extends { ready: boolean }>(
-  chain: readonly string[],
-  readiness: ReadonlyMap<string, T>,
-) {
-  for (const provider of chain) {
-    const status = readiness.get(provider);
-    if (status?.ready) {
-      return { provider, readiness: status };
-    }
-  }
-  return null;
 }
 
 function available(candidates: readonly string[], advertisedProviders: ReadonlySet<string>) {

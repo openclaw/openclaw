@@ -1,3 +1,4 @@
+export const RELAY_AUTH_LABEL: "openclaw.browser-relay.auth";
 export const RELAY_AUTH_VERSION: 2;
 export function requireRelayCrypto(cryptoApi: Crypto): Crypto;
 export function relayBytesFromBase64Url(
@@ -15,11 +16,11 @@ export type RelayAuthProofFields = {
   serverNonce: string;
   issuedAtMs: number;
   expiresAtMs: number;
-  role: string;
-  transport: string;
-  method: string;
+  role: "extension" | "cdp";
+  transport: "websocket" | "connection";
+  method: "GET" | "SEQUENCE";
   resource: string;
-  flow: string;
+  flow: "extension" | "cdp" | "json-list" | "owner";
 };
 export function canonicalRelayAuthProofBytes(
   proofKind: "server" | "client" | "accept",

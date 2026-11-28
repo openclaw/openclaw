@@ -1,8 +1,8 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.Question
 import ai.openclaw.app.gateway.QuestionAnswers
 import ai.openclaw.app.gateway.QuestionGetResult
@@ -55,6 +55,37 @@ class ChatQuestionTest {
         .setOther(question, " Salad ")
 
     assertEquals(mapOf("meal" to listOf("Pizza", "Tacos", "Salad")), draft.answers(listOf(question)))
+  }
+
+  @Test
+  fun richChoicesSubmitCanonicalValuesAndKeepCustomTitles() {
+    val parts =
+      question.copy(
+        options = listOf(QuestionOption("Bolt", value = "part:m4"), QuestionOption("Bolt", value = "part:m6")),
+        presentation = "form",
+      )
+    val draft = ChatQuestionDraft().toggle(parts, "part:m6").toggle(parts, "part:m4").setOther(parts, "Bolt")
+    assertEquals(mapOf("meal" to listOf("part:m4", "part:m6", "Bolt")), draft.answers(listOf(parts)))
+    assertEquals(ChatQuestionDraft(), ChatQuestionDraft().toggle(parts, "Bolt"))
+    val prompt =
+      ChatQuestionPrompt(
+        record(status = "answered").copy(
+          questions = listOf(parts),
+          answers = QuestionAnswers(mapOf("meal" to listOf("part:m6"))),
+        ),
+      )
+    assertEquals("Bolt", terminalQuestionAnswer(prompt, parts, ChatQuestionStatus.Answered))
+  }
+
+  @Test
+  fun richDefaultsPreserveWhitespaceAndClearedOptionalAnswers() {
+    val tags = question.copy(options = emptyList(), presentation = "form", answerFormat = "lines", allowEmpty = true, defaultAnswers = listOf(" first ", "second"))
+    val draft = ChatQuestionDraft.fromQuestions(listOf(tags))
+    assertEquals(mapOf("meal" to listOf(" first ", "second")), draft.answers(listOf(tags)))
+    assertEquals(mapOf("meal" to emptyList<String>()), draft.setOther(tags, "").answers(listOf(tags)))
+    val legacy = json.decodeFromString<Question>("""{"questionId":"q","header":"Q","question":"Question","options":[]}""")
+    assertEquals(null, legacy.presentation)
+    assertEquals(null, legacy.answerFormat)
   }
 
   @Test
@@ -220,7 +251,7 @@ class ChatQuestionTest {
         createScriptedChatController {
           respond("question.list") {
             throw GatewayRequestRejected(
-              GatewaySession.ErrorShape(
+              ErrorShape(
                 code = "FORBIDDEN",
                 message = "permission denied",
                 details =
@@ -251,7 +282,7 @@ class ChatQuestionTest {
           gatewayAdvertisesMethod = { method -> method != "question.list" }
           respond("question.list") {
             throw GatewayRequestRejected(
-              GatewaySession.ErrorShape(
+              ErrorShape(
                 code = "INVALID_REQUEST",
                 message = "missing scope: operator.admin",
               ),
@@ -744,7 +775,7 @@ class ChatQuestionTest {
             getCalls += 1
             releaseLookup.await()
             throw GatewayRequestRejected(
-              GatewaySession.ErrorShape(
+              ErrorShape(
                 code = "INVALID_REQUEST",
                 message = "question not found",
                 details =
@@ -1120,7 +1151,7 @@ class ChatQuestionTest {
           }
           respond("question.get") {
             throw GatewayRequestRejected(
-              GatewaySession.ErrorShape(
+              ErrorShape(
                 code = "INVALID_REQUEST",
                 message = "question not found",
                 details =

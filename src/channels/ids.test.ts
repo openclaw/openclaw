@@ -1,5 +1,6 @@
 // Channel id tests cover identifier normalization and validation helpers.
 import { describe, expect, it, vi } from "vitest";
+import * as bundledChannelCatalog from "./bundled-channel-catalog-read.js";
 import { findChatChannelLabel, normalizeChatChannelId } from "./ids.js";
 
 vi.hoisted(() => {
@@ -24,16 +25,28 @@ describe("channel ids", () => {
 
   it.each([
     ["whatsapp", "WhatsApp"],
-    ["imessage", "iMessage"],
-    ["googlechat", "Google Chat"],
-    [" imsg ", "iMessage"],
     ["GOOGLE-CHAT", "Google Chat"],
   ])("finds the exact generated label for %s", (channel, label) => {
     expect(findChatChannelLabel(channel)).toBe(label);
   });
 
   it("does not fall back to runtime metadata for unknown channels", () => {
-    expect(findChatChannelLabel("external-chat")).toBeUndefined();
-    expect(findChatChannelLabel(" ")).toBeUndefined();
+    const catalog = vi
+      .spyOn(bundledChannelCatalog, "listBundledChannelCatalogEntries")
+      .mockReturnValue([
+        {
+          id: "external-chat",
+          aliases: [],
+          order: 0,
+          channel: { id: "external-chat", label: "External Chat" },
+        },
+      ]);
+    try {
+      expect(normalizeChatChannelId("external-chat")).toBe("external-chat");
+      expect(findChatChannelLabel("external-chat")).toBeUndefined();
+      expect(findChatChannelLabel(" ")).toBeUndefined();
+    } finally {
+      catalog.mockRestore();
+    }
   });
 });

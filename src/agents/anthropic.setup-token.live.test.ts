@@ -10,14 +10,18 @@ import path from "node:path";
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { validateAnthropicSetupToken } from "../commands/auth-token.js";
-import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
+import { discoverAuthStorageFacts, discoverModelsAsync } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import {
   type AuthProfileCredential,
   ensureAuthProfileStore,
   saveAuthProfileStore,
 } from "./auth-profiles.js";
-import { isLiveTestEnabled, readLiveTestConfig } from "./live-test-helpers.js";
+import {
+  createSingleUserPromptMessage,
+  isLiveTestEnabled,
+  readLiveTestConfig,
+} from "./live-test-helpers.js";
 import { getApiKeyForModelCore, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -188,8 +192,8 @@ describeLive("live anthropic setup-token", () => {
         const cfg = await readLiveTestConfig();
         await ensureOpenClawModelsJson(cfg, tokenSource.agentDir);
 
-        const authStorage = discoverAuthStorage(tokenSource.agentDir);
-        const modelRegistry = discoverModels(authStorage, tokenSource.agentDir);
+        const { authStorage } = await discoverAuthStorageFacts(tokenSource.agentDir);
+        const modelRegistry = await discoverModelsAsync(authStorage, tokenSource.agentDir);
         const all = Array.isArray(modelRegistry) ? modelRegistry : modelRegistry.getAll();
         const candidates = all.filter(
           (model) => normalizeProviderId(model.provider) === "anthropic",
@@ -220,13 +224,7 @@ describeLive("live anthropic setup-token", () => {
         const res = await completeSimple(
           model,
           {
-            messages: [
-              {
-                role: "user",
-                content: "Reply with the word ok.",
-                timestamp: Date.now(),
-              },
-            ],
+            messages: createSingleUserPromptMessage("Reply with the word ok."),
           },
           {
             apiKey,

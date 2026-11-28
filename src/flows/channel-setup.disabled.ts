@@ -2,7 +2,7 @@ import { resolveChannelAccount } from "../channels/account-resolution.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import type { ChannelSetupPlugin } from "../channels/plugins/setup-wizard-types.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
-import { resolveChannelConfigRecord } from "../config/channel-configured-shared.js";
+import { resolveChannelConfigRecord } from "../config/channel-config-activation.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isAccountEnabled } from "../shared/account-enabled.js";
 

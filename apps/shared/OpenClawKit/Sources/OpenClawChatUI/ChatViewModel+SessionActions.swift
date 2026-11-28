@@ -6,9 +6,28 @@ private let chatSessionActionsLogger = Logger(
     category: "OpenClawChat")
 
 extension OpenClawChatViewModel {
+    static let sessionListFetchLimit = 200
+
+    /// Shows plain words for an action that failed and keeps the error itself for the log, so a
+    /// server or transport message never reaches the screen.
+    func reportFailure(_ text: String, _ error: Error, while action: String) {
+        chatUILogger.error("chat \(action, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+        self.errorText = text
+    }
+
+    /// A lost connection keeps its own wording, which the first-connection notice recognizes.
+    func reportChatLoadFailure(_ errorDescription: String) {
+        chatUILogger.error("chat load failed: \(errorDescription, privacy: .public)")
+        self.errorText = chatErrorIsDisconnected(errorDescription)
+            ? errorDescription : String(localized: "Couldn’t load this chat.")
+    }
+
     public func deleteSession(_ sessionKey: String, agentID: String? = nil) {
         let target = self.sessionMutationTarget(key: sessionKey, agentID: agentID)
         let transport = self.transport
+        let owner = self.sidebarData
+        let epoch = owner?.scopeRevision
+        let row = self.rosterEntry(key: sessionKey, agentID: target.agentID ?? self.activeAgentId)
         Task {
             do {
                 guard let routeLease = await transport.acquireSessionMutationRouteLease() else {
@@ -16,10 +35,15 @@ extension OpenClawChatViewModel {
                 }
                 try await routeLease.deleteSession(key: sessionKey, agentID: target.agentID)
             } catch {
-                self.errorText = error.localizedDescription
+                self.reportFailure(String(localized: "Couldn’t delete this chat."), error, while: "delete chat")
                 return
             }
-            self.sessions.removeAll { self.sessionMatchesTarget($0, target: target) }
+            if let owner {
+                guard owner.scopeRevision == epoch else { return }
+                if let row { owner.remove(row) }
+            } else {
+                self.sessions.removeAll { self.sessionMatchesTarget($0, target: target) }
+            }
             if self.matchesCurrentSessionKey(incoming: sessionKey, agentId: target.agentID, current: self.sessionKey) {
                 // The active transcript just disappeared server-side; fall
                 // back to the main session instead of a dead key.
@@ -40,7 +64,8 @@ extension OpenClawChatViewModel {
     }
 
     func sessionMutationTarget(key: String, agentID: String? = nil) -> OpenClawChatSessionTarget {
-        let owner = agentID ?? self.sessions.first(where: { $0.key == key })?.agentId ??
+        let owner = agentID ?? self.rosterEntry(key: key, agentID: self.explicitSessionAgentID ?? self.activeAgentId)?
+            .agentId ??
             self.explicitSessionAgentID
         return OpenClawChatSessionTarget(
             sessionKey: key,
@@ -53,6 +78,11 @@ extension OpenClawChatViewModel {
             (entry.agentId ?? self.currentSessionSnapshot().deliveryAgentID) == target.agentID
     }
 
+    func mainSessionKey(for session: OpenClawChatSessionEntry) -> String {
+        let agentID = ChatSessionSidebarModel.sidebarAgentID(session) ?? self.selectedAgentID
+        return agentID.map { self.mainSessionKey(forAgent: $0) } ?? self.resolvedMainSessionKey
+    }
+
     public var canRequestSessionCompact: Bool {
         !self.isCompacting &&
             !self.isSending &&
@@ -63,6 +93,26 @@ extension OpenClawChatViewModel {
     struct SessionBranchSwitchActivity: Equatable {
         let session: SessionSnapshot
         let generation: UInt64
+    }
+
+    func beginSessionBranchSwitchActivity(for session: SessionSnapshot) -> SessionBranchSwitchActivity {
+        self.invalidateHistoryCursor(replacingCanonicalHistory: true)
+        self.nextSessionBranchSwitchGeneration &+= 1
+        let activity = SessionBranchSwitchActivity(
+            session: session,
+            generation: self.nextSessionBranchSwitchGeneration)
+        self.sessionBranchSwitchActivity = activity
+        return activity
+    }
+
+    func isCurrentSessionBranchSwitchActivity(_ activity: SessionBranchSwitchActivity) -> Bool {
+        self.sessionBranchSwitchActivity == activity && self.isCurrentSession(activity.session)
+    }
+
+    func endSessionBranchSwitchActivity(_ activity: SessionBranchSwitchActivity) {
+        guard self.isCurrentSessionBranchSwitchActivity(activity) else { return }
+        self.sessionBranchSwitchActivity = nil
+        self.flushOutboxIfNeeded()
     }
 
     var isSwitchingSessionBranch: Bool {
@@ -99,6 +149,7 @@ extension OpenClawChatViewModel {
     @discardableResult
     func performStartNewSession(
         agentID: String? = nil,
+        inheritCurrentSession: Bool = false,
         worktree: Bool,
         worktreeBaseRef: String? = nil,
         routeLease: OpenClawChatNewSessionRouteLease? = nil) async -> Bool
@@ -107,10 +158,7 @@ extension OpenClawChatViewModel {
         self.isCreatingSession = true
         defer { self.isCreatingSession = false }
         let initiatingSession = self.currentSessionSnapshot()
-        let normalizedAgentID = agentID?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        let requestedAgentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        let requestedAgentID = ChatPayloadDecoding.trimmedNonEmptyString(agentID)?.lowercased()
         let requested = self.generatedNewSessionKey(agentID: requestedAgentID)
         // Only authoritative identities decide agent ownership; scanning the roster
         // could adopt an unrelated agent and hand sessions.create a cross-agent parent.
@@ -120,28 +168,24 @@ extension OpenClawChatViewModel {
                 self.activeAgentId ??
                 OpenClawChatSessionKey.agentID(from: self.resolvedMainSessionKey))?
             .lowercased()
-        let parentSessionKey = requestedAgentID == nil || requestedAgentID == currentAgentID
+        // Global/sidebar creation uses Gateway defaults; only in-chat /new inherits.
+        let parentSessionKey = inheritCurrentSession && (requestedAgentID == nil || requestedAgentID == currentAgentID)
             ? self.sessionKey
             : nil
         let next: String
         do {
-            let created = if let routeLease {
-                try await routeLease.createSession(
-                    key: requested,
-                    label: nil,
-                    agentID: requestedAgentID,
-                    parentSessionKey: parentSessionKey,
-                    worktree: worktree ? true : nil,
-                    worktreeBaseRef: worktree ? worktreeBaseRef : nil)
+            let create: OpenClawChatNewSessionRouteLease.CreateSession = if let routeLease {
+                routeLease.createSession
             } else {
-                try await self.transport.createSession(
-                    key: requested,
-                    label: nil,
-                    agentID: requestedAgentID,
-                    parentSessionKey: parentSessionKey,
-                    worktree: worktree ? true : nil,
-                    worktreeBaseRef: worktree ? worktreeBaseRef : nil)
+                self.transport.createSession
             }
+            let created = try await create(
+                requested,
+                nil,
+                requestedAgentID,
+                parentSessionKey,
+                worktree ? true : nil,
+                worktree ? worktreeBaseRef : nil)
             let createdKey = created.key.trimmingCharacters(in: .whitespacesAndNewlines)
             next = createdKey.isEmpty ? requested : createdKey
         } catch {
@@ -152,7 +196,7 @@ extension OpenClawChatViewModel {
                 // silently resetting the current session.
                 guard requestedAgentID == nil, !worktree else {
                     chatUILogger.error("sessions.create unsupported; advanced options not honored")
-                    self.errorText = error.localizedDescription
+                    self.reportFailure(String(localized: "Couldn’t start a new chat."), error, while: "start new chat")
                     return false
                 }
                 guard self.canCreateSessionForImmediateSwitch() else { return false }
@@ -160,8 +204,7 @@ extension OpenClawChatViewModel {
                 await self.performReset()
                 return self.isCurrentSession(initiatingSession)
             }
-            chatUILogger.error("sessions.create failed \(error.localizedDescription, privacy: .public)")
-            self.errorText = error.localizedDescription
+            self.reportFailure(String(localized: "Couldn’t start a new chat."), error, while: "start new chat")
             return false
         }
         guard self.isCurrentSession(initiatingSession), self.canCreateSessionForImmediateSwitch() else {
@@ -245,7 +288,7 @@ extension OpenClawChatViewModel {
         // sessions.groups.put, so memberships survive. Accepted tradeoff until the
         // gateway grows a revisioned groups API.
         let current = try await self.fetchSessionGroups(using: routeLease)
-        let response = try await routeLease.putGroups(names: current.map(\.name) + [name])
+        let response = try await routeLease.putGroups(current.map(\.name) + [name])
         self.sessionGroupsRevision += 1
         return response.groups
     }
@@ -258,7 +301,7 @@ extension OpenClawChatViewModel {
     {
         let nextName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !nextName.isEmpty else { return try await self.fetchSessionGroups(using: routeLease) }
-        let response = try await routeLease.renameGroup(name: name, to: nextName)
+        let response = try await routeLease.renameGroup(name, nextName)
         self.sessionGroupsRevision += 1
         self.refreshSessions(limit: Self.sessionListFetchLimit)
         return response.groups
@@ -269,7 +312,7 @@ extension OpenClawChatViewModel {
         _ name: String,
         using routeLease: OpenClawChatSessionGroupsRouteLease) async throws -> [OpenClawChatSessionGroup]
     {
-        let response = try await routeLease.deleteGroup(name: name)
+        let response = try await routeLease.deleteGroup(name)
         self.sessionGroupsRevision += 1
         self.refreshSessions(limit: Self.sessionListFetchLimit)
         return response.groups
@@ -277,19 +320,22 @@ extension OpenClawChatViewModel {
 
     public func setSessionGroup(key: String, group: String?, agentID: String? = nil) async throws {
         let target = self.sessionMutationTarget(key: key, agentID: agentID)
-        let normalized = group?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextGroup = normalized?.isEmpty == false ? normalized : nil
+        let nextGroup = ChatPayloadDecoding.trimmedNonEmptyString(group)
+        let owner = self.sidebarData
+        let row = self.rosterEntry(key: key, agentID: target.agentID ?? self.activeAgentId)
+        let token = row
+            .flatMap { owner?.beginMutation(target: $0, field: .category, update: { $0.category = nextGroup }) }
+        var receipt: OpenClawChatSessionPatchReceipt?
+        defer { owner?.finishMutation(token, receipt: receipt) }
         let routeLease = await self.transport.acquireSessionMutationRouteLease()
         guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
-        try await routeLease.patchSession(
+        receipt = try await routeLease.patchSession(
             key: key,
             agentID: target.agentID,
-            label: nil,
-            category: .some(nextGroup),
-            pinned: nil,
-            archived: nil,
-            unread: nil)
-        if let index = self.sessions.firstIndex(where: { self.sessionMatchesTarget($0, target: target) }) {
+            category: .some(nextGroup))
+        if owner == nil,
+           let index = self.sessions.firstIndex(where: { self.sessionMatchesTarget($0, target: target) })
+        {
             self.sessions[index].category = nextGroup
         }
         self.refreshSessions(limit: Self.sessionListFetchLimit)
@@ -305,7 +351,10 @@ extension OpenClawChatViewModel {
         let targets = Dictionary(uniqueKeysWithValues: selectedSessions.map {
             ($0.key, self.sessionMutationTarget(key: $0.key, agentID: $0.agentId))
         })
-        let mainSessionKey = self.resolvedMainSessionKey
+        let owner = self.sidebarData
+        let epoch = owner?.scopeRevision
+        // A manager may target another agent without switching the active conversation.
+        let mainSessionKeys = entries.mapValues { self.mainSessionKey(for: $0) }
         let attachmentBlockedKeys = self.isAttachmentOwnerPinned
             ? Set(selectedSessions.filter {
                 self.matchesCurrentSessionKey(incoming: $0.key, current: self.sessionKey)
@@ -319,8 +368,8 @@ extension OpenClawChatViewModel {
                     ($0, String(localized: "Gateway changed before the thread operation started."))
                 }))
         }
-        let result = await ChatSessionBatchMutationRunner.run(keys: orderedKeys) { key in
-            if let entry = entries[key] {
+        let result = await ChatSessionBatchMutationRunner.run(keys: orderedKeys) { @MainActor key in
+            if let entry = entries[key], let mainSessionKey = mainSessionKeys[key] {
                 switch action {
                 case .archive where !ChatSessionSidebarModel.canArchiveSession(
                     entry,
@@ -337,25 +386,15 @@ extension OpenClawChatViewModel {
                     break
                 }
             }
+            var receipt: OpenClawChatSessionPatchReceipt?
+            let token = entries[key].flatMap { owner?.beginBatchMutation(target: $0, action: action) }
+            defer { owner?.finishMutation(token, receipt: receipt) }
             switch action {
-            case .pin:
-                try await routeLease.patchSession(
+            case .pin, .unpin:
+                receipt = try await routeLease.patchSession(
                     key: key,
                     agentID: targets[key]?.agentID,
-                    label: nil,
-                    category: nil,
-                    pinned: true,
-                    archived: nil,
-                    unread: nil)
-            case .unpin:
-                try await routeLease.patchSession(
-                    key: key,
-                    agentID: targets[key]?.agentID,
-                    label: nil,
-                    category: nil,
-                    pinned: false,
-                    archived: nil,
-                    unread: nil)
+                    pinned: action == .pin)
             case .archive:
                 guard let expectedSessionID = entries[key]?.sessionId?
                     .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -363,17 +402,14 @@ extension OpenClawChatViewModel {
                 else {
                     throw ChatSessionBatchValidationError.cannotArchive
                 }
-                try await routeLease.patchSession(
+                receipt = try await routeLease.patchSession(
                     key: key,
                     agentID: targets[key]?.agentID,
                     expectedSessionID: expectedSessionID,
-                    label: nil,
-                    category: nil,
-                    pinned: nil,
-                    archived: true,
-                    unread: nil)
+                    archived: true)
             case .delete:
                 try await routeLease.deleteSession(key: key, agentID: targets[key]?.agentID)
+                if owner?.scopeRevision == epoch, let row = entries[key] { owner?.remove(row) }
             }
         }
         let succeeded = Set(result.succeededKeys)
@@ -384,18 +420,20 @@ extension OpenClawChatViewModel {
         switch action {
         case .pin, .unpin:
             let pinned = action == .pin
-            for index in self.sessions.indices {
+            for index in self.sessions.indices where owner == nil {
                 let entry = self.sessions[index]
                 guard succeeded.contains(entry.key), let target = targets[entry.key],
                       self.sessionMatchesTarget(entry, target: target) else { continue }
                 self.sessions[index].pinned = pinned
                 self.sessions[index].pinnedAt = pinned ? Date().timeIntervalSince1970 * 1000 : nil
             }
-            self.sessions = OpenClawChatSessionListOrganizer.organize(self.sessions)
+            if owner == nil { self.sessions = OpenClawChatSessionListOrganizer.organize(self.sessions) }
         case .archive, .delete:
-            self.sessions.removeAll {
-                guard succeeded.contains($0.key), let target = targets[$0.key] else { return false }
-                return self.sessionMatchesTarget($0, target: target)
+            if owner == nil {
+                self.sessions.removeAll {
+                    guard succeeded.contains($0.key), let target = targets[$0.key] else { return false }
+                    return self.sessionMatchesTarget($0, target: target)
+                }
             }
             if succeeded.contains(where: {
                 self.matchesCurrentSessionKey(incoming: $0, agentId: targets[$0]?.agentID, current: self.sessionKey)
@@ -415,62 +453,109 @@ extension OpenClawChatViewModel {
         Task { await self.performCompact() }
     }
 
-    public func fetchSessionList(search: String?, archived: Bool) async -> [OpenClawChatSessionEntry] {
+    public func fetchSessionList(
+        search: String?,
+        archived: Bool,
+        agentID: String? = nil,
+        preservingPersonalPinOrder: Bool = false) async -> [OpenClawChatSessionEntry]
+    {
         let session = self.currentSessionSnapshot()
-        let normalizedSearch = search?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let query = normalizedSearch?.isEmpty == false ? normalizedSearch : nil
+        let query = ChatPayloadDecoding.trimmedNonEmptyString(search)
         do {
             let res = try await self.transport.listSessions(
                 limit: Self.sessionListFetchLimit,
                 search: query,
                 archived: archived,
-                agentID: session.deliveryAgentID)
+                agentID: agentID ?? session.deliveryAgentID)
             guard self.isCurrentSession(session) else { return [] }
-            return OpenClawChatSessionListOrganizer.organize(res.sessions)
+            return OpenClawChatSessionListOrganizer.organize(
+                res.sessions,
+                preservingPersonalPinOrder: preservingPersonalPinOrder)
         } catch {
             // A superseded (cancelled) fetch must not produce fallback rows;
             // the newer task owns the scoped list. Callers also guard on
             // Task.isCancelled before applying results.
             guard self.isCurrentSession(session), !(error is CancellationError), !Task.isCancelled else { return [] }
             guard !archived else { return [] }
-            guard let query else { return self.sessions }
-            return OpenClawChatSessionListOrganizer.filter(self.sessions, search: query)
+            // sidebar-agent-roster.ts:203 opens management for its agent without changing the conversation.
+            let cached = agentID.map { agent in
+                (self.sidebarData?.rows ?? self.sessions).filter {
+                    !$0.isArchived && ChatSessionSidebarModel.isSessionInActiveAgentScope(
+                        key: $0.key,
+                        agentID: $0.agentId,
+                        activeAgentID: agent)
+                }
+            } ?? self.sessions
+            guard let query else { return cached }
+            return OpenClawChatSessionListOrganizer.filter(cached, search: query)
         }
     }
 
     public func renameSession(key: String, label: String, agentID: String? = nil) {
         let target = self.sessionMutationTarget(key: key, agentID: agentID)
+        let nextLabel = ChatPayloadDecoding.trimmedNonEmptyString(label)
+        let row = self.sidebarData?.row(
+            key: key,
+            agentID: target.agentID ?? self.currentSessionSnapshot().deliveryAgentID)
+        self.mutateSessionOptimistically(
+            target: target,
+            field: .label,
+            update: { $0.label = nextLabel
+                $0.displayName = nextLabel
+            },
+            mutation: { routeLease in
+                try await routeLease.patchSession(
+                    key: key,
+                    agentID: target.agentID,
+                    expectedSessionID: row?.sessionId,
+                    label: .some(nextLabel))
+            })
+    }
+
+    private func mutateSessionOptimistically(
+        target: OpenClawChatSessionTarget,
+        field: OpenClawChatSessionSidebarData.Field,
+        incarnation: String? = nil,
+        update: @escaping (inout OpenClawChatSessionEntry) -> Void,
+        mutation: @escaping @MainActor (OpenClawChatSessionMutationRouteLease) async throws
+            -> OpenClawChatSessionPatchReceipt?)
+    {
         let transport = self.transport
         let presentation = self.currentSessionSnapshot()
-        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextLabel: String? = trimmed.isEmpty ? nil : trimmed
-        let previous = self.sessions
-        if let index = self.sessions.firstIndex(where: { self.sessionMatchesTarget($0, target: target) }) {
-            self.sessions[index].label = nextLabel
-            self.sessions[index].displayName = nextLabel
+        let owner = self.sidebarData
+        let previous = owner == nil ? self.sessions : []
+        let token = self.rosterEntry(key: target.sessionKey, agentID: target.agentID ?? presentation.deliveryAgentID)
+            .flatMap { row in
+                incarnation == nil || row.sessionId == incarnation ? owner?.beginMutation(
+                    target: row,
+                    field: field,
+                    update: update) : nil
+            }
+        if owner == nil {
+            self.sessions = self.sessions.compactMap { entry in
+                guard self.sessionMatchesTarget(entry, target: target) else { return entry }
+                var row = entry
+                update(&row)
+                return field == .archived && row.isArchived ? nil : row
+            }
+            if field == .pinned { self.sessions = OpenClawChatSessionListOrganizer.organize(self.sessions) }
         }
         Task {
             do {
                 guard let routeLease = await transport.acquireSessionMutationRouteLease() else {
                     throw OpenClawChatTransportSendError.notDispatched
                 }
-                try await routeLease.patchSession(
-                    key: key,
-                    agentID: target.agentID,
-                    expectedSessionID: nil,
-                    label: .some(nextLabel),
-                    category: nil,
-                    color: nil,
-                    pinned: nil,
-                    archived: nil,
-                    unread: nil)
+                let receipt = try await mutation(routeLease)
+                owner?.finishMutation(token, receipt: receipt)
                 self.refreshSessions()
             } catch {
+                owner?.finishMutation(token, receipt: nil)
                 guard self.isCurrentSession(presentation) else { return }
-                self.sessions = self.applyingLocalUnreadOverrides(to: previous)
-                self.errorText = error.localizedDescription
+                if owner == nil { self.sessions = self.applyingLocalUnreadOverrides(to: previous) }
+                self.reportFailure(String(localized: "Couldn’t update this chat."), error, while: "update chat")
+                let failure = error.localizedDescription
                 chatSessionActionsLogger.error(
-                    "sessions.patch(label) failed \(error.localizedDescription, privacy: .public)")
+                    "sessions.patch(\(field.rawValue, privacy: .public)) failed \(failure, privacy: .public)")
             }
         }
     }
@@ -481,7 +566,7 @@ extension OpenClawChatViewModel {
         let initiatingSession = self.currentSessionSnapshot()
         do {
             let stableBoundary = fromLastCompleted ??
-                (self.sessions.first(where: { $0.key == key })?.hasActiveRun == true)
+                (self.rosterEntry(key: key, agentID: target.agentID ?? self.activeAgentId)?.hasActiveRun == true)
             let createdKey = try await self.transport.forkSession(
                 parentKey: key,
                 fromLastCompleted: stableBoundary,
@@ -494,7 +579,8 @@ extension OpenClawChatViewModel {
             }
             self.switchSession(to: createdKey)
         } catch {
-            self.errorText = error.localizedDescription
+            guard self.isCurrentSession(initiatingSession) else { return }
+            self.reportFailure(String(localized: "Couldn’t fork this chat."), error, while: "fork chat")
             chatSessionActionsLogger.error(
                 "sessions.create(fork) failed \(error.localizedDescription, privacy: .public)")
         }
@@ -510,6 +596,7 @@ extension OpenClawChatViewModel {
             return
         }
         do {
+            self.invalidateHistoryCursor(replacingCanonicalHistory: true)
             let result = try await self.transport.rewindSession(
                 sessionKey: initiatingSession.key,
                 entryId: entryID)
@@ -523,7 +610,9 @@ extension OpenClawChatViewModel {
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
             self.input = result.editorText ?? ""
+            self.narration = ChatNarration()
             self.restoreEditorAttachments(result.editorAttachments)
+            self.invalidateHistoryCursor(replacingCanonicalHistory: true)
             let historyRequest = self.beginHistoryRequest(for: initiatingSession)
             _ = await self.refreshHistoryAfterRun(historyRequest: historyRequest)
             guard self.isCurrentSession(initiatingSession) else {
@@ -535,7 +624,8 @@ extension OpenClawChatViewModel {
             await self.refreshSessionBranches(confirmingBranchChange: true)
         } catch {
             await self.cancelOutboxSessionMutation(initiatingSession)
-            self.errorText = error.localizedDescription
+            guard self.isCurrentSession(initiatingSession) else { return }
+            self.reportFailure(String(localized: "Couldn’t go back to this message."), error, while: "rewind")
             chatSessionActionsLogger.error(
                 "sessions.rewind failed \(error.localizedDescription, privacy: .public)")
         }
@@ -614,10 +704,10 @@ extension OpenClawChatViewModel {
                 }
             case .reconcile:
                 guard await self.reconcileOutboxBranchScope(
-                    session,
+                    self.outboxBranchScope(for: session),
                     branches: response.branches,
                     previousState: previousState,
-                    connectionGeneration: connectionGeneration)
+                    capturedSession: session)
                 else {
                     self.pauseOutboxBranchScope(session)
                     return false
@@ -671,10 +761,6 @@ extension OpenClawChatViewModel {
         }
     }
 
-    func refreshSessionBranchesForMenuPresentation() async {
-        await self.refreshSessionBranches()
-    }
-
     var canSwitchSessionBranch: Bool {
         !self.hasBlockingRunActivity &&
             !self.isSending &&
@@ -725,13 +811,15 @@ extension OpenClawChatViewModel {
             self.replyTarget = nil
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
+            self.narration = ChatNarration()
+            self.invalidateHistoryCursor(replacingCanonicalHistory: true)
             await self.reconcileSessionBranchChange(
                 switchActivity,
                 confirmedLeafEntryID: normalizedLeafEntryID)
         } catch {
             await self.cancelOutboxSessionMutation(initiatingSession)
             guard self.isCurrentSessionBranchSwitchActivity(switchActivity) else { return }
-            self.errorText = error.localizedDescription
+            self.reportFailure(String(localized: "Couldn’t switch branches."), error, while: "switch branch")
             chatSessionActionsLogger.error(
                 "sessions.branches.switch failed \(error.localizedDescription, privacy: .public)")
         }
@@ -774,7 +862,8 @@ extension OpenClawChatViewModel {
             self.restoreEditorAttachments(result.editorAttachments)
         } catch {
             await self.cancelOutboxSessionMutation(initiatingSession)
-            self.errorText = error.localizedDescription
+            guard self.isCurrentSession(initiatingSession) else { return }
+            self.reportFailure(String(localized: "Couldn’t fork from this message."), error, while: "fork at message")
             chatSessionActionsLogger.error(
                 "sessions.fork failed \(error.localizedDescription, privacy: .public)")
         }
@@ -783,21 +872,28 @@ extension OpenClawChatViewModel {
     private static func sessionMutationEntryID(for message: OpenClawChatMessage) -> String? {
         guard message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user"
         else { return nil }
-        let entryID = message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return entryID?.isEmpty == false ? entryID : nil
+        return ChatPayloadDecoding.trimmedNonEmptyString(message.transcriptMessageID)
     }
 
     public func setSessionUnread(key: String, unread: Bool, agentID: String? = nil) {
         let target = self.sessionMutationTarget(key: key, agentID: agentID)
         let identityKey = self.sessionMutationIdentity(for: key, agentID: target.agentID)
         let transport = self.transport
-        let previousEntry = self.sessions.first(where: { self.sessionMatchesTarget($0, target: target) })
+        let scopeRevision = self.sidebarData?.scopeRevision
+        let owner = self.sidebarData
+        let previousEntry = self.rosterEntry(key: key, agentID: target.agentID ?? self.activeAgentId)
+        let token = previousEntry.flatMap { owner?.beginMutation(
+            target: $0,
+            field: .unread,
+            update: { $0.unread = unread }) }
         let rollbackUnread = self.unreadPatchGuard.confirmedUnread(key: identityKey) ?? previousEntry?.unread
         let revision = self.unreadPatchGuard.beginExplicitPatch(
             key: identityKey,
             unread: unread,
             isActive: self.matchesCurrentSessionKey(incoming: key, agentId: target.agentID, current: self.sessionKey))
-        if let index = self.sessions.firstIndex(where: { self.sessionMatchesTarget($0, target: target) }) {
+        if owner == nil,
+           let index = self.sessions.firstIndex(where: { self.sessionMatchesTarget($0, target: target) })
+        {
             self.sessions[index].unread = unread
         }
         let routeLease = Task { await transport.acquireSessionMutationRouteLease() }
@@ -806,25 +902,39 @@ extension OpenClawChatViewModel {
             queueKey: identityKey,
             routeKey: key,
             agentID: target.agentID,
+            expectedSessionID: self.sidebarData == nil ? nil : previousEntry?.sessionId,
             unread: unread)
         Task {
             do {
-                try await operation.value
+                let receipt = try await operation.value
+                owner?.finishMutation(token, receipt: receipt)
                 guard self.unreadPatchGuard.patchSucceeded(
                     key: identityKey,
                     unread: unread,
                     revision: revision)
                 else { return }
-                self.refreshSessions()
+                if unread || !self.applySidebarReadReceipt(
+                    receipt,
+                    target: previousEntry,
+                    scopeRevision: scopeRevision)
+                {
+                    self.refreshSessions()
+                }
             } catch {
+                owner?.finishMutation(token, receipt: nil)
                 guard self.unreadPatchGuard.patchFailed(key: identityKey, revision: revision) else { return }
-                if let index = self.sessions.firstIndex(where: { self.sessionMatchesTarget($0, target: target) }),
-                   self.sessions[index].unread == unread
+                if owner == nil, let index = self.sessions.firstIndex(where: { self.sessionMatchesTarget(
+                    $0,
+                    target: target) }),
+                    self.sessions[index].unread == unread
                 {
                     self.sessions[index].unread = rollbackUnread
                 }
                 self.refreshSessions()
-                self.errorText = error.localizedDescription
+                self.reportFailure(
+                    String(localized: "Couldn’t change this chat’s unread mark."),
+                    error,
+                    while: "set unread")
                 chatSessionActionsLogger.error(
                     "sessions.patch(unread) failed \(error.localizedDescription, privacy: .public)")
             }
@@ -833,107 +943,86 @@ extension OpenClawChatViewModel {
 
     public func setSessionColor(key: String, color: String?, agentID: String? = nil) async {
         let target = self.sessionMutationTarget(key: key, agentID: agentID)
+        let owner = self.sidebarData
+        let row = self.rosterEntry(key: key, agentID: target.agentID ?? self.activeAgentId)
+        let token = row.flatMap { owner?.beginMutation(target: $0, field: .color, update: { $0.color = color }) }
+        var receipt: OpenClawChatSessionPatchReceipt?
+        defer { owner?.finishMutation(token, receipt: receipt) }
         do {
             let routeLease = await self.transport.acquireSessionMutationRouteLease()
             guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
-            try await routeLease.patchSession(
+            receipt = try await routeLease.patchSession(
                 key: key,
                 agentID: target.agentID,
-                label: nil,
-                category: nil,
-                color: .some(color),
-                pinned: nil,
-                archived: nil,
-                unread: nil)
+                color: .some(color))
             self.refreshSessions(limit: Self.sessionListFetchLimit)
         } catch {
-            self.errorText = error.localizedDescription
+            self.reportFailure(String(localized: "Couldn’t change this chat’s color."), error, while: "set color")
         }
     }
 
     public func setSessionPinned(key: String, pinned: Bool, agentID: String? = nil) {
         let target = self.sessionMutationTarget(key: key, agentID: agentID)
-        let transport = self.transport
-        let presentation = self.currentSessionSnapshot()
-        let previous = self.sessions
-        if let index = self.sessions.firstIndex(where: { self.sessionMatchesTarget($0, target: target) }) {
-            self.sessions[index].pinned = pinned
-            self.sessions[index].pinnedAt = pinned ? Date().timeIntervalSince1970 * 1000 : nil
-            self.sessions = OpenClawChatSessionListOrganizer.organize(self.sessions)
-        }
-        Task {
-            do {
-                guard let routeLease = await transport.acquireSessionMutationRouteLease() else {
-                    throw OpenClawChatTransportSendError.notDispatched
+        let row = self.sidebarData?.row(key: key, agentID: target.agentID ?? self.activeAgentId)
+        #if os(macOS)
+        if pinned, let observed = self.rosterEntry(key: key, agentID: target.agentID ?? self.activeAgentId),
+           observed.isSnoozed(at: self.sidebarRosterClock.gatewayDate()) { return }
+        #endif
+        let pinnedAt = pinned ? Date().timeIntervalSince1970 * 1000 : nil
+        self.mutateSessionOptimistically(
+            target: target,
+            field: .pinned,
+            update: { $0.pinned = pinned
+                $0.pinnedAt = pinnedAt
+                #if !os(macOS)
+                if pinned {
+                    $0.snoozedUntil = nil
+                    $0.snoozedAt = nil
                 }
+                #endif
+            },
+            mutation: { routeLease in
                 try await routeLease.patchSession(
                     key: key,
                     agentID: target.agentID,
-                    expectedSessionID: nil,
-                    label: nil,
-                    category: nil,
-                    color: nil,
-                    pinned: pinned,
-                    archived: nil,
-                    unread: nil)
-                self.refreshSessions()
-            } catch {
-                guard self.isCurrentSession(presentation) else { return }
-                self.sessions = self.applyingLocalUnreadOverrides(to: previous)
-                self.errorText = error.localizedDescription
-                chatSessionActionsLogger.error(
-                    "sessions.patch(pinned) failed \(error.localizedDescription, privacy: .public)")
-            }
-        }
+                    expectedSessionID: row?.sessionId,
+                    pinned: pinned)
+            })
     }
 
     public func setSessionArchived(_ session: OpenClawChatSessionEntry, archived: Bool) {
         let key = session.key
         let target = self.sessionMutationTarget(key: key, agentID: session.agentId)
-        let transport = self.transport
-        let presentation = self.currentSessionSnapshot()
         guard archived else {
             Task { await self.restoreSession(session) }
             return
         }
-        guard let expectedSessionID = session.sessionId?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !expectedSessionID.isEmpty
-        else {
-            self.errorText = "Session lifecycle action requires a durable session identity."
+        guard let expectedSessionID = ChatPayloadDecoding.trimmedNonEmptyString(session.sessionId) else {
+            self.errorText = String(localized: "Couldn’t archive this chat.")
             return
         }
-        let previous = self.sessions
-        self.sessions.removeAll { self.sessionMatchesTarget($0, target: target) }
-        Task {
-            do {
-                guard let routeLease = await transport.acquireSessionMutationRouteLease() else {
-                    throw OpenClawChatTransportSendError.notDispatched
-                }
-                try await routeLease.patchSession(
+        self.mutateSessionOptimistically(
+            target: target,
+            field: .archived,
+            incarnation: session.sessionId,
+            update: { $0.archived = true
+                $0.pinned = false
+                $0.pinnedAt = nil
+                $0.snoozedUntil = nil
+                $0.snoozedAt = nil
+            },
+            mutation: { routeLease in
+                let receipt = try await routeLease.patchSession(
                     key: key,
                     agentID: target.agentID,
                     expectedSessionID: expectedSessionID,
-                    label: nil,
-                    category: nil,
-                    color: nil,
-                    pinned: nil,
-                    archived: true,
-                    unread: nil)
+                    archived: true)
                 if self.matchesCurrentSessionKey(incoming: key, agentId: target.agentID, current: self.sessionKey) {
-                    // The archived session rejects new sends; move the user back
-                    // to the main session instead of leaving a dead composer.
+                    // The archived session rejects new sends; return to the main session.
                     self.switchSession(to: self.resolvedMainSessionKey)
                 }
-                self.refreshSessions()
-            } catch {
-                guard self.isCurrentSession(presentation) else { return }
-                self.sessions = self.applyingLocalUnreadOverrides(to: previous)
-                self.errorText = error.localizedDescription
-                chatSessionActionsLogger.error(
-                    "sessions.patch(archived) failed \(error.localizedDescription, privacy: .public)")
-            }
-        }
+                return receipt
+            })
     }
 
     /// Restores an archived session. Returns false (with `errorText` set) on
@@ -941,33 +1030,29 @@ extension OpenClawChatViewModel {
     @discardableResult
     public func restoreSession(_ session: OpenClawChatSessionEntry) async -> Bool {
         let target = self.sessionMutationTarget(key: session.key, agentID: session.agentId)
-        guard let expectedSessionID = session.sessionId?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !expectedSessionID.isEmpty
-        else {
-            self.errorText = "Session lifecycle action requires a durable session identity."
+        guard let expectedSessionID = ChatPayloadDecoding.trimmedNonEmptyString(session.sessionId) else {
+            self.errorText = String(localized: "Couldn’t restore this chat.")
             return false
         }
+        let owner = self.sidebarData
+        let token = owner?.beginMutation(target: session, field: .archived, update: { $0.archived = false
+            $0.archivedAt = nil
+        })
+        var receipt: OpenClawChatSessionPatchReceipt?
+        defer { owner?.finishMutation(token, receipt: receipt) }
         do {
             guard let routeLease = await self.transport.acquireSessionMutationRouteLease() else {
                 throw OpenClawChatTransportSendError.notDispatched
             }
-            try await routeLease.patchSession(
+            receipt = try await routeLease.patchSession(
                 key: session.key,
                 agentID: target.agentID,
                 expectedSessionID: expectedSessionID,
-                label: nil,
-                category: nil,
-                color: nil,
-                pinned: nil,
-                archived: false,
-                unread: nil)
+                archived: false)
             self.refreshSessions()
             return true
         } catch {
-            self.errorText = error.localizedDescription
-            chatSessionActionsLogger.error(
-                "sessions.patch(archived=false) failed \(error.localizedDescription, privacy: .public)")
+            self.reportFailure(String(localized: "Couldn’t restore this chat."), error, while: "restore chat")
             return false
         }
     }
@@ -986,6 +1071,7 @@ extension OpenClawChatViewModel {
         let identityKey = self.sessionMutationIdentity(for: entry.key, listedKey: entry.key, agentID: entry.agentId)
         let target = self.sessionMutationTarget(key: entry.key, agentID: entry.agentId)
         let transport = self.transport
+        let scopeRevision = self.sidebarData?.scopeRevision
         let routeLease = Task { await transport.acquireSessionMutationRouteLease() }
         let operation = self.unreadMutationQueue.reserve(
             routeLease: routeLease,
@@ -993,19 +1079,151 @@ extension OpenClawChatViewModel {
             routeKey: entry.key,
             agentID: target.agentID,
             expectedMarkedUnreadAt: .some(entry.markedUnreadAt),
+            expectedSessionID: self.sidebarData == nil ? nil : entry.sessionId,
             unread: false)
         do {
-            try await operation.value
+            let receipt = try await operation.value
             guard self.unreadPatchGuard.patchSucceeded(
                 key: identityKey,
                 unread: false,
                 revision: revision)
             else { return }
-            self.refreshSessions()
+            if !self.applySidebarReadReceipt(receipt, target: entry, scopeRevision: scopeRevision) {
+                self.refreshSessions()
+            }
         } catch {
             guard self.unreadPatchGuard.patchFailed(key: identityKey, revision: revision) else { return }
             chatSessionActionsLogger.error(
                 "sessions.patch(unread=false) failed \(error.localizedDescription, privacy: .public)")
+        }
+    }
+}
+
+extension OpenClawChatViewModel {
+    /// A new conversation has a stable local address before its first submission.
+    /// Keeping it out of the roster avoids empty server-side sessions on navigation.
+    struct NewChatDraft {
+        let key: String
+        let agentID: String?
+        var settings = OpenClawChatSessionSettingsPatch()
+        var settingsApplied = false
+        var requestsComposerFocus = false
+
+        var entry: OpenClawChatSessionEntry {
+            var entry = OpenClawChatSessionEntry(
+                key: self.key,
+                agentId: self.agentID,
+                isMain: false,
+                thinkingLevel: self.settings.thinkingLevel.flatMap(\.self),
+                verboseLevel: self.settings.verboseLevel.flatMap(\.self),
+                model: self.settings.model.flatMap(\.self))
+            entry.fastMode = self.settings.fastMode.flatMap(\.self)
+            entry.effectiveFastMode = entry.fastMode
+            entry.permissionMode = self.settings.permissionMode.flatMap(\.self)
+            entry.toolOverrides = self.settings.toolOverrides.flatMap(\.self)
+            return entry
+        }
+    }
+
+    public var isNewChatDraft: Bool {
+        self.newChatDraft?.key == self.sessionKey &&
+            !self.messages.contains(where: { $0.role == "user" })
+    }
+
+    @discardableResult
+    public func startNewChatDraft(agentID: String? = nil, focusComposer: Bool = false) -> Bool {
+        guard !self.isCreatingSession, self.canCreateSessionForImmediateSwitch() else { return false }
+        let preservedInput = self.isNewChatDraft && agentID != nil ? self.input : nil
+        let agentID = ChatPayloadDecoding.trimmedNonEmptyString(agentID)?.lowercased()
+            ?? self.selectedAgentID
+        let key = self.generatedNewSessionKey(agentID: agentID)
+        self.newChatDraft = NewChatDraft(key: key, agentID: agentID, requestsComposerFocus: focusComposer)
+        self.switchSession(to: key)
+        if self.sessionKey == key, let preservedInput { self.input = preservedInput }
+        return self.sessionKey == key
+    }
+
+    func newChatDraftSettingsLease(for target: ModelPatchTarget) -> OpenClawChatSessionSettingsRouteLease? {
+        guard let draft = self.newChatDraft, draft.key == self.sessionKey,
+              self.matchesCurrentSessionKey(incoming: target.canonicalSessionKey, current: draft.key)
+        else { return nil }
+        let key = draft.key
+        return OpenClawChatSessionSettingsRouteLease { [weak self] _, _, patch in
+            guard let self else { throw CancellationError() }
+            return try await self.stageNewChatDraftSettings(patch, expectedKey: key)
+        }
+    }
+
+    func stageNewChatDraftSettings(
+        _ patch: OpenClawChatSessionSettingsPatch,
+        expectedKey: String) throws -> OpenClawChatModelPatchResult?
+    {
+        guard self.newChatDraft?.key == expectedKey, self.sessionKey == expectedKey else {
+            throw CancellationError()
+        }
+        return self.stageNewChatDraftSettings(patch)
+    }
+
+    @discardableResult
+    func stageNewChatDraftSettings(_ patch: OpenClawChatSessionSettingsPatch) -> OpenClawChatModelPatchResult? {
+        guard var draft = self.newChatDraft, draft.key == self.sessionKey else { return nil }
+        let previous = draft.settings
+        draft.settings = OpenClawChatSessionSettingsPatch(
+            model: patch.model == nil ? previous.model : patch.model,
+            thinkingLevel: patch.thinkingLevel == nil ? previous.thinkingLevel : patch.thinkingLevel,
+            fastMode: patch.fastMode == nil ? previous.fastMode : patch.fastMode,
+            verboseLevel: patch.verboseLevel == nil ? previous.verboseLevel : patch.verboseLevel,
+            permissionMode: patch.permissionMode == nil ? previous.permissionMode : patch.permissionMode,
+            toolOverrides: patch.toolOverrides == nil ? previous.toolOverrides : patch.toolOverrides)
+        draft.settingsApplied = false
+        self.newChatDraft = draft
+        let entry = draft.entry
+        return OpenClawChatModelPatchResult(
+            key: entry.key,
+            modelProvider: entry.modelProvider,
+            model: entry.model,
+            thinkingLevel: entry.thinkingLevel,
+            fastMode: entry.fastMode,
+            effectiveFastMode: entry.effectiveFastMode,
+            verboseLevel: entry.verboseLevel,
+            permissionMode: entry.permissionMode,
+            toolOverrides: entry.toolOverrides)
+    }
+
+    func prepareNewChatDraftSettings(for session: SessionSnapshot) async -> Bool {
+        guard self.newChatDraft?.key == session.key else { return true }
+        await self.waitForPendingSessionSettings(for: self.currentModelPatchTarget())
+        guard self.isCurrentSession(session), let draft = self.newChatDraft, draft.key == session.key else {
+            return false
+        }
+        let settings = draft.settings
+        guard !draft.settingsApplied, settings != OpenClawChatSessionSettingsPatch() else { return true }
+        if !self.healthOK {
+            await self.pollHealthIfNeeded(force: true, sessionSnapshot: session)
+        }
+        guard self.isCurrentSession(session) else { return false }
+        guard self.healthOK else {
+            self.errorText = String(localized: "Connect to send with these chat settings.")
+            return false
+        }
+        do {
+            guard let lease = await self.transport.acquireSessionSettingsRouteLease(),
+                  self.isCurrentSession(session)
+            else { throw OpenClawChatTransportSendError.notDispatched }
+            // This UUID belongs to the local draft. Retrying the same settings
+            // on that address is idempotent even if an earlier reply was lost.
+            _ = try await lease.patchSessionSettings(session.key, session.deliveryAgentID, settings)
+            guard self.isCurrentSession(session), self.newChatDraft?.key == session.key else { return false }
+            self.newChatDraft?.settingsApplied = true
+            return true
+        } catch {
+            if self.isCurrentSession(session) {
+                self.reportFailure(
+                    String(localized: "Couldn’t apply this chat’s settings."),
+                    error,
+                    while: "apply new chat settings")
+            }
+            return false
         }
     }
 }

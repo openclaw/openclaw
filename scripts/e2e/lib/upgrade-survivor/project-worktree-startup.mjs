@@ -10,6 +10,7 @@ import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
 } from "../../../lib/sqlite-transcript-payload.mjs";
+import { childOf, retainedSnapshots, sqliteFamily } from "./fixture-files.mjs";
 import {
   resolveWorkerCellExport,
   resolveWorkerCellFunctionBinding,
@@ -72,15 +73,6 @@ function digest(file) {
 function writeJson(file, value) {
   fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n", { flag: "wx" });
 }
-function childOf(root, file) {
-  const relative = path.relative(root, file);
-  return (
-    relative !== "" &&
-    relative !== ".." &&
-    !relative.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(relative)
-  );
-}
 function context() {
   const get = (name) => {
     assert(path.isAbsolute(process.env[name] ?? ""), `Missing isolated ${name}`);
@@ -103,31 +95,6 @@ function context() {
     fixture: path.join(artifacts, "project-worktree-fixture.json"),
     importReceipt: path.join(artifacts, "project-worktree-import.json"),
   };
-}
-function sqliteFamily(file) {
-  return Object.fromEntries(
-    ["", "-wal", "-shm", "-journal"].flatMap((suffix) =>
-      fs.existsSync(file + suffix) ? [[suffix || "main", digest(file + suffix)]] : [],
-    ),
-  );
-}
-function retainedSnapshots(roots) {
-  const results = [];
-  function visit(dir) {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const file = path.join(dir, entry.name);
-      if (/^openclaw-(sqlite-readonly-|doctor-lint-state-)/.test(entry.name)) {
-        results.push(file);
-      }
-      if (entry.isDirectory()) {
-        visit(file);
-      }
-    }
-  }
-  for (const root of new Set(roots)) {
-    visit(root);
-  }
-  return results.toSorted((a, b) => a.localeCompare(b));
 }
 function loadFixture(ctx) {
   const f = readJson(ctx.fixture);
@@ -207,7 +174,7 @@ async function prepareSchema(ctx, packageRoot, bindings) {
     "Expected a published-to-candidate schema upgrade",
   );
   const require = createRequire(import.meta.url);
-  const parserPath = fs.realpathSync(require.resolve("typescript/unstable/sync"));
+  const parserPath = fs.realpathSync(require.resolve("typescript/sync"));
   const { version: parserVersion } = readJson(require.resolve("typescript/package.json"));
   const { createNativeTypeScriptParser } = await import("../../../lib/native-typescript.mts");
   const parser = createNativeTypeScriptParser({ cwd: packageRoot });
@@ -215,7 +182,12 @@ async function prepareSchema(ctx, packageRoot, bindings) {
   try {
     for (const [role, prefix, symbol] of [
       ["lock", "doctor-sqlite-maintenance-lock", "withDoctorSqliteMaintenanceLock"],
+      ["backup", "doctor-migration-backup", "captureFreshDoctorMigrationTables"],
+      ["withBackup", "update-doctor-migration-attribution", "runWithDoctorMigrationBackup"],
       ["migrate", "state-migrations.media-persistence", "migrateLegacyMediaPersistence"],
+      ["readConfig", "io.runtime", "readConfigFileSnapshot"],
+      ["planConfig", "automatic-config-repair", "planAutomaticConfigRepair"],
+      ["commitConfig", "automatic-config-repair", "commitAutomaticConfigRepair"],
       ["drain", "global-singleton", "drainGlobalSingletonLifecycleState"],
       ["close", "openclaw-state-db-cache", "closeOpenClawStateDatabaseByPathAsync"],
     ]) {
@@ -234,14 +206,37 @@ async function prepareSchema(ctx, packageRoot, bindings) {
   const { agentDb } = readJson(ctx.importReceipt);
   const errors = [];
   let result;
+  let configChanges;
   try {
     result = await doctor.api.lock({
       env: process.env,
       operation: "project worktree fixture schema preparation",
       run: () =>
-        doctor.api.migrate({
-          env: process.env,
-          configuredAgentDatabaseTargets: [{ agentId: "main", path: agentDb }],
+        doctor.api.withBackup(doctor.api.backup, async () => {
+          const migrated = await doctor.api.migrate({
+            env: process.env,
+            configuredAgentDatabaseTargets: [{ agentId: "main", path: agentDb }],
+          });
+          // The independent published fixture missed update's config repair, but must retain its legacy workspace metadata.
+          const configSnapshot = await doctor.api.readConfig();
+          const repair = await doctor.api.planConfig(configSnapshot);
+          assert(repair, "Expected the independent fixture's legacy roster repair");
+          assert.deepEqual(repair.changes, [
+            "Moved agents.list → keyed agents.entries.",
+            "Removed retired agents.entries default marker.",
+          ]);
+          await doctor.api.commitConfig(repair, configSnapshot);
+          const configured = await doctor.api.readConfig();
+          assert.equal(configured.valid, true, "Fixture config repair did not admit startup");
+          for (const key of ["gateway", "session", "plugins"]) {
+            assert.equal(
+              hash(JSON.stringify(configured.parsed[key])),
+              hash(JSON.stringify(configSnapshot.parsed[key])),
+              `Fixture config repair changed ${key}`,
+            );
+          }
+          configChanges = repair.changes;
+          return migrated;
         }),
     });
   } catch (error) {
@@ -265,6 +260,7 @@ async function prepareSchema(ctx, packageRoot, bindings) {
     parser: { source: "harness", version: parserVersion, sha256: digest(parserPath) },
     fromSchema: before.agent.schema,
     targetSchema: owner.agentSchema,
+    configChanges,
     result,
   });
   assert.deepEqual(
@@ -280,7 +276,7 @@ async function prepareSchema(ctx, packageRoot, bindings) {
 }
 
 async function inspectDatabase(owner, file, read) {
-  const before = sqliteFamily(file);
+  const before = sqliteFamily(file, digest);
   const prepared = owner.api.prepare(file);
   assert.notEqual(
     prepared.location,
@@ -313,7 +309,7 @@ async function inspectDatabase(owner, file, read) {
   if (errors.length) {
     throw new AggregateError(errors, "Project startup observer did not settle");
   }
-  assert.deepEqual(sqliteFamily(file), before, "Observer modified source SQLite files");
+  assert.deepEqual(sqliteFamily(file, digest), before, "Observer modified source SQLite files");
   return value;
 }
 
@@ -576,7 +572,12 @@ export function assertProjectWorktreeStartupLog(log, start) {
 }
 
 export function assertProjectWorktreeStartupPreservation(actual, original, expectedWorkspace) {
-  assert.deepEqual(actual.shared, original.shared);
+  const withWorktreeDefaults = (shared) => ({
+    ...shared,
+    // The published baseline predates the nullable worktree GC protection column.
+    worktrees: shared.worktrees.map((row) => Object.assign({ gc_protection_json: null }, row)),
+  });
+  assert.deepEqual(withWorktreeDefaults(actual.shared), withWorktreeDefaults(original.shared));
   assert.deepEqual(actual.agent.transcript, original.agent.transcript);
   assert.equal(actual.agent.sessions.length, original.agent.sessions.length);
   for (const row of actual.agent.sessions) {

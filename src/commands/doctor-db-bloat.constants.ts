@@ -1,0 +1,1 @@
+export const BLOAT_MIN_FILE_BYTES = 128 * 1024 * 1024;

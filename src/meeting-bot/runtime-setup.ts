@@ -8,12 +8,6 @@ import { isMeetingTalkBackMode } from "./meeting-modes.js";
 import type { MeetingPluginConfig } from "./plugin-config.js";
 import { addMeetingSetupCheck, createMeetingSetupStatus } from "./setup-checks.js";
 
-type MeetingSetupNodeAdapter = {
-  displayName: string;
-  nodeCommandName: string;
-  nodeConfigPath: string;
-};
-
 type MeetingRuntimeSetupOptions<Config extends MeetingPluginConfig, Mode extends string> = {
   assertAudioDeviceAvailable(params: {
     config: Config;
@@ -24,7 +18,11 @@ type MeetingRuntimeSetupOptions<Config extends MeetingPluginConfig, Mode extends
   connectedNodeMessage(nodeLabel: string | undefined): string;
   guestJoinCheck(config: Config): { message: string; ok: boolean };
   missingNodeIdMessage: string;
-  nodeAdapter: MeetingSetupNodeAdapter;
+  nodeAdapter: {
+    displayName: string;
+    nodeCommandName: string;
+    nodeConfigPath: string;
+  };
 };
 
 async function commandExists(runtime: PluginRuntime, command: string): Promise<boolean> {

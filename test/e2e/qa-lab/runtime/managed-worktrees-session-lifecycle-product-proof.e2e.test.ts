@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
 import type { SessionsDeleteResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
-  ManagedWorktreeGcResult,
+  ManagedWorktreeGcReceipt,
   ManagedWorktreeRecord,
 } from "../../../../src/agents/worktrees/types.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
@@ -176,14 +176,35 @@ describe("managed worktrees session-owner product proof", () => {
       )) as GatewayRunResult;
       expect(terminal.status).toBe("ok");
 
-      const gc = (await harness.gateway.call("worktrees.gc", {})) as ManagedWorktreeGcResult;
-      expect(gc).toEqual({
+      const gateway = harness.gateway;
+      let gc = (await gateway.call("worktrees.gc", {})) as ManagedWorktreeGcReceipt;
+      expect(gc).toMatchObject({ jobId: expect.any(String), state: "queued" });
+      const jobId = gc.jobId;
+      await expect
+        .poll(
+          async () => {
+            gc = (await gateway.call("worktrees.gc", { jobId })) as ManagedWorktreeGcReceipt;
+            return gc.state === "completed" || gc.state === "failed";
+          },
+          { timeout: 30_000, interval: 2_000 },
+        )
+        .toBe(true);
+      expect(gc).toMatchObject({
+        jobId,
+        state: "completed",
+        outcome: "completed",
+        error: null,
         removed: expect.not.arrayContaining([clean.worktree.id]),
         orphansDeleted: expect.any(Number),
         snapshotsPruned: expect.any(Number),
       });
-      expect((await listWorktrees()).worktrees).toContainEqual(
-        expect.objectContaining({ id: clean.worktree.id, ownerId: clean.key }),
+      const retained = (await listWorktrees()).worktrees.find(
+        (record) => record.id === clean.worktree.id,
+      );
+      expect(retained).toMatchObject({ id: clean.worktree.id, ownerId: clean.key });
+      expect(retained).not.toHaveProperty("removedAt");
+      await expect(fs.readFile(path.join(clean.worktree.path, "README.md"), "utf8")).resolves.toBe(
+        "base\n",
       );
 
       const cleanDeleted = (await harness.gateway.call("sessions.delete", {
@@ -192,7 +213,7 @@ describe("managed worktrees session-owner product proof", () => {
       expect(cleanDeleted.deleted).toBe(true);
       expect(cleanDeleted).not.toHaveProperty("worktreePreserved");
       await expect(fs.access(clean.worktree.path)).rejects.toMatchObject({ code: "ENOENT" });
-      const cleanSnapshotRef = `refs/openclaw/snapshots/${clean.worktree.id}`;
+      const cleanSnapshotRef = `refs/openclaw/snapshots/clean-v1/${clean.worktree.id}`;
       await expect(git(repo, "show-ref", "--verify", cleanSnapshotRef)).resolves.toContain(
         cleanSnapshotRef,
       );
@@ -248,7 +269,7 @@ describe("managed worktrees session-owner product proof", () => {
           },
         }),
       );
-      await expect(fs.access(locked.worktree.path)).resolves.toBeUndefined();
+      await fs.access(locked.worktree.path);
     },
   );
 });

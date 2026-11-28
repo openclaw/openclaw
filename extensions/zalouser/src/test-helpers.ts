@@ -1,5 +1,5 @@
 // Zalouser helper module supports test helpers behavior.
-import type { RuntimeEnv } from "../runtime-api.js";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
 
 export function createZalouserRuntimeEnv(): RuntimeEnv {
@@ -42,7 +42,6 @@ export function createZalouserGroupMessage(
     wasExplicitlyMentioned: false,
     canResolveExplicitMention: true,
     implicitMention: false,
-    raw: { source: "test" },
     ...overrides,
   };
 }
@@ -59,7 +58,6 @@ export function createZalouserDmMessage(
     content: "hello",
     timestampMs: Date.now(),
     msgId: "dm-1",
-    raw: { source: "test" },
     ...overrides,
   };
 }

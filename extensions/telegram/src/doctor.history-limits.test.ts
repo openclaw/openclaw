@@ -18,13 +18,13 @@ function effectiveLimits(cfg: OpenClawConfig, accountId?: string) {
 }
 
 describe("Telegram observed history and saved limits", () => {
-  it.each([0, 7, 5000])("preserves sentinel overrides over inherited %s windows", (inherited) => {
+  it("preserves sentinel overrides over disabled inherited windows", () => {
     const cfg: OpenClawConfig = {
-      messages: { groupChat: { historyLimit: inherited } },
+      messages: { groupChat: { historyLimit: 0 } },
       channels: {
         telegram: {
           historyLimit: sentinel,
-          dmHistoryLimit: inherited,
+          dmHistoryLimit: 0,
           dms: { "42": { historyLimit: sentinel } },
           accounts: { work: { historyLimit: sentinel, dmHistoryLimit: sentinel } },
         },

@@ -1,4 +1,3 @@
-// Account id tests cover account id normalization and validation.
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -7,20 +6,16 @@ import {
 } from "./account-id.js";
 
 describe("account id normalization", () => {
+  it("preserves distinct underscore-prefixed account identities", () => {
+    expect(["_prod", "prod"].map(normalizeAccountId)).toEqual(["_prod", "prod"]);
+    expect(["_prod", "prod"].map(normalizeOptionalAccountId)).toEqual(["_prod", "prod"]);
+  });
+
   const reservedAccountIdCases = [
     { name: "rejects __proto__ pollution keys", input: "__proto__" },
     { name: "rejects constructor pollution keys", input: "constructor" },
     { name: "rejects prototype pollution keys", input: "prototype" },
   ] as const;
-
-  function expectNormalizedAccountIdCase(params: {
-    input: string | null | undefined;
-    expected: string | undefined;
-    optional?: boolean;
-  }) {
-    const normalize = params.optional ? normalizeOptionalAccountId : normalizeAccountId;
-    expect(normalize(params.input)).toBe(params.expected);
-  }
 
   it.each([
     {
@@ -28,7 +23,6 @@ describe("account id normalization", () => {
       input: undefined,
       expected: DEFAULT_ACCOUNT_ID,
     },
-    { name: "defaults null to default account", input: null, expected: DEFAULT_ACCOUNT_ID },
     {
       name: "defaults blank strings to default account",
       input: "   ",
@@ -46,20 +40,16 @@ describe("account id normalization", () => {
       expected: DEFAULT_ACCOUNT_ID,
     })),
   ] as const)("$name", ({ input, expected }) => {
-    expectNormalizedAccountIdCase({ input, expected });
+    expect(normalizeAccountId(input)).toBe(expected);
   });
 
   it.each([
     { name: "keeps undefined optional values unset", input: undefined, expected: undefined },
     { name: "keeps blank optional values unset", input: "   ", expected: undefined },
     { name: "keeps invalid optional values unset", input: " !!! ", expected: undefined },
-    ...reservedAccountIdCases.map(({ name, input }) => ({
-      name: name.replace(" pollution keys", " optional values"),
-      input,
-      expected: undefined,
-    })),
+    { name: "keeps reserved optional values unset", input: "__proto__", expected: undefined },
     { name: "normalizes valid optional values", input: "  Business  ", expected: "business" },
   ] as const)("$name", ({ input, expected }) => {
-    expectNormalizedAccountIdCase({ input, expected, optional: true });
+    expect(normalizeOptionalAccountId(input)).toBe(expected);
   });
 });

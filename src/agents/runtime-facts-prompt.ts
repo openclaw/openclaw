@@ -1,99 +1,91 @@
 /** Compact current-turn snapshots; instructions belong in the stable system prompt. */
-import path from "node:path";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadExecApprovals, resolveExecApprovalsFromFile } from "../infra/exec-approvals.js";
-import { listActiveProcessSessionReferences } from "./bash-process-references.js";
-import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
-import type { RuntimeContextFragment } from "./internal-runtime-context.js";
-import { buildMediaTaskRuntimeContext } from "./media-generation-task-status.js";
-import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
-import { buildActiveSubagentRuntimeContext } from "./subagents/registry/subagent-active-context.js";
+import { buildTemporalContextText, TEMPORAL_CONTEXT_HEADING } from "./date-time.js";
+import {
+  readRuntimeContextConversationData,
+  type RuntimeContextFragment,
+} from "./internal-runtime-context.js";
+import {
+  buildMediaTaskRuntimeContext,
+  MEDIA_TASKS_HEADING,
+} from "./media-generation-task-status.js";
+import type { AgentRunSessionTarget } from "./run-session-target.types.js";
+import {
+  APPROVED_EXECUTABLES_HEADING,
+  buildExecutionHostRuntimeFacts,
+  EXEC_SESSIONS_HEADING,
+  type ExecutionHostRuntimeFactsParams,
+} from "./runtime-execution-facts.js";
+import {
+  buildActiveSubagentRuntimeContext,
+  SUBAGENT_SNAPSHOT_HEADINGS,
+} from "./subagents/registry/subagent-active-context.js";
 
-type RuntimeFactsParams = {
-  capabilityToolNames: ReadonlySet<string>;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId: string;
-  cfg: OpenClawConfig;
-};
+// One entry per snapshot; a snapshot's first line is one of its entry's headings.
+const SNAPSHOT_HEADINGS: readonly (readonly string[])[] = [
+  [APPROVED_EXECUTABLES_HEADING],
+  [EXEC_SESSIONS_HEADING],
+  SUBAGENT_SNAPSHOT_HEADINGS,
+  [MEDIA_TASKS_HEADING],
+  [TEMPORAL_CONTEXT_HEADING],
+];
 
-function buildApprovedExecutablesRuntimeContext(agentId: string): string {
-  const header = "## Approved executables";
-  try {
-    const { allowlist } = resolveExecApprovalsFromFile({ file: loadExecApprovals(), agentId });
-    const hints = allowlist
-      .flatMap((entry) => {
-        const pattern = entry.pattern.trim();
-        if (pattern.startsWith("=command:") || !/[\\/~]/.test(pattern)) {
-          return [];
-        }
-        // Keep absolute approval tokens exact; a basename can resolve to another binary.
-        const name = path.win32.isAbsolute(pattern)
-          ? pattern
-          : path.win32.basename(pattern).replace(/\.exe$/i, "");
-        // Omit hints that cannot be displayed faithfully within the prompt budget.
-        if (!name || name.length > 256 || sanitizeForPromptLiteral(name) !== name) {
-          return [];
-        }
-        return [`  ${name} ${entry.argPattern ? "(restricted args)" : "(any arguments)"}`];
-      })
-      .toSorted()
-      .slice(0, 10);
-    return [
-      header,
-      ...(hints.length
-        ? [
-            "Pre-approved executables (exact arguments are enforced at runtime; no approval prompt needed when args match):",
-            ...hints,
-          ]
-        : ["none"]),
-    ].join("\n");
-  } catch {
-    // Hints are advisory; approval loading must not block prompt preparation.
-    return `${header}\nunavailable`;
-  }
+function snapshotSlot(text: string): number {
+  const heading = text.split("\n", 1)[0];
+  return SNAPSHOT_HEADINGS.findIndex((headings) => headings.includes(heading!));
 }
 
+/**
+ * Builds this turn's state snapshots, keeping only those that differ from the latest copy the
+ * request already carries in `sentHistory`. A snapshot the request does not carry (new session,
+ * compacted away, or cleared by the route) is sent in full, its empty form included.
+ */
 export async function buildRuntimeFactsContext(
-  params: RuntimeFactsParams,
+  params: Omit<ExecutionHostRuntimeFactsParams, "includeEmptySnapshots"> & {
+    cfg: OpenClawConfig;
+    executionHost?: boolean;
+    sessionTarget?: AgentRunSessionTarget;
+    runId?: string;
+    sentHistory: readonly unknown[];
+  },
 ): Promise<RuntimeContextFragment[]> {
-  const sections: string[] = [];
-  if (process.platform === "win32" && params.capabilityToolNames.has("exec")) {
-    sections.push(buildApprovedExecutablesRuntimeContext(params.agentId));
-  }
-  if (params.capabilityToolNames.has("process")) {
-    const sessions = listActiveProcessSessionReferences({
-      scopeKey: resolveProcessToolScopeKey(params),
-    }).toSorted((a, b) => (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0));
-    sections.push(
-      [
-        "Active exec sessions:",
-        ...(sessions.length
-          ? sessions.map((session) => {
-              const pid = typeof session.pid === "number" ? ` pid=${session.pid}` : "";
-              const cwd = session.cwd
-                ? ` cwd=${truncateUtf16Safe(sanitizeForPromptLiteral(session.cwd), 256)}`
-                : "";
-              return `- ${session.sessionId} ${session.status}${pid}${cwd} :: ${sanitizeForPromptLiteral(session.name)}`;
-            })
-          : ["none"]),
-      ].join("\n"),
-    );
-  }
+  const facts =
+    params.executionHost === false
+      ? []
+      : await buildExecutionHostRuntimeFacts({ ...params, includeEmptySnapshots: true });
   const canSpawn = params.capabilityToolNames.has("sessions_spawn");
   const subagentContext = await buildActiveSubagentRuntimeContext({
     cfg: params.cfg,
     controllerSessionKey: params.sessionKey,
     controllerAgentId: params.agentId,
+    runId: params.runId,
     includeSpawnContext: canSpawn,
   });
   if (subagentContext || canSpawn) {
-    sections.push(subagentContext ?? "## Active Subagents\nnone");
+    facts.push({
+      kind: "conversation-data",
+      text: subagentContext ?? `${SUBAGENT_SNAPSHOT_HEADINGS[0]}\nnone`,
+    });
   }
-  const media = await buildMediaTaskRuntimeContext(params);
+  const media = await buildMediaTaskRuntimeContext({ ...params, includeEmptySnapshots: true });
   if (media) {
-    sections.push(media);
+    facts.push({ kind: "conversation-data", text: media });
   }
-  return sections.map((text) => ({ kind: "conversation-data", text }));
+  facts.push({
+    kind: "conversation-data",
+    text: buildTemporalContextText({
+      configuredTimezone: params.cfg.agents?.defaults?.userTimezone,
+      sessionStatusAvailable: params.capabilityToolNames.has("session_status"),
+    }),
+  });
+  const sent = new Map<number, string>();
+  for (const message of params.sentHistory.toReversed()) {
+    for (const text of readRuntimeContextConversationData(message)) {
+      const slot = snapshotSlot(text);
+      if (slot >= 0 && !sent.has(slot)) {
+        sent.set(slot, text);
+      }
+    }
+  }
+  return facts.filter((fact) => sent.get(snapshotSlot(fact.text)) !== fact.text);
 }

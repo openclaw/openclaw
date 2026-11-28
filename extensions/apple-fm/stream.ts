@@ -3,6 +3,8 @@ import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime
 import { quoteUnsafeIntegerLiterals } from "openclaw/plugin-sdk/json-unsafe-integers";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 import {
+  applyProviderPayloadHook,
+  buildAssistantMessage,
   createEmptyTransportUsage,
   failTransportStream,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
@@ -12,23 +14,17 @@ import type { AppleFmNative } from "./native.js";
 export function createAppleFmStream(native: Pick<AppleFmNative, "run">): StreamFn {
   return (model, context, options) => {
     const stream = createAssistantMessageEventStream();
-    const message: AssistantMessage = {
-      role: "assistant",
+    const message: AssistantMessage = buildAssistantMessage({
+      model,
       content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
       usage: createEmptyTransportUsage(),
       stopReason: "stop",
-      timestamp: Date.now(),
-    };
+    });
     stream.push({ type: "start", partial: message });
     void (async () => {
       try {
         options?.signal?.throwIfAborted();
-        const responseFormat = options?.responseFormat
-          ? structuredClone(options.responseFormat)
-          : undefined;
+        const responseFormat = options?.responseFormat;
         const request = {
           systemPrompt: context.systemPrompt,
           messages: context.messages,
@@ -37,7 +33,7 @@ export function createAppleFmStream(native: Pick<AppleFmNative, "run">): StreamF
           temperature: options?.temperature,
           responseFormat: responseFormat ? structuredClone(responseFormat) : undefined,
         };
-        const payload = (await options?.onPayload?.(request, model)) ?? request;
+        const payload = (await applyProviderPayloadHook(options, request, model)) ?? request;
         if (!payload || typeof payload !== "object") {
           throw new Error("Apple Foundation Models requires an object request.");
         }
@@ -113,14 +109,15 @@ export function createAppleFmStream(native: Pick<AppleFmNative, "run">): StreamF
         }
         for (const call of result.toolCalls) {
           const toolCall = { type: "toolCall" as const, ...call };
+          const streamingCall = { ...toolCall, partialJson: JSON.stringify(call.arguments) };
           const contentIndex = message.content.length;
           message.content.push(toolCall);
           stream.push({ type: "toolcall_start", contentIndex, partial: message });
           stream.push({
             type: "toolcall_delta",
             contentIndex,
-            delta: JSON.stringify(call.arguments),
-            partial: message,
+            delta: streamingCall.partialJson,
+            partial: { ...message, content: [...message.content.slice(0, -1), streamingCall] },
           });
           stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: message });
         }

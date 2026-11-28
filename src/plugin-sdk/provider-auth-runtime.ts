@@ -1,17 +1,28 @@
 // Provider auth runtime helpers implement OAuth loopback, token exchange, and auth persistence.
-import crypto from "node:crypto";
-import fs from "node:fs";
-import { createServer } from "node:http";
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+} from "../agents/auth-profiles/store-runtime.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { startOAuthLoopbackCallbackServer } from "../infra/oauth-loopback-callback.js";
-import { escapeHtml } from "../shared/html-escape.js";
+import {
+  startOAuthLoopbackCallbackServer,
+  type OAuthLoopbackCallbackServer,
+} from "../infra/oauth-loopback-callback.js";
+import {
+  providerAuthFailureFromOAuthError,
+  type ProviderAuthFailureReason,
+} from "../plugins/provider-auth-failure.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
+import { renderOAuthPage } from "../shared/oauth-page.js";
+import { parseOAuthAuthorizationInput } from "./provider-oauth-runtime.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
+export { withPersonalAuthProfileStore } from "../agents/auth-profiles/personal-store.js";
+export { withAuthProfileStoreAtEffect } from "../agents/auth-profiles/store-runtime.js";
+export { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 export { removeProviderAuthProfilesWithLock } from "../agents/auth-profiles/profiles.js";
 export { removeAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 export {
@@ -38,34 +49,13 @@ export type OAuthCallbackResult = {
   state: string;
 };
 
-type ProviderOAuthLoopbackCallbackResult =
-  | { type: "authorization_code"; code: string; state: string }
-  | { type: "oauth_error"; error: string; errorDescription?: string };
-
-type ProviderOAuthLoopbackCallbackServer = {
-  waitForCallback: () => Promise<ProviderOAuthLoopbackCallbackResult>;
-  close: () => Promise<void>;
-};
-
-type ProviderOAuthLoopbackRenderedResponse = { body: string; contentType: string };
-type ProviderOAuthLoopbackCorsOriginResolver = (
-  originHeader: string | string[] | undefined,
-) => string | undefined;
-
 /**
  * Binds a hardened loopback listener before returning so provider plugins can open the browser
  * only after the callback route is ready. Invalid request candidates remain nonterminal.
  */
-export async function startProviderOAuthLoopbackCallbackServer(params: {
-  redirectUrl: string | URL;
-  expectedState: string;
-  timeoutMs: number;
-  signal?: AbortSignal;
-  bindHostname?: string;
-  resolveCorsOrigin?: ProviderOAuthLoopbackCorsOriginResolver;
-  renderSuccess?: () => ProviderOAuthLoopbackRenderedResponse;
-  renderError?: (message: string) => ProviderOAuthLoopbackRenderedResponse;
-}): Promise<ProviderOAuthLoopbackCallbackServer> {
+export async function startProviderOAuthLoopbackCallbackServer(
+  params: Parameters<typeof startOAuthLoopbackCallbackServer>[0],
+): Promise<OAuthLoopbackCallbackServer> {
   return await startOAuthLoopbackCallbackServer(params);
 }
 
@@ -77,16 +67,39 @@ export type ProviderAuthProfileMetadata = {
   accountId?: string;
 };
 
+/** @deprecated Use resolveProviderAuthProfileMetadataAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveProviderAuthProfileMetadata(params: {
   provider: string;
   cfg?: OpenClawConfig;
   profileId?: string;
   agentDir?: string;
 }): ProviderAuthProfileMetadata {
+  warnPluginSdkDeprecation({
+    family: "auth-profiles",
+    method: "resolveProviderAuthProfileMetadata",
+    replacement: "resolveProviderAuthProfileMetadataAsync",
+  });
   const store = ensureAuthProfileStore(params.agentDir, {
     config: params.cfg,
     readOnly: true,
   });
+  return selectProviderAuthProfileMetadata(params, store);
+}
+
+export async function resolveProviderAuthProfileMetadataAsync(
+  params: Parameters<typeof resolveProviderAuthProfileMetadata>[0],
+): Promise<ProviderAuthProfileMetadata> {
+  const store = await ensureAuthProfileStoreAsync(params.agentDir, {
+    config: params.cfg,
+    readOnly: true,
+  });
+  return selectProviderAuthProfileMetadata(params, store);
+}
+
+function selectProviderAuthProfileMetadata(
+  params: Parameters<typeof resolveProviderAuthProfileMetadata>[0],
+  store: AuthProfileStore,
+): ProviderAuthProfileMetadata {
   const normalizedProvider = normalizeProviderId(params.provider);
   const entry = params.profileId
     ? ([params.profileId, store.profiles[params.profileId]] as const)
@@ -127,58 +140,38 @@ export function buildOAuthCallbackOriginResolver(
     if (!value) {
       return undefined;
     }
-    try {
-      const parsed = new URL(value);
-      if (parsed.protocol !== "https:") {
-        return undefined;
-      }
-      return normalized.has(parsed.host.toLowerCase()) ? parsed.origin : undefined;
-    } catch {
-      return undefined;
-    }
+    const parsed = URL.parse(value);
+    return parsed?.protocol === "https:" && normalized.has(parsed.host.toLowerCase())
+      ? parsed.origin
+      : undefined;
   };
 }
 
 /**
- * Generates a high-entropy OAuth state token for local callback validation.
+ * @deprecated Use `generateOAuthState` from `openclaw/plugin-sdk/provider-oauth-runtime`.
+ * Kept because published ClawHub plugins import it here (4 at 2026-11-21); the state is opaque.
  */
-function generateHexOAuthState(): string {
-  return crypto.randomBytes(32).toString("hex");
-}
-
-export { generateHexOAuthState as generateOAuthState };
+export { generateOAuthState } from "./provider-oauth-runtime.js";
 
 /**
- * Parses a pasted OAuth redirect URL into callback code/state fields.
+ * @deprecated Use `parseOAuthAuthorizationInput` from `openclaw/plugin-sdk/provider-oauth-runtime`.
+ * Kept because published ClawHub plugins import it here (5 at 2026-11-21). Same rules as the one
+ * paste parser, plus the old requirement that a state is present.
  */
 export function parseOAuthCallbackInput(
-  /** Full redirect URL pasted by the operator after manual OAuth completion. */
   input: string,
-  messages: {
-    /** Override for URLs that omit the state query parameter. */
-    missingState?: string;
-    /** Override for values that are not parseable redirect URLs. */
-    invalidInput?: string;
-  } = {},
+  messages: { missingState?: string; invalidInput?: string } = {},
 ): OAuthCallbackResult | { error: string } {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return { error: "No input provided" };
-  }
-
-  try {
-    const url = new URL(trimmed);
-    const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state");
-    if (!code) {
-      return { error: "Missing 'code' parameter in URL" };
-    }
-    if (!state) {
-      return { error: messages.missingState ?? "Missing 'state' parameter in URL" };
-    }
-    return { code, state };
-  } catch {
+  if (!URL.parse(input.trim())) {
     return { error: messages.invalidInput ?? "Paste the full redirect URL, not just the code." };
+  }
+  try {
+    const { code, state } = parseOAuthAuthorizationInput(input, {});
+    return state
+      ? { code, state }
+      : { error: messages.missingState ?? "Missing 'state' parameter in URL" };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -202,8 +195,8 @@ export async function waitForLocalOAuthCallback(params: {
   progressMessage?: string;
   /** Extra loopback hostname to bind; the redirect URI hostname is always bound. */
   hostname?: string;
-  /** Progress callback invoked after the server begins listening. */
-  onProgress?: (message: string) => void;
+  /** Progress callback; `reason` names a provider refusal that keeps the listener open. */
+  onProgress?: (message: string, reason?: ProviderAuthFailureReason) => void;
   /** Stops and closes the callback listener when the owning login is cancelled. */
   signal?: AbortSignal;
   /**
@@ -212,7 +205,6 @@ export async function waitForLocalOAuthCallback(params: {
   corsOriginAllowlist?: readonly string[];
 }): Promise<OAuthCallbackResult> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  const escapedSuccessTitle = escapeHtml(params.successTitle);
   const callbackUrl = new URL(params.redirectUri);
   callbackUrl.port = String(params.port);
   callbackUrl.pathname = params.callbackPath;
@@ -224,8 +216,16 @@ export async function waitForLocalOAuthCallback(params: {
     expectedState: params.expectedState,
     timeoutMs,
     ...(params.hostname ? { bindHostname: params.hostname } : {}),
-    createServer,
     ...(params.signal ? { signal: params.signal } : {}),
+    // A refusal keeps the listener open so the user can go back and allow access.
+    ...(params.onProgress
+      ? {
+          onRefusal: (error) => {
+            const failure = providerAuthFailureFromOAuthError(error);
+            params.onProgress?.(failure.message, failure.reason);
+          },
+        }
+      : {}),
     resolveCorsOrigin: hasCorsOriginAllowlist
       ? resolveOAuthCallbackOrigin
       : (originHeader) => {
@@ -233,20 +233,21 @@ export async function waitForLocalOAuthCallback(params: {
           return value && isHttpOrigin(value) ? value : undefined;
         },
     renderSuccess: () => ({
-      body:
-        "<!doctype html><html><head><meta charset='utf-8'/></head>" +
-        `<body><h2>${escapedSuccessTitle}</h2>` +
-        "<p>You can close this window and return to OpenClaw.</p></body></html>",
+      body: renderOAuthPage({
+        title: params.successTitle,
+        heading: params.successTitle,
+        message: "You can close this window and return to OpenClaw.",
+      }),
       contentType: "text/html; charset=utf-8",
     }),
   });
-  params.onProgress?.(
-    params.progressMessage ?? `Waiting for OAuth callback on ${params.redirectUri}...`,
-  );
   try {
+    params.onProgress?.(
+      params.progressMessage ?? `Waiting for OAuth callback on ${params.redirectUri}...`,
+    );
     const result = await callback.waitForCallback();
     if (result.type === "oauth_error") {
-      throw new Error(`OAuth error: ${result.error}`);
+      throw providerAuthFailureFromOAuthError(result.error);
     }
     return { code: result.code, state: result.state };
   } finally {
@@ -255,57 +256,26 @@ export async function waitForLocalOAuthCallback(params: {
 }
 
 function isHttpOrigin(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return (url.protocol === "http:" || url.protocol === "https:") && url.origin === value;
-  } catch {
-    return false;
-  }
+  const url = URL.parse(value);
+  return (url?.protocol === "http:" || url?.protocol === "https:") && url.origin === value;
 }
 
 type ResolveApiKeyForProvider =
-  typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
+  typeof import("../agents/model-auth-provider.js").resolveApiKeyForProviderCore;
 type GetRuntimeAuthForModel =
   typeof import("../plugins/runtime/runtime-model-auth.runtime.js").getRuntimeAuthForModelCore;
-type RuntimeModelAuthModule = typeof import("../plugins/runtime/runtime-model-auth.runtime.js");
-const RUNTIME_MODEL_AUTH_CANDIDATES = [
-  "./runtime-model-auth.runtime",
-  "../plugins/runtime/runtime-model-auth.runtime",
-] as const;
-const RUNTIME_MODEL_AUTH_EXTENSIONS = [".js", ".ts", ".mjs", ".mts", ".cjs", ".cts"] as const;
-
-function resolveRuntimeModelAuthModuleHref(): string {
-  const baseDir = path.dirname(fileURLToPath(import.meta.url));
-  for (const relativeBase of RUNTIME_MODEL_AUTH_CANDIDATES) {
-    for (const ext of RUNTIME_MODEL_AUTH_EXTENSIONS) {
-      const candidate = path.resolve(baseDir, `${relativeBase}${ext}`);
-      if (fs.existsSync(candidate)) {
-        return pathToFileURL(candidate).href;
-      }
-    }
-  }
-  throw new Error(`Unable to resolve runtime model auth module from ${import.meta.url}`);
-}
-
-async function loadRuntimeModelAuthModule(): Promise<RuntimeModelAuthModule> {
-  return (await import(resolveRuntimeModelAuthModuleHref())) as RuntimeModelAuthModule;
-}
 
 /**
- * Resolves provider API-key auth through the runtime auth module when available.
+ * Resolves provider API-key auth without loading model-runtime preparation.
  */
 export async function resolveApiKeyForProvider(
-  /** Provider auth lookup params forwarded to the runtime auth module. */
+  /** Provider auth lookup params forwarded to the provider auth owner. */
   params: Parameters<ResolveApiKeyForProvider>[0],
 ): Promise<Awaited<ReturnType<ResolveApiKeyForProvider>>> {
   params.signal?.throwIfAborted();
-  const runtimeAuth = await loadRuntimeModelAuthModule();
+  const { resolveApiKeyForProviderCore } = await import("../agents/model-auth-provider.js");
   params.signal?.throwIfAborted();
-  const resolveApiKeyForProviderLocal =
-    typeof runtimeAuth.resolveProviderRuntimeApiKey === "function"
-      ? runtimeAuth.resolveProviderRuntimeApiKey
-      : (await import("../agents/model-auth.js")).resolveApiKeyForProviderCore;
-  return resolveApiKeyForProviderLocal(params);
+  return resolveApiKeyForProviderCore(params);
 }
 
 /**
@@ -316,6 +286,6 @@ export async function getRuntimeAuthForModel(
   params: Parameters<GetRuntimeAuthForModel>[0],
 ): Promise<Awaited<ReturnType<GetRuntimeAuthForModel>>> {
   const { getRuntimeAuthForModelCore: getRuntimeAuthForModelLocal } =
-    await loadRuntimeModelAuthModule();
+    await import("../plugins/runtime/runtime-model-auth.runtime.js");
   return getRuntimeAuthForModelLocal(params);
 }
