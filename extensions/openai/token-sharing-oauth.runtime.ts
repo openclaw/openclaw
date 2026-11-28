@@ -119,9 +119,12 @@ async function requestJson(
           failure.message = `${failure.message} (${requestId})`;
         }
         if (requestId) {
+          const outcome = failure.oauthRefreshOutcome;
           Object.assign(failure, {
             oauthRefreshFailure: {
-              ...failure.oauthRefreshFailure,
+              status: outcome.status ?? response.status,
+              ...(outcome.reason ? { reason: outcome.reason } : {}),
+              ...(outcome.reason === "invalid_grant" ? { errorType: "invalid_grant" } : {}),
               ...(stage ? { stage } : {}),
               requestId,
             },
