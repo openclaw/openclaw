@@ -16,12 +16,17 @@ import {
   type InboxOnMessage,
 } from "./monitor-inbox.test-harness.js";
 
-function quotedMessageUpsert(id: string, text: string, contextInfo: Record<string, unknown>) {
+function quotedMessageUpsert(
+  id: string,
+  text: string,
+  contextInfo: Record<string, unknown>,
+  group?: { remoteJid: string; participant: string },
+) {
   return {
     type: "notify",
     messages: [
       {
-        key: { id, fromMe: false, remoteJid: "999@s.whatsapp.net" },
+        key: { id, fromMe: false, remoteJid: "999@s.whatsapp.net", ...group },
         message: { extendedTextMessage: { text, contextInfo } },
         messageTimestamp: 1_700_000_000,
         pushName: "Tester",
@@ -172,6 +177,29 @@ describe("web monitor inbox reply context", () => {
 
   it("captures reply context from quoted messages", async () => {
     await expectQuotedReplyContext({ conversation: "original" });
+  });
+
+  it("uses the account's LID mapping for a quoted group sender", async () => {
+    fsSync.writeFileSync(
+      path.join(getAuthDir(), "lid-mapping-555_reverse.json"),
+      JSON.stringify("1555"),
+    );
+    const { listener, inbound } = await receive(
+      quotedMessageUpsert(
+        nextMessageId("quoted-lid"),
+        "reply",
+        {
+          stanzaId: "original",
+          participant: "555@lid",
+          quotedMessage: { conversation: "original" },
+        },
+        { remoteJid: "123@g.us", participant: "999@s.whatsapp.net" },
+      ),
+    );
+
+    expect(inbound.quote?.sender?.displayName).toBe("+1555");
+    expect(inbound.quote?.context?.sender).toMatchObject({ lid: "555@lid", e164: "+1555" });
+    await listener.close();
   });
 
   it("preserves native reply context when WhatsApp omits the quoted message", async () => {

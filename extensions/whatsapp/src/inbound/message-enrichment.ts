@@ -57,6 +57,7 @@ function logMediaMaterializationFailure(params: {
 export async function enrichWhatsAppInboundMessage(params: {
   msg: WAMessage;
   sock: WASocket;
+  authDir?: string;
   mediaMaxMb?: number;
 }) {
   const { msg, sock } = params;
@@ -75,7 +76,7 @@ export async function enrichWhatsAppInboundMessage(params: {
   }
   body = body ?? "";
   const commandBody = body;
-  const replyContext = describeReplyContext(messageProjection);
+  const replyContext = describeReplyContext(messageProjection, params.authDir);
 
   let mediaPath: string | undefined;
   let mediaType = mediaKind
