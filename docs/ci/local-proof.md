@@ -345,9 +345,12 @@ all unsuppressed over-cap files.
 `pnpm check:baseline-ratchets --base <commit> --no-merge-base` runs the CI
 ratchets in two managed child slots, retaining all results after ordinary
 failures. `RATCHET_PR_HEAD_SHA` adds the existing PR-only line-cap comparison.
-One slot runs the database-worker inventory and then the database-dialect
-ratchet so their large TypeScript snapshots never overlap. The other slot runs
-smaller checks; both slots drain that queue once the database checks finish.
+One slot runs the database-worker inventory, the database-dialect ratchet and
+the Plugin SDK surface budget in sequence, so their large TypeScript snapshots
+never overlap. The other slot runs smaller checks, including the Plugin SDK
+export check; both slots drain that queue once the large checks finish. Every PR
+runs both SDK checks: the SDK import closure reaches far outside
+`src/plugin-sdk`, so no changed-path rule can tell which changes move it.
 When current and historical source snapshots have identical paths and contents,
 the worker inventory reuses its fresh current analysis for comparison counts.
 Changed snapshots retain both full analyses and historical-cache validation.
