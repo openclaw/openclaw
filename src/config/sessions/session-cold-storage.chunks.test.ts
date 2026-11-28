@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vite
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import * as sqliteTransactions from "../../infra/sqlite-transaction.js";
 import { copyColdArchives } from "../../infra/update-candidate-cold-archives.worker.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
@@ -22,6 +23,7 @@ import {
   iterateSessionColdRecords,
   readSessionColdChunks,
 } from "./session-cold-storage-chunks.js";
+import * as coldCodec from "./session-cold-storage-codec.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { prepareSessionColdBatchInWorker } from "./session-cold-storage-prepare.js";
 import { restoreSessionColdTranscriptInWorker } from "./session-cold-storage-restore.js";
@@ -128,6 +130,48 @@ function restorationPlan(descriptor: NonNullable<ReturnType<typeof readSessionCo
     archive: descriptor,
   };
 }
+
+it("fails preparation without committing when a later chunk verification fails after the snapshot closes", async () => {
+  let snapshotDatabase:
+    | Parameters<typeof sqliteTransactions.runSqliteReadSnapshotSync>[0]
+    | undefined;
+  const readSnapshot = sqliteTransactions.runSqliteReadSnapshotSync;
+  const snapshot = vi
+    .spyOn(sqliteTransactions, "runSqliteReadSnapshotSync")
+    .mockImplementation((db, run, options) => {
+      if (options?.operationLabel === "cold transcript snapshot") {
+        snapshotDatabase = db;
+      }
+      return readSnapshot(db, run, options);
+    });
+  const verify = coldCodec.verifyPublishedSessionColdArchive;
+  const failure = new Error("synthetic published chunk verification failure");
+  let verified = 0;
+  const verification = vi
+    .spyOn(coldCodec, "verifyPublishedSessionColdArchive")
+    .mockImplementation((...args) => {
+      verify(...args);
+      if (++verified === 2) {
+        expect(snapshotDatabase).toBeDefined();
+        expect(snapshotDatabase!.isTransaction).toBe(false);
+        throw failure;
+      }
+    });
+  try {
+    await expect(archive()).rejects.toThrow(failure);
+    expect(verified).toBe(2);
+    expect(fixture.snapshot()).toEqual(original);
+    for (const table of [
+      "session_transcript_cold_archives",
+      "session_transcript_cold_archive_chunks",
+    ]) {
+      expect(fixture.database().prepare(`SELECT count(*) AS n FROM ${table}`).get()!.n).toBe(0);
+    }
+  } finally {
+    verification.mockRestore();
+    snapshot.mockRestore();
+  }
+});
 
 it.each(["restore", "maintenance"] as const)(
   "recovers partial cold navigation and FTS cleanup through %s",

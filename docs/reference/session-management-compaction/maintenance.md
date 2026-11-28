@@ -224,8 +224,11 @@ the worker checks the stored byte counts again without unpacking known-oversized
 events. An event whose encoded envelope and restore metadata cannot fit one chunk
 also stays in SQLite. Existing single-file archives remain readable unchanged.
 
-The worker writes, syncs, and verifies an immutable archive before a guarded
-transaction records its location. Readers then use the complete archive while
+The worker encodes and compresses chunks inside a read snapshot, then closes
+the snapshot before decoding, writing, syncing, and verifying those immutable
+bytes. Only compressed chunks remain buffered, so publication does not keep the
+WAL pinned. A guarded writer transaction still revalidates the session before
+recording its archive location. Readers then use the complete archive while
 background cleanup clears the retained navigation rows' payloads and search index.
 The archive preserves the original serialized events and their restore
 metadata. A failed or interrupted preparation leaves the SQLite transcript

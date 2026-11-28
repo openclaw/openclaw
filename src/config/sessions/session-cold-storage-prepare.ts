@@ -279,6 +279,7 @@ function prepareSessionColdArchiveInWorker(
   );
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const chunks: SessionColdChunkMetadata[] = [];
+  const encodedChunks: Buffer[] = [];
   let envelopeBytes = 0;
   const opened = withOpenClawAgentDatabaseReadOnly(
     (database) =>
@@ -437,19 +438,7 @@ function prepareSessionColdArchiveInWorker(
               raw_bytes: rawBytes + eventCount - 1,
               archive_bytes: bytes.length,
             };
-            for (const record of decodeSessionColdRecords(bytes, {
-              ...chunk,
-              generation: plan.snapshot.generation!,
-            })) {
-              void record;
-            }
-            publishEncodedSessionTranscriptArchive({
-              archiveDirectory: directory,
-              archiveName: chunk.archive_name,
-              bytes,
-              sha256,
-            });
-            verifyPublishedSessionColdArchive(plan.databaseOptions.path, chunk);
+            encodedChunks.push(bytes);
             chunks.push(chunk);
             envelopeBytes += size;
           };
@@ -487,6 +476,23 @@ function prepareSessionColdArchiveInWorker(
   );
   if (!opened.found || chunks.length === 0) {
     throw new Error("Cannot archive a missing or empty transcript");
+  }
+  // Only compressed bytes survive the snapshot; verification and durable publication do not pin WAL.
+  for (const [index, chunk] of chunks.entries()) {
+    const bytes = encodedChunks[index]!;
+    for (const record of decodeSessionColdRecords(bytes, {
+      ...chunk,
+      generation: plan.snapshot.generation!,
+    })) {
+      void record;
+    }
+    publishEncodedSessionTranscriptArchive({
+      archiveDirectory: directory,
+      archiveName: chunk.archive_name,
+      bytes,
+      sha256: chunk.archive_sha256,
+    });
+    verifyPublishedSessionColdArchive(plan.databaseOptions.path, chunk);
   }
   requireDirectorySync(syncDirectorySync(directory), "Cold archive directory");
   requireDirectorySync(syncDirectorySync(path.dirname(directory)), "Session artifact directory");
