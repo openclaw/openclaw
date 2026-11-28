@@ -88,10 +88,42 @@ async function sweepRegisteredCodexAppServerOrphans(
       throw new Error("Codex orphan cleanup exceeded its startup budget. Retry to finish cleanup.");
     }
     const registration = registrationSchema.parse(entry.value);
-    const snapshot = await readCodexAppServerProcessSnapshot(deadline, [
-      registration.parent.pid,
-      registration.child.pid,
-    ]);
+    let snapshot: Awaited<ReturnType<typeof readCodexAppServerProcessSnapshot>>;
+    try {
+      snapshot = await readCodexAppServerProcessSnapshot(deadline, [
+        registration.parent.pid,
+        registration.child.pid,
+      ]);
+    } catch (error) {
+      if (
+        process.platform === "darwin" &&
+        error instanceof ProcessInspectionError &&
+        error.reason === "permission"
+      ) {
+        // A reused parent PID can be unreadable after reboot. Clear only when
+        // the child is also absent and the kernel confirms ESRCH; live or
+        // inaccessible children retain the existing fail-closed behavior.
+        const childSnapshot = await readCodexAppServerProcessSnapshot(deadline, [
+          registration.child.pid,
+        ]);
+        if (!childSnapshot.some((row) => row.pid === registration.child.pid)) {
+          try {
+            process.kill(registration.child.pid, 0);
+          } catch (signalError) {
+            if (
+              signalError !== null &&
+              typeof signalError === "object" &&
+              "code" in signalError &&
+              signalError.code === "ESRCH"
+            ) {
+              await store.delete(entry.key);
+              continue;
+            }
+          }
+        }
+      }
+      throw error;
+    }
     const parent = snapshot.find((row) => row.pid === registration.parent.pid);
     if (parent?.startedAt === registration.parent.startedAt && !isDeadProcessState(parent.state)) {
       continue;
