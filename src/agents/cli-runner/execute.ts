@@ -26,6 +26,7 @@ import {
   hasHydratableMediaImages,
 } from "../embedded-agent-runner/run/images.js";
 import { prepareAgentExecScratch } from "../exec-scratch.js";
+import { findCliTimeoutError, recordModelFallbackStop } from "../failover-error.js";
 import { resolveFastModeForElapsed } from "../fast-mode.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
@@ -587,6 +588,13 @@ export async function executePreparedCliRun(
           toolSummary: events.getToolSummary(),
           ...(acceptedSessionSpawns ? { acceptedSessionSpawns } : {}),
         });
+      }
+      // A timeout after the turn started a tool, from the run deadline or the no-output
+      // watchdog, cannot move to another model: it would restart the task and repeat those
+      // tool effects (#203465). Timeouts before any tool still fall back (#186915).
+      const timeoutError = findCliTimeoutError(runError);
+      if (timeoutError && events.getToolSummary().calls > 0) {
+        recordModelFallbackStop(timeoutError);
       }
       throw toolTracking.attachDeliveryEvidence(runError);
     }
