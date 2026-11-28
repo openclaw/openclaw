@@ -49,10 +49,10 @@ export async function recordGatewaySessionRunFailure(
   const observedCode = isRecord(params.errorObservation)
     ? params.errorObservation.providerErrorCode
     : undefined;
-  const observedCyberPolicy = formatProviderCyberPolicyText(observedCode);
-  const sanitized =
-    observedCyberPolicy ?? (sanitizeSessionRunError(params.error) || "unknown error");
-  const cyberPolicy = sanitized === PROVIDER_CYBER_POLICY_NOTICE;
+  const sanitized = sanitizeSessionRunError(params.error) || "unknown error";
+  const cyberPolicyNotice =
+    formatProviderCyberPolicyText(observedCode) ??
+    (sanitized === PROVIDER_CYBER_POLICY_NOTICE ? sanitized : undefined);
   const error = truncateSessionRunError(sanitized, 512);
   const cause = readRunFailureCause(params.errorObservation);
   const report: CustomMessageReportAppend = {
@@ -62,7 +62,7 @@ export async function recordGatewaySessionRunFailure(
         ? STATE_CONTENTION_SUMMARY
         : (params.notice ??
           renderAssistantRequestFailureCopy({ storageFailure }) ??
-          (cyberPolicy ? sanitized : undefined) ??
+          cyberPolicyNotice ??
           // A host-created update error's message is the instruction the user needs.
           (cause?.code === HARNESS_UPDATE_REQUIRED_CODE ? sanitized : undefined) ??
           renderCodexAppServerFailureCopy(sanitized) ??
@@ -80,7 +80,7 @@ export async function recordGatewaySessionRunFailure(
     details: {
       runId,
       error,
-      ...(params.summaryAsTitle || (cyberPolicy && !params.notice && !params.errorKind)
+      ...(params.summaryAsTitle || (cyberPolicyNotice && !params.notice && !params.errorKind)
         ? { summaryAsTitle: true }
         : {}),
       ...(params.desktopNotice ? { desktopNotice: params.desktopNotice } : {}),

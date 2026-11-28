@@ -8,7 +8,13 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.core.js";
 import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
-import { event, runId, seed, target } from "./session-lifecycle-run-failure.test-support.js";
+import {
+  event,
+  reports,
+  runId,
+  seed,
+  target,
+} from "./session-lifecycle-run-failure.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 
@@ -79,6 +85,14 @@ it.each(["assistant error", "lifecycle observation"] as const)(
         openclawRunError: { runId, summary, summaryAsTitle: true },
       });
       expect(JSON.stringify([live, history])).not.toContain(raw);
+      if (source === "lifecycle observation") {
+        expect(await reports()).toEqual([
+          expect.objectContaining({
+            content: summary,
+            details: expect.objectContaining({ error: raw }),
+          }),
+        ]);
+      }
     });
   },
 );
