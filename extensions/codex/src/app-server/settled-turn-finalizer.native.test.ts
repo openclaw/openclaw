@@ -10,6 +10,7 @@ import {
   appendSessionTranscriptMessageByIdentity,
   readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import {
   HOST_KEY,
@@ -262,6 +263,7 @@ type SummaryScenario = {
   preserveNativeModel?: boolean;
   prepared?: boolean;
   unfinishedPrior?: "ordinary" | "oversized";
+  overlengthPriorCallId?: boolean;
   hidden?: boolean;
   promptSuppressed?: boolean;
   continuation?: boolean;
@@ -469,6 +471,7 @@ it.skipIf(process.platform === "win32").for<SummaryScenario>([
   { label: "checkpointed work before terminal aggregate reasoning", terminalReasoning: true },
   { label: "unfinished prior turn", unfinishedPrior: "ordinary" },
   { label: "unfinished oversized prior turn", unfinishedPrior: "oversized" },
+  { label: "overlength prior tool call ID", overlengthPriorCallId: true },
   { label: "hidden background notification", hidden: true },
   { label: "prompt-less stranded-reply retry", promptSuppressed: true },
   { label: "same-run continuation after a transient provider overload", continuation: true },
@@ -501,6 +504,7 @@ async function runSummary(
     preserveNativeModel = false,
     prepared = true,
     unfinishedPrior,
+    overlengthPriorCallId = false,
     live = false,
     hidden = false,
     promptSuppressed = false,
@@ -583,6 +587,36 @@ async function runSummary(
         },
       });
     }
+  }
+  const overlengthPriorId = `call_${"a".repeat(36)}|fc_${"b".repeat(38)}`;
+  if (overlengthPriorCallId) {
+    const attr = { modelId: NATIVE_MODEL, provider: "openai", api: "openai-responses" };
+    const meta = { tokenUsage: undefined, aborted: false, promptError: null };
+    const appendPriorRow = (row: Parameters<typeof attachCodexMirrorIdentity>[0], id: string) =>
+      appendSessionTranscriptMessageByIdentity({
+        ...transcriptTarget(params),
+        message: attachCodexMirrorIdentity(row, id),
+      });
+    const priorCall = createAttributedCodexAssistantMessage(attr, "", meta);
+    priorCall.content = [
+      { type: "toolCall", id: overlengthPriorId, name: "lookup", arguments: {} },
+    ];
+    priorCall.stopReason = "toolUse";
+    const priorResult = {
+      role: "toolResult" as const,
+      toolCallId: overlengthPriorId,
+      toolName: "lookup",
+      content: [{ type: "text" as const, text: "Prior status verified." }],
+      isError: false,
+      timestamp: 2,
+    };
+    await appendPriorRow({ role: "user", content: "Prior work.", timestamp: 1 }, "prior-long:user");
+    await appendPriorRow(priorCall, "prior-long:tool:call");
+    await appendPriorRow(priorResult, "prior-long:tool:result");
+    await appendPriorRow(
+      createAttributedCodexAssistantMessage(attr, "Prior status was verified.", meta),
+      "prior-long:answer",
+    );
   }
   fixture.setPhase(terminalReasoning ? "action-reasoning" : "action");
   params.runId = "run-settled-action";
@@ -776,6 +810,27 @@ async function runSummary(
   expect(transcript.slice(transcriptBefore.length).map((entry) => entry.message)).toEqual([
     finalization.assistant,
   ]);
+  if (overlengthPriorCallId) {
+    const rawInput = fixture.requests[0]?.body.input;
+    const summaryCallIds = (Array.isArray(rawInput) ? rawInput : []).flatMap((entry) =>
+      isRecord(entry) && typeof entry.call_id === "string" ? [entry.call_id] : [],
+    );
+    expect(summaryCallIds.length).toBeGreaterThanOrEqual(4);
+    for (const callId of summaryCallIds) {
+      expect(callId.length).toBeLessThanOrEqual(64);
+    }
+    const priorWireIds = summaryCallIds.filter((callId) => callId !== "completed-action");
+    expect(priorWireIds).toEqual([
+      expect.stringMatching(/^call_[A-Za-z0-9_-]{1,59}$/),
+      priorWireIds[0],
+    ]);
+    expect(transcript.map((entry) => entry.message)).toEqual(
+      containsObject(
+        { role: "assistant", content: containsObject({ type: "toolCall", id: overlengthPriorId }) },
+        { role: "toolResult", toolCallId: overlengthPriorId, toolName: "lookup" },
+      ),
+    );
+  }
   expect(await readCodexAppServerBinding(params.sessionFile)).toEqual(bindingBefore);
   await expectActionOnce(fixture);
   if (live) {
