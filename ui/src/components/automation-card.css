@@ -2,7 +2,6 @@
   min-width: 0;
   padding-inline: 11px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
   background: var(--card);
   color: var(--text);
   font: 400 calc(13px * var(--control-ui-text-scale, 1)) / 1.4 var(--font-body);

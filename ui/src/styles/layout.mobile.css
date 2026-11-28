@@ -582,7 +582,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
   .card {
     padding: 12px;
-    border-radius: var(--radius-md);
   }
 
   .card-title {

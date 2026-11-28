@@ -13,7 +13,6 @@ openclaw-chat-clawhub-card {
   gap: var(--space-3);
   min-height: 63px;
   padding: 9px 12px;
-  border-radius: 15px;
 
   @container (width < 384px) {
     gap: var(--space-2);

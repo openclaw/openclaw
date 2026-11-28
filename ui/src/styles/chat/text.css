@@ -1152,7 +1152,6 @@
   margin-top: 0.75em;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-md);
   background: transparent;
   cursor: zoom-in;
 }
@@ -1170,7 +1169,6 @@
   height: auto;
   margin-top: 0.75em;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--secondary) 70%, transparent);
   object-fit: contain;
 }
@@ -1190,7 +1188,6 @@
   margin-top: 0.75em;
   padding: 0.7em 0.8em;
   border: 0;
-  border-radius: var(--radius-md);
   background: var(--bg-muted);
   color: var(--muted);
 }
