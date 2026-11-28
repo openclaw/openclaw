@@ -888,6 +888,199 @@ openclaw-appearance-background .settings-background-preview .session-background_
   height: 24px;
 }
 
+.settings-tab-icon__previews {
+  margin-block-start: var(--space-2);
+  border-block-start: 1px solid var(--border);
+}
+
+@media not all and (max-width: 640px) {
+  .settings-tab-icon__previews .settings-row__control {
+    max-width: 80%;
+  }
+}
+
+.settings-tab-icon__preview-list {
+  --icon-preview-size: 56px;
+  --icon-preview-tab-width: 164px;
+
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-5);
+  margin: 0;
+  margin-inline-start: auto;
+}
+
+.settings-tab-icon__preview-item {
+  display: grid;
+  grid-template-rows: 1fr var(--icon-preview-size);
+  place-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.settings-tab-icon__preview-item dd {
+  margin: 0;
+}
+
+.settings-tab-icon__browser-edge {
+  width: var(--icon-preview-tab-width);
+  max-width: 100%;
+  padding-block: var(--space-2) 0;
+  padding-inline: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.settings-tab-icon__browser-tab {
+  --preview-close-hit-size: 24px;
+  --preview-close-glyph-size: 14px;
+
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1);
+  /* Match the visible X, which is inset about 3px within its 14px glyph box. */
+  padding-inline-start: calc(
+    var(--space-1) + (var(--preview-close-hit-size) - var(--preview-close-glyph-size)) / 2 + 3px
+  );
+  border: 1px solid var(--border);
+  border-block-end: 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: var(--card);
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+  line-height: 20px;
+}
+
+.settings-tab-icon__browser-tab > openclaw-tooltip {
+  flex: none;
+  line-height: 0;
+}
+
+.settings-tab-icon__browser-tab img {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.settings-tab-icon__browser-tab > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-tab-icon__browser-close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--preview-close-hit-size);
+  height: var(--preview-close-hit-size);
+  margin-inline-start: auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-strong);
+}
+
+.settings-tab-icon__browser-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.settings-tab-icon__browser-close:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.settings-tab-icon__browser-close svg {
+  width: var(--preview-close-glyph-size);
+  height: var(--preview-close-glyph-size);
+}
+
+.settings-tab-icon__home-screen-masks img {
+  display: block;
+  width: var(--icon-preview-size);
+  height: var(--icon-preview-size);
+}
+
+.settings-tab-icon__home-screen-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.settings-tab-icon__home-screen-info {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+}
+
+.settings-tab-icon__home-screen-info:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.settings-tab-icon__home-screen {
+  border-radius: 24%;
+  /* Approximate the iOS continuous-corner mask without modifying the source PNG. */
+  clip-path: shape(
+    from 50% 0%,
+    curve to 100% 50% with 96% 0% / 100% 4%,
+    curve to 50% 100% with 100% 96% / 96% 100%,
+    curve to 0% 50% with 4% 100% / 0% 96%,
+    curve to 50% 0% with 0% 4% / 4% 0%,
+    close
+  );
+}
+
+.settings-tab-icon__home-screen-masks {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.settings-tab-icon__android-round {
+  border-radius: 50%;
+}
+
+.settings-tab-icon__android-rounded {
+  border-radius: 10%;
+}
+
+@media (max-width: 640px) {
+  .settings-tab-icon__preview-list {
+    --icon-preview-size: clamp(32px, 20vw - 32px, 56px);
+    --icon-preview-tab-width: clamp(145px, 20vw + 81px, 164px);
+
+    gap: var(--space-1);
+  }
+
+  .settings-tab-icon__browser-edge {
+    padding-block-start: var(--space-1);
+    padding-inline: var(--space-1);
+  }
+
+  .settings-tab-icon__browser-tab {
+    --preview-close-hit-size: var(--settings-touch-control-height);
+
+    gap: 2px;
+  }
+
+  .settings-tab-icon__home-screen-title {
+    max-width: calc(3 * var(--icon-preview-size) + 2 * var(--space-1));
+  }
+
+  .settings-tab-icon__home-screen-masks {
+    gap: var(--space-1);
+  }
+}
+
 .cfg-object[open] > .cfg-object__summary .cfg-object__chevron {
   transform: rotate(90deg);
 }

@@ -4,6 +4,7 @@ import {
   type ControlUiEnvironment,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { getOrCreatePromise } from "../../../src/shared/lazy-promise.js";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { neutralMarkSvg } from "../components/neutral-mark-svg.ts";
 import { controlUiDocumentHead } from "./control-ui-document-head.ts";
 import { applyControlUiOperatorSeamColor } from "./control-ui-presentation.ts";
@@ -63,6 +64,19 @@ type ControlUiFaviconStatus = "attention" | "working" | "done" | "disconnected" 
 let faviconStatus: ControlUiFaviconStatus = "idle";
 let faviconImage: HTMLImageElement | null = null;
 let faviconShape: AgentTabIconShape = "square";
+let personalPreview: string | null = null;
+let touchSource: HTMLImageElement | string | null = null;
+let touchRequest = 0;
+let iconPreviews: Readonly<{ favicon: string | null; appleTouch: string | null }> = {
+  favicon: null,
+  appleTouch: null,
+};
+const previewChanges = createChangeListeners();
+
+export const controlUiIconPreviews = {
+  read: () => iconPreviews,
+  subscribe: previewChanges.subscribe,
+};
 
 /** Decoded personal artwork is always rasterized here, including when idle. */
 export function applyControlUiFaviconImage(
@@ -72,8 +86,15 @@ export function applyControlUiFaviconImage(
   if (faviconImage === image && faviconShape === shape) {
     return;
   }
-  faviconImage = image;
-  faviconShape = shape;
+  try {
+    personalPreview = image ? rasterizeFavicon(image, shape, "", "") : null;
+  } catch (error) {
+    // A cross-origin or unreadable image must not retire the shipped fallback.
+    console.warn("[openclaw] favicon artwork could not be composed", error);
+    personalPreview = null;
+  }
+  faviconImage = personalPreview ? image : null;
+  faviconShape = personalPreview ? shape : "square";
   // Decoded personal images never enter the cached default-source loader.
   syncControlUiFavicon();
 }
@@ -148,6 +169,7 @@ export function controlUiFaviconBaseSvg(): string | null {
 
 export function syncControlUiFavicon(): void {
   const { baseSvg, color, ring } = (faviconPalette ??= resolveFaviconPalette());
+  syncIconPreviews(baseSvg);
   if (!color) {
     faviconSources.clear();
   }
@@ -179,6 +201,10 @@ export function syncControlUiFavicon(): void {
     }
     const request = { signature, image };
     faviconRequests.set(icon, request);
+    if (!color && personalPreview) {
+      restoreFavicon(icon, [svgFavicon(personalPreview), "image/svg+xml"]);
+      continue;
+    }
     if ((!color && !image) || !href) {
       restoreFavicon(icon, [href, type]);
       continue;
@@ -204,6 +230,45 @@ export function syncControlUiFavicon(): void {
       },
     );
   }
+}
+
+function publishIconPreviews(favicon: string | null, appleTouch: string | null): void {
+  if (iconPreviews.appleTouch !== appleTouch) {
+    const touchIcon = controlUiDocumentHead().appleTouchIcon;
+    if (touchIcon) {
+      touchIcon.link.href = appleTouch ?? touchIcon.defaultHref;
+    }
+  }
+  if (iconPreviews.favicon !== favicon || iconPreviews.appleTouch !== appleTouch) {
+    iconPreviews = { favicon, appleTouch };
+    previewChanges.publish();
+  }
+}
+
+function syncIconPreviews(baseSvg: string | null): void {
+  const favicon = personalPreview ?? baseSvg;
+  const source = faviconImage ?? baseSvg;
+  if (touchSource === source) {
+    publishIconPreviews(favicon, iconPreviews.appleTouch);
+    return;
+  }
+  touchSource = source;
+  const request = ++touchRequest;
+  if (typeof source === "string") {
+    publishIconPreviews(favicon, null);
+    const image = new Image();
+    image.src = source;
+    void image.decode().then(
+      () => {
+        if (request === touchRequest) {
+          publishIconPreviews(iconPreviews.favicon, rasterizeAppleTouchIcon(image));
+        }
+      },
+      () => {}, // Keep the shipped touch icon on a decode failure.
+    );
+    return;
+  }
+  publishIconPreviews(favicon, source ? rasterizeAppleTouchIcon(source) : null);
 }
 
 type FaviconSource = { svg: Element } | { image: HTMLImageElement };
@@ -270,24 +335,65 @@ async function composeFavicon(
       type: "image/svg+xml",
     };
   }
+  const png = rasterizeFavicon(source.image, shape, color, ring);
+  return image
+    ? { href: svgFavicon(png), type: "image/svg+xml" }
+    : { href: png, type: "image/png" };
+}
+
+function squareCanvas(size: number) {
   const canvas = document.createElement("canvas");
-  canvas.width = 32;
-  canvas.height = 32;
+  canvas.width = canvas.height = size;
   const context = canvas.getContext("2d");
   if (!context) {
-    throw new Error("Favicon canvas unavailable");
+    throw new Error("Icon canvas unavailable");
   }
+  return { canvas, context };
+}
+
+function drawIconArtwork(
+  context: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  size: number,
+  cover = false,
+) {
+  const fit = cover ? Math.max : Math.min;
+  const scale = fit(size / image.naturalWidth, size / image.naturalHeight);
+  const width = image.naturalWidth * scale;
+  const height = image.naturalHeight * scale;
+  context.drawImage(image, (size - width) / 2, (size - height) / 2, width, height);
+}
+
+function rasterizeAppleTouchIcon(image: HTMLImageElement): string | null {
+  try {
+    const size = 180;
+    const { canvas, context } = squareCanvas(size);
+    // Keep the PNG square and opaque. iOS supplies its own mask.
+    context.fillStyle = "#20242c";
+    context.fillRect(0, 0, size, size);
+    drawIconArtwork(context, image, size);
+    return canvas.toDataURL("image/png");
+  } catch (error) {
+    console.warn("[openclaw] Apple touch icon could not be composed", error);
+    return null;
+  }
+}
+
+function rasterizeFavicon(
+  image: HTMLImageElement,
+  shape: AgentTabIconShape,
+  color: string,
+  ring: string,
+): string {
+  const size = 32;
+  const { canvas, context } = squareCanvas(size);
   context.save();
   if (shape !== "square") {
     context.beginPath();
-    context.roundRect(0, 0, 32, 32, shape === "circle" ? 16 : 8);
+    context.roundRect(0, 0, size, size, shape === "circle" ? 16 : 8);
     context.clip();
   }
-  const fit = shape === "square" ? Math.min : Math.max;
-  const scale = fit(32 / source.image.naturalWidth, 32 / source.image.naturalHeight);
-  const width = source.image.naturalWidth * scale;
-  const height = source.image.naturalHeight * scale;
-  context.drawImage(source.image, (32 - width) / 2, (32 - height) / 2, width, height);
+  drawIconArtwork(context, image, size, shape !== "square");
   context.restore();
   if (color) {
     context.beginPath();
@@ -298,13 +404,13 @@ async function composeFavicon(
     context.lineWidth = 2;
     context.stroke();
   }
-  const png = canvas.toDataURL("image/png");
-  if (!image) {
-    return { href: png, type: "image/png" };
-  }
+  return canvas.toDataURL("image/png");
+}
+
+function svgFavicon(png: string): string {
   // Firefox batches icon candidates and prefers SVG over PNG, even when that
   // SVG was a default briefly restored before the personal image decoded. Keep
   // personal artwork SVG-preferred too; only our rasterized bytes are embedded.
   const svg = `<svg xmlns="${SVG_NAMESPACE}" viewBox="0 0 32 32" width="32" height="32"><image width="32" height="32" href="${png}"/></svg>`;
-  return { href: `data:image/svg+xml,${encodeURIComponent(svg)}`, type: "image/svg+xml" };
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }

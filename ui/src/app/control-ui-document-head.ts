@@ -3,6 +3,7 @@ import { inferControlUiPublicAssetPath } from "./public-assets.ts";
 type ControlUiDocumentHead = {
   readonly themeColors: readonly HTMLMetaElement[];
   readonly favicons: readonly HTMLLinkElement[];
+  readonly appleTouchIcon?: { readonly link: HTMLLinkElement; readonly defaultHref: string };
 };
 
 let elements: ControlUiDocumentHead = { themeColors: [], favicons: [] };
@@ -22,6 +23,7 @@ export function initializeControlUiDocumentHead(): void {
     }
   }
   const favicons: HTMLLinkElement[] = [];
+  let appleTouchIcon: ControlUiDocumentHead["appleTouchIcon"];
   for (const [id, asset] of [
     ["openclaw-favicon-svg", "favicon.svg"],
     ["openclaw-favicon-png", "favicon-32.png"],
@@ -30,13 +32,16 @@ export function initializeControlUiDocumentHead(): void {
   ] as const) {
     const link = document.getElementById(id);
     if (link instanceof HTMLLinkElement) {
-      link.href = inferControlUiPublicAssetPath(asset);
+      const href = inferControlUiPublicAssetPath(asset);
+      link.href = href;
       if (link.rel === "icon") {
         favicons.push(link);
+      } else if (asset === "apple-touch-icon.png") {
+        appleTouchIcon = { link, defaultHref: href };
       }
     }
   }
-  bindControlUiDocumentHead({ themeColors, favicons });
+  bindControlUiDocumentHead({ themeColors, favicons, appleTouchIcon });
 }
 
 export function controlUiDocumentHead(): ControlUiDocumentHead {

@@ -35,6 +35,8 @@ export function connectControlUiFaviconArtwork(context: {
   let disposed = false;
   let request = 0;
   let sourceKey = "";
+  let avatarShape: ReturnType<typeof agentTabIconShape> = null;
+  let avatarArtwork: HTMLImageElement | null = null;
   let avatarRevision = 0;
   let lobsterRevision = 0;
   let stopLobsterdex: (() => void) | undefined;
@@ -42,6 +44,7 @@ export function connectControlUiFaviconArtwork(context: {
 
   function retireImage() {
     request += 1;
+    avatarArtwork = null;
     releaseImage();
     releaseImage = () => {};
   }
@@ -56,8 +59,7 @@ export function connectControlUiFaviconArtwork(context: {
     const preference = context.theme.settings.tabIcon ?? "default";
     // Theme suppression is presentation-only; switching back restores the saved choice.
     const mode = !branding.lobsterdex && preference.startsWith("lobster:") ? "default" : preference;
-    // Control UI draws every agent tab icon as a circle; saved shape variants stay valid.
-    const shape = agentTabIconShape(mode) === null ? null : "circle";
+    const shape = agentTabIconShape(mode);
     const lobsterId = mode.startsWith("lobster:") ? mode.slice("lobster:".length) : null;
     if (!lobsterId) {
       stopLobsterdex?.();
@@ -74,15 +76,22 @@ export function connectControlUiFaviconArtwork(context: {
         : null;
     const nextKey = JSON.stringify([
       scope.key,
-      mode,
+      shape !== null ? "agent" : mode,
       shape !== null ? agentId : null,
       source,
       themeSource,
       shape !== null ? avatarRevision : lobsterId ? lobsterRevision : null,
     ]);
     if (sourceKey === nextKey) {
+      if (shape !== avatarShape) {
+        avatarShape = shape;
+        if (avatarArtwork && shape) {
+          applyControlUiFaviconImage(avatarArtwork, shape);
+        }
+      }
       return;
     }
+    avatarShape = shape;
     sourceKey = nextKey;
     retireImage();
     // Never leave the previous agent's image visible while the new identity resolves.
@@ -165,8 +174,9 @@ export function connectControlUiFaviconArtwork(context: {
           throw new Error("Agent avatar unavailable");
         }
         const image = await decodeFaviconImage(url);
-        if (current()) {
-          applyControlUiFaviconImage(image, shape);
+        if (current() && avatarShape) {
+          avatarArtwork = image;
+          applyControlUiFaviconImage(image, avatarShape);
         }
       })
       .catch(() => {

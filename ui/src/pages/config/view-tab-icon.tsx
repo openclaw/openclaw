@@ -10,12 +10,15 @@ import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import type { LobsterPetPalette } from "../../components/lobster-pet-contract.ts";
 import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
 import { lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import {
   IdentityAvatarImage,
   createIdentityAvatarPresentation,
 } from "../../components/solid/identity-avatar-image.tsx";
-import { SettingsRow } from "../../components/solid/settings-ui.tsx";
+import { SettingsRow, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
+import { Tooltip } from "../../components/solid/tooltip.tsx";
 import { ThemeBrandIcon } from "../../components/theme-brand-icon.tsx";
+import { controlUiIconPreviewsProjection } from "../../lib/reactive/control-ui-icon-previews.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
@@ -108,8 +111,6 @@ function TabIconPick(props: {
   );
 }
 
-/* The stored preference is one value, so the picker is one row: every choice is
-   visible and picking one never adds or removes a row below it. */
 export function TabIconRow(props: TabIconViewProps) {
   const defaultSource = createMemo(
     () => controlUiFaviconBaseSvg() ?? inferControlUiPublicAssetPath("favicon.svg"),
@@ -137,7 +138,7 @@ export function TabIconRow(props: TabIconViewProps) {
     if (selected()) {
       return `${selectionName()} · ${t("configView.appearance.tabIcon.localCollection")}`;
     }
-    return lobsterdexEnabled() && lobsters().length === 0
+    return !selectedShape() && lobsterdexEnabled() && lobsters().length === 0
       ? `${selectionName()} · ${t("configView.appearance.tabIcon.empty")}`
       : selectionName();
   };
@@ -164,7 +165,11 @@ export function TabIconRow(props: TabIconViewProps) {
             <TabIconPick
               label={t("configView.appearance.tabIcon.agent")}
               pressed={selectedShape() !== null}
-              onSelect={() => props.setTabIconMode("agent")}
+              onSelect={() => {
+                if (!selectedShape()) {
+                  props.setTabIconMode("agent:circle");
+                }
+              }}
             >
               <TabIconAvatar
                 imageUrl={props.tabIconAgentAvatar ?? null}
@@ -186,6 +191,128 @@ export function TabIconRow(props: TabIconViewProps) {
           </div>
         }
       />
+      <Show when={selectedShape()}>
+        {(shape) => (
+          <SettingsRow
+            title={t("configView.appearance.tabIcon.shape")}
+            stackedOnNarrow
+            control={
+              <SettingsSegmented
+                ariaLabel={t("configView.appearance.tabIcon.shape")}
+                value={shape()}
+                options={[
+                  { value: "square", label: t("configView.appearance.tabIcon.square") },
+                  { value: "rounded", label: t("configView.appearance.tabIcon.rounded") },
+                  { value: "circle", label: t("configView.appearance.tabIcon.circle") },
+                ]}
+                onChange={(value) =>
+                  props.setTabIconMode(value === "square" ? "agent" : `agent:${value}`)
+                }
+              />
+            }
+          />
+        )}
+      </Show>
+      <IconPreviews />
     </div>
+  );
+}
+
+function IconPreviews() {
+  const previews = controlUiIconPreviewsProjection;
+  const homeArtwork = () =>
+    previews().appleTouch ?? inferControlUiPublicAssetPath("apple-touch-icon.png");
+  let tab: HTMLDivElement | undefined;
+  let shake: Animation | undefined;
+  const closePreview = () => {
+    shake?.cancel();
+    if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      shake = tab?.animate(
+        {
+          transform: [
+            "none",
+            "translateX(-4px)",
+            "translateX(4px)",
+            "translateX(-2px)",
+            "translateX(2px)",
+            "none",
+          ],
+        },
+        300,
+      );
+    }
+  };
+  return (
+    <div class="settings-tab-icon__previews">
+      <SettingsRow
+        title={t("configView.appearance.tabIcon.previews")}
+        stackedOnNarrow
+        control={
+          <dl class="settings-tab-icon__preview-list">
+            <div class="settings-tab-icon__preview-item">
+              <dt>{t("configView.appearance.tabIcon.browserTabPreview")}</dt>
+              <dd class="settings-tab-icon__browser-edge">
+                <div class="settings-tab-icon__browser-tab" ref={(element) => (tab = element)}>
+                  <PreviewIcon
+                    src={previews().favicon ?? inferControlUiPublicAssetPath("favicon-32.png")}
+                    label={t("configView.appearance.tabIcon.faviconPreview")}
+                  />
+                  <span>OpenClaw</span>
+                  <button
+                    type="button"
+                    class="settings-tab-icon__browser-close"
+                    aria-label={t("configView.appearance.tabIcon.closePreviewTab")}
+                    onClick={closePreview}
+                  >
+                    <Icon name="x" />
+                  </button>
+                </div>
+              </dd>
+            </div>
+            <div class="settings-tab-icon__preview-item">
+              <dt class="settings-tab-icon__home-screen-title">
+                <span>{t("configView.appearance.tabIcon.homeScreenPreview")}</span>
+                <Tooltip content={t("configView.appearance.tabIcon.homeScreenHint")} openOnClick>
+                  <button
+                    class="settings-section__help-button settings-tab-icon__home-screen-info"
+                    type="button"
+                    aria-label={t("common.helpFor", {
+                      section: t("configView.appearance.tabIcon.homeScreenPreview"),
+                    })}
+                  >
+                    <Icon name="info" />
+                  </button>
+                </Tooltip>
+              </dt>
+              <dd class="settings-tab-icon__home-screen-masks">
+                <PreviewIcon
+                  class="settings-tab-icon__home-screen"
+                  src={homeArtwork()}
+                  label={t("configView.appearance.tabIcon.applePreview")}
+                />
+                <PreviewIcon
+                  class="settings-tab-icon__android-round"
+                  src={homeArtwork()}
+                  label={t("configView.appearance.tabIcon.androidRoundPreview")}
+                />
+                <PreviewIcon
+                  class="settings-tab-icon__android-rounded"
+                  src={homeArtwork()}
+                  label={t("configView.appearance.tabIcon.androidRoundedPreview")}
+                />
+              </dd>
+            </div>
+          </dl>
+        }
+      />
+    </div>
+  );
+}
+
+function PreviewIcon(props: { src: string; label: string; class?: string }) {
+  return (
+    <Tooltip content={props.label} describe={false}>
+      <img class={props.class} src={props.src} alt={props.label} />
+    </Tooltip>
   );
 }

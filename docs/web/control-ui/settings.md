@@ -107,7 +107,11 @@ Personal Appearance preferences remain available when you cannot read Gateway-wi
 
 ## Browser tab icon
 
-In **Settings → Appearance → Browser tab icon**, choose **Default**, **Agent avatar**, or **Lobsterdex**. Default keeps the theme and Gateway environment icon. Agent avatar follows the explicitly selected agent, using a centered circular crop and falling back to Default when it is unavailable. Earlier saved avatar shapes remain valid preferences and use the same circular crop. Lobsterdex lets you choose a fixed lobster from those already unlocked in this browser. Activity and attention dots remain visible in every mode.
+In **Settings → Appearance → Browser tab icon**, choose **Default**, **Agent avatar**, or **Lobsterdex**. Default keeps the theme and Gateway environment icon. Agent avatar follows the explicitly selected agent and falls back to Default when the avatar is unavailable. For agent avatars, **Favicon shape** offers **Square**, **Rounded square**, and **Circle**. Lobsterdex lets you choose a fixed lobster from those already unlocked in this browser. Activity and attention dots remain visible in the browser tab in every mode.
+
+**Icon previews** shows how the artwork looks in a browser tab and as a Home Screen icon on Apple devices. The Control UI generates a matching square PNG from the selected artwork, without the favicon crop or its status dot, and sets it as the page's Apple touch icon. No artwork is uploaded as part of this setting. The browser and operating system determine which icon a shortcut uses. Existing shortcuts may retain their old icon until you recreate them.
+
+The round and rounded-square **Android** previews show two representative launcher shapes. They are examples only and do not change the web app manifest or any installed icons. Depending on the browser and launcher, Android may use a manifest icon or fall back to the site's favicon, apply a different mask, or add a browser badge to a shortcut.
 
 Lobsterdex unlocks stay browser-local; this setting does not sync your collection. On another browser where your chosen lobster is not unlocked, OpenClaw keeps the choice but shows Default until that lobster is unlocked or you select another source. There are no custom uploads, per-tab choices, or agent-specific overrides.
 
