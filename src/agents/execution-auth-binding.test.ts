@@ -21,7 +21,7 @@ function grant(
   provider: string,
   access: string,
   refresh: string,
-  identity: Identity = {},
+  identity: Identity,
 ): OAuthCredential {
   return { type: "oauth", provider, access, refresh, expires: 1, ...identity };
 }
@@ -31,7 +31,7 @@ function oauth(provider: string, access: string, refresh: string, identity: Iden
     credential: grant(provider, access, refresh, identity),
   });
 }
-function resolved(apiKey: string, extra: Partial<ResolvedProviderAuth> = {}) {
+function resolved(apiKey: string, extra: Partial<ResolvedProviderAuth>) {
   return fingerprintResolvedProviderAuth({
     apiKey,
     source: "profile:openai:bound",

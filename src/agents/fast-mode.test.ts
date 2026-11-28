@@ -7,7 +7,7 @@ import {
   resolveFastModeState,
 } from "./fast-mode.js";
 
-function resolve(options: Partial<Parameters<typeof resolveFastModeState>[0]> = {}) {
+function resolve(options: Partial<Parameters<typeof resolveFastModeState>[0]>) {
   return resolveFastModeState({ cfg: {}, provider: "openai", model: "gpt-5.5", ...options });
 }
 function modelConfig(
