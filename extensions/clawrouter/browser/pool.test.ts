@@ -123,7 +123,8 @@ const pool: ClawRouterPoolResult = {
 it("retains accepted pool content through refresh failure and clears the alert during retry", async () => {
   const f = await fixture();
   expect(f.button.disabled).toBe(true);
-  expect(f.container.textContent).toContain("Loading the latest pool status");
+  expect(f.container.textContent).toContain("Loading pool status");
+  expect(f.button.textContent).toBe("Refreshing");
   f.first.resolve(pool);
   await vi.waitFor(() => expect(f.button.disabled).toBe(false));
   expect(f.container.textContent).toContain("fixture-model");
@@ -137,16 +138,26 @@ it("retains accepted pool content through refresh failure and clears the alert d
   expect(f.summary()).toBe(content);
   expect(f.button.disabled).toBe(true);
   failed.reject(new Error("fixture-private is unavailable"));
-  await vi.waitFor(() => expect(f.alert()?.textContent).toBe("[redacted] is unavailable"));
+  await vi.waitFor(() =>
+    expect(f.alert()?.textContent).toBe(
+      "Couldn’t load the ClawRouter pool. Select Refresh to try again.",
+    ),
+  );
+  expect(f.container.textContent).not.toContain("is unavailable");
   expect(f.summary()).toBe(content);
   const retry = createDeferred<ClawRouterPoolResult>();
   f.request.mockReturnValueOnce(retry.promise);
   f.button.click();
   await vi.waitFor(() => expect(f.alert()).toBeNull());
   expect(f.summary()).toBe(content);
-  retry.resolve({ status: "not_configured", message: "Configure the provider to view its pool." });
+  retry.resolve({
+    status: "not_configured",
+    message: "No ClawRouter API key is available. Ask an admin to add one in Settings → Models.",
+  });
   await vi.waitFor(() =>
-    expect(f.container.textContent).toContain("Configure the provider to view its pool."),
+    expect(f.container.textContent).toContain(
+      "No ClawRouter API key is available. Ask an admin to add one in Settings → Models.",
+    ),
   );
   expect(f.summary()).toBeNull();
 });
@@ -163,7 +174,7 @@ it("retires reads when hidden or access changes without publishing their late re
   expect(f.alert()).toBeNull();
   f.connection.canRead = false;
   f.notify();
-  expect(f.container.textContent).toContain("Read access is required");
+  expect(f.container.textContent).toContain("You need read access");
   expect(f.summary()).toBeNull();
   expect(f.button.disabled).toBe(true);
 });

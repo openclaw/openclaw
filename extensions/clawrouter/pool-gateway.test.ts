@@ -63,24 +63,33 @@ it("resolves configured runtime auth and returns the bounded pool snapshot", asy
   expect(mocks.release).toHaveBeenCalledOnce();
 });
 
+const unsupported = "This ClawRouter deployment doesn’t provide pool status.";
+const unauthorized =
+  "ClawRouter rejected the API key. Ask an admin to replace the key OpenClaw uses.";
+const unavailable = "Couldn’t load ClawRouter pool status.";
+const hidden = "Ask your ClawRouter admin to enable pool status for this policy.";
+
 it.each([
-  [404, { error: { code: "pool_status_hidden" } }, "hidden"],
-  [404, { error: "pool_status_hidden" }, "hidden"],
-  [404, { error: "not_found" }, "unsupported"],
-  [405, {}, "unsupported"],
-  [401, {}, "unauthorized"],
-  [403, {}, "unauthorized"],
-  [503, {}, "unavailable"],
-  [200, { version: "unknown" }, "unavailable"],
-])("maps HTTP %s to %s safely", async (code, body, state) => {
+  [404, { error: { code: "pool_status_hidden" } }, "hidden", hidden],
+  [404, { error: "pool_status_hidden" }, "hidden", hidden],
+  [404, { error: "not_found" }, "unsupported", unsupported],
+  [405, {}, "unsupported", unsupported],
+  [401, { error: "private provider diagnostic" }, "unauthorized", unauthorized],
+  [403, {}, "unauthorized", unauthorized],
+  [503, {}, "unavailable", unavailable],
+  [200, { version: "unknown" }, "unavailable", unavailable],
+])("maps HTTP %s (%j) to %s with safe copy", async (code, body, state, message) => {
   respondWith(Response.json(body, { status: code }));
-  expect(await invoke()).toMatchObject({ status: state, message: expect.any(String) });
+  expect(await invoke()).toEqual({ status: state, message });
   expect(mocks.release).toHaveBeenCalledOnce();
 });
 
 it("reports absent auth without making a request or exposing resolver diagnostics", async () => {
   mocks.auth.mockRejectedValue(new Error("private credential diagnostic"));
-  expect(await invoke()).toMatchObject({ status: "not_configured" });
+  expect(await invoke()).toEqual({
+    status: "not_configured",
+    message: "No ClawRouter API key is available. Ask an admin to add one in Settings → Models.",
+  });
   expect(mocks.fetch).not.toHaveBeenCalled();
 });
 
