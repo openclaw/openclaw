@@ -8,7 +8,7 @@ import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers
 import { executeGitCommand, executeGitCommandBytes } from "./git-exec.js";
 import { buildUpdateCommandRunner, runStep } from "./update-runner-command.js";
 
-const fetch = (options: Parameters<typeof executeGitCommandBytes>[2] = {}) =>
+const fetch = (options: Parameters<typeof executeGitCommandBytes>[2]) =>
   executeGitCommandBytes("/repo", ["fetch", "origin"], { timeoutMs: 10_000, ...options });
 const networkLog = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
