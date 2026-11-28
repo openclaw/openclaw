@@ -116,16 +116,31 @@
   margin-block-start: 0;
 }
 
-/* A single activity row that opens the turn sits between the reply line and
-   the answer. Space the answer text like the reply line above the row: the
-   bubble's own top padding is the whole gap, so cancel the column gap. */
+/* A single activity row that opens the run sits on the avatar's center line,
+   like the first text line of a bubble: the same 4px block inset as the
+   bubble's padding, so the answer text below it starts as far away as the
+   reply line above it. */
 .chat-agent-run-body
   > :is(
     .chat-activity-group--step,
     .chat-activity-group:not(.is-open, .chat-activity-group--inline, .chat-activity-group--bubble)
-  ):first-child
+  ):first-child {
+  margin-block: 4px;
+
   + .chat-bubble:not(.chat-bubble--tool-shell) {
-  margin-block-start: calc(-1 * var(--chat-message-gap));
+    margin-block-start: calc(-1 * var(--chat-message-gap));
+  }
+}
+
+/* Without a reply line the avatar starts at the row's top edge. */
+:is(.chat-avatar, .chat-avatar-slot)
+  + .chat-group-messages
+  > .chat-agent-run-body:first-child
+  > :is(
+    .chat-activity-group--step,
+    .chat-activity-group:not(.is-open, .chat-activity-group--inline, .chat-activity-group--bubble)
+  ):first-child {
+  margin-block-start: calc((var(--chat-avatar-column) - var(--chat-text-size) * 1.5) / 2);
 }
 
 .chat-group.tool {
