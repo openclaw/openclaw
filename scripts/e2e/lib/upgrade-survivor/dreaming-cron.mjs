@@ -566,7 +566,7 @@ function assertUpdated(artifacts, observations, packageRoot, candidateTarball) {
       ),
       `Backup ${entry.name} did not preserve the pre-repair jobs`,
     );
-    return { ...entry, contentVersion };
+    return { name: entry.name, sha256: entry.sha256, contentVersion };
   });
   assert.deepEqual(
     backups.map((entry) => entry.contentVersion).toSorted((a, b) => a - b),
