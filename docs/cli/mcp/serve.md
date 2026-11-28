@@ -158,7 +158,7 @@ This gives MCP clients one place to:
 
   </Accordion>
   <Accordion title="permissions_list_open">
-    Lists pending exec/plugin approval requests the bridge has observed since it connected to the Gateway.
+    Lists pending exec/plugin approval requests visible to this bridge's connected device or client and observed since it connected to the Gateway.
   </Accordion>
   <Accordion title="permissions_respond">
     Resolves one pending exec/plugin approval request with:
@@ -321,7 +321,7 @@ For broader testing context, see [Testing](/help/testing).
 
   </Accordion>
   <Accordion title="Approvals are missing">
-    `permissions_list_open` only shows approval requests observed while the bridge was connected. It is not a durable approval history API.
+    The Gateway filters approval events for the connected device or client. The approvals scope alone does not provide an administrator-wide pending list. A request handled through another client, such as a channel approval card, can be absent even when this bridge was already connected. `permissions_list_open` also remains limited to requests observed while the bridge was connected; it is not a durable approval history API.
   </Accordion>
 </AccordionGroup>
 
@@ -333,4 +333,4 @@ The bridge has these limits:
 - no generic push protocol beyond the Claude-specific adapter
 - no message edit or react tools
 - HTTP/SSE/streamable-http transport connects to a single remote server; upstreams are not multiplexed
-- `permissions_list_open` only includes approvals observed while the bridge is connected
+- `permissions_list_open` only includes visible approvals observed while the bridge is connected
