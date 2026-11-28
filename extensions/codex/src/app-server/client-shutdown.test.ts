@@ -27,7 +27,7 @@ afterEach(() => {
 describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
   const outcomes = ["confirmed", "unconfirmed"];
   if (process.platform === "linux") {
-    outcomes.push("deadline", "joining deadline");
+    outcomes.push("deadline", "joining deadline", "startup deadline");
   }
   it.each(outcomes)("preserves %s force-kill containment", async (cleanup) => {
     vi.useFakeTimers();
@@ -77,6 +77,16 @@ describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
     if (cleanup === "joining deadline") {
       harness.client.close({ forceKillDelayMs: 200 });
     }
+    if (cleanup === "startup deadline") {
+      const startup = closeCodexAppServerTransportAndWait(harness.process, {
+        drainStdio: true,
+        forceKillDelayMs: 10,
+        exitTimeoutMs: 40,
+      });
+      await vi.advanceTimersByTimeAsync(2_040);
+      await expect(startup).resolves.toEqual({ exited: true, cleanup: "uncertain" });
+      return;
+    }
     const closing = harness.client.closeAndWait({ forceKillDelayMs: 10, exitTimeoutMs: 100 });
     if (cleanup === "joining deadline") {
       // Each waiter observes exit within its own deadline while the transport owns the retry.
@@ -96,6 +106,7 @@ describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
         await vi.advanceTimersByTimeAsync(2_301);
         await expect(closing).resolves.toEqual({ exited: false, cleanup: "uncertain" });
         expect(diagnosticResult).toEqual({ exited: false, cleanup: "uncertain" });
+        expect(harness.process.stderr.destroyed).toBe(false);
         expect(scans).toBe(2);
         expect(kill).not.toHaveBeenCalledWith(-root.pid, "SIGKILL");
         Object.assign(harness.process, { exitCode: 0 });
