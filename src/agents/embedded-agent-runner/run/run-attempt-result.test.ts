@@ -11,7 +11,7 @@ describe("tool result summary", () => {
         buildTraceToolSummary({
           toolMetas: [
             { toolName: "bash", meta: "exit=1", isError: true },
-            { toolName: "bash", meta: "exit=2", isError: true },
+            { toolName: "bash", isError: true },
             { toolName: successfulTool, isError: false },
           ],
           lastToolError: recovered

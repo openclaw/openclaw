@@ -165,8 +165,9 @@ export class WorktreesModel {
     }
     if (
       !(await showConfirmDialog({
-        title: t("worktrees.confirmDelete", { name: record.name }),
+        title: t("worktrees.confirmDeleteCheckout"),
         message: t("worktrees.confirmDeleteBody"),
+        details: record.path,
         confirmLabel: t("common.delete"),
         danger: true,
       })) ||
@@ -190,6 +191,7 @@ export class WorktreesModel {
       const retry = await showConfirmDialog({
         title: retryPreserved ? t("common.retry") : t("worktrees.confirmForceDeleteTitle"),
         message: retryPreserved ? reason : t("worktrees.confirmForceDelete", { error: reason }),
+        details: record.path,
         confirmLabel: retryPreserved ? t("common.retry") : t("common.delete"),
         danger: true,
       });

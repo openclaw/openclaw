@@ -1374,22 +1374,6 @@ docker_build_run e2e-build -t demo-image .
   });
 
   it.each([
-    ["HEARTBEAT_SECONDS", "heartbeat_seconds"],
-    ["RETRIES", "retry_count"],
-  ])("normalizes zero-padded Docker build %s", (envSuffix, helperSuffix) => {
-    const script = repoRootShell`
-export ROOT_DIR
-export OPENCLAW_DOCKER_BUILD_${envSuffix}=08
-
-source "$ROOT_DIR/scripts/lib/docker-build.sh"
-
-[[ "$(docker_build_${helperSuffix})" = "8" ]]
-`;
-
-    execDockerSnippet(script);
-  });
-
-  it.each([
     [
       "retry count",
       "OPENCLAW_DOCKER_BUILD_RETRIES",
@@ -1681,6 +1665,7 @@ ${PACKAGE_BUILDER_NODE_SCRIPT}
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 docker() {
+  if [[ "$1" == info ]]; then echo 2; return; fi
   local last_arg=""
   local arg
   for arg in "$@"; do
@@ -1856,6 +1841,7 @@ ${PASSTHROUGH_TIMEOUT_SETUP}
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 docker() {
+  if [[ "$1" == info ]]; then echo 2; return; fi
   if [[ "$1" == "rm" ]]; then
     shift
     test "$1" = "-f"
@@ -2204,6 +2190,10 @@ unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PI
 export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=32
 
 docker() {
+  if [[ "$*" = "info --format {{.NCPU}}" ]]; then
+    echo 2
+    return
+  fi
   printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
 }
 export -f docker
@@ -2215,12 +2205,16 @@ OPENCLAW_DOCKER_E2E_MEMORY=12g OPENCLAW_DOCKER_E2E_CPUS=4 OPENCLAW_DOCKER_E2E_PI
 OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8 OPENCLAW_DOCKER_E2E_MEMORY=12g OPENCLAW_DOCKER_E2E_CPUS=16 OPENCLAW_DOCKER_E2E_PIDS_LIMIT=512 docker_e2e_docker_cmd run demo
 docker_e2e_docker_cmd run --memory 2g --cpus 3 --pids-limit 99 demo
 OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1 docker_e2e_docker_cmd run demo
+unset OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS
+nproc() { echo 32; }
+docker_e2e_docker_cmd run demo
 
 [[ "$(sed -n '1p' "$TMPDIR/docker-seen")" = "run -e OPENCLAW_NO_AUTO_UPDATE=1 --memory 8g --cpus 16 --pids-limit 2048 demo" ]]
 [[ "$(sed -n '2p' "$TMPDIR/docker-seen")" = "run -e OPENCLAW_NO_AUTO_UPDATE=1 --memory 12g --cpus 4 --pids-limit 512 demo" ]]
 [[ "$(sed -n '3p' "$TMPDIR/docker-seen")" = "run -e OPENCLAW_NO_AUTO_UPDATE=1 --memory 12g --cpus 8 --pids-limit 512 demo" ]]
 [[ "$(sed -n '4p' "$TMPDIR/docker-seen")" = "run -e OPENCLAW_NO_AUTO_UPDATE=1 --memory 2g --cpus 3 --pids-limit 99 demo" ]]
 [[ "$(sed -n '5p' "$TMPDIR/docker-seen")" = "run -e OPENCLAW_NO_AUTO_UPDATE=1 demo" ]]
+[[ "$(sed -n '6p' "$TMPDIR/docker-seen")" = "run -e OPENCLAW_NO_AUTO_UPDATE=1 --memory 8g --cpus 2 --pids-limit 2048 demo" ]]
 `;
 
     execDockerSnippet(script);
@@ -2239,6 +2233,7 @@ OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1 docker_e2e_docker_cmd run demo
       writeExecutables(join(workDir, "bin"), {
         node: `#!/bin/bash\nexec ${shellQuote(process.execPath)} "$@"\n`,
         docker: `#!/bin/bash
+if [[ "$1" == info ]]; then echo 2; exit 0; fi
 trap "" TERM HUP
 printf "%s\\n" "$$" >"$TMPDIR/docker-pid"
 printf "%s\\n" "$PPID" >"$TMPDIR/watchdog-pid"

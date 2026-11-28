@@ -470,6 +470,7 @@ export async function migrateLegacyMediaPersistence(
     configuredAgentDatabaseTargets?: readonly { agentId: string; path: string }[];
     preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
     integrityCheck?: "quick" | "full";
+    reuseCleanCloseIntegrity?: boolean;
     onPreparedRepairTargets?: (targets: readonly AgentDatabaseMigrationTarget[]) => void;
     onAdmittedTargets?: (targets: readonly AgentDatabaseMigrationTarget[]) => void;
     isSessionEntryStatePrepared?: (target: AgentDatabaseMigrationTarget) => boolean;
@@ -509,6 +510,7 @@ export async function migrateLegacyMediaPersistence(
       configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
       preparedDiscovery,
       integrityCheck: params.integrityCheck,
+      reuseCleanCloseIntegrity: params.reuseCleanCloseIntegrity,
       isSessionEntryStatePrepared: params.prepareSessionEntryState
         ? (target) => params.isSessionEntryStatePrepared?.(target) === true
         : undefined,

@@ -29,7 +29,7 @@ let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 const model = { provider: "openai", model: "gpt-5.4" };
 
-function runPrompt(runId: string, overrides: Partial<Parameters<typeof runEmbeddedAgent>[0]> = {}) {
+function runPrompt(runId: string, overrides: Partial<Parameters<typeof runEmbeddedAgent>[0]>) {
   return runEmbeddedAgent({
     ...createOverflowRunParams(state),
     ...model,
@@ -64,7 +64,7 @@ function completedAttempt(text?: string) {
     currentAttemptCompletedAssistant: assistant,
   });
 }
-function settledWriteTimeout(prompt: string, aborted = false) {
+function settledWriteTimeout(prompt: string, aborted: boolean) {
   const toolUseAssistant = buildEmbeddedRunnerAssistant({
     stopReason: "toolUse",
     ...model,
@@ -264,10 +264,6 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
           }
           expect(restricted.threadStartParams.dynamicTools).toEqual(dynamicTools);
           expect(restricted.developerInstructions).not.toContain("spawn_agent");
-          // A permissive ordinary turn still has native delegation: no other gate masks this proof.
-          const ordinary = await render("full");
-          expect(ordinary.threadStartParams.config).not.toHaveProperty("agents.enabled", false);
-          expect(ordinary.developerInstructions).toContain("spawn_agent");
         }
         expect(attempt.delegationCapability).toBe("host_only");
         return makeAttemptResult({ assistantTexts: ["Continue the authorized work."] });

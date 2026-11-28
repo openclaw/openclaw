@@ -89,3 +89,22 @@ describe("remote project search", () => {
     expect(browser.projectSearchRead).toBeNull();
   });
 });
+
+it("searches once after typing pauses and checks write access before sending", async () => {
+  const { browser, request, context } = remoteSearch();
+  request.mockResolvedValue(project);
+  browser.changeProjectQuery("at");
+  await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS - 1);
+  browser.changeProjectQuery("atlas");
+  await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS - 1);
+  expect(request).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(request).toHaveBeenCalledExactlyOnceWith("projects.searchRemote", { query: "atlas" });
+
+  browser.changeProjectQuery("another");
+  Object.assign(context.gateway.snapshot.hello!, {
+    auth: { role: "operator", scopes: ["operator.read"] },
+  });
+  await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
+  expect(request).toHaveBeenCalledTimes(1);
+});

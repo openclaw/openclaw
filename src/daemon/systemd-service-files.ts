@@ -16,7 +16,6 @@ import {
   ServiceStartRefusalError,
   ServiceOwnershipRefusalError,
   findServiceOwnershipRefusal,
-  SYSTEMD_STATE_SELECTOR_KEYS,
 } from "./service-inspection-error.js";
 import { resolveSystemdServiceStartRefusal } from "./service-runtime.js";
 import type {
@@ -283,18 +282,6 @@ async function readSystemdManagerCommand(
               serviceUser: user,
               programArguments,
               workingDirectory: workingDirectory.replace(/^!/, ""),
-              selectors: Object.fromEntries(
-                SYSTEMD_STATE_SELECTOR_KEYS.flatMap((key) =>
-                  Object.hasOwn(inlineEnvironment, key) ? [[key, inlineEnvironment[key]]] : [],
-                ),
-              ),
-              selectorsIncomplete:
-                fileSpecs.length > 0 ||
-                unset.some((assignment) =>
-                  SYSTEMD_STATE_SELECTOR_KEYS.some(
-                    (key) => assignment === key || assignment.startsWith(`${key}=`),
-                  ),
-                ),
             }))
           : os.userInfo()
         : undefined;

@@ -54,6 +54,7 @@ export const GATEWAY_WORK_ADMISSION_STATE = resolveGlobalSingleton(
     suspendAttribution?: string;
     suspendInvalidated?: () => void;
     activeRootWork: Set<GatewayRootWorkAdmission>;
+    rootWorkReleaseListeners: Set<() => void>;
     suspendOpenWaiters: Set<() => void>;
     suspendListeners: Set<(phase: GatewaySuspendAdmissionPhase) => void>;
   } => ({
@@ -65,6 +66,7 @@ export const GATEWAY_WORK_ADMISSION_STATE = resolveGlobalSingleton(
     suspendPhase: "accepting",
     suspendGeneration: 0,
     activeRootWork: new Set(),
+    rootWorkReleaseListeners: new Set(),
     suspendOpenWaiters: new Set(),
     suspendListeners: new Set(),
   }),

@@ -325,7 +325,7 @@ export type AgentHarnessSideQuestionParams = {
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 };
-export type AgentHarnessSideQuestionRequest = {
+type AgentHarnessSideQuestionRequest = {
   prompt: string;
   prependContext?: string;
   appendContext?: string;

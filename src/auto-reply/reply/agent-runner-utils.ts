@@ -27,6 +27,7 @@ import {
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { selectLiveRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { followsSessionInferenceAccount } from "../../cron/inference-binding.js";
 import {
   isTrustedMessageActionTurnIngress,
   mintMessageActionTurnCapability,
@@ -494,6 +495,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
     ...(job
       ? {
           jobId: job.id,
+          scheduledLiveProviderAuth: followsSessionInferenceAccount(job) || undefined,
           scheduledRuntimeAuthority: job.runtimeAuthority,
           scheduledRuntimeAuthorityRecoveryRequired: job.runtimeAuthorityRecoveryRequired === true,
         }

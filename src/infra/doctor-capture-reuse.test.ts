@@ -65,7 +65,6 @@ async function fixture() {
     OPENCLAW_UPDATE_IN_PROGRESS: undefined,
     OPENCLAW_UPDATE_RUN_ID: undefined,
     OPENCLAW_SERVICE_REPAIR_POLICY: "external",
-    OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER: undefined,
   };
   for (const [key, value] of Object.entries(fixtureEnv)) {
     vi.stubEnv(key, value);
@@ -96,7 +95,6 @@ async function fixture() {
         fullIntegrityCheck,
         root,
         env,
-        runtime,
         signal,
         assertCurrent: getOpenClawDatabaseMaintenanceScope()!.assertAdmission,
       });

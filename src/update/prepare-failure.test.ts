@@ -4,6 +4,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
+import * as gatewayService from "../daemon/service.js";
+import { createMockGatewayService } from "../daemon/service.test-helpers.js";
+import * as gatewayLockPayload from "../infra/gateway-lock-payload.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
+import { pkgQueryResult } from "../infra/update-freebsd-pkg-ownership.test-support.js";
 import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
 import {
   prepareManagedHandoffLeaseStore,
@@ -13,6 +18,7 @@ import {
 import { getUpdateRunAsync, listUpdateRunsAsync } from "../infra/update-run-reader.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
 import * as updateWrites from "../infra/update-run-write.async.js";
+import * as processExec from "../process/exec.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -22,11 +28,14 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { createCommandResult } from "../test-utils/process-result.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { VERSION } from "../version.js";
 import { checkUpdateInstallationSlot } from "./installation-identity.js";
 import { node, repository, root } from "./prepare.test-support.js";
 import { prepareUpdate } from "./run.js";
 import { createTrialPending, readTrial, resolvePrefix, switchLink, writeTrial } from "./store.js";
+import * as updateStore from "./store.js";
 import * as targets from "./target.js";
 
 const exec = promisify(execFile);
@@ -79,29 +88,41 @@ it("discards a rejected Git candidate without leaking its registration or touchi
   }
 });
 
-it("records one failed terminal run when preparation lock acquisition throws", async () => {
-  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-  try {
-    openOpenClawStateDatabase({ env: process.env });
-    const run = await createUpdateRunAsync({ trigger: "cli" });
-    vi.spyOn(fs, "link").mockRejectedValue(new Error("preparation lock failed"));
-    expect(
-      await prepareUpdate({
-        runId: run.runId,
-        runningRoot: root,
-        runningVersion: VERSION,
-        channel: "dev",
-      }),
-    ).toMatchObject({ status: "failed" });
-    expect(await listUpdateRunsAsync()).toEqual([
-      expect.objectContaining({ runId: run.runId, status: "failed", phase: "finished" }),
-    ]);
-    expect(await readTrial()).toBeNull();
-  } finally {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-  }
-});
+it.each(["normal", "bare"])(
+  "records the cause of a long %s preparation exception",
+  async (header) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    try {
+      openOpenClawStateDatabase({ env: process.env });
+      const run = await createUpdateRunAsync({ trigger: "cli" });
+      const token = "sk-abcdefghijklmnopqrstuv";
+      const error = new Error(`preparation lock failed; Authorization: Bearer ${token}`);
+      error.stack = `${header === "bare" ? "Error" : `Error: ${error.message}`}\n    at acquirePreparationLock\n${"    at prepareCaller\n".repeat(100)}`;
+      vi.spyOn(fs, "link").mockRejectedValue(error);
+      expect(
+        await prepareUpdate({
+          runId: run.runId,
+          runningRoot: root,
+          runningVersion: VERSION,
+          channel: "dev",
+        }),
+      ).toMatchObject({ status: "failed" });
+      const runs = await listUpdateRunsAsync();
+      expect(runs).toEqual([
+        expect.objectContaining({ runId: run.runId, status: "failed", phase: "finished" }),
+      ]);
+      const detail = runs[0]?.steps.find((step) => step.step === "outcome")?.detail;
+      expect(detail).toContain("preparation lock failed");
+      expect(detail).toContain("at acquirePreparationLock");
+      expect(detail).not.toContain(token);
+      expect(detail?.length).toBeLessThanOrEqual(1024);
+      expect(await readTrial()).toBeNull();
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+    }
+  },
+);
 
 it("does not publish a trial when preparation outcome bookkeeping throws", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
@@ -318,3 +339,93 @@ it.each([
     closeOpenClawStateDatabaseForTest();
   }
 });
+
+const sqliteHostPlatform = process.platform;
+const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
+const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
+
+it.each([
+  { platform: "linux", owned: true, unavailable: false, manager: "pacman" },
+  { platform: "freebsd", owned: true, unavailable: false, manager: "pkg" },
+  { platform: "darwin", owned: false, unavailable: false, manager: undefined },
+  { platform: "win32", owned: false, unavailable: false, manager: undefined },
+  { platform: "linux", owned: false, unavailable: true, manager: "pacman" },
+  { platform: "freebsd", owned: false, unavailable: true, manager: "pkg" },
+] as const)(
+  "preserves $platform package preparation admission (owned=$owned, unavailable=$unavailable)",
+  async ({ platform, owned, unavailable, manager }) => {
+    vi.stubEnv("HOME", root);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
+    const runningRoot = path.join(root, "package");
+    await fs.mkdir(runningRoot);
+    await fs.writeFile(
+      path.join(runningRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: VERSION }),
+    );
+    // Simulated package policy keeps the real host namespace and SQLite VFS.
+    const namespace = gatewayLockPayload.readGatewayLockProcessNamespace();
+    vi.spyOn(gatewayLockPayload, "readGatewayLockProcessNamespace").mockReturnValue(namespace);
+    vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((file) =>
+      existingHostUri(file, sqliteHostPlatform),
+    );
+    vi.spyOn(nodeSqlite, "resolveImmutableSqliteFileUri").mockImplementation((file) =>
+      immutableHostUri(file, sqliteHostPlatform),
+    );
+    vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(createMockGatewayService());
+    const reachedStaging = new Error("fixture: reached staging allocation");
+    const staging = vi.spyOn(updateStore, "allocateStaging").mockRejectedValue(reachedStaging);
+    try {
+      openOpenClawStateDatabase({ env: process.env });
+      const run = await createUpdateRunAsync({ trigger: "cli" });
+      vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue(
+        createCommandResult({ code: 1 }),
+      );
+      const query = vi
+        .spyOn(processExec, "runCommandBuffered")
+        .mockResolvedValue(
+          pkgQueryResult(
+            unavailable ? "" : `${runningRoot}/package.json\n`,
+            unavailable ? { code: 1 } : {},
+          ),
+        );
+      const outcome = await withMockedPlatform(platform, () =>
+        prepareUpdate({
+          runId: run.runId,
+          runningRoot,
+          runningVersion: VERSION,
+          channel: "stable",
+          node,
+          timeoutMs: 10_000,
+        }),
+      );
+      if (owned) {
+        expect(outcome).toMatchObject({
+          status: "failed",
+          reason: `${manager}-owned-install`,
+          message: expect.stringContaining(
+            manager === "pkg" ? "Update it through pkg" : "pacman -Syu",
+          ),
+        });
+        expect(staging).not.toHaveBeenCalled();
+        expect(await getUpdateRunAsync(run.runId)).toMatchObject({
+          status: "failed",
+          reason: `${manager}-owned-install`,
+        });
+      } else {
+        expect(staging).toHaveBeenCalledOnce();
+        expect(staging).toHaveBeenCalledWith({ kind: "package" }, resolvePrefix());
+        expect(outcome).toMatchObject({ status: "failed", reason: "update-failed" });
+        const record = await getUpdateRunAsync(run.runId);
+        expect(record?.steps.find((step) => step.step === "outcome")?.detail).toContain(
+          reachedStaging.message,
+        );
+      }
+      expect(query).toHaveBeenCalledTimes(owned || unavailable ? 1 : 0);
+      expect(await readTrial()).toBeNull();
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+    }
+  },
+);

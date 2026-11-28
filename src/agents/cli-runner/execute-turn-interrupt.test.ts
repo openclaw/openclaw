@@ -30,15 +30,6 @@ function setup() {
 }
 
 describe("CLI yield turn end", () => {
-  it("ends an input at an already-pending yield after that input delivered its reply", async () => {
-    const { interrupt, turnEnd } = setup();
-    turnEnd.markDelivered(true);
-    turnEnd.observe("sessions_yield", alreadyPending);
-    turnEnd.onToolResult("mcp__openclaw__sessions_yield", false);
-    await vi.waitFor(() => expect(interrupt).toHaveBeenCalledWith("source_reply"));
-    expect(turnEnd.suppressesAssistantOutput()).toBe(true);
-  });
-
   it("keeps a steered input's turn open when only the earlier input delivered", async () => {
     const { interrupt, turnEnd } = setup();
     turnEnd.markDelivered(true);

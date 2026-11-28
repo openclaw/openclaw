@@ -11,19 +11,29 @@ struct RootSidebarStabilityTests {
         let appModel = NodeAppModel()
         let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
         let model = RootSidebarModel()
-        // 40 pinned rows, then 23 recent rows of which the sidebar shows the newest 20.
-        var sessions = (0..<63).map { index in
-            var row = OpenClawChatSessionEntry(
-                key: "agent:main:work-\(index)", kind: "direct", updatedAt: Double(index),
-                sessionId: "work-\(index)", label: "Work \(index)")
-            row.pinned = index < 40
-            return row
+        // 40 pinned rows, then 23 recent rows of which the sidebar shows the newest 15.
+        func row(_ index: Int) -> OpenClawChatSessionEntry {
+            OpenClawChatSessionEntry(
+                key: "agent:main:work-\(index)",
+                kind: "direct",
+                updatedAt: Double(index),
+                sessionId: "work-\(index)",
+                label: "Work \(index)")
         }
+        var sessions = (0..<63).map(row)
+        // The first three personal pins are missing from the initial roster. Its next page supplies them.
+        let pinnedOrder = Array(63..<66) + Array(0..<40)
+        appModel.personalSidebarPins = IOSSidebarPins(entries: pinnedOrder.map { "session:agent:main:work-\($0)" })
         model.testRosterLoad = { ChatSessionRosterSnapshot(sessions: sessions, isCached: false) }
         await model.refreshSessions(appModel: appModel)
         let root = RootSidebar(
-            model: model, selectedDestination: .chat, isDrawerLayout: true,
-            isDismissButtonEnabled: true, selectDestination: { _ in }, selectSession: { _ in }, hideSidebar: {})
+            model: model,
+            selectedDestination: .chat,
+            isSidebarVisible: true,
+            selectDestination: { _ in },
+            selectSession: { _ in },
+            openPagesEditor: {},
+            openSearch: {})
             .environment(appModel)
             .environment(gatewayController)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 340, height: 700))
@@ -39,18 +49,12 @@ struct RootSidebarStabilityTests {
         scroll.setContentOffset(CGPoint(x: 0, y: 400), animated: false)
         await Self.settle(host.view)
         let oldOffset = scroll.contentOffset.y
-        for index in 63..<66 {
-            var row = OpenClawChatSessionEntry(
-                key: "agent:main:work-\(index)", kind: "direct", updatedAt: Double(index),
-                sessionId: "work-\(index)", label: "Work \(index)")
-            row.pinned = true
-            sessions.append(row)
-        }
+        sessions.append(contentsOf: (63..<66).map(row))
         await model.refreshSessions(appModel: appModel)
         await Self.settle(host.view)
-        // This fixture inserts three 44-point rows with 2-point stack spacing.
+        // This fixture inserts three 44-point rows with 4-point stack spacing.
         // Lazy contentSize is an estimate, not a valid insertion-height oracle.
-        let insertedRowHeight: CGFloat = 3 * (44 + 2)
+        let insertedRowHeight: CGFloat = 3 * (44 + 4)
         #expect(
             abs(scroll.contentOffset.y - oldOffset - insertedRowHeight) < 2,
             "The scroll offset must compensate for the three inserted rows")
@@ -58,11 +62,7 @@ struct RootSidebarStabilityTests {
         // The recent list is capped, so rows arriving above push rows out below; compensation must stop at the end.
         scroll.setContentOffset(CGPoint(x: 0, y: Self.maxOffset(scroll)), animated: false)
         await Self.settle(host.view)
-        for index in 66..<69 {
-            sessions.append(OpenClawChatSessionEntry(
-                key: "agent:main:work-\(index)", kind: "direct", updatedAt: Double(index),
-                sessionId: "work-\(index)", label: "Work \(index)"))
-        }
+        sessions.append(contentsOf: (66..<69).map(row))
         await model.refreshSessions(appModel: appModel)
         await Self.settle(host.view)
         #expect(scroll.contentOffset.y <= Self.maxOffset(scroll) + 1, "Compensation must stop at the end of the list")

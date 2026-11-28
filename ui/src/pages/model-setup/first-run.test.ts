@@ -123,7 +123,7 @@ describe("model setup first-run redirect", () => {
         history: { location: () => location, replace: vi.fn() },
         initialLocationReady: Promise.resolve(location),
       });
-      expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+      expect(replace).toHaveBeenCalledWith("model-providers", { search: "?firstRun=1" });
       dispose();
     },
   );
@@ -167,7 +167,7 @@ describe("model setup first-run redirect", () => {
     expect(onInitialDecision).toHaveBeenCalledOnce();
     expect(replace).toHaveBeenCalledTimes(shouldRedirect ? 1 : 0);
     if (shouldRedirect) {
-      expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+      expect(replace).toHaveBeenCalledWith("model-providers", { search: "?firstRun=1" });
     }
     dispose();
   });
@@ -180,7 +180,7 @@ describe("model setup first-run redirect", () => {
     const dispose = await startRedirect(context, decision.resolve);
 
     await decision.promise;
-    expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+    expect(replace).toHaveBeenCalledWith("model-providers", { search: "?firstRun=1" });
     dispose();
   });
 });

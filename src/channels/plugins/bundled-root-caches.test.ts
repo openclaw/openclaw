@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -12,16 +9,6 @@ vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
       env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? actual.resolveBundledPluginsDir(env),
   };
 });
-
-const tempDirs: string[] = [];
-
-function makeBundledRoot(prefix: string) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  tempDirs.push(root);
-  const pluginsDir = path.join(root, "dist", "extensions");
-  fs.mkdirSync(pluginsDir, { recursive: true });
-  return pluginsDir;
-}
 
 function plugin(id: string, label: string) {
   return { id, meta: { id, label }, capabilities: {}, config: {} };
@@ -35,9 +22,6 @@ function loadBootstrap(scope: string) {
 }
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
   vi.unstubAllEnvs();
   vi.resetModules();
   vi.doUnmock("../../plugins/channel-catalog-registry.js");
@@ -45,8 +29,8 @@ afterEach(() => {
 });
 
 it("reads bundled channel ids from the active bundled root without re-importing", async () => {
-  const rootA = makeBundledRoot("openclaw-bundled-ids-a-");
-  const rootB = makeBundledRoot("openclaw-bundled-ids-b-");
+  const rootA = "bundled-ids-a";
+  const rootB = "bundled-ids-b";
 
   // mock-isolation: Synthetic catalog rows isolate root-cache invalidation from plugin discovery.
   vi.doMock("../../plugins/channel-catalog-registry.js", () => ({
@@ -75,8 +59,8 @@ it("reads bundled channel ids from the active bundled root without re-importing"
 });
 
 it("reads bootstrap plugins from the active bundled root without re-importing", async () => {
-  const rootA = makeBundledRoot("openclaw-bootstrap-a-");
-  const rootB = makeBundledRoot("openclaw-bootstrap-b-");
+  const rootA = "bootstrap-a";
+  const rootB = "bootstrap-b";
   const suffix = () => {
     const activeRoot = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     return activeRoot === rootA ? "A" : activeRoot === rootB ? "B" : "unknown";

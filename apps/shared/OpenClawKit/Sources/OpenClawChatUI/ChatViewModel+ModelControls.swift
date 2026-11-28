@@ -76,14 +76,25 @@ extension OpenClawChatViewModel {
         }
     }
 
+    /// Loads the model list again from the model sheet: the failure clears first, so the sheet shows its
+    /// loading state until the answer replaces it.
+    func retryModelCatalog() async {
+        self.modelCatalogMessage = nil
+        await self.fetchModels()
+    }
+
     public static let verboseLevelOptions = ["off", "on", "full"]
 
     public func modelSignInContext() async -> OpenClawChatModelSignInContext? {
         let session = self.currentSessionSnapshot()
         let agentID = session.deliveryAgentID ?? OpenClawChatSessionKey.agentID(from: session.key) ?? self.activeAgentId
         guard let context = await self.transport.acquireModelSignInContext(agentID: agentID) else {
+            // The phone's accounts page says so in place.
+            #if os(macOS)
             guard self.isCurrentSession(session) else { return nil }
-            self.errorText = String(localized: "Model sign-in needs a newer Gateway. Update it or use /login.")
+            self.errorText = String(
+                localized: "Model sign-in needs a newer version of OpenClaw. Update it or use /login.")
+            #endif
             return nil
         }
         guard self.isCurrentSession(session) else { return nil }
@@ -221,10 +232,18 @@ extension OpenClawChatViewModel {
               reason.blocksSend
         else { return nil }
         switch reason {
+        #if os(iOS)
+        // The phone's sign-in row sits next to this line and is the action.
+        case .missingAuth:
+            return String(localized: "This model needs a sign-in.")
+        case .authFailed:
+            return String(localized: "Sign-in failed for this model.")
+        #else
         case .missingAuth:
             return String(localized: "No provider credential is configured for this model. Set it up in Model Setup.")
         case .authFailed:
             return String(localized: "Authentication failed. Review the provider credential or sign-in, then retry.")
+        #endif
         case .cooldown, .unknown:
             return nil
         }
@@ -424,27 +443,6 @@ extension OpenClawChatViewModel {
         return self.normalizedModelSelectionID(selectionID) ?? selectionID
     }
 
-    public func isSelectedModel(_ selectionID: String) -> Bool {
-        Self.modelSelectionMatches(
-            selectionID: selectionID,
-            currentSelectionID: self.modelSelectionID,
-            choices: self.modelChoices)
-    }
-
-    static func modelSelectionMatches(
-        selectionID: String,
-        currentSelectionID: String,
-        choices: [OpenClawChatModelChoice]) -> Bool
-    {
-        if selectionID == self.defaultModelSelectionID {
-            return currentSelectionID == self.defaultModelSelectionID
-        }
-        guard let choice = choices.first(where: { $0.selectionID == selectionID }) else {
-            return currentSelectionID == selectionID
-        }
-        return currentSelectionID == choice.selectionID || currentSelectionID == choice.modelID
-    }
-
     public var composerInlineEffortLabel: String {
         let effort = self.thinkingOverrideIsInherited
             ? String(
@@ -543,7 +541,12 @@ extension OpenClawChatViewModel {
                         self.acceptedVerboseLevelsByTarget[target]?.level,
                         sessionKey: state.key,
                         exactMatchOnly: state.exactMatchOnly)
-                    if !state.exactMatchOnly { self.errorText = error.localizedDescription }
+                    if !state.exactMatchOnly {
+                        self.reportFailure(
+                            String(localized: "Couldn’t change the detail level."),
+                            error,
+                            while: "select verbose level")
+                    }
                 }
             }
         }
@@ -600,7 +603,11 @@ extension OpenClawChatViewModel {
             sessionKey: sessionKey)
         let requestID = self.reserveSessionSettingsRequest(for: target)
         self.optimisticSettingsLanes[target, default: .init()].latestFastModeRequestID = requestID
-        self.enqueueSessionSettingsPatch(requestID: requestID, target: target) { [weak self] routeLease in
+        self.enqueueSessionSettingsPatch(
+            requestID: requestID,
+            target: target,
+            mayFinishAfterSend: true)
+        { [weak self] routeLease in
             guard let self else { return }
             // Latest wins: a speed that a newer pick replaced before its turn is never sent.
             guard requestID == self.optimisticSettingsLanes[target]?.latestFastModeRequestID else { return }
@@ -652,7 +659,10 @@ extension OpenClawChatViewModel {
                         self?.selectFastMode(selectionID)
                     }
                     #else
-                    self.errorText = error.localizedDescription
+                    self.reportFailure(
+                        String(localized: "Couldn’t change Fast mode."),
+                        error,
+                        while: "select fast mode")
                     #endif
                 }
             }

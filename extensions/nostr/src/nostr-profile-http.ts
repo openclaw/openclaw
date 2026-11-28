@@ -333,9 +333,12 @@ async function handleUpdateProfile(
     if (!url) {
       continue;
     }
-    const check = validateUrlSafety(url);
-    if (!check.ok) {
-      sendJson(res, 400, { ok: false, error: `${field}: ${check.error}` });
+    if (!validateUrlSafety(url).ok) {
+      sendJson(res, 400, {
+        ok: false,
+        error: "Validation failed",
+        details: [`${field}: Enter an HTTPS URL on a public host.`],
+      });
       return true;
     }
   }

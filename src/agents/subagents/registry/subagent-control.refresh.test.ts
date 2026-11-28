@@ -48,7 +48,7 @@ const writeSession = (runId: string, sessionKey: string, agentId = "main") =>
 const registerRun = (
   runId: string,
   childSessionKey: string,
-  requesterSessionKey = owner,
+  requesterSessionKey: string,
   overrides: Partial<Parameters<typeof registerSubagentRun>[0]> = {},
 ) =>
   records.register(runId, undefined, {

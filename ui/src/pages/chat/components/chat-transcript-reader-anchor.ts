@@ -1,6 +1,6 @@
 import type { Virtualizer, VirtualItem } from "@tanstack/virtual-core";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
-import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
+import { type TranscriptLayoutOwner, unscaledBorderBox } from "./chat-transcript-layout-owner.ts";
 import type { ChatTranscriptRenderer } from "./chat-transcript-layout-solid.tsx";
 import type { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 import type { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
@@ -135,7 +135,11 @@ export class TranscriptReaderAnchor {
       }
       const height = row && this.heights.get(row);
       return (
-        row?.isConnected === true && height !== undefined && Math.abs(height - item.size) < 0.5
+        row?.isConnected === true &&
+        height !== undefined &&
+        Math.abs(height - item.size) < 0.5 &&
+        // A commit can resize a row before either measurement observer has fired.
+        (indexes !== undefined || Math.abs(unscaledBorderBox(row).height - height) < 0.5)
       );
     });
   };

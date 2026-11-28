@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
 
 function resolveAssistantDecision(
-  params: Partial<Omit<Parameters<typeof resolveRunFailoverDecision>[0], "stage">> = {},
+  params: Partial<Omit<Parameters<typeof resolveRunFailoverDecision>[0], "stage">>,
 ) {
   return resolveRunFailoverDecision({
     stage: "assistant",

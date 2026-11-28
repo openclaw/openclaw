@@ -298,7 +298,6 @@ describe("configured catalog authority", () => {
     }
   });
   it("keeps declared inference bound to the configured physical route (custom endpoint)", () => {
-    const custom = true;
     const chat = false;
     const inference = {
       chat,
@@ -330,7 +329,7 @@ describe("configured catalog authority", () => {
             models: [
               modelDefinition("typed", {
                 name: "Configured",
-                ...(custom ? { baseUrl: "https://custom.fixture.invalid/v1" } : {}),
+                baseUrl: "https://custom.fixture.invalid/v1",
                 reasoning: false,
                 maxTokens: 256,
               }),
@@ -351,11 +350,9 @@ describe("configured catalog authority", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       name: "Configured",
-      baseUrl: custom ? "https://custom.fixture.invalid/v1" : "https://catalog.fixture.invalid/v1",
-      inference: custom ? { chat: false } : inference,
+      baseUrl: "https://custom.fixture.invalid/v1",
+      inference: { chat: false },
     });
-    if (custom) {
-      expect(rows[0]!.inference).not.toHaveProperty("decision");
-    }
+    expect(rows[0]!.inference).not.toHaveProperty("decision");
   });
 });

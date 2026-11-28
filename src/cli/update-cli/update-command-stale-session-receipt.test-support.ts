@@ -3,7 +3,7 @@ import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import { seedStaleDeferredPluginSessionImport } from "../../commands/doctor-session-sqlite.deferred-plugin.test-support.js";
 import { noteSessionTranscriptHealth } from "../../commands/doctor-session-transcripts.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
-import { migrateLegacyAcpSessionMetadata } from "../../infra/state-migrations.session-store.js";
+import { migrateLegacyAcpSessionMetadata } from "../../infra/state-migrations.acp-session-metadata.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../../plugins/legacy-session-surfaces.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
