@@ -6,6 +6,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { createChangeListeners } from "../../../../src/shared/listeners.ts";
 import { createApplicationRouter, startApplicationRouter } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -16,6 +17,7 @@ import { TemplatesPage } from "./page.tsx";
 
 async function setup(pathname: string, initialConfig: Record<string, unknown> | null = null) {
   const source = createApplicationGateway();
+  const agents = createAgentCapability(source.gateway);
   let bootstrapConfig = initialConfig;
   const configListeners = createChangeListeners();
   const runtimeConfig = createRuntimeConfigCapability(source.gateway, {
@@ -25,6 +27,7 @@ async function setup(pathname: string, initialConfig: Record<string, unknown> | 
   const context = {
     basePath: "",
     gateway: source.gateway,
+    agents,
     runtimeConfig,
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
@@ -42,6 +45,7 @@ async function setup(pathname: string, initialConfig: Record<string, unknown> | 
   onTestFinished(() => {
     router.stop();
     runtimeConfig.dispose();
+    agents.dispose();
   });
   await startApplicationRouter(router, history, "", context);
   return {
@@ -56,7 +60,7 @@ async function setup(pathname: string, initialConfig: Record<string, unknown> | 
   };
 }
 
-function templatesConfig(enabled: boolean) {
+function templatesConfig(enabled?: boolean) {
   return { gateway: { controlUi: { experimental: { templates: enabled } } } };
 }
 
@@ -66,9 +70,10 @@ it("rejects a direct visit when Templates is known-disabled", async () => {
 });
 
 it.each([
+  ["/templates", undefined],
   ["/templates", true],
   ["/templates/workflow-operator", false],
-] as const)("gates cold %s until Labs=%s", async (pathname, enabled) => {
+] as const)("gates cold %s until Templates availability=%s", async (pathname, enabled) => {
   const fixture = await setup(pathname);
   expect(fixture.router.getState().matches[0]).toMatchObject({
     routeId: "templates",
@@ -97,8 +102,8 @@ it.each([
     hello: gatewayHelloForMethods(["templates.catalog.search"], ["operator.read"]),
   });
   await vi.waitFor(() => expect(loading()).toBeNull());
-  await vi.waitFor(() => expect(explore() !== null).toBe(enabled));
-  if (!enabled) {
+  await vi.waitFor(() => expect(explore() !== null).toBe(enabled !== false));
+  if (enabled === false) {
     expect(view.container.textContent).toContain("Templates is turned off");
     expect(request).not.toHaveBeenCalled();
   }

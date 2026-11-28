@@ -11,7 +11,7 @@ import { parseReplyDirectives } from "./reply-directives.js";
 import { createReplyDispatcherWithTyping } from "./reply-dispatcher.js";
 import { createReplyReferencePlanner } from "./reply-reference.js";
 import {
-  extractShortModelName,
+  resolveModelResponsePrefixContext,
   resolveResponsePrefixTemplate,
 } from "./response-prefix-template.js";
 import { createStreamingDirectiveAccumulator } from "./streaming-directives.js";
@@ -340,6 +340,13 @@ it("preserves split malformed fenced code", () => {
   expect(streamed + (accumulator.consume("", { final: true })?.text ?? "")).toBe(chunks.join(""));
 });
 
+it("streams whitespace-only chunks after visible text", () => {
+  const chunks = ["X", "\n\n", "```text", "\n", "a b", "\n", "```", " ", "done", "\n"];
+  const accumulator = createStreamingDirectiveAccumulator();
+  const streamed = chunks.map((chunk) => accumulator.consume(chunk)?.text ?? "").join("");
+  expect(streamed + (accumulator.consume("", { final: true })?.text ?? "")).toBe(chunks.join(""));
+});
+
 it("propagates explicit reply ids until the assistant message resets", () => {
   const accumulator = createStreamingDirectiveAccumulator();
   expect(accumulator.consume("[[reply_to: a]]")).toBeNull();
@@ -376,6 +383,8 @@ it("normalizes provider/date/latest suffixes while preserving other IDs", () => 
     ["gpt-5.4-latest", "gpt-5.4"],
     ["model-123456789", "model-123456789"],
   ] as const) {
-    expect(extractShortModelName(input), input).toBe(expected);
+    expect(resolveModelResponsePrefixContext({ provider: "p", model: input }).model, input).toBe(
+      expected,
+    );
   }
 });

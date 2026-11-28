@@ -5,6 +5,17 @@ import UIKit
 @testable import OpenClaw
 
 struct OpenClawTypographyTests {
+    @Test func `group header controls use branded typography`() throws {
+        let source = try String(contentsOf: Self.sourceURL("Design/CommandSessionGroupHeader.swift"), encoding: .utf8)
+        // The fold control is the shared section header, the same one as Needs you, Working, Pinned and Recent.
+        let header = try String(contentsOf: Self.sourceURL("Design/SessionSectionHeader.swift"), encoding: .utf8)
+        #expect(source.contains("SessionSectionHeader("))
+        #expect(header.contains(".font(OpenClawType.captionMedium)"))
+        #expect(source.contains(".font(OpenClawType.subhead)"))
+        #expect(source.contains(".font(OpenClawType.body)"))
+        #expect(!source.contains(".font(."))
+    }
+
     @Test func `bundled fonts load from app bundle`() {
         for name in OpenClawType.registeredPostScriptNames {
             #expect(UIFont(name: name, size: 12) != nil, "Missing bundled font: \(name)")
@@ -87,6 +98,24 @@ struct OpenClawTypographyTests {
         #expect(font.pointSize == 22)
     }
 
+    @Test func `Settings roles resolve to branded fonts`() throws {
+        // `SettingsType` is the only font alias the scanner trusts by name, so audit its producer:
+        // every role must return an `OpenClawType` font and nothing else.
+        let source = try String(
+            contentsOf: Self.iosRootURL().appendingPathComponent("Sources/Design/SettingsProTabSupport.swift"),
+            encoding: .utf8)
+        let body = try Self.extract(source, from: "enum SettingsType {", to: "\n}\n")
+        let roles = body.components(separatedBy: "static var ").dropFirst()
+        #expect(roles.count == 5)
+        for role in roles {
+            let returned = role
+                .components(separatedBy: "{").dropFirst().first?
+                .components(separatedBy: "}").first?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            #expect(returned.hasPrefix("OpenClawType."), Comment(rawValue: "SettingsType role returns \(returned)"))
+        }
+    }
+
     @Test func `iOS app text and control calls keep branded font boundaries`() throws {
         let offenders = try Self.unbrandedTextCallOffenders()
         #expect(offenders.isEmpty, Comment(rawValue: offenders.joined(separator: "\n")))
@@ -136,55 +165,6 @@ struct OpenClawTypographyTests {
         #expect(offenders[4].contains(".font(.title)"))
         #expect(offenders[5].contains(".font(.footnote)"))
         #expect(offenders[6].contains(".font(.headline)"))
-    }
-
-    @Test func `accessibility metadata text does not require visual typography`() throws {
-        let accessibilityTextSamples = [
-            ".accessibilityLabel(Text(title))",
-            "Image(systemName: \"circle\").accessibilityLabel(Text(title))",
-            ".accessibilityLabel(Text(title)).accessibilityIdentifier(\"status\")",
-            "Image(systemName: \"circle\").accessibilityLabel(Text(title)).accessibilityHint(Text(hint))",
-            ".accessibilityLabel(Text(self.statusLabel ?? LocalizedStringResource(\"Allowed\")))",
-            ".accessibilityLabel(Text(title))\n)",
-            ".accessibilityLabel(\n    Text(title)\n)",
-            "Image(systemName: \"circle\")\n    .accessibilityLabel(\n        Text(title)\n    )",
-            ".accessibilityValue(\n    Text(value))",
-            ".accessibilityHint(\n\n    Text(hint))",
-        ]
-        for source in accessibilityTextSamples {
-            let lines = source.components(separatedBy: .newlines)
-            let idx = try #require(lines.firstIndex { Self.isTextOrLabelCall($0) })
-            #expect(Self.isAccessibilityMetadataTextCall(at: idx, in: lines))
-        }
-
-        #expect(!Self.isAccessibilityMetadataTextCall(at: 0, in: ["Text(title)"]))
-        #expect(!Self.isAccessibilityMetadataTextCall(at: 0, in: [".accessibilityLabel(title)"]))
-
-        let nearbyVisualText = [
-            ".accessibilityLabel(Text(title))",
-            "Text(body)",
-        ]
-        #expect(!Self.isAccessibilityMetadataTextCall(at: 1, in: nearbyVisualText))
-
-        let sameLineVisualLabel = [
-            "Label(\"Status\", systemImage: \"circle\").accessibilityLabel(Text(status))",
-        ]
-        #expect(!Self.isAccessibilityMetadataTextCall(at: 0, in: sameLineVisualLabel))
-
-        let trailingVisualText = [".accessibilityLabel(Text(status)); Text(body)"]
-        #expect(!Self.isAccessibilityMetadataTextCall(at: 0, in: trailingVisualText))
-
-        let modifierTextInString = [
-            "let sample = \".accessibilityLabel(\"",
-            "Text(body)",
-        ]
-        #expect(!Self.isAccessibilityMetadataTextCall(at: 1, in: modifierTextInString))
-
-        let modifierTextInComment = [
-            "// Example: .accessibilityLabel(",
-            "Text(body)",
-        ]
-        #expect(!Self.isAccessibilityMetadataTextCall(at: 1, in: modifierTextInComment))
     }
 
     @Test func `secure fields do not use platform placeholder text`() throws {
@@ -264,6 +244,8 @@ struct OpenClawTypographyTests {
             "OpenClawActivityType",
             "OpenClawChatTypography",
             "WatchClawType",
+            // Settings roles; `Settings roles resolve to branded fonts` audits their producer.
+            "SettingsType.",
             "typography.",
         ]
         let sourceBytes = Array(source.utf8)
@@ -283,63 +265,6 @@ struct OpenClawTypographyTests {
                 "\(relativePath):\(fontLine + 1): \(fontCall.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
         return offenders
-    }
-
-    private static let textOrLabelCallPattern = try! NSRegularExpression(pattern: #"\b(Text|Label)\s*\("#)
-
-    private static func isTextOrLabelCall(_ line: String) -> Bool {
-        self.textOrLabelCallPattern.firstMatch(
-            in: line,
-            range: NSRange(line.startIndex..<line.endIndex, in: line)) != nil
-    }
-
-    private static func isAccessibilityMetadataTextCall(at idx: Int, in lines: [String]) -> Bool {
-        self.accessibilityMetadataTextLines(in: lines).contains(idx)
-    }
-
-    private static func accessibilityMetadataTextLines(in lines: [String]) -> Set<Int> {
-        let code = self.maskedSwiftCode(lines.joined(separator: "\n"))
-        let textToken = Array("Text".utf8)
-        let labelToken = Array("Label".utf8)
-        let modifiers = [
-            Array(".accessibilityLabel".utf8),
-            Array(".accessibilityValue".utf8),
-            Array(".accessibilityHint".utf8),
-        ]
-        var callCounts: [Int: Int] = [:]
-        var metadataCallCounts: [Int: Int] = [:]
-        var line = 0
-
-        for offset in code.indices {
-            if code[offset] == 10 {
-                line += 1
-                continue
-            }
-            if self.callOpeningParenthesis(after: textToken, at: offset, in: code) != nil ||
-                self.callOpeningParenthesis(after: labelToken, at: offset, in: code) != nil
-            {
-                callCounts[line, default: 0] += 1
-            }
-
-            for modifier in modifiers {
-                guard let modifierOpen = self.callOpeningParenthesis(after: modifier, at: offset, in: code)
-                else { continue }
-                let textOffset = self.skippingWhitespace(in: code, after: modifierOpen)
-                guard let textOpen = self.callOpeningParenthesis(after: textToken, at: textOffset, in: code),
-                      let textClose = self.matchingParenthesis(in: code, openingAt: textOpen)
-                else { continue }
-                let metadataClose = self.skippingWhitespace(in: code, after: textClose)
-                guard metadataClose < code.count, code[metadataClose] == 41 else { continue }
-
-                // Exempt only the direct Text argument; visible calls sharing its source line stay audited.
-                let textLine = line + code[offset..<textOffset].count(where: { $0 == 10 })
-                metadataCallCounts[textLine, default: 0] += 1
-            }
-        }
-
-        return Set(metadataCallCounts.compactMap { line, count in
-            callCounts[line] == count ? line : nil
-        })
     }
 
     private static func callOpeningParenthesis(

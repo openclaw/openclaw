@@ -209,7 +209,7 @@ it.each([
       const result = await executeAgentTurn(
         createMinimalRunAgentTurnParams({ followupRun: followup, sessionCtx: context }),
       );
-      expect(selected).toEqual(["anthropic"]);
+      expect(selected).toEqual(modelCalls ? ["anthropic"] : []);
       expect(model).toHaveBeenCalledTimes(modelCalls);
       expect(resolveStable).toHaveBeenCalledTimes(resolutions);
       if (modelCalls) {

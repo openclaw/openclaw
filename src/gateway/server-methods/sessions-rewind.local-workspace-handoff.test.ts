@@ -67,9 +67,12 @@ async function expectAdoption(
     "authorized successor owner",
   );
   expect(resumed.sessionId).toBe(saved.entry.sessionId);
+  // Custody transfers on the incarnation pair, so the saved row adopts both the
+  // successor's session id and its rotated lifecycle revision.
   expect(await readLocalWorkspaceProjection(fixture.worktree.id)).toEqual({
     ...saved.row,
     session_id: saved.entry.sessionId,
+    lifecycle_revision: saved.entry.lifecycleRevision,
     revision: saved.row.revision + 1,
   });
   expect(
@@ -183,7 +186,7 @@ it.each(["caller revoked at commit", "successor reassigned at commit"] as const)
         ).rejects.toThrow(
           revocation === "caller revoked at commit"
             ? "successor caller revoked"
-            : "authority changed",
+            : "Local sandbox workspace changed",
         );
       } finally {
         command.mockRestore();

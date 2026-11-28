@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { ircPlugin } from "./channel.js";
 import { connectIrcClient, type IrcClientOptions } from "./client.js";
 import { onIrcTestLine, startIrcTestServer as startServer } from "./irc-server.test-support.js";
+import { probeIrc } from "./probe.js";
 import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -139,7 +140,7 @@ describe("irc client nickserv", () => {
     const result = await connectAndCollectRegistration({
       nickserv: {
         service: "NickServ\n",
-        password: String.raw`pa\tss\new\x41` + "\u0002\u007f\r\nJOIN #bad",
+        password: String.raw`pa\tss\new\x41` + "\t\r\u0002\u007f\r\nJOIN #bad",
       },
     });
 
@@ -171,14 +172,58 @@ describe("irc client readiness timeout", () => {
 });
 
 describe("irc client fallback nick", () => {
-  it("produces unique fallback nicks across sequential collisions", async () => {
-    const first = await connectAfterNickCollision("bot");
-    const second = await connectAfterNickCollision("bot");
-    const third = await connectAfterNickCollision("bot");
-    expect(first).toMatch(/^bot_\d*$/);
-    expect(second).toMatch(/^bot_\d+$/);
-    expect(third).toMatch(/^bot_\d+$/);
-    expect(new Set([first, second, third]).size).toBe(3);
+  it("probes a connected account when NICKLEN=9 arrives after registration", async () => {
+    const nicks = new Set<string>();
+    const rejectedNicks: string[] = [];
+    const probeClosed = createDeferred<void>();
+    const server = await startIrcTestServer((socket) => {
+      let nick = "";
+      let userReceived = false;
+      socket.on("close", () => {
+        nicks.delete(nick);
+        if (nick !== "openclaw9") {
+          probeClosed.resolve();
+        }
+      });
+      onIrcTestLine(socket, (line) => {
+        if (line.startsWith("NICK ")) {
+          const candidate = line.slice("NICK ".length);
+          if (candidate.length > 9) {
+            rejectedNicks.push(candidate);
+            socket.write(`:server 432 * ${candidate} :Nickname too long\r\n`);
+            return;
+          }
+          if (nicks.has(candidate)) {
+            socket.write(`:server 433 * ${candidate} :Nickname in use\r\n`);
+            return;
+          }
+          nick = candidate;
+          nicks.add(nick);
+        } else if (line.startsWith("USER ")) {
+          userReceived = true;
+        } else if (line === "QUIT :probe") {
+          socket.end();
+          return;
+        }
+        if (nick && userReceived) {
+          socket.write(`:server 001 ${nick} :welcome\r\n`);
+          socket.write(`:server 005 ${nick} NICKLEN=9 :are supported\r\n`);
+        }
+      });
+    });
+    const existing = await connectTestClient(server, { nick: "openclaw9" });
+    const result = await probeIrc({
+      channels: {
+        irc: { host: "127.0.0.1", port: server.port, tls: false, nick: existing.nick },
+      },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.ok).toBe(true);
+    expect(rejectedNicks.length).toBeGreaterThan(0);
+    await withTimeout(probeClosed.promise, 1000, "IRC probe close");
+    expect(existing.isReady()).toBe(true);
+    expect(nicks).toEqual(new Set(["openclaw9"]));
+    expect(server.openSocketCount()).toBe(1);
   });
 
   it.each([
@@ -585,17 +630,16 @@ describe("IRC formatted text on the wire", () => {
     expect(core.channel.activity.record).not.toHaveBeenCalled();
     expect(server.openSocketCount()).toBe(0);
   });
-
   it("sends literal backslash sequences unchanged with a reply reference", async () => {
-    const results = await send(String.raw`Run C:\tools\new.exe or printf("%d\n") with \x41`, {
-      replyToId: "parent-1",
-    });
+    const results = await send(
+      String.raw`Run C:\tools\new.exe or printf("%d\n") with \x41` + "\tName\rState\ndocs\tready",
+      { replyToId: "parent-1" },
+    );
     expect(server.lines.filter((line) => line.startsWith("PRIVMSG "))).toEqual([
-      String.raw`PRIVMSG #room :Run C:\tools\new.exe or printf("%d\n") with \x41  [reply:parent-1]`,
+      String.raw`PRIVMSG #room :Run C:\tools\new.exe or printf("%d\n") with \x41 Name State docs ready  [reply:parent-1]`,
     ]);
     expect(results[0]?.receipt?.replyToId).toBe("parent-1");
   });
-
   it.each([
     ["code", "PRIVMSG #room :| Name | State | | ---- | ----- | | docs | ready |"],
     ["bullets", "PRIVMSG #room :docs \u2022 State: ready"],

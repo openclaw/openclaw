@@ -116,13 +116,19 @@ function buildMemoryAddonRows(
     notices: Readonly<Partial<Record<string, { message: string }>>>;
     refreshWarnings: Readonly<Partial<Record<string, string>>>;
   },
+  engine: MemoryEngineSelection,
 ) {
   return memoryAddonPresentations.map((addon) => {
     const entry = findMemoryCatalogPlugin(catalog, addon.id);
     return {
       id: addon.id,
       label: t(addon.labelKey),
-      description: entry?.description ?? addon.id,
+      description:
+        selectedEngineId(engine) === "knowledge" && addon.id === "active-memory"
+          ? t("memoryPage.addons.activeMemory.knowledgeDescription")
+          : selectedEngineId(engine) === "knowledge" && addon.id === "memory-wiki"
+            ? t("memoryPage.addons.memoryWiki.knowledgeDescription")
+            : (entry?.description ?? addon.id),
       state: resolveMemoryPluginState(catalog, entry),
       error: state.errors[addon.id] ?? null,
       notice:
@@ -219,7 +225,11 @@ function EngineSection(props: MemoryViewProps) {
       <>
         <SettingsRow
           title={t("memoryPage.engine.rowTitle")}
-          description={<>{!available() && t("memoryPage.engine.catalogUnavailable")}</>}
+          description={
+            !available() && props.catalog.kind !== "loading"
+              ? t("memoryPage.engine.catalogUnavailable")
+              : undefined
+          }
           control={
             available() ? (
               <SettingsSelect
@@ -357,7 +367,9 @@ function AddonRow(props: { addon: MemoryAddonRow; owner: MemoryViewProps }) {
 }
 
 function AddonsSection(props: MemoryViewProps) {
-  const addons = createMemo(() => buildMemoryAddonRows(props.catalog, props.addonOutcomes));
+  const addons = createMemo(() =>
+    buildMemoryAddonRows(props.catalog, props.addonOutcomes, props.engineSelection),
+  );
   return (
     <SettingsSection
       title={t("memoryPage.addons.title")}
@@ -383,7 +395,7 @@ function MemoryCatalogSections(props: MemoryViewProps) {
 function SettingsTab(props: MemoryViewProps) {
   const catalogScope = createMemo(() => props.catalogScope);
   return (
-    <ShellLayoutBoundary traits={{ settingsPage: true }}>
+    <>
       <div class="settings-page">
         <Errored
           fallback={(_error) => (
@@ -417,7 +429,7 @@ function SettingsTab(props: MemoryViewProps) {
           )}
         </SettingsSection>
       </div>
-    </ShellLayoutBoundary>
+    </>
   );
 }
 

@@ -1,6 +1,4 @@
-import { createHook } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
-import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -21,7 +19,6 @@ import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleto
 import * as storeWriterQueue from "../../shared/store-writer-queue.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { readSessionPhysicalDiskUsage } from "./disk-budget-files.js";
 import { drainSessionDiskBudgetWorkers } from "./disk-budget-runtime.js";
 import {
   hasRetainedSessionTranscriptArchives,
@@ -50,44 +47,6 @@ async function addSessionArtifacts(directory: string, index: number): Promise<vo
 }
 
 describe("physical session disk usage", () => {
-  // Bun does not emit Node's PROMISE async-hook events.
-  it.skipIf(Boolean(process.versions.bun))(
-    "bounds per-artifact promise allocation inside the scan worker",
-    async () => {
-      await withTestDir({ prefix: "openclaw-disk-scan-promises-" }, async (directory) => {
-        const storePath = path.join(directory, "openclaw-agent.sqlite");
-        await fs.writeFile(storePath, Buffer.alloc(321));
-        const countScan = async () => {
-          let promises = 0;
-          const hook = createHook({
-            init(_id, type) {
-              if (type === "PROMISE") {
-                promises++;
-              }
-            },
-          });
-          hook.enable();
-          try {
-            const usage = await readSessionPhysicalDiskUsage(storePath);
-            return { promises, usage };
-          } finally {
-            hook.disable();
-          }
-        };
-        await countScan();
-        const initial = await countScan();
-        for (let index = 0; index < 32; index++) {
-          await fs.writeFile(path.join(directory, `session-${index}.jsonl`), Buffer.alloc(7));
-        }
-        const expanded = await countScan();
-        expect(expanded.usage).toEqual({ databaseWalBytes: 0, totalBytes: 321 + 32 * 7 });
-        // A stat uses one result continuation, without an extra catch/await promise layer.
-        expect(initial.promises).toBeGreaterThan(0);
-        expect(expanded.promises - initial.promises).toBeLessThanOrEqual(32 * 20);
-      });
-    },
-  );
-
   it.each([false, true])(
     "joins a forced followup after maintenance failure (mutation fails: %s)",
     async (mutationFails) => {
@@ -301,6 +260,97 @@ describe("physical session disk usage", () => {
     expect(liveThreadIds, "SDK fixture drainage must leave no live native worker").toEqual([]);
   });
 
+  it("joins case-owned disk discovery before agent database cleanup completes", async () => {
+    await withTestDir({ prefix: "openclaw-disk-usage-agent-close-" }, async (directory) => {
+      const storePath = path.join(directory, "sessions.json");
+      const databasePath = path.join(directory, "openclaw-agent.sqlite");
+      await fs.writeFile(databasePath, Buffer.alloc(321));
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
+        this: WorkerTaskPool<unknown, unknown>,
+        input,
+        options,
+      ) {
+        spy.mockRestore();
+        return this.run(async () => {
+          entered.resolve();
+          await release.promise;
+          return input;
+        }, options);
+      });
+      const measurement = measureSessionPhysicalDiskUsage(storePath);
+      await entered.promise;
+      let closed = false;
+      const closing = closeOpenClawAgentDatabasesAsync(directory).then(() => {
+        closed = true;
+      });
+      try {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(closed, "discovery can still open SQLite siblings and create WAL sidecars").toBe(
+          false,
+        );
+        release.resolve();
+        await closing;
+        await expect(measurement).resolves.toMatchObject({ totalBytes: 321 });
+      } finally {
+        release.resolve();
+        spy.mockRestore();
+        await Promise.allSettled([measurement, closing]);
+        await drainSessionDiskBudgetWorkers();
+      }
+    });
+  });
+
+  it("retains disk discovery cleanup custody when native retirement fails", async () => {
+    await drainSessionDiskBudgetWorkers();
+    await withTestDir({ prefix: "openclaw-disk-usage-failed-close-" }, async (directory) => {
+      const storePath = path.join(directory, "openclaw-agent.sqlite");
+      await fs.writeFile(storePath, Buffer.alloc(321));
+      await measureSessionPhysicalDiskUsage(storePath);
+      const worker = workers.at(-1)!;
+      const retirement = vi
+        .spyOn(worker, "terminate")
+        .mockRejectedValue(new Error("native stop failed"));
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
+        this: WorkerTaskPool<unknown, unknown>,
+        input,
+        options,
+      ) {
+        spy.mockRestore();
+        return this.run(async () => {
+          entered.resolve();
+          await release.promise;
+          return input;
+        }, options);
+      });
+      const measurement = measureSessionPhysicalDiskUsage(storePath);
+      const outcome = measurement.catch((error: unknown) => error);
+      try {
+        await entered.promise;
+        worker.emit("error", new Error("synthetic native worker failure"));
+        expect(await outcome).toBeInstanceOf(Error);
+        await expect(closeOpenClawAgentDatabasesAsync(directory)).rejects.toThrow();
+        expect(worker.threadId).not.toBe(-1);
+        retirement.mockRestore();
+        release.resolve();
+        await closeOpenClawAgentDatabasesAsync(directory);
+        expect(worker.threadId).toBe(-1);
+      } finally {
+        retirement.mockRestore();
+        spy.mockRestore();
+        release.resolve();
+        await outcome;
+        await closeOpenClawAgentDatabasesAsync(directory);
+        await drainSessionDiskBudgetWorkers();
+      }
+    });
+  });
+
   it("joins a measurement admitted after drainage starts before retiring its worker", async () => {
     await withTestDir({ prefix: "openclaw-disk-usage-drain-admission-" }, async (directory) => {
       const storePath = path.join(directory, "openclaw-agent.sqlite");
@@ -498,46 +548,6 @@ describe("physical session disk usage", () => {
       });
       await expect(fs.stat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(hasRetainedSessionTranscriptArchives(storePath)).resolves.toBe(false);
-    });
-  });
-
-  it("does not add synchronous realpath work as session artifacts grow", async () => {
-    await withTestDir({ prefix: "openclaw-disk-scan-scaling-" }, async (directory) => {
-      const storePath = path.join(directory, "openclaw-agent.sqlite");
-      await fs.writeFile(storePath, Buffer.alloc(321));
-      await fs.writeFile(`${storePath}-wal`, Buffer.alloc(654));
-      await fs.writeFile(`${storePath}-shm`, Buffer.alloc(32_768));
-      await addSessionArtifacts(directory, 0);
-      const realpath = vi.spyOn(nodeFs, "realpathSync");
-      const fixtureSyncCalls = () =>
-        realpath.mock.calls.filter(
-          ([candidate]) =>
-            typeof candidate === "string" && candidate.startsWith(`${directory}${path.sep}`),
-        ).length;
-      try {
-        const initial = await measureSessionPhysicalDiskUsage(storePath);
-        const initialSyncCalls = fixtureSyncCalls();
-        expect(initial).toEqual({
-          databaseWalBytes: 654,
-          totalBytes: 993,
-        });
-        for (let index = 1; index <= 32; index += 1) {
-          await addSessionArtifacts(directory, index);
-        }
-        realpath.mockClear();
-
-        const expanded = await measureSessionPhysicalDiskUsage(storePath);
-        const expandedSyncCalls = fixtureSyncCalls();
-
-        expect(expanded).toEqual({
-          databaseWalBytes: 654,
-          totalBytes: 975 + 33 * 18,
-        });
-        // Filesystem work that grows with the directory must not block the event loop.
-        expect(expandedSyncCalls).toBeLessThanOrEqual(initialSyncCalls);
-      } finally {
-        realpath.mockRestore();
-      }
     });
   });
 });

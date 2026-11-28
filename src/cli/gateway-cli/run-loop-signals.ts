@@ -42,6 +42,7 @@ export function createGatewayRunSignals(params: {
   isRuntimeResetPending: () => boolean;
   isShuttingDown: () => boolean;
   getExternalRestartOwner: () => GatewaySuspendHandoffOwner | undefined;
+  publishExternalRestartReceipt: () => Promise<void>;
   getTerminalHostedStop: () => ReturnType<typeof createGatewayHostLifecycle> | undefined;
   updateSuccessor: Pick<GatewayUpdateSuccessor, "stop" | "stopRequested">;
   request: (
@@ -90,7 +91,7 @@ export function createGatewayRunSignals(params: {
   const enqueueSignal = (
     readIntent: boolean,
     handle: (intent: GatewayRestartIntent | null, acceptedAtMs: number) => void,
-    failed: (error: unknown, acceptedAtMs: number) => void,
+    failed: (error: unknown, acceptedAtMs: number, timedOut: boolean) => void,
   ) => {
     const iteration = params.getIteration();
     const acceptedAtMs = performance.now();
@@ -158,7 +159,7 @@ export function createGatewayRunSignals(params: {
       { ref: false },
     ).catch((error: unknown) => {
       if (isCurrent()) {
-        failed(error, acceptedAtMs);
+        failed(error, acceptedAtMs, controller.signal.aborted);
       }
     });
     signalSettlement = settled;
@@ -313,7 +314,18 @@ export function createGatewayRunSignals(params: {
             return;
           }
           eagerLifecycleRuntime.abortPendingChannelReloads();
-          eagerLifecycleRuntime.scheduleGatewayRestart({ delayMs: 0, reason: "SIGUSR2" });
+          const scheduled = eagerLifecycleRuntime.scheduleGatewayRestart({
+            delayMs: 0,
+            reason: "SIGUSR2",
+          });
+          if (scheduled.ok) {
+            // A receipt changes only an observer's wait. Never delay or undo the reserved restart.
+            void params.publishExternalRestartReceipt().catch((error: unknown) => {
+              gatewayLog.warn(
+                `Could not acknowledge scheduled external restart: ${formatErrorMessage(error)}`,
+              );
+            });
+          }
           return;
         }
         eagerLifecycleRuntime.abortPendingChannelReloads();
@@ -326,15 +338,19 @@ export function createGatewayRunSignals(params: {
           { acceptedAtMs, deferRestartDrain },
         );
       };
-      enqueueSignal(true, handleRestart, (error, acceptedAtMs) => {
-        if (!authorized) {
+      enqueueSignal(true, handleRestart, (error, acceptedAtMs, timedOut) => {
+        if (!authorized && !timedOut) {
           restartSignalFailed(error, false);
           return;
         }
         gatewayLog.warn(
-          `Restart intent could not be read; continuing the authorized local restart: ${formatErrorMessage(error)}`,
+          `Handling SIGUSR2 without stored restart intent: ${formatErrorMessage(error)}`,
         );
-        handleRestart(null, acceptedAtMs);
+        try {
+          handleRestart(null, acceptedAtMs);
+        } catch (err) {
+          restartSignalFailed(err, false);
+        }
       });
     } catch (err) {
       restartSignalFailed(err);

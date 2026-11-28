@@ -24,17 +24,21 @@ import {
 import {
   acquireCompactHooksPreparedModelRuntime,
   createCompactHooksResolvedModel,
+  createDefaultCompactionAuthStore,
   getCurrentPluginMetadataSnapshotMock,
   mockCompactHooksContextEngine,
   mockCompactHooksPluginMetadata,
   resolveCompactHooksApiKeyMock,
   type CompactHooksQueuedCompaction,
+  wrapCompactHooksEntryPoints,
   type MockResolvedModel,
 } from "./compact.hooks.metadata.test-support.js";
+import { mockNonDurableCompactionRuntime } from "./compact.hooks.non-durable-mocks.test-support.js";
 import {
   mockCompactHooksSkills,
   mockCompactHooksTools,
 } from "./compact.hooks.tools.test-support.js";
+import { mockCompactionPreparation } from "./compact.preparation.test-support.js";
 import { createCompactionSessionManagerMock } from "./compact.session-manager.test-support.js";
 import type { resolveModelAsync } from "./model.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
@@ -120,7 +124,7 @@ export const resolveSessionAgentIdsMock = vi.fn<
 const resolveAgentConfigMock = vi.fn((_config?: unknown, _agentId?: string): unknown => undefined);
 let fixture: { workspaceDir: string; sessionId: string };
 export const resolveDefaultAgentDirMock = vi.fn<() => string>();
-export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
+const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "openclaw" }));
 function createSelectedAgentHarnessMock(params: {
   agentHarnessId?: string;
@@ -223,7 +227,9 @@ export const createAgentSessionMock = vi.fn(async (..._args: [unknown?, unknown?
 export const createOpenClawCodingToolsMock = vi.fn<typeof createOpenClawCodingToolsInternal>(
   () => [],
 );
-const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
+export const buildEmbeddedExtensionFactoriesMock = vi.fn<
+  typeof import("./extensions.js").buildEmbeddedExtensionFactories
+>(() => []);
 export const resolveEffectiveCompactionModeMock = vi.fn(() => "default");
 const guardSessionManagerMock = vi.fn((sessionManager: Record<string, unknown>) => ({
   ...sessionManager,
@@ -270,19 +276,6 @@ export const resolveProviderEntryApiKeyProfileReferenceMock: Mock<() => unknown>
 const shouldPreferExplicitConfigApiKeyAuthMock = vi.fn(() => false);
 const registerProviderStreamForModelMock: Mock<(params?: unknown) => unknown> = vi.fn();
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
-function createDefaultCompactionAuthStore(): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      "openai:test": {
-        type: "api_key",
-        provider: "openai",
-        key: "test",
-      },
-    },
-    order: { openai: ["openai:test"] },
-  };
-}
 
 export const ensureAuthProfileStoreMock: Mock<() => AuthProfileStore> = vi.fn(
   createDefaultCompactionAuthStore,
@@ -503,7 +496,8 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     vi.doUnmock("./server-endpoint-compaction.js");
     vi.doUnmock("../sessions/model-registry-runtime.js");
     vi.doUnmock("../sessions/resource-loader.js");
-    vi.doUnmock("../sessions/index.js");
+    vi.doUnmock("../sessions/session-manager.js");
+    vi.doUnmock("../sessions/compaction/compaction.js");
     vi.doUnmock("../sessions/sdk.js");
     vi.doUnmock("../session-tool-result-guard-wrapper.js");
     vi.doUnmock("../agent-settings.js");
@@ -576,9 +570,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   }));
 
   if (!options.durableSession) {
-    vi.doMock("../sessions/model-registry-runtime.js", () => ({
-      getModelRegistryRuntime: getModelRegistryRuntimeMock,
-    }));
+    mockNonDurableCompactionRuntime(getModelRegistryRuntimeMock);
   }
 
   vi.doMock("../../hooks/internal-hooks.js", async () => {
@@ -600,13 +592,12 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       },
     }));
 
-    vi.doMock("../sessions/index.js", () => ({
-      AuthStorage: function AuthStorage() {},
-      ModelRegistry: function ModelRegistry() {},
+    vi.doMock("../sessions/session-manager.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../sessions/session-manager.js")>()),
       SessionManager: createCompactionSessionManagerMock(sessionMessages),
-      SettingsManager: {
-        create: vi.fn(() => ({})),
-      },
+    }));
+    vi.doMock("../sessions/compaction/compaction.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../sessions/compaction/compaction.js")>()),
       estimateTokens: estimateTokensMock,
       generateSummary: vi.fn(async () => "summary"),
     }));
@@ -670,7 +661,6 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       getApiKeyForModelMock(params),
     hasUsableCustomProviderApiKey: vi.fn(() => false),
     resolveProviderEntryApiKeyProfileReference: resolveProviderEntryApiKeyProfileReferenceMock,
-    resolveModelAuthModeAsync: vi.fn(() => "env"),
     shouldPreferExplicitConfigApiKeyAuth: shouldPreferExplicitConfigApiKeyAuthMock,
   }));
 
@@ -745,11 +735,11 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     resolveEmbeddedAgentStream: resolveEmbeddedAgentStreamMock,
   }));
 
-  vi.doMock("./extra-params.js", () => ({
+  mockCompactionPreparation(options, {
     applyExtraParamsToAgent: applyExtraParamsToAgentMock,
     resolveAgentTransportOverride: resolveAgentTransportOverrideMock,
-    resolvePreparedExtraParams: vi.fn(() => ({})),
-  }));
+    buildEmbeddedExtensionFactories: buildEmbeddedExtensionFactoriesMock,
+  });
 
   vi.doMock("./compaction-safety-timeout.js", async () => {
     const actual = await vi.importActual<typeof import("./compaction-safety-timeout.js")>(
@@ -773,11 +763,6 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       validateGeminiTurns: false,
       validateAnthropicTurns: false,
     })),
-  }));
-
-  // mock-isolation: Keep extension state isolated while safeguard tests install their own factories.
-  vi.doMock("./extensions.js", () => ({
-    buildEmbeddedExtensionFactories: buildEmbeddedExtensionFactoriesMock,
   }));
 
   vi.doMock("./history.js", () => ({
@@ -929,14 +914,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
 
   return {
     ...compactModule,
-    compactEmbeddedAgentSession: (params, host = {}) =>
-      compactQueuedModule.compactQueuedEmbeddedAgentSession(params, {
-        ...host,
-        sourceAuthority: host.sourceAuthority ?? {
-          assertActive: host.assertActive ?? (() => {}),
-          operatorAuthority: undefined,
-        },
-      }),
+    ...wrapCompactHooksEntryPoints(compactModule, compactQueuedModule),
     onSessionTranscriptUpdate: transcriptEvents.onSessionTranscriptUpdate,
     onInternalSessionTranscriptUpdate: transcriptEvents.onInternalSessionTranscriptUpdate,
   };

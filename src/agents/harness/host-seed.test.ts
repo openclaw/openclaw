@@ -1,7 +1,7 @@
 import { unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import {
   DEFAULT_COMPACTION_SETTINGS,
   prepareCompaction,
@@ -14,18 +14,17 @@ import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { onAgentRuntimeEvent, type AgentEventPayload } from "../../infra/agent-events.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { compactEmbeddedAgentSessionDirect as compactSession } from "../embedded-agent-runner/compact.js";
 import { readCompactionAccountingRecorder } from "../embedded-agent-runner/run/compaction-accounting-bridge.js";
-import {
-  estimateCompactionHistoryTokens,
-  resolveCompactionRetentionBudget,
-} from "../sessions/compaction/request-budget.js";
+import { resolveCompactionRetentionBudgetFromTokens } from "../sessions/compaction/request-budget.js";
+import { estimateCompactionHistoryTokens } from "../sessions/context-token-pressure.js";
 import { withSessionCompactionPersistenceAsync as persistCompaction } from "../sessions/session-compaction-persistence.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
@@ -226,7 +225,7 @@ it.each<SeedCase>([
               : undefined,
             budget: budget
               ? {
-                  ...resolveCompactionRetentionBudget(budget, []),
+                  ...resolveCompactionRetentionBudgetFromTokens(budget, 0),
                   estimateTokens: (message: AgentMessage) =>
                     estimateCompactionHistoryTokens([message], budget),
                 }
@@ -384,6 +383,49 @@ it("charges restored assistant images before selecting the bounded seed", () =>
     expect(JSON.stringify(seed)).toContain("Recent text");
   }));
 
+it("bounds restored image bytes even when their image-token estimates fit", () =>
+  withOpenClawTestState({ label: "native-media-byte-seed" }, async (state) => {
+    const fixture = await seedFixture(state, "media-bytes");
+    const manager = await fixture.open();
+    await appendUser(manager, "Earlier image question", 1);
+    await appendUser(manager, "Recent text", 2);
+    const before = loadTranscriptEventsSync(fixture.target);
+    const bound = fixture.bind(
+      { config: seedConfig("20mb", false), contextTokenBudget: 100_000 },
+      undefined,
+      {
+        capabilities: {
+          prepareContextMedia: async ({ message }) => ({
+            images:
+              message.role === "user" && message.content === "Earlier image question"
+                ? Array.from({ length: 12 }, () => ({
+                    type: "image" as const,
+                    mimeType: "image/png",
+                    data: Buffer.concat([
+                      Buffer.from(
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+                        "base64",
+                      ),
+                      Buffer.alloc(75_000),
+                    ]).toString("base64"),
+                  }))
+                : [],
+          }),
+        },
+      },
+    );
+    const prepare = expectDefined(bound?.prepareBoundedSeed, "media byte seed");
+    const seed = await prepare({ assertCurrent: () => {} });
+    expect(
+      seed.some(
+        (message) => message.role === "user" && message.content === "Earlier image question",
+      ),
+    ).toBe(false);
+    expect(JSON.stringify(seed)).toContain("Older history outside that window is omitted");
+    expect(JSON.stringify(seed)).toContain("Recent text");
+    expect(loadTranscriptEventsSync(fixture.target)).toEqual(before);
+  }));
+
 it.each([1, 2])("bounds restored images and reuses their prepared snapshot (%s)", (imageCount) =>
   withOpenClawTestState({ label: "native-media-seed" }, async (state) => {
     const fixture = await seedFixture(state, "media");
@@ -467,6 +509,16 @@ it.each(["throws", "rejects"] as const)(
       const manager = await fixture.open();
       await appendUser(manager, "old".repeat(1000), 1);
       await appendUser(manager, "recent request", 2);
+      const runId = `seed-observer-${failure}`;
+      const published: AgentEventPayload[] = [];
+      onTestFinished(
+        onAgentRuntimeEvent((event) => {
+          if (event.runId === runId) {
+            published.push(event);
+          }
+        }),
+      );
+      const source = new AbortController();
       const onAgentEvent = vi.fn(() => {
         if (failure === "throws") {
           throw new Error("observer down");
@@ -474,15 +526,34 @@ it.each(["throws", "rejects"] as const)(
         return Promise.reject(new Error("observer down"));
       });
       const prepare = expectDefined(
-        fixture.bind({
-          config: seedConfig(1024, false),
-          onAgentEvent,
-        })?.prepareBoundedSeed,
+        fixture.bind({ config: seedConfig(1024, false), runId, onAgentEvent }, source.signal)
+          ?.prepareBoundedSeed,
         "seed capability",
       );
       const seed = await prepare({ assertCurrent: () => {} });
       expect(JSON.stringify(seed)).toContain("Older history outside that window is omitted");
       expect(seed).toContainEqual(makeUserMessage("recent request", 2));
       expect(onAgentEvent).toHaveBeenCalledOnce();
+      expect(onAgentEvent).toHaveBeenCalledWith({
+        stream: "compaction",
+        data: {
+          phase: "context_bounded",
+          message: expect.stringContaining("Older history outside that window is omitted"),
+        },
+      });
+      expect(published).toMatchObject([
+        {
+          runId,
+          sessionKey: fixture.target.sessionKey,
+          stream: "compaction",
+          data: {
+            phase: "context_bounded",
+            message: expect.stringContaining("Older history outside that window is omitted"),
+          },
+        },
+      ]);
+      source.abort(new Error("seed source closed"));
+      await expect(prepare({ assertCurrent: () => {} })).rejects.toThrow("seed source closed");
+      expect(published).toHaveLength(1);
     }),
 );

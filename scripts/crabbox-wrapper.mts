@@ -1122,6 +1122,28 @@ function ensureAwsMacOnDemandMarket(commandArgs: string[], providerName: string)
   return normalizedArgs;
 }
 
+function ensureBoatDefaultClass(commandArgs: string[], providerName: string) {
+  if (
+    !["run", "warmup"].includes(commandArgs[0] ?? "") ||
+    canonicalProviderName(providerName) !== "ascii-box" ||
+    ["--class", "--type", "--id"].some((name) => hasOption(commandArgs, name)) ||
+    process.env.CRABBOX_DEFAULT_CLASS ||
+    process.env.CRABBOX_SERVER_TYPE ||
+    process.env.CRABBOX_CONFIG
+  ) {
+    return commandArgs;
+  }
+  const config = resolvedCrabboxConfig();
+  if (config?.class !== "standard" || config.serverTypeExplicit !== false) {
+    return commandArgs;
+  }
+
+  // Keep the repository's generic class unchanged for other providers.
+  const normalizedArgs = [...commandArgs];
+  normalizedArgs.splice(commandOptionEnd(normalizedArgs), 0, "--class", "fast");
+  return normalizedArgs;
+}
+
 function ensureNativeWindowsHydrateJob(commandArgs: string[]) {
   if (
     commandArgs[0] !== "actions" ||
@@ -3853,9 +3875,12 @@ const provider = providerSelection.provider;
 const canonicalProvider = canonicalProviderName(provider);
 const commandProviderValue = commandProvider(args);
 let normalizedArgs = ensureAwsMacOnDemandMarket(
-  ensurePolicyProvider(
-    ensureNativeWindowsHydrateJob(ensureAzureWindowsProvider(args, provider, providers)),
-    providerSelection,
+  ensureBoatDefaultClass(
+    ensurePolicyProvider(
+      ensureNativeWindowsHydrateJob(ensureAzureWindowsProvider(args, provider, providers)),
+      providerSelection,
+    ),
+    provider,
   ),
   provider,
 );
@@ -4069,6 +4094,7 @@ try {
         repoRoot,
         syncRoot,
         reuseMirror: canonicalProvider === "blacksmith-testbox",
+        seedFromBase: canonicalProvider === "ascii-box",
         syncPlan: spawnInvocation(
           binary,
           ["sync-plan", "--json", "--limit", "2147483647"],

@@ -58,7 +58,13 @@ it.each(["draft", "focus"])(
     const panel = (await read(false))!;
     document.body.appendChild(document.createElement("button")).focus();
     panel.onCollapsedChange?.(true);
-    await Promise.resolve();
-    expect(document.activeElement).toBe(textarea);
+    await waitForSolid(() => {
+      const currentTextarea = expectDefined(
+        container.querySelector<HTMLTextAreaElement>("textarea"),
+        "restored composer textarea",
+      );
+      expect(document.activeElement).toBe(currentTextarea);
+      expect(currentTextarea.value).toBe(props.draft);
+    });
   },
 );

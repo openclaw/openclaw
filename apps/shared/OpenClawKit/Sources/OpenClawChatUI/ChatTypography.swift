@@ -3,36 +3,80 @@ import SwiftUI
 #if os(macOS)
 import AppKit
 #elseif os(iOS)
+import CoreText
 import UIKit
 #endif
 
 enum OpenClawChatTypography {
-    // The 17 pt system body is too large for a dense transcript on a phone, and leaves the smallest
-    // Dynamic Type setting at 14 pt, the Control UI's default chat size. Chat sizes shrink by one ratio;
-    // sizes that would fall under 11 pt stop there. Dynamic Type still scales the result.
+    static let composerGlyph = Font.system(size: 15, weight: .medium)
+    static let composerChevronGlyph = Font.system(size: 8, weight: .medium)
+    static let composerAttachmentGlyph = Font.system(size: 17, weight: .medium)
+    static let composerPrimaryGlyph = Font.system(size: 17, weight: .semibold)
+    /// Composer menu labels read close to the draft's size in a medium weight, as in the Control UI.
+    static var composerControlLabel: Font {
+        body(size: 16, weight: .medium, relativeTo: .callout)
+    }
+
+    /// Chat text reads at the system text styles, like Messages: body is 17 pt at the default Dynamic
+    /// Type size and follows every setting, up and down. Each role names its style; `readable` keeps a
+    /// size from rendering under 11 pt at the smallest setting.
+    static let bodySize: CGFloat = 17
+    /// Messages and tool rows share a reading size without changing the composer or sheets.
+    static let transcriptBodySize: CGFloat = 15
+
+    static var transcriptBody: Font {
+        body(size: self.transcriptBodySize, weight: .regular, relativeTo: .body)
+    }
+
     #if os(iOS)
-    static let scale: CGFloat = 13.5 / 17.0
+    /// SF Symbol glyphs in the composer and the talk banner still draw at the compact size that chat
+    /// text used before it moved to the system styles; text never goes through this.
+    private static let glyphScale: CGFloat = 13.5 / 17.0
     #else
-    static let scale: CGFloat = 1
+    private static let glyphScale: CGFloat = 1
     #endif
-    static let bodySize: CGFloat = 17 * scale
 
     static func scaled(_ size: CGFloat) -> CGFloat {
-        max(size * self.scale, min(size, 11))
+        max(size * self.glyphScale, min(size, 11))
     }
+
+    #if os(iOS)
+    /// Nothing renders under 11 pt. A custom font follows `relativeTo:` along UIFontMetrics' curve for
+    /// custom fonts, which takes 12 pt caption text to 10 pt at the three smallest settings; a role that
+    /// would land under 11 there scales with caption2 instead, whose curve never shrinks.
+    static func readable(
+        _ size: CGFloat,
+        relativeTo textStyle: Font.TextStyle) -> (size: CGFloat, relativeTo: Font.TextStyle)
+    {
+        let size = max(size, 11)
+        let smallest = UIFontMetrics(forTextStyle: textStyle.uiTextStyle).scaledValue(
+            for: size,
+            compatibleWith: UITraitCollection(preferredContentSizeCategory: .extraSmall))
+        return (size, smallest >= 11 ? textStyle : .caption2)
+    }
+
+    private static func custom(_ name: String, size: CGFloat, relativeTo textStyle: Font.TextStyle) -> Font {
+        let readable = self.readable(size, relativeTo: textStyle)
+        return Font.custom(name, size: readable.size, relativeTo: readable.relativeTo)
+    }
+    #endif
 
     static var headline: Font {
         display(size: 17, weight: .semibold, relativeTo: .headline)
     }
 
-    static func heading(level: Int) -> Font {
-        switch level {
+    static func heading(level: Int, transcript: Bool = false) -> Font {
+        if transcript, level >= 4 {
+            return self.body(size: self.transcriptBodySize, weight: .semibold, relativeTo: .body)
+        }
+        let reduction = transcript ? self.bodySize - self.transcriptBodySize : 0
+        return switch level {
         case 1:
-            self.display(size: 24, weight: .bold, relativeTo: .title2)
+            self.display(size: 24 - reduction, weight: .bold, relativeTo: .title2)
         case 2:
-            self.display(size: 21, weight: .bold, relativeTo: .title3)
+            self.display(size: 21 - reduction, weight: .bold, relativeTo: .title3)
         case 3:
-            self.display(size: 19, weight: .semibold, relativeTo: .headline)
+            self.display(size: 19 - reduction, weight: .semibold, relativeTo: .headline)
         case 4:
             self.body(size: 17, weight: .semibold, relativeTo: .body)
         case 5:
@@ -47,7 +91,7 @@ enum OpenClawChatTypography {
     }
 
     static var body: Font {
-        body(size: 17, weight: .regular, relativeTo: .body)
+        body(size: self.bodySize, weight: .regular, relativeTo: .body)
     }
 
     static var formControl: Font {
@@ -86,13 +130,22 @@ enum OpenClawChatTypography {
         body(size: 11, weight: .regular, relativeTo: .caption2)
     }
 
+    /// The reactions pill: emoji at footnote, the total at caption, so the pill keeps one height.
+    static var reactionEmoji: Font {
+        body(size: 13, weight: .regular, relativeTo: .footnote)
+    }
+
+    static var reactionCount: Font {
+        body(size: 12, weight: .medium, relativeTo: .caption)
+    }
+
     static func avatar(size: CGFloat) -> Font {
         self.body(size: size, weight: .bold, relativeTo: .caption)
     }
 
     static func body(size: CGFloat, weight: Font.Weight, relativeTo textStyle: Font.TextStyle) -> Font {
         #if os(iOS)
-        Font.custom(self.bodyPostScriptName, size: self.scaled(size), relativeTo: textStyle).weight(weight)
+        self.custom(self.bodyPostScriptName, size: size, relativeTo: textStyle).weight(weight)
         #elseif os(macOS)
         Font.custom(self.macSystemFontName(size: size), size: size, relativeTo: textStyle).weight(weight)
         #else
@@ -100,9 +153,39 @@ enum OpenClawChatTypography {
         #endif
     }
 
+    #if os(iOS)
+    /// A sheet of settings reads at the app's Settings sizes, not the transcript's. Inter is a
+    /// variable font and `Font.custom` leaves its optical size at 14 pt, so these set both axes.
+    static var settingsBody: Font {
+        settings(size: 17, weight: 400, relativeTo: .body)
+    }
+
+    static var settingsFootnote: Font {
+        settings(size: 13, weight: 400, relativeTo: .footnote)
+    }
+
+    static var settingsSectionHeader: Font {
+        settings(size: 12, weight: 600, relativeTo: .caption1)
+    }
+
+    private static func settings(size: CGFloat, weight: CGFloat, relativeTo textStyle: UIFont.TextStyle) -> Font {
+        guard UIFont(name: self.bodyPostScriptName, size: size) != nil else {
+            return Font(UIFontMetrics(forTextStyle: textStyle).scaledFont(for: .systemFont(ofSize: size)))
+        }
+        let descriptor = UIFontDescriptor(fontAttributes: [
+            .name: self.bodyPostScriptName,
+            kCTFontVariationAttribute as UIFontDescriptor.AttributeName: [
+                NSNumber(value: 2_003_265_652): weight, // "wght"
+                NSNumber(value: 1_869_640_570): min(max(size, 14), 32), // "opsz"
+            ],
+        ])
+        return Font(UIFontMetrics(forTextStyle: textStyle).scaledFont(for: UIFont(descriptor: descriptor, size: size)))
+    }
+    #endif
+
     static func display(size: CGFloat, weight: Font.Weight, relativeTo textStyle: Font.TextStyle) -> Font {
         #if os(iOS)
-        Font.custom(self.displayPostScriptName, size: self.scaled(size), relativeTo: textStyle).weight(weight)
+        self.custom(self.displayPostScriptName, size: size, relativeTo: textStyle).weight(weight)
         #elseif os(macOS)
         Font.custom(self.macSystemFontName(size: size), size: size, relativeTo: textStyle).weight(weight)
         #else
@@ -113,7 +196,7 @@ enum OpenClawChatTypography {
     static func mono(size: CGFloat, weight: Font.Weight = .regular, relativeTo textStyle: Font.TextStyle) -> Font {
         #if os(iOS)
         let name = weight == .semibold ? Self.monoSemiBoldPostScriptName : Self.monoPostScriptName
-        return Font.custom(name, size: Self.scaled(size), relativeTo: textStyle)
+        return Self.custom(name, size: size, relativeTo: textStyle)
         #elseif os(macOS)
         return Font.custom(self.macMonospacedSystemFontName(size: size), size: size, relativeTo: textStyle)
             .weight(weight)
@@ -144,11 +227,72 @@ enum OpenClawChatTypography {
     #endif
 }
 
+#if os(iOS)
+extension Font.TextStyle {
+    var uiTextStyle: UIFont.TextStyle {
+        switch self {
+        case .largeTitle: .largeTitle
+        case .title: .title1
+        case .title2: .title2
+        case .title3: .title3
+        case .headline: .headline
+        case .subheadline: .subheadline
+        case .callout: .callout
+        case .footnote: .footnote
+        case .caption: .caption1
+        case .caption2: .caption2
+        default: .body
+        }
+    }
+}
+#endif
+
+extension View {
+    /// UIKit takes context action ink from the presenting view, not the item label.
+    func chatActionContextMenu(@ViewBuilder items: () -> some View) -> some View {
+        self.contextMenu(menuItems: items)
+            #if os(iOS)
+                .tint(.primary)
+            #endif
+    }
+
+    #if os(iOS)
+    /// The same menu over a custom preview instead of the lifted view.
+    func chatActionContextMenu(
+        @ViewBuilder items: () -> some View,
+        @ViewBuilder preview: () -> some View) -> some View
+    {
+        self.contextMenu(menuItems: items, preview: preview)
+            .tint(.primary)
+    }
+    #endif
+}
+
+#if os(iOS)
+private struct ChatMenuSymbol: View {
+    @Environment(\.isEnabled) private var isEnabled
+    let name: String
+
+    var body: some View {
+        if !self.isEnabled, let image = UIImage(systemName: self.name) {
+            // A disabled UIAction dims its title but still tints template images as enabled.
+            Image(uiImage: image.withTintColor(.tertiaryLabel, renderingMode: .alwaysOriginal))
+        } else {
+            Image(systemName: self.name)
+        }
+    }
+}
+#endif
+
 func chatActionLabel(_ title: Text, systemImage: String) -> some View {
     Label {
         title.font(OpenClawChatTypography.body)
     } icon: {
+        #if os(iOS)
+        ChatMenuSymbol(name: systemImage)
+        #else
         Image(systemName: systemImage)
+        #endif
     }
 }
 

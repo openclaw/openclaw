@@ -7,6 +7,7 @@ import android.os.Parcel
 import com.google.android.gms.wearable.ChannelClient
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
@@ -489,12 +490,15 @@ class WearRealtimeChannelRegistryTest {
       }
     }
 
+  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun `promotion reserved before discovery timeout commits after bounded cleanup`() =
     runBlocking {
+      val handoffDispatcher = UnconfinedTestDispatcher()
       val registry =
         WearRealtimeChannelRegistry(
-          scope = scope,
+          // Keep expiry and handoff timers virtual; channel readers still run on IO.
+          scope = CoroutineScope(scope.coroutineContext + handoffDispatcher),
           transport = transport,
           connectionReadyTimeoutMillis = 200L,
           pendingConnectionTimeoutMillis = 1_000L,
@@ -520,11 +524,24 @@ class WearRealtimeChannelRegistryTest {
       try {
         registry.accept(first, appendAudio = { _, _ -> }, stopTalk = stopTalk)
         transport.awaitOpened(first)
-        checkNotNull(registry.claim("watch-a", "attempt-a"))
+        val firstOwner = checkNotNull(registry.claim("watch-a", "attempt-a")).owner
         registry.accept(replacement, appendAudio = { _, _ -> }, stopTalk = stopTalk)
         transport.awaitOpened(replacement)
-        val replacementClaim = async { registry.claim("watch-a", "attempt-b") }
+        val replacementClaim = async(handoffDispatcher) { registry.claim("watch-a", "attempt-b") }
+        // Transport open precedes publication; drive polling only until reservation owns the handoff.
+        withTimeout(1_000L) {
+          while (registry.isCurrent(firstOwner)) {
+            handoffDispatcher.scheduler.advanceTimeBy(1L)
+            handoffDispatcher.scheduler.runCurrent()
+            yield()
+          }
+        }
         withTimeout(1_000L) { stopStarted.await() }
+        // Discovery uses monotonic wall time; let its deadline expire before virtual cleanup.
+        delay(250L)
+        assertFalse(replacementClaim.isCompleted)
+        handoffDispatcher.scheduler.advanceTimeBy(300L)
+        handoffDispatcher.scheduler.runCurrent()
 
         val replacementOwner =
           withTimeout(1_000L) {
@@ -541,12 +558,14 @@ class WearRealtimeChannelRegistryTest {
       }
     }
 
+  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun `claim keeps polling after an unclaimed channel expires`() =
     runBlocking {
+      val expiryDispatcher = UnconfinedTestDispatcher()
       val registry =
         WearRealtimeChannelRegistry(
-          scope = scope,
+          scope = CoroutineScope(scope.coroutineContext + expiryDispatcher),
           transport = transport,
           connectionReadyTimeoutMillis = 1_000L,
           pendingConnectionTimeoutMillis = 100L,
@@ -557,10 +576,16 @@ class WearRealtimeChannelRegistryTest {
       run {
         registry.accept(expired, appendAudio = { _, _ -> }, stopTalk = {})
         transport.awaitOpened(expired)
-        withTimeout(1_000L) { transport.awaitClosed(expired) }
+        withTimeout(1_000L) {
+          while (transport.closeCount(expired) == 0) {
+            expiryDispatcher.scheduler.advanceUntilIdle()
+            yield()
+          }
+          transport.awaitClosed(expired)
+        }
 
-        val claim = async { registry.claim("watch-a", "attempt-a") }
-        delay(100L)
+        // Keep the replacement alive while the real-time claim polls for publication.
+        val claim = async(start = CoroutineStart.UNDISPATCHED) { registry.claim("watch-a", "attempt-a") }
         assertFalse(claim.isCompleted)
         registry.accept(replacement, appendAudio = { _, _ -> }, stopTalk = {})
         transport.awaitOpened(replacement)

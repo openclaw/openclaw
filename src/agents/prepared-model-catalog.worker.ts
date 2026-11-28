@@ -7,13 +7,14 @@ import {
 } from "../config/resolution-facts.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { installDirectoryWatchPort } from "../infra/directory-watch-host.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
+import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import {
-  captureRemoteModelCatalogStartupSnapshot,
-  withRemoteModelCatalogSnapshot,
-} from "../model-catalog/remote-overlay.js";
-import { withHandedOffCodexClientVersion } from "../plugin-sdk/codex-client-version-handoff.internal.js";
+  decodeRemoteModelCatalogWorkerBytes,
+  readRemoteModelCatalogStartupPublication,
+} from "../model-catalog/remote-startup-snapshot.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -57,6 +58,7 @@ import { replaceRuntimeAuthProfileStoreSnapshotsAsync } from "./auth-profiles/ru
 import { loadAuthProfileStoreForCatalogAsync } from "./auth-profiles/store-runtime.js";
 import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.js";
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
+import { parseModelCatalogJson } from "./model-catalog-json.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
@@ -448,8 +450,18 @@ async function runCatalogRequest(
       models.push(model);
       runtimeModels.set(provider, models);
     }
-    for (const outcome of facts.modelCatalog.providerOutcomes ?? []) {
-      const provider = normalizeProviderId(outcome.provider);
+    // Saved catalogs seed the template registry. Every provider this plan saves publishes its
+    // live rows, so an accepted empty listing withdraws the saved ones.
+    const plannedProviders = source.pluginCatalogs.flatMap(({ contents }) => {
+      // A merge with no discoveries reuses the stored catalog, including accepted JSONC.
+      // SAFETY: provider keys are read from the same catalog input as the model registry.
+      const catalog = parseModelCatalogJson(contents, true) as { providers?: object };
+      return Object.keys(catalog.providers ?? {});
+    });
+    for (const provider of [
+      ...(facts.modelCatalog.providerOutcomes ?? []).map((outcome) => outcome.provider),
+      ...plannedProviders,
+    ].map(normalizeProviderId)) {
       if (!runtimeModels.has(provider)) {
         runtimeModels.set(provider, []);
       }
@@ -469,6 +481,7 @@ async function runCatalogRequest(
       snapshot: facts.modelCatalog,
       runtimeModels,
       providerExpiries: source.providerExpiries ?? new Map(),
+      pluginCatalogs: source.pluginCatalogs,
       configuredRuntimeModels: facts.configuredRuntimeModels,
       credentials: catalogCredentials,
       providerAuthLabels:
@@ -533,6 +546,9 @@ async function runCatalogRequest(
 
 if (parentPort) {
   const data = workerData as PreparedModelCatalogWorkerData;
+  if (data.directoryWatchPort) {
+    installDirectoryWatchPort(data.directoryWatchPort);
+  }
   if (data.databaseEngineSelection) {
     installDatabaseEngineSelection(data.databaseEngineSelection);
   }
@@ -550,7 +566,22 @@ if (parentPort) {
       const { request, context } = task;
       let value: PreparedModelCatalogWorkerInput;
       if ("pluginMetadataSnapshot" in task.value) {
-        value = task.value;
+        const captured = task.value.remoteCatalog;
+        // Reuse only the captured source and content revision, including after the parent rotates.
+        const remoteCatalog =
+          captured &&
+          (readRemoteModelCatalogStartupPublication(captured) ??
+            Array.from(
+              contexts.values(),
+              ({ prepared }) => prepared.pluginGeneration.remoteCatalog,
+            ).find(
+              (catalog) =>
+                catalog?.sourceUrl === captured.sourceUrl && catalog.revision === captured.revision,
+            ) ??
+            ("sharedBytes" in captured
+              ? decodeRemoteModelCatalogWorkerBytes(captured.sharedBytes)
+              : captured));
+        value = { ...task.value, remoteCatalog };
       } else {
         const retained = contexts.get(context.workspaceDir);
         if (retained?.fingerprint !== context.fingerprint) {
@@ -561,24 +592,6 @@ if (parentPort) {
           remoteCatalog: retained.prepared.pluginGeneration.remoteCatalog,
           pluginMetadataSnapshot: retained.prepared.pluginGeneration.pluginMetadataSnapshot,
         };
-      }
-      if (value.remoteCatalog) {
-        // Transport clones share the publisher's content revision. Reuse an existing owner
-        // before registry callbacks capture the request scope; keep no extra revision cache.
-        const retained = [
-          captureRemoteModelCatalogStartupSnapshot(),
-          ...Array.from(
-            contexts.values(),
-            ({ prepared }) => prepared.pluginGeneration.remoteCatalog,
-          ),
-        ].find(
-          (catalog) =>
-            catalog?.sourceUrl === value.remoteCatalog?.sourceUrl &&
-            catalog?.revision === value.remoteCatalog?.revision,
-        );
-        if (retained) {
-          value = { ...value, remoteCatalog: retained };
-        }
       }
       activeRequest = value;
       let reportAfter = 0;
@@ -620,39 +633,36 @@ if (parentPort) {
                     withTemplateInstallSchemaVersionFacts(
                       request.templateInstallSchemaVersions,
                       () =>
-                        // Never select a Codex binary here; report the parent's decision.
-                        withHandedOffCodexClientVersion(request.codexClientVersion, () =>
-                          work.run(() =>
-                            runCatalogRequest(
-                              value,
-                              config,
-                              request,
-                              work,
-                              async () => {
-                                if (previous?.fingerprint === fingerprint) {
-                                  return previous.prepared;
-                                }
-                                replacing =
-                                  previous?.registrationFingerprint !== registrationFingerprint;
-                                return (attempted = await prepareWorkerGeneration(
-                                  value,
-                                  config,
-                                  replacing ? undefined : previous?.prepared,
-                                ));
-                              },
-                              async () => {
-                                // Admission can outlast a refresh on slow filesystems; only completed
-                                // generation preparation starts the provider-discovery deadline.
-                                stopProgress();
-                                const response = await channel?.request(null);
-                                response?.consumed();
-                                if (response && response.input !== true) {
-                                  throw new Error(
-                                    "prepared model catalog request retired before discovery",
-                                  );
-                                }
-                              },
-                            ),
+                        work.run(() =>
+                          runCatalogRequest(
+                            value,
+                            config,
+                            request,
+                            work,
+                            async () => {
+                              if (previous?.fingerprint === fingerprint) {
+                                return previous.prepared;
+                              }
+                              replacing =
+                                previous?.registrationFingerprint !== registrationFingerprint;
+                              return (attempted = await prepareWorkerGeneration(
+                                value,
+                                config,
+                                replacing ? undefined : previous?.prepared,
+                              ));
+                            },
+                            async () => {
+                              // Admission can outlast a refresh on slow filesystems; only completed
+                              // generation preparation starts the provider-discovery deadline.
+                              stopProgress();
+                              const response = await channel?.request(null);
+                              response?.consumed();
+                              if (response && response.input !== true) {
+                                throw new Error(
+                                  "prepared model catalog request retired before discovery",
+                                );
+                              }
+                            },
                           ),
                         ),
                     ),

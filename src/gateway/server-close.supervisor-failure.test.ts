@@ -4,12 +4,12 @@ import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import * as supervisor from "../process/supervisor/index.js";
-import * as schema from "../state/openclaw-agent-db-schema.js";
+import * as schema from "../state/openclaw-agent-db-schema-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 
-it("closes agent databases after a settled supervisor failure without process-death recovery", async () => {
+it("closes agent databases after a settled supervisor failure without rescanning on reopen", async () => {
   const fixture = await createGatewayMetadataCloseFixture("gateway-supervisor-failure-close");
   try {
     const { server } = await fixture.startServer();
@@ -34,13 +34,13 @@ it("closes agent databases after a settled supervisor failure without process-de
     vi.spyOn(schema, "agentDatabaseIntegrityBeforeMutationSteps").mockImplementation(function* (
       ...args
     ) {
-      diagnostics = args[3];
+      diagnostics = args[3]?.diagnostics;
       return yield* gate(...args);
     });
     resetGatewayWorkAdmission();
     expect(openOpenClawAgentDatabase(options).db.isOpen).toBe(true);
     expect(diagnostics).toBeDefined();
-    expect(diagnostics?.integrityGateReason).not.toBe("process-death");
+    expect(diagnostics?.integrityGateMode).toBeUndefined();
   } finally {
     vi.restoreAllMocks();
     await fixture.cleanup();

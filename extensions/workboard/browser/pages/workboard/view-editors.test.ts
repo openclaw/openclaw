@@ -5,6 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { setWorkboardCards } from "../../lib/workboard/card-state.ts";
 import { resetWorkboardConnectionState } from "../../lib/workboard/runtime.ts";
 import {
   createGatewaySession,
@@ -24,10 +25,72 @@ import {
   textButton,
   inlineEditor,
   sessionPicker,
+  type SelectPicker,
   toast,
 } from "./view.test-support.ts";
 
+function addLabel(container: Element, value: string) {
+  const input = expectDefined(
+    container.querySelector<HTMLInputElement>('.workboard-label-choices input[type="search"]'),
+    "label search",
+  );
+  input.value = value;
+  input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  flush();
+  input.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+  );
+  flush();
+}
+function selectedLabels(container: Element) {
+  return [
+    ...container.querySelectorAll<HTMLInputElement>(
+      '.workboard-label-choices input[type="checkbox"]',
+    ),
+  ]
+    .filter((input) => input.checked)
+    .map((input) => input.parentElement?.textContent?.trim());
+}
+
 describe("WorkboardView", () => {
+  it("checks the bulk Add limit only for remaining cards and submits their opening revision", async () => {
+    const full = createWorkboardCard({
+      id: "full",
+      labels: Array.from({ length: 12 }, (_, i) => `label-${i}`),
+    });
+    const remaining = createWorkboardCard({ id: "remaining", labels: ["original"], updatedAt: 10 });
+    const request = vi.fn().mockRejectedValue(new Error("Card changed"));
+    const { state, container, renderView } = createWorkboardView({
+      client: { request },
+      canWrite: true,
+    });
+    setWorkboardCards(state, [full, remaining]);
+    state.selectedCardIds = new Set([full.id, remaining.id]);
+    renderView();
+    requireButton(container, "Edit properties").click();
+    flush();
+    const dialog = expectDefined(container.querySelector(".workboard-bulk-dialog"), "bulk editor");
+    const pickers = [...dialog.querySelectorAll<SelectPicker>("[data-test-select-picker]")];
+    const labelMode = pickers.find((picker) => picker.accessibleLabel === "Labels");
+    expectDefined(labelMode, "label mode").onSelect("add");
+    flush();
+    addLabel(container, "new");
+    expect(requireButton(container, "Apply changes").disabled).toBe(true);
+
+    setWorkboardCards(state, [{ ...remaining, labels: ["concurrent"], updatedAt: 11 }]);
+    renderView();
+    const apply = requireButton(container, "Apply changes");
+    expect(apply.disabled).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    apply.click();
+    await waitForFast(() => expect(state.bulkSaving).toBe(false));
+    expect(request).toHaveBeenCalledExactlyOnceWith("workboard.cards.update", {
+      id: remaining.id,
+      expectedUpdatedAt: remaining.updatedAt,
+      patch: { labels: ["original", "new"] },
+    });
+  });
+
   it("keeps a stale edit draft disabled until it is cancelled", async () => {
     const { host, state, container, renderView } = createWorkboardView();
     state.cards = [createWorkboardCard({ title: "Canonical title" })];
@@ -53,6 +116,7 @@ describe("WorkboardView", () => {
   it("passes dialog labels and cancellation back to the plugin draft owner", async () => {
     const { host, state } = createLoadedWorkboardState();
     state.lastDispatchSummary = {
+      firstFailure: null,
       started: 0,
       failures: 0,
       promoted: 0,
@@ -111,7 +175,6 @@ describe("WorkboardView", () => {
     const fields = [
       [".workboard-draft__title", "Release: "],
       [".workboard-draft__notes", "Scope:\nVerification:\nCloseout:"],
-      [".workboard-draft__labels", "release"],
     ] as const;
     template.click();
     renderView();
@@ -124,8 +187,11 @@ describe("WorkboardView", () => {
       input.value = `Edited ${value}`;
       input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     }
+    addLabel(container, "custom draft");
+    expect(selectedLabels(container)).toEqual(["custom draft", "release"]);
     template.click();
     renderView();
+    expect(selectedLabels(container)).toEqual(["release"]);
     for (const [selector, value] of fields) {
       expect(container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)?.value).toBe(
         value,
@@ -280,21 +346,16 @@ describe("WorkboardView", () => {
     const popup = expectDefined(editor.popover, "labels popover");
     const matches = vi.spyOn(popup, "matches").mockReturnValue(false);
     onTestFinished(() => matches.mockRestore());
-    const input = await editor.open();
-    input.value = "original, pending";
-    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await editor.open();
+    addLabel(popup, "pending");
     popup.dispatchEvent(new Event("toggle"));
     await waitForFast(() => expect(popup.querySelector("input")).toBeNull());
     trigger.click();
-    await waitForFast(() =>
-      expect(popup.querySelector<HTMLInputElement>("input")?.value).toBe("original, pending"),
-    );
+    await waitForFast(() => expect(selectedLabels(popup)).toEqual(["original", "pending"]));
     textButton(popup, "Cancel").click();
     await waitForFast(() => expect(popup.querySelector("input")).toBeNull());
     trigger.click();
-    await waitForFast(() =>
-      expect(popup.querySelector<HTMLInputElement>("input")?.value).toBe("original"),
-    );
+    await waitForFast(() => expect(selectedLabels(popup)).toEqual(["original"]));
     expect(state.cards[0]?.labels).toEqual(["original"]);
   });
 
@@ -319,8 +380,12 @@ describe("WorkboardView", () => {
       const editor = await inlineEditor(container, field);
       const { trigger, owner, popover } = editor;
       let input = await editor.open();
-      input.value = "Unsaved change";
-      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      if (field === "labels") {
+        addLabel(owner, "Unsaved change");
+      } else {
+        input.value = "Unsaved change";
+        input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      }
       const dismissLabels = async () => {
         expectDefined(popover, "labels popover").dispatchEvent(new Event("toggle"));
         await waitForFast(() => expect(owner.querySelector("input")).toBeNull());
@@ -348,7 +413,14 @@ describe("WorkboardView", () => {
       await waitForFast(() => expect(input.readOnly).toBe(true));
       expect(input.disabled).toBe(false);
       expect(input.isConnected).toBe(true);
-      expect(input.value).toBe("Unsaved change");
+      if (field === "labels") {
+        expect(selectedLabels(owner)).toEqual(["Unsaved change"]);
+        expect(owner.querySelector<HTMLInputElement>('input[type="checkbox"]')?.disabled).toBe(
+          true,
+        );
+      } else {
+        expect(input.value).toBe("Unsaved change");
+      }
       expect(owner.querySelector("input, textarea")).toBe(input);
       const save = textButton(owner, "Save");
       expect(save.disabled).toBe(true);
@@ -365,7 +437,14 @@ describe("WorkboardView", () => {
       expect(state.detailCardId).toBe(card.id);
       expect(input.isConnected).toBe(true);
       textButton(container.querySelector(".workboard-discard")!, "Keep editing").click();
-      expect(input.value).toBe("Unsaved change");
+      if (field === "labels") {
+        expect(selectedLabels(owner)).toEqual(["Unsaved change"]);
+        expect(owner.querySelector<HTMLInputElement>('input[type="checkbox"]')?.disabled).toBe(
+          true,
+        );
+      } else {
+        expect(input.value).toBe("Unsaved change");
+      }
       expect(input.readOnly).toBe(true);
       expect(input.disabled).toBe(false);
       close.click();
@@ -544,8 +623,7 @@ describe("WorkboardView", () => {
     expect(trigger.isConnected).toBe(true);
     expect(trigger.textContent).toContain("review");
     const input = expectDefined(popup.querySelector<HTMLInputElement>("input"), "input");
-    input.value = " review, quality, review ";
-    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    addLabel(popup, "quality");
     buttonByText(popup, "Save")!.click();
     await waitForFast(() => expect(state.error).toContain("Labels unavailable"));
     expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
@@ -553,7 +631,7 @@ describe("WorkboardView", () => {
       expectedUpdatedAt: card.updatedAt,
       patch: { labels: ["review", "quality"] },
     });
-    expect(input.value).toBe(" review, quality, review ");
+    expect(selectedLabels(popup)).toEqual(["quality", "review"]);
     expect(trigger.isConnected).toBe(true);
     const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
     input.dispatchEvent(escape);

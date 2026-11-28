@@ -48,7 +48,7 @@ import {
   type LegacyMigrationSourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
-import { runUpdateSqliteMigrationAsync } from "./update-doctor-migration-attribution.js";
+import { runUpdateSqliteMigrationAsync } from "./update-doctor-migration-context.js";
 
 export const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 export const MAX_LEGACY_EXEC_APPROVALS_BYTES = 4 * 1024 * 1024;
@@ -614,6 +614,7 @@ export async function migrateLegacyExecApprovals(params: {
     retryGuidance: `Stop the Gateway and node hosts holding ${params.stateDir}.`,
     run: async (env) => {
       const stateRoot = await root(params.stateDir, {
+        allowDrvfsRenameRecovery: true,
         hardlinks: "reject",
         maxBytes: MAX_LEGACY_EXEC_APPROVALS_BYTES,
         symlinks: "reject",

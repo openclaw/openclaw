@@ -1,8 +1,13 @@
 // @vitest-environment node
+import { setImmediate } from "node:timers/promises";
 import { createRoot } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import type { PluginDiscoveryEntry, PluginDiscoveryResult } from "../../lib/plugins/index.ts";
+import type {
+  PluginCatalogItem,
+  PluginDiscoveryEntry,
+  PluginDiscoveryResult,
+} from "../../lib/plugins/index.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -36,6 +41,7 @@ function entry(
 function setup(
   responses: Array<PluginDiscoveryResult | Promise<PluginDiscoveryResult>>,
   responder?: (method: string, params: unknown) => Promise<unknown>,
+  inventory?: () => PluginCatalogItem[],
 ) {
   const request = createGatewayRequestMock(async (method, params) => {
     if (responder) {
@@ -54,7 +60,7 @@ function setup(
   let discovery!: ReturnType<typeof createPluginDiscovery>;
   const dispose = createRoot((stop) => {
     discovery = createPluginDiscovery(
-      { getClient: () => client, isConnected: () => true },
+      { getClient: () => client, isConnected: () => true, inventory },
       () => {},
     );
     return stop;
@@ -187,6 +193,101 @@ it("populates the grouped home page and keeps it visible during a refresh", asyn
   expect(read().result?.items).toEqual([category]);
   expect(read().featured).toEqual([]);
   expect(read().trending).toEqual([]);
+});
+
+it("continues only sparse shelves without blocking the overview or replacing a foreground category", async () => {
+  const category = (slug: string, order: number) => ({
+    slug,
+    label: slug,
+    description: slug,
+    icon: "package",
+    order,
+    previewCursor: slug + "-more",
+  });
+  const disabled = entry(0, { categories: ["models"] });
+  disabled.local = { ...disabled.local, installed: true, state: "disabled", action: "manage" };
+  const healthy = Array.from({ length: 8 }, (_, index) =>
+    entry(index + 1, { categories: ["tools"] }),
+  );
+  const extra = entry(9, { categories: ["models"], featured: true });
+  const reserve = Array.from({ length: 9 }, (_, index) =>
+    entry(10 + index, { categories: ["models"] }),
+  );
+  const later = createDeferred<PluginDiscoveryResult>();
+  const { discovery, request, read } = setup([
+    { items: [disabled, ...healthy], categories: [category("models", 0), category("tools", 1)] },
+    later.promise,
+    { items: healthy },
+  ]);
+  await discovery.refresh();
+  expect(read().result?.items).toHaveLength(9);
+  expect(request.mock.calls.map((call) => call[1])).toEqual([
+    { intent: "all", pageSize: 100 },
+    { intent: "all", category: "models", cursor: "models-more", pageSize: 100 },
+  ]);
+  await discovery.selectCategory("tools");
+  later.resolve({ items: [extra, ...reserve] });
+  await setImmediate();
+  expect(read().result?.items).toEqual(healthy);
+  await discovery.selectCategory(null);
+  // Keep the fetched candidates: inventory arriving later may hide the first eight.
+  expect(read().result?.items).toEqual(expect.arrayContaining([extra, ...reserve]));
+  expect(read().featured).toEqual([]);
+  expect(request).toHaveBeenCalledTimes(3);
+});
+
+it("uses fresh inventory to refill a shelf and ignores an old continuation after refresh", async () => {
+  const items = Array.from({ length: 8 }, (_, index) => entry(index, { categories: ["memory"] }));
+  const categories = [
+    {
+      slug: "memory",
+      label: "Memory",
+      description: "Memory",
+      icon: "package",
+      order: 0,
+      previewCursor: "more",
+    },
+  ];
+  const inventory: PluginCatalogItem[] = [];
+  const stale = createDeferred<PluginDiscoveryResult>();
+  const { discovery, request, read } = setup(
+    [
+      { items, categories },
+      stale.promise,
+      { items, categories },
+      { items: [], nextCursor: "page-2" },
+      { items: [], nextCursor: "page-3" },
+      { items: [], nextCursor: "page-4" },
+    ],
+    undefined,
+    () => inventory,
+  );
+  await discovery.refresh();
+  expect(request).toHaveBeenCalledOnce();
+  inventory.push({
+    id: "installed",
+    name: "Installed",
+    catalogId: items[0]!.id,
+    kind: ["tool"],
+    origin: "global",
+    installed: true,
+    enabled: false,
+    state: "disabled",
+  });
+  discovery.inventoryChanged();
+  expect(request).toHaveBeenCalledTimes(2);
+  const signal = request.mock.lastCall?.[2]?.signal;
+  await discovery.refresh();
+  expect(signal?.aborted).toBe(true);
+  stale.resolve({ items: [entry(99, { categories: ["memory"] })] });
+  await setImmediate();
+  // Even an unlimited series of empty pages with advancing cursors stops, without upgrading
+  // a best-effort continuation into a foreground error or retrying on inventory publication.
+  discovery.inventoryChanged();
+  expect(request).toHaveBeenCalledTimes(6);
+  expect(read().result?.items).toEqual(items);
+  expect(read().error).toBeNull();
+  expect(read().remoteError).toBeNull();
 });
 
 it("counts only settled manual searches across refresh, filters and connection invalidation", async () => {

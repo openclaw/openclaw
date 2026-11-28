@@ -18,7 +18,10 @@ type PlannedPluginStateMigrationDescriptor = {
 
 export function completedPluginMigrationFields(
   sources: readonly MigrationMessages[],
-): Pick<MigrationMessages, "completedPluginIds" | "requiredPluginIds" | "statelessPluginIds"> {
+): Pick<
+  MigrationMessages,
+  "completedPluginIds" | "requiredPluginIds" | "statelessPluginIds" | "deferredPluginMigrations"
+> {
   const completedPluginIds = sortUniqueStrings(
     sources.flatMap((source) => source.completedPluginIds ?? []),
   );
@@ -28,10 +31,14 @@ export function completedPluginMigrationFields(
   const statelessPluginIds = sortUniqueStrings(
     sources.flatMap((source) => source.statelessPluginIds ?? []),
   );
+  const deferredPluginMigrations = sources.flatMap(
+    (source) => source.deferredPluginMigrations ?? [],
+  );
   return {
     ...(completedPluginIds.length > 0 ? { completedPluginIds } : {}),
     ...(requiredPluginIds.length > 0 ? { requiredPluginIds } : {}),
     ...(statelessPluginIds.length > 0 ? { statelessPluginIds } : {}),
+    ...(deferredPluginMigrations.length > 0 ? { deferredPluginMigrations } : {}),
   };
 }
 

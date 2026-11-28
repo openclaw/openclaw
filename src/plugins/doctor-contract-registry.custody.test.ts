@@ -119,8 +119,9 @@ it.each(["plain", "overlapping package", "native companion", "external dependenc
       }),
     );
     expect(originalBytes[0]).toBeGreaterThan(0);
-    // Fresh native admission still selects its reference; ordinary captured bytes stay reused.
-    expect(originalBytes[1]).toBe(originalBytes[0]! + nativeReferenceBytes);
+    // Worker and host reconstruction each admit the native reference for the fresh
+    // instance; ordinary captured bytes stay reused from the retained source.
+    expect(originalBytes[1]).toBe(originalBytes[0]! + nativeReferenceBytes * 2);
     expect(digests[0]).toBe(digests[1]);
     fs.writeFileSync(plugin.actions, 'export const version = "changed after capture";');
     await withPluginGenerationSourceCustody(async () => {

@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MeetingJoinRequest } from "../../meeting-bot/plugin-entry.js";
 import type * as Meeting from "../../meeting-bot/session-types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   meetingBrowserActScripts as browserActScripts,
   type MeetingBrowserFixture,
@@ -88,6 +89,32 @@ export function defineMeetingSessionFlowTests(options: {
       session: { state: "ended", chrome: { health } },
     });
     expect(harness.gatewayRequest).toHaveBeenCalledWith(...requestArgs({ path: "/tabs/open" }));
+  });
+
+  it("keeps ended status when a pending browser read fails after leave", async () => {
+    const { harness, runtime, session, id } = await joinedFixture();
+    const started = createDeferredCore();
+    const resume = createDeferredCore();
+    harness.gatewayRequest.mockImplementationOnce(async () => {
+      started.resolve();
+      await resume.promise;
+      throw new Error("Delayed browser read failed");
+    });
+    const pending = runtime.status(id);
+    await Promise.race([started.promise, pending]);
+    let ended: typeof session.chrome;
+    try {
+      await expect(runtime.leave(id)).resolves.toMatchObject({ browserLeft: true });
+      ended = structuredClone(session.chrome);
+    } finally {
+      resume.resolve();
+    }
+    await expect(pending).resolves.toMatchObject({ session: { chrome: ended } });
+    harness.state.tabOpen = true;
+    harness.state.targetId = "replacement";
+    harness.gatewayRequest.mockClear();
+    await expect(runtime.status(id)).resolves.toMatchObject({ session: { chrome: ended } });
+    expect(harness.gatewayRequest).not.toHaveBeenCalled();
   });
 
   it("reads an archived transcript without reclaiming a newer live tab owner", async () => {

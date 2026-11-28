@@ -17,6 +17,7 @@ import { isSessionHistoryReadOperation } from "./session-history-read-operation-
 import { encodeSessionTranscriptRequestError } from "./session-history-worker-errors.js";
 import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import {
+  closeHistoryDatabaseScopes,
   withHistoryDatabase,
   pruneClosedHistoryDatabaseScopes,
 } from "./session-transcript-worker-scopes.js";
@@ -28,21 +29,9 @@ import type {
 
 type TranscriptReply = SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues>;
 
-const startup:
-  | { databaseEngineSelection?: DatabaseEngineSelection; prewarmHistory?: true }
-  | undefined = workerData;
+const startup: { databaseEngineSelection?: DatabaseEngineSelection } | undefined = workerData;
 if (startup?.databaseEngineSelection) {
   installDatabaseEngineSelection(startup.databaseEngineSelection);
-}
-
-// Pool tasks can choose any idle worker, including one created first for a light read.
-if (startup?.prewarmHistory) {
-  await Promise.all([
-    import("../../gateway/session-history-worker-reader.js"),
-    import("../../gateway/chat-history-page-kernel.js"),
-    import("../../gateway/chat-history-response-page.js"),
-    import("../../gateway/session-history-snapshot.js"),
-  ]);
 }
 
 let releaseReadValidation:
@@ -50,7 +39,7 @@ let releaseReadValidation:
   | undefined;
 const memoryPressure = diagnosticsChannel("openclaw.memory.critical");
 
-serveOwnedWorkerTasks(
+export const startHostedWorker = serveOwnedWorkerTasks(
   async (input, channel, control): Promise<TranscriptReply | UsageCostWorkerReply> => {
     // Pressure stays inside this isolate and drops decoded caches before the next snapshot.
     // Bun's compatibility probe walks the heap instead of describing a V8 allocation limit.
@@ -128,13 +117,17 @@ serveOwnedWorkerTasks(
         if (!channel) {
           throw new Error("Transcript search requires its host status channel");
         }
-        const { searchSessionTranscriptsReadOnlySync } =
-          await import("./session-transcript-search.js");
+        const { searchSessionTranscriptsReadOnlySync, searchSessionTranscriptsFiltered } =
+          await import("./session-transcript-search.worker.js");
         const options = {
           ...request.database,
           env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
         };
-        const { found, ...result } = searchSessionTranscriptsReadOnlySync(request.params, options);
+        const { found, ...result } = request.params.filterCandidates
+          ? await searchSessionTranscriptsFiltered(request.params, options, channel, () =>
+              control.throwIfCancelled(),
+            )
+          : searchSessionTranscriptsReadOnlySync(request.params, options);
         let indexing = false;
         if (found) {
           // Search hits describe their read snapshot; readiness comes from the projection owner.
@@ -177,6 +170,13 @@ serveOwnedWorkerTasks(
         };
       }
       if (request.kind === "prewarm") {
+        // Only explicit presentation preparation pays for the history graph.
+        await Promise.all([
+          import("../../gateway/session-history-worker-reader.js"),
+          import("../../gateway/chat-history-page-kernel.js"),
+          import("../../gateway/chat-history-response-page.js"),
+          import("../../gateway/session-history-snapshot.js"),
+        ]);
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
         const opened = withOpenClawAgentDatabaseReadOnly(() => undefined, {
@@ -322,10 +322,7 @@ serveOwnedWorkerTasks(
         const cold = await import("./session-cold-storage-read.worker.js");
         const options = { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) };
         return request.kind === "cold-metadata"
-          ? {
-              kind: request.kind,
-              archive: cold.readSessionColdMetadataInWorker(options, request.sessionId),
-            }
+          ? cold.readSessionColdMetadataInWorker(options, request.sessionId, request.readCustody)
           : { kind: request.kind, ...cold.readSessionColdStorageInventoryInWorker(options) };
       }
       if (request.kind === "session-target-prepare" || request.kind === "session-store-target") {
@@ -617,6 +614,11 @@ serveOwnedWorkerTasks(
               source: readActivitySummaryBatch(request),
             };
           }
+          if (request.kind === "compaction-preparation") {
+            const { readPreparedSessionCompaction } =
+              await import("./session-compaction-prepared.worker.js");
+            return readPreparedSessionCompaction(request, control);
+          }
           if (
             request.kind === "transcript-hydration" ||
             request.kind === "transcript-maintenance" ||
@@ -636,18 +638,9 @@ serveOwnedWorkerTasks(
               database: request.database,
             });
           }
-          if (request.kind === "session-reset-recall") {
-            const { readSessionResetRecallCutoffInProcess } =
-              await import("../../../packages/memory-host-sdk/src/host/session-reset-recall-read.worker.js");
-            return { cutoff: readSessionResetRecallCutoffInProcess(request.scope) };
-          }
-          if (request.mode === "snapshot") {
-            const { readSessionEntrySnapshotRequest } =
-              await import("./session-transcript-hydration-read.worker.js");
-            return readSessionEntrySnapshotRequest(request);
-          }
-          const { prepareSessionMemoryEntry } = await import("./session-memory-entry.worker.js");
-          return prepareSessionMemoryEntry(request);
+          const { readSessionResetRecallCutoffInProcess } =
+            await import("../../../packages/memory-host-sdk/src/host/session-reset-recall-read.worker.js");
+          return { cutoff: readSessionResetRecallCutoffInProcess(request.scope) };
         },
       );
     };
@@ -667,6 +660,10 @@ serveOwnedWorkerTasks(
             () => withSessionTranscriptProjectionReceipt(request.projectionReceipt, readRequest),
             request.validation,
             request.kind === "transcript-match" ? request.request.diagnostics : undefined,
+            request.readCustody,
+            request.creationClaim
+              ? { witness: request.creationClaim, assertCurrent: () => control.throwIfCancelled() }
+              : undefined,
           )
         : { ok: true, value: await readRequest() };
     } catch (error) {
@@ -709,5 +706,6 @@ serveOwnedWorkerTasks(
       );
       pruneClosedHistoryDatabaseScopes();
     },
+    releaseRetainedResources: closeHistoryDatabaseScopes,
   },
 );

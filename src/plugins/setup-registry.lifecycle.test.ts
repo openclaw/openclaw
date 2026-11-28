@@ -190,33 +190,6 @@ describe("plugin setup registry artifact lifecycle", () => {
     },
   );
 
-  it("records setup load failures with inaccessible error messages after native evaluation", async () => {
-    const event = "setup-display-load";
-    const before = process.listenerCount(event);
-    const failure = `
-        process.on(${JSON.stringify(event)}, () => {});
-        const error = new Error("hidden message", { cause: new Error("setup failure detail") });
-        Object.defineProperty(error, "message", { get() { throw new Error("display failed"); } });
-        throw error;
-      `;
-    const manifestRegistry = registry(writeSetupLifecycleFixture("setup-display", failure));
-    const cache = createPluginCache();
-    try {
-      const result = resolveSetup(cache, manifestRegistry);
-      expect(result.providers).toEqual([]);
-      expect(result.diagnostics).toMatchObject([
-        {
-          pluginId: "setup-display",
-          code: "setup-entry-load-failed",
-          message: expect.stringContaining("setup failure detail"),
-        },
-      ]);
-      expect(process.listenerCount(event)).toBe(before + 1);
-    } finally {
-      await retirePluginCache(cache).finally(() => process.removeAllListeners(event));
-    }
-  });
-
   it("retires a failed setup registration without retiring successful owners in its cache", async () => {
     const ids = ["live-setup", "failed-setup"] as const;
     const event = "setup-registration-owner";

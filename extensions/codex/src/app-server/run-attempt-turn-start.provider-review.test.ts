@@ -28,7 +28,7 @@ vi.mock("./run-attempt-lifecycle.js", () => ({
 vi.mock("./run-attempt-state.js", () => ({
   isCodexActiveCompactTurnError: () => recovery.kind === "compact",
   clearCodexBindingAfterInvalidImagePayload: recovery.forbidden,
-  shouldUseFreshCodexThreadAfterContextEngineOverflow: () => recovery.kind === "overflow",
+  shouldUseFreshCodexThreadAfterContextOverflow: () => recovery.kind === "overflow",
 }));
 // mock-isolation: Any binding replacement is forbidden for this reviewed-turn fixture.
 vi.mock("./session-binding.js", () => ({

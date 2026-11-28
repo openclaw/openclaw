@@ -1,18 +1,41 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Match, Show, Switch } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  Errored,
+  For,
+  lazy,
+  Loading,
+  Match,
+  onSettled,
+  Show,
+  Switch,
+} from "solid-js";
+import {
+  isProviderAuthFailureReason,
+  resolveProviderAuthRecovery,
+} from "../../../../src/plugins/provider-auth-failure.js";
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+} from "../../app/stale-chunk-reload.ts";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
-import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import "../../components/modal-dialog.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import type { ModelSetupWizardState } from "./state.ts";
 import { WIZARD_COPY } from "./wizard-copy.ts";
 
 registerModelSetupEnglish();
+
+const WizardStepControls = lazy(() => import("../../components/wizard-step-controls.tsx"), {
+  export: "WizardStepControls",
+});
 
 export type WizardViewProps = {
   onDialogRef?: (element: import("../../components/modal-dialog.tsx").OpenClawModalDialog) => void;
@@ -23,6 +46,7 @@ export type WizardViewProps = {
   refreshWarning: string | null;
   doneMessage?: string;
   doneDescription?: string;
+  doneContent?: JSX.Element;
   doneAction?: { label: string; disabled?: boolean; onClick: () => void };
   cancellationNotice?: string | null;
   cancellationFeedback?: JSX.Element;
@@ -32,12 +56,16 @@ export type WizardViewProps = {
   onAnswer: (value: unknown, includeValue?: boolean) => void;
   onCancel: () => void;
   onClose: () => void;
+  /** Provider sign-in recovery for a typed failure; without it the error offers only Close. */
+  recovery?: { onRetry: () => void; onOpenSettings: () => void };
 };
 
 export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   let focusTargets = new Set<HTMLElement>();
+  const [focusRevision, setFocusRevision] = createSignal(0);
   const autofocusRef = (element: HTMLElement) => {
     focusTargets.add(element);
+    setFocusRevision((revision) => revision + 1);
   };
   const initialFocus = () =>
     [...focusTargets]
@@ -49,12 +77,15 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
     props.admissionPending && props.state.phase === "idle" ? "starting" : props.state.phase;
   // Focus the committed wizard step after its identity or completion actions change.
   createPendingFocus(
-    () =>
+    () => [
       props.state.phase === "step"
         ? `${props.state.step.id}:${props.busy || props.state.busy ? "busy" : "ready"}:${props.state.validationError ?? ""}`
         : `${displayPhase()}:${Boolean(props.doneAction)}`,
+      focusRevision(),
+    ],
     {
       requested: () => true,
+      ready: () => initialFocus() !== null,
       focus: () => {
         focusTargets = new Set([...focusTargets].filter((element) => element.isConnected));
         initialFocus()?.focus({ preventScroll: true });
@@ -76,7 +107,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
       type === "multiselect" ||
       type === "note" ||
       type === "action" ||
-      (type === "text" && !current.externalAuthInput) ||
+      type === "text" ||
       (type === "select" && (options?.length ?? 0) <= 2)
     );
   };
@@ -91,6 +122,13 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   };
   const errorState = () =>
     props.state.phase === "error" || props.state.phase === "cancelled" ? props.state : undefined;
+  // Core owns the recovery for each typed sign-in failure; the dialog shows its one action.
+  const recovery = () => {
+    const reason = props.state.phase === "error" ? props.state.reason : undefined;
+    return props.recovery && isProviderAuthFailureReason(reason)
+      ? resolveProviderAuthRecovery(reason)
+      : undefined;
+  };
   return (
     <Show when={displayPhase() !== "idle"}>
       <openclaw-modal-dialog
@@ -180,6 +218,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                     <Show when={props.doneDescription}>
                       <p class="model-setup-wizard__success-description">{props.doneDescription}</p>
                     </Show>
+                    {props.doneContent}
                   </div>
                 </Match>
                 <Match when={errorState()}>
@@ -194,6 +233,15 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                     >
                       <InlineAlert tone="danger" class="model-setup-wizard__error" role="alert">
                         <p class="model-setup-wizard__error-text">{state().message}</p>
+                        <Show when={recovery() === "wait" || recovery() === "admin"}>
+                          <p class="model-setup-wizard__error-text">
+                            {t(
+                              recovery() === "wait"
+                                ? "modelSetup.wizard.waitThenRetry"
+                                : "modelSetup.wizard.askAdmin",
+                            )}
+                          </p>
+                        </Show>
                         <div class="model-setup-wizard__error-copy">
                           <CopyButton
                             text={state().message}
@@ -206,67 +254,161 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                 </Match>
                 <Match when={displayPhase() === "step"}>
                   <Show when={retainedStep()}>
-                    {(state) => (
-                      <>
-                        <Show when={state().validationError}>
-                          <InlineAlert
-                            tone="danger"
-                            id="model-setup-wizard-validation-error"
-                            role="alert"
+                    {(state) => {
+                      // A rejected answer, else why the open sign-in has not finished yet (a
+                      // browser refusal or a busy callback port). The waiting sign-in shows
+                      // that reason itself.
+                      const fieldError = () =>
+                        state().validationError ??
+                        (state().step.reason &&
+                        state().step.progressMessage &&
+                        (state().externalAuthInput || !signInStep())
+                          ? formatUiExternalText(state().step.progressMessage!)
+                          : null);
+                      return (
+                        <>
+                          {/* A pasted-address sign-in shows its error under the field. */}
+                          <Show when={!state().externalAuthInput && fieldError()}>
+                            <InlineAlert
+                              tone="danger"
+                              id="model-setup-wizard-validation-error"
+                              role="alert"
+                            >
+                              {fieldError()}
+                            </InlineAlert>
+                          </Show>
+                          <Errored
+                            fallback={(error, retry) => {
+                              let active = true;
+                              onSettled(() => () => {
+                                active = false;
+                              });
+                              return (
+                                <InlineAlert
+                                  tone="danger"
+                                  role="alert"
+                                  action={
+                                    <button
+                                      type="button"
+                                      class="btn"
+                                      onClick={() =>
+                                        isStaleChunkImportError(error())
+                                          ? void retryStaleChunkReloadWhenReachable({
+                                              canReload: () => active,
+                                            })
+                                          : retry()
+                                      }
+                                    >
+                                      {t(
+                                        isStaleChunkImportError(error())
+                                          ? "common.reload"
+                                          : "common.retry",
+                                      )}
+                                    </button>
+                                  }
+                                >
+                                  {isStaleChunkImportError(error())
+                                    ? t("modelSetup.wizard.controlsLoadFailed")
+                                    : formatUiError(error())}
+                                </InlineAlert>
+                              );
+                            }}
                           >
-                            {state().validationError}
-                          </InlineAlert>
-                        </Show>
-                        <WizardStepControls
-                          presentation="model-setup"
-                          step={state().step}
-                          externalAuthInput={state().externalAuthInput}
-                          signInIcon={props.signInIcon}
-                          brandId={props.state.authBrandId}
-                          providerLabel={props.state.authLabel}
-                          value={props.value}
-                          busy={props.busy || state().busy}
-                          inputId="model-setup-wizard-text-input"
-                          validationErrorId={
-                            state().validationError
-                              ? "model-setup-wizard-validation-error"
-                              : undefined
-                          }
-                          confirmAffirmativeLabel={
-                            props.mode === "prepare" && state().step.type === "confirm"
-                              ? t("modelSetup.wizard.continue")
-                              : undefined
-                          }
-                          leadingAction={
-                            signInStep() || !stepHasPrimary() ? undefined : (
-                              <button type="button" class="btn" onClick={() => props.onCancel()}>
-                                {t("common.cancel")}
-                              </button>
-                            )
-                          }
-                          onValueChange={(value) => props.onValueChange(value)}
-                          onAnswer={(value) => props.onAnswer(value)}
-                          onAutofocusRef={autofocusRef}
-                        />
-                        <Show
-                          when={
-                            (props.busy || state().busy) &&
-                            state().step.type !== "progress" &&
-                            !state().step.externalUrl &&
-                            !state().step.deviceCode
-                          }
-                        >
-                          <div class="wizard-step__progress" role="status" aria-busy="true">
-                            <span class="wizard-step__spinner" aria-hidden="true" />
-                            {t("modelSetup.wizard.working")}
-                          </div>
-                        </Show>
-                      </>
-                    )}
+                            <Loading
+                              fallback={
+                                <div role="status" aria-busy="true">
+                                  {t("common.loading")}
+                                </div>
+                              }
+                            >
+                              <WizardStepControls
+                                presentation="model-setup"
+                                step={state().step}
+                                externalAuthInput={state().externalAuthInput}
+                                signInIcon={props.signInIcon}
+                                brandId={props.state.authBrandId}
+                                providerLabel={props.state.authLabel}
+                                value={props.value}
+                                busy={props.busy || state().busy}
+                                inputId="model-setup-wizard-text-input"
+                                validationErrorId={
+                                  fieldError() ? "model-setup-wizard-validation-error" : undefined
+                                }
+                                validationError={fieldError()}
+                                confirmAffirmativeLabel={
+                                  props.mode === "prepare" && state().step.type === "confirm"
+                                    ? t("modelSetup.wizard.continue")
+                                    : undefined
+                                }
+                                leadingAction={
+                                  (signInStep() && !state().externalAuthInput) ||
+                                  !stepHasPrimary() ? undefined : (
+                                    <button
+                                      type="button"
+                                      class="btn"
+                                      onClick={() => props.onCancel()}
+                                    >
+                                      {t("common.cancel")}
+                                    </button>
+                                  )
+                                }
+                                onValueChange={(value) => props.onValueChange(value)}
+                                onAnswer={(value) => props.onAnswer(value)}
+                                onAutofocusRef={autofocusRef}
+                              />
+                            </Loading>
+                          </Errored>
+                          <Show
+                            when={
+                              (props.busy || state().busy) &&
+                              state().step.type !== "progress" &&
+                              !state().step.externalUrl &&
+                              !state().step.deviceCode
+                            }
+                          >
+                            <div class="wizard-step__progress" role="status" aria-busy="true">
+                              <span class="wizard-step__spinner" aria-hidden="true" />
+                              {t("modelSetup.wizard.working")}
+                            </div>
+                          </Show>
+                        </>
+                      );
+                    }}
                   </Show>
                 </Match>
               </Switch>
             </div>
+            <Show
+              when={
+                recovery() === "retry" ||
+                recovery() === "restart" ||
+                recovery() === "fix-paste" ||
+                recovery() === "open-settings"
+              }
+            >
+              <openclaw-modal-actions class="oc-dialog__footer model-setup-wizard__footer">
+                <button type="button" class="btn" onClick={() => props.onClose()}>
+                  {t("common.close")}
+                </button>
+                <button
+                  type="button"
+                  class="btn primary"
+                  onClick={() =>
+                    recovery() === "open-settings"
+                      ? props.recovery?.onOpenSettings()
+                      : props.recovery?.onRetry()
+                  }
+                >
+                  {t(
+                    recovery() === "open-settings"
+                      ? "modelSetup.wizard.openSettings"
+                      : recovery() === "retry"
+                        ? "modelSetup.wizard.retryStep"
+                        : "modelSetup.wizard.startAgain",
+                  )}
+                </button>
+              </openclaw-modal-actions>
+            </Show>
             <Show when={displayPhase() === "done"}>
               <openclaw-modal-actions class="oc-dialog__footer model-setup-wizard__footer">
                 <button

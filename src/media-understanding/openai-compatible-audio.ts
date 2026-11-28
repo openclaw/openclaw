@@ -20,6 +20,8 @@ export async function transcribeOpenAiCompatibleAudio(
     defaultBaseUrl: string;
     defaultModel: string;
     provider?: string;
+    /** Form field that carries `language`; some models take a `languages[]` list instead. */
+    languageField?: "language" | "languages[]";
   },
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
@@ -45,7 +47,7 @@ export async function transcribeOpenAiCompatibleAudio(
     mime: params.mime,
     fields: {
       model,
-      language: params.language,
+      [params.languageField ?? "language"]: params.language,
       prompt: params.prompt,
     },
   });

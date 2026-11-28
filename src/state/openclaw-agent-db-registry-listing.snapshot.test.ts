@@ -75,8 +75,8 @@ it("lazily reads in its captured scope and publishes complete rows to the canoni
   expect(mocks.read).not.toHaveBeenCalled();
   const incompatible = {
     ...entry,
-    agentId: "future",
-    schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+    agentId: "legacy",
+    schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION - 1,
   };
   mocks.read.mockImplementationOnce(async (source) => {
     expect(source).toMatchObject({ path: options.path, env: options.env });

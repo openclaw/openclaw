@@ -1,10 +1,15 @@
 import { afterEach, assert, expect, it } from "vitest";
 import { formatIrohEndpointKey } from "../../packages/openclaw-id-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type {
   GatewayIngressPrincipal,
   GatewayIngressPrincipalRecovery,
 } from "../plugins/gateway-ingress.types.js";
 import { createOpenClawIdAuthority } from "./openclaw-id/authority.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
 import { captureGatewayIngressPersonPrincipal } from "./remote-ingress-principal-admission.js";
@@ -15,9 +20,17 @@ import {
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 
-afterEach(() => setOpenClawIdTunnelPrincipalLookup(undefined));
+afterEach(() => {
+  setOpenClawIdTunnelPrincipalLookup(undefined);
+  clearRuntimeConfigSnapshot();
+});
 
 it("keeps the original app admission through recovery without revoking independent person grants", async () => {
+  setRuntimeConfigSnapshot({
+    gateway: {
+      roles: { definitions: { operator: structuredClone(MEMBER_ROLE_PRESETS.operator) } },
+    },
+  });
   const claw = await linkedClaw();
   const peerKey = formatIrohEndpointKey(new Uint8Array(32).fill(171));
   const accountId = "recovered-member";
@@ -101,7 +114,7 @@ it("keeps the original app admission through recovery without revoking independe
     for (const invalid of corruptions) {
       grants.set("malformed", JSON.stringify(invalid));
       await expect(restore("malformed")).rejects.toMatchObject({
-        name: "GatewayOperatorRecoveryAuthorizationError",
+        name: "OperatorRefusalError",
       });
     }
     expect(
@@ -114,18 +127,18 @@ it("keeps the original app admission through recovery without revoking independe
     expect(original.signal.aborted).toBe(true);
     expect(original.assertCurrent).toThrow();
     await expect(restore()).rejects.toMatchObject({
-      name: "GatewayOperatorRecoveryAuthorizationError",
+      name: "OperatorRefusalError",
     });
 
     // Reapproving the same key is a new listing, not a revival of the old app approval.
     expect(await claw.authority.submit(await add(), "tunnel")).toMatchObject({ ok: true });
     await reloadAuthority();
     await expect(restore()).rejects.toMatchObject({
-      name: "GatewayOperatorRecoveryAuthorizationError",
+      name: "OperatorRefusalError",
     });
     setOpenClawIdTunnelPrincipalLookup(undefined);
     await expect(restore()).rejects.toMatchObject({
-      name: "GatewayOperatorRecoveryAuthorizationError",
+      name: "OperatorRefusalError",
     });
     const independent = await restore("independent");
     recovered.push(independent);

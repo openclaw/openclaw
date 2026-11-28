@@ -348,11 +348,7 @@ export function createTerminalPanel(
         context?.theme.subscribe(publish),
       ];
       if (element.embedded || dockLayout.open) {
-        void terminalSessions.restoreSessions().then(() => {
-          if (owner.isConnected && sessionPicker?.open()) {
-            sessionPicker.onRefresh({ preserveError: true });
-          }
-        });
+        void terminalSessions.restoreSessions();
       }
       publish();
       return () =>

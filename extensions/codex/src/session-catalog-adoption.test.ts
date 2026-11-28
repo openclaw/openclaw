@@ -8,7 +8,6 @@ import { createLazyCodexAppServerBindingStore } from "./app-server/session-bindi
 import { createCodexAppServerBindingStore, bindingStoreKey } from "./app-server/session-binding.js";
 import { createCodexSqliteTestBindingStateStore } from "./app-server/session-binding.sqlite.test-helpers.js";
 import { listAdoptedSessionEntries } from "./session-catalog-adoption.js";
-import * as adoptionKeys from "./session-catalog-node-adoption.js";
 import {
   pinnedConnectionMocks,
   createCodexSessionCatalogControlFactory,
@@ -233,52 +232,12 @@ it("refreshes bulk adoption authority after a generation changes or a binding di
     );
     state.delete(bindingStoreKey(bindingIdentity(entries[1]!)));
     expect(await list()).toEqual([entries[0]!.sessionKey, undefined]);
+    entries[0]!.entry.initializationPending = true;
+    sessionEntries.revision = {};
+    expect(await list()).toEqual([undefined, undefined]);
     expect(syncLookupMany).not.toHaveBeenCalled();
     expect(lookup).not.toHaveBeenCalled();
   });
-});
-
-it("reuses adoption preparation across catalog lists until the entry revision changes", async () => {
-  const sourceThreadId = "adopted-source";
-  const f = await adoptedSource(sourceThreadId);
-  const { entries, sessionKey } = f;
-  const adopted = entries[0]!;
-  entries.unshift(
-    ...Array.from({ length: 3_000 }, (_, index) => ({
-      sessionKey: `agent:main:unrelated-${index}`,
-      entry: { sessionId: `unrelated-${index}`, updatedAt: 1 },
-    })),
-  );
-  let inspectedEntries = 0;
-  const catalogEntries = entries.map((summary) => ({
-    agentId: "main",
-    sessionKey: summary.sessionKey,
-    get entry() {
-      inspectedEntries++;
-      return summary.entry;
-    },
-  }));
-  const sessionEntries: SessionCatalogEntrySnapshot = {
-    revision: {},
-    entriesForAgent: () => entries,
-    entriesForCatalog: () => catalogEntries,
-  };
-  const list = async () => sessionRows(await f.list({ sessionEntries }))?.[0];
-  const parseKey = vi.spyOn(adoptionKeys, "adoptionSessionKeyRest");
-  expect((await list())?.sessionKey).toBe(sessionKey);
-  expect(parseKey).toHaveBeenCalledExactlyOnceWith(sessionKey);
-  const coldInspections = inspectedEntries;
-  const result = await list();
-  const warmInspections = inspectedEntries - coldInspections;
-  expect(result?.sessionKey).toBe(sessionKey);
-  expect(warmInspections).toBe(0);
-  expect(parseKey).toHaveBeenCalledTimes(1);
-
-  adopted.entry = { ...adopted.entry, initializationPending: true };
-  sessionEntries.revision = {};
-  expect(await list()).not.toHaveProperty("sessionKey");
-  expect(inspectedEntries).toBeGreaterThan(coldInspections);
-  expect(parseKey).toHaveBeenCalledTimes(1);
 });
 
 it("reports duplicate adoption across agents before decoding a later malformed bulk row", async () => {

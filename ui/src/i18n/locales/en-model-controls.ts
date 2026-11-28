@@ -1,3 +1,4 @@
+import { mergeCatalog } from "../lib/merge-catalog.ts";
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
@@ -6,23 +7,24 @@ const enModelControls = {
     modelControls: {
       subscription: "Subscription",
       api: "API",
+      nativeLogin: "Native login",
       default: "Default",
       defaultModel: "Default model",
       routes: {
         claudeCli: {
           label: "Claude CLI · native",
           detail:
-            "Runs through Claude CLI, using its native login or a selected saved account. An explicitly selected API-key account has separate API billing; CLI doesn’t mean free or subscription-only.",
+            "Uses Claude CLI with its native login or selected account. API-key accounts have separate API charges.",
         },
         anthropicApi: {
           label: "API · OpenClaw",
           detail:
-            "Uses the configured Anthropic API connection with OpenClaw’s runtime. API-key usage is billed separately from a Claude subscription.",
+            "Uses the Anthropic API through OpenClaw. API charges are separate from Claude subscriptions.",
         },
         anthropicConfigured: {
           label: "Configured route",
           detail:
-            "Anthropic models can use the API or Claude CLI, depending on their configured runtime and account. The provider name alone doesn’t determine billing.",
+            "Uses the API or Claude CLI, depending on the runtime and account. Billing follows that account.",
         },
       },
       completionRoutes: {
@@ -33,8 +35,7 @@ const enModelControls = {
         },
         cli: {
           label: "{runtime} · native",
-          detail:
-            "Runs through {runtime} using its own login. Billing follows the account it’s signed in with; an API-key login is billed as API usage.",
+          detail: "Uses {runtime} and its signed-in account. API-key accounts incur API charges.",
         },
         harness: {
           label: "{runtime}",
@@ -47,7 +48,7 @@ const enModelControls = {
       decisionUnavailable:
         "This decision model is unavailable. Enable its plugin or choose another model.",
       decisionHelp:
-        "Makes typed choices, scores, and yes/no judgments. Disabled until you select a decision model; conversational models aren’t used as a fallback.",
+        "Handles structured choices and scores. Select a decision model to enable it; chat models are not used as fallback.",
       decisionAgentHelp:
         "Use the global decision model, choose an override, or disable decisions for this agent.",
       effort: "Effort",
@@ -62,7 +63,7 @@ const enModelControls = {
       daybreakBlue: "Daybreak Blue",
       daybreakRed: "Daybreak Red",
       access: "Access",
-      accessUnavailable: "{program} (unavailable)",
+      daybreakRequired: "Required by this model",
       fast: "Fast",
       ultrafast: "Ultrafast",
       ultrafastUnavailable: "Ultrafast isn’t available for this model.",
@@ -75,6 +76,9 @@ const enModelControls = {
       dontAskAgain: "Don’t ask again",
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
+      runsOn: "Runs on",
+      cooldown: "Cooldown {time}",
+      cooldownStatus: "Cooling down",
       configureModels: "Configure models",
       selectionScopeSessionLabel: "This session",
       selectionScopeAgentLabel: "Agent default",
@@ -90,11 +94,11 @@ const enModelControls = {
       speedUnsupported: "This model doesn’t offer speed options.",
       contextActiveAndMax: "{active} active · {maximum} max",
       chatOnly: "No tools",
-      chatOnlyHelp:
-        "This model can’t read files, run commands, or browse. Pick another model for that.",
+      chatOnlyHelp: "No file, command, or browser access. Choose another model to use tools.",
       loadingModels: "Loading models…",
       refreshingModels: "Refreshing models…",
       refreshingSettings: "Refreshing session settings…",
+      thinkingPermissionDenied: "You don’t have permission to change the thinking level.",
       refreshingProviderModels: "Refreshing models for {providers}…",
       modelPending: "Model pending",
       modelsUnavailable: "Models unavailable",
@@ -136,31 +140,22 @@ const enModelControls = {
       label: "Permissions",
       help: "Choose what the agent can read, edit, and run in this session.",
       default: "Default",
-      agentDefault: "Agent default",
-      agentDefaultWithMode: "Agent default ({mode})",
-      defaultDescription: "Uses this agent’s settings.",
       defaultWithMode: "Default ({mode})",
-      fullRequiresAdmin: "Only admins can turn on Full access.",
-      requiresAdmin: "Requires admin access.",
+      changePermissionDenied: "You don’t have permission to change this session’s permissions.",
       updateFailed: "Couldn’t change permissions. Try again.",
       refreshFailed: "Couldn’t refresh this session. Reload to see the saved permissions.",
       modes: {
         "read-only": {
           label: "Read only",
-          description:
-            "Can read files in this session’s workspace. Can’t edit files or run commands.",
         },
         guarded: {
           label: "Ask me",
-          description: "Asks you before doing anything outside the workspace.",
         },
         workspace: {
           label: "Auto-review",
-          description: "An AI reviewer approves actions outside the workspace.",
         },
         full: {
           label: "Full access",
-          description: "Edits files and runs commands anywhere, without review.",
         },
       },
     },
@@ -169,7 +164,7 @@ const enModelControls = {
 
 export const registerModelControlsEnglish = Object.assign(
   () => {
-    en.chat = Object.assign({}, en.chat, enModelControls.chat);
+    mergeCatalog(en, enModelControls);
   },
   { catalog: enModelControls },
 );

@@ -23,12 +23,13 @@ final class SystemsNavigationUITests: XCTestCase {
 
     func testSavedPinsRemainAuthoritativeAcrossUpgrade() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "iPhone sidebar evidence")
-        let app = self.launchApp(pinnedPages: "usage,overview,docs")
+        let app = self.launchApp(pinnedPages: "usage,overview,docs,agents")
         defer { app.terminate() }
 
         XCTAssertTrue(app.buttons["RootTabs.Sidebar.Destination.usage"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["RootTabs.Sidebar.Destination.overview"].exists)
-        XCTAssertTrue(app.buttons["RootTabs.Sidebar.Destination.docs"].exists)
+        XCTAssertFalse(app.buttons["RootTabs.Sidebar.Destination.overview"].exists)
+        XCTAssertFalse(app.buttons["RootTabs.Sidebar.Destination.docs"].exists)
+        XCTAssertFalse(app.buttons["RootTabs.Sidebar.Destination.agents"].exists)
         XCTAssertFalse(
             app.buttons["RootTabs.Sidebar.Destination.systems"].exists,
             "An existing saved pin list must not gain Systems during upgrade")
@@ -82,7 +83,7 @@ final class SystemsNavigationUITests: XCTestCase {
         let dashboard = app.webViews.firstMatch
         XCTAssertTrue(dashboard.waitForExistence(timeout: 30), app.debugDescription)
         XCTAssertTrue(dashboard.staticTexts["Systems"].waitForExistence(timeout: 60), app.debugDescription)
-        XCTAssertFalse(app.descendants(matching: .any)["SettingsHub.Fallback"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["SettingsHub.Native"].exists)
         self.capture(app, named: "systems-live-dashboard")
     }
 

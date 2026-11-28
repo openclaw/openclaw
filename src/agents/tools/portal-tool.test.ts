@@ -64,7 +64,6 @@ it.each(["host", "worker", "bound"] as const)(
       },
     };
     const selected = createAvailablePortalTools({
-      senderIsOwner: mode !== "bound",
       sessionPortalTarget: mode === "bound" ? target : undefined,
     })[0]!;
     const environment =
@@ -106,6 +105,10 @@ it.each(["host", "worker", "bound"] as const)(
 );
 
 it("uses a flat closed action schema and owner-only security gate", () => {
+  expect(tool.description).toContain("PUBLIC_URL=publicUrl");
+  expect(tool.description).toContain("publicUrl is not the launch link");
+  expect(tool.description).toContain("screen(action=portal_show, portalId) if available");
+  expect(tool.description).toContain("Report blocked/unverified results");
   expect(tool.parameters).toMatchObject({
     additionalProperties: false,
     properties: { action: { enum: ["open", "list", "close"] } },

@@ -176,7 +176,11 @@ it("keeps other plugin migrations available after a dependency link cannot be cr
   expect([...collected.inspectedPluginIds]).toEqual(["healthy-plugin"]);
   expect(collected.requiredPluginIds).toEqual(new Set(["unprepared-plugin", "healthy-plugin"]));
   expect(collected.plans.map((plan) => plan.pluginId)).toEqual(["healthy-plugin"]);
-  expect(warnings).toEqual([expect.stringContaining("Plugin unprepared-plugin is not prepared")]);
+  expect(warnings).toEqual([]);
+  expect(collected.unavailablePlugins.get("unprepared-plugin")).toMatchObject({
+    requiresStateMigration: true,
+    reason: expect.stringContaining("Cannot prepare dependency broken-dependency"),
+  });
   expect(await collected.plans[0]!.migration.migrateLegacyState(migrationInput(roots[1]!))).toEqual(
     { changes: ["healthy migration ran"], warnings: [] },
   );

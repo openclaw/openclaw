@@ -5,8 +5,11 @@ import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-event
 import { recordDiagnosticsTimelineDuration } from "../../infra/diagnostics-timeline.js";
 import type { ProvisionCopyDetails } from "../../infra/fs-safe-copy-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { SpawnResult } from "../../process/exec-result.js";
+import type { LocalWorkspacePausePhase } from "../sandbox/types.js";
 
 type PreparationPhase =
+  | `reuse.${LocalWorkspacePausePhase | "probeCanonical" | "probeProjection" | "capturePreparation"}`
   | "allocate"
   | "allocationWait"
   | "mutationWait"
@@ -36,6 +39,7 @@ type PreparationPhase =
   | "warmPoolApply"
   | "templateRelease"
   | "provision"
+  | "provisionEstimate"
   | "provisionInspect"
   | "provisionCopy"
   | "provisionCopyWait"
@@ -49,6 +53,8 @@ type PreparationPhase =
   | "templatePrepare"
   | "templateRetire"
   | "templateValidate"
+  | "templateClone"
+  | "templateValidateOutput"
   | "templateApply"
   | "snapshot"
   | "synchronizeCanonical"
@@ -59,6 +65,7 @@ type PreparationPhase =
   | "workspaceLayout";
 type TemplateState = "warm" | "cold" | "unavailable" | "reused";
 type TemplateDetails = {
+  identity?: string;
   reason?: string;
   missReason?:
     | "no-generation"
@@ -68,8 +75,29 @@ type TemplateDetails = {
     | "invalid";
   priorSourceCommit?: string;
   requestedSourceCommit?: string;
+  refreshRejectReason?:
+    | "template-missing"
+    | "validation-failed"
+    | "attributes-changed"
+    | "checkout-policy-mismatch"
+    | "diff-probe-failed";
+  validationFailure?:
+    | "checkout-policy"
+    | "status-probe"
+    | "status-malformed"
+    | "dirty"
+    | "head-mismatch";
+  refreshErrorClass?:
+    | "exit-nonzero"
+    | "timeout"
+    | "no-output-timeout"
+    | "signal"
+    | "output-truncated";
   backend?: string;
   cloneBytes?: number;
+  nativeCloneCount?: number;
+  nativeCloneWriteBytes?: number;
+  nativeCloneUnmeasuredCount?: number;
   errorCode?: string;
 };
 type PreparationTimingState = {
@@ -117,10 +145,39 @@ export function recordWorktreePreparationFailure(phase: PreparationPhase, error:
   }
 }
 
+/** Record only the completed probe's bounded outcome, never its repository output. */
+export function recordWorktreeTemplateProbeFailure(
+  reason: "validation-failed" | "diff-probe-failed",
+  result: Pick<SpawnResult, "termination" | "code" | "stdoutTruncatedBytes">,
+) {
+  setWorktreePreparationTemplate(undefined, {
+    refreshRejectReason: reason,
+    validationFailure: reason === "validation-failed" ? "status-probe" : undefined,
+    refreshErrorClass:
+      result.termination !== "exit"
+        ? result.termination
+        : result.code !== 0
+          ? "exit-nonzero"
+          : "output-truncated",
+  });
+}
+
 export function setWorktreePreparationCopyDetails(details: ProvisionCopyDetails) {
   const current = preparation.getStore();
   if (current) {
     current.copyDetails = details;
+  }
+}
+
+export function recordWorktreeNativeClone(writeBytes: number | undefined) {
+  const details = preparation.getStore()?.templateDetails;
+  if (details) {
+    details.nativeCloneCount = (details.nativeCloneCount ?? 0) + 1;
+    if (writeBytes === undefined) {
+      details.nativeCloneUnmeasuredCount = (details.nativeCloneUnmeasuredCount ?? 0) + 1;
+    } else {
+      details.nativeCloneWriteBytes = (details.nativeCloneWriteBytes ?? 0) + writeBytes;
+    }
   }
 }
 
@@ -160,14 +217,14 @@ export async function timeWorktreePreparationPhase<T>(
 }
 
 export async function withWorktreePreparationTiming<T>(
-  kind: "managed" | "sandbox",
+  kind: "managed" | "managed-prewarm" | "sandbox",
   run: () => Promise<T>,
 ): Promise<T> {
   const startedAt = Date.now();
   const start = performance.now();
   const emit = createQueuedDiagnosticPhaseEmitter();
   const current: PreparationTimingState = {
-    enabled: kind === "managed",
+    enabled: kind !== "sandbox",
     template: "unavailable",
     templateDetails: { reason: "not-requested" },
     phases: {},
@@ -206,6 +263,9 @@ export async function withWorktreePreparationTiming<T>(
         const phaseDurationsMs = Object.fromEntries(
           Object.entries(current.phases).map(([phase, duration]) => [phase, Math.round(duration)]),
         );
+        const reuseDominantPhase = Object.entries(current.phases)
+          .filter(([phase]) => phase.startsWith("reuse."))
+          .toSorted((a, b) => b[1] - a[1])[0]?.[0];
         recordDiagnosticsTimelineDuration(`worktree.${kind}`, end - start);
         for (const [phase, duration] of Object.entries(current.phases)) {
           recordDiagnosticsTimelineDuration(`worktree.${kind}.${phase}`, duration);
@@ -215,7 +275,7 @@ export async function withWorktreePreparationTiming<T>(
           Math.max(0, end - start - coveredMs),
         );
         log.info("managed worktree preparation", {
-          consoleMessage: `managed worktree preparation kind=${kind} template=${current.template} templateDetails=${JSON.stringify(current.templateDetails)} copyDetails=${JSON.stringify(current.copyDetails ?? {})} outcome=${outcome} errorDetails=${JSON.stringify(errorDetails)} durationMs=${durationMs} unattributedMs=${unattributedMs} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,
+          consoleMessage: `managed worktree preparation kind=${kind} template=${current.template} templateDetails=${JSON.stringify(current.templateDetails)} copyDetails=${JSON.stringify(current.copyDetails ?? {})} outcome=${outcome} errorDetails=${JSON.stringify(errorDetails)} durationMs=${durationMs} unattributedMs=${unattributedMs} reuseDominantPhase=${reuseDominantPhase ?? "none"} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,
           kind,
           template: current.template,
           templateDetails: current.templateDetails,
@@ -225,6 +285,7 @@ export async function withWorktreePreparationTiming<T>(
           durationMs,
           unattributedMs,
           phaseDurationsMs,
+          reuseDominantPhase,
         });
         emit?.({
           name: "worktree.preparation",
@@ -248,6 +309,7 @@ export async function withWorktreePreparationTiming<T>(
               ]),
             ),
             ...errorDetails,
+            ...(reuseDominantPhase ? { reuseDominantPhase } : {}),
             unattributedMs,
             ...phaseDurationsMs,
           },

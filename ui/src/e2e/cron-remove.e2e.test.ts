@@ -7,7 +7,12 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
+import {
+  cronJob,
+  cronList,
+  cronSidebarFeatureMethods,
+  openAutomation,
+} from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron removal mocked Gateway E2E",
@@ -30,30 +35,18 @@ suite.define(() => {
   it("confirms removal and rejects a decision captured before reconnect", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        featureMethods: cronSidebarFeatureMethods,
         methodResponses: {
           "cron.list": cronListResponse([job]),
+          "cron.get": job,
           "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
           "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
         },
       });
       const response = await page.goto(`${suite.server.baseUrl}cron`);
       expect(response?.status()).toBe(200);
-      const row = page.locator(`[data-test-id="cron-row-${job.id}"]`);
-      await row.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await page.locator(".cron-table__head").getAttribute("role")).toBeNull();
-      expect(await row.getAttribute("role")).toBe("listitem");
-      const openTask = row.locator("button.cron-table__name");
-      await openTask.focus();
-      await page.keyboard.press("Enter");
+      const row = await openAutomation(page, job.id);
       const detail = page.locator('.cron-page[data-panel-mode="job"]');
-      await detail.waitFor({ state: "visible" });
-      const back = page.locator('[data-test-id="cron-back"]');
-      expect(await back.evaluate((el) => el === document.activeElement)).toBe(true);
-      await page.keyboard.press("Enter");
-      await openTask.waitFor({ state: "visible" });
-      expect(await openTask.evaluate((el) => el === document.activeElement)).toBe(true);
-      await page.keyboard.press("Enter");
-      await detail.waitFor({ state: "visible" });
       await chooseRemove(page);
       const cancelled = await waitForConfirmModal(page);
       await expect(cancelled.textContent()).resolves.toContain(job.name);
@@ -87,14 +80,9 @@ suite.define(() => {
       await expect.poll(async () => gateway.getRequests("cron.remove")).toHaveLength(1);
       expect((await gateway.getRequests("cron.remove"))[0]?.params).toEqual({ id: job.id });
       await detail.waitFor({ state: "detached" });
+      // The Gateway announces the removal; the sidebar list follows it.
+      await gateway.emitGatewayEvent("cron.inventory.changed", undefined);
       await expect.poll(() => row.count()).toBe(0);
-      const search = page.locator('.cron-search-box input[type="search"]');
-      expect(await search.evaluate((el) => el === document.activeElement)).toBe(true);
-      await page.getByRole("tab", { name: "Activity history", exact: true }).press("Enter");
-      const create = page.locator(".cron-new-task");
-      await create.press("Enter");
-      await back.press("Enter");
-      expect(await create.evaluate((el) => el === document.activeElement)).toBe(true);
     });
   });
 });

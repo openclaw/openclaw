@@ -9,8 +9,12 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { validatePluginStateComparison } from "./plugin-state-observation.js";
-import { createPluginStateOperation } from "./plugin-state-operation.js";
-import { assertPluginStatePublicationSettled } from "./plugin-state-publication.js";
+import { createPluginStateOperation, deletePluginStateKeys } from "./plugin-state-operation.js";
+import {
+  assertPluginStatePublicationSettled,
+  isPluginStatePublicationUnavailable,
+  reconcilePluginStatePublication,
+} from "./plugin-state-publication.js";
 import {
   preparePluginStateJournalValue,
   type PluginStateSequencedJournalParams,
@@ -58,6 +62,7 @@ import {
 import {
   comparePluginStateDeleteInWorker,
   comparePluginStateUpdateInWorker,
+  confirmPluginStateCommittedInWorker,
   observePluginStateInWorker,
   clearPluginStateInWorker,
   consumePluginStateInWorker,
@@ -116,7 +121,15 @@ function createReadAvailabilityAssertion(
     assertCurrent?.();
     context ??= captureOpenClawStateWorkerContext({ env: options.env });
     (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
-    assertPluginStatePublicationSettled(context.admission.identity.key, options);
+    const identity = context.admission.identity.key;
+    if (isPluginStatePublicationUnavailable(identity)) {
+      // This check still fails closed; a later check observes the re-validated committed state.
+      const captured = context;
+      void reconcilePluginStatePublication(identity, () =>
+        confirmPluginStateCommittedInWorker(captured, options),
+      );
+    }
+    assertPluginStatePublicationSettled(identity, options);
   };
 }
 
@@ -195,6 +208,7 @@ function createAsyncKeyedStore<T>(
   const store: Required<PluginStateKeyedStore<T, 2>> = {
     createOperation: (stores, handler, authority) =>
       createPluginStateOperation(store, stores, handler, authority),
+    deleteKeys: (keys, options) => deletePluginStateKeys(store, keys, options?.alsoFrom),
     observe: async (key) => {
       const observation = await observePluginStateInWorker({
         ...scope,
@@ -634,11 +648,11 @@ export function prepareCorePluginStateReplacement<T>(
       // SAFETY: This namespace stores the core caller's serialized JSON value type.
       return (await listPluginStateInWorker(scope)) as PluginStateEntry<T>[];
     },
-    async replace(entries: ReadonlyMap<string, T>): Promise<void> {
+    async replace(entries: ReadonlyMap<string, T>, assertCurrent?: () => void): Promise<void> {
       const values = Array.from(entries, ([key, value]) =>
         prepareRegisterParams(key, value, prepared.defaultTtlMs, undefined, prepared.namespace),
       );
-      await replacePluginStateInWorker({ ...scope, entries: values });
+      await replacePluginStateInWorker({ ...scope, entries: values, assertCurrent });
     },
   };
 }

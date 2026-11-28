@@ -1,5 +1,0 @@
-# Small direct capture and real next-command overlap after canonical acceptance.
-# Covers caller disposal, bounded cleanup admission, failed removal and orphan recovery.
-# Also covers snapshot-worker manifest equivalence and bounded cancellation.
-# Exact net regression growth; no allocation for inherited main test-line debt.
-205

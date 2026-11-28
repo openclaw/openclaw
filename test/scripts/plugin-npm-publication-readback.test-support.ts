@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import JSZip from "jszip";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { expect } from "vitest";
 import {
   createPluginPublicationArtifact,
@@ -104,18 +104,28 @@ export async function createNpmPublicationReadbackFixture(
   const runAttempt = 2;
   const replanned = mode === "replanned-failed";
   const deferredAuth = mode === "deferred-auth";
-  const noPublication = fault === "no-publish" || mode === "prior-deferred" || replanned;
+  const operatorDeferred = mode === "operator-deferred";
+  const noPublication =
+    fault === "no-publish" || mode === "prior-deferred" || replanned || operatorDeferred;
   const parentRunId = 300;
   const parentRunAttempt = 1;
   const publisherAttempt = mode === "retained-publisher" || replanned ? 1 : 2;
   const plannerAttempt = mode === "retained-plan" ? 1 : replanned ? 2 : publisherAttempt;
-  const prepared = mode === "prepared" || mode === "candidate-prepared";
+  const prepared = ["prepared", "candidate-prepared", "independent-q-prepared"].includes(mode);
   const producerId = prepared ? 100 : runId;
-  const producerWorkflowSha = mode === "candidate-prepared" ? sourceSha : workflowSha;
+  const producerWorkflowSha =
+    mode === "independent-q-prepared"
+      ? "d".repeat(40)
+      : mode === "candidate-prepared"
+        ? sourceSha
+        : workflowSha;
   const policy =
-    mode === "candidate-prepared" ? "name: frozen Q policy\n" : readFileSync(workflowPath);
+    prepared && mode !== "prepared" ? "name: frozen Q policy\n" : readFileSync(workflowPath);
   mkdirSync(join(root, ".github/workflows"), { recursive: true });
-  writeFileSync(join(root, workflowPath), policy);
+  writeFileSync(
+    join(root, workflowPath),
+    mode === "independent-q-prepared" ? "name: C policy, not Q\n" : policy,
+  );
   const producerAttempt = prepared ? 3 : mode === "retained-qualification" ? 1 : publisherAttempt;
   const mixed = ["missing-planned-job", "existing-package"].includes(fault);
   const selected = (mixed ? ["demo", "existing"] : ["demo"]).map((extensionId) => ({
@@ -321,7 +331,22 @@ export async function createNpmPublicationReadbackFixture(
       sourceSha,
       all: selected,
       candidates,
-      skippedPublished: selected.filter((entry) => !candidates.includes(entry)),
+      skippedPublished: operatorDeferred
+        ? []
+        : selected.filter((entry) => !candidates.includes(entry)),
+      ...(operatorDeferred
+        ? {
+            coreDeferrals: [
+              {
+                packageName,
+                version,
+                sourceSha: fault === "deferred-invalid" ? "c".repeat(40) : sourceSha,
+                reason: "npm-trusted-publisher-exchange-http-404",
+                evidence: "https://github.com/openclaw/openclaw/actions/runs/12/job/34",
+              },
+            ],
+          }
+        : {}),
     },
   });
   const planMetadata = metadata(43, `plugin-npm-plan-${runId}-${plannerAttempt}`, planZip, runId);
@@ -351,6 +376,18 @@ export async function createNpmPublicationReadbackFixture(
   expectDefined(runResponses[0], "qualification producer run").head_sha =
     fault === "producer-sha" ? "c".repeat(40) : producerWorkflowSha;
   const respondGh = (endpoint: string) => {
+    if (endpoint.endsWith(`/contents/${workflowPath}?ref=${producerWorkflowSha}`)) {
+      const policyBytes = Buffer.from(
+        fault === "source-policy" ? "name: replaced Q policy\n" : policy,
+      );
+      return {
+        type: "file",
+        path: workflowPath,
+        encoding: "base64",
+        size: policyBytes.length,
+        content: policyBytes.toString("base64"),
+      };
+    }
     if (endpoint.endsWith(`/actions/runs/${runId}`)) {
       return run(runId, runAttempt);
     }
@@ -420,6 +457,9 @@ export async function createNpmPublicationReadbackFixture(
       );
     }
     if (url.startsWith("https://registry.npmjs.org/")) {
+      if (operatorDeferred && fault !== "deferred-published") {
+        return new Response(null, { status: fault === "deferred-registry-error" ? 403 : 404 });
+      }
       if (deferredAuth) {
         throw new Error("Deferred package registry readback must stay owned by recovery.");
       }

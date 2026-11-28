@@ -100,6 +100,7 @@ export function buildAppGuidedOllamaModel(params: {
   model: OllamaTagModel;
   showInfo: OllamaModelShowInfo;
   configuredCloudModel?: ModelDefinitionConfig;
+  configuredMaxTokens?: number;
 }): ModelDefinitionConfig | undefined {
   const { baseUrl, model, showInfo, configuredCloudModel } = params;
   const contextWindow = showInfo.contextWindow ?? configuredCloudModel?.contextWindow;
@@ -124,6 +125,7 @@ export function buildAppGuidedOllamaModel(params: {
   return capLocalOllamaModelContext(
     {
       ...definition,
+      maxTokens: params.configuredMaxTokens ?? definition.maxTokens,
       ...(showInfo.parameterCount !== undefined ? { parameterCount: showInfo.parameterCount } : {}),
       thinkingLevelMap: definition.thinkingLevelMap ?? showInfo.thinkingLevelMap,
       contextWindow,

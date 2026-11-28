@@ -40,7 +40,7 @@ import {
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-failure.js";
 import { prepareWorkerTurnMedia } from "./worker-turn-media.js";
-import { prepareWorkerTurnModel } from "./worker-turn-model.js";
+import { prepareWorkerTurnModel, workerTurnRuntimeLeaseOptions } from "./worker-turn-model.js";
 import {
   assertSupportedTurn,
   captureWorkerTurnInputAuthority,
@@ -85,7 +85,7 @@ export async function executeWorkerTurn(
       agentDir: input.agentDir ?? resolveAgentDir(input.config ?? {}, placement.agentId),
       workspaceDir: input.workspaceDir,
     },
-    { pluginGeneration: input.pluginGeneration, abortSignal: input.abortSignal },
+    workerTurnRuntimeLeaseOptions(input),
   );
   return await preparedRuntime.run(async () => {
     const backend = "cloud-worker";
@@ -236,7 +236,6 @@ export async function executeWorkerTurn(
     });
     const { browser, computer, preparedComputer } = desktop;
     const {
-      authProfileStoreSource,
       capabilityProfile,
       policy: toolPolicy,
       exec,
@@ -261,6 +260,7 @@ export async function executeWorkerTurn(
       promptCacheContext: {
         boundaryCount: manager.getBoundaryCount(),
         promptCacheKey: turn.promptCacheKey,
+        providerStateScope: turn.providerStateScope,
         fastMode: turn.fastMode,
         fastModeStartedAtMs: turn.fastModeStartedAtMs,
         fastModeAutoOnSeconds: turn.fastModeAutoOnSeconds,
@@ -339,7 +339,6 @@ export async function executeWorkerTurn(
             sessionId: turn.sessionId,
           });
           placementTools.push(...desktop.tools);
-          const availablePlacementTools = new Set(placementTools.map((tool) => tool.name));
           const tools = await runPrepared(() =>
             params.environments.createGatewayTools?.({
               identity,
@@ -352,7 +351,6 @@ export async function executeWorkerTurn(
                 const prepared = await createOpenClawCodingToolsInternalAsync(
                   {
                     ...turn,
-                    authProfileStoreSource,
                     agentId: placement.agentId,
                     conversationCapabilityProfile: capabilityProfile,
                     preparedModelRuntime: preparedRuntime.snapshot,
@@ -388,7 +386,7 @@ export async function executeWorkerTurn(
                 }
                 return filterWorkerPlacementTools(
                   applyEmbeddedAttemptToolsAllow(prepared, turn.toolsAllow),
-                  availablePlacementTools,
+                  new Set(placementTools.map((tool) => tool.name)),
                   launchToolNames,
                 );
               },
@@ -462,11 +460,12 @@ export async function executeWorkerTurn(
       };
       const promptContext = await runPrepared(() => prepareWorkerTurnPrompt(promptPreparation));
       using mcpQuestions = new DisposableStack();
-      const { allowedToolNames, issueLaunchAuthority } = await prepareWorkerLaunchTools({
+      const { allowedToolNames, issueAuthority, bindAuthority } = await prepareWorkerLaunchTools({
         ...turnOwner,
         surface,
         localMcpNodeId,
         exec,
+        memoryBoundary: params.environments.resolveExecMemoryBoundary?.(placement.environmentId),
         connectionIdentity,
         placements: params.placements,
         questionsEnabled: turn.config.mcp?.apps?.enabled === true,
@@ -522,6 +521,7 @@ export async function executeWorkerTurn(
           isAuthorized,
           userMessageAlreadyPersisted,
           baseLeafId,
+          modelPromptProjection: promptContext.modelPromptProjection,
         });
         return baseLeafId;
       };
@@ -548,7 +548,7 @@ export async function executeWorkerTurn(
         );
         throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
       }
-      const toolAuthority = issueLaunchAuthority();
+      const toolAuthority = issueAuthority();
       githubGrant = await bindWorkerGitHubTurn({
         operatorAuthority: readAdmittedRunOperatorAuthority(admittedRunContext),
         session: placement,
@@ -627,7 +627,7 @@ export async function executeWorkerTurn(
         );
       }
       if (!isAuthorized()) {
-        throw new Error("Worker turn authority changed while preparing its launch");
+        throw new Error("Worker turn ended while preparing its launch. Start a new turn.");
       }
       if (!workerAdmission) {
         recorder?.markSentToProvider?.();
@@ -664,7 +664,7 @@ export async function executeWorkerTurn(
       let processResult: Awaited<ReturnType<NonNullable<typeof tunnel.launchTurn>>>;
       try {
         processResult = await tunnel.launchTurn({
-          assertCurrent: githubGrant?.assertCurrent ?? assertActive,
+          assertCurrent: bindAuthority(githubGrant?.assertCurrent ?? assertActive),
           plan: launchPlan.plan,
           turnClaim: params.turnClaim,
           timeoutMs: turn.timeoutMs,

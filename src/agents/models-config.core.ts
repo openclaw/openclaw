@@ -17,6 +17,7 @@ import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { privateFileStore } from "../infra/private-file-store.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import {
   resolvePluginMetadataSnapshot,
@@ -31,7 +32,7 @@ import {
 } from "./agent-scope.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { MODELS_JSON_STATE } from "./models-config-state.js";
+import { MODELS_JSON_STATE, publishModelsJsonCostSource } from "./models-config-state.js";
 import { planOpenClawModelsJson, type PreparedModelsConfigContext } from "./models-config.plan.js";
 import {
   capturePluginModelCatalogAuth,
@@ -44,6 +45,8 @@ import {
   replacePersistedPluginModelCatalogs,
   type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
+
+const log = createSubsystemLogger("agents/models-config");
 
 type ModelsConfigInput = OpenClawConfig | (() => Promise<CapturedRuntimeConfigRead>);
 
@@ -295,12 +298,18 @@ export async function ensureOpenClawModelsJsonWithInput(
       }),
     );
 
+    const rootChanged = plan.action === "write" && existingModelsFile.raw !== plan.contents;
     if (plan.action === "write") {
       await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
-      if (existingModelsFile.raw !== plan.contents) {
+      if (rootChanged) {
         await privateFileStore(path.dirname(targetPath)).writeText("models.json", plan.contents);
-        MODELS_JSON_STATE.costCache.delete(agentDir);
       }
+    }
+    publishModelsJsonCostSource(
+      agentDir,
+      plan.action === "write" ? plan.contents : existingModelsFile.raw || null,
+    );
+    if (plan.action === "write") {
       await ensureModelsFileModeForModelsJson(targetPath);
     }
     const publication = plan.pluginCatalogWrites
@@ -317,6 +326,12 @@ export async function ensureOpenClawModelsJsonWithInput(
           plan.action === "write" ? plan.contents : existingModelsFile.raw || null,
         pluginCatalogs: publication.catalogs,
       };
+    }
+    // Logged once per catalog change, not per catalog load, so the skip stays visible without repeating.
+    if (rootChanged || publication?.changed) {
+      for (const reason of plan.skippedProviders ?? []) {
+        log.warn(`Model catalog omits a provider the model registry cannot load: ${reason}`);
+      }
     }
     if (plan.action === "noop") {
       await ensureModelsFileModeForModelsJson(targetPath);

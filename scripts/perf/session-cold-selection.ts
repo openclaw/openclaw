@@ -27,6 +27,13 @@
  * internal row visits. Fixture generation and imports are outside measurement.
  * CPU/allocation cover this isolate, not a Gateway or reclamation-worker transport.
  * Cold markers are synthetic metadata: this fixture must never be used for restoration.
+ * --cleanup-pending 0 (or 1 for 1%) adds retained headers and cleaned navigation
+ * rows to every cold archive, with leftover bodies at the end of selected windows.
+ * Hot siblings provide database size without copying operator data. Each measured
+ * selection resumes the preceding discovery cursor, as the maintenance owner does.
+ * --recent N keeps N unarchived windows at the cutoff. For a 128-slot sweep of
+ * 10,000 unarchived sessions, prepare with --sessions 10000 --hot 10000 --events 1
+ * --cleanup-pending 0 and --recent 10000 (idle), 9999 (one old) or 9872 (128 old).
  * --entry measures retained-window entry deletion instead of cold selection. Prepare
  * with --entry --sessions 10000 --hot 1 --events 1 --windows 16 --body-bytes 1024;
  * measure with --entry [--entry-module <frozen-entry-store.ts>]. Each operation deletes
@@ -45,6 +52,7 @@ import { DatabaseSync, StatementSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -52,6 +60,7 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     sessions: { type: "string", default: "10000" },
     hot: { type: "string", default: "128" },
+    recent: { type: "string" },
     events: { type: "string", default: "1000" },
     "body-bytes": { type: "string", default: "1024" },
     iterations: { type: "string", default: "20" },
@@ -67,6 +76,7 @@ const { values } = parseArgs({
     history: { type: "boolean" },
     windows: { type: "string", default: "16" },
     "entry-module": { type: "string" },
+    "cleanup-pending": { type: "string" },
   },
 });
 assert(values["state-dir"], "--state-dir is required");
@@ -91,9 +101,11 @@ const positive = (input: string) => {
 type Fixture = {
   sessions: number;
   hot: number;
+  recent?: number;
   events: number;
   bodyBytes: number;
   windows?: number;
+  cleanupPending?: number;
 };
 process.env.OPENCLAW_STATE_DIR = root;
 process.env.OPENCLAW_HOME = path.join(root, "home");
@@ -119,66 +131,110 @@ try {
     const fixture: Fixture = {
       sessions: positive(values.sessions),
       hot: positive(values.hot),
+      ...(values.recent !== undefined ? { recent: positive(values.recent) } : {}),
       events: positive(values.events),
       bodyBytes: positive(values["body-bytes"]),
       ...(values.entry ? { windows: positive(values.windows) } : {}),
+      ...(values["cleanup-pending"] !== undefined
+        ? { cleanupPending: Number(values["cleanup-pending"]) }
+        : {}),
     };
-    assert(fixture.hot <= fixture.sessions);
-    agent.runOpenClawAgentWriteTransaction(({ db }) => {
-      // sqlite-allow-raw -- Synthetic fixture insertion into the real admitted schema.
-      const node = db.prepare(
-        "INSERT INTO session_nodes(session_key,current_session_id,entry_json,updated_at,entry_valid) VALUES(?,?,?,1,1)",
-      );
-      const window = db.prepare(
-        "INSERT INTO session_windows(session_id,session_key,created_at,updated_at,transcript_updated_at) VALUES(?,?,1,1,1)",
-      );
-      const watermark = db.prepare(
-        "INSERT INTO transcript_rewrite_watermarks(session_id,generation,updated_at) VALUES(?,?,1)",
-      );
-      const cold = db.prepare(
-        "INSERT INTO session_transcript_cold_archives(session_id,generation,archive_name,archive_sha256,event_count,raw_bytes,archive_bytes,last_seq,archived_at,storage,archive_blob) VALUES(?,?,?,?,1,1,1,0,1,'file',NULL)",
-      );
-      const event = db.prepare(
-        "INSERT INTO transcript_events(session_id,seq,event_json,created_at,event_utf8_bytes) VALUES(?,?,?,1,?)",
-      );
-      const payload = JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "x".repeat(fixture.bodyBytes) },
-      });
-      for (let index = 0; index < fixture.sessions; index++) {
-        const sessionId = id(index);
-        const key = `agent:main:${sessionId}`;
-        node.run(
-          key,
-          sessionId,
-          JSON.stringify({
-            sessionId,
-            updatedAt: 1,
-            ...(values.entry
-              ? { label: "synthetic metadata ".repeat(Math.ceil(fixture.bodyBytes / 19)) }
-              : {}),
-          }),
+    assert((fixture.recent ?? 0) <= fixture.hot && fixture.hot <= fixture.sessions);
+    assert(fixture.cleanupPending === undefined || [0, 1].includes(fixture.cleanupPending));
+    const { prepareColdTranscriptPayload } =
+      await import("../../src/config/sessions/transcript-payload.js");
+    for (let start = 0; start < fixture.sessions; start += 100) {
+      agent.runOpenClawAgentWriteTransaction(({ db }) => {
+        // sqlite-allow-raw -- Synthetic fixture insertion into the real admitted schema.
+        const node = db.prepare(
+          "INSERT INTO session_nodes(session_key,current_session_id,entry_json,updated_at,entry_valid) VALUES(?,?,?,?,1)",
         );
-        window.run(sessionId, key);
-        watermark.run(sessionId, `generation-${index}`);
-        if (index < fixture.sessions - fixture.hot) {
-          const hash = index.toString(16).padStart(64, "0");
-          cold.run(sessionId, `generation-${index}`, `${hash}.jsonl.zst`, hash);
-        } else {
-          for (let seq = 0; seq < fixture.events; seq++) {
-            event.run(sessionId, seq, payload, Buffer.byteLength(payload));
+        const window = db.prepare(
+          "INSERT INTO session_windows(session_id,session_key,created_at,updated_at,transcript_updated_at) VALUES(?,?,1,?,?)",
+        );
+        const watermark = db.prepare(
+          "INSERT INTO transcript_rewrite_watermarks(session_id,generation,updated_at) VALUES(?,?,1)",
+        );
+        const cold = db.prepare(
+          "INSERT INTO session_transcript_cold_archives(session_id,generation,archive_name,archive_sha256,event_count,raw_bytes,archive_bytes,last_seq,archived_at,storage,archive_blob) VALUES(?,?,?,?,1,1,1,0,1,'file',NULL)",
+        );
+        const event = db.prepare(
+          "INSERT INTO transcript_events(session_id,seq,event_json,created_at,event_utf8_bytes) VALUES(?,?,?,1,?)",
+        );
+        const payload = JSON.stringify({
+          type: "message",
+          message: { role: "user", content: "x".repeat(fixture.bodyBytes) },
+        });
+        const payloadBytes = Buffer.byteLength(payload);
+        const coldEvent = db.prepare(
+          "INSERT INTO transcript_events(session_id,seq,event_json,created_at,event_utf8_bytes,navigation_json) VALUES(?,?,?,1,?,?)",
+        );
+        const navigation = prepareColdTranscriptPayload(db, payload).navigation_json;
+        assert(navigation);
+        const header = JSON.stringify({ type: "session", version: 3, id: "synthetic" });
+        for (let index = start; index < Math.min(start + 100, fixture.sessions); index++) {
+          const sessionId = id(index);
+          const key = `agent:main:${sessionId}`;
+          const hotIndex = index - (fixture.sessions - fixture.hot);
+          const updatedAt = hotIndex >= 0 && hotIndex < (fixture.recent ?? 0) ? 100 : 1;
+          node.run(
+            key,
+            sessionId,
+            JSON.stringify({
+              sessionId,
+              updatedAt,
+              ...(values.entry
+                ? { label: "synthetic metadata ".repeat(Math.ceil(fixture.bodyBytes / 19)) }
+                : {}),
+            }),
+            updatedAt,
+          );
+          window.run(sessionId, key, updatedAt, updatedAt);
+          watermark.run(sessionId, `generation-${index}`);
+          if (index < fixture.sessions - fixture.hot) {
+            const hash = index.toString(16).padStart(64, "0");
+            cold.run(sessionId, `generation-${index}`, `${hash}.jsonl.zst`, hash);
+            if (fixture.cleanupPending !== undefined) {
+              for (let seq = 0; seq < fixture.events; seq++) {
+                const body =
+                  seq === 0
+                    ? header
+                    : fixture.cleanupPending === 1 &&
+                        index % 100 === 99 &&
+                        seq === fixture.events - 1
+                      ? payload
+                      : null;
+                coldEvent.run(
+                  sessionId,
+                  seq,
+                  body,
+                  seq === 0 ? Buffer.byteLength(header) : payloadBytes,
+                  seq === 0 ? null : navigation,
+                );
+              }
+            }
+          } else {
+            for (let seq = 0; seq < fixture.events; seq++) {
+              event.run(sessionId, seq, payload, payloadBytes);
+            }
           }
         }
-      }
-      for (let index = 1; index < (fixture.windows ?? 1); index++) {
-        const target = id(fixture.sessions - 1);
-        window.run(`${target}-history-${index}`, `agent:main:${target}`);
-      }
-    }, options);
+        if (start === 0) {
+          for (let index = 1; index < (fixture.windows ?? 1); index++) {
+            const target = id(fixture.sessions - 1);
+            window.run(`${target}-history-${index}`, `agent:main:${target}`, 1, 1);
+          }
+        }
+      }, options);
+    }
     writeFileSync(manifestPath, JSON.stringify(fixture));
     console.log(JSON.stringify({ prepared: fixture }));
   } else {
     const fixture = JSON.parse(readFileSync(manifestPath, "utf8")) as Fixture;
+    assert(
+      !fixture.recent || !(values.protection || values.mutation || values.entry || values.history),
+      "Recent windows require selection mode",
+    );
     const owner: typeof import("../../src/config/sessions/session-cold-storage-selection.js") =
       await import(
         values["owner-module"]
@@ -196,15 +252,16 @@ try {
     const ids = Array.from({ length: fixture.hot }, (_, index) =>
       id(fixture.sessions - fixture.hot + index),
     );
-    const input = {
-      databaseOptions: options,
-      admissionIdentities: [],
-      liveSessionKeys: [],
-      cooledSessionIds: [],
-      beforeMs: 100,
-      maxTranscripts: fixture.hot,
-      maxBytes: 64 * 1024 * 1024,
-    };
+    const input: import("../../src/config/sessions/session-accessor.sqlite-archive-types.js").SessionColdBatchInput =
+      {
+        databaseOptions: options,
+        admissionIdentities: [],
+        liveSessionKeys: [],
+        cooledSessionIds: [],
+        beforeMs: 100,
+        maxTranscripts: fixture.cleanupPending === undefined ? fixture.hot : 128,
+        maxBytes: 64 * 1024 * 1024,
+      };
     const worker:
       | typeof import("../../src/config/sessions/session-cold-storage-worker.js")
       | undefined = values.mutation
@@ -346,7 +403,11 @@ try {
       } else {
         const result = owner.selectSessionColdBatch(input);
         assert(result.found);
-        assert.equal(result.value.plans.length, fixture.hot);
+        assert.equal(
+          result.value.plans.length,
+          Math.min(fixture.hot - (fixture.recent ?? 0), input.maxTranscripts),
+        );
+        input.cleanupCursor = result.value.cleanupCursor;
       }
     };
     const statements = new Map<
@@ -456,12 +517,7 @@ try {
     globalThis.gc?.();
     const inspector = new Session();
     if (values.allocation) {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 32768,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 32768);
     }
     const iterations = values.sql ? 1 : positive(values.iterations);
     const before = process.memoryUsage();

@@ -1,4 +1,4 @@
-import { RUNTIME_CONTEXT_CUSTOM_TYPE } from "@openclaw/llm-core";
+import { RUNTIME_CONTEXT_CUSTOM_TYPE } from "@openclaw/llm-core/types";
 import { sql } from "kysely";
 import { projectSessionEntryMessage } from "../../../packages/agent-core/src/harness/session/session.js";
 import {

@@ -236,7 +236,7 @@ describe("lmstudio setup", () => {
     const provider = source === "env" ? { ...staleAuth, apiKey: undefined } : staleAuth;
     return {
       config: buildConfig(
-        { ...provider, headers: customHeaders },
+        { ...provider, headers: customHeaders, maxTokens: 8_192 },
         source === "env" ? {} : storedAuth,
       ),
       opts: { customApiKey: "" },
@@ -280,6 +280,7 @@ describe("lmstudio setup", () => {
         models ? [{ id: "phi-4", contextWindow: 65536 }, { id: modelId }] : [{ id: modelId }],
       );
       if (headerOnly) {
+        expect(provider.models).toMatchObject([{ id: modelId, maxTokens: 8_192 }]);
         expectDiscoveryRequest(undefined, customHeaders);
         expect(removeProfiles).toHaveBeenCalledWith(
           expect.objectContaining({ provider: "lmstudio" }),
@@ -460,7 +461,7 @@ describe("lmstudio-runtime", () => {
   beforeEach(() => resolveApiKeyForProviderMock.mockReset());
   it.each`
     name          | config                                              | key                         | source                        | env                                 | expected
-    ${"blank"}    | ${{ auth: "api-key" }}                              | ${"   "}                    | ${"profile:lmstudio:default"} | ${{}}                               | ${/openclaw models auth login --provider lmstudio/}
+    ${"blank"}    | ${{ auth: "api-key" }}                              | ${"   "}                    | ${"profile:lmstudio:default"} | ${{}}                               | ${/add an LM Studio API key in Models/}
     ${"missing"}  | ${{ auth: "api-key" }}                              | ${undefined}                | ${undefined}                  | ${{}}                               | ${/LM Studio API key is required/i}
     ${"fallback"} | ${{ auth: "api-key", apiKey: "${LM_API_TOKEN}" }}   | ${undefined}                | ${undefined}                  | ${{ LM_API_TOKEN: "template-key" }} | ${"template-key"}
     ${"local"}    | ${{ auth: "api-key" }}                              | ${localKey}                 | ${"synthetic"}                | ${{}}                               | ${localKey}

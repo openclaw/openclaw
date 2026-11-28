@@ -153,6 +153,14 @@ Unscoped launches use fixed classifications such as `unscoped.shell-command`,
 and paths never become labels. Linux OOM-protection exec wrappers report the
 logical target command, since the spawn broker can omit the wrapper shell.
 Counts represent successful admitted launches, not a census of grandchildren.
+Shared command launches also report a bounded `transport` label: `broker`,
+`native.no-broker`, `native.ipc`, `native.independent`, `native.descriptor`,
+`native.inherit`, or `native.stdio`. These distinguish missing broker context
+from the option class requiring in-process spawning; native-process API stdio
+fallbacks use `native.stdio`. `thread` is `main` or `worker`. The Prometheus
+`openclaw_child_process_spawn_total` counter retains these labels alongside the
+operation and command family above, without recording arguments or paths.
+This diagnostic does not change spawn routing.
 
 Gateway RPC diagnostics retain exact core and registered plugin method names,
 including `node.invoke.result` and `workboard.cards.list`; unregistered request
@@ -206,8 +214,10 @@ operation across waits and append `session-rows:select`, `session-rows:prepare`,
 `session-rows:consume`; roster fact batches preserve their caller's task label. For example,
 `gateway:rpc:sessions.list:session-rows:select` identifies list selection, and
 scheduled work retains its `scheduler:<lane>:<task>` prefix. Labels contain only
-code-owned operation names, never session keys or request content. Labels cover
-the synchronous portion of explicit task scopes. Other asynchronous continuations
+code-owned operation names, never session keys or request content. Host exec
+preparation uses `exec:spawn-prepare`; detached terminal-upload expiration uses
+`terminal-upload:cleanup`. Labels cover the synchronous portion of explicit task
+scopes. Other asynchronous continuations
 and unknown callbacks use best-effort unattributed
 delay warnings from the event-loop sampler; the Gateway does not install
 process-wide async hooks to time every promise continuation. During healthy idle
@@ -775,8 +785,19 @@ node are omitted and reported in `unattributedSampleCount` and
 when such references are omitted or a size-capped summary replaces the tree.
 
 The complete result is capped at 1 MiB. When the tree and samples exceed that cap,
-`truncated` is true and `summary` replaces `profile`. Summary entries combine
-identical call stacks and retain up to eight frames in leaf-first order. Repeated
+`truncated` is true and `summary` replaces `profile`. The same sanitized tree and
+samples are also saved as a Chrome DevTools-loadable `.heapprofile` under
+`<stateDir>/diagnostics/`; the response includes its `path` and `sizeBytes`.
+The file preserves all attributed samples and native node sizes, even when their
+rows do not fit in the inline summary. The existing omission of samples without a
+matching node still applies. Files are capped at 64 MiB, created with owner-only
+permissions, and retained until manually removed, like CPU profiles and heap
+snapshots. Insufficient disk space, write failure, cancellation, or an over-cap
+profile fails the capture; partial files are removed and cleanup failures are
+reported. Copy the file from the Gateway host to load it in DevTools' Memory panel.
+
+Summary entries combine
+identical call stacks and retain up to 32 frames in leaf-first order. Repeated
 recursive runs that fit those slots are collapsed, with `×N` on the last frame of
 the repeated run. Longer stacks retain the allocating leaf, the nearest omitted
 OpenClaw caller, and its outermost OpenClaw owner; `[...]` marks skipped frames.
@@ -923,8 +944,10 @@ include that delay; coverage and heap counters describe acquisition. These field
 are not an atomic process snapshot.
 
 Critical memory pressure retires idle workers through their existing cleanup owners,
-including when diagnostic event collection is disabled. Warnings do not retire
-workers. Retirement requests are asynchronous, skip active work, and keep native
+including when diagnostic event collection is disabled. On constrained Node/Linux
+hosts, process memory usage at 80% of the limit also triggers retirement without
+changing diagnostic severity. Other warnings do not retire workers.
+Retirement requests are asynchronous, skip active work, and keep native
 close/checkpoint operations off the main thread. Active operations keep their
 custody and the usual 30-minute database retention window resumes after use.
 No stored data, database schema, or update procedure changes.
@@ -1107,7 +1130,10 @@ reads do not count; an empty conditional row list is still a baseline. Its bound
 causes are `projection-revision`, `config`, `identity`, `selection-reset`,
 `view-evicted`, and `history-evicted`. Views are evicted in least-recently-used
 order at 512 cache slots or 32 MiB estimated retention per projection; each view
-retains at most 32 prior row generations.
+retains at most 32 prior row generations. Under byte pressure, older generations
+are retired before whole views, preserving each view's newest comparison baseline
+where the budget permits. Retention gauges report the coalesced state after these
+retirements, so samples can remain below the cap while evictions occur.
 For invalidations observed together on a read, config wins over identity, then
 projection revision; selection resets count where they clear the cache.
 
@@ -1129,9 +1155,11 @@ baselines and diagnostic session activity states. `openclaw_session_projection_o
 counts live projection owners. Both gauges have no labels or session identities.
 
 `openclaw_session_projection_rows_retained_bytes` estimates plain data reachable
-from those rows, deduplicating shared objects within each projection. Sampling
-uses existing memory samples (normally every 30 seconds during diagnostic
-activity), with a fixed 100,000-visit and 64-depth budget per projection. It
+from those rows, deduplicating shared objects within each projection. Entry counts
+follow existing memory samples (normally every 30 seconds during diagnostic
+activity). Byte and truncation estimates refresh on the first sample and at most
+once every five minutes afterward, with a fixed 100,000-visit and 64-depth budget
+per projection; between refreshes they retain the last estimate. The estimator
 never serializes contents, invokes getters, reads SQLite, or walks data on writes
 or Prometheus scrapes. `openclaw_session_projection_rows_estimate_truncated`
 counts owners whose estimate hit that budget or unsupported data; a nonzero value

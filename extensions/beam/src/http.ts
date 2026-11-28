@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { getGatewayRequestAuthorityV1 } from "openclaw/plugin-sdk/gateway-request-authority";
 import { sendJsonNoStore as sendJson } from "openclaw/plugin-sdk/http-response-runtime";
-import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { buildControlUiCatalogSharePath } from "openclaw/plugin-sdk/session-catalog-runtime";
 import {
   beginWebhookRequestPipelineOrReject,
@@ -12,37 +12,7 @@ import type { BeamPublisher } from "../upload-operation-api.js";
 import type { BeamStore } from "./store.js";
 import { BEAM_MAX_BODY_BYTES, BEAM_SESSION_SHARE_ROUTE, parseBeamUpload } from "./types.js";
 
-type BeamRequestClient = {
-  clientIp: string;
-  scopes: readonly string[];
-  profileId?: string;
-  visitorGrant?: { assertCurrent(): void };
-};
-
-function currentRequestClient(req: IncomingMessage): BeamRequestClient {
-  const client = getPluginRuntimeGatewayRequestScope()?.client;
-  const access = client?.internal?.operatorAccessAuthority;
-  return {
-    clientIp: client?.clientIp ?? req.socket.remoteAddress ?? "unknown",
-    scopes: client?.connect?.scopes ?? [],
-    profileId: client?.authenticatedUserProfile?.profileId,
-    ...(access?.requiredPolicyPlugin === "visitor-access" &&
-    access.gatewayAccessGrant?.pluginId === "visitor-access"
-      ? { visitorGrant: access }
-      : {}),
-  };
-}
-
-function canPublish(scopes: readonly string[]): boolean {
-  return scopes.includes("operator.write") || scopes.includes("operator.admin");
-}
-
-export function createBeamRequestHandler(params: {
-  store: BeamStore;
-  now?: () => number;
-  resolveClient?: (req: IncomingMessage) => BeamRequestClient;
-  resolveControlUiBasePath: () => string | undefined;
-}): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
+export function createBeamIngressLimits() {
   const rateLimiter = createFixedWindowRateLimiter({
     windowMs: 60_000,
     maxRequests: 60,
@@ -52,46 +22,49 @@ export function createBeamRequestHandler(params: {
     maxInFlightPerKey: 2,
     maxTrackedKeys: 2_048,
   });
+  return { rateLimiter, inFlightLimiter };
+}
+
+export function createBeamRequestHandler(params: {
+  store: BeamStore;
+  now?: () => number;
+  limits?: ReturnType<typeof createBeamIngressLimits>;
+  resolveAuthority?: typeof getGatewayRequestAuthorityV1;
+  resolveControlUiBasePath: () => string | undefined;
+}): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
+  const { rateLimiter, inFlightLimiter } = params.limits ?? createBeamIngressLimits();
 
   return async (req, res) => {
-    const scope = getPluginRuntimeGatewayRequestScope();
-    const client = params.resolveClient?.(req) ?? currentRequestClient(req);
-    const publisher: BeamPublisher | undefined = canPublish(client.scopes)
-      ? { kind: "staff", profileId: client.profileId }
-      : client.scopes.includes("operator.sessions.write") && client.profileId && client.visitorGrant
-        ? { kind: "guest", profileId: client.profileId }
-        : undefined;
-    if (!publisher) {
+    const authority = (params.resolveAuthority ?? getGatewayRequestAuthorityV1)();
+    const profileId = authority?.personProfileId;
+    const publisher: BeamPublisher | undefined =
+      authority?.scopes.includes("operator.write") || authority?.scopes.includes("operator.admin")
+        ? { kind: "staff", profileId, attributionProfileId: authority.attributionProfileId }
+        : profileId &&
+            authority?.scopes.includes("operator.sessions.write") &&
+            authority.requiredGrantPluginId === "visitor-access"
+          ? { kind: "guest", profileId }
+          : undefined;
+    if (!authority || !publisher) {
       sendJson(res, 403, {
         ok: false,
         error: "Beam requires operator.write or an active verified Visitor publisher",
       });
       return true;
     }
-    const assertCurrent = () => {
-      if (
-        scope?.signal?.aborted ||
-        scope?.hasCurrentClientAuthority?.() === false ||
-        res.writableEnded ||
-        res.destroyed
-      ) {
-        if (!res.writableEnded && !res.destroyed) {
-          sendJson(res, 401, { ok: false, error: "Beam publisher authority expired" });
-        }
-        throw new Error("Beam publisher authority expired");
-      }
-      client.visitorGrant?.assertCurrent();
-    };
+    const requiredGrant = publisher.kind === "guest" ? "visitor-access" : undefined;
+    const assertCurrent = () => authority.assertCurrent(requiredGrant);
     assertCurrent();
+    const clientIp = authority.clientIp ?? req.socket.remoteAddress ?? "unknown";
     const pipeline = beginWebhookRequestPipelineOrReject({
       req,
       res,
       allowMethods: ["POST"],
       requireJsonContentType: true,
       rateLimiter,
-      rateLimitKey: client.clientIp,
+      rateLimitKey: clientIp,
       inFlightLimiter,
-      inFlightKey: client.clientIp,
+      inFlightKey: clientIp,
     });
     if (!pipeline.ok) {
       return true;
@@ -114,7 +87,7 @@ export function createBeamRequestHandler(params: {
         sendJson(res, 400, { ok: false, error: parsed.error });
         return true;
       }
-      await scope?.revalidate?.();
+      await authority.revalidate(requiredGrant);
       assertCurrent();
       const receivedAt = params.now?.() ?? Date.now();
       const result = await params.store.upload(parsed.value, {

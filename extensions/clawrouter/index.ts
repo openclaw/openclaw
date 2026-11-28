@@ -41,6 +41,7 @@ import {
 import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { clawrouterMediaUnderstandingProvider } from "./audio-transcription.js";
 import { normalizeClawRouterApiBaseUrl, normalizeClawRouterRootUrl } from "./base-url.js";
+import { createClawRouterConverseStream } from "./converse-stream.js";
 import { buildClawRouterDecisionProvider } from "./decision-provider.js";
 import { clawrouterEmbeddingProvider } from "./embedding-provider.js";
 import { buildClawRouterImageGenerationProvider } from "./image-generation-provider.js";
@@ -623,16 +624,16 @@ export default defineSingleProviderPluginEntry({
       // This is protocol support, not a key grant. The decision executor checks the
       // selected credential's catalog before using its native route.
       augmentModelCatalog: ({ entries }) =>
-        entries.map((entry) =>
-          entry.provider === PROVIDER_ID &&
-          entry.id === "openai/gpt-6-luna" &&
-          entry.api === "openai-responses"
-            ? {
-                ...entry,
-                inference: { ...decisionCapabilities, chat: entry.inference?.chat ?? true },
-              }
-            : entry,
-        ),
+        entries
+          .filter(
+            ({ provider, id, api }) =>
+              provider === PROVIDER_ID && id === "openai/gpt-6-luna" && api === "openai-responses",
+          )
+          .map((entry) =>
+            Object.assign({}, entry, {
+              inference: { ...decisionCapabilities, chat: entry.inference?.chat ?? true },
+            }),
+          ),
       // Live catalog routing also applies to explicitly configured model rows.
       preferRuntimeResolvedModel: () => true,
       prepareDynamicModel: async (ctx) => {
@@ -654,6 +655,11 @@ export default defineSingleProviderPluginEntry({
           apiKey,
           discoveryApiKey: apiKey,
           baseUrl: ctx.providerConfig?.baseUrl ?? configuredBaseUrl(ctx.config),
+          requestedModelId: ctx.modelId,
+          requestedModelApi:
+            ctx.providerConfig?.models?.find((model) => model.id === ctx.modelId)?.api ??
+            ctx.modelRegistry?.find(PROVIDER_ID, ctx.modelId)?.api ??
+            ctx.providerConfig?.api,
         });
         const model = providerConfig.models.find((entry) => entry.id === ctx.modelId);
         if (!model) {
@@ -674,6 +680,7 @@ export default defineSingleProviderPluginEntry({
         return baseUrl !== providerConfig.baseUrl ? { ...providerConfig, baseUrl } : undefined;
       },
       normalizeResolvedModel: ({ model }) => normalizeClawRouterResolvedModel(model),
+      createStreamFn: createClawRouterConverseStream,
       resolveFastModeSupport,
       resolveServiceTiers,
       resolveNativeWebSearch,
@@ -685,7 +692,7 @@ export default defineSingleProviderPluginEntry({
         if (ctx.modelApi === "openai-completions" && ctx.modelId?.startsWith("mistral/")) {
           return mistralReplay.buildReplayPolicy?.(ctx);
         }
-        if (ctx.modelApi === "anthropic-messages") {
+        if (ctx.modelApi === "anthropic-messages" || ctx.modelApi === "bedrock-converse-stream") {
           return anthropicReplay.buildReplayPolicy?.(ctx);
         }
         if (ctx.modelApi === "google-generative-ai") {

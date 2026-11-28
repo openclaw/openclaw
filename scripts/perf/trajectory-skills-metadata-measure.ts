@@ -24,6 +24,7 @@ import { parseArgs } from "node:util";
 import type { Skill } from "../../src/skills/loading/skill-contract.js";
 import type { SkillEntry, SkillSnapshot } from "../../src/skills/types.js";
 import type { DB } from "../../src/state/openclaw-agent-db.generated.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -393,12 +394,7 @@ try {
     await nextTurn();
     await nextTurn();
     if (values.mode === "allocation") {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 8192,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 8192);
       sampling = true;
     }
     observer.observe({ entryTypes: ["gc"] });

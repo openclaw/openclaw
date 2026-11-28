@@ -37,6 +37,9 @@ line-comment and trailing-comma support as model loading. It keeps references
 backed by those local providers and repairs references to unavailable providers.
 This repair leaves `models.json` unchanged, preserving its comments. Unreadable
 or malformed catalogs still produce a warning and leave affected references intact.
+In `models.mode: "replace"`, only explicit providers count as catalog providers;
+model refs routed through an enabled CLI backend also remain available. Doctor
+preserves those runtime pins and fallbacks in default and per-agent scopes.
 
 ## Plugin prompt-modification permission
 
@@ -1157,7 +1160,10 @@ The Codex plugin's `codex-native-assignment-repair` runs during
 `openclaw doctor --fix` and update-time Doctor, after session repair. It collapses
 proven duplicate assignments for the same child and native turn and removes
 assignments whose requester session, lifecycle, or connection is provably
-obsolete. Compatible aliases retain their receipt and recorded-result metadata;
+obsolete. An assignment is kept only when its lifecycle revision equals the
+requester's, including legacy owners where both are absent. A revision on only
+one side, such as after a reset that kept the session ID, cannot be recovered
+and is removed. Compatible aliases retain their receipt and recorded-result metadata;
 conflicting facts produce a recoverable warning without changing the row.
 Separate pending turns of one child are preserved. Repairs use the
 existing SQLite backup and exact-row compare-and-apply owner; no database schema

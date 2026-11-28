@@ -3,6 +3,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../../../config/config.js";
 import { hashConfigRaw } from "../../../config/io.read-helpers.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { decideDoctorContributionPending } from "../../../flows/doctor-health-context.test-support.js";
 import { runWriteConfigHealth } from "../../../flows/doctor-health-contribution-runners.config.js";
 import { initialDoctorHealthContribution } from "../../../flows/doctor-health-contributions-selection.test-support.js";
 import { createDoctorHealthFlowContext } from "../../../flows/doctor-health-contributions.test-support.js";
@@ -143,3 +144,28 @@ it.each(configuredCases)("persists required $kind work after release backfill", 
     }
   }),
 );
+
+it("has pending work only for configured integrations that the release step would touch", () =>
+  withOpenClawTestState({ label: "release-backfill-pending", env: updateEnv }, async (state) => {
+    const contribution = initialDoctorHealthContribution(
+      "doctor:release-configured-plugin-installs",
+    );
+    const pending = async (cfg: OpenClawConfig) =>
+      decideDoctorContributionPending(contribution, await createContext(state, cfg));
+    const configured: OpenClawConfig = { plugins: { entries: { discord: { enabled: true } } } };
+    await state.writeConfig(configured);
+
+    await expect(pending({ meta: { lastTouchedVersion: VERSION } })).resolves.toBe("none");
+    // Before the release gate, a completed step stamps the config's touched version.
+    await expect(
+      pending({ ...configured, meta: { lastTouchedVersion: "2026.5.1" } }),
+    ).resolves.toBe("work");
+    const ctx = await createContext(state, {
+      ...configured,
+      meta: { lastTouchedVersion: "2026.5.1" },
+    });
+    await contribution.run(ctx);
+    expect(ctx.cfg.meta?.lastTouchedVersion).toBe(VERSION);
+    expect(mocks.repair).toHaveBeenCalledOnce();
+    expect(mocks.repair.mock.calls[0]?.[0].pluginIds).toContain("discord");
+  }));

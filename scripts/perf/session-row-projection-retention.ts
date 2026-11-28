@@ -48,6 +48,7 @@ const { values } = parseArgs({
     allocation: { type: "boolean" },
     snapshot: { type: "boolean" },
     diagnostics: { type: "boolean" },
+    "diagnostic-heartbeats": { type: "string" },
     "read-all": { type: "boolean" },
     "cpu-profile": { type: "boolean" },
     "expect-config-collected": { type: "boolean" },
@@ -65,6 +66,13 @@ const sessions = number("sessions", 700),
 const batches = number("batches", 20),
   churn = number("churn", 32);
 assert(active <= sessions);
+const diagnosticHeartbeats = parseStrictIntegerOption({
+  raw: values["diagnostic-heartbeats"],
+  label: "diagnostic-heartbeats",
+  fallback: 0,
+  min: 0,
+});
+assert(!diagnosticHeartbeats || values.diagnostics, "Heartbeat measurement requires --diagnostics");
 const key = (index: number) => `agent:main:projection-fixture-${index}`;
 function config(revision: number): OpenClawConfig {
   return {
@@ -113,6 +121,7 @@ const sourceHashes = Object.fromEntries(
     "src/gateway/session-row-projection.ts",
     "src/gateway/session-row-projection-context.ts",
     "src/gateway/session-row-projection-publication.ts",
+    "src/gateway/session-row-projection-retention.ts",
     "src/infra/retained-data-size.ts",
   ].map((name) => {
     const baseline = process.env.OPENCLAW_BENCH_BASELINE_DIR;
@@ -298,7 +307,24 @@ await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }
       await inspector.post("Profiler.enable");
       await inspector.post("Profiler.start");
     }
-    for (let batch = 0; batch < batches; batch++) {
+    if (diagnosticHeartbeats) {
+      // Advance only the monotonic clock, leaving real owner work and event delivery intact.
+      const realNow = performance.now.bind(performance);
+      let offset = 0;
+      performance.now = () => realNow() + offset;
+      const heartbeats = [];
+      try {
+        for (let index = 0; index < diagnosticHeartbeats; index++) {
+          offset += 30_000;
+          heartbeats.push(await readDiagnostic(sessions));
+        }
+      } finally {
+        performance.now = realNow;
+      }
+      result.heartbeats = heartbeats;
+      result.heartbeatIntervalMs = 30_000;
+    }
+    for (let batch = 0; batch < (diagnosticHeartbeats ? 0 : batches); batch++) {
       const retired: WeakRef<object>[] = [];
       const indices = Array.from(
         { length: active },

@@ -1,3 +1,4 @@
+import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
 import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { callGoogleMeetGateway } from "./cli-shared.js";
@@ -35,32 +36,6 @@ describe("callGoogleMeetGateway local fallback", () => {
     ).resolves.toEqual({ ok: false });
   });
 
-  it("propagates a coded transport close", async () => {
-    const error = gatewayTransportError(1006);
-    vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockRejectedValue(error);
-
-    await expect(
-      callGoogleMeetGateway({
-        method: "googlemeet.status",
-      }),
-    ).rejects.toBe(error);
-  });
-
-  it("propagates a transport timeout", async () => {
-    const error = Object.assign(new Error("gateway timed out"), {
-      name: "GatewayTransportError",
-      kind: "timeout",
-      connectionDetails: { url: "ws://127.0.0.1:18789" },
-    });
-    vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockRejectedValue(error);
-
-    await expect(
-      callGoogleMeetGateway({
-        method: "googlemeet.status",
-      }),
-    ).rejects.toBe(error);
-  });
-
   it("falls back when the exact Meet method is not registered", async () => {
     const error = gatewayRequestError("unknown method: googlemeet.status");
     vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockRejectedValue(error);
@@ -73,14 +48,28 @@ describe("callGoogleMeetGateway local fallback", () => {
   });
 
   it.each([
+    gatewayTransportError(1006),
+    Object.assign(gatewayTransportError(), { kind: "timeout" }),
     gatewayRequestError("unknown method: voicecall.status"),
     new Error("unknown method: googlemeet.status"),
-  ])("propagates a non-fallback error: $message", async (error) => {
+  ])("propagates a non-fallback error: $message $kind", async (error) => {
     vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockRejectedValue(error);
     await expect(
       callGoogleMeetGateway({
         method: "googlemeet.status",
       }),
     ).rejects.toBe(error);
+  });
+
+  it("rejects instead of falling back or returning a reply after Ctrl+C", async () => {
+    const work = new AsyncWorkScope();
+    const call = vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockImplementation(async () => {
+      work.beginClose();
+      throw gatewayTransportError();
+    });
+    await expect(
+      work.run(() => callGoogleMeetGateway({ method: "googlemeet.transcript" })),
+    ).rejects.toThrow();
+    expect(call.mock.calls[0]?.[3]).toEqual({ progress: false, signal: expect.any(AbortSignal) });
   });
 });

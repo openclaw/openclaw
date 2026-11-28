@@ -19,6 +19,7 @@ import {
   initialFallbackAttemptOptions,
   createMockReplyOperation,
   createMinimalRunAgentTurnParams,
+  createFollowupRun,
   NON_DIRECT_FAILURE_SURFACE_CASES,
   createNonDirectFailureSessionCtx,
   type EmbeddedAgentParams,
@@ -117,6 +118,29 @@ function createOpenAiServiceUnavailableError() {
 }
 
 describe("executeAgentTurn: provider failures", () => {
+  it("preserves item-conflict recovery in the Control UI reply and saved notice", async () => {
+    const expected =
+      "⚠️ The AI service could not recover saved conversation state (item_conflict). Retry this turn. If it still fails, run /compact or choose another model, and share the Gateway logs with the operator.";
+    state.isInternalMessageChannelMock.mockReturnValue(true);
+    const payload = await rejectedPayload(
+      new FailoverError(expected, {
+        reason: "format",
+        provider: "openai",
+        code: "item_conflict",
+        rawError: "An input item conflicts with an existing record.",
+      }),
+    );
+    expect(payload).toMatchObject({ isError: true, text: expected });
+    const agentEvents = await import("../../infra/agent-events.js");
+    expect(vi.mocked(agentEvents.emitAgentEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({ phase: "error", errorNotice: expected }),
+      }),
+    );
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
   it("surfaces provider authentication failures in non-direct chats", async () => {
     const rawError =
       "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses";
@@ -318,6 +342,52 @@ describe("executeAgentTurn: provider failures", () => {
     expect(payload.text).toContain("weekly limit");
     expect(payload.text).toContain("resets 6pm");
     expect(payload.text).not.toContain("few minutes");
+  });
+
+  it("keeps the configured locale and time zone after rate-limited fallbacks without a hook", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-26T00:00:00Z"));
+    const rateLimitResetAt = Date.parse("2026-11-26T02:00:00Z");
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      new FailoverError("All models failed (2): rate limited", {
+        reason: "rate_limit",
+        status: 429,
+        rawError: "Something went wrong while processing your request.",
+        rateLimitResetAt,
+        attempts: ["first", "second"].map((model) => ({
+          provider: "fixture",
+          model,
+          error: "rate limited",
+          reason: "rate_limit",
+          status: 429,
+          rateLimitResetAt,
+        })),
+      }),
+    );
+    const payload = finalPayload(
+      await executeTestTurn({
+        sessionCtx: createDirectFailureSessionCtx(),
+        followupRun: createFollowupRun({
+          config: {
+            ui: { prefs: { locale: "fr" } },
+            agents: { defaults: { userTimezone: "Asia/Tokyo" } },
+          },
+        }),
+      }),
+    );
+    expect(payload.text).toContain("dans 2 heures (26 nov. 2026, 11:00 UTC+9)");
+    expect(payload.text).toContain("fixture/first");
+    const agentEvents = await import("../../infra/agent-events.js");
+    expect(vi.mocked(agentEvents.emitAgentEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "error",
+          errorNotice: payload.text,
+        }),
+      }),
+    );
+    expect(payload.presentation).toBeUndefined();
   });
 
   it("scopes fallback exhaustion copy to the attempted models", () => {

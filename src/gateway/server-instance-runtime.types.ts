@@ -31,7 +31,6 @@ export type GatewayInstanceAgentDispatchOptions = {
   prepareDispatchCurrent?: () => Promise<void>;
   allowModelOverride?: boolean;
   allowSyntheticModelOverride?: boolean;
-  allowSyntheticCronRunContinuation?: boolean;
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
   expectFinal?: boolean;
   /** Instance-owned dispatch always uses a synthetic client. */
@@ -93,6 +92,7 @@ export type GatewayLifecycleRuntime = {
     to: string;
     accountId?: string;
     threadId?: string | number;
+    replyToId?: string;
     text: string;
     idempotencyKey: string;
     isCurrent?: (cfg: OpenClawConfig) => boolean;

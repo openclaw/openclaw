@@ -218,7 +218,8 @@ export async function connectIrcClient(options: IrcClientOptions) {
   const sendPrivmsg = async (target: string, text: string, replyTo?: string) => {
     const effect = captureEffectAuthority();
     const normalizedTarget = sanitizeIrcTarget(target);
-    const cleaned = sanitizeIrcOutboundText(text);
+    const message = text.replace(/\r\n|[\r\t]/g, " ");
+    const cleaned = sanitizeIrcOutboundText(message);
     if (!cleaned) {
       throw new Error("Message must be non-empty for IRC sends");
     }
@@ -229,7 +230,7 @@ export async function connectIrcClient(options: IrcClientOptions) {
     const lineOverheadBytes =
       relayPrefixBytes + Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
     const maxChunkBytes = IRC_MAX_LINE_BYTES - lineOverheadBytes;
-    let remaining = replyTo ? sanitizeIrcOutboundText(`${text}\n\n[reply:${replyTo}]`) : cleaned;
+    let remaining = replyTo ? sanitizeIrcOutboundText(`${message}\n\n[reply:${replyTo}]`) : cleaned;
     const chunks: string[] = [];
     while (remaining.length > 0) {
       const chunk = takeIrcPrivmsgChunk(remaining, messageChunkMaxChars, maxChunkBytes).trim();
@@ -363,6 +364,23 @@ export async function connectIrcClient(options: IrcClientOptions) {
       if (!ready && (nickCollision || IRC_ERROR_CODES.has(line.command))) {
         if (nickCollision && tryRecoverNickCollision()) {
           continue;
+        }
+        // NICKLEN may arrive only after registration. Shorten generated nicks on 432,
+        // preserving the collision suffix and stopping before the base becomes empty.
+        if (line.command === "432" && fallbackNickAttempted) {
+          const suffixIndex = currentNick.lastIndexOf("_");
+          if (suffixIndex > 1) {
+            const shorterNick =
+              currentNick.slice(0, suffixIndex - 1) + currentNick.slice(suffixIndex);
+            try {
+              sendRaw(`NICK ${shorterNick}`);
+              currentNick = shorterNick;
+              continue;
+            } catch (err) {
+              failAndClose(err);
+              return;
+            }
+          }
         }
         const detail =
           line.trailing ??

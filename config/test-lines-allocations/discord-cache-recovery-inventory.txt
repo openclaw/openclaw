@@ -1,2 +1,0 @@
-# Inventory regression for Discord's absent/populated disposable cache and LINE's core-captured queue.
-11

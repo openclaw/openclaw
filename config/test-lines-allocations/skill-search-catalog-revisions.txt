@@ -1,2 +1,0 @@
-114
-# Extend existing skill-search regressions through runtime catalog binding: reuse unchanged metadata/inline revisions, refresh edits, preserve run authority, and bound idle retention.

@@ -325,13 +325,15 @@ it.each([
         requesterSessionKey: "agent:other:main",
       });
     }
+    const replacement =
+      transition === "session replacement" ? sessionEntry(storePath, ancestorKey) : undefined;
     expect(releaseSwarmRun("draining-blocker")).toBe(true);
     await Promise.resolve();
     expect(dispatch).not.toHaveBeenCalled();
     admission.release();
     const result = await pending;
     expect(subagentRuns.has(ancestor.runId)).toBe(transition === "owner replacement");
-    if (transition !== "ordinary retirement") {
+    if (transition === "lifecycle rotation" || transition === "owner replacement") {
       expect(subagentRuns.get(child.runId)?.killIntent).toBeUndefined();
       expect(subagentRuns.get(child.runId)?.collectorCompletion).toBeUndefined();
       expect(status(subagentRuns.get(child.runId))).toBe("queued");
@@ -343,6 +345,9 @@ it.each([
     expect(status(subagentRuns.get(child.runId))).toBe("killed");
     expect(dispatch).not.toHaveBeenCalled();
     expect(result).toMatchObject({ found: true, killed: true, cascadeKilled: 1 });
+    if (replacement) {
+      expect(sessionEntry(storePath, ancestorKey)).toEqual(replacement);
+    }
   } finally {
     admission.release();
     await pending;

@@ -8,8 +8,6 @@ openclaw-assistant-panel {
 .assistant-panel {
   position: fixed;
   display: flex;
-  min-width: 0;
-  min-height: 0;
   flex-direction: column;
   overflow: hidden;
   background: var(--bg);
@@ -31,8 +29,18 @@ openclaw-assistant-panel {
   left: var(--shell-nav-width, 0);
 }
 
+/* Linux and Windows desktop shells draw caption buttons over the window's
+   top-right corner; start below that strip so the header keeps its full width.
+   The shell publishes a zero controls width on macOS and in fullscreen, plain
+   browsers publish neither variable, and a mobile topbar already clears it. */
 .assistant-panel--right {
-  top: var(--shell-topbar-height, 0);
+  top: max(
+    var(--shell-topbar-height, 0px),
+    min(
+      var(--openclaw-native-window-controls-width, 0px),
+      var(--openclaw-native-titlebar-height, 0px)
+    )
+  );
 }
 
 .assistant-panel-resizer {
@@ -60,7 +68,7 @@ openclaw-assistant-panel {
   min-width: 0;
   gap: 7px;
   color: var(--text-strong);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .assistant-panel-title openclaw-mascot {
@@ -68,10 +76,6 @@ openclaw-assistant-panel {
   width: 16px;
   height: 16px;
   flex: none;
-}
-
-.assistant-panel-icon {
-  flex: 0 0 auto;
 }
 
 @media (max-width: 640px) {

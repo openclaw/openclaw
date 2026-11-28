@@ -63,11 +63,8 @@ function adopt(agentId = "main") {
   );
 }
 
-async function mountWithCatalog(
-  result = thread(),
-  sessionKeys = ["agent:main:main"],
-  request = vi.fn().mockResolvedValue(result),
-) {
+async function mountWithCatalog(result = thread(), sessionKeys = ["agent:main:main"]) {
+  const request = vi.fn().mockResolvedValue(result);
   const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
   gateway.publish({
     hello: {

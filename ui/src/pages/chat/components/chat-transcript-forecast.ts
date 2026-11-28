@@ -98,6 +98,55 @@ export function rowKeys(
   return keys;
 }
 
+/**
+ * The flow starts at the first active row's virtual offset, which counts rows of unknown size at
+ * their estimates. A row arriving before laid-out content would enter the flow at its real size
+ * in a frame where the content already moved by its estimate's error, so it waits outside the
+ * flow until its size is known, and so do the rows before it. Rows of known size between it and
+ * the flow join at once, so the flow keeps up with the reader. Removes the waiting rows from
+ * `active`; with nothing laid out, as after a jump, every row enters.
+ *
+ * A row outside the flow paints where it will land: a row before the flow hangs above the rows
+ * between them, a row after it sits at its virtual slot. That place is exact only once the sizes of
+ * those rows (and, after the flow, its own) are known. Until then it stays unpainted (`unsettled`),
+ * so no text first appears in one place and then moves.
+ */
+export function hold(
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  active: number[],
+  keys: Set<string>,
+  measured: (indexes: readonly number[]) => boolean,
+): { held: Set<string>; unsettled: Set<string> } {
+  const key = (index: number) => String(virtualizer.options.getItemKey(index));
+  const known = (index: number) => virtualizer.itemSizeCache.has(key(index)) || measured([index]);
+  const laidOut = active.findIndex((index) => {
+    const element = virtualizer.elementsCache.get(key(index));
+    return element?.isConnected === true && element.dataset.preparedRow !== "true";
+  });
+  const edge = active.slice(0, Math.max(laidOut, 0)).findLastIndex((index) => !known(index));
+  const held = new Set(active.splice(0, edge + 1).map(key));
+  for (const row of held) {
+    keys.add(row);
+  }
+  const unsettled = new Set<string>();
+  const first = active[0];
+  const last = active.at(-1);
+  for (const item of virtualizer.getVirtualItems()) {
+    const row = String(item.key);
+    if (first === undefined || last === undefined || !keys.has(row)) {
+      continue;
+    }
+    const [from, to] = item.index < first ? [item.index + 1, first - 1] : [last + 1, item.index];
+    for (let index = from; index <= to; index++) {
+      if (!known(index)) {
+        unsettled.add(row);
+        break;
+      }
+    }
+  }
+  return { held, unsettled };
+}
+
 export function retainedKeys(
   preparedRowKeys: ReadonlySet<string>,
   rowIndexes: ReadonlyMap<string, number>,

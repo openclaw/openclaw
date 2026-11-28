@@ -77,6 +77,20 @@ native configuration. Start, resume, and fork share this policy; changes refresh
 loaded thread configuration. Native async questions and MCP elicitations are
 unaffected.
 
+Ordinary managed sessions use fixed Default mode without the native mode
+announcement or transition boilerplate. Their collaboration guidance mentions
+`request_user_input` only when the tool is enabled and Default-mode questions
+are allowed. Enabling tool registration alone does not make it usable in Default
+mode. OpenClaw's `ask_user` retains its own tool contract; native question rules
+are not transferred to it.
+
+The managed guidance preserves autonomous execution, genuinely required input,
+and approval boundaries. It uses thread developer instructions so model-catalogue
+overrides cannot restore disabled-tool guidance and compaction retains the current
+policy. Managed resume handoffs explicitly supersede earlier mode instructions
+without rewriting history. Native-supervised forks and modes, specialized cron and
+side-question policies keep their existing owners.
+
 Codex `request_user_input` and ordinary MCP elicitations share one per-turn
 interactive queue. The Control UI renders each non-secret Gateway question, and
 a single choice uses typed channel buttons when the channel supports them.

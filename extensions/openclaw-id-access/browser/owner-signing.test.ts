@@ -94,3 +94,40 @@ describe("signAsOwner", () => {
     await expect(hasValidSignature(statement)).resolves.toBe(true);
   });
 });
+
+it("rejects undefined and unusable invite roles before submission", async () => {
+  const { createInvite } = await import("./invites.js");
+  const clawId = "c".repeat(32);
+  const signer = await storeDeviceKey(clawId);
+  const link: Link = {
+    linked: true,
+    clawId,
+    seq: 7,
+    ownerDevices: [
+      {
+        devicePub: formatEd25519PublicKey(signer.publicKey),
+        label: "Browser",
+        peerKeys: [],
+        cert: {},
+      },
+    ],
+    roles: [
+      { name: "viewer", defined: true, sessions: "view", requiresSandbox: false, admin: false },
+      {
+        name: "Research Team",
+        defined: true,
+        sessions: "view",
+        requiresSandbox: false,
+        admin: false,
+      },
+    ],
+  };
+  const request = vi.fn();
+  await expect(
+    createInvite(request, link, "person@example.test", "deleted", false),
+  ).rejects.toMatchObject({ code: "role_undefined" });
+  await expect(
+    createInvite(request, link, "person@example.test", "Research Team", false),
+  ).rejects.toMatchObject({ code: "role_invalid" });
+  expect(request).not.toHaveBeenCalled();
+});

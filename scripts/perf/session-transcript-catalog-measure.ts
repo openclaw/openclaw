@@ -21,6 +21,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { TranscriptEvent } from "../../src/config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptCatalogPage } from "../../src/gateway/session-transcript-catalog.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 const { values } = parseArgs({
@@ -202,12 +203,7 @@ try {
   observer.observe({ entryTypes: ["gc"] });
   tasks.subscribe(recordTask);
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const loadBefore = os.loadavg();
   const memoryBefore = process.memoryUsage();

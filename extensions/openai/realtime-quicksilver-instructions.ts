@@ -9,10 +9,12 @@ Keep the conversation natural while delegated work runs.`;
 const OPENAI_QUICKSILVER_CHANNEL_INSTRUCTIONS = `Context on the commentary channel is silent background. You may use it, but never read it aloud.
 Context on the speakable channel is your answer to deliver naturally in your own words. Never mention the channel or the delegation.`;
 
+export const OPENAI_QUICKSILVER_PROGRESS_INSTRUCTIONS = `Do not invent acknowledgments or progress claims. When the host explicitly requests a natural launch acknowledgment, keep it brief and provisional; a delegation or task receipt is not evidence of progress.`;
+
 export const OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS = `Delegate status, cancellation, redirects, and follow-up requests to the client using the caller's request, even while another delegation is active.
 Wait for the host control result before answering each new request: it must be fresh and for this voice call, even if shared history appears to answer it. Do not answer these requests yourself or rewrite them into a progress claim.
 Shared conversation history may describe other calls or completed work; it does not establish this call's live ownership or status.
-Only that fresh result establishes whether this call's work is active, completed, or cancelled. Do not invent acknowledgments or progress claims. When the host explicitly requests a natural launch acknowledgment, keep it brief and provisional; a delegation or task receipt is not evidence of progress.
+Only that fresh result establishes whether this call's work is active, completed, or cancelled.
 Current host-provided task receipts and control results are not new requests: speak them exactly as instructed, without delegating them.`;
 
 export function buildOpenAIQuicksilverBackgroundContext(

@@ -103,14 +103,15 @@ private final class OutboxReadCounter: @unchecked Sendable {
     }
 }
 
-private func outboxCommand(
+func outboxCommand(
     id: String = UUID().uuidString,
     sessionKey: String = "main",
     text: String,
     attachments: [OpenClawChatOutboxAttachment] = [],
     thinking: String = "off",
     createdAt: Double = Date().timeIntervalSince1970,
-    status: OpenClawChatOutboxCommand.Status = .queued) -> OpenClawChatOutboxCommand
+    status: OpenClawChatOutboxCommand.Status = .queued,
+    lastError: String? = nil) -> OpenClawChatOutboxCommand
 {
     OpenClawChatOutboxCommand(
         id: id,
@@ -124,7 +125,7 @@ private func outboxCommand(
         createdAt: createdAt,
         status: status,
         retryCount: 0,
-        lastError: nil)
+        lastError: lastError)
 }
 
 private func withRawDatabase(at url: URL, _ body: (OpaquePointer) throws -> Void) throws {
@@ -363,6 +364,79 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         ])
         #expect(await reopened.store(gatewayID: "gw-a").loadSessions(agentID: "agent-b").map(\.agentId) == [
             "agent-b",
+        ])
+    }
+
+    @Test func `agent identity snapshot survives a relaunch and leaves with its gateway`() async throws {
+        let molty = OpenClawChatCachedAgentIdentity(
+            agentID: "main",
+            rosterName: "main",
+            identityName: "Molty",
+            emoji: nil,
+            isDefault: true,
+            avatar: Data([0x89, 0x50, 0x4E, 0x47]))
+        let ops = OpenClawChatCachedAgentIdentity(
+            agentID: "ops",
+            rosterName: "Operations",
+            identityName: nil,
+            emoji: "🦞",
+            isDefault: false,
+            avatar: nil)
+        await store.storeAgentIdentities([molty, ops])
+        await databases.store(gatewayID: "gw-b").storeAgentIdentities([ops])
+        try databases.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        #expect(reopened.store(gatewayID: "gw-a").loadAgentIdentities() == [molty, ops])
+
+        try reopened.removeGatewayData(gatewayID: "gw-a")
+        #expect(reopened.store(gatewayID: "gw-a").loadAgentIdentities().isEmpty)
+        #expect(reopened.store(gatewayID: "gw-b").loadAgentIdentities() == [ops])
+
+        _ = try await reopened.clearGatewayCache()
+        #expect(reopened.store(gatewayID: "gw-b").loadAgentIdentities().isEmpty)
+    }
+
+    @Test func `agent identity written by a newer build loads and ignores keys it does not know`() async throws {
+        try await databases.cacheQueue.write { db in
+            try db.execute(
+                sql: """
+                INSERT INTO cached_agent_identities(gateway_id, agent_id, position, payload_json, avatar)
+                VALUES ('gw-a', 'main', 0, ?, ?)
+                """,
+                arguments: [
+                    #"{"accentColor":"orange","emoji":"🦞","identityName":"Molty","isDefault":true,"#
+                        + #""model":{"id":"future"},"rosterName":"main"}"#,
+                    Data([0x89, 0x50, 0x4E, 0x47]),
+                ])
+        }
+
+        #expect(store.loadAgentIdentities() == [
+            OpenClawChatCachedAgentIdentity(
+                agentID: "main",
+                rosterName: "main",
+                identityName: "Molty",
+                emoji: "🦞",
+                isDefault: true,
+                avatar: Data([0x89, 0x50, 0x4E, 0x47])),
+        ])
+    }
+
+    @Test func `agent identity written by an older build loads with missing keys defaulted`() async throws {
+        try await databases.cacheQueue.write { db in
+            try db.execute(sql: """
+            INSERT INTO cached_agent_identities(gateway_id, agent_id, position, payload_json, avatar)
+            VALUES ('gw-a', 'ops', 0, '{"rosterName":"Operations"}', NULL),
+                   ('gw-a', 'bare', 1, '{}', NULL);
+            """)
+        }
+
+        #expect(store.loadAgentIdentities() == [
+            OpenClawChatCachedAgentIdentity(
+                agentID: "ops", rosterName: "Operations", identityName: nil, emoji: nil, isDefault: false, avatar: nil),
+            OpenClawChatCachedAgentIdentity(
+                agentID: "bare", rosterName: nil, identityName: nil, emoji: nil, isDefault: false, avatar: nil),
         ])
     }
 
@@ -941,6 +1015,7 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         try await databases.watchMessages.importLegacy(.init(messages: [
             .init(id: "watch-sensitive", gatewayStableID: "gw-a", text: sensitiveText, submittedAtMs: nil),
         ], recentMessageIDs: []), nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+        await storeA.saveComposerDraftText(key: "agent:main:main", text: sensitiveText, revision: 1)
         await storeB.storeSessions([cacheSessionEntry(key: "keep", updatedAt: 1)])
 
         try databases.removeGatewayData(gatewayID: "gw-a")
@@ -981,6 +1056,7 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
             "client-state-watch-message-journal-v9",
             "client-state-watch-message-legacy-receipts-v1",
             "client-state-outbox-queue-mode-v10",
+            "client-state-composer-drafts-v11",
         ])
     }
 }
@@ -1036,6 +1112,43 @@ final class ClientDatabaseLegacyImportTests: TemporaryDatabaseTestSuite, @unchec
         #expect(attachment.data == bytes && attachment.fileName == "legacy.png" && attachment.mimeType == "image/png")
         let claimed = try #require(await store.claimNextCommand())
         #expect(claimed.id == "legacy-text" && claimed.queueMode == nil)
+    }
+
+    @Test func `v10 upgrade adds composer drafts and preserves queued commands`() async throws {
+        let stateURL = directory.appendingPathComponent(OpenClawClientDatabases.clientStateFilename)
+        let legacy = try DatabaseQueue(path: stateURL.path)
+        var migrator = DatabaseMigrator()
+        OpenClawClientDatabases.registerClientStateMigrationsV1ThroughV5(&migrator)
+        OpenClawClientDatabases.registerClientStateMigrationsV6ThroughV8(&migrator)
+        OpenClawClientDatabases.registerWatchMessageJournalMigration(&migrator)
+        OpenClawClientDatabases.registerOutboxQueueModeMigration(&migrator)
+        try migrator.migrate(legacy)
+        let bytes = Data("v10 attachment".utf8)
+        try await legacy.write { db in
+            try db.execute(sql: """
+            INSERT INTO outbox_commands(
+                gateway_id, client_uuid, session_key, delivery_session_key, routing_contract,
+                agent_id, text, thinking, created_at, status, attachment_bytes, queue_mode
+            ) VALUES ('gw-a', 'v10-steer', 'main', 'agent:main:main', 'per-sender|main|main',
+                'main', 'keep me', 'off', ?, 'queued', ?, 'steer')
+            """, arguments: [Date().timeIntervalSince1970, bytes.count])
+            try db.execute(sql: """
+            INSERT INTO outbox_attachments(
+                gateway_id, command_id, position, type, mime_type, file_name, payload
+            ) VALUES ('gw-a', 'v10-steer', 0, 'file', 'text/plain', 'note.txt', ?)
+            """, arguments: [bytes])
+        }
+        try legacy.close()
+
+        let upgraded = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? upgraded.close() }
+        let command = try #require(await upgraded.store(gatewayID: "gw-a").loadCommands().first)
+        #expect(command.id == "v10-steer" && command.text == "keep me" && command.queueMode == .steer)
+        #expect(command.attachments.map(\.data) == [bytes])
+        let draftTables = try await upgraded.stateQueue.read { db in
+            try ["composer_drafts", "composer_draft_attachments"].filter { try db.tableExists($0) }
+        }
+        #expect(draftTables == ["composer_drafts", "composer_draft_attachments"])
     }
 
     @Test func `legacy v1 cache is discarded`() async throws {

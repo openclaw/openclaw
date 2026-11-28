@@ -9,6 +9,12 @@ export type ProviderResolveSyntheticAuthContext = {
   providerConfig?: ModelProviderConfig;
 };
 
+/** Validated, non-secret native login metadata for display, never auth authority. */
+export type ProviderNativeAuthDisplay = {
+  kind: "subscription" | "api" | "native";
+  plan?: string;
+};
+
 /** Synthetic provider credential returned by plugin auth helpers. */
 export type ProviderSyntheticAuthResult = {
   apiKey: string;
@@ -16,7 +22,11 @@ export type ProviderSyntheticAuthResult = {
   mode: Exclude<ModelProviderAuthMode, "aws-sdk" | "none" | "native-command">;
   expiresAt?: number;
   /** Native presence authorizes only this runtime, never a provider bearer request. */
-  nativeAuth?: { runtime: string; mode: "api-key" | "oauth" | "token" };
+  nativeAuth?: {
+    runtime: string;
+    mode: "api-key" | "oauth" | "token";
+    display?: ProviderNativeAuthDisplay;
+  };
 };
 
 /** Context for resolving external provider auth profiles. */

@@ -1,3 +1,0 @@
-# Published beta.6 v16 Doctor repair must keep legal memory FTS tables,
-# shadow tables, and the canonical chunk triggers that address chunk_rowid.
-110

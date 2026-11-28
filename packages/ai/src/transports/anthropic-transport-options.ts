@@ -85,6 +85,7 @@ export function resolveAnthropicTransportOptions(
     signal: options?.signal,
     apiKey,
     cacheRetention: options?.cacheRetention,
+    ...(options?.cachePrewarm ? { cachePrewarm: true as const } : {}),
     sessionId: options?.sessionId,
     headers: options?.headers,
     onPayload: options?.onPayload,
@@ -99,6 +100,7 @@ export function resolveAnthropicTransportOptions(
     anthropicCompactThreshold: options?.anthropicCompactThreshold,
     cacheTtlPruning: options?.cacheTtlPruning,
     onClaudeCodeVersionRequired: options?.onClaudeCodeVersionRequired,
+    onFastModeUnsupported: options?.onFastModeUnsupported,
     ...(options?.authProfileId ? { authProfileId: options.authProfileId } : {}),
   } satisfies AnthropicTransportOptions);
   resolved.reasoning = applyAnthropicThinkingOptions(model, resolved, options, "transport");

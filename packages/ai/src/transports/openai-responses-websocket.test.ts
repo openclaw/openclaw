@@ -4,6 +4,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import OpenAI from "openai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectForRetentionCheck } from "../../../../src/test-utils/retention.js";
+import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
 import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 
 const websocketState = vi.hoisted(() => ({
@@ -66,7 +67,6 @@ import {
   getAiTransportHost,
   runWithAiTransportHost,
 } from "../host.js";
-import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesWebSocketStream } from "./openai-responses-websocket.js";
 
 const initialHost = getAiTransportHost();
@@ -127,7 +127,7 @@ function createStream(body = request(), overrides: Partial<StreamOptions> = {}) 
     client,
     request: body,
     mode: "websocket-cached",
-    sessionId: "session-1",
+    providerState: claimConversationProviderState("session-1"),
     headers: { "x-stable-session": "session-1" },
     ...overrides,
   });
@@ -277,7 +277,9 @@ describe("native OpenAI Responses WebSocket transport", () => {
         await consumeResponse(
           createStream(body, {
             client: requestClient,
-            sessionId: failed ? "session-1" : `retention-${caller.turn}`,
+            providerState: claimConversationProviderState(
+              failed ? "session-1" : `retention-${caller.turn}`,
+            ),
             ...(failed ? { restoreRequest, degradeCooldownMs: 60_000 } : {}),
           }),
         );
@@ -310,7 +312,9 @@ describe("native OpenAI Responses WebSocket transport", () => {
             }),
           );
         } else {
-          const followup = createStream(request(), { sessionId: `retention-${callerCount}` });
+          const followup = createStream(request(), {
+            providerState: claimConversationProviderState(`retention-${callerCount}`),
+          });
           expect(followup).toMatchObject({
             reusedConnection: true,
             request: { previous_response_id: `resp_${callerCount}` },

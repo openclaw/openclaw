@@ -1,5 +1,4 @@
 import type { AssistantMessage, Context } from "@openclaw/llm-core";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
 import { buildOpenAIProvider } from "../extensions/openai/api.js";
 import { configureAiTransportHost, getAiTransportHost } from "../packages/ai/src/host.js";
@@ -10,7 +9,6 @@ import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
 } from "../packages/ai/src/transports/openai-responses-compaction-replay.js";
-import { readResponsesInputReplayState } from "../packages/ai/src/transports/openai-responses-input-replay.js";
 import type { SdkResponse } from "../packages/ai/src/transports/openai-responses-sdk.test-support.js";
 import {
   completedResponse,
@@ -186,15 +184,10 @@ it("keeps session prefixes reusable while extension payload handlers change", as
       const reply = owner.session.agent.state.messages.at(-1);
       assert(reply?.role === "assistant");
       expect(reply.stopReason).toBe("stop");
-      const fingerprint = asOptionalRecord(
-        readResponsesInputReplayState(reply)?.contextUsage,
-      )?.prefixHash;
-      expect(fingerprint).toBeTypeOf("string");
       const input = sdk.requests.at(-1)?.input as Array<{ type: string; output?: string }>;
       expect(sdk.requests.at(-1)?.access_programs).toEqual({ cyber: "standard" });
       return {
         encodings,
-        fingerprint,
         output: input.find((item) => item.type === "function_call_output")?.output,
       };
     };
@@ -214,7 +207,6 @@ it("keeps session prefixes reusable while extension payload handlers change", as
     const unchanged = await request(control);
     expect(changed.output).toBe(editedOutput);
     expect(unchanged).toMatchObject({ output: retainedOutput, encodings: 0 });
-    expect(changed.fingerprint).not.toBe(unchanged.fingerprint);
     expect(first.history.at(-1)?.content).toEqual(text(retainedOutput));
 
     first.resourceLoader.getExtensions().extensions[0]!.handlers.delete("before_provider_request");

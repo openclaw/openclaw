@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { hasMenuSurface } from "../../components/menu-surface.ts";
 import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
@@ -71,7 +71,6 @@ const SESSION_GROUP_MODE_LABELS = {
 } as const satisfies Record<SessionsGroupBy, string>;
 
 export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JSX.Element {
-  const [searching, setSearching] = createSignal(false);
   let popover: PopoverHandle | undefined;
   const phone = () => Boolean(props.phoneLayout);
   // Archived timestamps are intentionally stale, so recency only applies to the active view.
@@ -82,8 +81,8 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
   const sourceFilters = createMemo(
     () =>
       [
-        ["includeGlobal", t("sessionsView.global"), t("sessionsView.globalTooltip")],
-        ["includeUnknown", t("sessionsView.unknown"), t("sessionsView.unknownTooltip")],
+        ["includeGlobal", t("sessionsView.global")],
+        ["includeUnknown", t("sessionsView.unknown")],
       ] as const,
   );
   const updateFilter = (
@@ -114,13 +113,10 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
   ];
   const search = () => (
     <HeaderSearch
-      title={t("sessionsView.filters")}
       label={t("sessionsView.searchPlaceholder")}
-      closeLabel={t("sessionsView.clearSearch")}
+      clearLabel={t("sessionsView.clearSearch")}
       class="sessions-filter-popover__search"
       query={props.searchQuery}
-      open={searching() || Boolean(props.searchQuery)}
-      onOpenChange={setSearching}
       onQueryChange={props.onSearchChange}
       ownsEscape={() =>
         !props.sessionMenu &&
@@ -143,7 +139,6 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
           {
             value: "archived",
             label: t("sessionsView.archived"),
-            title: t("sessionsView.archivedOnlyTooltip"),
           },
           { value: "all", label: t("sessionsView.all") },
         ]}
@@ -152,35 +147,24 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
       <div class="sessions-filter-popover__fields">
         <For each={filterInputs}>
           {([key, suffix, labelKey]) => {
-            let input: HTMLInputElement | undefined;
             const value = createMemo(() => props[key]);
             return (
-              <openclaw-tooltip
-                prop:descriptionTarget={() => input ?? null}
-                prop:content={
-                  key === "activeMinutes"
-                    ? t("sessionsView.activeTooltip", { count: props.activeMinutes.trim() })
-                    : t("sessionsView.limitTooltip")
-                }
-              >
-                <label class={phone() ? "field" : "session-filter-field"}>
-                  <span class={phone() ? undefined : "session-filter-label"}>{t(labelKey)}</span>
-                  <input
-                    ref={(element) => (input = element)}
-                    class={
-                      phone()
-                        ? "settings-input"
-                        : ["session-filter-input", `session-filter-input--${suffix}`]
-                    }
-                    placeholder={
-                      key === "activeMinutes" ? t("sessionsView.minutesPlaceholder") : undefined
-                    }
-                    value={value()}
-                    disabled={key === "activeMinutes" && props.statusFilter !== "active"}
-                    onInput={(event) => updateFilter(key, event.currentTarget.value)}
-                  />
-                </label>
-              </openclaw-tooltip>
+              <label class={phone() ? "field" : "session-filter-field"}>
+                <span class={phone() ? undefined : "session-filter-label"}>{t(labelKey)}</span>
+                <input
+                  class={
+                    phone()
+                      ? "settings-input"
+                      : ["session-filter-input", `session-filter-input--${suffix}`]
+                  }
+                  placeholder={
+                    key === "activeMinutes" ? t("sessionsView.minutesPlaceholder") : undefined
+                  }
+                  value={value()}
+                  disabled={key === "activeMinutes" && props.statusFilter !== "active"}
+                  onInput={(event) => updateFilter(key, event.currentTarget.value)}
+                />
+              </label>
             );
           }}
         </For>
@@ -191,30 +175,26 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
         aria-label={t("sessionsView.sourceFilters")}
       >
         <For each={sourceFilters()}>
-          {([key, label, tooltip]) => {
-            let input: HTMLInputElement | undefined;
+          {([key, label]) => {
             return (
-              <openclaw-tooltip prop:content={tooltip} prop:descriptionTarget={() => input ?? null}>
-                <label
-                  class={[
-                    "session-filter-check session-filter-toggle",
-                    { "session-filter-check--active": props[key] },
-                  ]}
-                >
-                  <input
-                    ref={(element) => (input = element)}
-                    name={key}
-                    class="session-filter-check__input"
-                    type="checkbox"
-                    checked={props[key]}
-                    onChange={(event) => updateFilter(key, event.currentTarget.checked)}
-                  />
-                  <span class="session-filter-check__mark" aria-hidden="true">
-                    <Icon name="check" />
-                  </span>
-                  <span class="session-filter-check__label">{label}</span>
-                </label>
-              </openclaw-tooltip>
+              <label
+                class={[
+                  "session-filter-check session-filter-toggle",
+                  { "session-filter-check--active": props[key] },
+                ]}
+              >
+                <input
+                  name={key}
+                  class="session-filter-check__input"
+                  type="checkbox"
+                  checked={props[key]}
+                  onChange={(event) => updateFilter(key, event.currentTarget.checked)}
+                />
+                <span class="session-filter-check__mark" aria-hidden="true">
+                  <Icon name="check" />
+                </span>
+                <span class="session-filter-check__label">{label}</span>
+              </label>
             );
           }}
         </For>

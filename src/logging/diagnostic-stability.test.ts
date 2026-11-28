@@ -62,7 +62,7 @@ const tool = {
   toolName: "poll",
   level: "warning",
   action: "warn",
-  detector: "known_poll_no_progress",
+  detector: "tool_repeat",
   count: 3,
 } as const;
 const talk = {

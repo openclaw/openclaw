@@ -28,7 +28,6 @@
 .usage-empty-state,
 .usage-overview-card,
 .provider-usage-section,
-.usage-mosaic,
 .usage-left-card,
 .sessions-card,
 .session-detail-panel {
@@ -41,8 +40,7 @@
 .usage-overview-layout,
 .session-detail-panel,
 .session-detail-content,
-.session-detail-row,
-.session-detail-bottom {
+.session-detail-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 14px;
@@ -64,7 +62,7 @@
   border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
   background: color-mix(in srgb, var(--accent) 8%, var(--bg-muted));
   color: var(--accent);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 650;
   flex: 0 1 auto;
   max-width: 55%;
@@ -96,20 +94,14 @@
 
 .provider-usage-card__name {
   color: var(--text-strong);
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   font-weight: 700;
 }
 
 .provider-usage-card__id,
 .usage-creators-table thead {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-}
-
-.usage-mosaic-section,
-.session-log-tools {
-  display: grid;
-  gap: 8px;
+  font-size: 11px;
 }
 
 /* Header: a quiet toolbar and a summary strip on the page surface, no card. */
@@ -135,8 +127,7 @@
 .sessions-card-meta,
 .timeseries-header-row,
 .context-breakdown-header,
-.session-detail-header,
-.session-logs-header {
+.session-detail-header {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -219,9 +210,7 @@
 
 .usage-date-input,
 .usage-select,
-.usage-query-input,
-.usage-filters-inline select,
-.usage-filters-inline input[type="text"] {
+.usage-query-input {
   min-height: var(--settings-control-height);
   border: 1px solid var(--field-border);
   border-radius: var(--field-radius);
@@ -235,27 +224,19 @@
   padding: 0 var(--field-padding-inline);
 }
 
-select.usage-select {
-  width: auto;
-}
-
 .usage-separator,
 .usage-query-hint,
 .sessions-card-count,
 .session-bar-meta,
 .context-weight-desc,
 .timeseries-summary,
-.session-log-meta,
-.session-logs-header-count,
-.usage-hour-labels,
 .context-breakdown-more,
 .usage-lineage-note,
 .session-detail-indicator,
-.session-log-tools summary,
 .legend-item,
 .usage-creators-more > summary {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .usage-query-hint {
@@ -279,7 +260,7 @@ select.usage-select {
 .usage-metric-badge strong {
   overflow: hidden;
   color: var(--text-strong);
-  font-size: calc(1.375rem * var(--control-ui-text-scale));
+  font-size: 1.375rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
@@ -327,7 +308,7 @@ select.usage-select {
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--text);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 500;
 }
 
@@ -720,40 +701,14 @@ select.usage-select {
   background: var(--bg-hover);
 }
 
-.usage-filter-option {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 8px;
-  align-items: center;
-  padding: 6px 8px;
-  min-height: var(--menu-item-height);
-  border-radius: var(--menu-item-radius);
-  background: transparent;
-  font-size: var(--control-ui-text-sm);
-}
-
-.usage-filter-option .oc-menu-item__check,
 .usage-value-picker__option .oc-menu-item__check {
   order: 0;
   margin-inline-start: 0;
 }
 
-.usage-filter-select [data-value="command:clear"] + .usage-filter-option {
-  margin-block-start: 9px;
-}
-
-.usage-filter-select [data-value="command:clear"] + .usage-filter-option::before {
-  position: absolute;
-  inset-inline: 8px;
-  top: -5px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  content: "";
-}
-
 .usage-query-chips,
 .usage-query-suggestions,
-.usage-badges,
-.session-log-tools-list {
+.usage-badges {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -863,7 +818,7 @@ select.usage-select {
 }
 
 .usage-empty-state__title {
-  font-size: calc(20px * var(--control-ui-text-scale));
+  font-size: 20px;
   font-weight: 700;
   color: var(--text-strong);
 }
@@ -882,7 +837,7 @@ select.usage-select {
   border-radius: var(--radius-md);
   text-align: center;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .usage-empty-block--compact {
@@ -893,27 +848,12 @@ select.usage-select {
 .usage-summary-grid,
 .session-summary-grid,
 .usage-insights-grid,
-.context-breakdown-grid,
-.session-logs-list {
+.context-breakdown-grid {
   display: grid;
   gap: 10px;
 }
 
 /* Long conversation text must not recursively size implicit grid columns in WebKit. */
-.session-logs-list {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.session-logs-list--windowed {
-  display: block;
-  height: min(70vh, 640px);
-  overflow: auto;
-  overscroll-behavior: contain;
-}
-
-.session-logs-window {
-  position: relative;
-}
 
 .usage-summary-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -946,9 +886,8 @@ select.usage-select {
 .usage-insight-title,
 .context-breakdown-title,
 .sessions-sort span,
-.cost-breakdown-header,
-.usage-mosaic-section-title {
-  font-size: var(--control-ui-text-sm);
+.cost-breakdown-header {
+  font-size: 12px;
   font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
@@ -957,7 +896,7 @@ select.usage-select {
 
 .usage-summary-value,
 .session-summary-value {
-  font-size: calc(clamp(1.4rem, 2vw, 1.85rem) * var(--control-ui-text-scale));
+  font-size: clamp(1.4rem, 2vw, 1.85rem);
   line-height: 1.1;
   color: var(--text-strong);
   font-variant-numeric: tabular-nums;
@@ -965,7 +904,7 @@ select.usage-select {
 }
 
 .usage-summary-value--compact {
-  font-size: calc(clamp(1.15rem, 1.5vw, 1.5rem) * var(--control-ui-text-scale));
+  font-size: clamp(1.15rem, 1.5vw, 1.5rem);
   line-height: 1.15;
 }
 
@@ -985,7 +924,7 @@ select.usage-select {
 .session-summary-meta,
 .usage-list-sub,
 .usage-section-meta {
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
@@ -1003,7 +942,7 @@ select.usage-select {
   background: transparent;
   color: var(--muted);
   font-family: inherit;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1;
   cursor: var(--cursor-action);
   opacity: 0.7;
@@ -1053,12 +992,6 @@ select.usage-select {
     box-shadow 0.18s var(--ease-out);
 }
 
-/* Fixed width: identity names arrive with the data and must not move the controls beside it. */
-select.usage-creator-filter {
-  width: 260px;
-  max-width: 100%;
-}
-
 .usage-creator-row--unrecorded :is(th, td) {
   color: var(--muted);
 }
@@ -1071,7 +1004,7 @@ select.usage-creator-filter {
   width: 100%;
   table-layout: fixed;
   border-collapse: collapse;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1196,7 +1129,7 @@ select.usage-creator-filter {
 .usage-heatmap__month,
 .usage-heatmap__weekday {
   fill: var(--muted);
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
 }
 
 .usage-heatmap__weekday {
@@ -1236,7 +1169,7 @@ select.usage-creator-filter {
   align-items: baseline;
   padding: 8px 0;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 /* Insight rows: name and value, a share bar, then quiet detail; names never wrap mid-word. */
@@ -1315,151 +1248,10 @@ select.usage-creator-filter {
   color: var(--danger);
 }
 
-/* One hairline-divided surface, like the Carapace summary strip. */
-.usage-mosaic {
-  display: grid;
-  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
-  gap: 1px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--border);
-}
-
-.usage-mosaic > * {
-  padding: 16px;
-  background: var(--card);
-}
-
-.usage-mosaic-total,
 .session-detail-title {
   color: var(--text-strong);
-}
-
-.session-detail-title {
-  font-size: calc(15px * var(--control-ui-text-scale));
+  font-size: 15px;
   font-weight: 700;
-}
-
-.usage-mosaic-total {
-  font-size: calc(13px * var(--control-ui-text-scale));
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.usage-mosaic-section-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.usage-weekdays {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.usage-weekday {
-  display: grid;
-  grid-template-columns: 2.5rem minmax(0, 1fr) 4.5rem;
-  align-items: center;
-  gap: 10px;
-  font-size: var(--control-ui-text-sm);
-}
-
-.usage-weekday__label {
-  color: var(--muted);
-}
-
-.usage-weekday__track {
-  height: 6px;
-  overflow: hidden;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--border) 60%, transparent);
-}
-
-.usage-weekday__fill {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: color-mix(in srgb, var(--accent) var(--usage-bar-tint, 45%), transparent);
-}
-
-.usage-weekday__value {
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-/* Marks are tinted by value; the peak and the current day or hour carry the full accent. */
-.usage-weekday--peak .usage-weekday__fill,
-.usage-weekday--now .usage-weekday__fill,
-.usage-hour-cell--peak .usage-hour-cell__bar,
-.usage-hour-cell--now .usage-hour-cell__bar {
-  background: var(--accent);
-}
-
-.usage-weekday--now .usage-weekday__label {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.usage-hour-cell--now .usage-hour-cell__bar {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
-}
-
-.usage-weekday--peak .usage-weekday__value {
-  color: var(--text-strong);
-  font-weight: 600;
-}
-
-.usage-hour-grid {
-  display: grid;
-  grid-template-columns: repeat(24, minmax(0, 1fr));
-  gap: 3px;
-  height: 96px;
-  border-bottom: 1px solid var(--border);
-}
-
-.usage-hour-cell {
-  display: flex;
-  align-items: flex-end;
-  min-width: 0;
-  padding: 0;
-  border: none;
-  border-radius: 3px 3px 0 0;
-  background: transparent;
-  cursor: var(--cursor-action);
-  appearance: none;
-}
-
-.usage-hour-cell__bar {
-  width: 100%;
-  border-radius: 2px 2px 0 0;
-  background: color-mix(in srgb, var(--accent) var(--usage-bar-tint, 45%), transparent);
-}
-
-.usage-hour-cell:hover {
-  background: var(--bg-hover);
-}
-
-.usage-hour-cell:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
-  outline-offset: 1px;
-}
-
-.usage-hour-cell.selected .usage-hour-cell__bar {
-  background: var(--accent);
-}
-
-.usage-hour-labels {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 8px;
-  font-size: var(--control-ui-text-sm);
-  color: var(--muted);
 }
 
 .usage-grid {
@@ -1505,7 +1297,7 @@ select.usage-creator-filter {
 
 .cost-window__value {
   color: var(--text-strong);
-  font-size: calc(1.375rem * var(--control-ui-text-scale));
+  font-size: 1.375rem;
   font-variant-numeric: tabular-nums;
   font-weight: 600;
   letter-spacing: -0.02em;
@@ -1569,8 +1361,7 @@ select.usage-creator-filter {
 .cost-breakdown,
 .sessions-card,
 .session-timeseries-compact,
-.context-details-panel,
-.session-logs-compact {
+.context-details-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 12px;
@@ -1822,7 +1613,7 @@ select.usage-creator-filter {
 
 .cost-breakdown-total,
 .context-total {
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   color: var(--text);
 }
 
@@ -1855,12 +1646,6 @@ select.usage-creator-filter {
 .session-bars {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-}
-
-.session-bars--recent {
-  max-height: 220px;
-  margin-top: 6px;
-  overflow: auto;
 }
 
 .session-bars--selected {
@@ -1956,7 +1741,7 @@ select.usage-creator-filter {
   white-space: nowrap;
   color: var(--text-strong);
   font-family: var(--mono);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 500;
   text-align: end;
 }
@@ -1982,13 +1767,10 @@ select.usage-creator-filter {
   align-items: center;
   gap: 8px 14px;
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 /* The detail panel is a side column: its sections stack. */
-.session-detail-bottom {
-  grid-template-columns: minmax(0, 1fr);
-}
 
 .usage-badges {
   margin-bottom: 2px;
@@ -1999,8 +1781,7 @@ select.usage-creator-filter {
 }
 
 .session-timeseries-compact,
-.context-details-panel,
-.session-logs-compact {
+.context-details-panel {
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -2027,7 +1808,7 @@ select.usage-creator-filter {
 
 .ts-axis-label {
   fill: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .ts-bar {
@@ -2071,106 +1852,15 @@ select.usage-creator-filter {
   background: var(--bg);
 }
 
-.session-logs-header {
-  align-items: flex-start;
-}
-
-.session-log-filters {
-  margin: 0;
-}
-
-.usage-filters-inline {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-}
-
-.usage-filters-inline select[multiple] {
-  min-width: 150px;
-  min-height: 112px;
-  padding: 8px;
-}
-
-.usage-filters-inline input[type="text"] {
-  flex: 1 1 220px;
-  padding: 0 var(--field-padding-inline);
-}
-
-.session-log-has-tools {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-}
-
-.session-log-entry {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg);
-}
-
-.session-log-entry.user {
-  border-color: color-mix(in srgb, var(--accent) 18%, var(--border));
-}
-
-.session-log-entry.assistant {
-  border-color: color-mix(in srgb, var(--info) 18%, var(--border));
-}
-
-.session-log-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 10px;
-  font-size: var(--control-ui-text-sm);
-}
-
-.session-log-role {
-  font-weight: 700;
-  color: var(--text-strong);
-}
-
-.session-log-content {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: 1.5;
-}
-
-.session-log-tools summary {
-  font-weight: 600;
-}
-
-.session-log-tools-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 6px 8px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 8%, var(--card));
-  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border));
-  font-size: var(--control-ui-text-sm);
-}
-
 :root[data-theme-mode="light"] .session-bar-row,
 :root[data-theme-mode="light"] .usage-insight-card,
 :root[data-theme-mode="light"] .session-timeseries-compact,
-:root[data-theme-mode="light"] .context-details-panel,
-:root[data-theme-mode="light"] .session-logs-compact {
+:root[data-theme-mode="light"] .context-details-panel {
   background: var(--card);
 }
 
 @container (max-width: 900px) {
-  .usage-grid,
-  .usage-mosaic,
-  .session-detail-bottom {
+  .usage-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2210,7 +1900,7 @@ select.usage-creator-filter {
   }
 
   .usage-metric-badge strong {
-    font-size: calc(1.0625rem * var(--control-ui-text-scale));
+    font-size: 1.0625rem;
   }
 }
 
@@ -2223,9 +1913,7 @@ select.usage-creator-filter {
 }
 
 @media (max-width: 900px) {
-  .usage-grid,
-  .usage-mosaic,
-  .session-detail-bottom {
+  .usage-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2257,8 +1945,7 @@ select.usage-creator-filter {
     border-top: 0;
   }
 
-  .usage-controls,
-  .usage-filters-inline {
+  .usage-controls {
     align-items: stretch;
   }
 
@@ -2267,10 +1954,6 @@ select.usage-creator-filter {
   .sessions-card-meta,
   .timeseries-controls {
     justify-content: flex-start;
-  }
-
-  .session-log-entry {
-    align-items: flex-start;
   }
 
   .session-bar-row,
@@ -2453,7 +2136,7 @@ select.usage-creator-filter {
 
   .usage-filter-sheet__facets .oc-menu-item__label > span:first-child {
     color: var(--muted);
-    font-size: calc(13px * var(--control-ui-text-scale));
+    font-size: 13px;
     font-weight: 500;
   }
 
@@ -2466,7 +2149,7 @@ select.usage-creator-filter {
     border-radius: var(--field-radius);
     background: var(--field-bg);
     color: var(--text);
-    font-size: var(--control-ui-text-lg);
+    font-size: 16px;
     font-weight: var(--control-ui-font-weight-normal);
   }
 
@@ -2509,30 +2192,6 @@ select.usage-creator-filter {
   }
 
   /* Side by side when both labels fit; wider mono themes wrap instead of truncating. */
-  .session-log-filters > .usage-filter-select {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
-  .session-log-filters .usage-filter-trigger {
-    width: 100%;
-  }
-
-  .session-log-filters .usage-filter-trigger > .oc-menu-item__label {
-    justify-content: space-between;
-    width: 100%;
-    min-width: 0;
-  }
-
-  .session-log-filters .usage-filter-trigger__label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .session-log-filters > .session-log-has-tools {
-    flex: 1 0 100%;
-  }
 }
 
 /* Legend: every stacked series with its share of the range. */

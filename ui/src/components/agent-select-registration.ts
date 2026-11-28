@@ -13,6 +13,7 @@ declare module "@solidjs/web" {
       "openclaw-agent-select": HTMLAttributes<AgentSelectElement> & {
         name?: string;
         "prop:options": readonly AgentSelectOption[];
+        "prop:triggerAttrs"?: AgentSelectElement["triggerAttrs"];
         "prop:variant"?: AgentSelectElement["variant"];
         "prop:identityById"?: AgentSelectElement["identityById"];
         "prop:identityTargetsRef"?: AgentSelectElement["identityTargetsRef"];

@@ -341,6 +341,25 @@ describe("GPT-Live offer broker", () => {
     }
   });
 
+  it("grounds client-owned WebRTC acknowledgments without host-control policy", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => createCallResponse());
+    const { realtime, runAgentConsult } = makeBroker({ fetchImpl });
+    const reservation = await reserve(realtime, {
+      providerConfig: {},
+      model: "gpt-live-test",
+      runAgentConsult,
+      instructions: "Keep my answers brief.",
+    });
+    expect((await post(realtime, { token: reservation.clientSecret })).res.statusCode).toBe(200);
+    const body = fetchImpl.mock.calls[0]?.[1]?.body;
+    assert(typeof body === "string");
+    const { session } = JSON.parse(body);
+    expect(session.instructions).toContain("Do not invent acknowledgments or progress claims.");
+    expect(session.instructions).toContain("Keep my answers brief.");
+    expect(session.instructions).not.toContain("Wait for the host control result");
+    expect(session.instructions).not.toContain("Only that fresh result establishes");
+  });
+
   it("uses a relative single-use offer route and normalizes voice", async () => {
     const { realtime } = makeBroker();
     const reservation = await reserveLiveSession(realtime, { voice: "invalid" });
@@ -511,7 +530,9 @@ describe("GPT-Live browser session lifecycle", () => {
         classified ? { type: "client", ack_filler: false } : { type: "client" },
       );
       if (!classified) {
-        expect(session.instructions).toBe("Keep my answers brief.");
+        expect(session.instructions).toContain("Keep my answers brief.");
+        expect(session.instructions).toContain("Do not invent acknowledgments or progress claims.");
+        expect(session.instructions).not.toContain("Wait for the host control result");
         expect(session.initial_items).toEqual(
           request.initialItems.map(({ role, text }) => ({
             type: "message",
@@ -588,19 +609,23 @@ describe("GPT-Live browser session lifecycle", () => {
     await expect(reserveOwner("native-owner")).resolves.toHaveProperty("transport", "webrtc");
   });
 
-  it("reports readiness and fences callbacks with negotiated control", async () => {
+  it("sends the explicit Live 1.1 selector and fences native control callbacks", async () => {
     const socket = new FakeSocket("manual");
-    const { realtime, runAgentConsult } = makeBroker({ socketFactory: () => socket });
+    const fetchImpl = vi.fn<typeof fetch>(async () => createCallResponse());
+    const { realtime, runAgentConsult } = makeBroker({ fetchImpl, socketFactory: () => socket });
     const bindBridge = vi.fn();
     const bindControl = vi.fn<NonNullable<RealtimeVoiceGatewayControl["bindControl"]>>();
     const onReady = vi.fn();
     const onTranscript = vi.fn();
     const onEvent = vi.fn();
     const onClose = vi.fn();
-    const request = nativeRequest(runAgentConsult, {
-      ownerConnId: "native-control-owner",
-      gatewayControl: { bindBridge, bindControl, onReady, onTranscript, onEvent, onClose },
-    });
+    const request = {
+      ...nativeRequest(runAgentConsult, {
+        ownerConnId: "native-control-owner",
+        gatewayControl: { bindBridge, bindControl, onReady, onTranscript, onEvent, onClose },
+      }),
+      model: "gpt-live-1.1-codex",
+    };
     const reservation = await reserve(realtime, request);
     const { response, handling } = startOffer(realtime, {
       token: reservation.clientSecret,
@@ -614,6 +639,20 @@ describe("GPT-Live browser session lifecycle", () => {
     socket.emit("open");
     await handling;
     expect(response.res.statusCode).toBe(200);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(requestTarget(url)).toBe(
+      "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+    );
+    expect(init?.headers).toMatchObject({
+      Authorization: "Bearer synthetic-oauth",
+      "Content-Type": "application/json",
+    });
+    assert(typeof init?.body === "string", "Expected initial call JSON");
+    expect(JSON.parse(init.body)).toMatchObject({
+      sdp: AUDIO_ONLY_SDP,
+      session: { model: "gpt-live-1.1-codex", audio: { output: { voice: "cove" } } },
+    });
     expect(onReady).toHaveBeenCalledOnce();
     expect(bindBridge).not.toHaveBeenCalled();
     const control = bindControl.mock.calls[0]?.[0];
