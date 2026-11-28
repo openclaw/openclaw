@@ -41,7 +41,7 @@ describe("agent run session target", () => {
     expect(resolveStoredTarget(params, mode)).resolves;
   const expectRejected = (params: ResolveTargetParams) =>
     expect(resolveStoredTarget(params)).rejects;
-  const partialTarget = (sessionId: string, extra: Partial<ResolveTargetParams> = {}) => ({
+  const partialTarget = (sessionId: string, extra: Partial<ResolveTargetParams>) => ({
     sessionId,
     sessionTarget: { agentId: "main", sessionId },
     ...extra,
