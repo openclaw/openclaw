@@ -1,5 +1,6 @@
 import { assert, beforeEach, expect, it, vi } from "vitest";
 import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
+import { EmbeddedCodexHandoffError } from "../../agents/embedded-agent-runner/codex-handoff.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { bindIngressLifecycleToReplyOptions } from "../../channels/message/ingress-drain-lifecycle.js";
 import { createChannelIngressDrain } from "../../channels/message/ingress-drain.js";
@@ -242,6 +243,14 @@ function createActiveGoalEntry(): SessionEntry {
     goal: createSessionGoalFixture("goal", "Finish"),
   };
 }
+
+it("defers an embedded Codex handoff refusal to candidate admission", async () => {
+  state.preflight.mockRejectedValueOnce(new EmbeddedCodexHandoffError());
+  const turn = await admitted(prepare());
+  expect(turn.preflightError).toBeUndefined();
+  expect(turn.preflightFailurePayload).toBeUndefined();
+  expect(turn.preflightCompactionApplied).not.toBe(true);
+});
 
 it("retains an undefined preflight rejection as an executable failure", async () => {
   state.preflight.mockRejectedValueOnce(undefined);

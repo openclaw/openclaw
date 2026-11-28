@@ -1,11 +1,13 @@
 import { markAutoFallbackPrimaryProbe } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
+import { assertEmbeddedCodexHandoff } from "../../agents/embedded-agent-runner/codex-handoff.js";
 import { resolveRunEntryCliRuntime } from "../../agents/embedded-agent-runner/run-entry-runtime.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateAgentRuntime } from "../../agents/thinking-runtime.js";
+import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import {
   assertCronCandidateSandboxPlacement,
@@ -272,6 +274,25 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           sessionEntry: runtimeSessionEntry(provider),
           agentRuntime: runOptions.agentHarnessRuntimeOverride,
         });
+        const sourceEntry = turn.getActiveSessionEntry();
+        if (
+          runOptions.isFallbackRetry &&
+          !runtime.useCliExecution &&
+          candidateAgentRuntime === "openclaw" &&
+          sourceEntry &&
+          turn.sessionKey &&
+          turn.storePath
+        ) {
+          await assertEmbeddedCodexHandoff(
+            {
+              sessionId: sourceEntry.sessionId,
+              sessionKey: turn.sessionKey,
+              agentId: resolveAgentIdFromSessionKey(turn.sessionKey, candidateRun.agentId),
+              storePath: turn.storePath,
+            },
+            () => params.runAbortSignal?.throwIfAborted(),
+          );
+        }
         params.scheduledInference?.assertCandidate(
           provider,
           runtime.useCliExecution,

@@ -33,6 +33,7 @@ import { isOutOfTurnHistoryEntry } from "../../sessions/session-manager-codec.js
 import { sessionManagerOpenTranscriptCohort } from "../../sessions/session-manager-core.js";
 import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { assertEmbeddedCodexHandoff } from "../codex-handoff.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { log } from "../logger.js";
@@ -467,6 +468,9 @@ export async function prepareEmbeddedAttemptSessionManager(
   input: EmbeddedAttemptSessionPreparationInput,
 ) {
   const { attempt } = input;
+  if (input.sessionTarget && !attempt.sessionManager) {
+    await assertEmbeddedCodexHandoff(input.sessionTarget, input.assertCurrent);
+  }
   const transcriptStateParams = {
     sessionManager: attempt.sessionManager,
     agentId: input.sessionAgentId,

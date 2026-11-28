@@ -641,10 +641,10 @@ export async function maybeCompactCodexAppServerSession(
                   provider: attempt.provider ?? binding.modelProvider,
                   model: attempt.model ?? binding.model,
                   tokensAfter,
+                  trigger: attempt.trigger === "manual" ? "manual" : undefined,
                   threadId: binding.threadId,
                   turnId: completion.turnId,
                   itemId: completion.itemId,
-                  timestamp: Date.now(),
                 });
               }
               await settlementAuthority.withCurrent(assertSettlementCurrent);

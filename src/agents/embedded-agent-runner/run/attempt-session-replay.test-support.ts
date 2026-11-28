@@ -116,6 +116,7 @@ export async function withInterruptedTurn(
     partialText?: string;
     toolProgress?: boolean;
     settledPrefix?: boolean;
+    seedPriorHistory?: (sessionManager: SessionManager) => Promise<void>;
     oversizedMetadata?: boolean;
     compactedInput?: boolean;
     selectedOwner?: boolean;
@@ -157,6 +158,9 @@ export async function withInterruptedTurn(
           ...(retry ? options.retryInput : {}),
         },
       });
+    if (options.seedPriorHistory) {
+      await options.seedPriorHistory(await SessionManager.openAsync(target, state.workspaceDir));
+    }
     if (options.settledPrefix) {
       // A completed earlier turn that fenced current-turn reads must still see.
       const seed = await SessionManager.openAsync(target, state.workspaceDir);
@@ -363,6 +367,7 @@ export async function withReplaySession(
     recovery?: "retry" | "compaction";
     compactionReserveTokens?: number;
     images?: ImageContent[];
+    onModelRequest?: Parameters<typeof submitEmbeddedAttemptPrompt>[0]["onModelRequest"];
   } = {},
 ) {
   const { attempt, target, prepare } = fixture;
@@ -423,6 +428,7 @@ export async function withReplaySession(
         activeSession: session,
         appendOnlyRuntimeContext,
         contextTokenBudget: 8000,
+        onModelRequest: options.onModelRequest,
         images: options.images ?? [],
         modelPrompt: attempt.prompt,
         onFinalPromptText: () => {},

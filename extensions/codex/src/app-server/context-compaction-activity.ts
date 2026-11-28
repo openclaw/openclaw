@@ -19,10 +19,11 @@ export async function persistCodexContextCompactionActivity(params: {
   provider?: string;
   model?: string;
   tokensAfter?: number;
+  trigger?: "manual";
   threadId: string;
   turnId: string;
   itemId: string;
-  timestamp: number;
+  timestamp?: number;
 }): Promise<void> {
   const target = params.sessionTarget;
   if (!target?.sessionId || !target.sessionKey || !target.storePath) {
@@ -43,13 +44,14 @@ export async function persistCodexContextCompactionActivity(params: {
     details: {
       kind: "context_compaction",
       backend: "codex-app-server",
+      ...(params.trigger ? { trigger: params.trigger } : {}),
       threadId: params.threadId,
       turnId: params.turnId,
       itemId: params.itemId,
       ...(params.runId ? { runId: params.runId } : {}),
     },
     __openclaw: { itemId: params.itemId, ...(params.runId ? { runId: params.runId } : {}) },
-    timestamp: params.timestamp,
+    timestamp: params.timestamp ?? Date.now(),
     idempotencyKey: activityId,
   };
   try {

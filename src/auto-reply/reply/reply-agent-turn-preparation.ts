@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
+import { deferEmbeddedCodexHandoff } from "../../agents/embedded-agent-runner/codex-handoff.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { prepareChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
@@ -551,9 +552,8 @@ export async function prepareReplyAgentTurn<TConfigured>(
         const preflightAdmission = readPendingUserTurnTranscriptAdmission(
           preparation.followupRun.userTurnTranscriptRecorder,
         );
-        const trace = params.trace;
         const tracePhase = <T>(phase: string, runPhase: () => Promise<T>) =>
-          trace ? trace(phase, runPhase) : runPhase();
+          params.trace ? params.trace(phase, runPhase) : runPhase();
         try {
           activeEntry = await tracePhase("reply.preflight_compaction", () =>
             runSessionCompactionIfNeeded({
@@ -584,7 +584,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
               },
               onCompactionStart: () => operation.setPhase("preflight_compacting"),
               onSessionIdChanged: (sessionId) => operation.updateSessionId(sessionId),
-            }),
+            }).catch(deferEmbeddedCodexHandoff(activeEntry)),
           );
         } catch (error) {
           const recorder = preparation.followupRun.userTurnTranscriptRecorder;
