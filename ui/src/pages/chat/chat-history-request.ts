@@ -1,7 +1,6 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   nativeHistoryMessageSourceId,
   oldestNativeHistoryMessage,
@@ -21,13 +20,9 @@ import {
   type ChatHistoryResult,
   type ChatHistoryObservation,
   type ObservedChatHistoryResponse,
-  type ChatHistoryDeltaResult,
-  type ChatHistoryResetResult,
   type ChatHistoryResponse,
   isHistoryCursor,
   attachHistoryActivity,
-  resolveChatHistoryPagination,
-  historySessionId,
 } from "./chat-history-snapshot.ts";
 import {
   chatHistoryRequests,
@@ -38,10 +33,6 @@ import {
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
-import {
-  projectChatTranscriptMetadata,
-  type ChatSessionSnapshot,
-} from "./session-message-cache.ts";
 export { chatHistoryRequestParams } from "./chat-history-request-params.ts";
 
 export function captureChatHistoryRun(
@@ -278,65 +269,6 @@ export function requestSharedHistory(
         }
       : response,
   );
-}
-
-type ChatSessionSnapshotRequestResult =
-  | { kind: "snapshot"; snapshot: ChatSessionSnapshot }
-  | (ChatHistoryDeltaResult & { sessionInfo: GatewaySessionRow })
-  | ChatHistoryResetResult;
-
-export async function requestChatSessionSnapshot(
-  client: GatewayBrowserClient,
-  sessionKey: string,
-  consumerOwner: object,
-  isCurrentConsumer: () => boolean,
-  cursor?: string,
-  signal?: AbortSignal,
-): Promise<ChatSessionSnapshotRequestResult> {
-  const method = "chat.history";
-  const requestModeKey = cursor === undefined ? "page" : `cursor:${cursor}`;
-  const requestKey = `prefetch\u0000${method}\u0000${sessionKey}\u0000${requestModeKey}`;
-  const result = await requestSharedHistory(
-    null,
-    client,
-    requestKey,
-    method,
-    sessionKey,
-    undefined,
-    consumerOwner,
-    { isCurrent: isCurrentConsumer, signal },
-    cursor,
-  );
-  if (isHistoryCursor(result)) {
-    if (result.kind === "reset") {
-      return result;
-    }
-    if (!result.sessionInfo) {
-      throw new Error("chat history delta omitted uncached session metadata");
-    }
-    return { ...result, sessionInfo: result.sessionInfo };
-  }
-  const sessionInfo = result.sessionInfo;
-  return {
-    kind: "snapshot",
-    snapshot: {
-      ...(result.deltaCursor !== undefined ? { deltaCursor: result.deltaCursor } : {}),
-      ...(Object.hasOwn(sessionInfo ?? {}, "activeLeafEntryId")
-        ? { displayedLeafEntryId: sessionInfo?.activeLeafEntryId?.trim() || null }
-        : {}),
-      transcriptMetadata: sessionInfo ? projectChatTranscriptMetadata(sessionInfo) : undefined,
-      messages: visibleChatHistoryMessages(result.messages),
-      pagination: resolveChatHistoryPagination(result),
-      sessionId: historySessionId(result),
-      historyState: result.stateRevision
-        ? {
-            stateRevision: result.stateRevision,
-            pendingInputs: result.pendingInputs,
-            sessionInfo,
-          }
-        : undefined,
-    },
-  };
 }
 
 type OlderHistorySelector = { cursor: string } | { messageId: string; sessionId: string };

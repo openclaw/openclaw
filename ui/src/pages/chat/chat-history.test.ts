@@ -8,7 +8,7 @@ import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow, SessionsRewindResult } from "../../api/types.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
-import { loadOlderChatHistoryPage, requestChatSessionSnapshot } from "./chat-history-request.ts";
+import { loadOlderChatHistoryPage } from "./chat-history-request.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import {
@@ -33,6 +33,7 @@ import {
   readChatMessagesFromCache,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
+import { requestChatSessionSnapshot } from "./session-prefetch-history.ts";
 
 function activeHistory(runId: string) {
   const history = emptyActiveHistory(runId);
