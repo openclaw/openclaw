@@ -63,7 +63,7 @@
 }
 
 .logbook__device-details summary {
-  cursor: pointer;
+  cursor: var(--cursor-action);
   list-style: none;
 }
 
