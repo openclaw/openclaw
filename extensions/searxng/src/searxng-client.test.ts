@@ -67,10 +67,14 @@ it.each([
 
 it("builds the configured request and normalizes, filters, and caps its results", async () => {
   const fetch = mockFetch([
-    row("cat", { content: "Meow", img_src: "https://img.test/cat.jpg" }),
+    row("cat", {
+      content: "Meow",
+      img_src: "https://img.test/cat.jpg",
+      publishedDate: "2026-01-01T00:00:00Z",
+    }),
     row("bad-title", { title: { text: "bad" } }),
     row("bad-url", { url: 3 }),
-    row("text", { content: { text: "bad" } }),
+    row("text", { content: { text: "bad" }, publishedDate: { month: 1 } }),
     row("capped"),
   ]);
 
@@ -84,6 +88,7 @@ it("builds the configured request and normalizes, filters, and caps its results"
         snippet: expect.stringContaining("Meow"),
         img_src: "https://img.test/cat.jpg",
         siteName: "example.com",
+        published: "2026-01-01T00:00:00Z",
       },
       { url: "https://example.com/text" },
     ],
