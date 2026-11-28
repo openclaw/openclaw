@@ -245,6 +245,35 @@ export async function resolveRecordedProjectByRoot(
   });
 }
 
+/** Renames the resolved registry project; a concurrently replaced or removed project is unchanged. */
+export async function renameProjectRegistry(
+  project: ProjectRegistryRecord,
+  displayName: string,
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+): Promise<ProjectRegistryRecord | undefined> {
+  const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
+  const context = captureOpenClawStateWorkerContext({ path: options.path, env });
+  return await withProjectCheckoutLifecycle(project.repoRoot, { context }, async (lease) => {
+    const { runWithOpenClawStateLeasesWorker } =
+      await import("../state/openclaw-state-lease-worker-operation.js");
+    return await runWithOpenClawStateLeasesWorker([lease], context, (scope, identities) =>
+      scope.execute({
+        type: "projects.rename",
+        input: {
+          project: {
+            id: project.id,
+            repoRoot: project.repoRoot,
+            source: project.source,
+            originUrl: project.originUrl,
+            displayName,
+          },
+          leases: identities,
+        },
+      }),
+    );
+  });
+}
+
 export async function removeProjectRegistry(
   project: ProjectRegistryRecord,
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},

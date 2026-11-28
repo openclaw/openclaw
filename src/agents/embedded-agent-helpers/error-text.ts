@@ -1,9 +1,12 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { REPETITIVE_OUTPUT_ERROR_MESSAGE } from "../../../packages/agent-core/src/errors.js";
 import { TOOL_REPEAT_LIMIT_CODE } from "../../../packages/agent-core/src/tool-repeat-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
-import { REPETITIVE_OUTPUT_ERROR_CODE, type AssistantMessage } from "../../llm/types.js";
+import { REPETITIVE_OUTPUT_ERROR_CODE, type AssistantHistoryMessage } from "../../llm/types.js";
+import { isTerminalAssistantError } from "../../llm/utils/retry.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   CONTEXT_OVERFLOW_ERROR_MESSAGE,
@@ -54,7 +57,7 @@ import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.j
 const log = createSubsystemLogger("errors");
 const TOOL_REPEAT_LIMIT_FALLBACK =
   "OpenClaw stopped this turn: the model repeated the same tool call too many times. Send a new message to continue.";
-const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
+const sandboxToolPolicyAuditMessages = new WeakSet<AssistantHistoryMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
 export const SYNTHESIZED_TIMEOUT_ERROR_TEXT = "LLM request timed out.";
 const MODEL_NOT_FOUND_USER_TEXT =
@@ -97,7 +100,11 @@ type AssistantErrorTextOptions = {
   sandboxRuntime?: ReturnType<typeof resolveSandboxRuntimeStatus>;
 };
 type ClassifiedAssistantErrorFacts = ReturnType<typeof classifyAssistantErrorFacts>;
-function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErrorTextOptions) {
+
+function classifyAssistantErrorFacts(
+  msg: AssistantHistoryMessage,
+  opts?: AssistantErrorTextOptions,
+) {
   const signal = buildAssistantFailoverSignal(msg, {
     provider: opts?.providerOwner?.id ?? opts?.provider,
   });
@@ -106,6 +113,7 @@ function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErro
   const providerPlugin = opts?.providerOwner ?? null;
   const classification = classifyFailoverSignal(signal, { providerPlugin });
   return {
+    signal,
     provider: opts?.provider ?? msg.provider ?? opts?.providerOwner?.id,
     model: opts?.model ?? msg.model,
     reason: failoverReasonFromClassification(classification),
@@ -118,7 +126,7 @@ function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErro
   };
 }
 export function formatAssistantErrorText(
-  msg: AssistantMessage,
+  msg: AssistantHistoryMessage,
   opts?: AssistantErrorTextOptions,
   facts?: ClassifiedAssistantErrorFacts,
 ): string | undefined {
@@ -317,34 +325,59 @@ function isRawAssistantErrorPassthrough(params: {
   );
 }
 
-export function formatUserFacingAssistantErrorText(
-  msg: AssistantMessage,
+export function formatUserFacingAssistantError(
+  msg: AssistantHistoryMessage,
   opts?: AssistantErrorTextOptions,
-): string {
+): { text: string; providerAuthored?: true } {
   if (msg.errorCode === REPETITIVE_OUTPUT_ERROR_CODE) {
-    return REPETITIVE_OUTPUT_ERROR_MESSAGE;
+    return { text: REPETITIVE_OUTPUT_ERROR_MESSAGE };
   }
   if (msg.errorCode === TOOL_REPEAT_LIMIT_CODE) {
     // Show only the agent-core template; never arbitrary text carried under this code.
-    return msg.errorMessage &&
-      /^OpenClaw stopped this turn: the model called (?:[\w.-]{1,64}|a tool) with the same arguments \d+ times in a row\. Send a new message to continue\.$/.test(
-        msg.errorMessage,
-      )
-      ? msg.errorMessage
-      : TOOL_REPEAT_LIMIT_FALLBACK;
+    return {
+      text:
+        msg.errorMessage &&
+        /^OpenClaw stopped this turn: the model called (?:[\w.-]{1,64}|a tool) with the same arguments \d+ times in a row\. Send a new message to continue\.$/.test(
+          msg.errorMessage,
+        )
+          ? msg.errorMessage
+          : TOOL_REPEAT_LIMIT_FALLBACK,
+    };
   }
   const modelLoadCopy = renderModelLoadFailureCopy(msg);
   if (modelLoadCopy) {
-    return modelLoadCopy;
+    return { text: modelLoadCopy };
   }
   const rawError = msg.errorMessage?.trim();
   const approvalMessage = resolveExecutionApprovalFailureMessage(rawError);
   if (approvalMessage) {
-    return `⚠️ ${approvalMessage}`;
+    return { text: `⚠️ ${approvalMessage}` };
   }
   const facts = classifyAssistantErrorFacts(msg, opts);
   if (!facts.storageFailure && rawError === MODEL_REQUEST_POLICY_DENIED_TEXT) {
-    return MODEL_REQUEST_POLICY_DENIED_TEXT;
+    return { text: MODEL_REQUEST_POLICY_DENIED_TEXT };
+  }
+  const owner = opts?.providerOwner;
+  if (
+    !facts.storageFailure &&
+    msg.stopReason === "error" &&
+    !isTerminalAssistantError(msg) &&
+    facts.signal.message &&
+    owner?.formatUserFacingError
+  ) {
+    const text = normalizeOptionalString(
+      owner.formatUserFacingError({
+        provider: owner.id,
+        modelId: msg.model,
+        errorMessage: facts.signal.message,
+        status: facts.status,
+        code: facts.signal.code,
+        errorType: facts.signal.errorType,
+      }),
+    );
+    if (text) {
+      return { text: redactSensitiveText(text, { mode: "tools" }), providerAuthored: true };
+    }
   }
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
@@ -358,8 +391,16 @@ export function formatUserFacingAssistantErrorText(
         ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
         : undefined
       : friendlyError);
-  if (safeFriendlyError) {
-    return safeFriendlyError.trim();
-  }
-  return renderAssistantRequestFailureCopy(facts) ?? GENERIC_ASSISTANT_ERROR_TEXT;
+  return {
+    text: safeFriendlyError
+      ? safeFriendlyError.trim()
+      : (renderAssistantRequestFailureCopy(facts) ?? GENERIC_ASSISTANT_ERROR_TEXT),
+  };
+}
+
+export function formatUserFacingAssistantErrorText(
+  msg: AssistantHistoryMessage,
+  opts?: AssistantErrorTextOptions,
+): string {
+  return formatUserFacingAssistantError(msg, opts).text;
 }

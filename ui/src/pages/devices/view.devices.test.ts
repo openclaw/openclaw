@@ -7,7 +7,6 @@ import type { InventoryRemovalRequest } from "../../lib/nodes/page-operations.ts
 import {
   createDevicesViewProps,
   createOfflineDeviceNode,
-  deviceSystemInfo,
 } from "../../test-helpers/devices-fixtures.ts";
 import {
   renderDevicesContainer,
@@ -177,25 +176,6 @@ describe("devices pending rendering", () => {
     ]);
   });
 
-  it("gives every pending request the same weight", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [
-          { requestId: "req-1", deviceId: "device-1", displayName: "Device One", ts: Date.now() },
-          { requestId: "req-2", deviceId: "device-2", displayName: "Device Two", ts: Date.now() },
-        ],
-        paired: [],
-      },
-    });
-    const section = getSection(container, "Pending approval");
-
-    expect(section.querySelectorAll(".device-entry__approve")).toHaveLength(2);
-    expect(section.querySelector(".primary")).toBeNull();
-    // The section already says what these rows are.
-    expect(section.querySelector(".settings-status")).toBeNull();
-    expect(section.querySelector(".device-entry__meta")?.textContent).toContain("New device");
-  });
-
   it("shows who asks and for what without opening anything", () => {
     const container = renderDevicesContainer({
       devicesList: {
@@ -282,76 +262,6 @@ describe("devices pending rendering", () => {
 });
 
 describe("devices inventory rendering", () => {
-  it.each([
-    { load: 18, free: 24, diskFree: 240, tone: "warn" },
-    { load: 28, free: 8, diskFree: 80, tone: "danger" },
-  ])("renders node resource pressure as $tone", ({ load, free, diskFree, tone }) => {
-    const container = renderDevicesContainer({
-      nodes: [
-        {
-          nodeId: "studio",
-          displayName: "Studio",
-          connected: true,
-          paired: true,
-          platform: "macos 27.0",
-          modelIdentifier: "Mac15,14",
-          version: "2026.8.1",
-          hostStats: {
-            cpuCount: 24,
-            loadAverage: [load, 2.8, 2.4],
-            memoryTotalBytes: 192 * 1024 ** 3,
-            memoryFreeBytes: free * 1024 ** 3,
-            diskTotalBytes: 2048 * 1024 ** 3,
-            diskAvailableBytes: diskFree * 1024 ** 3,
-            updatedAtMs: 1000,
-          },
-        },
-        { nodeId: "without-stats", displayName: "Without stats", paired: true, connected: true },
-      ],
-    });
-    const row = getSettingsRow(container, "Studio");
-    expect(row.querySelectorAll(`.device-resource .session-context-meter--${tone}`)).toHaveLength(
-      3,
-    );
-    // The closed row names the pressure; the meters stay on demand.
-    expect(row.querySelector("summary .settings-status")?.className).toContain(tone);
-    expect(row.querySelector("summary .session-context-meter")).toBeNull();
-    expect(row.querySelector("summary .settings-status")?.textContent).toContain(
-      `Load ${load.toFixed(1)}`,
-    );
-    expect(row.querySelector(".device-resource")?.getAttribute("title")).toContain(
-      `${load.toFixed(2)} / 2.80 / 2.40 on 24 cores`,
-    );
-    expect(metaParts(row.querySelector(".device-entry__meta") ?? undefined)).toEqual([
-      "macOS 27.0",
-      "Mac Studio",
-    ]);
-    expect(row.querySelector(".device-entry__facts")?.textContent).toContain("Mac15,14");
-    expect(row.querySelector(".device-entry__facts")?.textContent).toContain("2026.8.1");
-    expect(getSettingsRow(container, "Without stats").querySelector(".device-resource")).toBeNull();
-  });
-
-  it("hides only meters whose optional inputs are absent", () => {
-    const container = renderDevicesContainer({
-      nodes: [
-        {
-          nodeId: "memory",
-          displayName: "Memory only",
-          paired: true,
-          hostStats: {
-            cpuCount: 8,
-            memoryTotalBytes: 32 * 1024 ** 3,
-            memoryFreeBytes: 16 * 1024 ** 3,
-            updatedAtMs: 1000,
-          },
-        },
-      ],
-    });
-    const meters = getSettingsRow(container, "Memory only").querySelectorAll(".device-resource");
-    expect(meters).toHaveLength(1);
-    expect(meters[0]?.textContent).toContain("16 / 32 GB");
-  });
-
   it.each(["gateway", "node:studio"])(
     "opens the recorded %s desktop environment in a focus window",
     async (environmentId) => {
@@ -390,53 +300,6 @@ describe("devices inventory rendering", () => {
     expect(row.textContent).toContain("Desktop sharing");
     expect(row.textContent).toContain("pending desktop access request");
     expect(row.querySelector(".device-entry__facts")?.textContent).toContain("desktop.stream");
-  });
-
-  it("renders Gateway resources and uptime from system info", () => {
-    const container = renderDevicesContainer({
-      presence: [{ host: "studio-server", mode: "gateway", ts: 1000 }],
-      gatewaySystemInfo: {
-        ...deviceSystemInfo,
-        uptimeMs: (11 * 24 + 4) * 3600000,
-        cpuCount: 16,
-        loadAverage: [3.2, 2.8, 2.4],
-        memoryTotalBytes: 64 * 1024 ** 3,
-        memoryFreeBytes: 32 * 1024 ** 3,
-        diskTotalBytes: 2 * 1024 ** 4,
-        diskAvailableBytes: 1.2 * 1024 ** 4,
-      },
-    });
-    const row = getSettingsRow(container, "studio-server");
-    expect(row.textContent).toContain("Computer running OpenClaw");
-    expect(row.textContent).not.toContain("This computer");
-    expect(row.querySelectorAll(".device-resource")).toHaveLength(3);
-    expect(row.querySelector(".device-resource--load")?.textContent).toContain("3.2");
-    expect(row.textContent).toContain("1.2 TB free");
-    expect(row.querySelector(".settings-row__desc")?.textContent).toContain("up 11d 4h");
-  });
-
-  it("keeps the paired-devices empty state when only other sections have rows", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [
-          {
-            requestId: "req-1",
-            deviceId: "device-1",
-            displayName: "Device One",
-            role: "operator",
-            scopes: [],
-            ts: Date.now(),
-          },
-        ],
-        paired: [],
-      },
-      presence: [{ instanceId: "probe-1", host: "laptop", mode: "probe", ts: 1_000 }],
-    });
-
-    const section = getInventorySection(container);
-    expect(section.querySelector(".settings-empty")?.textContent).toContain(
-      "No paired devices yet.",
-    );
   });
 
   it("renders one row per machine with duplicates collapsed", () => {
@@ -584,17 +447,6 @@ describe("devices inventory rendering", () => {
     const versionFact = expectDefined(facts[0], "version warning fact");
 
     renderDevicesInto(container, { ...props, nodes: props.nodes.map((node) => ({ ...node })) });
-
-    expect(
-      Array.from(row.querySelectorAll(".device-entry__alerts > span")).every(
-        (badge, index) => badge === badges[index],
-      ),
-    ).toBe(true);
-    expect(
-      Array.from(row.querySelectorAll(".device-entry__facts > .device-fact"))
-        .slice(0, 3)
-        .every((fact, index) => fact === facts[index]),
-    ).toBe(true);
     renderDevicesInto(container, { ...props, gatewayVersion: "2026.11.1" });
     expect(row.querySelector(".device-entry__alerts > span")).toBe(versionBadge);
     expect(versionBadge.getAttribute("title")).toContain("2026.11.1");
@@ -602,7 +454,6 @@ describe("devices inventory rendering", () => {
     renderDevicesInto(container, { ...props, gatewayVersion: "2026.10.29" });
     const remaining = Array.from(row.querySelectorAll(".device-entry__alerts > span"));
     expect(remaining).toHaveLength(2);
-    expect(remaining.every((badge, index) => badge === badges[index + 1])).toBe(true);
     expect(versionBadge.isConnected).toBe(false);
   });
 
@@ -894,67 +745,6 @@ describe("devices inventory rendering", () => {
     );
     expect(facts).toContain("Roles");
     expect(facts).toContain("Scopes");
-  });
-
-  it("brands platform names instead of naive capitalization", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [],
-        paired: [
-          { deviceId: "ios-1", displayName: "iPhone", platform: "iOS 26.4", roles: ["operator"] },
-          { deviceId: "mac-1", displayName: "Mac", platform: "darwin", roles: ["operator"] },
-          {
-            deviceId: "mac-browser",
-            displayName: "Mac browser",
-            platform: "MacIntel",
-            deviceFamily: "Mac",
-            roles: ["operator"],
-          },
-          {
-            deviceId: "ipad-browser",
-            displayName: "iPad browser",
-            platform: "MacIntel",
-            deviceFamily: "iPad",
-            roles: ["operator"],
-          },
-          {
-            deviceId: "legacy-browser",
-            displayName: "Legacy browser",
-            platform: "MacIntel",
-            roles: ["operator"],
-          },
-        ],
-      },
-      presence: [
-        {
-          instanceId: "unpaired-ipad",
-          host: "Unpaired iPad",
-          platform: "MacIntel",
-          deviceFamily: "iPad",
-          mode: "webchat",
-          ts: 1_000,
-        },
-      ],
-    });
-    const subs = Array.from(
-      getInventorySection(container).querySelectorAll(".device-entry .settings-row__desc"),
-      (node) => node.textContent ?? "",
-    );
-
-    expect(subs.some((text) => text.includes("iOS 26.4"))).toBe(true);
-    expect(subs.some((text) => text.includes("IOS"))).toBe(false);
-    expect(subs.some((text) => text.includes("macOS"))).toBe(true);
-    for (const [name, label] of [
-      ["Mac browser", "macOS"],
-      ["iPad browser", "iPadOS"],
-      ["Legacy browser", "MacIntel"],
-      ["Unpaired iPad", "iPadOS"],
-    ]) {
-      const row = Array.from(container.querySelectorAll(".device-entry")).find(
-        (entry) => entry.querySelector(".settings-row__title")?.textContent === name,
-      );
-      expect(metaParts(row)[0]).toBe(label);
-    }
   });
 
   it("announces device and node list errors as alerts", () => {

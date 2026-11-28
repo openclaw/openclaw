@@ -26,6 +26,7 @@ import { loadProviderScopedThinkingCatalog } from "../model-catalog.runtime.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "../model-selection-shared.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
+import { resolveCommandAuthProfileSelection } from "./attempt-auth-selection.js";
 import * as sessionPersistence from "./attempt-execution.shared.js";
 import { resolveEmbeddedModelSelection } from "./model-selection.js";
 
@@ -195,7 +196,6 @@ function createRestrictedFixture() {
   const operatorAuthority = createTestOperatorAuthority({
     profileId: "limited-operator",
     scopes: ["operator.write"],
-    assertCurrent: () => {},
     modelPolicy: prepareOperatorModelPolicy({
       cfg: fixture.cfg,
       policy: { sourceAgent: "main", deny: ["custom/child"] },
@@ -356,6 +356,40 @@ describe("command selection with configured model facts", () => {
 
     fixture.defaults.modelPolicy = { allow: ["custom/base"] };
     await expect(fixture.select({ opts })).rejects.toThrow(
+      'Model override "custom/manual" is not allowed',
+    );
+  });
+
+  it.each([
+    { provider: "custom", model: "manual@custom:work" },
+    { model: "custom/manual@custom:work" },
+  ])("uses the explicit auth profile without changing the model identity: %j", async (override) => {
+    const fixture = createFixture();
+    fixture.inventory.mockReturnValue(customCatalog("base", "child", "manual"));
+    fixture.userSelection("manual", "custom", {
+      authProfileOverride: "custom:session",
+      authProfileOverrideSource: "user",
+    });
+    vi.spyOn(authProfiles, "ensureAuthProfileStoreAsync").mockResolvedValue({
+      version: 1,
+      profiles: {
+        "custom:session": { type: "api_key", provider: "custom", key: "synthetic-session-key" },
+      },
+    });
+    const opts = { message: "Continue", allowModelOverride: true, ...override };
+    const selected = await fixture.unchanged({ opts });
+    expect(selected).toMatchObject(expectedRoute("manual"));
+    expect(
+      resolveCommandAuthProfileSelection({
+        sessionEntry: selected.sessionEntryForAttempt,
+        configuredAuthProfileId: "custom:default",
+      }),
+    ).toEqual({ id: "custom:work", source: "user" });
+    expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
+
+    fixture.defaults.modelPolicy = { allow: ["custom/base"] };
+    fixture.userSelection("base");
+    await expect(fixture.unchanged({ opts })).rejects.toThrow(
       'Model override "custom/manual" is not allowed',
     );
   });
@@ -612,34 +646,4 @@ describe("command selection with session routing", () => {
       expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
     },
   );
-
-  it("rechecks operator authority after loading the thinking catalog", async () => {
-    const fixture = createFixture();
-    fixture.custom.models.forEach((model) => {
-      model.reasoning = true;
-    });
-    const lifetime = new AbortController();
-    const denied = new Error("operator authority ended during thinking catalog loading");
-    const operatorAuthority = createTestOperatorAuthority({
-      profileId: "transcript-operator",
-      scopes: ["operator.write"],
-      assertCurrent: () => {},
-      signal: lifetime.signal,
-    });
-    vi.mocked(loadProviderScopedThinkingCatalog)
-      .mockClear()
-      .mockImplementation(async () => {
-        lifetime.abort(denied);
-        return [];
-      });
-
-    await expect(
-      fixture.select({
-        opts: { message: "Select thinking level", operatorAuthority },
-        requestedThinkLevel: "low",
-      }),
-    ).rejects.toBe(denied);
-
-    expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
-  });
 });

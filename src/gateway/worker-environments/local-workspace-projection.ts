@@ -543,7 +543,7 @@ export async function resolveLocalWorkspaceOwner(params: {
   const assertActive = () => {
     params.assertCurrent?.();
     if (lifetime.disposed) {
-      throw new Error("Local sandbox workspace authority changed");
+      throw new Error("Local sandbox workspace was released. Start a new turn.");
     }
   };
   const metadata = captureSessionEntryMetadataRead(scope, assertActive);
@@ -608,7 +608,7 @@ export async function resolveLocalWorkspaceOwner(params: {
       if (!metadata) {
         assertActive();
         if (!retained?.isCurrent()) {
-          throw new Error("Local sandbox workspace authority changed");
+          throw new Error("Local sandbox workspace changed. Start a new turn.");
         }
         return;
       }
@@ -619,7 +619,7 @@ export async function resolveLocalWorkspaceOwner(params: {
         now?.archivedAt !== undefined ||
         now?.worktree?.id !== worktree.id
       ) {
-        throw new Error("Local sandbox workspace authority changed");
+        throw new Error("Local sandbox workspace changed. Start a new turn.");
       }
     };
     const assertCurrent = () => {

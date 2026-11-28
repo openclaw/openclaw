@@ -16,6 +16,7 @@ import { i18n } from "../../i18n/index.ts";
 import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -23,9 +24,9 @@ import {
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { button as actionButton } from "./cloud-worker-snapshots-dom.test-support.ts";
 import { CloudWorkersPage } from "./cloud-workers-page.tsx";
 import {
+  button as actionButton,
   change,
   click,
   configSnapshot,
@@ -202,63 +203,7 @@ it("selects advertised classes for the draft OS and retains custom values across
   }
 });
 
-it("offers Linux machine classes when the applied target is unset and the catalog omits its single OS", async () => {
-  const config = {
-    cloudWorkers: { profiles: { worker: machineProfile("standard", { target: undefined }) } },
-  };
-  const request = createGatewayRequestMock(async (method) => {
-    if (method === "config.get") {
-      return configSnapshot(config, "initial");
-    }
-    if (method === "environments.list") {
-      return {
-        environments: [],
-        profiles: [
-          {
-            id: "worker",
-            providerId: "crabbox",
-            machines: [
-              { id: "standard", label: "Standard", os: "linux", default: true },
-              { id: "large", label: "Large", os: "linux" },
-            ],
-          },
-        ],
-      };
-    }
-    throw new Error(`Unexpected request ${method}`);
-  });
-  const { runtimeConfig, view, page } = mountProfiles(createTestGatewayClient(request));
-  try {
-    await waitForSolid(() =>
-      expect(profileRow(page, "worker").textContent).toContain("Advertised"),
-    );
-    const edit = await waitForSolid(() =>
-      expectDefined(
-        profileRow(page, "worker").querySelector<HTMLButtonElement>(
-          'button[aria-label="Edit: worker"]:enabled',
-        ),
-        "enabled Edit action",
-      ),
-    );
-    edit.click();
-    const picker = await waitForSolid(() =>
-      expectDefined(
-        page.querySelector<HTMLButtonElement>("#cloud-worker-machine-class"),
-        "device class picker for applied default OS",
-      ),
-    );
-    expect(osSelect(page)).toBeNull();
-    picker.click();
-    await waitForSolid(() =>
-      expect(page.querySelector('[role="option"][data-value="large"]')).not.toBeNull(),
-    );
-  } finally {
-    view.unmount();
-    runtimeConfig.dispose();
-  }
-});
-
-it("keeps the profile draft and accepted catalog through refresh failure and retry", async () => {
+it("keeps profile inputs through catalog registration, refresh failure and retry", async () => {
   const config = { cloudWorkers: { profiles: { worker: machineProfile() } } };
   const catalog = {
     environments: [],
@@ -303,6 +248,11 @@ it("keeps the profile draft and accepted catalog through refresh failure and ret
       ),
     );
     change(lifetime, "9h");
+    // Another lazy catalog can publish without changing this field's translations.
+    registerEnglishCatalog(() => {});
+    await waitForSolid(() =>
+      expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime),
+    );
     const refresh = async (nextHash: string) => {
       const pending = createDeferred<EnvironmentsListResult>();
       response = pending.promise;
@@ -640,7 +590,9 @@ it("keeps a rejected profile draft and retires pending save presentation on acce
       ),
     );
     change(lifetime, "9h");
-    click(page, "Save");
+    const save = actionButton(page, "Save");
+    save.click();
+    save.click();
     await waitForSolid(() => {
       expect(patches).toBe(1);
       expect(actionButton(page, "Saving…").disabled).toBe(true);
@@ -653,6 +605,16 @@ it("keeps a rejected profile draft and retires pending save presentation on acce
     expect(lifetime.value).toBe("9h");
     await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
     expect(page.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(false);
+    gatewayHarness.publish(false, client, null);
+    gatewayHarness.publish(
+      true,
+      client,
+      gatewayHelloForMethods(["config.patch", "environments.list"]),
+    );
+    await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
+    expect(page.textContent).toContain("Synthetic profile save unavailable");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
+    expect(lifetime.value).toBe("9h");
 
     pending = createDeferred<unknown>();
     click(page, "Save");

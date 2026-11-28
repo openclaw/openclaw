@@ -22,8 +22,7 @@ type ActivityPerson = PresenceViewer & {
 };
 
 type PeopleView = {
-  filters: SessionActivityFilters;
-  onFiltersChange: (filters: SessionActivityFilters) => void;
+  filters: Pick<SessionActivityFilters, "personId">;
   presentationRevision?: number;
   result?: Pick<SessionsListResult, "peopleIncomplete">;
 };
@@ -117,6 +116,7 @@ function PersonRow(props: {
 
 export function PeopleControl(props: {
   view: PeopleView;
+  onPersonChange: (personId: string | null) => void;
   people: readonly ActivityPerson[];
   selectedPerson: PresenceViewer | null;
   totalSessions: number | undefined;
@@ -126,7 +126,7 @@ export function PeopleControl(props: {
   const phone = createMediaQuery(ACTIVITY_PHONE_QUERY);
   const selectPerson = (personId: string | null) => {
     popover?.overlay.request(false, "return");
-    props.view.onFiltersChange({ ...props.view.filters, personId });
+    props.onPersonChange(personId);
   };
   const visible = () => props.people.slice(0, 3);
   const overflow = () => props.people.length - visible().length;
@@ -191,7 +191,7 @@ export function PeopleControl(props: {
           type="button"
           class="btn btn--sm activity-feed__people-clear"
           aria-label={t("activityFeed.clearPersonFilter")}
-          onClick={() => props.view.onFiltersChange({ ...props.view.filters, personId: null })}
+          onClick={() => props.onPersonChange(null)}
         >
           <Icon name="x" />
         </button>

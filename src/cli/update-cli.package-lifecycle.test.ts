@@ -25,6 +25,7 @@ import {
 import {
   defaultRuntime,
   ExitError,
+  listUpdateRuns,
   replaceConfigFile,
   updateCommand,
   updateGitRelease,
@@ -114,16 +115,25 @@ describe("update-cli", () => {
     );
   });
 
-  it("refuses local packaged-code replay before release preparation with manual recovery guidance", async () => {
+  it.each([
+    {
+      option: { reapplyLocalOverrides: true },
+      guidance: "update without this flag, then reapply the overrides by hand",
+    },
+    {
+      option: { fullIntegrityCheck: true },
+      guidance: "openclaw doctor --fix --full-integrity-check",
+    },
+  ])("refuses unsupported $option before release preparation", async ({ option, guidance }) => {
     await mockPackageInstallAtCaseDir();
     const runRelease = vi.spyOn(release, "runReleaseUpdateCli").mockResolvedValue(undefined);
+    const runsBefore = listUpdateRuns();
 
-    await expect(updateCommand({ yes: true, reapplyLocalOverrides: true })).rejects.toThrow(
-      "update without this flag, then reapply the overrides by hand",
-    );
+    await expect(updateCommand({ yes: true, json: true, ...option })).rejects.toThrow(guidance);
 
     expect(packageInstallCommandCall()).toBeUndefined();
     expect(runRelease).not.toHaveBeenCalled();
+    expect(listUpdateRuns()).toEqual(runsBefore);
   });
 
   it("refuses --tag main before dry-run package resolution", async () => {

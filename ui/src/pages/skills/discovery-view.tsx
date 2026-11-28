@@ -13,6 +13,7 @@ import { registryCategoryIcon } from "../../components/solid/registry-category-i
 import { SettingsEmpty, SettingsGroup } from "../../components/solid/settings-ui.tsx";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { formatNumber } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
 import { PluginCatalogGrid } from "../plugins/catalog-grid.tsx";
@@ -176,8 +177,11 @@ function InstalledShelf(props: { entries: SkillDiscoveryEntry[]; onOpen: () => v
         </For>
       </span>
       <span class="skill-installed-shelf__text">
-        <strong>{t("skillGroups.installed")}</strong>
-        <span class="skill-installed-shelf__names">
+        <strong>
+          {t("skillGroups.installed")} (
+          <data value={props.entries.length}>{formatNumber(props.entries.length)}</data>)
+        </strong>
+        <span class="skill-installed-shelf__names" aria-hidden="true">
           {props.entries
             .slice(0, 12)
             .map((entry) => entry.name)
@@ -277,6 +281,11 @@ export function SkillDiscovery(props: SkillsProps) {
     );
   });
   const hasInstalled = createMemo(() => catalog().installed.length > 0);
+  // Retried taxonomy can change overflow without resizing the retained strip.
+  const chipsRevision = createMemo(() => ({
+    categories: props.readCategories()?.categories,
+    installed: hasInstalled(),
+  }));
   // During a search, installed matches that ClawHub also returned stay in the registry's ranking.
   const installedRows = createMemo(() =>
     scope() === "installed" ? installed() : installed().filter((entry) => !entry.remote),
@@ -382,7 +391,7 @@ export function SkillDiscovery(props: SkillsProps) {
           {props.state.clawhubInstallMessage!.text}
         </InlineAlert>
       )}
-      <CatalogDiscoveryChips label={t("skillsPage.categories")}>
+      <CatalogDiscoveryChips label={t("skillsPage.categories")} revision={chipsRevision()}>
         <CatalogDiscoveryChip
           icon={<Icon name="layoutGrid" />}
           active={scope() === "all" && !category()}

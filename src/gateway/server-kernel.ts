@@ -106,6 +106,7 @@ type GatewayKernelOptions = {
   deferEarlyRuntime?: boolean;
   /** HTTP startup binds its listener before awaiting session projection readiness. */
   deferRequestRuntime?: boolean;
+  waitForPostReadyWork?: () => Promise<void>;
   sdkResourceHost?: LegacyPluginSdkResourceHost;
 };
 
@@ -258,6 +259,7 @@ async function createGatewayKernelWithSdkHost(
         log,
         logHealth,
         hostLifecycle: opts.hostLifecycle,
+        waitForPostReadyWork: options.waitForPostReadyWork,
       }),
     );
     if (!options.deferRequestRuntime) {

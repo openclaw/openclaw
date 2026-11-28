@@ -1,11 +1,14 @@
 import { expect, it } from "vitest";
 import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { createParticipationTestAuthority } from "../../agents/participation-ceiling.test-support.js";
+import { createTestCronOperatorSource } from "../execution-context.test-support.js";
 import { resolveCronRunAdmissionSource } from "../run-authority.js";
 import { resolveCronRunToolsAllow } from "../tools-allow.js";
 import type { CronStoredJob, CronToolsAllowExecTarget } from "../types.js";
 import {
   cronJobMessageActionAuthorityInputsEqual,
   reconcileCronChannelRequesterAuthority,
+  reconcileCronOperatorSource,
   reconcileToolsAllowAuthority,
 } from "./jobs-tool-policy.js";
 
@@ -129,3 +132,31 @@ it("uses its owner's tools instead of a stale automatic tool snapshot", () => {
   Object.assign(job.payload, { toolsAllowIsDefault: true });
   expect(resolveCronRunToolsAllow(job)).toEqual(["*"]);
 });
+
+it.each([false, true])(
+  "does not drop a mandatory source on an incompatible edit (participant=%s)",
+  (participant) => {
+    const key = "agent:main:invited";
+    const source = createTestCronOperatorSource(key);
+    if (participant) {
+      source.source.snapshot = createParticipationTestAuthority({
+        kind: "send",
+        profileId: "profile-1",
+        sessionKey: key,
+      }).recoverySnapshot!;
+    }
+    const previousJob = { ...toolJob(["read"]), operatorSource: source };
+    const job: CronStoredJob = {
+      ...previousJob,
+      payload: { kind: "systemEvent", text: "changed execution" },
+    };
+    const reconcile = () =>
+      reconcileCronOperatorSource({ job, previousJob, defaultAgentId: "main" });
+    if (participant) {
+      expect(reconcile).toThrow(/participant/i);
+    } else {
+      reconcile();
+      expect(job.operatorSource).toBeUndefined();
+    }
+  },
+);

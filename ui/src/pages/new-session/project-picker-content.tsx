@@ -13,12 +13,15 @@ import {
   useContext,
 } from "solid-js";
 import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
+import { foldSearchCase } from "../../../../src/shared/search-case.js";
+import { pathForRoute } from "../../app-route-paths.ts";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
@@ -267,12 +270,13 @@ export function ProjectPickerContent(props: ProjectChipProps) {
   const localProjects = createMemo(() => {
     // Retired catalogs clear immediately; a live refresh keeps local filtering responsive.
     const accepted = !props.nativeTerminal && projectsReady() ? projects() : [];
-    const query = view().query.toLowerCase().normalize("NFC");
+    const query = foldSearchCase(view().query).normalize("NFC");
     // Search only the display name and the identity projected by the Gateway, never origins or paths.
     return query
       ? accepted.filter((project) =>
-          [project.displayName, project.repositoryIdentity].some((value) =>
-            value?.toLowerCase().normalize("NFC").includes(query),
+          [project.displayName, project.repositoryIdentity].some(
+            (value) =>
+              value !== undefined && foldSearchCase(value).normalize("NFC").includes(query),
           ),
         )
       : accepted;
@@ -539,11 +543,19 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                   keyed={(project) => project.id}
                   fallback={
                     <Show when={projectsReady() && !projectCatalogError()}>
-                      <div class="new-session-page__menu-note new-session-page__empty">
-                        {view().query
-                          ? t("newSession.noLocalProjectMatches")
-                          : t("newSession.noLocalProjects")}
-                      </div>
+                      {/* Restricted roles see only shared projects, so say why none appear. */}
+                      {!props.params.place.canWrite() &&
+                      props.params.place.browser.projects.length === 0 ? (
+                        <div class="new-session-page__menu-note">
+                          {t("newSession.noSharedProjects")}
+                        </div>
+                      ) : (
+                        <div class="new-session-page__menu-note new-session-page__empty">
+                          {view().query
+                            ? t("newSession.noLocalProjectMatches")
+                            : t("newSession.noLocalProjects")}
+                        </div>
+                      )}
                     </Show>
                   }
                 >
@@ -568,6 +580,19 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                   }}
                 </For>
               </Loading>
+              <Show when={props.params.place.isAdmin() ? props.params.context : undefined}>
+                {(context) => (
+                  <a
+                    class="new-session-page__menu-note new-session-page__manage-projects"
+                    href={pathForRoute("projects", context().basePath)}
+                    onClick={(event) =>
+                      handleNavigationClick(event, () => context().navigate("projects"))
+                    }
+                  >
+                    {t("newSession.manageProjects")}
+                  </a>
+                )}
+              </Show>
             </Show>
             {view().cloneInput && view().projectAddAvailable ? (
               <SessionMenuItem
@@ -651,15 +676,18 @@ export function ProjectPickerContent(props: ProjectChipProps) {
               <div class="new-session-page__menu-note">{t("newSession.projectsAdminHint")}</div>
             ) : undefined}
           </div>
-          <div class="new-session-page__picker-foot">
-            {view().browseNeedsAdmin ? (
-              <openclaw-tooltip prop:content={t("newSession.browseRequiresAdminTooltip")}>
-                {browseButton()}
-              </openclaw-tooltip>
-            ) : (
-              browseButton()
-            )}
-          </div>
+          {/* Gateway-host folder browsing needs operator.write; restricted roles pick shared projects. */}
+          <Show when={props.params.place.canWrite()}>
+            <div class="new-session-page__picker-foot">
+              {view().browseNeedsAdmin ? (
+                <openclaw-tooltip prop:content={t("newSession.browseRequiresAdminTooltip")}>
+                  {browseButton()}
+                </openclaw-tooltip>
+              ) : (
+                browseButton()
+              )}
+            </div>
+          </Show>
         </div>
       )}
     </>

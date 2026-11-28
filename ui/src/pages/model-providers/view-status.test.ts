@@ -39,6 +39,24 @@ it("uses the scoped check outcome without hiding catalog or account problems", (
   expect(status()).toBe("Ready");
 });
 
+it("preserves setup status when a probe has no model to check", () => {
+  const viewProps = props({ cards: [card({ catalogStatus: "ready" })] });
+  const container = mount({
+    ...viewProps,
+    probeResults: { openai: { provider: "openai", status: "no_model", results: [] } },
+  });
+  expect(text(container.querySelector(".provider-row__status"))).toBe("Ready");
+  mount(
+    {
+      ...viewProps,
+      cards: [card({ catalogStatus: "auth-rejected" })],
+      probeResults: { openai: { provider: "openai", status: "no_model", results: [] } },
+    },
+    container,
+  );
+  expect(text(container.querySelector(".provider-row__status"))).toBe("Credentials rejected");
+});
+
 it("labels a single measured account when per-login limits are unavailable", () => {
   const profile = { profileId: "openai:first", type: "oauth" as const, status: "ok" as const };
   const base = card({

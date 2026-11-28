@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { MediaProbeKind, MediaProbeResult } from "./media-probe.js";
 
 const { runFfprobe } = vi.hoisted(() => ({
@@ -13,17 +13,18 @@ vi.mock("./ffmpeg-exec.js", () => ({
   runFfprobe,
 }));
 
+const stdinFile = { fd: 17, source: { path: "/probe", dev: 1n, ino: 2n } };
 let testDir = "";
 let songPath = "";
 let clipPath = "";
 let voicePath = "";
 let probeMediaFilesWithinBudget: typeof import("./media-probe.js").probeMediaFilesWithinBudget;
-let probePlaybackMediaFileDescriptor: typeof import("./media-probe.js").probePlaybackMediaFileDescriptor;
+let probePlaybackMediaFile: typeof import("./media-probe.js").probePlaybackMediaFile;
 let probeVideoDimensions: typeof import("./media-probe.js").probeVideoDimensions;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ probeMediaFilesWithinBudget, probePlaybackMediaFileDescriptor, probeVideoDimensions } =
+  ({ probeMediaFilesWithinBudget, probePlaybackMediaFile, probeVideoDimensions } =
     await import("./media-probe.js"));
   testDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-probe-"));
   songPath = path.join(testDir, "song.mp3");
@@ -80,7 +81,10 @@ describe("probeMediaFile", () => {
         "0",
         "fd:",
       ],
-      { stdinFileDescriptor: expect.any(Number), timeoutMs: expect.any(Number) },
+      {
+        stdinFile: expect.objectContaining({ source: expect.objectContaining({ path: songPath }) }),
+        timeoutMs: expect.any(Number),
+      },
     );
   });
 
@@ -177,7 +181,7 @@ describe("probeMediaFile", () => {
       }),
     );
 
-    await expect(probePlaybackMediaFileDescriptor(17, "video")).resolves.toEqual({
+    await expect(probePlaybackMediaFile(stdinFile, "video")).resolves.toEqual({
       durationMs: 4000,
       width: 1920,
       height: 1080,
@@ -192,7 +196,7 @@ describe("probeMediaFile", () => {
     });
     expect(runFfprobe).toHaveBeenCalledOnce();
     expect(runFfprobe).toHaveBeenCalledWith(expect.arrayContaining(["-fd", "0", "fd:"]), {
-      stdinFileDescriptor: 17,
+      stdinFile,
     });
   });
 
@@ -211,13 +215,13 @@ describe("probeMediaFile", () => {
         .mockRejectedValueOnce(Object.assign(new Error("ffprobe failed"), { stderr }))
         .mockResolvedValueOnce(JSON.stringify({ format: { duration: "2" } }));
 
-      await expect(probePlaybackMediaFileDescriptor(17, "audio")).resolves.toEqual({
+      await expect(probePlaybackMediaFile(stdinFile, "audio")).resolves.toEqual({
         durationMs: 2000,
       });
       expect(runFfprobe).toHaveBeenNthCalledWith(
         2,
         expect.arrayContaining(["-protocol_whitelist", "pipe", "pipe:0"]),
-        { stdinFileDescriptor: 17 },
+        { stdinFile },
       );
     },
   );
@@ -228,7 +232,7 @@ describe("probeMediaFile", () => {
   ])("does not retry an unrelated ffprobe option failure: %s", async (stderr) => {
     runFfprobe.mockRejectedValue(Object.assign(new Error("ffprobe failed"), { stderr }));
 
-    await expect(probePlaybackMediaFileDescriptor(17, "audio")).resolves.toBeNull();
+    await expect(probePlaybackMediaFile(stdinFile, "audio")).resolves.toBeNull();
     expect(runFfprobe).toHaveBeenCalledOnce();
   });
 
@@ -265,16 +269,16 @@ describe("probeMediaFilesWithinBudget", () => {
       filePath: songPath,
       kind: "audio" as const,
     }));
-    const handles = await Promise.all(inputs.map(({ filePath }) => fs.open(filePath, "r")));
-    let nextHandle = 0;
-    // Make every admitted probe ready without depending on filesystem scheduling.
-    using open = vi.spyOn(fs, "open").mockImplementation(async () => handles[nextHandle++]!);
+    const entered = createDeferred();
     const release = createDeferred();
     let active = 0;
     let maxActive = 0;
     runFfprobe.mockImplementation(async () => {
       active += 1;
       maxActive = Math.max(maxActive, active);
+      if (active === 2) {
+        entered.resolve();
+      }
       await release.promise;
       active -= 1;
       return JSON.stringify({ format: { duration: "1" } });
@@ -286,7 +290,7 @@ describe("probeMediaFilesWithinBudget", () => {
       maxProbes: 8,
     });
     try {
-      await Promise.all(open.mock.results.map(({ value }) => value));
+      await awaitGateBeforeSettlement(entered.promise, probing, "Two probes must run concurrently");
       expect(runFfprobe).toHaveBeenCalledTimes(2);
       release.resolve();
       const results = await probing;
@@ -297,7 +301,6 @@ describe("probeMediaFilesWithinBudget", () => {
     } finally {
       release.resolve();
       await probing;
-      await Promise.all(handles.map((handle) => handle.close()));
     }
   });
 

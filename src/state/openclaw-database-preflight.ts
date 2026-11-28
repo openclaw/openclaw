@@ -94,6 +94,7 @@ export async function assertOpenClawDatabasesReady(
     {
       env: options.env,
       onAgentInspection: options.onAgentInspection,
+      takeStateSchemaReader: options.takeStateSchemaReader,
       onRegisteredAgentDatabases: options.onRegisteredAgentDatabases,
       verifyCurrentSchemaShape: true,
       ...(options.config
@@ -314,7 +315,7 @@ export async function preflightOpenClawDatabaseSchemas(
           (purpose === "runtime" || inspectSource) &&
           (!options.requireStartupMigrationReadiness || liveState) &&
           !options.openStateSchemaReadAdmission
-            ? createAgentSchemaInspectionWorker()
+            ? (options.takeStateSchemaReader?.() ?? createAgentSchemaInspectionWorker())
             : undefined;
         // Online inspection needs one native read transaction, not a payload-sized copy.
         // Keep it in the child: closing a source here could release this process's writer locks.
@@ -563,6 +564,11 @@ export async function preflightOpenClawDatabaseSchemas(
         }
         readSucceeded = !schemaInspection.failure && !schemaInspection.reason;
         const { version: agentVersion, writerAppVersion, agentSchemaMeta } = schemaInspection;
+        // Runtime readers use the published floor; explicit target/maintenance checks stay strict.
+        const agentAdmissionVersion =
+          purpose === "runtime" && options.supportedVersions === undefined
+            ? (schemaInspection.minReader ?? agentVersion)
+            : agentVersion;
         if (row.holdForDeletionRecovery) {
           recordAgentDatabaseRecoveryInspection(
             preparedDiscovery,
@@ -572,7 +578,7 @@ export async function preflightOpenClawDatabaseSchemas(
           );
           return undefined;
         }
-        if (agentVersion <= supportedVersions.agent && inspectOwnership && row.agentId) {
+        if (agentAdmissionVersion <= supportedVersions.agent && inspectOwnership && row.agentId) {
           const refusal = inspectAgentDatabaseAdmission({
             agentId: row.agentId,
             path: agentPath,
@@ -611,7 +617,7 @@ export async function preflightOpenClawDatabaseSchemas(
           inspection.indeterminate.push(failure);
           return undefined;
         }
-        if (agentVersion > supportedVersions.agent) {
+        if (agentAdmissionVersion > supportedVersions.agent) {
           const incompatible = {
             kind: "agent",
             path: agentPath,

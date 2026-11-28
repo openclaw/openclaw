@@ -4,18 +4,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { UpdateCommandFailure } from "../../cli/update-cli/update-command-result.js";
-import { completeUpdateCommandRun } from "../../cli/update-cli/update-command-run.js";
-import { withUpdateFailureTriage } from "../../cli/update-cli/update-command-triage.js";
-import { withTriageTerminal } from "../../commands/triage.test-support.js";
 import type { RunGithubCli } from "../../infra/github-issue.js";
-import {
-  readUpdateFailureReportReceipt,
-  type RestartSentinelPayload,
-} from "../../infra/restart-sentinel.js";
+import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import { parseUpdateDoctorLintReport } from "../../infra/update-doctor-lint.js";
 import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
-import { prepareUpdateFailureReport } from "../../infra/update-failure-report.js";
 import {
   createUpdateRun,
   finishUpdateRun,
@@ -23,11 +15,8 @@ import {
   recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { runStep } from "../../infra/update-runner-command.js";
-import type { UpdateRunResult } from "../../infra/update-runner-types.js";
-import { defaultRuntime } from "../../runtime.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -43,14 +32,6 @@ import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 const mocks = vi.hoisted(() => ({
   runGh: vi.fn<RunGithubCli>(),
   sentinel: vi.fn<() => Promise<RestartSentinelPayload | null>>(),
-  select: vi.fn<() => Promise<string | symbol>>(),
-  confirm: vi.fn<() => Promise<boolean | symbol>>(),
-}));
-
-vi.mock("../../commands/configure.shared.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../commands/configure.shared.js")>()),
-  select: mocks.select,
-  confirm: mocks.confirm,
 }));
 
 vi.mock("../../plugins/bundled-plugin-metadata.js", async (importOriginal) => {
@@ -137,41 +118,11 @@ function expectText(text: string | undefined, contains: string[] = [], excludes:
   }
 }
 
-async function expectNoReport({ receipt = true, github = true } = {}) {
-  if (receipt) {
-    expect(await readUpdateFailureReportReceipt(runId)).toBeNull();
-  }
+async function expectNoReport({ github = true } = {}) {
   expect(await reportFiles()).toEqual([]);
   if (github) {
     expect(mocks.runGh).not.toHaveBeenCalled();
   }
-}
-
-function resultStep(name: string, exitCode: number | null = null, durationMs = 0) {
-  return { name, command: "", cwd: "", durationMs, exitCode };
-}
-
-function interactiveReport(result: UpdateRunResult, env = process.env) {
-  const runtime = { log: vi.fn(), error: vi.fn() };
-  return {
-    runtime,
-    run: async () => {
-      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
-      const error = vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
-      try {
-        await withTriageTerminal(true, async () => {
-          await expect(
-            withUpdateFailureTriage({ run: { runId, env } }, { env }, () =>
-              Promise.reject(new UpdateCommandFailure(result)),
-            ),
-          ).rejects.toMatchObject({ code: 1 });
-        });
-      } finally {
-        log.mockRestore();
-        error.mockRestore();
-      }
-    },
-  };
 }
 
 function ghResult(stdout = "", status = 0) {
@@ -182,9 +133,6 @@ function ghPhases() {
 }
 function submissionBody() {
   return mocks.runGh.mock.calls.find(([args]) => args[0] === "api")?.[1]?.input?.toString();
-}
-function localReport() {
-  return renderUpdateRunReport(getUpdateRun(runId)!).lines.join("\n");
 }
 function recordFactFailure(
   failureFacts: UpdateFailureFact[] | undefined,
@@ -221,7 +169,7 @@ function publicFact(
 
 async function invoke(
   params: Record<string, unknown>,
-  hasCurrentClientAuthority = () => true,
+  hasCurrentClientAuthority: (() => boolean) | null = () => true,
   authority: ClientAuthority = { internal: { operatorRoleActor: { kind: "system" } } },
   trackExecution?: GatewayRequestHandlerOptions["context"]["trackExecution"],
 ) {
@@ -230,7 +178,7 @@ async function invoke(
     req: { type: "req", id: "report-run-test", method: "update.report", params },
     params,
     respond,
-    hasCurrentClientAuthority,
+    ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
     client: {
       connect: {
         minProtocol: 1,
@@ -314,12 +262,12 @@ async function reportFiles() {
 
 beforeEach(async () => {
   home = await createTempHomeEnv("openclaw-update-report-run-");
-  mocks.select.mockReset().mockResolvedValue("report");
-  mocks.confirm.mockReset().mockResolvedValue(true);
   mocks.sentinel.mockReset().mockResolvedValue(null);
   mocks.runGh
     .mockReset()
-    .mockImplementation(async (args) => ghResult(args[0] === "auth" ? "" : issueUrl));
+    .mockImplementation(async (args) =>
+      ghResult(args[0] === "auth" ? "" : args[0] === "issue" ? "[]" : issueUrl),
+    );
 });
 afterEach(async () => {
   await home.restore();
@@ -354,113 +302,6 @@ describe("Report action from the authoritative update ledger", () => {
     expect(body).toContain("Failing check readyz (readyz-unhealthy)");
     expect(body).not.toMatch(/exit unknown|\/private\/customer|synthetic-private-token/u);
   });
-
-  it.each(["identity", "attempt", "digest"] as const)(
-    "retires named administrator consent when %s changes during final validation",
-    async (change) => {
-      recordFailure();
-      const authority = namedAdministrator();
-      const { previewDigest } = await preview(authority);
-      const paused = createDeferred();
-      const resume = createDeferred();
-      // Read admission, validate before reservation, validate after artifact staging.
-      mocks.sentinel
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(null)
-        .mockImplementationOnce(async () => {
-          paused.resolve();
-          await resume.promise;
-          return change === "digest" ? matchingSentinel() : null;
-        });
-      const submitting = invoke(submitParams(previewDigest), undefined, authority);
-      await paused.promise;
-      if (change === "identity") {
-        authority.authenticatedUserProfile!.profileId = "another-administrator";
-      } else if (change === "attempt") {
-        createUpdateRun({ trigger: "control-ui" });
-      }
-      resume.resolve();
-      const response = await submitting;
-      expect(response).not.toHaveBeenCalledWith(true, expect.anything());
-      await expectNoReport();
-    },
-  );
-
-  it("never authenticates the host after owner demotion during artifact publication", async () => {
-    recordFailure();
-    const authority = namedAdministrator(GATEWAY_OWNER_PROFILE_ID);
-    const { previewDigest } = await preview(authority);
-    const rename = fs.rename.bind(fs);
-    const publication = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
-      await rename(...args);
-      if (String(args[0]).includes(`${path.sep}update-reports${path.sep}`)) {
-        authority.authenticatedUserProfile!.profileId = "named-administrator";
-      }
-    });
-    try {
-      const response = await invoke(submitParams(previewDigest), undefined, authority);
-      expect(response).not.toHaveBeenCalledWith(true, expect.anything());
-      await expectNoReport();
-    } finally {
-      publication.mockRestore();
-    }
-  });
-
-  it.each(["compact", "direct-success", "other-scope"] as const)(
-    "enriches only the same scoped attempt in lifecycle order: %s",
-    async (mode) => {
-      createUpdateRun({ runId, trigger: "cli" });
-      recordUpdateRunPhase(runId, "activating");
-      recordUpdateRunPhase(runId, "verifying");
-      recordUpdateRunStep(runId, { step: "activating", status: "failed" });
-      recordUpdateRunStep(runId, {
-        step: "verifying",
-        status: "failed",
-        failureFacts: [
-          {
-            check: "readyz",
-            code: "readyz-unhealthy",
-            message: "Gateway readiness endpoint returned HTTP 503; expected HTTP 200.",
-          },
-        ],
-      });
-      finishUpdateRun(runId, { status: "failed", reason: "verification-failed" });
-      const env =
-        mode === "other-scope"
-          ? { ...process.env, OPENCLAW_STATE_DIR: path.join(home.home, "other-scope") }
-          : process.env;
-      const { body } = await prepareUpdateFailureReport(
-        {
-          attemptId: runId,
-          action: "cli",
-          recordedRun: getUpdateRun(runId, { env }),
-          result: {
-            status: "error",
-            mode: "npm",
-            reason: "verification-failed",
-            durationMs: 1,
-            steps: [resultStep("verifying", mode === "direct-success" ? 0 : 7, 1)],
-          },
-        },
-        { env },
-      );
-      await expectNoReport();
-      if (mode === "other-scope") {
-        expectText(body, [], ["Failed phase activating", "Failing check readyz"]);
-      } else {
-        expect(body).toContain("Failed phase activating: exit unknown");
-        if (mode === "compact") {
-          expect(body.indexOf("Failed phase activating: exit unknown")).toBeLessThan(
-            body.indexOf("Failed phase verifying: exit 7"),
-          );
-          expect(body.match(/Failed phase verifying:/gu)).toHaveLength(1);
-          expect(body).toContain("Failing check readyz (readyz-unhealthy)");
-        } else {
-          expectText(body, [], ["Failed phase verifying:", "Failing check readyz"]);
-        }
-      }
-    },
-  );
 
   it.each([
     {
@@ -516,9 +357,7 @@ describe("Report action from the authoritative update ledger", () => {
           "config.json",
         ],
       );
-      expect(renderUpdateRunReport(recorded!).lines.join("\n")).toContain(
-        `Failing check package-stage (${code})`,
-      );
+      expect(recorded?.steps.at(-1)?.failureFacts?.[0]?.code).toBe(code);
       await submit(previewDigest);
       expectText(
         submissionBody(),
@@ -567,7 +406,9 @@ describe("Report action from the authoritative update ledger", () => {
           { check: "doctor", code: "doctor-failed", pluginId: "discord", [field]: value },
         ]);
       }
-      expect(localReport()).toContain(value);
+      expect(getUpdateRun(runId)?.steps.flatMap((step) => step.failureFacts ?? [])).toContainEqual(
+        expect.objectContaining({ [field === "path" ? "affectedKey" : field]: value }),
+      );
       const { body, previewDigest } = await preview();
       const excluded = field === "path" ? "private-customer-key" : value;
       expectText(
@@ -610,53 +451,44 @@ describe("Report action from the authoritative update ledger", () => {
       "[redacted-diagnostic]",
       { pluginId: "discord" },
     ),
-  ])(
-    "retains $check through the ledger, local summary and public preview",
-    async ({ publicMessage, ...fact }) => {
-      recordFactFailure(
-        [fact],
-        "failing check",
-        "update-failed",
-        [
-          ...["package rollback", "repairing", "repair attempt 1", "repair attempt 2"].map(
-            (step) => ({ step }),
-          ),
-          ...["global install rollback", "global install backup retention"].map((step) => ({
-            step,
-            failureFacts: [
-              {
-                check: "package-swap",
-                code: "swap-failed",
-                message: "Rollback verification timed out",
-              },
-            ],
-          })),
-        ],
-        "private-raw-log",
-      );
-      const recorded = getUpdateRun(runId)!;
-      expect(recorded.steps.find((step) => step.step === "failing check")?.failureFacts).toEqual([
-        fact,
-      ]);
-      const local = renderUpdateRunReport(recorded).lines.join("\n");
-      const { body } = await preview();
-      expect(local.match(/^Failed:/gmu)).toHaveLength(3);
-      expect(body.match(/^- Failed phase /gmu)).toHaveLength(3);
-      expect(local).toContain("Failed: global install backup retention");
-      expect(body).toContain("Failing check package-swap (swap-failed)");
-      for (const text of [local, body]) {
-        expect(text).toContain(`Failing check ${fact.check} (${fact.code})`);
-        if (fact.affectedKey) {
-          expect(text).toContain(fact.affectedKey);
-        }
-        if (fact.pluginId) {
-          expect(text).toContain(fact.pluginId);
-        }
-      }
-      expect(local).toContain(fact.message);
-      expectText(body, [`: ${publicMessage}\n`], ["private-raw-log"]);
-    },
-  );
+  ])("retains $check through the ledger and public preview", async ({ publicMessage, ...fact }) => {
+    recordFactFailure(
+      [fact],
+      "failing check",
+      "update-failed",
+      [
+        ...["package rollback", "repairing", "repair attempt 1", "repair attempt 2"].map(
+          (step) => ({ step }),
+        ),
+        ...["global install rollback", "global install backup retention"].map((step) => ({
+          step,
+          failureFacts: [
+            {
+              check: "package-swap",
+              code: "swap-failed",
+              message: "Rollback verification timed out",
+            },
+          ],
+        })),
+      ],
+      "private-raw-log",
+    );
+    const recorded = getUpdateRun(runId)!;
+    expect(recorded.steps.find((step) => step.step === "failing check")?.failureFacts).toEqual([
+      fact,
+    ]);
+    const { body } = await preview();
+    expect(body.match(/^- Failed phase /gmu)).toHaveLength(3);
+    expect(body).toContain("Failing check package-swap (swap-failed)");
+    expect(body).toContain(`Failing check ${fact.check} (${fact.code})`);
+    if (fact.affectedKey) {
+      expect(body).toContain(fact.affectedKey);
+    }
+    if (fact.pluginId) {
+      expect(body).toContain(fact.pluginId);
+    }
+    expectText(body, [`: ${publicMessage}\n`], ["private-raw-log"]);
+  });
   it.each([
     { reason: "not-git-install", reportable: true },
     { reason: "already-current", reportable: false },
@@ -681,41 +513,22 @@ describe("Report action from the authoritative update ledger", () => {
       } else {
         expectError(respond, { code: "INVALID_REQUEST" });
       }
-      await expectNoReport({ receipt: false });
+      await expectNoReport();
     },
   );
 
   it.each(["rolled-back"] as const)(
-    "previews %s without a sentinel and never treats status as verified rollback",
+    "previews %s without treating its status as verified rollback",
     async (status) => {
       recordFailure(status);
       const result = await preview();
       expectText(
         result.body,
-        ["f".repeat(40), "build", "2026.9.1", "2026.9.2", "Recovery outcome: not recorded"],
-        ["private-"],
+        ["f".repeat(40), "build", "2026.9.1", "2026.9.2", "Result: rolled-back"],
+        ["private-", "Recovery outcome:"],
       );
       expect(Buffer.byteLength(result.body)).toBeLessThan(16_000);
-      await expectNoReport({ receipt: false });
-    },
-  );
-
-  it.each([true, false])(
-    "includes rollback/exit evidence only from a matching final sentinel: %s",
-    async (matches) => {
-      recordFailure();
-      const sentinel = matchingSentinel();
-      mocks.sentinel.mockResolvedValue({
-        ...sentinel,
-        stats: {
-          ...sentinel.stats,
-          runId: matches ? runId : "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee",
-        },
-      });
-      const result = await preview();
-      expect(result.body.includes("verified safe to restart")).toBe(matches);
-      expect(result.body.includes("exit 2")).toBe(matches);
-      expect(result.body).not.toContain("private-");
+      await expectNoReport();
     },
   );
 
@@ -729,177 +542,37 @@ describe("Report action from the authoritative update ledger", () => {
       mocks.sentinel.mockResolvedValue(matchingSentinel());
       const respond = await invoke({ action: "preview", attemptId: runId });
       expectError(respond, { code: "INVALID_REQUEST" });
-      await expectNoReport({ receipt: false });
+      await expectNoReport();
     },
   );
 
-  it("reuses the durable created URL on duplicate submission without repeating transport", async () => {
+  it("finishes an admitted host submission when its connection retires during transport", async () => {
     recordFailure();
-    const { previewDigest } = await preview();
-    const params = { action: "submit", attemptId: runId, previewDigest };
-    const first = await invoke(params);
-    const second = await invoke(params);
-    expect(first).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ status: "created", url: issueUrl }),
-    );
-    expect(second).toHaveBeenCalledWith(true, expect.objectContaining({ url: issueUrl }));
-    expect(mocks.runGh.mock.calls.map(([args]) => args[0])).toEqual(["auth", "api"]);
+    const connection = new AbortController();
+    const authority: ClientAuthority = {
+      ...namedAdministrator(GATEWAY_OWNER_PROFILE_ID),
+      connectionSignal: connection.signal,
+    };
+    const { previewDigest } = await preview(authority);
+    const paused = createDeferred();
+    const resume = createDeferred();
+    mocks.runGh.mockImplementationOnce(async (args) => {
+      expect(args[0]).toBe("auth");
+      paused.resolve();
+      await resume.promise;
+      return ghResult();
+    });
+    const params = submitParams(previewDigest);
+    const submitting = invoke(params, () => true, authority);
+    await paused.promise;
+    // The host retires the socket without changing its admitted auth generation.
+    connection.abort();
+    resume.resolve();
+    const respond = await submitting;
+    expect(ghPhases()).toEqual(["auth", "issue", "api"]);
+    expect(respond).not.toHaveBeenCalled();
     expect(await reportFiles()).toEqual([]);
   });
-
-  it.each([
-    { outcome: "created", changedPreview: false },
-    { outcome: "created", changedPreview: true },
-    { outcome: "pending", changedPreview: false },
-    { outcome: "pending", changedPreview: true },
-  ] as const)(
-    "reuses CLI $outcome across Gateway reconnect, changed preview: $changedPreview",
-    async ({ outcome, changedPreview }) => {
-      createUpdateRun({
-        runId,
-        trigger: "control-ui",
-        before: { version: "2026.9.1" },
-        target: { kind: "git", sha: "f".repeat(40) },
-        origin: {
-          sessionKey: "private-session",
-          doctorHint: "private-command --token private-secret",
-        },
-      });
-      recordUpdateRunPhase(runId, "validating");
-      mocks.select.mockResolvedValueOnce("report").mockResolvedValue("dismiss");
-      mocks.runGh.mockImplementation(async (args) => {
-        if (args[0] === "auth") {
-          return ghResult();
-        }
-        if (args[0] === "issue") {
-          expect(args[1]).toBe("list");
-          return ghResult("[]");
-        }
-        expect(args[0]).toBe("api");
-        return outcome === "created" ? ghResult(issueUrl) : ghResult("", 1);
-      });
-      const result = completeUpdateCommandRun(
-        {
-          status: "error",
-          mode: "git",
-          reason: "build-failed",
-          durationMs: 1,
-          before: { version: "2026.9.1" },
-          after: { version: "2026.9.2", upstreamRef: "f".repeat(40) },
-          steps: [resultStep("validating"), resultStep("build")],
-        },
-        { runId, env: process.env },
-      );
-      const interactive = interactiveReport(
-        changedPreview ? { ...result, after: { ...result.after, version: "2026.9.3" } } : result,
-      );
-      await interactive.run();
-      const { runtime } = interactive;
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(mocks.select).toHaveBeenCalledTimes(outcome === "pending" ? 2 : 1);
-      if (outcome === "pending") {
-        expect(mocks.select).toHaveBeenNthCalledWith(
-          2,
-          expect.objectContaining({
-            options: expect.arrayContaining([{ value: "status", label: "Check report status" }]),
-          }),
-        );
-      }
-      const createPhases = () => ghPhases().filter((kind) => kind !== "issue");
-      expect(createPhases()).toEqual(["auth", "api"]);
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      expect(await readUpdateFailureReportReceipt(runId)).toMatchObject({ status: outcome });
-      const { body, previewDigest } = await preview();
-      if (!changedPreview) {
-        expect(runtime.log).toHaveBeenCalledWith(body);
-      }
-      expect((await readUpdateFailureReportReceipt(runId))?.previewDigest === previewDigest).toBe(
-        !changedPreview,
-      );
-      if (outcome === "pending") {
-        const callsBefore = mocks.runGh.mock.calls.length;
-        const named = await submit(previewDigest, namedAdministrator());
-        expectPartialReply(named, { status: "pending" });
-        expect(named.mock.calls[0]?.[1]).not.toHaveProperty("url");
-        expect(named.mock.calls[0]?.[1]).not.toHaveProperty("fallbackUrl");
-        expect(mocks.runGh).toHaveBeenCalledTimes(callsBefore);
-      }
-      const response = await submit(previewDigest);
-      expectPartialReply(
-        response,
-        outcome === "created" ? { status: "duplicate" } : { status: "pending" },
-      );
-      if (outcome === "created" && !changedPreview) {
-        expect(response.mock.calls[0]?.[1]).toMatchObject({ url: issueUrl });
-      } else {
-        expect(response.mock.calls[0]?.[1]).not.toHaveProperty("url");
-        expect(response.mock.calls[0]?.[1]).not.toHaveProperty("fallbackUrl");
-      }
-      expect(createPhases()).toEqual(["auth", "api"]);
-      const nextRunId = "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee";
-      createUpdateRun({ runId: nextRunId, trigger: "cli" });
-      finishUpdateRun(nextRunId, { status: "failed", reason: "build-failed" });
-      const nextPreview = await invoke({ action: "preview", attemptId: nextRunId });
-      const nextResult = nextPreview.mock.calls[0]?.[1];
-      if (!isRecord(nextResult) || typeof nextResult.previewDigest !== "string") {
-        throw new Error("Missing distinct-run report preview");
-      }
-      await invoke({
-        action: "submit",
-        attemptId: nextRunId,
-        previewDigest: nextResult.previewDigest,
-      });
-      expect(createPhases()).toEqual(["auth", "api", "auth", "api"]);
-      expect(await readUpdateFailureReportReceipt(nextRunId)).toMatchObject({ status: outcome });
-      expect(await readUpdateFailureReportReceipt(runId)).toMatchObject({ status: outcome });
-    },
-  );
-
-  it.each(["auth-preflight", "attempt-validation"] as const)(
-    "refuses a retired connection during %s and permits explicit resubmission after reconnect",
-    async (pauseAt) => {
-      recordFailure();
-      const connection = new AbortController();
-      const authority: ClientAuthority = {
-        ...namedAdministrator(GATEWAY_OWNER_PROFILE_ID),
-        connectionSignal: connection.signal,
-      };
-      const { previewDigest } = await preview(authority);
-      const paused = createDeferred();
-      const resume = createDeferred();
-      mocks.runGh.mockImplementationOnce(async (args) => {
-        expect(args[0]).toBe("auth");
-        if (pauseAt === "auth-preflight") {
-          paused.resolve();
-          await resume.promise;
-        } else {
-          mocks.sentinel.mockImplementationOnce(async () => {
-            paused.resolve();
-            await resume.promise;
-            return null;
-          });
-        }
-        return ghResult();
-      });
-      const params = submitParams(previewDigest);
-      const submitting = invoke(params, () => true, authority);
-      await paused.promise;
-      // The host retires the socket without changing its admitted auth generation.
-      connection.abort();
-      resume.resolve();
-      const respond = await submitting;
-      expect(ghPhases()).toEqual(["auth"]);
-      expectError(respond, { code: "INVALID_REQUEST" });
-      await expectNoReport({ github: false });
-      const reconnected = { ...authority, connectionSignal: new AbortController().signal };
-      const retried = await invoke(params, () => true, reconnected);
-      expectPartialReply(retried, { status: "created", url: issueUrl });
-      expect(ghPhases()).toEqual(["auth", "auth", "api"]);
-      expect(await reportFiles()).toEqual([]);
-    },
-  );
 
   it("does not prepare a preview for an already-retired connection", async () => {
     recordFailure();
@@ -914,7 +587,7 @@ describe("Report action from the authoritative update ledger", () => {
     await expectNoReport();
   });
 
-  it("settles accepted report transport, receipt, and artifact cleanup before Gateway close", async () => {
+  it("settles accepted report transport before Gateway close", async () => {
     recordFailure();
     const connection = new AbortController();
     const work = new GatewayConnectionWork();
@@ -932,7 +605,7 @@ describe("Report action from the authoritative update ledger", () => {
         await releaseResponse.promise;
         return ghResult(issueUrl);
       }
-      return ghResult();
+      return ghResult(args[0] === "issue" ? "[]" : "");
     });
     const params = submitParams(previewDigest);
     const submitting = invoke(
@@ -945,10 +618,6 @@ describe("Report action from the authoritative update ledger", () => {
     connection.abort();
     work.beginClose();
     const close = vi.fn(async () => {
-      expect(await readUpdateFailureReportReceipt(runId)).toMatchObject({
-        status: "created",
-        url: issueUrl,
-      });
       expect(await reportFiles()).toEqual([]);
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
@@ -981,16 +650,11 @@ describe("Report action from the authoritative update ledger", () => {
     }
     expect(close).toHaveBeenCalledOnce();
     expect(closeError).not.toHaveBeenCalled();
-    const reconnected = await invoke(params, () => true, {
-      ...authority,
-      connectionSignal: new AbortController().signal,
-    });
-    expectPartialReply(reconnected, { url: issueUrl });
-    expect(ghPhases()).toEqual(["auth", "api"]);
+    expect(ghPhases()).toEqual(["auth", "issue", "api"]);
     expect(await reportFiles()).toEqual([]);
   });
 
-  it.each(["replacement-run", "duplicate-finalization", "changed-sentinel"] as const)(
+  it.each(["duplicate-finalization", "changed-sentinel"] as const)(
     "handles %s during auth preflight using authoritative final facts",
     async (change) => {
       recordFailure();
@@ -998,13 +662,13 @@ describe("Report action from the authoritative update ledger", () => {
       const { previewDigest } = await preview();
       mocks.runGh.mockImplementation(async (args) => {
         if (args[0] === "api") {
-          expect(change).toBe("duplicate-finalization");
           return ghResult(issueUrl);
         }
+        if (args[0] === "issue") {
+          return ghResult("[]");
+        }
         expect(args[0]).toBe("auth");
-        if (change === "replacement-run") {
-          createUpdateRun({ trigger: "control-ui" });
-        } else if (change === "duplicate-finalization") {
+        if (change === "duplicate-finalization") {
           const retained = finishUpdateRun(runId, {
             status: "failed",
             reason: "build-failed",
@@ -1024,14 +688,37 @@ describe("Report action from the authoritative update ledger", () => {
         return ghResult();
       });
       const respond = await submit(previewDigest);
-      if (change === "duplicate-finalization") {
-        expectPartialReply(respond, { status: "created", url: issueUrl });
-        expect(ghPhases()).toEqual(["auth", "api"]);
-      } else {
-        expectError(respond, { code: "INVALID_REQUEST" });
-        expect(mocks.runGh).toHaveBeenCalledOnce();
-      }
+      expectPartialReply(respond, { status: "created", url: issueUrl });
+      expect(ghPhases()).toEqual(["auth", "issue", "api"]);
       expect(await reportFiles()).toEqual([]);
     },
   );
+
+  it("requires live authenticated authority before preparing a report", async () => {
+    recordFailure();
+    const respond = await invoke({ action: "preview", attemptId: runId }, null);
+    expectError(respond, { code: "INVALID_REQUEST" });
+    await expectNoReport();
+  });
+
+  it("does not authenticate the host when a named administrator reports in a browser", async () => {
+    recordFailure();
+    const authority = namedAdministrator();
+    const { previewDigest } = await preview(authority);
+    const respond = await submit(previewDigest, authority);
+    expectPartialReply(respond, {
+      status: "fallback",
+      fallbackUrl: expect.stringContaining("github.com/openclaw/openclaw/issues/new"),
+    });
+    await expectNoReport();
+  });
+
+  it("rejects consent for a replaced attempt instead of reporting another run", async () => {
+    recordFailure();
+    const { previewDigest } = await preview();
+    createUpdateRun({ trigger: "control-ui" });
+    const respond = await submit(previewDigest);
+    expectError(respond, { code: "INVALID_REQUEST" });
+    await expectNoReport();
+  });
 });

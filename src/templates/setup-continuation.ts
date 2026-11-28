@@ -46,9 +46,12 @@ export async function continueTemplateSetup(
     }
     return undefined;
   }
-  const result = (openingError?: string): GatewayTemplateAddApplyResult => {
+  const result = (
+    openingError?: string,
+    code = "template_opening_failed",
+  ): GatewayTemplateAddApplyResult => {
     const error = openingError
-      ? { code: "template_opening_failed", message: openingError }
+      ? { code, message: openingError }
       : report?.failures.length
         ? {
             code: "template_setup_incomplete",
@@ -147,6 +150,50 @@ export async function continueTemplateSetup(
           checkpoints = saved;
           return saved;
         };
+        // An absent inventory on an older receipt is not an empty manifest. Bind the
+        // exact release once; a later edit to the agent's CLAW.md cannot remove required work.
+        let required = setup.requiredAutomationIds;
+        if (!required) {
+          if (!setup.source.version) {
+            throw new Error(
+              "Cannot verify required automations without an exact Template version.",
+            );
+          }
+          const { value: requiredAutomationIds } = await withResolvedClawHubSource({
+            ...input,
+            coordinate: setup.source,
+            mode: "preview",
+            run: async (source) => source.manifest.automations.map(({ id }) => id),
+          });
+          await save((current) => ({ ...current, requiredAutomationIds }));
+          required = requiredAutomationIds;
+        }
+        const missingAutomations = async () => {
+          if (!required.length) {
+            return [];
+          }
+          if (!input.readSetupAutomationKeys) {
+            throw new Error(
+              "The scheduler is unavailable to verify the Template's required automations.",
+            );
+          }
+          const keys = await input.readSetupAutomationKeys(agent);
+          assertCurrent();
+          return required.filter((id) => !keys.has(`template:${agentId}:${id}`));
+        };
+        if (setup.openingComplete && (await missingAutomations()).length) {
+          // A resumed checkpoint (including one from an older Gateway) is not a scheduler receipt.
+          await save(({ openingComplete: _complete, ...current }) => current);
+        }
+        const runOpening = async (onModelRequested?: () => void) => {
+          try {
+            await input.onAgentCreated?.(agent, setup, onModelRequested);
+          } finally {
+            onModelRequested?.();
+          }
+          // Record the settled turn. The scheduler, not its visible reply, proves completion below.
+          await save((current) => ({ ...current, openingComplete: true }));
+        };
         const openingIncludesReport = !setup.dependenciesPending && !setup.openingComplete;
         if (setup.dependenciesPending) {
           const install = async () => {
@@ -169,21 +216,7 @@ export async function continueTemplateSetup(
           // once that turn has sent its first model request, or has ended without one.
           const openingRequested = Promise.withResolvers<void>();
           const [opening, dependencies] = await Promise.allSettled([
-            setup.openingComplete
-              ? Promise.resolve()
-              : (async () => {
-                  try {
-                    await input.onAgentCreated?.(
-                      agent,
-                      setup.report,
-                      true,
-                      openingRequested.resolve,
-                    );
-                  } finally {
-                    openingRequested.resolve();
-                  }
-                  await save((current) => ({ ...current, openingComplete: true }));
-                })(),
+            setup.openingComplete ? Promise.resolve() : runOpening(openingRequested.resolve),
             (async () => {
               if (!setup.openingComplete) {
                 await openingRequested.promise;
@@ -205,14 +238,21 @@ export async function continueTemplateSetup(
         assertCurrent();
         if (!setup.openingComplete) {
           // A failed first turn retries with the settled report, without reinstalling anything.
-          await input.onAgentCreated?.(agent, setup.report);
-          await save((current) => ({ ...current, openingComplete: true }));
+          await runOpening();
         }
         if (
           !openingIncludesReport &&
           (setup.report.failures.length || setup.report.mcpServers.length)
         ) {
           await input.onDependenciesSettled?.(agent, setup.report);
+        }
+        const missing = await missingAutomations();
+        if (missing.length) {
+          await save(({ openingComplete: _complete, ...current }) => current);
+          return result(
+            `Template setup is missing required automations (${missing.slice(0, 3).join(", ")}). Retry setup in this chat; existing jobs are kept.`,
+            "template_automations_incomplete",
+          );
         }
         const completed = setup;
         await patchSessionEntryCore(

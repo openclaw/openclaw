@@ -1,6 +1,5 @@
 import { copyFileSync, readFileSync, renameSync, unlinkSync } from "node:fs";
 import { expect, it, vi } from "vitest";
-import { captureGatewayToolReceiptAssertion } from "../../../agents/tools/gateway-caller-context.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -186,11 +185,7 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
       const authority = {
         sessionMutationCommitGuard:
           guard === "receipt"
-            ? captureGatewayToolReceiptAssertion(
-                composeSessionSourceAssertion([
-                  captureExternalSessionCommitGuard(assertSdkCurrent),
-                ]),
-              )
+            ? composeSessionSourceAssertion([captureExternalSessionCommitGuard(assertSdkCurrent)])
             : assertSdkCurrent,
       };
       let change: Promise<unknown> | undefined;

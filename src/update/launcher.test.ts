@@ -28,7 +28,7 @@ afterEach(async () => {
   }
 });
 
-async function fixture(newSource: string) {
+async function fixture(newSource: string, oldSource = "console.log('OLD'); ready();") {
   const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-launcher-"));
   cleanups.push(() => fs.rm(state, { recursive: true, force: true }));
   const prefix = path.join(state, "git-install");
@@ -39,7 +39,7 @@ async function fixture(newSource: string) {
     process.on('message', message => { if (message.type === 'openclaw.trial') console.log('READY ' + JSON.stringify(message.trial)); });
   `;
   for (const [id, source] of [
-    ["old", "console.log('OLD'); ready();"],
+    ["old", oldSource],
     ["new", newSource],
   ]) {
     const root = path.join(prefix, "releases", id!, "openclaw");
@@ -56,14 +56,74 @@ async function fixture(newSource: string) {
   }
   await switchLink("releases/old/openclaw", prefix);
   const launcher = await writeLauncher(prefix);
-  return { state, prefix, launcher };
+  const clock = path.join(state, "clock.mjs");
+  await fs.writeFile(
+    clock,
+    `
+    import childProcess from "node:child_process";
+    import { syncBuiltinESMExports } from "node:module";
+    if (process.argv[1] === ${JSON.stringify(launcher)}) {
+      let child;
+      const fork = childProcess.fork;
+      childProcess.fork = (...args) => {
+        child = fork(...args);
+        child.on("message", message => {
+          if (message.type === "openclaw.trial") {
+            setImmediate(() => console.log("MIGRATION SETTLED"));
+          }
+        });
+        return child;
+      };
+      syncBuiltinESMExports();
+      let now = Date.now();
+      Date.now = () => now;
+      const timers = new Map();
+      const schedule = globalThis.setTimeout;
+      const cancel = globalThis.clearTimeout;
+      globalThis.setTimeout = (callback, delay, ...args) => {
+        if (delay < 1) return schedule(callback, delay, ...args);
+        const timer = schedule(() => {}, 2147483647);
+        timers.set(timer, { at: now + delay, run: () => callback(...args) });
+        return timer;
+      };
+      globalThis.clearTimeout = (timer) => { timers.delete(timer); cancel(timer); };
+      let input = "";
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", chunk => {
+        input += chunk;
+        while (input.includes("\\n")) {
+          const end = input.indexOf("\\n");
+          const command = JSON.parse(input.slice(0, end));
+          input = input.slice(end + 1);
+          if (command.advance) {
+            const until = now + command.advance;
+            for (const [timer, task] of [...timers].sort((a, b) => a[1].at - b[1].at)) {
+              if (task.at > until) break;
+              now = task.at;
+              clearTimeout(timer);
+              task.run();
+            }
+            now = until;
+          }
+          if (command.send && child.connected) child.send(command.send, () => {});
+          console.log("CLOCK " + command.label);
+        }
+      });
+    }
+    `,
+  );
+  return { state, prefix, launcher, clock };
 }
 
-function start(launcher: string, args = ["gateway", "run"]) {
-  const child = spawn(process.execPath, [launcher, ...args], {
-    stdio: "pipe",
-    env: { ...process.env, NODE_OPTIONS: "" },
-  });
+function start(launcher: string, args = ["gateway", "run"], clock?: string) {
+  const child = spawn(
+    process.execPath,
+    [...(clock ? ["--import", clock] : []), launcher, ...args],
+    {
+      stdio: "pipe",
+      env: { ...process.env, NODE_OPTIONS: "" },
+    },
+  );
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (chunk) => {
@@ -119,6 +179,15 @@ async function pending(prefix: string) {
   return trial;
 }
 
+async function writeManifest(
+  prefix: string,
+  files: readonly { live: string; preimage: string | null }[],
+) {
+  const file = path.join(prefix, "releases", "new", ".restore");
+  await fs.writeFile(file, JSON.stringify({ v: 1, runId: "test-run", files }));
+  return file;
+}
+
 describe("resident update launcher", () => {
   it("commits a pending trial only after the new child announces ready", async () => {
     const { prefix, launcher } = await fixture("ready();");
@@ -144,7 +213,7 @@ describe("resident update launcher", () => {
     );
   });
 
-  it("restores preserved state, additions, and orphan companions before restarting the old release", async () => {
+  it("keeps no-manifest legacy image, addition, and orphan-companion recovery", async () => {
     const { state, prefix, launcher } = await fixture(
       "console.error('candidate exploded'); process.exit(1);",
     );
@@ -177,6 +246,134 @@ describe("resident update launcher", () => {
       },
     });
   });
+
+  it("restores only the target manifest, including external files, without consuming global add receipts", async () => {
+    const { state, prefix, launcher } = await fixture("process.exit(78);");
+    const external = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-external-restore-"));
+    cleanups.push(() => fs.rm(external, { recursive: true, force: true }));
+    const database = path.join(state, "state.sqlite");
+    const outside = path.join(external, "store.sqlite");
+    const added = path.join(state, "boot-created.sqlite");
+    const later = path.join(state, "runtime-created.sqlite");
+    for (const [file, value] of [
+      [database, "candidate"],
+      [database + ".pre-new-build", "original"],
+      [database + "-wal", "candidate WAL"],
+      [outside, "external candidate"],
+      [outside + ".original", "external original"],
+      [added, "boot created"],
+      [later, "later user data"],
+    ]) {
+      await fs.writeFile(file!, value!);
+    }
+    const stale = path.join(state, ".upgraded-new-build.json");
+    const receipt = JSON.stringify({ ops: [{ kind: "add", live: later }] });
+    await fs.writeFile(stale, receipt);
+    await writeManifest(prefix, [
+      { live: database, preimage: database + ".pre-new-build" },
+      { live: outside, preimage: outside + ".original" },
+      { live: database + "-wal", preimage: null },
+      { live: added, preimage: null },
+    ]);
+    await pending(prefix);
+
+    const run = start(launcher);
+    await output(run.child, "OLD", run.stdout);
+
+    expect(await fs.readFile(later, "utf8")).toBe("later user data");
+    expect(await fs.readFile(stale, "utf8")).toBe(receipt);
+    expect(await fs.readFile(database, "utf8")).toBe("original");
+    expect(await fs.readFile(outside, "utf8")).toBe("external original");
+    await expect(fs.stat(added)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(database + "-wal")).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await readTrial(prefix)).phase).toBe("rolled-back");
+  });
+
+  it("keeps stale same-build receipts outside the current legacy trial window", async () => {
+    const { state, prefix, launcher } = await fixture("process.exit(78);");
+    const later = path.join(state, "runtime-created.sqlite");
+    await fs.writeFile(later, "later user data");
+    const applied = path.join(state, ".upgraded-new-build.json");
+    await fs.writeFile(applied, JSON.stringify({ ops: [{ kind: "add", live: later }] }));
+    const work = path.join(state, ".upgrade-new-build-old");
+    await fs.mkdir(work);
+    const plan = path.join(work, "plan.json");
+    await fs.writeFile(
+      plan,
+      JSON.stringify({ ops: [{ kind: "add", live: later, next: path.join(work, "consumed") }] }),
+    );
+    const createdAt =
+      Math.max((await fs.stat(applied)).ctimeMs, (await fs.stat(work)).ctimeMs) + 2000;
+    const trial = await pending(prefix);
+    await switchLink(trial.target, prefix);
+    await writeTrial({ ...trial, phase: "trial", attempts: 2, createdAt }, prefix);
+
+    const run = start(launcher);
+    await output(run.child, "OLD", run.stdout);
+
+    expect(await fs.readFile(later, "utf8")).toBe("later user data");
+    expect(await fs.stat(applied)).toBeDefined();
+    expect(await fs.stat(plan)).toBeDefined();
+  });
+
+  it("replays a manifest restore after an image rename was already completed", async () => {
+    const { state, prefix, launcher } = await fixture("process.exit(78);");
+    const first = path.join(state, "first");
+    const second = path.join(state, "second");
+    const added = path.join(state, "addition");
+    await fs.writeFile(first, "first original");
+    await fs.writeFile(second, "second candidate");
+    await fs.writeFile(second + ".original", "second original");
+    await fs.writeFile(added, "candidate addition");
+    await writeManifest(prefix, [
+      { live: first, preimage: first + ".already-consumed" },
+      { live: second, preimage: second + ".original" },
+      { live: added, preimage: null },
+    ]);
+    const trial = await pending(prefix);
+    await switchLink(trial.target, prefix);
+    await writeTrial(
+      {
+        ...trial,
+        phase: "restoring",
+        outcome: { status: "rolled-back", reason: "candidate failed", at: Date.now() },
+      },
+      prefix,
+    );
+    const run = start(launcher);
+    await output(run.child, "OLD", run.stdout);
+    expect(await fs.readFile(first, "utf8")).toBe("first original");
+    expect(await fs.readFile(second, "utf8")).toBe("second original");
+    await expect(fs.stat(added)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await readTrial(prefix)).phase).toBe("rolled-back");
+  });
+
+  it.each(["json", "version", "missing-image"] as const)(
+    "fails visibly on a %s manifest instead of starting an unverified fallback",
+    async (mode) => {
+      const { state, prefix, launcher } = await fixture(
+        "process.exit(78);",
+        "console.log('OLD'); process.exit(78);",
+      );
+      const live = path.join(state, "live");
+      await fs.writeFile(live, "unchanged");
+      const file = await writeManifest(prefix, [{ live, preimage: live + ".missing" }]);
+      if (mode !== "missing-image") {
+        await fs.writeFile(
+          file,
+          mode === "json" ? "{" : JSON.stringify({ v: 2, runId: "test-run", files: [] }),
+        );
+      }
+      await pending(prefix);
+      const run = start(launcher);
+      const closed = once(run.child, "close");
+      expect((await closed)[0]).toBe(1);
+      expect(run.stderr()).toContain("Invalid update restore manifest");
+      expect(run.stdout()).not.toContain("OLD");
+      expect(await fs.readFile(live, "utf8")).toBe("unchanged");
+      expect((await readTrial(prefix)).phase).toBe("trial");
+    },
+  );
 
   it("propagates terminal exit 78 without restarting", async () => {
     const { prefix, launcher } = await fixture("process.exit(78);");
@@ -234,6 +431,51 @@ describe("resident update launcher", () => {
     });
   });
 
+  it("restores the old release ten minutes after migration settles, not twenty", async () => {
+    const { prefix, launcher, clock } = await fixture(`
+      process.send({ type: 'openclaw.trial', phase: 'trial' });
+      console.log('MIGRATED');
+    `);
+    await pending(prefix);
+    const run = start(launcher, undefined, clock);
+    await output(run.child, "MIGRATION SETTLED", run.stdout);
+    // The timer must restore service without another child message waking the launcher.
+    run.child.stdin.write(JSON.stringify({ advance: 600_001, label: "deadline" }) + "\n");
+    await output(run.child, "OLD", run.stdout);
+    expect(await readTrial(prefix)).toMatchObject({
+      phase: "rolled-back",
+      outcome: {
+        reason: "The new version did not finish starting within 10 minutes",
+      },
+    });
+  });
+
+  it("allows migration to exceed ten minutes before committing a healthy candidate", async () => {
+    const { prefix, launcher, clock } = await fixture(`
+      process.on('message', message => {
+        if (message.type === 'fixture.ready') {
+          process.send({ type: 'openclaw.trial', phase: 'trial' });
+          ready();
+        }
+      });
+      console.log('MIGRATING');
+    `);
+    await pending(prefix);
+    const run = start(launcher, undefined, clock);
+    await output(run.child, "MIGRATING", run.stdout);
+    run.child.stdin.write(JSON.stringify({ advance: 660_000, label: "slow-migration" }) + "\n");
+    await output(run.child, "CLOCK slow-migration", run.stdout);
+    expect(await readTrial(prefix)).toMatchObject({ phase: "trial", attempts: 1 });
+    run.child.stdin.write(
+      JSON.stringify({ send: { type: "fixture.ready" }, label: "ready" }) + "\n",
+    );
+    await output(run.child, "READY", run.stdout);
+    expect(await readTrial(prefix)).toMatchObject({
+      phase: "committed",
+      outcome: { status: "succeeded", buildId: "new-build" },
+    });
+  });
+
   it("finishes a missing-link interruption and leaves non-Gateway commands outside the trial", async () => {
     const { prefix, launcher } = await fixture("ready();");
     await pending(prefix);
@@ -251,12 +493,17 @@ describe("resident update launcher", () => {
   });
 });
 
-it("returns an absolute launcher path and never downgrades a newer frozen format", async () => {
+it("upgrades a legacy reader without downgrading a current or newer frozen format", async () => {
   const { prefix, launcher } = await fixture("ready();");
   expect(await writeLauncher(path.relative(process.cwd(), prefix))).toBe(launcher);
-  const future = "// OpenClaw launcher format: 3\n";
-  await fs.writeFile(launcher, future);
+  await fs.writeFile(launcher, "// OpenClaw launcher format: 3\n");
   await writeLauncher(prefix);
-  await writeGitReleaseLauncher(prefix);
-  expect(await fs.readFile(launcher, "utf8")).toBe(future);
+  expect(await fs.readFile(launcher, "utf8")).toContain("// OpenClaw launcher format: 4\n");
+  for (const format of [4, Number.MAX_SAFE_INTEGER]) {
+    const content = `// OpenClaw launcher format: ${format}\n`;
+    await fs.writeFile(launcher, content);
+    await writeLauncher(prefix);
+    await writeGitReleaseLauncher(prefix);
+    expect(await fs.readFile(launcher, "utf8")).toBe(content);
+  }
 });

@@ -133,7 +133,9 @@ never needs the agent.
 ## The board
 
 - **Fluid grid.** Drag widgets by their handle; everything reflows and
-  compacts automatically. Resize by handle or pick a size preset (small,
+  compacts automatically. When you drop or resize a widget within a tab, it
+  stays where you left it while the change saves. If the save fails, the board
+  shows the saved layout and an error. Resize by handle or pick a size preset (small,
   medium, large, extra large) from the widget menu. Nobody places pixels —
   not you, not the agent. On narrow boards, widgets stack at full width in
   their saved order; widening the board restores their saved column widths.

@@ -62,11 +62,20 @@ async function run(argv) {
     return rows;
   }
 
-  // Gives each author a display label; display names shared by different IDs get an ID suffix.
-  function authorLabels(rows) {
+  // Gives each author and mentioned user a display label; display names shared by different IDs
+  // get an ID suffix. An author's own name wins over a name a mention carries, but a mention's
+  // name replaces an author shown only by ID.
+  function userLabels(rows) {
     const names = new Map();
     for (const { payload } of rows) {
       names.set(payload.author_id, payload.author_name || payload.author_id);
+    }
+    for (const { payload } of rows) {
+      for (const [id, name] of Object.entries(payload.mention_names ?? {})) {
+        if (!names.has(id) || names.get(id) === id) {
+          names.set(id, name);
+        }
+      }
     }
     const counts = new Map();
     for (const name of names.values()) {
@@ -83,6 +92,13 @@ async function run(argv) {
     return text.slice(0, /[\uDC00-\uDFFF]/.test(text[cap] ?? "") ? cap - 1 : cap);
   };
 
+  // Discord and Slack user mentions (<@id>, <@!id>, <@id|label>) read as @label when the user
+  // authored a message in the export or a row names them.
+  const withNames = (text, labels) =>
+    text.replace(/<@!?([0-9A-Z]+)(?:\|[^>]*)?>/g, (mention, id) =>
+      labels.has(id) ? "@" + labels.get(id) : mention,
+    );
+
   // Renders one message as transcript lines: time, author, reply target, then the text.
   function messageLines(row, byId, labels, day) {
     const { payload } = row;
@@ -94,7 +110,9 @@ async function run(argv) {
         target.occurred_at.slice(0, 10) === day
           ? clock(target.occurred_at)
           : target.occurred_at.slice(0, 10) + " " + clock(target.occurred_at);
-      const content = target.payload.deleted_at ? "[deleted]" : target.payload.content || "";
+      const content = target.payload.deleted_at
+        ? "[deleted]"
+        : withNames(target.payload.content || "", labels);
       const quote =
         target.occurred_at.slice(0, 10) === day
           ? ""
@@ -103,12 +121,7 @@ async function run(argv) {
     } else if (payload.reply_to_message_id) {
       reply = " ↩ earlier message";
     }
-    // Discord and Slack user mentions (<@id>, <@!id>) read as @name when the author appears in the export.
-    let text = payload.deleted_at
-      ? "[deleted]"
-      : (payload.content || "[no text]").replace(/<@!?([0-9A-Z]+)>/g, (mention, id) =>
-          labels.has(id) ? "@" + labels.get(id) : mention,
-        );
+    let text = payload.deleted_at ? "[deleted]" : withNames(payload.content || "[no text]", labels);
     if (payload.has_attachments) {
       text += " [attachment]";
     }
@@ -120,12 +133,15 @@ async function run(argv) {
   }
 
   // Groups a day's messages into sections: the channel itself first, then each thread by first message.
-  function sections(dayRows) {
+  function sections(dayRows, labels) {
     const groups = new Map();
     for (const row of dayRows) {
       const key = row.payload.thread_id ?? "";
       if (!groups.has(key)) {
-        groups.set(key, { title: key ? "Thread: " + row.payload.thread_name : channel, rows: [] });
+        groups.set(key, {
+          title: key ? "Thread: " + withNames(row.payload.thread_name, labels) : channel,
+          rows: [],
+        });
       }
       groups.get(key).rows.push(row);
     }
@@ -145,7 +161,7 @@ async function run(argv) {
 
   // Keep sections together when they fit, and split larger sections only between messages.
   function pack(dayRows, byId, labels, day) {
-    const groups = sections(dayRows).map((section) => ({
+    const groups = sections(dayRows, labels).map((section) => ({
       title: section.title,
       rows: section.rows,
       blocks: section.rows.map((row) => {
@@ -258,7 +274,7 @@ async function run(argv) {
   }
   await mkdir(outputDir, { recursive: true });
   const chunks = [];
-  const labels = authorLabels(rows);
+  const labels = userLabels(rows);
   for (const [day, dayRows] of days) {
     chunks.push(...(await writeDay(day, dayRows, byId, labels)));
   }

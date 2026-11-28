@@ -300,6 +300,17 @@ it("records a transcript-only notice for a channel the caller skips", async () =
   expect(peekSystemEvents(sessionKey)).toEqual(["Job g context."]);
 });
 
+it("keeps a notice in the transcript when the conversation denies automatic sends", async () => {
+  const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-9`;
+  await seedSession(sessionKey, PLUGIN_ID);
+  await upsertSessionEntryCore({ agentId: "main", storePath, sessionKey }, { sendPolicy: "deny" });
+  const generation = await capture(sessionKey);
+
+  await expect(post(generation!, "i")).resolves.toEqual({ status: "posted", delivered: false });
+  expect(proof.sent).toEqual([]);
+  expect(await notices(sessionKey)).toEqual([{ id: "i" }]);
+});
+
 it("delivers a thread-bound session's notice to the session key's thread", async () => {
   const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-7:thread:456`;
   await seedSession(sessionKey, PLUGIN_ID, "r1", "stale-thread");

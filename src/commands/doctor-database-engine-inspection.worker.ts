@@ -211,7 +211,7 @@ serveWorkerTasks<DoctorDatabaseEngineInspection, DoctorDatabaseEngineInspectionI
         // Per-store inspection retains inaccessible roots and reports their contents as unknown.
         return inspect();
       }
-      return withOpenClawStateDatabaseReadSnapshot(inspect, { env });
+      return withOpenClawStateDatabaseReadSnapshot(inspect, { env, preferLiveOwner: true });
     };
     // The caller's inspection context does not cross this worker boundary.
     await control.runNativeSection(() =>

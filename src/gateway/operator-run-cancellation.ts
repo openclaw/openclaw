@@ -24,7 +24,7 @@ import {
 } from "./server-methods/chat-aborted-partial.js";
 import { resolveAuthenticatedPersonalGatewayProfileId } from "./server-methods/gateway-personal-caller.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+import { prepareSessionSystemTurnAuthority } from "./session-sharing-authorization-async.js";
 import { formatForLog } from "./ws-log.js";
 
 type OperatorRunCancellationContext = Pick<

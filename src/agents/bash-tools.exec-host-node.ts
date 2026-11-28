@@ -52,6 +52,7 @@ import {
   withNodePathPrependWarning,
 } from "./exec-node-path-prepend.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { hasObservedExit } from "./shell-call-receipt.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const APPROVED_NODE_INVOKE_SCOPES = [WRITE_SCOPE, APPROVALS_SCOPE];
@@ -424,17 +425,22 @@ export async function executeNodeHostCommand(
       } else {
         const followupTarget = buildExecApprovalFollowupTarget(params, approvalId);
         const warnNodePath = params.warnings.includes(EXEC_NODE_PATH_PREPEND_WARNING);
-        const sendDeniedFollowup = (reason: string) =>
-          execHostShared.sendExecApprovalFollowupResult(
+        const recordOutcome = await params.admitShellDispatch?.();
+        let nodeInvocationStarted = false;
+        const sendDeniedFollowup = async (reason: string) => {
+          if (!nodeInvocationStarted) {
+            await recordOutcome?.({ kind: "not-dispatched" });
+          }
+          return execHostShared.sendExecApprovalFollowupResult(
             followupTarget,
             `Exec denied (node=${target.nodeId} id=${approvalId}, ${reason}): ${params.command}`,
           );
+        };
         const sendApprovalRequestFailedFollowup = async (): Promise<void> => {
           if (!params.signal?.aborted) {
             await sendDeniedFollowup("approval-request-failed");
           }
         };
-        let nodeInvocationStarted = false;
         let nodeInvocationCompleted = false;
 
         void (async () => {
@@ -504,6 +510,9 @@ export async function executeNodeHostCommand(
             });
             nodeInvocationCompleted = true;
             if (!invocation.ok) {
+              if (invocation.failure.reason !== "outcome-unknown") {
+                await recordOutcome?.({ kind: "not-dispatched" });
+              }
               await execHostShared.sendExecApprovalFollowupResult(
                 followupTarget,
                 formatNodeInvokeFailureFollowup({
@@ -524,8 +533,13 @@ export async function executeNodeHostCommand(
                     error?: string | null;
                     exitCode?: number | null;
                     timedOut?: boolean;
+                    exitSignal?: string | number | null;
+                    signal?: string | number | null;
                   })
                 : {};
+            if (!payload.timedOut && !payload.signal && hasObservedExit(payload)) {
+              await recordOutcome?.({ kind: "exited", exitCode: payload.exitCode });
+            }
             const output = formatExecApprovalContinuationSourceOutput([
               { label: "stdout", value: payload.stdout },
               { label: "stderr", value: payload.stderr },
@@ -605,6 +619,8 @@ export async function executeNodeHostCommand(
         (analysisOk && allowlistSatisfied)) &&
       inlineEvalHit === null,
   });
+  params.signal?.throwIfAborted();
+  await params.admitShellDispatch?.();
   params.signal?.throwIfAborted();
   return dispatchNodeSystemRun({
     request: params,

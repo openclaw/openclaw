@@ -132,26 +132,20 @@ describe("subagent registry cleanup scheduling", () => {
   registerSubagentSweepRetainedAuthorityTests(killSessionEntry);
 
   it.each(["terminal", "running"] as const)(
-    "only gives ended %s children requester-wake priority over suspended delivery cleanup",
+    "only gives ended %s children requester-wake priority over pending cleanup",
     async (executionStatus) => {
-      const { entry, completeCleanupBookkeeping, resumeRequesterSettleWake, sweeper } =
-        createHarness();
+      const { entry, resumeRequesterSettleWake, sweeper } = createHarness();
       entry.execution = {
         status: executionStatus,
         endedAt: Date.now() - 60_000,
         outcome: { status: "ok" },
       };
       entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
-      entry.delivery = {
-        status: "suspended",
-        suspendedAt: Date.now() - 8 * 24 * 60 * 60_000,
-        suspendedReason: "expiry",
-      };
+      entry.delivery = { status: "pending" };
 
       await sweeper.sweepOnce();
 
       if (executionStatus === "terminal") {
-        expect(completeCleanupBookkeeping).not.toHaveBeenCalled();
         expect(resumeRequesterSettleWake).toHaveBeenCalledWith(entry.runId, entry);
       } else {
         expect(resumeRequesterSettleWake).not.toHaveBeenCalled();

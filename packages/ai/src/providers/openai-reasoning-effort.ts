@@ -94,6 +94,7 @@ export function isOpenAIGpt6Model(model: OpenAIReasoningModel): boolean {
     id === "gpt-6-sol" ||
     id === "gpt-6-luna" ||
     id === "gpt-6.1-sol" ||
+    id === "gpt-6.1-terra" ||
     id === "gpt-6.2-astra" ||
     id === "gpt-6.2-sol"
   );

@@ -37,6 +37,7 @@ import {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const [candidateArg, artifactsArg, driverTag = "latest"] = process.argv.slice(2);
 const legacySqlite = process.env.OPENCLAW_PUBLISHED_DRIVER_LEGACY_SQLITE === "1";
+const crashGateway = process.env.OPENCLAW_PUBLISHED_DRIVER_CRASH_GATEWAY === "1";
 const linkedRoot = process.env.OPENCLAW_PUBLISHED_DRIVER_LINKED_ROOT === "1";
 // An install-cli.sh-shaped prefix (`tools/node-v<version>` beside a `tools/node` link) is one
 // OpenClaw owns, so an updater with release directories converts it on its first update.
@@ -515,6 +516,30 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     })}\n`;
     fs.mkdirSync(path.dirname(orphanSidecar), { recursive: true });
     fs.writeFileSync(orphanSidecar, orphanSidecarBytes, { mode: 0o600 });
+    if (crashGateway) {
+      // The service pid file names its supervisor, not the Gateway holding state.
+      const lockPath = path.join(
+        state,
+        "tmp",
+        `openclaw-${process.getuid()}`,
+        "gateway.state.lock",
+      );
+      const holder = readJson(lockPath);
+      process.kill(holder.pid, "SIGKILL");
+      await run("verify-crash", process.execPath, [
+        "--input-type=module",
+        "-e",
+        "import fs from 'node:fs'; const until = Date.now() + 5000; while (fs.existsSync('/proc/' + process.argv[1])) { if (Date.now() >= until) process.exit(1); await new Promise(r => setTimeout(r, 10)); }",
+        String(holder.pid),
+      ]);
+      // Settle the supervisor before its restart timer, without a clean Gateway shutdown.
+      await run("stop-crashed-service", "systemctl", [
+        "--user",
+        "stop",
+        "openclaw-gateway.service",
+      ]);
+      assert.equal(readJson(lockPath).ownerId, holder.ownerId, "Crash lost its legacy lock");
+    }
     let update;
     let updateFailure;
     const sqliteBefore = legacySqlite ? inspectPublishedDriverSqlite(state, 0) : undefined;

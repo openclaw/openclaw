@@ -1,4 +1,3 @@
-import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { hasRetainedPluginRuntimeCloseError } from "../../../plugins/runtime-close-error.js";
 import { getCanonicalGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -149,15 +148,11 @@ export function createCollectorLaunchCallbacks(params: {
       ) {
         await claim;
       }
-      const assertLaunchCurrent = composeSessionSourceAssertion(
-        [params.operatorAuthority?.assertCurrent],
-        (assertSource) => {
-          assertSource();
-          if (canLaunchQueuedRegistration?.() === false) {
-            throw new Error("Collector registration no longer owns this launch");
-          }
-        },
-      );
+      const assertLaunchCurrent = () => {
+        if (canLaunchQueuedRegistration?.() === false) {
+          throw new Error("Collector registration no longer owns this launch");
+        }
+      };
       assertLaunchCurrent();
       dispatchAttempted = true;
       const launch = await params.launchChildRun(assertLaunchCurrent);

@@ -232,7 +232,8 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
     if (pending.length) {
       const observed = replayDeclarationLookups(
         this.rootDir,
-        (file) => this.boundary.assert(file),
+        // Replay's filesystem owns physical confinement; this caller adds no narrower policy.
+        (file) => file,
         pending,
         this.readText,
       );

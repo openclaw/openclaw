@@ -115,8 +115,8 @@ function captureAudio() {
   });
 }
 
-function click(target: HTMLElement) {
-  target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+function click(target: HTMLElement, detail = 1) {
+  target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail }));
 }
 
 function pointer(type: string): Event {
@@ -643,6 +643,8 @@ describe("ComposerDictationOwner", () => {
 
       // The permission prompt blurs the page while the microphone is still opening.
       window.dispatchEvent(new Event("blur"));
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
       expect(controller.connecting).toBe(true);
 
       if (answer === "allow") {
@@ -652,7 +654,7 @@ describe("ComposerDictationOwner", () => {
         );
         expect(onError).not.toHaveBeenCalled();
         window.dispatchEvent(new Event("blur"));
-        expect(controller.active).toBe(false);
+        expect(controller.active).toBe(true);
       } else {
         permission.reject(new DOMException("denied", "NotAllowedError"));
         await waitForFast(() =>
@@ -666,64 +668,89 @@ describe("ComposerDictationOwner", () => {
     },
   );
 
-  it("does not swallow the next click after a hold is cancelled by blur", async () => {
-    const { controller, onTap, target } = createHarness();
+  it.each(["blur", "visibilitychange"])(
+    "does not start a held gesture or swallow the next click after %s",
+    async (type) => {
+      const { controller, onTap, target } = createHarness();
+      target.dispatchEvent(pointer("pointerdown"));
+      await vi.advanceTimersByTimeAsync(150);
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      (type === "blur" ? window : document).dispatchEvent(new Event(type));
+      await vi.advanceTimersByTimeAsync(500);
+      click(target);
 
-    target.dispatchEvent(pointer("pointerdown"));
-    window.dispatchEvent(new Event("blur"));
-    await Promise.resolve();
-    click(target);
+      expect(onTap).toHaveBeenCalledOnce();
+      expect(controller.locksComposer).toBe(false);
+      expect(getUserMedia).not.toHaveBeenCalled();
+    },
+  );
 
-    expect(onTap).toHaveBeenCalledOnce();
-    expect(controller.locksComposer).toBe(false);
-  });
+  it.each(["hold", "direct"])(
+    "keeps %s dictation capturing in the background until Stop",
+    async (mode) => {
+      const order = recordRequests();
+      const stopTrack = vi.fn();
+      getUserMedia.mockImplementation(async () => {
+        order.push("microphone");
+        return microphone(stopTrack);
+      });
+      const { controller, onCommit, target } = createHarness({
+        sessionKey: "agent:researcher:conversation",
+      });
 
-  it.each(["click", "blur", "visibilitychange"])("commits once after latched %s", async (type) => {
-    const order = recordRequests();
-    const stopTrack = vi.fn();
-    getUserMedia.mockImplementation(async () => {
-      order.push("microphone");
-      return microphone(stopTrack);
-    });
-    const { controller, onCommit, target } = createHarness({
-      sessionKey: "agent:researcher:conversation",
-    });
+      if (mode === "hold") {
+        await startHold(target);
+      } else {
+        await startDirect(controller);
+      }
+      expect(request).toHaveBeenCalledWith("talk.session.create", {
+        sessionKey: "agent:researcher:conversation",
+        mode: "transcription",
+        transport: "gateway-relay",
+        brain: "none",
+      });
+      await waitForFast(() =>
+        expect(order.slice(0, 2)).toEqual(["talk.session.create", "microphone"]),
+      );
+      await waitForFast(() =>
+        expect(controller).toMatchObject({ active: true, connecting: false }),
+      );
+      captureAudio();
+      await waitForFast(() => expectAppended());
+      emit({ type: "partial", text: "hello wor" });
+      expect(controller.transcript).toBe("hello wor");
+      transcript("hello world");
+      emit({ type: "partial", text: "next wor" });
+      if (mode === "hold") {
+        await releaseLatched(target);
+      }
+      window.dispatchEvent(new Event("blur"));
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(controller).toMatchObject({ active: true, transcribing: false });
+      expect(stopTrack).not.toHaveBeenCalled();
+      expect(onCommit).not.toHaveBeenCalled();
+      request.mockClear();
+      captureAudio();
+      await waitForFast(() => expectAppended());
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("talk.session.close");
 
-    await startHold(target);
-    expect(request).toHaveBeenCalledWith("talk.session.create", {
-      sessionKey: "agent:researcher:conversation",
-      mode: "transcription",
-      transport: "gateway-relay",
-      brain: "none",
-    });
-    await waitForFast(() =>
-      expect(order.slice(0, 2)).toEqual(["talk.session.create", "microphone"]),
-    );
-    await waitForFast(() => expect(controller).toMatchObject({ active: true, connecting: false }));
-    captureAudio();
-    await waitForFast(() => expectAppended());
-    emit({ type: "partial", text: "hello wor" });
-    expect(controller.transcript).toBe("hello wor");
-    transcript("hello world");
-    emit({ type: "partial", text: "next wor" });
-    await releaseLatched(target);
-    // A tab switch fires blur then visibilitychange; the second interruption keeps the commit.
-    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-    (type === "click" ? target : type === "blur" ? window : document).dispatchEvent(
-      new Event(type),
-    );
-    document.dispatchEvent(new Event("visibilitychange"));
-    expect(controller).toMatchObject({ finalizing: false, locksComposer: false });
-    expect(stopTrack).toHaveBeenCalledOnce();
-    expect(onCommit).not.toHaveBeenCalled();
-    transcript("next words");
-    emit({ type: "close", reason: "completed" });
-    await waitForFast(() => expectClosed());
-    expect(onCommit).toHaveBeenCalledExactlyOnceWith("hello world next words", true);
-    expect(order.indexOf("talk.session.appendAudio")).toBeLessThan(
-      order.indexOf("talk.session.close"),
-    );
-  });
+      click(target);
+      // Further focus/visibility events must not discard or duplicate the stopped result.
+      window.dispatchEvent(new Event("blur"));
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(controller).toMatchObject({ finalizing: false, locksComposer: false });
+      expect(stopTrack).toHaveBeenCalledOnce();
+      expect(onCommit).not.toHaveBeenCalled();
+      transcript("next words");
+      emit({ type: "close", reason: "completed" });
+      await waitForFast(() => expectClosed());
+      expect(onCommit).toHaveBeenCalledExactlyOnceWith("hello world next words", true);
+      expect(order.indexOf("talk.session.appendAudio")).toBeLessThan(
+        order.indexOf("talk.session.close"),
+      );
+    },
+  );
 
   it("publishes pending transcription without locking the composer", async () => {
     const { controller, onCommit } = createHarness();
@@ -922,24 +949,38 @@ describe("ComposerDictationOwner", () => {
 });
 
 describe("composer microphone button", () => {
-  it("keeps a latched hold recording after its release click until a separate tap", async () => {
-    const { controller, onCommit, onTap, target } = createButtonHarness();
-    await startHold(target);
-    transcript("keep recording");
+  it.each(["release", "background then mouse", "background then keyboard"])(
+    "keeps a latched hold until the first explicit Stop after %s",
+    async (action) => {
+      const { controller, onCommit, onTap, target } = createButtonHarness();
+      await startHold(target);
+      transcript("keep recording");
 
-    await releaseLatched(target);
-    expect(controller.active).toBe(true);
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("talk.session.close");
-    expect(onCommit).not.toHaveBeenCalled();
+      if (action === "release") {
+        await releaseLatched(target);
+      } else {
+        // Release outside the window is not guaranteed to reach this document.
+        window.dispatchEvent(new Event("blur"));
+        vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
+      expect(controller.active).toBe(true);
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("talk.session.close");
+      expect(onCommit).not.toHaveBeenCalled();
 
-    click(target);
-    await waitForFast(() => expectClosed());
-    emit({ type: "close", reason: "completed" });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(onCommit).toHaveBeenCalledExactlyOnceWith("keep recording", true);
-    expect(controller.active).toBe(false);
-    expect(onTap).not.toHaveBeenCalled();
-  });
+      if (action === "background then mouse") {
+        target.dispatchEvent(pointer("pointerdown"));
+        document.dispatchEvent(pointer("pointerup"));
+      }
+      click(target, action === "background then keyboard" ? 0 : 1);
+      await waitForFast(() => expectClosed());
+      emit({ type: "close", reason: "completed" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onCommit).toHaveBeenCalledExactlyOnceWith("keep recording", true);
+      expect(controller.active).toBe(false);
+      expect(onTap).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps a quick tap as the tap action", async () => {
     const { controller, onTap, target } = createButtonHarness();

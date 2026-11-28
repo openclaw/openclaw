@@ -37,11 +37,18 @@ import {
 import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { renderCodexRelayRefreshableFallback } from "./thread-policy.js";
 import { buildCodexConversationTurnInstructions } from "./thread-prompt.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
 import { buildCodexParentLocalInstructions, buildTurnStartParams } from "./turn-params.js";
 import type { CodexThreadRouteReservation } from "./turn-router.js";
 import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
+
+const accessProgramLabels = {
+  standard: "Standard",
+  daybreak_blue: "Daybreak Blue",
+  daybreak_red: "Daybreak Red",
+} as const;
 
 export type CodexStartedTurn = {
   turn: CodexTurnStartResponse;
@@ -230,8 +237,15 @@ export async function prepareCodexAttemptTurnRequest(
       const program =
         turnStartParams.cyberAccessProgram === "daybreakBlue" ? "daybreak_blue" : "daybreak_red";
       if (!advertised?.includes(program)) {
+        const supported = advertised?.map((value) => accessProgramLabels[value]);
+        const daybreak = advertised?.find((value) => value !== "standard");
+        const guidance = !daybreak
+          ? "Turn Daybreak off for this chat."
+          : `Turn on Daybreak for this chat to use ${accessProgramLabels[daybreak]}.`;
         throw new CodexAccessProgramUnavailableError(
-          "This Daybreak program is not advertised for the current account and model. Select Standard Access or refresh account capabilities.",
+          supported?.length
+            ? `${selectedModel} supports ${supported.join(" and ")}${supported.length === 1 ? " only" : ""}. This chat requested ${accessProgramLabels[program]}. ${guidance}`
+            : "This Daybreak program is not advertised for the current account and model. Turn Daybreak off for this chat or refresh account capabilities.",
         );
       }
     }
@@ -280,11 +294,13 @@ export async function prepareCodexAttemptTurnRequest(
       const inferenceInstructions = joinPresentSections(
         usesSupervisionConnection
           ? undefined
-          : (buildCodexParentLocalInstructions(runtimeParams, {
-              personaInstructions: workspaceBootstrapContext.personaInstructions,
-              skillsInstructions: context.skillsInstructions,
-              memoryInstructions: workspaceBootstrapContext.memoryInstructions,
-            }) ?? undefined),
+          : renderCodexRelayRefreshableFallback(inferenceThread.liveThreadEphemeralPolicy),
+        usesSupervisionConnection
+          ? undefined
+          : (buildCodexParentLocalInstructions(
+              runtimeParams,
+              workspaceBootstrapContext.personalPersonaInstructions,
+            ) ?? undefined),
         turnState.promptBuild.turnDeveloperInstructions,
         buildCodexConversationTurnInstructions(
           runtimeParams,
@@ -365,7 +381,9 @@ export async function prepareCodexAttemptTurnRequest(
       if (
         !params.skipPreparedUserTurnMessage &&
         !recorder?.isBlocked() &&
-        recorder?.captureModelPromptProjection
+        recorder?.captureModelPromptProjection &&
+        // An earlier fallback candidate may already have frozen this turn's projection.
+        recorder.getPersistedMessage?.()?.["__openclaw"]?.modelPromptProjection === undefined
       ) {
         const { prompt: builtPrompt, promptInputRange } = turnState.promptBuild;
         if (!promptInputRange) {

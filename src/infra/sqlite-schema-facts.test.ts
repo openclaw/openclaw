@@ -84,6 +84,75 @@ describe("admitted SQLite schema facts", () => {
     expect(database.prepare("SELECT id FROM original").all()).toEqual([{ id: 9 }]);
   });
 
+  it.each(["get", "all", "run", "iterate"] as const)(
+    "ignores unprepared mutation tails through %s",
+    (method) => {
+      for (const sql of [
+        "; -- UPDATE\n /* CREATE */ SELECT 'DROP; DELETE'",
+        "WITH value AS (SELECT 1) SELECT * FROM value",
+        "PRAGMA user_version",
+      ]) {
+        const { database } = openFile();
+        const writeRevision = readSqliteDatabaseWriteRevision(database);
+        const schemaRevision = getSqliteDatabaseSchemaRevision(database);
+        expect(writeRevision).toBeTypeOf("number");
+        expect(schemaRevision).toBeTypeOf("number");
+        const statement = database.prepare(
+          `${sql}; INSERT INTO original VALUES (7); CREATE TABLE ignored(id)`,
+        );
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          if (method === "iterate") {
+            expect([...statement.iterate()]).toHaveLength(1);
+          } else {
+            statement[method]();
+          }
+          expect(readSqliteDatabaseWriteRevision(database)).toBe(writeRevision);
+          expect(getSqliteDatabaseSchemaRevision(database)).toBe(schemaRevision);
+        }
+        expect(database.prepare("SELECT id FROM original").all()).toEqual([]);
+        expect(tableExists(database, "ignored")).toBe(false);
+      }
+    },
+  );
+
+  it("tracks the prepared mutation while ignoring later schema changes", () => {
+    const { database } = openFile();
+    const writeRevision = readSqliteDatabaseWriteRevision(database);
+    const schemaRevision = getSqliteDatabaseSchemaRevision(database);
+    expect(writeRevision).toBeTypeOf("number");
+    expect(schemaRevision).toBeTypeOf("number");
+    database.prepare("INSERT INTO original VALUES (7); CREATE TABLE ignored(id)").run();
+    expect(readSqliteDatabaseWriteRevision(database)).not.toBe(writeRevision);
+    expect(getSqliteDatabaseSchemaRevision(database)).toBe(schemaRevision);
+    expect(database.prepare("SELECT id FROM original").all()).toEqual([{ id: 7 }]);
+    expect(tableExists(database, "ignored")).toBe(false);
+
+    database.prepare("CREATE TABLE prepared(id); DROP TABLE original").run();
+    expect(getSqliteDatabaseSchemaRevision(database)).not.toBe(schemaRevision);
+    expectSchema(database, { original: true, prepared: true });
+  });
+
+  it("retains the complete prepared trigger body and executes all exec statements", () => {
+    const database = openDatabase();
+    database.exec("CREATE TABLE audit(id); INSERT INTO original VALUES (1)");
+    database
+      .prepare(`CREATE TRIGGER record_insert AFTER INSERT ON original BEGIN
+        INSERT INTO audit VALUES (NEW.id);
+        INSERT INTO audit VALUES (NEW.id + 1);
+      END; DROP TABLE original`)
+      .run();
+    expect(getAdmittedSqliteSchemaFacts(database)?.triggers.has("record_insert")).toBe(true);
+    database.prepare("INSERT INTO original VALUES (7)").run();
+    expect(database.prepare("SELECT id FROM audit ORDER BY id").all()).toEqual([
+      { id: 7 },
+      { id: 8 },
+    ]);
+    expect(database.prepare("SELECT id FROM original ORDER BY id").all()).toEqual([
+      { id: 1 },
+      { id: 7 },
+    ]);
+  });
+
   it("serves admitted runtime schema checks without executing SQL", () => {
     const database = openDatabase(AGENT_SCHEMA, false);
     assertCanonicalSessionValidationSchema(database);
@@ -98,6 +167,48 @@ describe("admitted SQLite schema facts", () => {
     }
     expect(observation.queries).toEqual([]);
   });
+
+  it.each(["schema", "version"] as const)(
+    "reuses a newer agent reader floor until its writer changes the %s",
+    (change) => {
+      const version = OPENCLAW_AGENT_SCHEMA_VERSION + 1;
+      const { filename, database: reader } = openFile(
+        `CREATE TABLE schema_meta (
+          meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER,
+          agent_id TEXT, min_reader INTEGER
+        );
+        INSERT INTO schema_meta VALUES (
+          'primary', 'agent', ${version}, 'main', ${OPENCLAW_AGENT_SCHEMA_VERSION}
+        );
+        PRAGMA user_version = ${version};`,
+      );
+      expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(version);
+      using observation = observeReads();
+      for (let index = 0; index < 10; index += 1) {
+        expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(version);
+      }
+      expect(observation.queries).toEqual([]);
+
+      const writer = openDatabase("", false, filename);
+      const nextVersion = change === "version" ? version + 1 : version;
+      runSqliteImmediateTransactionSync(writer, () => {
+        writer.exec(
+          change === "version"
+            ? `PRAGMA user_version = ${nextVersion}`
+            : "CREATE TABLE newer_agent_data (value TEXT)",
+        );
+        writer
+          .prepare("UPDATE schema_meta SET schema_version = ?, min_reader = ?")
+          .run(nextVersion, nextVersion);
+      });
+      expect(() => assertSupportedAgentSchemaVersion(reader, filename)).toThrow(
+        expect.objectContaining({
+          name: "SqliteSchemaVersionError",
+          message: expect.stringContaining(`Minimum reader schema version is ${nextVersion}`),
+        }),
+      );
+    },
+  );
 
   it("shares physical validation across handles and admits replacement files", () => {
     const root = tempDirs.make("openclaw-schema-process-");

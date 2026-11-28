@@ -11,7 +11,6 @@ import {
 } from "../../commands/status-update-restart.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   sentinelState,
@@ -29,14 +28,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function readRun(payload: Awaited<ReturnType<typeof captureUpdateRunPayload>>) {
   return expectDefined(getUpdateRun(expectDefined(payload, "update response").runId), "update run");
-}
-
-async function failureReport(run: ReturnType<typeof readRun>, reason?: string) {
-  return prepareUpdateFailureReport({
-    attemptId: run.runId,
-    recordedRun: run,
-    result: { status: "error", mode: "npm", reason, steps: [], durationMs: 0 },
-  });
 }
 
 function errorFact(message: string) {
@@ -75,10 +66,9 @@ describe("update.run handoff refusal diagnostics", () => {
       expect(run.steps.flatMap((step) => step.failureFacts ?? [])).toContainEqual(
         expect.objectContaining({ code: "handoff-permission-denied" }),
       );
-      const report = await failureReport(run);
+      const report = await prepareUpdateFailureReport(run);
       expect(report.body).toContain("handoff-permission-denied");
-      expect(report.body).toContain("Recovery outcome: Gateway kept serving");
-      expect(report.body).not.toContain("exit unknown");
+      expect(report.body).toContain("Result: failed");
     },
   );
 
@@ -103,13 +93,10 @@ describe("update.run handoff refusal diagnostics", () => {
     try {
       const payload = expectDefined(await captureUpdateRunPayload(), "update response");
       const run = readRun(payload);
-      const report = await failureReport(run);
+      const report = await prepareUpdateFailureReport(run);
       expect(payload.ok).toBe(false);
       expect(report.body).toContain("handoff-helper-exited");
-      expect(report.body).toContain(
-        "Gateway kept serving; handoff failed before ownership transfer",
-      );
-      expect(report.body).not.toContain("exit unknown");
+      expect(report.body).toContain("Rollback outcome: not needed");
       expectServing();
     } finally {
       coordinator.mockRestore();
@@ -165,18 +152,17 @@ describe("update.run handoff refusal diagnostics", () => {
       try {
         const payload = expectDefined(await captureUpdateRunPayload(), "update response");
         const run = readRun(payload);
-        const localReport = renderUpdateRunReport(run).markdown;
+        const recordedSteps = JSON.stringify(run.steps);
         expect(payload.ok).toBe(false);
-        expect(localReport).toContain(expected);
-        expect(localReport).not.toContain("fixture-private-token");
-        expect(localReport).not.toContain("discarded startup noise");
-        expect(JSON.stringify(run.steps)).not.toContain("fixture-private-token");
+        expect(recordedSteps).toContain(expected);
+        expect(recordedSteps).not.toContain("fixture-private-token");
+        expect(recordedSteps).not.toContain("discarded startup noise");
         expect(
           run.steps
             .flatMap((step) => step.failureFacts ?? [])
             .every((fact) => (fact.message?.length ?? 0) <= 200),
         ).toBe(true);
-        const report = await failureReport(run);
+        const report = await prepareUpdateFailureReport(run);
         expect(report.body).toContain("handoff-helper-exited");
         expect(report.body).not.toContain("fixture-private-token");
         expectServing();
@@ -204,12 +190,9 @@ describe("update.run handoff refusal diagnostics", () => {
     expect(fact).toMatchObject({ check: "managed-service", code: `handoff-${kind}` });
     expect(fact?.message).toContain("openclaw");
     expect(run.verification.rollbackOutcome).toMatchObject({ status: "not-needed" });
-    const report = await failureReport(run, run.reason ?? undefined);
+    const report = await prepareUpdateFailureReport(run);
     expect(report.body).toContain(`Failing check managed-service (handoff-${kind})`);
-    expect(report.body).toContain(
-      "Recovery outcome: Gateway kept serving; handoff failed before ownership transfer",
-    );
-    expect(report.body).not.toContain("exit unknown");
+    expect(report.body).toContain("Rollback outcome: not needed");
     for (const privateValue of [
       "fixture-private-token",
       "fixture-private-user",
@@ -241,9 +224,7 @@ describe("update.run handoff refusal diagnostics", () => {
     expect(run?.steps.flatMap((step) => step.failureFacts ?? [])).toContainEqual(
       expect.objectContaining({ code: "handoff-runtime-unavailable" }),
     );
-    expect(renderUpdateRunReport(expectDefined(run, "update run")).markdown).toContain(
-      "The serving Gateway has not been stopped.",
-    );
+    expect(run?.origin.nextAction).toContain("The serving Gateway has not been stopped.");
   });
 
   it("preserves the Node engine refusal and serving observation for update.run", async () => {
@@ -261,7 +242,6 @@ describe("update.run handoff refusal diagnostics", () => {
     });
     expect(run.origin.nextAction).toBe(message);
     expect(run.verification.serviceRunning).toBe(true);
-    expect(renderUpdateRunReport(run).lines.join("\n")).toContain(message);
     expectServing();
   });
 
@@ -368,16 +348,16 @@ describe("update.run handoff refusal diagnostics", () => {
             : "managed update ownership transfer failed";
       const run = readRun(payload);
       const failureFacts = [errorFact(message)];
-      const report = await failureReport(run, run.reason ?? undefined);
+      const report = await prepareUpdateFailureReport(run);
       if (failure === "sentinel-write") {
-        expect(report.body).toContain("Recovery outcome: Gateway kept serving");
+        expect(report.body).toContain("Rollback outcome: not needed");
         expect(report.body).toContain("handoff-payload-failed");
         expect.soft(report.body).toContain("Failing check managed-service (Error)");
         expect.soft(report.body).not.toContain(message);
         expect.soft(report.body).toContain("[redacted-diagnostic]");
       } else {
-        expect(report.body).not.toContain("Recovery outcome: Gateway kept serving");
-        expect.soft(report.body).toContain(`Failed phase requested: ${message}`);
+        expect.soft(report.body).toContain("Failed phase requested:");
+        expect.soft(report.body).toContain(message);
       }
       const failedStep = { failureFacts: expect.arrayContaining(failureFacts) };
       expect(run.steps).toContainEqual(
@@ -388,10 +368,17 @@ describe("update.run handoff refusal diagnostics", () => {
       });
       expect(sendNotice).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          message: `⚠️ OpenClaw couldn't finish updating.\nThe current version (${run.before.version}) is still running.\nUpdate failed before the update started (managed-service-handoff-failed).\nFor details, open Settings → Updates in the OpenClaw app or run \`openclaw update status\` in your terminal.`,
+          message: expect.stringContaining("⚠️ OpenClaw couldn't finish updating."),
         }),
         expect.any(Object),
       );
+      const notice = sendNotice.mock.calls.at(-1)?.[0]?.message;
+      expect(notice).toContain(`The current version (${run.before.version}) is still running.`);
+      expect(notice).toContain(
+        "Update failed before the update started (managed-service-handoff-failed).",
+      );
+      expect(notice).toContain(message);
+      expect(notice).toContain("openclaw update status");
     },
   );
 
@@ -439,14 +426,13 @@ describe("update.run handoff refusal diagnostics", () => {
       });
       expect(payload?.handoff).toBeUndefined();
       const run = readRun(payload);
-      const report = await failureReport(run, reason);
+      const report = await prepareUpdateFailureReport(run);
       if (error instanceof UpdatePreMutationError) {
         expect(run.origin.nextAction).toBe(message);
-        expect(renderUpdateRunReport(run).markdown).toContain(message);
         expect(report.body).not.toContain("sudo systemctl restart");
       }
-      expect.soft(report.body).toContain(`Failed phase requested: ${publicMessage}`);
-      expect.soft(report.body).not.toContain("exit unknown");
+      expect.soft(report.body).toContain("Failed phase requested:");
+      expect.soft(report.body).toContain(publicMessage);
       const failureFacts =
         error instanceof UpdatePreMutationError ? error.failureFacts : [errorFact(message)];
       const failedStep = { failureFacts: expect.arrayContaining(failureFacts) };

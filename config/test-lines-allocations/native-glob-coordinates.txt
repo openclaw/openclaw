@@ -1,0 +1,5 @@
+# Retain fixed-set CJS/ESM discovery, Windows drive-case admission, and real
+# watcher ownership/exclusion/cache/removal regressions with native child cleanup.
+# This change adds 419 net test lines: 416 native-glob lines and 3 patch-guard lines.
+# Allocate only the 19 lines above the unchanged 400-line ordinary allowance.
+19

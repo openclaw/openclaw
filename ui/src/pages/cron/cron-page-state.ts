@@ -28,11 +28,14 @@ import {
   startCronEdit,
   toggleCronJob,
 } from "../../lib/cron/index.ts";
+import { isCronInventoryInvalidation } from "../../lib/cron/inventory-connection.ts";
+import { validateCronModelThinkingSelection } from "../../lib/cron/model-thinking-validation.ts";
 import {
-  hasCronInventoryEvents,
-  isCronInventoryInvalidation,
-} from "../../lib/cron/inventory-connection.ts";
-import { loadCronRuns, selectCronRunsForJob, updateCronRunsFilter } from "../../lib/cron/runs.ts";
+  loadCronRuns,
+  retryCronRuns,
+  selectCronRunsForJob,
+  updateCronRunsFilter,
+} from "../../lib/cron/runs.ts";
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
@@ -204,9 +207,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         if (
           active &&
           context() === currentContext &&
-          (event.event === "cron" ||
-            (hasCronInventoryEvents(currentContext.gateway.snapshot) &&
-              isCronInventoryInvalidation(event, currentContext.gateway.snapshot)))
+          (event.event === "cron" || isCronInventoryInvalidation(event))
         ) {
           void refreshCron({
             coalesce: true,
@@ -307,7 +308,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         .then(() => ensureEditorSources());
     }
     if (forceRefresh || (!cron.cronStatus && !cron.cronLoading)) {
-      void refreshCron({ coalesce: true });
+      void refreshCron({ coalesce: true, refresh: forceRefresh });
     }
     onSettled(() => ensureEditorSources(forceRefresh));
   }
@@ -621,7 +622,15 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     // Synchronize the revision-bound catalog before validating a possibly replaced definition.
     eventSource.sync();
     const eventErrors = validateCronEventSelection(cron.cronForm, eventSource.view);
-    if (hasCronFormErrors(eventErrors)) {
+    const persistedPayload = cron.cronEditingJob?.payload;
+    const modelErrors = validateCronModelThinkingSelection(
+      cron.cronForm,
+      presentation.modelCatalog(),
+      persistedPayload?.kind === "agentTurn"
+        ? { model: persistedPayload.model, thinking: persistedPayload.thinking }
+        : undefined,
+    );
+    if (hasCronFormErrors(eventErrors) || hasCronFormErrors(modelErrors)) {
       // Catalog/schema feedback is derived from the current source in the view,
       // not retained on the form after discovery finishes or changes revision.
       cron.cronFieldErrors = validateCronForm(cron.cronForm);
@@ -706,6 +715,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     },
     onLoadMoreRuns: () =>
       void presentation.runTask((cronState) => loadCronRuns(cronState, { append: true })),
+    onRetryRuns: () => void presentation.runTask(retryCronRuns),
     onRunsFiltersChange: (patch: Parameters<typeof updateCronRunsFilter>[1]) =>
       void presentation.runTask(async (cronState) => {
         updateCronRunsFilter(cronState, patch);

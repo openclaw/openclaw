@@ -1,10 +1,10 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import SHARED_TOOL_DISPLAY_JSON from "../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
 import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import {
   resolveToolDetailForArgs,
   type ToolDisplaySpec,
 } from "../../../../src/agents/tool-display-common.js";
+import { TOOL_DISPLAY_CONFIG } from "../../../../src/agents/tool-display-detail-config.js";
 import type { ToolDetailMode } from "../../../../src/agents/tool-display-exec.js";
 import { resolveToolDisplayIdentity } from "./tool-display-identity.ts";
 
@@ -15,8 +15,8 @@ type ToolDisplay = {
   detail?: string;
 };
 
-const FALLBACK = SHARED_TOOL_DISPLAY_JSON.fallback;
-const TOOL_MAP: Record<string, ToolDisplaySpec> = SHARED_TOOL_DISPLAY_JSON.tools;
+const FALLBACK = TOOL_DISPLAY_CONFIG.fallback;
+const TOOL_MAP: Record<string, ToolDisplaySpec> = TOOL_DISPLAY_CONFIG.tools;
 
 function shortenHomeInString(input: string): string {
   // Browser-safe home shortening: avoid importing Node-only helpers (keeps Vite builds working in Docker/CI).

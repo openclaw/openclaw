@@ -191,7 +191,7 @@ it("shares audio metadata probes, retries failures, and reinspects replacements"
   expect(await readMetadata(filePath)).toMatchObject({ available: true, durationMs: 4567 });
   expect(runFfprobe).toHaveBeenCalledTimes(3);
   expect(runFfprobe).toHaveBeenCalledWith(expect.any(Array), {
-    stdinFileDescriptor: expect.any(Number),
+    stdinFile: expect.any(Object),
   });
 });
 

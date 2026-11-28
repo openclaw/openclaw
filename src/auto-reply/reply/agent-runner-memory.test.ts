@@ -27,7 +27,6 @@ import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-su
 import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { modelDefinition, providerConfig } from "../../agents/model-auth.fixtures.test-support.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import { ZERO_USAGE_FIXTURE } from "../../agents/test-helpers/usage-fixtures.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -49,7 +48,6 @@ import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.
 import { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import * as transcriptAccounting from "../../config/sessions/session-transcript-accounting.js";
-import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import {
   clearMemoryPluginState,
@@ -68,6 +66,8 @@ import {
   runSessionCompactionIfNeeded as runSessionCompactionIfNeededRaw,
 } from "./agent-runner-memory.js";
 import {
+  compactionConfig,
+  usageEvent,
   createFlushSessionEntry,
   createFreshSessionEntry,
   createMemoryFlushPlan,
@@ -130,6 +130,13 @@ vi.mock("../../infra/agent-run-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/agent-run-registry.js")>()),
   registerAgentRunContext: registerAgentRunContextMock,
   clearAgentRunContext: clearAgentRunContextMock,
+}));
+// These cases cover the reply-level compactor that sessions use when the attempt's
+// request boundary does not own compaction (context engines, a compaction model,
+// or a prompt that cannot fit); the runreplyagent compaction cases cover deferral.
+vi.mock("./agent-runner-memory-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-memory-runtime.js")>()),
+  defersTokenCompactionToRequestBoundary: async () => false,
 }));
 
 let incrementCompactionCount: typeof import("./session-updates.js").incrementCompactionCount;
@@ -194,21 +201,6 @@ function loadMainSessionEntry(storePath: string): SessionEntry {
     throw new Error("expected persisted main session entry");
   }
   return entry;
-}
-
-function usageEvent(
-  content: string,
-  usage: Partial<ReturnType<typeof makeAssistantMessageFixture>["usage"]>,
-  api?: string,
-) {
-  return {
-    type: "message",
-    message: { role: "assistant", content, usage, ...(api ? { api } : {}) },
-  };
-}
-
-function compactionConfig(compaction: AgentDefaultsConfig["compaction"]) {
-  return { agents: { defaults: { compaction } } };
 }
 
 function requireCompactEmbeddedAgentSessionCall(index = 0) {
@@ -412,7 +404,6 @@ describe("runMemoryFlushIfNeeded", () => {
       const operatorAuthority = createTestOperatorAuthority({
         profileId: "guest",
         scopes: ["operator.write"],
-        assertCurrent: vi.fn<() => void>(),
         retain: () => releaseOperatorAuthority,
       });
       runEmbeddedAgentMock
@@ -1024,7 +1015,6 @@ describe("runMemoryFlushIfNeeded", () => {
     { stage: "after start notice", invalidation: "authorization" },
     { stage: "after awaited compactor", invalidation: "authorization" },
     { stage: "after awaited compactor", invalidation: "abort" },
-    { stage: "after awaited compactor", invalidation: "operator" },
   ] as const)(
     "rejects $invalidation invalidation $stage without accounting or adopting compaction",
     async ({ stage, invalidation }) => {
@@ -1033,23 +1023,9 @@ describe("runMemoryFlushIfNeeded", () => {
       const followupRun = createTestFollowupRun({ workspaceDir: rootDir });
       const controller = new AbortController();
       let authorized = true;
-      let operatorCurrent = true;
-      if (invalidation === "operator") {
-        followupRun.operatorAuthority = createTestOperatorAuthority({
-          profileId: "guest",
-          scopes: ["operator.write"],
-          assertCurrent: () => {
-            if (!operatorCurrent) {
-              throw new Error("operator authority revoked");
-            }
-          },
-        });
-      }
       const invalidate = () => {
         if (invalidation === "authorization") {
           authorized = false;
-        } else if (invalidation === "operator") {
-          operatorCurrent = false;
         } else {
           controller.abort(new Error("caller aborted"));
         }
@@ -1093,9 +1069,7 @@ describe("runMemoryFlushIfNeeded", () => {
       await expect(pending).rejects.toThrow(
         invalidation === "authorization"
           ? "Session compaction maintenance is no longer active"
-          : invalidation === "abort"
-            ? "caller aborted"
-            : "operator authority revoked",
+          : "caller aborted",
       );
 
       expect(onCompactionStart).toHaveBeenCalledTimes(stage === "before start" ? 0 : 1);

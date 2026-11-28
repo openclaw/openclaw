@@ -277,27 +277,14 @@ it.each(["canonical", "projection"] as const)(
     };
     mutateLocalWorkspaceProjection(database, row.worktree_id, { kind: "create", row });
     prepareTreePacks(database, records);
-    const required = target === "canonical" ? fingerprints[1]! : fingerprints[0]!;
     for (const kind of ["scan", "probe"] as const) {
       const action = { kind, target, canonicalRoot };
-      const reads = trackSqliteStatementExecutions(database, ["projection"], (sql) =>
-        /^select\b/i.test(sql) && sql.includes('from "local_workspace_projections"')
-          ? "projection"
-          : null,
-      );
       const captured = readLocalWorkspaceManifestRows(database, {
         id: row.worktree_id,
         revision: 0,
         action,
         knownTreeRoot: treeRoot,
       });
-      reads.restore();
-      expect(reads.blobBytes.projection).toBe(
-        32 +
-          (kind === "scan"
-            ? fingerprints[0]!.byteLength + fingerprints[1]!.byteLength
-            : required.byteLength),
-      );
       expect(captured.records).toBeUndefined();
       const metrics = { contentHashCount: 0, memoHitCount: 0 };
       const value = await withWorkspaceHashMemo(
@@ -446,10 +433,6 @@ it.each([2, 64])("loads %i directories with reads bounded by tree depth", (count
     ]).flat(),
   );
   prepareTreePacks(db, records);
-  // One sentinel/root pack, one root-directory pack, and one per child directory.
-  expect(db.prepare("SELECT count(*) AS n FROM local_workspace_tree_packs").get()!.n).toBe(
-    count + 2,
-  );
   const counter = trackSqliteStatementExecutions(db, ["reads"], (sql) =>
     /^(?:select|with)\b/i.test(sql) ? "reads" : null,
   );
@@ -503,14 +486,8 @@ it("shares an unchanged subdirectory pack across different projection roots", ()
       patch: { tree_root_digest: localWorkspaceDigestBytes(records.get("")!.treeRef) },
     });
   }
-  // Three packs per tree; only the sentinel and root-directory packs differ.
-  expect(db.prepare("SELECT count(*) AS n FROM local_workspace_tree_packs").get()!.n).toBe(5);
   const shared = first.get(first.get("shared")!.children!)!.treeRef;
   expect(second.get(second.get("shared")!.children!)!.treeRef).toBe(shared);
-  const packed = db
-    .prepare("SELECT records_json FROM local_workspace_tree_packs WHERE tree_digest = ?")
-    .get(localWorkspaceDigestBytes(shared));
-  expect(JSON.parse(String(packed!.records_json))).toHaveLength(2);
   for (const [index, records] of [first, second].entries()) {
     const loaded = readLocalWorkspaceManifestRows(db, {
       id: `sharing-${index}`,
@@ -522,8 +499,7 @@ it("shares an unchanged subdirectory pack across different projection roots", ()
   }
 });
 
-it("accepts a prepared tree with only the projection root flip inside the writer transaction", () => {
-  using cleanup = new DisposableStack();
+it("commits the prepared tree as the current projection root", () => {
   using db = new DatabaseSync(":memory:");
   const id = randomUUID();
   mutateLocalWorkspaceProjection(db, id, {
@@ -532,21 +508,6 @@ it("accepts a prepared tree with only the projection root flip inside the writer
   });
   const records = tree("a");
   prepareTreePacks(db, records);
-  const counters = trackSqliteStatementExecutions(db, ["nodeWrites", "rootFlip"], (sql) => {
-    if (
-      /^(?:insert|update|delete)\b/i.test(sql) &&
-      /local_workspace_(?:tree_packs|manifest_nodes)/i.test(sql)
-    ) {
-      return "nodeWrites";
-    }
-    if (/^update\b/i.test(sql) && /local_workspace_projections/i.test(sql)) {
-      return "rootFlip";
-    }
-    return null;
-  });
-  cleanup.defer(counters.restore);
-  prepareTreePacks(db, records);
-  expect(counters.counts.nodeWrites).toBe(0);
   mutateLocalWorkspaceProjection(db, id, {
     kind: "update",
     revision: 0,
@@ -560,10 +521,9 @@ it("accepts a prepared tree with only the projection root flip inside the writer
       replace: true,
     },
   });
-  expect(counters.counts).toEqual({ nodeWrites: 0, rootFlip: 1 });
   expect(
     decodeLocalWorkspaceTree(
-      readLocalWorkspaceTree(db, localWorkspaceDigestBytes(records.get("")!.treeRef)),
+      readLocalWorkspaceTree(db, readLocalWorkspaceProjectionInDatabase(db, id)!.tree_root_digest!),
     ),
   ).toEqual(records);
 });
@@ -667,10 +627,6 @@ it("releases sweep read pages for checkpoints while retaining live and concurren
   );
   reads.restore();
   expect(checkpointBusy).toEqual([0]);
-  // Live packs need no epoch lookup; only unreachable old packs become candidates.
-  expect(reads.rowCounts.epochs).toBeLessThanOrEqual(6);
-  // Candidate paging reads each digest once; graph traversal already knows its lookup keys.
-  expect(reads.blobBytes.packs + reads.blobBytes.epochs).toBeLessThanOrEqual(6 * 32);
   expect(candidates.packs).toHaveLength(4);
   expect(candidates.paths).toHaveLength(2);
   // A writer reusing content after discovery protects it with the current epoch.

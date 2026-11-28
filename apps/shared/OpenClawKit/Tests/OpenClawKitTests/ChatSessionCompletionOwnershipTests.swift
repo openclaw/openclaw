@@ -162,7 +162,7 @@ struct ChatSessionCompletionOwnershipTests {
         try #require(await transport.waitUntilStarted())
         viewModel.switchSession(to: "other")
         await viewModel.bootstrapTask?.value
-        #expect(viewModel.errorText == "Replacement history unavailable")
+        #expect(viewModel.errorText == "Couldn’t load this chat.")
         viewModel.input = "Replacement draft"
         #expect(await transport.calls.actionKeys == ["main"])
         #expect(await transport.calls.historyKeys == ["main", "other"])
@@ -173,7 +173,7 @@ struct ChatSessionCompletionOwnershipTests {
 
         #expect(viewModel.sessionKey == "other")
         #expect(viewModel.input == "Replacement draft")
-        #expect(viewModel.errorText == "Replacement history unavailable")
+        #expect(viewModel.errorText == "Couldn’t load this chat.")
         #expect(!viewModel.isLoading && !viewModel.isCompacting)
         #expect(await transport.calls.historyKeys == ["main", "other"])
     }

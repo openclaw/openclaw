@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateTemplateDraftDocument } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   templateDraftRevision,
@@ -19,6 +20,7 @@ import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { gatewayProfile } from "../server/client-fixtures.test-support.js";
+import * as sessionAuthorization from "../session-sharing-authorization-async.js";
 import type { GatewayClient } from "./client-types.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import { templatesDraftsHandlers } from "./templates-drafts.js";
@@ -27,7 +29,7 @@ import type { RespondFn } from "./types.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function requestDraft(
-  operation: "create" | "save" | "review" | "publish",
+  operation: "create" | "save" | "review" | "publish" | "signIn",
   workspace: string,
   params: Record<string, unknown> = {},
   condition?: string,
@@ -38,7 +40,9 @@ async function requestDraft(
   // SAFETY: These are the live socket fields read by draft authority.
   const client = {
     connId: "draft-author",
-    authenticatedUserProfile: gatewayProfile("creator"),
+    authenticatedUserProfile: gatewayProfile(
+      condition === "other-person" ? "creator" : GATEWAY_OWNER_PROFILE_ID,
+    ),
     connect: { role: "operator", scopes: ["operator.admin"] },
     internal: { syntheticClient: condition === "synthetic", operatorRoleActor: { kind: "system" } },
   } as GatewayClient;
@@ -67,6 +71,43 @@ async function requestDraft(
 }
 
 describe("Template draft human authority", () => {
+  it("finishes an admitted sign-in poll after administrator scope removal", async () => {
+    const workspace = tempDirs.make("template-sign-in-");
+    using _ = vi
+      .spyOn(sessionAuthorization, "resolveSessionMutationAuthorizationAsync")
+      .mockImplementationOnce(async (request) => {
+        request.assertInvocationCurrent?.();
+        request.client!.connect.scopes = [];
+        return { error: null };
+      });
+    const reply = await requestDraft("signIn", workspace, {
+      action: "poll",
+      sourceSessionKey: "agent:research:template",
+      draftId: "12345678-1234-4234-8234-123456789abc",
+      requestId: "12345678-1234-4234-8234-123456789abc",
+    });
+    expect(reply[0]).toBe(true);
+    expect(reply[1]).toEqual({ status: "expired" });
+  });
+
+  it("stops a sign-in poll when its connection ends", async () => {
+    const workspace = tempDirs.make("template-sign-in-");
+    using _ = vi
+      .spyOn(sessionAuthorization, "resolveSessionMutationAuthorizationAsync")
+      .mockImplementationOnce(async (request) => {
+        request.assertInvocationCurrent?.();
+        request.client!.invalidated = true;
+        return { error: null };
+      });
+    const reply = await requestDraft("signIn", workspace, {
+      action: "poll",
+      sourceSessionKey: "agent:research:template",
+      draftId: "12345678-1234-4234-8234-123456789abc",
+      requestId: "12345678-1234-4234-8234-123456789abc",
+    });
+    expect(reply[0]).toBe(false);
+  });
+
   it("registers draft methods only for administrators", () => {
     for (const method of Object.keys(templatesDraftsHandlers)) {
       expect(coreGatewayHandlers[method]).toBeDefined();
@@ -351,6 +392,19 @@ describe("Template draft reviewed publication", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     expect(registryErrors.splice(0)).toEqual([]);
+  });
+
+  it("asks a different administrator to sign in rather than borrowing the host account", async () => {
+    const fixture = await publicationFixture();
+    const reply = await requestDraft(
+      "review",
+      fixture.workspaceDir,
+      { draftId: fixture.draft.draftId },
+      "other-person",
+    );
+    expect(reply[0]).toBe(false);
+    expect(reply[2]).toMatchObject({ details: { templateSignIn: { required: true } } });
+    expect(fixture.uploads).toHaveLength(0);
   });
 
   it("publishes exactly the reviewed selections under the personal publisher", async () => {
