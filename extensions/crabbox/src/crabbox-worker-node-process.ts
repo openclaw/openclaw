@@ -105,16 +105,32 @@ ${desktopTarget === "windows/normal" ? createCrabboxWindowsDesktopNodeLauncher()
     if (!/^[1-9][0-9]*$/.test(pidText)) throw new Error("Cloud worker node PID is invalid; release and reprovision the worker");
     const pid = Number(pidText);
     let alive = true;
-    try { process.kill(pid, 0); } catch (error) { if (error.code !== "ESRCH") throw error; alive = false; }
+    try { process.kill(pid, 0); } catch (error) {
+      // EPERM means the process exists but belongs to another user. Treat it as
+      // alive so the identity fence, not a raw errno, decides the outcome.
+      if (error.code !== "ESRCH" && error.code !== "EPERM") throw error;
+      if (error.code === "ESRCH") alive = false;
+    }
     if (alive) {
       let verified = false;
       if (process.platform === "linux") {
-        const args = fs.readFileSync(path.join("/proc", pidText, "cmdline"), "utf8").split("\\0");
-        const env = fs.readFileSync(path.join("/proc", pidText, "environ"), "utf8").split("\\0");
-        // OpenClaw changes process.title; the immutable install cwd survives that argv rewrite.
-        const title = args[0];
-        const nodeInvocation = args[1] === cli || ["openclaw", "openclaw-connect", "openclaw-node"].includes(title);
-        verified = nodeInvocation && fs.realpathSync(path.join("/proc", pidText, "cwd")) === runtimeDir && env.includes("OPENCLAW_STATE_DIR=" + stateDir);
+        let args, env, cwd;
+        try {
+          args = fs.readFileSync(path.join("/proc", pidText, "cmdline"), "utf8").split("\\0");
+          env = fs.readFileSync(path.join("/proc", pidText, "environ"), "utf8").split("\\0");
+          // OpenClaw changes process.title; the immutable install cwd survives that argv rewrite.
+          cwd = fs.realpathSync(path.join("/proc", pidText, "cwd"));
+        } catch (error) {
+          // The process can exit between the liveness probe and these reads.
+          // ENOENT/ESRCH means gone; other failures leave verified=false so the
+          // fence reports an actionable refusal instead of a raw errno.
+          if (["ENOENT", "ESRCH"].includes(error.code)) alive = false;
+        }
+        if (alive) {
+          const title = args[0];
+          const nodeInvocation = args[1] === cli || ["openclaw", "openclaw-connect", "openclaw-node"].includes(title);
+          verified = nodeInvocation && cwd === runtimeDir && env.includes("OPENCLAW_STATE_DIR=" + stateDir);
+        }
       } else if (process.platform === "win32") {
         try {
           const launch = JSON.parse(fs.readFileSync(launchFile, "utf8"));
@@ -136,10 +152,14 @@ ${desktopTarget === "windows/normal" ? createCrabboxWindowsDesktopNodeLauncher()
           verified = desktopTarget === "macos" ? verifyMacosNode(launch, pid) : verifyDarwinNode(launch, pid);
         } catch { /* Missing launch or process identity must never authorize replay. */ }
       }
-      if (!verified) {
+      if (!alive) {
+        // The saved process exited during identity reads; fall through to the
+        // dead-PID path so a stale receipt can be replaced safely.
+      } else if (!verified) {
         throw new Error("Cloud worker node is running a different bootstrap artifact or invocation; release and reprovision the worker");
+      } else {
+        return true;
       }
-      return true;
     }
     if (desktopTarget === "macos") {
       const launch = JSON.parse(fs.readFileSync(launchFile, "utf8"));

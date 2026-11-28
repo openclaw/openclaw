@@ -20,6 +20,7 @@ async function replay(
   home = "/Users/worker",
   launch?: "ready" | "waiter-exit",
   interrupted?: "before-receipt" | "dangling-runtime" | "receipt-only",
+  allowSpawn = false,
 ) {
   const stateDir = path.join(home, ".openclaw", "cloud-workers", leaseId);
   const runtimeDir = path.join(home, ".openclaw-worker", "node-runtimes", "a".repeat(64));
@@ -73,7 +74,11 @@ async function replay(
     getuid: () => 501,
     env: { ...setup.forwardedEnv, LC_ALL: "fr_FR.UTF-8" },
     umask: vi.fn(),
-    kill: vi.fn(),
+    kill: vi.fn(() => {
+      if (failure === "eperm") {
+        throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+      }
+    }),
     exitCode: 0,
   };
   const fs = {
@@ -132,6 +137,14 @@ async function replay(
       }
       if (failure === "unavailable") {
         throw new Error("Unreadable process identity");
+      }
+      if (failure === "eperm") {
+        return "unrelated-process\0";
+      }
+      if (failure === "procfs-gone") {
+        throw Object.assign(new Error("no such file or directory, open '/proc/123/cmdline'"), {
+          code: "ENOENT",
+        });
       }
       if (file === "/proc/123/cmdline") {
         return failure === "original-argv" ? `/usr/bin/node\0${cli}\0connect\0` : command + "\0";
@@ -287,7 +300,7 @@ async function replay(
     expect(writtenFiles).not.toContain(path.join(stateDir, "node.pid"));
     expect(writtenFiles).not.toContain(path.join(stateDir, "node-launch.json"));
     expect(processFixture.kill).not.toHaveBeenCalled();
-  } else {
+  } else if (!allowSpawn) {
     expect(spawn).not.toHaveBeenCalled();
   }
   if (interrupted) {
@@ -330,6 +343,27 @@ describe.each(["linux", "darwin"] as const)("%s node enrollment replay", (platfo
       );
     },
   );
+  if (platform === "linux") {
+    it("treats an EPERM liveness probe as a live foreign process and fences it", async () => {
+      const result = await replay("linux", "eperm");
+      expectRefusal(result);
+      expect(result.output).not.toContain("kill EPERM");
+    });
+    it("treats a procfs race as a dead PID instead of crashing with raw ENOENT", async () => {
+      const result = await replay(
+        "linux",
+        "procfs-gone",
+        false,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      );
+      expect(result.output).not.toContain("ENOENT");
+      expect(result.output).toContain("Replay must not spawn another node");
+    });
+  }
 });
 
 it.each([
