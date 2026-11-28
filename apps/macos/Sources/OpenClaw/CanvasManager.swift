@@ -33,14 +33,15 @@ final class CanvasManager {
         let ensured = try ensureController(sessionKey: sessionKey)
         let controller = ensured.controller
 
-        if !ensured.created {
-            controller.presentAnchoredPanel(anchorProvider: anchorProvider)
-        }
+        // Presentation applies and persists the placement, so store it first on both paths.
         controller.preferredPlacement = placement
         if ensured.created {
             controller.showCanvas(path: normalizedTarget ?? "/")
-        } else if let normalizedTarget {
-            controller.load(target: normalizedTarget)
+        } else {
+            controller.presentAnchoredPanel(anchorProvider: anchorProvider)
+            if let normalizedTarget {
+                controller.load(target: normalizedTarget)
+            }
         }
         self.refreshDebugStatus()
         return controller.directoryPath
