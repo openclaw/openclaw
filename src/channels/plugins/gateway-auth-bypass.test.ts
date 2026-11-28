@@ -1,13 +1,14 @@
 // Gateway auth bypass tests cover channel plugin paths allowed to skip gateway auth.
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const { tryLoadActivatedBundledPluginPublicSurfaceModuleMock } = vi.hoisted(() => ({
   tryLoadActivatedBundledPluginPublicSurfaceModuleMock: vi.fn(
     async ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
       if (dirName === "mattermost" && artifactBasename === "gateway-auth-api.js") {
         return {
-          resolveGatewayAuthBypassPaths: () => [
-            " /api/channels/mattermost/command ",
+          resolveGatewayAuthBypassPaths: ({ cfg }: { cfg: OpenClawConfig }) => [
+            cfg.channels?.mattermost?.commands?.callbackPath,
             "",
             null,
             "/api/channels/mattermost/work",
@@ -39,7 +40,11 @@ describe("channel gateway auth bypass fast path", () => {
   it("loads the narrow gateway auth artifact for configured channels", async () => {
     const paths = await resolveBundledChannelGatewayAuthBypassPaths({
       channelId: "mattermost",
-      cfg: { channels: { mattermost: {} } },
+      cfg: {
+        channels: {
+          mattermost: { commands: { callbackPath: " /api/channels/mattermost/command " } },
+        },
+      },
     });
 
     expect(paths).toEqual(["/api/channels/mattermost/command", "/api/channels/mattermost/work"]);
