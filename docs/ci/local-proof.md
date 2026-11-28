@@ -147,6 +147,27 @@ Missing active translations or resources, active placeholder drift, invalid
 artifact syntax, and other generated-output differences remain blocking. Generator sync
 and the standalone Android and Apple checks retain their strict behavior.
 
+### Independent full-check stages
+
+`pnpm check --stage <name>` selects from the existing `preflight`, `typecheck`,
+`lint`, and `policy` stages. Repeat the option to select several stages; execution
+keeps canonical order and runs each selected stage once. Omitting the option
+retains the complete check. `--base`, `--include-test-types`, and
+`--include-architecture` keep their usual meaning.
+
+The npm source preflight uses five isolated workers: ordered `preflight` and
+`policy` in one invocation, full production/test `typecheck`, core lint, plugin
+lint, and scripts lint with controller, i18n, stylesheet, and formatting checks.
+The lint workers reuse the canonical `--only` selectors; per-runner shard and
+memory limits stay unchanged. The aggregate source receipt requires every
+worker to succeed. This trades three extra checkout/install setups for overlap,
+not less source coverage or guaranteed full-release wall-time savings.
+
+Frozen sources whose successful help output does not advertise `--stage`, or
+whose lint runner lacks `--only` selectors, run the original complete check
+once in the guards worker instead. The other workers report an intentional
+no-op. Capability-probe failures remain failures.
+
 ### Delegating changed compilers in CI
 
 `check:changed --delegate-compilers` retains the selected formatting, lint, guards,
@@ -324,12 +345,29 @@ all unsuppressed over-cap files.
 `pnpm check:baseline-ratchets --base <commit> --no-merge-base` runs the CI
 ratchets in two managed child slots, retaining all results after ordinary
 failures. `RATCHET_PR_HEAD_SHA` adds the existing PR-only line-cap comparison.
-The database-worker inventory starts first and shares the runner with at most
-one smaller check; it never runs two semantic inventories concurrently. When
-the complete current and historical source snapshots have identical paths and
-contents, its fresh current analysis also supplies the comparison counts.
+One slot runs the database-worker inventory, the database-dialect ratchet and
+the Plugin SDK surface budget in sequence, so their large TypeScript snapshots
+never overlap. The other slot runs smaller checks, including the Plugin SDK
+export check; both slots drain that queue once the large checks finish. Every PR
+runs both SDK checks: the SDK import closure reaches far outside
+`src/plugin-sdk`, so no changed-path rule can tell which changes move it.
+When current and historical source snapshots have identical paths and contents,
+the worker inventory reuses its fresh current analysis for comparison counts.
 Changed snapshots retain both full analyses and historical-cache validation.
 Frozen targets without the aggregate command retain their original commands.
+
+`pnpm check:session-identity-ratchet` rejects growth in identity comparisons and
+pins outside the session-store owner. Direct `null`/`undefined` presence checks
+do not compare identities and are excluded; adjacent comparisons between IDs
+and explicit pin names still count. Its per-file allowlist may only shrink.
+After removing counted sites, run the checker with `--prune` and verify again
+without pruning.
+
+`pnpm check:provider-branching-ratchet` rejects growth in request and history
+branches keyed on a provider id, model id, API name or URL in `src/agents`,
+`packages/ai`, `packages/llm-core` and the provider replay helpers. Declare the
+behavior as model compat in the owning plugin instead. Its per-file allowlist
+may only shrink; after removing branches, run the checker with `--prune`.
 
 <a id="test-line-budget" />
 
@@ -469,10 +507,11 @@ environment allowlist still applies. Explicit Blacksmith Testbox workflows
 hydrate credentials: untrusted contributor/fork code requires
 secretless fork CI or sanitized direct AWS, never local execution or Testbox.
 The wrapper uses the bundled Crabbox plugin's binary manager. All providers and
-cloud-worker profiles require Crabbox 0.83.0 or newer. This includes task-owned
+cloud-worker profiles require Crabbox 0.83.2 or newer. This includes task-owned
 Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
-Testboxes alive. Missing or older binaries use a verified managed 0.83.0 release
-before provider discovery or lease work. The original binary stays untouched.
+Testboxes alive, and verified Boat cleanup when stopping a VM deletes it. Missing
+or older binaries use a verified managed 0.83.2 release before provider discovery
+or lease work. The original binary stays untouched.
 
 For native Linux/WSL command-lifecycle or cancellation proof, verify the selected
 binary's runtime pack before allocating a lease. Use a complete matching Crabbox
@@ -761,13 +800,13 @@ Crabbox path before treating a direct Blacksmith run as maintainer proof.
 
 For admission/queue handling, follow the canonical proof policy above.
 For explicitly selected AWS capacity, use the
-[direct-provider commands](https://github.com/openclaw/openclaw/blob/main/.agents/skills/crabbox/references/operations.md#direct-aws).
+[direct-provider commands](https://github.com/openclaw/agent-skills/blob/main/skills/crabbox/references/providers-and-desktop.md#direct-aws).
 
 Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-class CPU. A `beast` request starts at 192 vCPUs and is the easiest way to trip regional EC2 Spot or On-Demand Standard quota. The repo-owned `.crabbox.yaml` keeps `class: standard` for explicit AWS proof; on-demand market and `capacity.hints: true` retain AWS capacity diagnostics. Use `fast` for heavier broad checks, `large` only after standard/fast are not enough, and `beast` only for exceptional CPU-bound lanes such as full-suite or all-plugin Docker matrices, explicit release/blocker validation, or high-core performance profiling. Do not use `beast` for `pnpm check:changed`, focused tests, docs-only work, ordinary lint/typecheck, small E2E repros, or Blacksmith outage triage. Use `--market on-demand` for capacity diagnosis so Spot market churn is not mixed into the signal.
 
 `.crabbox.yaml` owns provider, sync, and GitHub Actions hydration defaults. Crabbox sync never transfers `.git`, so the hydrated Actions checkout keeps its own remote Git metadata instead of syncing maintainer-local remotes and object stores, and the repo config additionally excludes local runtime/build artifacts (such as `.artifacts` and test reports) that should never be transferred. `.github/workflows/crabbox-hydrate.yml` owns checkout, Node/pnpm setup, `origin/main` fetch, and the non-secret environment handoff for owned-cloud `crabbox run --id <cbx_id>` commands.
 
-Direct leases require Crabbox 0.83.0 or newer. TTL counts from creation, including hydration; idle timeout counts inactivity. The earlier deadline wins. Defaults are 30 minutes each, with a four-hour maximum unless an owner or organization override allows more. Effective policy may clamp requests and live leases; inspect the lease and read policy notices. The Azure `prewarm` and `changed` jobs request four hours total and 90 minutes idle explicitly. The hydration workflow's keepalive holds its Actions job open; it does not renew a Crabbox lease. `keep` and `stop: never` do not prevent expiry.
+Direct leases require Crabbox 0.83.2 or newer. TTL counts from creation, including hydration; idle timeout counts inactivity. The earlier deadline wins. Defaults are 30 minutes each, with a four-hour maximum unless an owner or organization override allows more. Effective policy may clamp requests and live leases; inspect the lease and read policy notices. The Azure `prewarm` and `changed` jobs request four hours total and 90 minutes idle explicitly. The hydration workflow's keepalive holds its Actions job open; it does not renew a Crabbox lease. `keep` and `stop: never` do not prevent expiry.
 
 Plain heartbeats, setup, synchronization, and desktop activity do not extend total lifetime. `run` may extend only while a command executes, subject to provider support, budget, and policy. Creation-fixed providers need sufficient TTL at allocation. `directLeases: deny` requires the configured coordinator route. Do not change providers to avoid that policy. `crabbox list --retained` adds kept terminal resources with unconfirmed cleanup to the default live listing; use exact-ID inspection and a waiting stop to prove cleanup.
 

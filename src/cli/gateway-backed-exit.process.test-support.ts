@@ -115,7 +115,7 @@ export function runIsolatedGatewayCli(params: {
   stateDir: string;
   configPath: string;
   env?: NodeJS.ProcessEnv;
-  onStdout?: (stdout: string) => void;
+  interact?: Parameters<typeof runCliProcessChild>[0]["interact"];
 }) {
   return runCliProcessChild({
     nodeArgs: [
@@ -147,6 +147,6 @@ export function runIsolatedGatewayCli(params: {
       VITEST: undefined,
       ...params.env,
     },
-    onStdout: params.onStdout,
+    interact: params.interact,
   });
 }

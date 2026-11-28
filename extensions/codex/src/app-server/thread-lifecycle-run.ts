@@ -149,11 +149,12 @@ export async function startOrResumeThread(
         throwIfAborted,
       });
       serviceTierAdmission = context.serviceTierAdmission;
-      // Managed requests own a parent-local carrier. Only uncovered connections
-      // put refreshable instructions in native thread state; recompute after route changes.
+      // Stable context always uses the cached native thread carrier. A relay carries
+      // per-turn plugin context for this request only; recompute after route changes.
       params.refreshableInstructions = params.inferenceRoute
-        ? undefined
-        : input.refreshableInstructions;
+        ? input.refreshableInstructions
+        : joinPresentSections(input.refreshableInstructions, input.turnRefreshableInstructions) ||
+          undefined;
       // Only an actual relay can preserve current context through native compaction.
       params.developerInstructions =
         params.inferenceRoute || input.developerInstructions === undefined
@@ -643,12 +644,13 @@ export async function startOrResumeThread(
             buildLoadedPluginThreadConfig,
             prepareResume: () => prepareCodexThreadResume(params, resumeBinding, requestContext),
             releaseRetainedThread: async (assertCurrent) => {
-              await releaseRetainedThread(
+              const released = await releaseRetainedThread(
                 resumeBinding.threadId,
                 resumeBinding.clientId,
                 assertCurrent,
                 { waitForBackgroundCleanup: true },
               );
+              return released && (!resumeBinding.clientId || resumeBinding.clientId === clientId);
             },
           });
           if (resumed) {

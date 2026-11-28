@@ -53,21 +53,6 @@ function waitAddon(element: HTMLElement, label: string, checked: boolean) {
   return waitForSolid(() => expect(addonSwitch(element, label)?.checked).toBe(checked));
 }
 
-/** Which tab body is actually mounted, rather than what the tab strip claims. */
-function visibleTab(element: HTMLElement): "overview" | "memories" | "dreams" | "settings" | null {
-  const panel = element.querySelector('[role="tabpanel"]');
-  if (!panel) {
-    return null;
-  }
-  if (panel.querySelector("openclaw-agent-memory-panel")) {
-    return "dreams";
-  }
-  if (panel.querySelector('[data-settings-view="memory/memories"]')) {
-    return "memories";
-  }
-  return panel.querySelector('[data-settings-view="memory/overview"]') ? "overview" : "settings";
-}
-
 function pressTab(element: HTMLElement, tab: string, key = "Enter") {
   const event = new KeyboardEvent("keydown", {
     key,
@@ -346,32 +331,6 @@ it("renders and clears mutation errors on only the affected add-on", async () =>
   await waitText(element, "enablement rejected", false);
   await waitText(element, "Couldn’t update Active memory. Try again.", false);
   retry.resolve(committed("active-memory", false));
-});
-
-it("renders every canonical tab path and honors browser history restoration", async () => {
-  const navigate = vi.fn();
-  const { element } = createPage({ catalog: [], navigate });
-  expect(visibleTab(element)).toBe("settings");
-
-  pressTab(element, "overview");
-  expect(navigate).toHaveBeenCalledWith("memory", { pathname: "/settings/memory" });
-  element.routeData = memoryTabRoute("overview");
-  flush();
-  await waitForSolid(() => expect(visibleTab(element)).toBe("overview"));
-
-  element.routeData = memoryTabRoute("settings");
-  flush();
-  expect(visibleTab(element)).toBe("settings");
-
-  element.routeData = memoryTabRoute("memories");
-  flush();
-  await waitForSolid(() => expect(visibleTab(element)).toBe("memories"));
-
-  element.routeData = memoryTabRoute("dreams");
-  flush();
-  expect(visibleTab(element)).toBe("dreams");
-  expect(element.querySelector("openclaw-agent-select")).toBeNull();
-  expect(element.textContent).not.toContain("Schedule (cron)");
 });
 
 it("keeps Dreams empty when no configured agent is available", async () => {

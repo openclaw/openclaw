@@ -17,8 +17,6 @@ const BROWSER_OPERATOR_CONTROL_IDLE_MS = 5 * 60_000;
 
 type ProfileControl = {
   controller?: { connId: string; lastInputAt: number; release: () => void };
-  /** Last input from a Gateway client (Control UI or CLI), with or without control. */
-  lastOperatorInputAt?: number;
 };
 
 const controls = new WeakMap<BrowserServerState, Map<string, ProfileControl>>();
@@ -76,38 +74,17 @@ export function admitBrowserInput(
 
 /**
  * Record deliberate input from a Gateway client; the Browser panel marks it on each request.
- * It drives the agent's recent-use note and keeps the holder's control from going idle.
+ * It keeps the holder's control from going idle.
  */
 export function recordBrowserOperatorInput(
   state: BrowserServerState,
   profile: ResolvedBrowserProfile,
   connId: string | undefined,
 ): void {
-  if (!connId) {
-    return;
+  const controller = controls.get(state)?.get(browserKey(profile))?.controller;
+  if (connId && controller?.connId === connId) {
+    controller.lastInputAt = Date.now();
   }
-  const control = profileControl(state, profile);
-  const now = Date.now();
-  control.lastOperatorInputAt = now;
-  if (control.controller?.connId === connId) {
-    control.controller.lastInputAt = now;
-  }
-}
-
-type BrowserOperatorActivity = {
-  controlled: boolean;
-  lastOperatorInputAt?: number;
-};
-
-export function readBrowserOperatorActivity(
-  state: BrowserServerState,
-  profile: ResolvedBrowserProfile,
-): BrowserOperatorActivity {
-  const control = controls.get(state)?.get(browserKey(profile));
-  return {
-    controlled: control?.controller !== undefined,
-    ...(control?.lastOperatorInputAt ? { lastOperatorInputAt: control.lastOperatorInputAt } : {}),
-  };
 }
 
 /**

@@ -1,6 +1,7 @@
 // Failed compaction must exit nonzero so automation cannot mistake a silent no-op for success.
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { createCompactionNoticePayload } from "../auto-reply/reply/compaction-notice.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-output.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -70,7 +71,7 @@ export async function sessionsCompactCommand(
 ): Promise<void> {
   const agent = opts.agent?.trim();
   if (opts.agent !== undefined && !agent) {
-    throw new Error("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
   const signal = getAsyncWorkSignal();
   const rpcOpts: Parameters<typeof callGatewayFromCliWithTransport>[1] = {

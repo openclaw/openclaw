@@ -326,7 +326,8 @@ export function projectAgentHistoryActivity(
         normalizeOptionalString(block.toolName) ??
         normalizeOptionalString(block.name) ??
         "Tool";
-      const failed = isError === true || isToolResultError(block);
+      const synthetic = isSyntheticMissingToolResult(block);
+      const failed = !synthetic && (isError === true || isToolResultError(block));
       const details = asOptionalRecord(block.details);
       const exitReasonLost =
         (name === "exec" || name === "bash" || name === "process") &&
@@ -348,8 +349,9 @@ export function projectAgentHistoryActivity(
         name,
         phase: "result",
         args: executedArgs ?? call?.args,
-        result: block,
-        isError: failed ? true : poll ? false : isError,
+        // Repair receipts keep provider pairing valid; they record no execution outcome.
+        result: synthetic ? undefined : block,
+        isError: synthetic ? undefined : failed ? true : poll ? false : isError,
         // The existing persistence cap can remove the distinction between a
         // requested stop and a failed command. Do not invent that outcome.
         ...(!failed && exitReasonLost ? { status: "unknown" as const } : {}),

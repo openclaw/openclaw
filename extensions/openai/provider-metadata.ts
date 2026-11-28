@@ -4,7 +4,7 @@ const noopAuth = async () => ({ profiles: [] });
 const OPENAI_ACCOUNT_WIZARD_GROUP = {
   groupId: "openai",
   groupLabel: "OpenAI",
-  groupHint: "Codex login, Sign in with ChatGPT (Beta), or API key",
+  groupHint: "Codex login, Sign in with ChatGPT, or API key",
 } as const;
 const CODEX_CHATGPT_IMPORT = {
   migrationProviderId: "codex",
@@ -29,31 +29,20 @@ export function createOpenAIProviderMetadata(): ProviderPlugin {
         {
           id: "oauth",
           kind: "oauth",
-          label: "Codex login (browser)",
-          hint: "Sign in to Codex locally with your ChatGPT account",
+          label: "Codex login",
+          hint: "Sign in with your ChatGPT account using a one-time code",
           credentialImport: CODEX_CHATGPT_IMPORT,
           wizard: {
             choiceId: "openai",
             assistantPriority: -10,
-          },
-        },
-        {
-          id: "device-code",
-          kind: "device_code",
-          label: "Codex login (device code)",
-          hint: "Use a browser code when OpenClaw runs on a remote VM",
-          credentialImport: CODEX_CHATGPT_IMPORT,
-          wizard: {
-            choiceId: "openai-device-code",
-            assistantPriority: -40,
             onboardingFeatured: true,
           },
         },
         {
           id: "siwc",
           kind: "oauth",
-          label: "Sign in with ChatGPT (Beta)",
-          hint: "Authorize OpenClaw for eligible Responses models using your Codex allowance",
+          label: "Sign in with ChatGPT",
+          hint: "Use your ChatGPT plan for eligible Responses API requests",
           wizard: {
             choiceId: "openai-token-sharing",
             assistantPriority: 0,

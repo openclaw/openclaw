@@ -170,7 +170,7 @@ describe.each(["absent", "captured"] as const)("dispatcher plugin context: %s", 
 });
 
 it.for(["scope", "instance", "consumer"] as const)(
-  "refuses queued delivery after its captured %s closes",
+  "settles queued delivery after its captured %s closes",
   async (closed, { signal }) => {
     const channel = createOwnedTestInstance("closed-delivery-context");
     const registry = channel.owner!.registry!;
@@ -205,15 +205,19 @@ it.for(["scope", "instance", "consumer"] as const)(
       release.resolve();
       dispatcher.markComplete();
       const receipt = await withinTest(dispatcher.waitForIdle(), signal);
+      if (closed === "scope") {
+        // A released scope stops routing; the live instance admits the delivery normally.
+        expect(delivered).toHaveBeenCalledOnce();
+        expect(errors).toEqual([]);
+        return;
+      }
       expect(delivered).not.toHaveBeenCalled();
       expect(errors).toHaveLength(1);
       expect(errors[0]).toMatchObject({
         message:
-          closed === "scope"
-            ? "Plugin invocation scope is closed"
-            : closed === "consumer"
-              ? "Plugin closed-delivery-context consumer is closed"
-              : "Plugin closed-delivery-context was reloaded or disabled; use its current tools.",
+          closed === "consumer"
+            ? "Plugin closed-delivery-context consumer is closed"
+            : "Plugin closed-delivery-context was reloaded or disabled; use its current tools.",
       });
       expect(receipt).toMatchObject({ counts: { final: { failedAfterSend: 1 } } });
     } finally {

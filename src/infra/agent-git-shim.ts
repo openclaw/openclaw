@@ -1,21 +1,40 @@
 export const AGENT_GIT_SANDBOX_BIN = "/openclaw/git-tools";
+export const AGENT_GIT_SANDBOX_SCRIPT = "/tmp/openclaw-agent-git/git";
 
-/** A PATH tool contract: local probes, shared history, and partial-clone fetches/hydration. */
-export const AGENT_GIT_SHIM = `#!/bin/sh
-shim_dir=\${0%/*}
-search_path=
-separator=
+/** Validate native Git without pinning upgrade-managed symlinks to their current target. */
+export const RESOLVE_AGENT_GIT = `
 remaining=$PATH
 while :; do
   entry=\${remaining%%:*}
-  if [ "$entry" != "$shim_dir" ]; then
-    search_path=$search_path$separator$entry
-    separator=:
+  case $entry in (/*) ;; (*) entry=$PWD/\${entry:-.} ;; esac
+  candidate=$entry/git
+  if [ "$entry" != "$wrapper_bin" ]; then
+    resolved=$(command -p realpath -- "$candidate" 2>/dev/null) || resolved=
+    if [ -f "$resolved" ] && [ -x "$resolved" ]; then
+      # Reject scripts and symlinks to wrappers without executing candidates.
+      magic=$(command -p od -An -tx1 -N4 "$resolved" 2>/dev/null)
+      set -- $magic
+      case "$*" in
+        ('7f 45 4c 46'|'ce fa ed fe'|'cf fa ed fe'|'fe ed fa ce'|'fe ed fa cf'|'ca fe ba be'|'be ba fe ca'|'ca fe ba bf'|'bf ba fe ca')
+          printf '%s\\n' "$candidate"
+          exit 0 ;;
+      esac
+    fi
   fi
-  case $remaining in *:*) remaining=\${remaining#*:} ;; *) break ;; esac
+  case $remaining in (*:*) remaining=\${remaining#*:} ;; (*) exit 0 ;; esac
 done
-PATH=$search_path
-export PATH
+`;
+
+/** A PATH tool contract: local probes, shared history, and partial-clone fetches/hydration. */
+export const AGENT_GIT_SHIM = `
+if [ ! -x "$git" ]; then
+  wrapper_bin=\${0%/*}
+  git=$(${RESOLVE_AGENT_GIT})
+  if [ -z "$git" ]; then
+    echo 'OpenClaw: no native Git executable found. Install Git, then retry.' >&2
+    exit 127
+  fi
+fi
 is_probe() {
   prepare_history=
   no_lazy_fetch=
@@ -115,23 +134,23 @@ query_repository() {
   done
   shift "$tail_count"
   case $query in
-    projection) git "$@" config --bool --get openclaw.projection 2>/dev/null ;;
+    projection) "$git" "$@" config --bool --get openclaw.projection 2>/dev/null ;;
     shared)
-      common=$(git "$@" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+      common=$("$git" "$@" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
       for linked in "$common"/worktrees/*/gitdir; do
         if [ -f "$linked" ]; then return 0; fi
       done
       return 1 ;;
     blobless)
-      remote_settings=$(git "$@" config --get-regexp '^(remote\\..*\\.(url|promisor|partialclonefilter)|log[.]follow)$' 2>/dev/null) || return 1
+      remote_settings=$("$git" "$@" config --get-regexp '^(remote\\..*\\.(url|promisor|partialclonefilter)|log[.]follow)$' 2>/dev/null) || return 1
       remote_settings="
 $remote_settings
 "
       case $remote_settings in *'.partialclonefilter blob:none
 '*) ;; *) return 1 ;; esac ;;
-    log_follow) git "$@" config --bool --get log.follow 2>/dev/null ;;
+    log_follow) "$git" "$@" config --bool --get log.follow 2>/dev/null ;;
     register_remotes)
-      remotes=$(git "$@" remote) || return 1
+      remotes=$("$git" "$@" remote) || return 1
       fetch_cwd=
       if [ -n "$fetch_remote" ] && [ "$multiple_fetch" != 1 ]; then
         case "
@@ -140,7 +159,7 @@ $remotes
 $fetch_remote
 "*) ;;
           *)
-            if ! git "$@" config --get-all "remotes.$fetch_remote" >/dev/null 2>&1; then
+            if ! "$git" "$@" config --get-all "remotes.$fetch_remote" >/dev/null 2>&1; then
               remotes="$remotes
 $fetch_remote"
             fi ;;
@@ -148,16 +167,16 @@ $fetch_remote"
       fi
       while IFS= read -r remote; do
         [ -n "$remote" ] || continue
-        url=$(git "$@" ls-remote --get-url "$remote") || return 1
+        url=$("$git" "$@" ls-remote --get-url "$remote") || return 1
         case $url in /*) ;; *)
           # A colon is an SSH separator only before the first slash.
           case \${url%%:*} in "$url"|*/*)
             if [ -z "$fetch_cwd" ]; then
               if [ "$command" = pull ]; then
-                fetch_cwd=$(git "$@" rev-parse --show-toplevel) || return 1
+                fetch_cwd=$("$git" "$@" rev-parse --show-toplevel) || return 1
               else
                 # Let Git own -C, explicit gitdirs and bare-repository setup.
-                fetch_cwd=$(git "$@" -c 'alias.openclaw-fetch-cwd=!pwd -P' openclaw-fetch-cwd) || return 1
+                fetch_cwd=$("$git" "$@" -c 'alias.openclaw-fetch-cwd=!pwd -P' openclaw-fetch-cwd) || return 1
               fi
             fi
             raw_url=$url
@@ -169,7 +188,7 @@ remote.$remote.url "}
 "*} ;;
             esac
             # Preserve other fetch/push URLs while anchoring the first fetch URL.
-            git "$@" config --local --fixed-value --replace-all "remote.$remote.url" "$fetch_cwd/$url" "$raw_url" || return 1 ;;
+            "$git" "$@" config --local --fixed-value --replace-all "remote.$remote.url" "$fetch_cwd/$url" "$raw_url" || return 1 ;;
           esac ;;
         esac
         # Native multi/group selection rejects --filter; keep each remote's promises usable later.
@@ -185,16 +204,16 @@ $key "}
 "*}
             [ "$actual" = "$value" ] && continue ;;
           esac
-          git "$@" config --local "$key" "$value" || return 1
+          "$git" "$@" config --local "$key" "$value" || return 1
         done
       done <<EOF
 $remotes
 EOF
       ;;
-    objects) GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= exec git "$@" cat-file --batch-check='%(objectname) %(objecttype)' 2>/dev/null ;;
+    objects) GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= exec "$git" "$@" cat-file --batch-check='%(objectname) %(objecttype)' 2>/dev/null ;;
     missing_blobs)
       # Unlike cat-file on older Git, missing=print never hydrates these blob roots.
-      present=$(GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" rev-list --objects --no-walk --ignore-missing --missing=print --stdin 2>/dev/null <<EOF
+      present=$(GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= "$git" "$@" rev-list --objects --no-walk --ignore-missing --missing=print --stdin 2>/dev/null <<EOF
 $missing
 EOF
       ) || return 1
@@ -204,7 +223,7 @@ EOF
         { seen[$1]=1 }
       '
       ;;
-    resolve) GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= exec git "$@" rev-parse --verify --end-of-options "$revision" 2>/dev/null ;;
+    resolve) GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= exec "$git" "$@" rev-parse --verify --end-of-options "$revision" 2>/dev/null ;;
     revisions)
       marker='HEAD^{commit}'
       while :; do
@@ -214,18 +233,18 @@ EOF
       while IFS= read -r expression; do set -- "$@" "$expression"; done <<EOF
 $revisions
 EOF
-      resolved=$(GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" "$marker" 2>/dev/null) || return 1
+      resolved=$(GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= "$git" "$@" "$marker" 2>/dev/null) || return 1
       [ "\${resolved##*
 }" = "$marker" ] ;;
     revision)
       if [ -z "$revision_marker" ]; then
-        revision_format=$(git "$@" rev-parse --show-object-format 2>/dev/null) || return 1
+        revision_format=$("$git" "$@" rev-parse --show-object-format 2>/dev/null) || return 1
         case $revision_format in
           sha256) revision_marker=0000000000000000000000000000000000000000000000000000000000000000 ;;
           *) revision_marker=0000000000000000000000000000000000000000 ;;
         esac
       fi
-      resolved=$(GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" rev-parse --revs-only --no-flags --end-of-options "$revision" "$revision_marker" 2>/dev/null) || return 1
+      resolved=$(GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= "$git" "$@" rev-parse --revs-only --no-flags --end-of-options "$revision" "$revision_marker" 2>/dev/null) || return 1
       # A path consumes the marker too; a valid revision leaves it as the last ID.
       [ "\${resolved##*
 }" = "$revision_marker" ] ;;
@@ -234,7 +253,7 @@ EOF
       # A have commit implies its blobs exist. For known missing blobs that can
       # suppress explicit wants; blob-only roots need no history negotiation.
       [ "$query" != fetch_blobs ] || negotiation=noop
-      GIT_NO_LAZY_FETCH=1 git "$@" -c fetch.negotiationAlgorithm=$negotiation fetch --quiet --filter=blob:none --no-tags --no-write-fetch-head --no-auto-maintenance --recurse-submodules=no origin --stdin <<EOF
+      GIT_NO_LAZY_FETCH=1 "$git" "$@" -c fetch.negotiationAlgorithm=$negotiation fetch --quiet --filter=blob:none --no-tags --no-write-fetch-head --no-auto-maintenance --recurse-submodules=no origin --stdin <<EOF
 $missing
 EOF
       ;;
@@ -260,7 +279,7 @@ EOF
       while IFS= read -r arg; do [ -z "$arg" ] || set -- "$@" "$arg"; done <<EOF
 $blob_paths
 EOF
-      { GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" 2>/dev/null && echo complete; } | LC_ALL=C awk -v query="$query" '
+      { GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= "$git" "$@" 2>/dev/null && echo complete; } | LC_ALL=C awk -v query="$query" '
         function add(oid, mode) {
           if (mode == "160000" || oid ~ /^0+$/ || seen[oid]++) return
           if (++count > 2048 || (bytes += length(oid) + 1) > 131072) exit
@@ -624,7 +643,7 @@ if ! is_probe "$@"; then
     prepare_commits "$@" || exit 2
     case $verb in log|blame|show|diff|grep) prepare_blobs "$@" ;; esac
     if [ "$prepared_blobs" = 1 ]; then
-      GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@"
+      GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= "$git" "$@"
       result=$?
       [ "$result" = 0 ] && exit 0
       [ "$blob_verb" = grep ] && [ "$result" = 1 ] && exit 1
@@ -648,12 +667,12 @@ if ! is_probe "$@"; then
     while [ "$tail_count" -gt 0 ]; do
       set -- "$@" "$1"; shift; tail_count=$((tail_count - 1))
     done
-    exec git "$@"
+    exec "$git" "$@"
   fi
-  exec git "$@"
+  exec "$git" "$@"
 fi
 # Older Git ignores GIT_NO_LAZY_FETCH; transport denial still keeps probes offline.
-GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@"
+GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= "$git" "$@"
 result=$?
 if [ "$result" -ne 0 ] && { [ "$result" -ne 1 ] || [ "$probe_kind" != ancestor ]; }; then
   echo 'OpenClaw: Git probe ran offline. If the commit is missing, fetch explicitly with a known local common tip: git fetch origin <sha> --negotiation-tip=origin/main; or use gh api repos/<owner>/<repo>/commits/<sha> (compare/<base>...<head> for ancestry). Then retry. Content reads such as git show still hydrate blobs normally.' >&2

@@ -3,32 +3,25 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { retireSqliteSnapshotPayload } from "./sqlite-readonly-location-cleanup.js";
+import type { SqliteSnapshotReclamation } from "./sqlite-readonly-worker-protocol.js";
 import {
   beginSqliteSnapshotRetirement,
   SQLITE_SNAPSHOT_LEGACY_AGE_MS,
   SQLITE_SNAPSHOT_PREFIX,
 } from "./sqlite-snapshot-retirement.js";
 
-export type SqliteSnapshotReclamation = { removed: number; bytes: number; skipped: number };
 const GRACE_MS = 15 * 60_000;
 const NAMESPACE = /^sqlite-[a-f0-9]{24}$/u;
 
 /** Updater roots stay offline; copies outside this namespace are reclaimed only after a day idle. */
-export async function reclaimAbandonedSqliteSnapshots(
-  signal: AbortSignal,
-): Promise<SqliteSnapshotReclamation> {
+export async function reclaimSqliteSnapshotInstallationInProcess(): Promise<SqliteSnapshotReclamation> {
   const root = resolvePrivateSqliteSnapshotStagingRoot();
   const result = { removed: 0, bytes: 0, skipped: 0 };
   if (!NAMESPACE.test(path.basename(root))) {
     return result;
   }
   const sweep = async (directory: string) => {
-    // Avoid a native worker when a root has never needed a private copy.
-    if (!(await hasSnapshotEntries(directory, signal))) {
-      return;
-    }
-    const { runSqliteReadOnlyWorkerOnce } = await import("./sqlite-readonly-worker.js");
-    const swept = await runSqliteReadOnlyWorkerOnce(directory, { mode: "staging-sweep", signal });
+    const swept = await reclaimSnapshotDirectory(directory, root);
     result.removed += swept.removed;
     result.bytes += swept.bytes;
     result.skipped += swept.skipped;
@@ -46,9 +39,6 @@ export async function reclaimAbandonedSqliteSnapshots(
       }
     }
     for (const directory of [...siblings, parent]) {
-      if (signal.aborted) {
-        break;
-      }
       await sweep(directory).catch(() => {
         result.skipped++;
       });
@@ -59,24 +49,10 @@ export async function reclaimAbandonedSqliteSnapshots(
   return result;
 }
 
-async function hasSnapshotEntries(directory: string, signal: AbortSignal): Promise<boolean> {
-  for await (const entry of await fs.promises.opendir(directory)) {
-    if (signal.aborted) {
-      return false;
-    }
-    if (entry.isDirectory() && entry.name.startsWith(SQLITE_SNAPSHOT_PREFIX)) {
-      return true;
-    }
-    await setImmediate();
-  }
-  return false;
-}
-
-/** The native worker holds every existing lifetime token across bounded payload deletion. */
-export async function reclaimSqliteSnapshotsInProcess(
+async function reclaimSnapshotDirectory(
   root: string,
+  own: string,
 ): Promise<SqliteSnapshotReclamation> {
-  const own = resolvePrivateSqliteSnapshotStagingRoot();
   const stat = fs.lstatSync(root);
   // Accept this installation's namespace, a sibling namespace, or their shared parent.
   const stranded =

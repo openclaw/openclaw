@@ -1,9 +1,9 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
-import { clearChatHistory } from "./chat-history-actions.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { preparePaneSessionHandoff } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -17,6 +17,40 @@ type SessionOperation = {
   isCurrent: () => boolean;
   onSessionChange: (nextSessionKey: string) => boolean | void;
 };
+
+export type HarnessUpdateSessionTarget = {
+  agentId: string;
+  /** The failed conversation; an incognito source keeps the recovery session incognito. */
+  sourceSessionKey: string;
+  /** The failed conversation's effective model, as `provider/model`. */
+  model: string | undefined;
+  create: ApplicationContext["sessions"]["createResult"];
+  open: (key: string) => boolean | void;
+  signal: AbortSignal;
+  isCurrent: () => boolean;
+};
+
+export async function createHarnessUpdateSession(
+  target: HarnessUpdateSessionTarget,
+  summary: string,
+) {
+  if (target.signal.aborted || !target.isCurrent()) {
+    return false;
+  }
+  const result = await target.create(
+    {
+      agentId: target.agentId,
+      ...(isIncognitoSessionKey(target.sourceSessionKey) ? { incognito: true } : {}),
+      ...(target.model ? { model: target.model, agentRuntime: "openclaw" as const } : {}),
+      message: t("chat.recovery.harnessUpdatePrompt", { summary }),
+    },
+    { signal: target.signal },
+  );
+  if (!result || target.signal.aborted || !target.isCurrent()) {
+    return false;
+  }
+  return target.open(result.key) !== false;
+}
 
 export async function createCapturedChatSession({
   state,
@@ -44,8 +78,14 @@ export async function createCapturedChatSession({
   if (signal.aborted || !isCurrent() || state.sessionKey !== previousSessionKey) {
     return false;
   }
+  if (!expiredIncognito && !(await confirmReset())) {
+    return false;
+  }
+  const { clearChatHistory } = preservesBoard
+    ? await import("./chat-history-clear.runtime.ts")
+    : {};
   if (
-    (!expiredIncognito && !(await confirmReset())) ||
+    signal.aborted ||
     !isCurrent() ||
     !areUiSessionKeysEquivalent(state.sessionKey, previousSessionKey)
   ) {
@@ -62,7 +102,7 @@ export async function createCapturedChatSession({
   }
 
   setChatError(state, null);
-  if (preservesBoard) {
+  if (clearChatHistory) {
     const resetResult = await clearChatHistory(state);
     return resetResult !== "failed";
   }

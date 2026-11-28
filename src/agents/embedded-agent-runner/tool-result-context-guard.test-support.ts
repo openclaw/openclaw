@@ -4,7 +4,7 @@ import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { installToolResultContextGuard } from "./tool-result-context-guard.js";
 
-export const CONTEXT_LIMIT_TRUNCATION_NOTICE = "more characters truncated";
+export const CONTEXT_LIMIT_TRUNCATION_NOTICE = "chars omitted";
 
 export function makeUser(text: string): AgentMessage {
   return castAgentMessage({ role: "user", content: text, timestamp: Date.now() });
@@ -54,31 +54,8 @@ export async function applyGuardToContext(
 
 export function expectOpenClawTruncation(text: string): void {
   expect(text).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
-  expect(text).toMatch(
-    /\[\.\.\. \d+ more characters truncated; rerun with narrower args if needed\]$/,
-  );
+  expect(text).toMatch(/\[\.\.\. \d+ chars omitted\]/);
   expect(text).not.toContain("[compacted: tool output removed to free context]");
   expect(text).not.toContain("[compacted: tool output trimmed to free context]");
   expect(text).not.toContain("[truncated: output exceeded context limit]");
-}
-
-export function sumToolResultTextChars(messages: AgentMessage[]): number {
-  let sum = 0;
-  for (const message of messages) {
-    const content = (message as { content?: unknown }).content;
-    if (message.role !== "toolResult" || !Array.isArray(content)) {
-      continue;
-    }
-    for (const block of content) {
-      if (
-        block &&
-        typeof block === "object" &&
-        block.type === "text" &&
-        typeof block.text === "string"
-      ) {
-        sum += block.text.length;
-      }
-    }
-  }
-  return sum;
 }

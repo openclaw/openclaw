@@ -57,10 +57,10 @@ function renderSummaryValue(value: unknown): string {
 }
 
 function renderObjectSummary(payload: unknown, opts: FormatOpts): string {
-  if (!payload || typeof payload !== "object") {
+  const obj = asOptionalObjectRecord(payload);
+  if (!obj) {
     return sanitizeTerminalText(String(payload));
   }
-  const obj = payload as Record<string, unknown>;
   const keys = Object.keys(obj);
   if (keys.length === 0) {
     return theme.muted("(empty)");
@@ -133,10 +133,10 @@ function renderMessageList(
 }
 
 function renderPaginationHint(payload: unknown, muted: (text: string) => string): string | null {
-  if (!payload || typeof payload !== "object") {
+  const obj = asOptionalObjectRecord(payload);
+  if (!obj) {
     return null;
   }
-  const obj = payload as Record<string, unknown>;
   if (
     obj.hasMore === true ||
     (typeof obj.nextBatch === "string" && obj.nextBatch) ||
@@ -288,10 +288,10 @@ export function formatMessageCliText(
                 if (typeof u === "string") {
                   return u;
                 }
-                if (!u || typeof u !== "object") {
+                const user = asOptionalObjectRecord(u);
+                if (!user) {
                   return "";
                 }
-                const user = u as Record<string, unknown>;
                 return firstNonemptyString(user, "tag", "username", "id");
               })
               .filter(Boolean)

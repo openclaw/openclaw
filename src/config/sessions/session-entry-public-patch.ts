@@ -14,6 +14,7 @@ function generationValidPrivateFieldsForSameSession(
     return undefined;
   }
   const state: Partial<InternalSessionEntry> = {
+    ...(existingEntry.titleFallbackReady ? { titleFallbackReady: true } : {}),
     ...(existingEntry.localWorkspaceHandoff
       ? { localWorkspaceHandoff: existingEntry.localWorkspaceHandoff }
       : {}),
@@ -26,6 +27,9 @@ function generationValidPrivateFieldsForSameSession(
       : {}),
     ...(existingEntry.activeWriterRunId !== undefined
       ? { activeWriterRunId: existingEntry.activeWriterRunId }
+      : {}),
+    ...(existingEntry.lifecycleRestartScope !== undefined
+      ? { lifecycleRestartScope: existingEntry.lifecycleRestartScope }
       : {}),
     ...(existingEntry.lifecycleRunId !== undefined
       ? { lifecycleRunId: existingEntry.lifecycleRunId }

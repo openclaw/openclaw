@@ -14,6 +14,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type, type Static } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import type { GuardedFetchResult } from "../../infra/net/fetch-guard.js";
 import { SsrFBlockedError, type LookupFn } from "../../infra/net/ssrf.js";
 import { logWarn } from "../../logger.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
@@ -28,7 +29,6 @@ import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { isRecord } from "../../utils.js";
 import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
 import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
-import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.types.js";
 import { stringEnum } from "../schema/string-enum.js";
 import {
@@ -49,6 +49,7 @@ import {
   htmlToMarkdown,
   markdownToText,
   truncateWebFetchText,
+  sanitizeWebFetchUrl,
   type ExtractMode,
 } from "./web-fetch-utils.js";
 import {
@@ -315,18 +316,6 @@ function throwIfFetchAborted(signal: AbortSignal | undefined): void {
   throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
 
-// Repair model-injected scheme/authority whitespace; preserve path/query whitespace
-// for the URL parser to percent-encode.
-function sanitizeWebFetchUrl(raw: string): string {
-  let end = raw.length;
-  while (end > 0 && raw.charCodeAt(end - 1) <= 0x20) {
-    end -= 1;
-  }
-  const trimmed = raw.slice(0, end).replace(/^\s+/, "");
-  const repaired = trimmed.replace(/^(https?:\/\/)\s+/i, "$1");
-  return repaired.replace(/^(https?:\/\/[^/?#\s]+)\s+$/i, "$1");
-}
-
 async function buildWebFetchPayload(params: {
   providerId?: string;
   payload: unknown;
@@ -393,7 +382,7 @@ async function buildWebFetchPayload(params: {
         spillOutput,
       );
     } catch (error) {
-      spillOutput.assertCurrent?.();
+      throwIfFetchAborted(spillOutput.signal);
       if (!spillOutput.sandbox) {
         throw error;
       }
@@ -493,7 +482,7 @@ export function createWebFetchTool(options?: {
   sandboxRoot?: string;
   sandboxFsBridge?: SandboxFsBridge;
   agentSessionKey?: string;
-  assertInvocationCurrent?: () => void;
+  spillOwner?: PrivateTempFileOptions["owner"];
   runtimeWebFetch?: RuntimeWebFetchMetadata;
   lateBindRuntimeConfig?: boolean;
   lookupFn?: LookupFn;
@@ -507,7 +496,9 @@ export function createWebFetchTool(options?: {
   // another caller fetches the same URL with identical network settings.
   const cacheScope = options?.sandboxed
     ? sha256Hex(JSON.stringify([options.agentSessionKey ?? randomUUID(), options.sandboxRoot]))
-    : undefined;
+    : options?.spillOwner
+      ? sha256Hex(JSON.stringify([options.spillOwner.agentId, options.spillOwner.sessionKey]))
+      : undefined;
   const tool: AnyAgentTool = {
     label: "Web Fetch",
     name: "web_fetch",
@@ -516,12 +507,6 @@ export function createWebFetchTool(options?: {
     parameters: WebFetchSchema,
     outputSchema: WebFetchOutputSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
-      const assertSourceCurrent = captureAgentToolSourceExecutionGuard(signal);
-      const assertCurrent = () => {
-        assertSourceCurrent();
-        options?.assertInvocationCurrent?.();
-      };
-      assertCurrent();
       const {
         config,
         preferRuntimeProviders,
@@ -611,11 +596,10 @@ export function createWebFetchTool(options?: {
           ? { ...executionFetch?.ssrfPolicy, hostnameAllowlist }
           : executionFetch?.ssrfPolicy;
         const lookupFn = options?.lookupFn;
-        const fetchOutput = {
+        const fetchOutput: PrivateTempFileOptions = {
           ...(options?.sandboxed
             ? { sandbox: { root: options.sandboxRoot, bridge: options.sandboxFsBridge } }
-            : {}),
-          assertCurrent,
+            : { owner: options?.spillOwner }),
           signal,
         };
         const fetchWebPayload = async (): Promise<Record<string, unknown>> => {
@@ -652,12 +636,11 @@ export function createWebFetchTool(options?: {
             });
           }
 
-          let res: Response;
-          let release: () => Promise<void>;
+          let directFetch: GuardedFetchResult;
           let finalUrl = url;
           try {
             const { fetchWithWebToolsNetworkGuard } = await loadWebGuardedFetch();
-            const result = await fetchWithWebToolsNetworkGuard({
+            directFetch = await fetchWithWebToolsNetworkGuard({
               url,
               maxRedirects,
               timeoutSeconds,
@@ -676,9 +659,7 @@ export function createWebFetchTool(options?: {
                 },
               },
             });
-            res = result.response;
-            finalUrl = result.finalUrl;
-            release = result.release;
+            finalUrl = directFetch.finalUrl;
           } catch (error) {
             if (error instanceof SsrFBlockedError || signal?.aborted) {
               throw error;
@@ -690,6 +671,7 @@ export function createWebFetchTool(options?: {
             throw error;
           }
 
+          const { response: res, release, signal: extractionSignal = signal } = directFetch;
           try {
             if (!res.ok) {
               throwIfFetchAborted(signal);
@@ -754,6 +736,7 @@ export function createWebFetchTool(options?: {
                 url: finalUrl,
                 extractMode,
                 config,
+                signal: extractionSignal,
               });
               if (!extracted?.text) {
                 let payload: Record<string, unknown> | null = null;
@@ -869,7 +852,7 @@ export function createWebFetchTool(options?: {
                   signal,
                 })
               )?.type === "file";
-            fetchOutput.assertCurrent?.();
+            throwIfFetchAborted(signal);
             if (available) {
               return { ...cached.value, cached: true };
             }
@@ -881,7 +864,6 @@ export function createWebFetchTool(options?: {
           // Publish only after guard release: cancellation or cleanup failure must not
           // leave a successful cache entry for a call that never returned its content.
           throwIfFetchAborted(signal);
-          fetchOutput.assertCurrent?.();
           // Retry a failed sandbox save on the next call; never cache an unavailable spill.
           if (!fetchOutput.sandbox || !payload.truncated || payload.spill) {
             writeCache(FETCH_CACHE, cacheKey, payload, cacheTtlMs);

@@ -1,5 +1,6 @@
 import { isPathInsideWithRealpath } from "@openclaw/fs-safe/path";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { getAgentToolActionDescriptor } from "../agent-tool-metadata.js";
 import type { OpenClawCodingToolsOptions } from "../agent-tools.options.js";
@@ -8,10 +9,15 @@ import {
   isCodeModeControlTool,
 } from "../code-mode-control-tools.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { getPreparedModelRuntimePolicyConfigReader } from "../prepared-model-runtime-auth.js";
 import { normalizeToolPolicyName } from "../tool-policy-shared.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
-import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+import type { AgentHarnessHostAttempt } from "./host-capability-internal.types.js";
+import type {
+  AgentHarnessHostCapabilities,
+  HostToolSurfaceOptions,
+} from "./host-capability-types.js";
 import { cloneHostSnapshot as cloneSnapshot } from "./host-snapshot.js";
 
 const WORKSPACE_TOOL_NAMES = Object.freeze([
@@ -184,4 +190,19 @@ export function captureRequiredWorkspaceToolFloor(
     };
   };
   return { root, apply };
+}
+
+/** Capture admission policy before a plugin can replace the tool surface config. */
+export function captureHostToolPolicyConfigReader(attempt: AgentHarnessHostAttempt) {
+  const policyConfig = attempt.config;
+  const requiredWorkspace = attempt.requireWorkspaceOnly === true;
+  const admittedPolicyReader = getPreparedModelRuntimePolicyConfigReader(
+    attempt.preparedModelRuntime,
+  );
+  const readPolicyConfig =
+    admittedPolicyReader ?? (policyConfig ? createRuntimeConfigReader(policyConfig) : undefined);
+  return (options: HostToolSurfaceOptions) =>
+    admittedPolicyReader || requiredWorkspace || !options.config || options.config === policyConfig
+      ? readPolicyConfig
+      : createRuntimeConfigReader(options.config);
 }

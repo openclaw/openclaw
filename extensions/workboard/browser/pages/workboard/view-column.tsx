@@ -63,6 +63,7 @@ export function WorkboardColumn(input: {
   workboard: WorkboardProps;
   status: WorkboardStatus;
   cards: WorkboardCard[];
+  unfilteredCards: WorkboardCard[];
   cardRefs?: ReturnType<typeof createElementRefs<HTMLElement>>;
   menuCardId?: string;
   options?: {
@@ -101,7 +102,7 @@ export function WorkboardColumn(input: {
   const hasHiddenCards = createMemo(
     () =>
       input.cards.length === 0 &&
-      state().cards.some(
+      input.unfilteredCards.some(
         (card) =>
           card.status === input.status &&
           (state().showArchived || isActiveWorkboardCard(card)) &&
@@ -282,6 +283,7 @@ export function WorkboardColumn(input: {
         void moveWorkboardCard({
           ...workboardMutationContext(input.workboard),
           cardId: card.id,
+          expectedUpdatedAt: card.updatedAt,
           status: input.status,
           beforeCardId,
           boardFilter: input.options?.boardFilter ?? state().boardFilter,
@@ -453,7 +455,7 @@ export function WorkboardColumn(input: {
                           >
                             <WorkboardCardView
                               workboard={input.workboard}
-                              card={card()}
+                              card={state().inlinePreviews.get(card()) ?? card()}
                               cardRefs={input.cardRefs}
                               surface={surface()}
                             />

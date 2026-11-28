@@ -5,6 +5,7 @@ import { canonicalizeConfiguredMcpServer } from "./mcp-config-normalize.js";
 import { replaceConfigFile } from "./mutate.js";
 import { redactSensitiveArgv } from "./redact-argv.js";
 import { REDACTED_SENTINEL, redactConfigObject, restoreRedactedValues } from "./redact-snapshot.js";
+import { hasManagedRuntimeConfigWriteOwner } from "./runtime-snapshot.js";
 import { buildConfigSchemaCore } from "./schema.js";
 import type { McpServerToolFilterConfig } from "./types.mcp.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -43,6 +44,8 @@ type McpConfigMutationHook = (mutation: McpConfigMutation) => Promise<void>;
 type McpConfigWriteAuthority = {
   assertCurrent?: () => void;
   assertCurrentAsync?: () => Promise<void>;
+  /** Prepare locally, but let the running Gateway own persistence and credential cleanup. */
+  commit?: (change: { previous: OpenClawConfig; next: OpenClawConfig }) => Promise<unknown>;
 };
 
 function normalizeToolSelectionList(value: readonly string[] | undefined): string[] | undefined {
@@ -265,22 +268,30 @@ async function mutateConfiguredMcpServer(
     };
   }
   // Validation materializes runtime defaults; persist only the source candidate.
-  const committed = await replaceConfigFile({
-    sourceConfig: next,
-    baseHash: loaded.baseHash,
-    writeOptions: {
-      ...writeOptions,
-      assertCurrent: () => {
-        writeOptions.assertCurrent?.();
-        assertCurrent?.();
+  let committedConfig: OpenClawConfig;
+  if (params.commit) {
+    await params.commit({ previous: snapshot.sourceConfig, next });
+    committedConfig = next;
+  } else {
+    const committed = await replaceConfigFile({
+      sourceConfig: next,
+      baseHash: loaded.baseHash,
+      writeOptions: {
+        ...writeOptions,
+        assertCurrent: () => {
+          writeOptions.assertCurrent?.();
+          assertCurrent?.();
+        },
+        beforeCommit: async () => {
+          await writeOptions.beforeCommit?.();
+          await assertCurrentAsync?.();
+        },
       },
-      beforeCommit: async () => {
-        await writeOptions.beforeCommit?.();
-        await assertCurrentAsync?.();
-      },
-    },
-  });
-  if (onCommitted) {
+    });
+    committedConfig = committed.nextConfig;
+  }
+  // A running Gateway reconciles every committed writer, not only this facade.
+  if (onCommitted && !params.commit && !hasManagedRuntimeConfigWriteOwner(loaded.path)) {
     const previous = loaded.mcpServers[name];
     const nextServer = servers[name];
     await onCommitted({
@@ -292,7 +303,7 @@ async function mutateConfiguredMcpServer(
   return {
     ok: true,
     path: loaded.path,
-    config: committed.nextConfig,
+    config: committedConfig,
     mcpServers: servers,
     ...success,
   };
@@ -312,6 +323,7 @@ async function updateConfiguredMcpServerTools(
       name: params.name,
       assertCurrent: params.assertCurrent,
       assertCurrentAsync: params.assertCurrentAsync,
+      commit: params.commit,
       errorLabel: "tool selection update",
       update: (server) => {
         if (params.tools === null) {
@@ -350,6 +362,7 @@ async function updateConfiguredMcpServer(
       name: params.name,
       assertCurrent: params.assertCurrent,
       assertCurrentAsync: params.assertCurrentAsync,
+      commit: params.commit,
       errorLabel: "configure",
       update: (server) => canonicalizeConfiguredMcpServer(params.update(server)),
     },

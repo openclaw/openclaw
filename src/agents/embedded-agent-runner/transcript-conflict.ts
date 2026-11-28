@@ -6,7 +6,7 @@ import { hasOutboundDeliveryEvidence, type AgentDeliveryEvidence } from "./deliv
 import { observeReplayMetadata, type EmbeddedRunReplayState } from "./replay-state.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
-export function isTranscriptConflictReplaySafe(
+export function isEmbeddedRunReplaySafe(
   previous: EmbeddedRunReplayState,
   attempt: AgentDeliveryEvidence &
     Partial<Pick<EmbeddedRunAttemptResult, "replayMetadata" | "clientToolCalls">>,
@@ -29,8 +29,17 @@ export class ReplaySafeTranscriptConflictError extends Error {
   }
 }
 
-export function isReplaySafeTranscriptConflict(error: unknown): boolean {
-  return collectErrorGraphCandidates(error, readErrorCauses).some(
-    (candidate) => candidate instanceof ReplaySafeTranscriptConflictError,
+/** Cancellation after the execution owner positively proved the whole run effect-free. */
+export class ReplaySafeRunAbortError extends Error {
+  constructor(cause: Error) {
+    super(cause.message, { cause });
+    this.name = cause.name;
+  }
+}
+
+export function findReplaySafeRunAbort(error: unknown): ReplaySafeRunAbortError | undefined {
+  return collectErrorGraphCandidates(error, readErrorCauses).find(
+    (candidate): candidate is ReplaySafeRunAbortError =>
+      candidate instanceof ReplaySafeRunAbortError,
   );
 }

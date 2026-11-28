@@ -153,6 +153,7 @@ it.each(["tailscale", "onetimepin"])("gates %s privileged dispatch", async (prov
               },
               state: { authResult, authMethod: authResult.method, role: "operator" },
               ownerProfileExpected: false,
+              connectionScopes: ["operator.read"],
               authenticatedUserId: authResult.user,
               resolveAuthenticatedGitHubIdentity: createAuthenticatedGitHubIdentitySync({
                 authResult,

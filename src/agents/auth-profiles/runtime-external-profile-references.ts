@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
@@ -169,5 +170,5 @@ export function mergeRuntimeExternalProfileReferences(params: {
       : undefined;
   merged.runtimeExternalProfileIdsAuthoritative =
     params.existing.runtimeExternalProfileIdsAuthoritative === true ? true : undefined;
-  return merged;
+  return omitUndefinedFields(merged);
 }

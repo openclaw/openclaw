@@ -6,7 +6,7 @@ import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import { prepareCliHistoryBoundary } from "../agents/cli-runner/history-boundary.js";
+import { admitCliHistoryAccount } from "../agents/cli-runner/history-boundary.js";
 import { loadCliSessionPromptContext } from "../agents/cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
 import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
@@ -29,7 +29,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -50,7 +49,6 @@ import {
 } from "../infra/agent-events.js";
 import {
   captureAgentRunTerminalPersistence,
-  clearAgentRunTerminalWriteContext,
   drainAgentRunTerminalWrites,
 } from "../infra/agent-run-terminal-writes.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
@@ -520,8 +518,8 @@ describe("durable pre-reply run failure", () => {
             : kind === "route_unavailable"
               ? "⚠️ The provider cannot serve this model right now. Choose another model."
               : kind === "auth_permanent"
-                ? "⚠️ The AI service isn't accepting your login. Sign in again under Models in the Control UI or run `openclaw configure`."
-                : "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
+                ? "⚠️ The AI service isn't accepting your login. Sign in again under Models in the OpenClaw app or run `openclaw configure`."
+                : "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.";
         const canonicalCopy = renderAssistantRequestFailureCopy({
           reason,
           code,
@@ -593,7 +591,7 @@ describe("durable pre-reply run failure", () => {
         openclawRunError: {
           runId,
           summary:
-            "⚠️ The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
+            "⚠️ The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the OpenClaw app.",
         },
       });
       expect(JSON.stringify(visible)).not.toContain("PRIVATEPROVIDERDETAIL");
@@ -866,14 +864,11 @@ async function createCliHistoryFixture() {
     timeoutMs: 1_000,
   };
   const credential = { type: "token" as const, provider: "test-cli", token: "account-a" };
-  const writer = await prepareCliHistoryBoundary(params, { credential });
-  expect(writer).toBeDefined();
-  runWithCliHistoryWriter(writer, () => {
-    SessionManager.open(scope).appendMessage({
-      role: "user",
-      content: "Prior account-owned request",
-      timestamp: 1_000,
-    });
+  expect((await admitCliHistoryAccount(params, { credential }))?.replaysHistory).toBe(true);
+  SessionManager.open(scope).appendMessage({
+    role: "user",
+    content: "Prior account-owned request",
+    timestamp: 1_000,
   });
   const owner = createSessionLifecyclePersistenceOwner();
   const captured = captureAgentRunTerminalPersistence(cliRunId).writeContext;
@@ -906,13 +901,13 @@ async function createCliHistoryFixture() {
         runId: "next-cli-run",
         admittedRunContext: await next.admit("embedded"),
       };
-      const nextWriter = await prepareCliHistoryBoundary(nextParams, {
+      const admitted = await admitCliHistoryAccount(nextParams, {
         credential: { ...credential, token },
       });
       return await loadCliSessionPromptContext({
         ...nextParams,
         allowRawTranscriptReseed: true,
-        rawTranscriptReseedReason: nextWriter ? "missing-transcript" : "auth-unknown",
+        rawTranscriptReseedReason: admitted?.replaysHistory ? "missing-transcript" : "auth-unknown",
       });
     } finally {
       next.close();
@@ -987,36 +982,20 @@ describe("CLI history through Gateway terminal persistence", () => {
     });
   });
 
-  it.each(["close", "fallback"] as const)(
-    "settles a closed writer but rejects a replaced candidate: %s",
-    async (revoke) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        setRuntimeConfigSnapshot({});
-        const f = await createCliHistoryFixture();
-        const before = await loadTranscriptEvents(f.cliTarget);
-        const pending = f.persist("end");
-        if (revoke === "close") {
-          f.admission.close();
-        } else {
-          clearAgentRunTerminalWriteContext(f.admission.operationalRunInstance);
-        }
-        try {
-          if (revoke === "fallback") {
-            await expect(pending).rejects.toThrow("Terminal write owner changed");
-            expect(await loadTranscriptEvents(f.cliTarget)).toEqual(before);
-          } else {
-            await pending;
-            await f.persist("error");
-            expect(loadSessionEntry(f.cliTarget)?.status).toBe("timeout");
-            expect(await loadTranscriptEvents(f.cliTarget)).toHaveLength(before.length + 1);
-            expect((await f.laterContext("account-a")).reseedMessages).toContainEqual(
-              expect.objectContaining({ role: "user", content: "Prior account-owned request" }),
-            );
-          }
-        } finally {
-          f.admission.close();
-        }
-      });
-    },
-  );
+  it("settles a closed writer", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const f = await createCliHistoryFixture();
+      const before = await loadTranscriptEvents(f.cliTarget);
+      const pending = f.persist("end");
+      f.admission.close();
+      await pending;
+      await f.persist("error");
+      expect(loadSessionEntry(f.cliTarget)?.status).toBe("timeout");
+      expect(await loadTranscriptEvents(f.cliTarget)).toHaveLength(before.length + 1);
+      expect((await f.laterContext("account-a")).reseedMessages).toContainEqual(
+        expect.objectContaining({ role: "user", content: "Prior account-owned request" }),
+      );
+    });
+  });
 });

@@ -5,6 +5,7 @@ import type { TerminalConnection, TerminalSessionInfo } from "./terminal-connect
 import { observeTerminalRestoreInput } from "./terminal-panel-session-boot.ts";
 import type {
   TerminalOperation,
+  TerminalPanelError,
   TerminalPanelSessionTab,
   TerminalRestoreBatch,
 } from "./terminal-panel-session-types.ts";
@@ -35,7 +36,7 @@ type TerminalSessionRecoveryHost = {
   discard: (tab: TerminalPanelSessionTab) => void;
   exited: (tab: TerminalPanelSessionTab) => void;
   setBooting: (booting: boolean) => void;
-  setError: (text: string) => void;
+  setError: (text: string, retryAction?: TerminalPanelError["retryAction"]) => void;
 };
 
 /** Owns saved-session custody until discovery confirms attachment, exit, or a deliberate close. */
@@ -179,7 +180,9 @@ export class TerminalPanelSessionRecovery {
       }
     } catch (error: unknown) {
       if (this.host.isCurrent(operation, restore)) {
-        this.host.setError(`${t("terminal.attachFailed")}: ${formatUiError(error)}`);
+        this.host.setError(`${t("terminal.attachFailed")}: ${formatUiError(error)}`, {
+          kind: "restore",
+        });
         return true;
       }
     } finally {

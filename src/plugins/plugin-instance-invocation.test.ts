@@ -13,10 +13,8 @@ import {
   getPluginRuntimeGatewayRequestScope as getScope,
   withPluginRuntimeGatewayRequestScope,
 } from "./runtime/gateway-request-scope.js";
-import {
-  getPluginRuntimeGenerationRegistry,
-  withPluginRuntimeGenerationScope,
-} from "./runtime/generation-scope.js";
+import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-state.js";
 
 it.each(["ordinary", "consumer"] as const)(
   "admits a %s callback in one independent frame and retains its closure fence",

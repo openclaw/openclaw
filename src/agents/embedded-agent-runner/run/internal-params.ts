@@ -13,7 +13,7 @@ import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-
 import type { ReplyDeliveryFactsObserver } from "../../reply-completion.js";
 import type { BoundAgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.types.js";
+import type { CompactionRequestBudget } from "../../sessions/compaction/preparation.types.js";
 import type { RunToolUsageRecorder } from "../../tool-usage-recorder.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import type { ResolvedRunEntryModelSelection } from "../run-entry.types.js";
@@ -63,6 +63,8 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   }) => Promise<string>;
   /** A recovery checkpoint must not compact away the history it is trying to save. */
   disableCompactionRecovery?: true;
+  /** Reports content deltas from a detached memory flush without exposing them to its parent. */
+  onMemoryFlushModelProgress?: () => void;
   /** Original admitted settings, retained by the host across private runtime selection. */
   joinObservation?: ReplyMessageJoinObservation;
   /** The logical run already invoked model routing before preparing its candidate chain. */
@@ -94,6 +96,8 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   agentHarnessRuntimePreparationHint?: string;
   /** Keep staged setup config and credentials outside configured Gateway ownership. */
   preparedModelRuntimeMode?: "isolated-read-only";
+  /** Setup may initialize missing account catalog facts before its live inference probe. */
+  refreshModelCatalog?: boolean;
   /** Ring-zero tool override, supplied only by the OpenClaw orchestrator. */
   systemAgentTool?: SystemAgentToolOptions;
   /** Gateway-private lifecycle generation selected before command admission. */
@@ -123,6 +127,7 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
     | "onCompactionRequestBudget"
     | "runCleanupSettlement"
     | "joinObservation"
+    | "onMemoryFlushModelProgress"
   > & {
     /** Spawn preference from the exact session entry already captured by run admission. */
     toolUsageRankingSeed?: InternalSessionEntry["toolUsageRankingSeed"];

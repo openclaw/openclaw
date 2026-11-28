@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { FailoverError } from "./failover-error.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
@@ -299,10 +299,9 @@ it.each(["timeout", "model_not_found"] as const)(
 
 it("preserves operator model restrictions for utility fallbacks", async () => {
   failThenAnswer("rate_limit");
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId: "fixture",
     scopes: ["operator.write"],
-    assertCurrent() {},
     modelPolicy: prepareOperatorModelPolicy({
       cfg,
       policy: { allow: ["local/*", "other/*"], deny: ["other/backup"] },
@@ -338,4 +337,29 @@ it("honors cancellation before another utility candidate", async () => {
   });
   await expect(run({ abortSignal: controller.signal })).rejects.toThrow();
   expect(complete).toHaveBeenCalledOnce();
+});
+
+it("stops utility fallbacks when the caller's currency guard cancels the attempt", async () => {
+  // The Activity recap's self-cancel: its guard throws while the caller signal stays live.
+  const cancelled = Object.assign(new Error("Activity recap lifecycle or utility model changed"), {
+    name: "AbortError",
+  });
+  complete.mockImplementation(async (call) => {
+    call.assertCurrent?.();
+    return answer;
+  });
+  const caller = new AbortController();
+  const assertCurrent = () => {
+    throw cancelled;
+  };
+  await expect(run({ abortSignal: caller.signal, assertCurrent })).rejects.toBe(cancelled);
+  expect(complete.mock.calls.map(([call]) => `${call.provider}/${call.model}`)).toEqual([
+    "local/small",
+  ]);
+});
+
+it("keeps utility fallbacks for model failures while the caller is current", async () => {
+  failThenAnswer();
+  await expect(run({ assertCurrent: () => undefined })).resolves.toEqual(answer);
+  expect(complete).toHaveBeenCalledTimes(2);
 });

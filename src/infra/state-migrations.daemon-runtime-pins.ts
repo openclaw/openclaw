@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { resolveStateDir } from "../config/paths.js";
 import {
   completeUnshippedDaemonRuntimePinMigrationAsync,
+  daemonRuntimePinMigrationSourcesMatch,
   type DaemonRuntimePinDatabase,
   readDaemonRuntimePinMigrationReceipt,
   withDaemonRuntimePinStore,
@@ -27,7 +28,7 @@ import { getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
-import { runUpdateSqliteMigrationAsync } from "./update-doctor-migration-attribution.js";
+import { runUpdateSqliteMigrationAsync } from "./update-doctor-migration-context.js";
 
 function writeDaemonRuntimePinMigrationReceipt(
   db: DatabaseSync,
@@ -87,15 +88,34 @@ export function initializeFreshDaemonRuntimePinMigration(env: NodeJS.ProcessEnv)
   );
 }
 
+/** A completed receipt recorded for this state database's source. */
+function daemonRuntimePinMigrationComplete(stateEnv: NodeJS.ProcessEnv, sourceState: string) {
+  const previous = readDaemonRuntimePinMigrationReceipt(stateEnv);
+  return (
+    previous?.phase === "complete" &&
+    daemonRuntimePinMigrationSourcesMatch(previous.source_state, sourceState)
+  );
+}
+
+/**
+ * Whether the runtime pin handoff still has work, read from the pin store's receipt without
+ * creating or locking either store. PostgreSQL state completes its receipt through the store
+ * owner and is not decided here.
+ */
+export function hasDaemonRuntimePinMigrationWork(env: NodeJS.ProcessEnv): boolean {
+  if (isStatePostgres()) {
+    throw new Error("PostgreSQL runtime pin receipts are completed by their store owner.");
+  }
+  return !daemonRuntimePinMigrationComplete(env, resolveOpenClawStateSqlitePath(env));
+}
+
 export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<MigrationMessages> {
   if (await completeUnshippedDaemonRuntimePinMigrationAsync(env)) {
     return { changes: [], warnings: [] };
   }
   const sourceState = resolveOpenClawStateSqlitePath(env);
-  const migrationComplete = (stateEnv: NodeJS.ProcessEnv) => {
-    const previous = readDaemonRuntimePinMigrationReceipt(stateEnv);
-    return previous?.phase === "complete" && previous.source_state === sourceState;
-  };
+  const migrationComplete = (stateEnv: NodeJS.ProcessEnv) =>
+    daemonRuntimePinMigrationComplete(stateEnv, sourceState);
   // A completed handoff needs no offline custody, including while the Gateway runs.
   try {
     if (migrationComplete(env)) {

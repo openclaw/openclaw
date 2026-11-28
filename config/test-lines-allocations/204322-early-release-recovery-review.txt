@@ -1,0 +1,5 @@
+# Early Git release recovery (#204322): regression proof for the review of 9132a642d2f, each red on it:
+# put-back waits out the stop and keeps the release (1), rollback-journal reads with locks (2),
+# slow crash loop gives up at StartLimitBurst (3), record before restart and reset-failed (5),
+# start-lock ownership and the dead-lock race (6), and the original run trigger.
+78

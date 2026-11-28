@@ -28,9 +28,9 @@ describe("formatAssistantErrorText", () => {
       content: [{ type: "text", text: errorMessage }],
     });
   const authInvalidTokenCopy =
-    "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
+    "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.";
   const replyLimitCopy =
-    "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.";
+    "The reply length is set too high for this model. Lower its reply limit in the OpenClaw app settings, or choose another model.";
   const tokenLimitBody = JSON.stringify({
     type: "error",
     error: {
@@ -61,7 +61,7 @@ describe("formatAssistantErrorText", () => {
   it.each([
     [
       '<!DOCTYPE html><html><head><title>Just a moment...</title><link rel="dns-prefetch" href="//chatgpt.com"></head><body><span id="challenge-error-text">Enable JavaScript and cookies to continue</span><script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script></body></html>',
-      "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+      "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
     ],
     ["request ended without sending any chunks", "LLM request timed out."],
     [
@@ -71,11 +71,11 @@ describe("formatAssistantErrorText", () => {
     ["403 <!DOCTYPE html><html><body>Access denied</body></html>", authInvalidTokenCopy],
     [
       "407 Proxy Authentication Required",
-      "Couldn't connect to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+      "Couldn't connect to the AI service. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
     ],
     [
       "Hostname/IP does not match certificate's altnames: Host: api.example.com",
-      "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+      "Couldn't connect securely to the AI service. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
     ],
   ])("formats assistant error: %s", (raw, expected) => {
     expectCopy(raw, expected);
@@ -128,7 +128,7 @@ describe("formatAssistantErrorText", () => {
     ],
     [
       "Error: 521 <!DOCTYPE html><html><body>rate limit</body></html>",
-      "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+      "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
     ],
     [
       "OAuth token refresh failed for openai: invalid_grant. Please try again or re-authenticate.",
@@ -140,7 +140,7 @@ describe("formatAssistantErrorText", () => {
     ],
     [
       'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai)" exceeded hard timeout (120000ms)',
-      "Signing in took too long. Try again in a moment. If it keeps happening, sign in again under Models in the Control UI.",
+      "Signing in took too long. Try again in a moment. If it keeps happening, sign in again under Models in the OpenClaw app.",
     ],
     [
       'Unexpected event order, got message_start before receiving "message_stop"',
@@ -178,7 +178,7 @@ describe("formatAssistantErrorText", () => {
         model: "test-model",
       }),
     ).toBe(
-      "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.",
+      "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow` in your terminal.",
     );
   });
 
@@ -232,7 +232,7 @@ describe("formatAssistantErrorText", () => {
     });
 
     expect(userFacing).toBe(
-      "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
+      "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
     );
     expect(userFacing).not.toContain("opaque-auth-canary");
   });
@@ -302,7 +302,7 @@ describe("formatAssistantErrorText", () => {
   it("uses structured transport codes with a generic provider message", () => {
     expectBothCopies(
       { ...makeAssistantError("Connection error."), errorCode: "ENOTFOUND" },
-      "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+      "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
     );
   });
 
@@ -318,7 +318,7 @@ describe("formatAssistantErrorText", () => {
       '{"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"},"code":401}',
     );
     expect(formatAssistantErrorText(msg, { provider: "openai" })).toBe(
-      "This login doesn't have the access OpenClaw needs. Sign in again under Models in the Control UI.",
+      "This login doesn't have the access OpenClaw needs. Sign in again under Models in the OpenClaw app.",
     );
   });
 
@@ -338,7 +338,7 @@ describe("formatAssistantErrorText", () => {
       content: [],
     });
 
-    expectBothCopies(msg, "This model was not found. Choose another model in the Control UI.");
+    expectBothCopies(msg, "This model was not found. Choose another model in the OpenClaw app.");
   });
 });
 

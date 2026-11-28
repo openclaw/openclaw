@@ -4,7 +4,6 @@ import type { FollowupRun, QueueSettings } from "../auto-reply/reply/queue/types
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
-import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -34,7 +33,7 @@ export function bindSessionControllerSource(
   ) {
     throw new Error("Source binding no longer current");
   }
-  input.sourceAdapter?.authority?.assertCurrent();
+  input.sourceAdapter?.authority?.assertCurrent?.();
   input.sourceAdapter?.signal?.throwIfAborted();
   input.source = source;
   source.controllerInput = input;
@@ -63,6 +62,7 @@ export function beginSessionControllerSourceInjection(
   options: { keepOrderOnDecline?: boolean; retryWithdrawnSteer?: boolean } = {},
 ): SessionControllerSourceInjection {
   if (
+    input.source?.operatorAuthority?.participationCeiling !== undefined ||
     (input.phase !== "preparing" && input.phase !== "waiting") ||
     (input.injectionAttempted &&
       !(options.retryWithdrawnSteer && input.steerNow && input.custody.enqueued)) ||
@@ -174,7 +174,7 @@ export function beginSessionControllerSourceInjection(
           }
           return false;
         }
-        input.sourceAdapter?.authority?.assertCurrent();
+        input.sourceAdapter?.authority?.assertCurrent?.();
         input.abortSignal.throwIfAborted();
         started = true;
         pending.admitted = true;
@@ -185,10 +185,6 @@ export function beginSessionControllerSourceInjection(
         });
         return true;
       } catch (error) {
-        // Definite revocation must retire before finish can wake the mailbox.
-        if (!isOperatorAuthorityUnavailable(error)) {
-          retireSessionControllerInput(input);
-        }
         finish(false);
         if (input.abortSignal.aborted) {
           return false;
@@ -218,7 +214,7 @@ export function retireSessionControllerSourceCancellation(input: SessionControll
 /** Resolve inline/reset policy on the original input before publishing runnable work. */
 export function updateSessionControllerSourcePolicy(
   input: SessionControllerInput,
-  policy: QueueSettings,
+  requestedPolicy: QueueSettings,
 ): void {
   const assertConfigurable = () => {
     if (
@@ -232,8 +228,11 @@ export function updateSessionControllerSourcePolicy(
     input.abortSignal.throwIfAborted();
   };
   assertConfigurable();
-  input.sourceAdapter?.authority?.assertCurrent();
+  input.sourceAdapter?.authority?.assertCurrent?.();
   assertConfigurable();
+  const policy = input.source?.operatorAuthority?.participationCeiling
+    ? { ...requestedPolicy, mode: "followup" as const }
+    : requestedPolicy;
   const wasInterrupt = input.policy.mode === "interrupt";
   input.policy = Object.freeze({ ...policy });
   if (policy.mode === "interrupt" && !wasInterrupt && !input.claim) {
@@ -614,6 +613,8 @@ export function completeSessionControllerSourceLifecycle(
       state.failure = error;
     }
     state.releaseAuthority = undefined;
+    state.releaseCallbacks?.();
+    state.releaseCallbacks = undefined;
     state.settling = undefined;
     const input = run.controllerInput;
     if (!run.controllerClaim && input && (!synchronous || !input.retirementRequested)) {

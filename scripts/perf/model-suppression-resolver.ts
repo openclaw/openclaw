@@ -14,6 +14,7 @@ import { materializePreparedRuntimeModel } from "../../src/agents/runtime-plan/m
 import type { AgentRuntimeAuthPlan } from "../../src/agents/runtime-plan/types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -125,12 +126,7 @@ try {
   await nextTurn();
   const hostLoadStart = loadavg();
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const cpuBefore = process.threadCpuUsage();
   const started = performance.now();

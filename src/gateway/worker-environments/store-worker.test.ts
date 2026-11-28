@@ -24,15 +24,12 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
   registerOpenClawStateDatabaseLifecycleListener,
-  runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
-import { createWorkerEnvironmentStoreKernel } from "./store.kernel.js";
 import { workerCredential, workerReadyPatch } from "./store.test-support.js";
 
 const delivery = vi.hoisted(() => ({
@@ -459,40 +456,6 @@ it.each(["create", "close"] as const)(
   },
 );
 
-it("touches the current attachment with one guarded write and no preliminary row read", () => {
-  const database = openDatabase("worker-attachment-touch-sql-");
-  let nowMs = 1_000;
-  const write = <T>(operation: () => T) =>
-    runOpenClawStateWriteTransaction(operation, { database });
-  const kernel = write(() => createWorkerEnvironmentStoreKernel(database, () => nowMs));
-  const { attachment } = write(() =>
-    kernel.createSessionAttachmentIntent(
-      attachmentIntent("touch-environment", "touch-session", "touch-provision"),
-    ),
-  );
-  const statements: string[] = [];
-  const sql = observeMainThreadSql({ onStatement: (query) => statements.push(query) });
-  try {
-    sql.calibrate();
-    for (const at of [2_000, 2_000]) {
-      nowMs = at;
-      sql.clear();
-      statements.length = 0;
-      write(() => kernel.touchSessionAttachment(attachment));
-      const attachmentStatements = statements.filter((statement) =>
-        statement.includes('"worker_environment_session_attachments"'),
-      );
-      expect(attachmentStatements).toEqual([expect.stringMatching(/^update /i)]);
-      expect(kernel.getSessionAttachmentRecord(attachment.sessionId)).toEqual({
-        ...attachment,
-        lastUsedAtMs: at,
-      });
-    }
-  } finally {
-    sql.restore();
-  }
-});
-
 it("rejects stale, replaced, missing, closed, and revoked attachment touches", async () => {
   const database = openDatabase("worker-attachment-touch-guards-");
   let nowMs = 1_000;
@@ -564,6 +527,8 @@ it("rechecks idle-cleanup activity after a pending attachment touch publishes", 
     publish.resolve();
     await touch;
     await rejected;
+    expect(store.getSessionAttachmentRecord(attachment.sessionId)?.lastUsedAtMs).toBe(2_000);
+    await store.touchSessionAttachment(attachment, () => {});
     expect(store.getSessionAttachmentRecord(attachment.sessionId)).toMatchObject({
       lastUsedAtMs: 2_000,
       closedAtMs: null,

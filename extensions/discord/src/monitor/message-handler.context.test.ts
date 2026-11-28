@@ -114,9 +114,7 @@ it("preserves bot sender scope and live owner authority through the host builder
           cfg,
           commandAuthorized: true,
         });
-        expect(() => authorization.assertOwnerCurrent?.()).not.toThrow();
-        cfg.commands = { ownerAllowFrom: [] };
-        expect(() => authorization.assertOwnerCurrent?.()).toThrow("authority changed");
+        expect(authorization.senderIsOwner).toBe(true);
       },
     );
   });
@@ -128,6 +126,20 @@ it("does not mark PluralKit proxy senders as bots", async () => {
     sender: { isPluralKit: true },
   });
   expect(payload.SenderIsBot).toBeUndefined();
+});
+
+it.each([
+  "Send /model to choose another model.",
+  "Please explain /think high /status /help.",
+  " \t/model openai/gpt-4o-mini",
+])("keeps the complete typed command source for %j", async (text) => {
+  const payload = await context({ baseText: text, messageText: text }, text);
+  expect(payload).toMatchObject({
+    RawBody: text,
+    CommandBody: text,
+    BodyForCommands: text,
+    commandText: text,
+  });
 });
 
 it("preserves forwarded text once in history without treating it as a command", async () => {

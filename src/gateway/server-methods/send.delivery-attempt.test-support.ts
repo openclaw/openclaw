@@ -100,7 +100,7 @@ export function registerSendDeliveryAttemptTests(harness: DeliveryAttemptTestHar
       failure === "fence-failure"
         ? "occurrence delivery fence unavailable"
         : failure === "delivery-authority"
-          ? "authority is no longer active"
+          ? "The message turn has ended. Start a new turn to retry."
           : "uploads are disabled",
     );
     expect(beforeDeliveryAttempt).toHaveBeenCalledOnce();

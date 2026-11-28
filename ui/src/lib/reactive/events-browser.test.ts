@@ -31,11 +31,13 @@ describe("browser projections", () => {
     // The shared runner installs memory storage rather than a jsdom Storage instance.
     Object.defineProperty(storageEvent, "storageArea", { value: localStorage });
     window.dispatchEvent(storageEvent);
+    expect(changed).toHaveBeenCalledTimes(2);
     expect(projection.read().get("synthetic-blue")?.name).toBe("Blue");
     release();
     projection.dispose();
     changed.mockClear();
     recordLobsterVisit("synthetic-green");
+    window.dispatchEvent(storageEvent);
     expect(changed).not.toHaveBeenCalled();
     expect(projection.read().has("synthetic-green")).toBe(false);
   });

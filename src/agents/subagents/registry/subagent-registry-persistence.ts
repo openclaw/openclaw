@@ -23,6 +23,7 @@ import {
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
 import {
+  bindImmutableSubagentRun,
   compactSubagentRunForMemory,
   immutableSubagentRun,
   restoreSubagentRunPayload,
@@ -43,10 +44,7 @@ import {
   publishSubagentRunsAfterAtomicStore,
   rememberRestoredSubagentRunNotification,
 } from "./subagent-registry-state.js";
-import {
-  bindSubagentRunRecord,
-  parseSubagentRegistryWriteReceipt,
-} from "./subagent-registry.store.codec.js";
+import { parseSubagentRegistryWriteReceipt } from "./subagent-registry.store.codec.js";
 import type { SubagentRegistryWrite } from "./subagent-registry.store.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -334,22 +332,35 @@ async function commitRows<T>(
   runs: ReadonlyMap<string, SubagentRunRecord>,
 ): Promise<SubagentRunMutationReceipt<T>> {
   const postimages = new Map(
-    [...(planned.postimages ?? [])].map(
-      ([runId, row]) =>
-        [runId, row ? copySubagentRunRuntimeOwner(row, structuredClone(row)) : null] as const,
-    ),
+    [...(planned.postimages ?? [])].map(([runId, row]) => {
+      // Only reuse containers from the registry's immutable current row.
+      const captured = row && { ...row };
+      const previous = runs.get(runId);
+      if (captured) {
+        for (const [key, value] of Object.entries(captured)) {
+          if (
+            value &&
+            typeof value === "object" &&
+            (!previous || value !== Reflect.get(previous, key))
+          ) {
+            Reflect.set(captured, key, structuredClone(value));
+          }
+        }
+      }
+      return [runId, row && captured ? copySubagentRunRuntimeOwner(row, captured) : null] as const;
+    }),
   );
   const values = [...postimages.values()].flatMap((row) => {
     if (!row) {
       return [];
     }
-    const value = bindSubagentRunRecord(row);
+    const value = bindImmutableSubagentRun(row);
     const previous = runs.get(row.runId);
     // Runtime-only reservations still publish, but need no identical durable write.
     // Prepared-only and compacted rows cannot prove equality with stored payloads.
     return previous &&
       !isSubagentRunPayloadEvicted(previous) &&
-      isDeepStrictEqual(value, bindSubagentRunRecord(previous))
+      isDeepStrictEqual(value, bindImmutableSubagentRun(previous))
       ? []
       : [value];
   });
@@ -357,6 +368,8 @@ async function commitRows<T>(
     writeId: randomUUID(),
     values,
     deleteRunIds: [...postimages].flatMap(([id, row]) => (row ? [] : [id])),
+    removalReason: planned.removalReason,
+    terminalRows: planned.terminalRows,
     terminalEvents: planned.terminalEvents?.map(({ input }) => structuredClone(input)),
   };
   if (!values.length && !write.deleteRunIds.length && !write.terminalEvents?.length) {
@@ -437,7 +450,7 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
     const evictedIds = [...rows.values()]
       .filter(isSubagentRunPayloadEvicted)
       .map((row) => row.runId);
-    if (evictedIds.length) {
+    if (evictedIds.length && !options.deleteOnly) {
       const payloads = await readFullSubagentRuns(
         context,
         { kind: "ids", runIds: evictedIds },
@@ -459,16 +472,34 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
       void Promise.resolve(planned).catch(() => {});
       throw new Error("Subagent mutation plans must remain synchronous");
     }
-    for (const [id, row] of planned.postimages ?? []) {
-      if (!pending.runIds.has(id) || (row && row.runId !== id)) {
-        throw new SubagentRegistryMutationRejectedError(
-          "Subagent mutation writes an unadmitted row",
-        );
+    const bindPostimages = (
+      postimages: SubagentRunMutation<unknown>["postimages"],
+      receipt = false,
+    ) => {
+      for (const [id, row] of postimages ?? []) {
+        if (!receipt && options.deleteOnly && row !== null) {
+          throw new SubagentRegistryMutationRejectedError(
+            "Deletion-only subagent mutations cannot write retained payloads",
+          );
+        }
+        if (!pending.runIds.has(id) || (row && row.runId !== id)) {
+          const InvalidRow = receipt
+            ? SubagentRegistryCommitReceiptError
+            : SubagentRegistryMutationRejectedError;
+          throw new InvalidRow(
+            `${receipt ? "Registry receipt" : "Subagent mutation"} writes an unadmitted row`,
+          );
+        }
+        if (row) {
+          const plannedRow = receipt ? planned.postimages?.get(id) : undefined;
+          bindSubagentRunRuntimeKey(
+            row,
+            plannedRow ? getSubagentRunRuntimeKey(plannedRow) : runtimeKeyFor(rows.get(id), row),
+          );
+        }
       }
-      if (row) {
-        bindSubagentRunRuntimeKey(row, runtimeKeyFor(rows.get(id), row));
-      }
-    }
+    };
+    bindPostimages(planned.postimages);
     pending.rekeys = [...(planned.rekeys ?? [])].map(([from, to]) => {
       const source = rows.get(from);
       const destination = planned.postimages?.get(to);
@@ -504,19 +535,7 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
     try {
       authority.assertDatabase();
       const postimages = committed.postimages ?? new Map<string, SubagentRunRecord | null>();
-      for (const [id, row] of postimages) {
-        if (!pending.runIds.has(id) || (row && row.runId !== id)) {
-          throw new SubagentRegistryCommitReceiptError("Registry receipt writes an unadmitted row");
-        }
-        if (row) {
-          // Planned rows were bound before commit; receipt-only rows bind here.
-          const plannedRow = planned.postimages?.get(id);
-          const key = plannedRow
-            ? getSubagentRunRuntimeKey(plannedRow)
-            : runtimeKeyFor(rows.get(id), row);
-          bindSubagentRunRuntimeKey(row, key);
-        }
-      }
+      bindPostimages(postimages, true);
       publishRows(runs, postimages, context, () => {
         published = true;
         for (const notice of committed.notices ?? []) {

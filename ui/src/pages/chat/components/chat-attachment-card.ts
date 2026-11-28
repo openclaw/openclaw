@@ -3,6 +3,7 @@ import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-compo
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
+import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import {
   resolveAttachmentFileIcon,
   type AttachmentFileVisualMode,
@@ -20,6 +21,8 @@ export type AttachmentCardHeaderOptions = {
   label: string;
   mimeType?: string;
   sizeBytes?: number;
+  durationMs?: number;
+  onPlay?: () => void;
   downloadHref?: string;
   downloadPending?: boolean;
   downloadPendingFocusable?: boolean;
@@ -71,7 +74,13 @@ export function prepareAttachmentCardHeader(options: AttachmentCardHeaderOptions
   return {
     compactPreview: options.visualMode === "preview-with-favicon",
     formattedSize,
-    metadata: [typeLabel, formattedSize].filter(Boolean).join(" · "),
+    metadata: [
+      typeLabel,
+      formatDurationCompact(options.durationMs, { includeSeconds: true }),
+      formattedSize,
+    ]
+      .filter(Boolean)
+      .join(" · "),
     downloadLabel,
     downloadClass: `chat-assistant-attachment-card__action chat-assistant-attachment-card__download chat-assistant-attachment-card__download--ghost ${
       downloadLabel

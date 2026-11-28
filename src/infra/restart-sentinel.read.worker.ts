@@ -8,7 +8,6 @@ import {
 } from "./restart-sentinel-store.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
-import { readUpdateFailureReportReceiptRowSync } from "./update-failure-report-receipt-store.js";
 
 export const restartSentinelReadOperations = {
   "restartSentinel.managedHandoffInspect": (input: ManagedHandoffSentinelIdentity, db) =>
@@ -16,10 +15,6 @@ export const restartSentinelReadOperations = {
       type: "restartSentinel.managedHandoffInspect" as const,
       snapshot: inspectManagedHandoffSentinelRowSync(db, input),
     })),
-  "restartSentinel.reportReceipt": (input: string, db) => ({
-    type: "restartSentinel.reportReceipt" as const,
-    receipt: readUpdateFailureReportReceiptRowSync(db, input),
-  }),
   "restartSentinel.current": (_input: undefined, db) => ({
     type: "restartSentinel.current" as const,
     state: readRestartSentinelRowSync(db),

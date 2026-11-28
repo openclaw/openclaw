@@ -1,12 +1,15 @@
 import { expect, it } from "vitest";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import { renderTranscriptsMarkdown, summarizeTranscripts } from "./summary.js";
+import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./types.js";
 
 const ESC = "\u001b";
 const C1_CSI = "\u009b";
 const red = (text: string) => `${ESC}[31m${text}${ESC}[0m`;
 const OSC_LINK = `${ESC}]8;;https://example.com${ESC}\\click${ESC}]8;;${ESC}\\`;
-const line = (text: string, label: string): TranscriptUtterance => ({ text, speaker: { label } });
+const line = (text: string, label: string, id?: string): TranscriptUtterance => ({
+  text,
+  speaker: { label, id },
+});
 
 function summarize(
   utterances: (string | TranscriptUtterance)[],
@@ -64,6 +67,22 @@ it("keeps plain transcript content unchanged", () => {
   });
 });
 
+it("distinguishes an empty live capture from a finished capture without usable speech", () => {
+  const stopped = { stoppedAt: "2026-01-01T12:00:00Z" };
+  expect(summarize([]).overview).toBe("No transcript captured yet.");
+  for (const rows of [[], ["context:", "###"]]) {
+    expect(summarize(rows, stopped)).toMatchObject({
+      overview: "No usable speech was captured.",
+      transcript: [],
+      decisions: [],
+      actionItems: [],
+      risks: [],
+      utteranceCount: rows.length,
+    });
+  }
+  expect(summarize(["採用します。"], stopped).overview).toBe("採用します。");
+});
+
 it("lists participants once in first-appearance order after the overview", () => {
   const summary = summarize([
     line("Hello", " Zoe "),
@@ -75,6 +94,36 @@ it("lists participants once in first-appearance order after the overview", () =>
   expect(renderTranscriptsMarkdown(summary)).toContain(
     `${summary.overview}\n\n## Participants\n- Zoe\n- Alex\n\n## Decisions`,
   );
+});
+
+it("attributes notes to the same account across nicknames and separates namesakes", () => {
+  const rows = [
+    line("I will send the release.", "Sam", "account-a"),
+    line("I will send the invoice.", "Sam", "account-b"),
+    line("I will send an update.", "New nickname", "account-a"),
+    line("I will send the minutes.", "Sam"),
+  ];
+  const summary = summarize(rows);
+  expect(summary.participants).toEqual(["Sam", "Sam (2)", "Sam (3)"]);
+  expect(summary.actionItems).toEqual([
+    "Sam: I will send the release.",
+    "Sam (2): I will send the invoice.",
+    "Sam: I will send an update.",
+    "Sam (3): I will send the minutes.",
+  ]);
+  expect(summary.transcript).toEqual(summary.actionItems);
+  expect(renderTranscriptsMarkdown(summary)).not.toContain("account-");
+  expect(rows[2]?.speaker?.label).toBe("New nickname");
+});
+
+it("keeps literal numbered nicknames distinct from generated names", () => {
+  expect(
+    summarize([
+      line("Hi", "Sam (2)", "first"),
+      line("Hi", "Sam", "second"),
+      line("Hi", "Sam", "third"),
+    ]).participants,
+  ).toEqual(["Sam (2)", "Sam", "Sam (3)"]);
 });
 
 it("keeps decisions, actions, and risks ahead of long transcripts for bounded readers", () => {

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -41,7 +42,7 @@ import { resolveOfficialExternalPluginRepairHint } from "../plugins/official-ext
 import { runExec } from "../process/exec.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import { assertRuntimeMediaRequestSecretOwnerAvailable } from "../secrets/runtime-media-secret-owner.js";
-import { MediaAttachmentCache } from "./attachments.cache.js";
+import { maxBytesError, MediaAttachmentCache } from "./attachments.cache.js";
 import { resolveCliOutput } from "./cli-output.js";
 import { CLI_OUTPUT_MAX_BUFFER, MIN_AUDIO_FILE_BYTES } from "./defaults.constants.js";
 import {
@@ -142,7 +143,9 @@ export function buildModelDecision(params: {
   };
 }
 
-export type MediaRequestOverrides = Pick<AudioTranscriptionRequest, "prompt" | "language">;
+export type MediaRequestOverrides = Pick<AudioTranscriptionRequest, "prompt" | "language"> & {
+  modelOverride?: ProviderModelRef;
+};
 
 function assertMinAudioSize(params: { size: number; attachmentIndex: number }): void {
   if (params.size >= MIN_AUDIO_FILE_BYTES) {
@@ -242,10 +245,7 @@ export async function runProviderEntry(params: {
       });
     } catch (error) {
       if (error instanceof ImageOptimizationLimitError) {
-        throw new MediaUnderstandingSkipError(
-          "maxBytes",
-          `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${error.maxBytes}`,
-        );
+        throw maxBytesError({ attachmentIndex: params.attachmentIndex, maxBytes: error.maxBytes });
       }
       throw error;
     }

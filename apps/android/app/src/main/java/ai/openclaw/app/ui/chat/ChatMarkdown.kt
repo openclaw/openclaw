@@ -43,6 +43,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
@@ -91,7 +92,12 @@ private const val DATA_IMAGE_HEADER_MAX_CHARS = 64
 internal const val CHAT_MARKDOWN_DISCLOSURE_MAX_DEPTH = 32
 private val dataImageRegex = Regex("^data:image/([a-zA-Z0-9+.-]+);base64,([A-Za-z0-9+/=\\n\\r]+)$")
 
-private val markdownParser: Parser by lazy {
+private val markdownParser: Parser by lazy { createChatMarkdownParser(IncludeSourceSpans.NONE) }
+private val sourceMappedMarkdownParser: Parser by lazy {
+  createChatMarkdownParser(IncludeSourceSpans.BLOCKS_AND_INLINES)
+}
+
+private fun createChatMarkdownParser(sourceSpans: IncludeSourceSpans): Parser {
   val extensions: List<Extension> =
     listOf(
       AutolinkExtension.create(),
@@ -99,10 +105,10 @@ private val markdownParser: Parser by lazy {
       TablesExtension.create(),
       TaskListItemsExtension.create(),
     )
-  Parser
+  return Parser
     .builder()
     .extensions(extensions)
-    .includeSourceSpans(IncludeSourceSpans.BLOCKS_AND_INLINES)
+    .includeSourceSpans(sourceSpans)
     .build()
 }
 
@@ -125,13 +131,13 @@ fun ChatMarkdown(
       baseCallout = bodyStyle,
     )
 
-  val rendering = MarkdownRendering(textColor, inlineStyles, isStreaming, progressBars)
+  val rendering = MarkdownRendering(textColor, inlineStyles, isStreaming, progressBars, if (LocalChatCodeReaderHandoff.current != null) "" else null)
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-    for (block in blocks) {
+    for ((index, block) in blocks.withIndex()) {
       when (block) {
         is ChatMarkdownSourceBlock.Markdown -> {
           val documentBlocks = remember(block.source) { parseChatMarkdownBlocks(block.source) }
-          rendering.RenderMarkdownBlocks(documentBlocks)
+          rendering.at(index).RenderMarkdownBlocks(documentBlocks)
         }
 
         is ChatMarkdownSourceBlock.Math -> {
@@ -151,14 +157,17 @@ private data class MarkdownRendering(
   val inlineStyles: InlineStyles,
   val isStreaming: Boolean,
   val progressBars: Boolean,
-)
+  val fencePath: String?,
+) {
+  fun at(index: Int): MarkdownRendering = if (fencePath == null) this else copy(fencePath = "$fencePath/$index")
+}
 
 @Composable
 private fun MarkdownRendering.RenderMarkdownBlocks(blocks: List<ChatMarkdownRenderBlock>) {
-  for (block in blocks) {
+  for ((index, block) in blocks.withIndex()) {
     when (block) {
       is ChatMarkdownRenderBlock.CommonMark -> {
-        RenderCommonMarkBlock(block.node)
+        at(index).RenderCommonMarkBlock(block.node)
       }
 
       is ChatMarkdownRenderBlock.LiteralHtml -> {
@@ -166,7 +175,7 @@ private fun MarkdownRendering.RenderMarkdownBlocks(blocks: List<ChatMarkdownRend
       }
 
       is ChatMarkdownRenderBlock.Disclosure -> {
-        RenderMarkdownDisclosure(block)
+        at(index).RenderMarkdownDisclosure(block)
       }
     }
   }
@@ -208,6 +217,7 @@ private fun MarkdownRendering.RenderCommonMarkBlock(current: Node) {
           // Streaming fences remain plain until closed. Finalized messages may validly
           // end at EOF without a closing fence under CommonMark.
           isComplete = !isStreaming || current.closingFenceLength != null,
+          readerState = { rememberFenceScroll(fencePath, current.literal.orEmpty(), current.info, isStreaming) },
         )
       }
     }
@@ -402,7 +412,7 @@ private fun MarkdownRendering.RenderList(list: Node) {
   // Nested lists already sit inside their parent's content column.
   Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
     items.forEachIndexed { index, item ->
-      RenderListItem(item, markers[index], markerStyle, markerWidth)
+      at(index).RenderListItem(item, markers[index], markerStyle, markerWidth)
     }
   }
 }
@@ -460,10 +470,11 @@ private fun MarkdownRendering.RenderTableBlock(table: TableBlock) {
         modifier = Modifier.fillMaxWidth(),
       ) {
         for (index in 0 until maxCols) {
-          val cell = row.cells.getOrNull(index) ?: AnnotatedString("")
+          val cell = row.cells.getOrNull(index)
           val anchor = rememberChatReaderAnchor()
           Text(
-            text = cell,
+            text = cell?.text ?: AnnotatedString(""),
+            textAlign = cell?.alignment,
             style = if (row.isHeader) ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold) else inlineStyles.baseCallout,
             color = textColor,
             onTextLayout = anchor?.onTextLayout ?: {},
@@ -498,8 +509,18 @@ private fun buildTableRows(
           cells =
             markdownSiblings(row.firstChild)
               .filterIsInstance<TableCell>()
-              .map { buildInlineMarkdown(it.firstChild, inlineStyles) }
-              .toList(),
+              .map { cell ->
+                TableRenderCell(
+                  text = buildInlineMarkdown(cell.firstChild, inlineStyles),
+                  alignment =
+                    when (cell.alignment) {
+                      TableCell.Alignment.LEFT -> TextAlign.Left
+                      TableCell.Alignment.CENTER -> TextAlign.Center
+                      TableCell.Alignment.RIGHT -> TextAlign.Right
+                      null -> null
+                    },
+                )
+              }.toList(),
         )
       }
     }.toList()
@@ -624,6 +645,9 @@ internal fun buildChatInlineMarkdown(
 }
 
 internal fun parseChatMarkdown(text: String): Document = markdownParser.parse(text) as Document
+
+// Only math segmentation consumes source positions; ordinary rendering keeps no per-line map.
+internal fun parseChatMarkdownWithSourceSpans(text: String): Document = sourceMappedMarkdownParser.parse(text) as Document
 
 internal fun markdownSiblings(start: Node?): Sequence<Node> = generateSequence(start) { it.next }
 
@@ -986,6 +1010,7 @@ private fun buildPlainText(start: Node?): String {
   for (node in markdownSiblings(start)) {
     when (node) {
       is MarkdownTextNode -> sb.append(node.literal)
+      is Code -> sb.append(node.literal)
       is SoftLineBreak, is HardLineBreak -> sb.append('\n')
       else -> sb.append(buildPlainText(node.firstChild))
     }
@@ -1034,7 +1059,12 @@ private data class InlineStyles(
 
 private data class TableRenderRow(
   val isHeader: Boolean,
-  val cells: List<AnnotatedString>,
+  val cells: List<TableRenderCell>,
+)
+
+private data class TableRenderCell(
+  val text: AnnotatedString,
+  val alignment: TextAlign?,
 )
 
 /**

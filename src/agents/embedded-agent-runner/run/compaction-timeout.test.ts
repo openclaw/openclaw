@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
-import {
-  selectCompactionTimeoutSnapshot,
-  shouldFlagCompactionTimeout,
-  trimToContinuableTail,
-} from "./compaction-timeout.js";
+import { selectCompactionTimeoutSnapshot, trimToContinuableTail } from "./compaction-timeout.js";
 
 type Snapshot = Parameters<typeof selectCompactionTimeoutSnapshot>[0]["currentSnapshot"];
 
@@ -31,16 +27,6 @@ function expectSelectedSnapshot(
 }
 
 describe("compaction-timeout helpers", () => {
-  it("flags a timeout while compaction is pending", () => {
-    expect(
-      shouldFlagCompactionTimeout({
-        isTimeout: true,
-        isCompactionPendingOrRetrying: true,
-        isCompactionInFlight: false,
-      }),
-    ).toBe(true);
-  });
-
   it("keeps tool-result tails continuable after compaction timeout", () => {
     const pre = [
       castAgentMessage({ role: "user", content: "pre-user" }),

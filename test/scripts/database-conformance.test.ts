@@ -79,6 +79,12 @@ describe("PostgreSQL conformance shards", () => {
         .filter((entry) => entry.relativePath.endsWith(".postgres.test.ts"))
         .map((entry) => `${root}/${entry.relativePath.replaceAll("\\", "/")}`),
     );
+    // These mixed-engine suites have PostgreSQL cases even without the filename suffix.
+    suites.push(
+      "src/channels/message/ingress-monitor.scheduling.test.ts",
+      "src/gateway/github-publication-runtime.test.ts",
+      "src/plugin-state/plugin-state-worker.test.ts",
+    );
     expect(
       suites.filter(
         (file) => !selected.some((target) => file === target || file.startsWith(`${target}/`)),

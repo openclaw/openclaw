@@ -288,7 +288,16 @@ it("installs native commits before reply, retains known commits after reply fail
     });
     expect(f.receipt()).toMatchObject({
       kind: "native-commit",
-      committed: { facts: { kind: "committed", receipt: committed.receipt } },
+      committed: {
+        facts: {
+          kind: "committed",
+          receipt: {
+            entryReference: initial.writeToken,
+            entryDelta: { values: [["updatedAt", 10]], removed: [] },
+            postimage: { entry: undefined },
+          },
+        },
+      },
     });
     expect(f.nativeEntry()?.updatedAt).toBe(10);
     delete f.hooks.afterTransaction;

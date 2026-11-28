@@ -26,7 +26,6 @@ import { extractControlUiStartupAssetPaths } from "../../config/control-ui-start
 import controlUiViteConfig, {
   createControlUiPrecompressedAssetVariants,
   resolveControlUiBuildInfo,
-  resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../../vite.config.ts";
@@ -177,7 +176,7 @@ function hook<T extends (...args: never[]) => unknown>(value: T | { handler: T }
   return typeof value === "function" ? value : value?.handler;
 }
 
-async function localeHooks(aliases: Alias[] = []) {
+async function localeHooks(aliases: Alias[] = [], building = false) {
   const plugin = controlUiLocaleModulesPlugin();
   const configResolved = hook(plugin.configResolved);
   const alias = [
@@ -185,7 +184,10 @@ async function localeHooks(aliases: Alias[] = []) {
     ...resolveSourcePackageAliasesForVite(),
     ...resolveTsconfigPathAliasesForVite(),
   ];
-  await configResolved?.call({} as never, { resolve: { alias } } as never);
+  await configResolved?.call(
+    {} as never,
+    { command: building ? "build" : "serve", resolve: { alias } } as never,
+  );
   const resolveId = hook(plugin.resolveId);
   const load = hook(plugin.load);
   const watchChange = hook(plugin.watchChange);
@@ -301,12 +303,6 @@ async function expectEncodings(
     encodings.map((ext) => `${file}.${ext}`),
   );
   return variants;
-}
-
-function expectBefore<T>(values: T[], first: T, second: T) {
-  expect(values.includes(first)).toBe(true);
-  expect(values.includes(second)).toBe(true);
-  expect(values.indexOf(first)).toBeLessThan(values.indexOf(second));
 }
 
 async function executeLocale(
@@ -636,48 +632,6 @@ it.each([
   ).toThrow(`${key} ${error}`);
 });
 
-it.each(["agent-id", "error-coercion", "expect", "stringified-error"])(
-  "resolves internal source aliases for %s",
-  (subpath) => {
-    const aliases = resolveSourcePackageAliasesForVite();
-    const moduleId = `@openclaw/normalization-core/${subpath}`;
-    expect(aliases.find((alias) => alias.find === moduleId)?.replacement).toBe(
-      path.join(repoRoot, `packages/normalization-core/src/${subpath}.ts`),
-    );
-    expectBefore(
-      aliases.map((alias) => alias.find),
-      moduleId,
-      "@openclaw/normalization-core",
-    );
-  },
-);
-
-it("uses Node package resolution for external packages inherited by worktrees", () => {
-  const resolvePackage = vi.fn((specifier: string) => path.join("/parent/node_modules", specifier));
-  const aliases = resolveExternalPackageAliasesForVite(resolvePackage);
-  expect(aliases.find((alias) => alias.find === "@openclaw/libterminal/browser")).toEqual({
-    find: "@openclaw/libterminal/browser",
-    replacement: path.join("/parent/node_modules/@openclaw/libterminal", "dist/browser.js"),
-  });
-});
-
-it("keeps specific tsconfig aliases ahead of broad package aliases", () => {
-  const aliases = resolveTsconfigPathAliasesForVite();
-  expect(aliases.find((alias) => alias.find === "@openclaw/net-policy/ip")?.replacement).toBe(
-    path.join(repoRoot, "packages/net-policy/src/ip.ts"),
-  );
-  expectBefore(
-    aliases.map((alias) => alias.find),
-    "@openclaw/net-policy/ip",
-    "@openclaw/net-policy",
-  );
-  expectBefore(
-    aliases.filter((alias) => alias.find instanceof RegExp).map((alias) => alias.replacement),
-    path.join(repoRoot, "packages/net-policy/src/$1"),
-    path.join(repoRoot, "extensions/$1"),
-  );
-});
-
 it("composes the complete source without registering runtime English", () => {
   const before = structuredClone(en);
   const source = loadControlUiSourceCatalog();
@@ -685,7 +639,7 @@ it("composes the complete source without registering runtime English", () => {
   expect(en).toEqual(before);
   expect(source).not.toBe(en);
   expect(source.configView).not.toBe(en.configView);
-  expect(flat.get("activity.title")).toBe("Activity");
+  expect(flat.get("activity.currentWork.title")).toBe("Active sessions");
   expect(flat.get("configView.sections.cron")).toBe("Automations");
 });
 
@@ -743,6 +697,62 @@ it("keeps namespace URLs in one immutable locale generation across rebuilds", as
   expect(changed.every((file) => !first.includes(file))).toBe(true);
 });
 
+it("packs small optional dictionaries without installing their siblings", async () => {
+  const source = {
+    common: { health: "Ready" },
+    chat: { title: "Chat" },
+    activity: { title: "Activity ".repeat(500) },
+    skillGroups: { title: "Groups ".repeat(300) },
+    skillStatus: { title: "Status ".repeat(300) },
+    nativeLinkMenu: { title: "Links ".repeat(400) },
+    templatesTrustWarning: { title: "Trust ".repeat(400) },
+  };
+  await withSourceImport(
+    async () => catalogImport(source),
+    async () => {
+      const { load } = await localeHooks([], true);
+      const assets = new Map<string, { fileName: string; source: string }>();
+      const result = await load.call(
+        {
+          addWatchFile: vi.fn(),
+          emitFile(asset: { fileName: string; source: string }) {
+            const ref = `asset${assets.size}`;
+            assets.set(ref, asset);
+            return ref;
+          },
+        } as never,
+        baseLocaleId,
+        {} as never,
+      );
+      if (typeof result !== "string") {
+        throw new Error("Expected generated locale source");
+      }
+      // Six dictionaries need four files: one bounded group, one remaining small
+      // dictionary, and the independent Chat and large Activity dictionaries.
+      expect(assets.size).toBe(4);
+      let executable = result;
+      for (const [ref, asset] of assets) {
+        if (asset.fileName.includes("-group-")) {
+          expect(Buffer.byteLength(asset.source)).toBeLessThanOrEqual(8 * 1024);
+        }
+        executable = executable.replaceAll(
+          `import.meta.ROLLUP_FILE_URL_${ref}`,
+          JSON.stringify(dataModuleUrl(asset.source)),
+        );
+      }
+      const { catalog, loadNamespace, loadAll } = await executeLocale(load, executable, true);
+      expect(catalog).toEqual({ common: source.common });
+      await loadNamespace("skillGroups");
+      expect(catalog.skillGroups).toEqual(source.skillGroups);
+      expect(catalog.skillStatus).toBeUndefined();
+      expect(catalog.chat).toBeUndefined();
+      expect(catalog.activity).toBeUndefined();
+      await loadAll();
+      expect(catalog).toEqual(source);
+    },
+  );
+});
+
 it("defers page and config-hint translations until their namespace loads", async () => {
   const { load, resolveId } = await localeHooks();
   const resolve = (id: string) => resolveId.call({} as never, id, undefined, {} as never);
@@ -757,7 +767,7 @@ it("defers page and config-hint translations until their namespace loads", async
   const addWatchFile = vi.fn();
   const baseSource = await loadLocaleSource(load, resolvedBase as string, addWatchFile);
   const { catalog, loadNamespace } = await executeLocale(load, baseSource, true);
-  expect(flattenTranslations(catalog).has("activity.title")).toBe(false);
+  expect(flattenTranslations(catalog).has("activity.currentWork.title")).toBe(false);
   expect(catalog.configHints).toBeUndefined();
   const memoryPath = path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl");
   const loadingText = flattenTranslations(en).get("common.loading");
@@ -772,7 +782,7 @@ it("defers page and config-hint translations until their namespace loads", async
   expect(loadingEntry).toBeDefined();
   expect(flattenTranslations(catalog).get("common.loading")).toBe(loadingEntry?.translated);
   await loadNamespace("activity");
-  expect(flattenTranslations(catalog).get("activity.title")).toBeTypeOf("string");
+  expect(flattenTranslations(catalog).get("activity.currentWork.title")).toBeTypeOf("string");
   expect(catalog.configHints).toBeUndefined();
   expect(flattenTranslations(catalog).has("runtimeErrors.nativeTimeout")).toBe(false);
   expect(catalog.notificationErrors).toBeUndefined();
@@ -804,7 +814,7 @@ it("bootstraps only an absent locale memory from the English catalog", async () 
   await withoutMemory(async () => {
     const baseSource = await loadLocaleSource(load, baseId, addWatchFile);
     const { catalog, loadAll } = await executeLocale(load, baseSource, true);
-    expect(flattenTranslations(catalog).has("activity.title")).toBe(false);
+    expect(flattenTranslations(catalog).has("activity.currentWork.title")).toBe(false);
     expect(catalog.configHints).toBeUndefined();
     await loadAll();
     expect(flattenTranslations(catalog)).toEqual(flattenTranslations(loadControlUiSourceCatalog()));

@@ -110,7 +110,6 @@ import { nativeWorkerTestEntrypoint } from "../../src/worker/native-worker-entry
 import { workerBackgroundExecEntrypoints } from "../../src/worker/worker-runtime-background-exec-entrypoints.test-support.ts";
 import { qaOtelSmokeEntrypoint } from "../../test/e2e/qa-lab/runtime/qa-otel-smoke-entrypoint.test-support.ts";
 import { channelIngressGatewayRestartEntrypoint } from "../../test/fixtures/channel-ingress-gateway-restart-entrypoint.ts";
-import { toolingNativeRuntimeEntrypoints } from "../../test/scripts/tooling-native-runtime.test-support.ts";
 import { toolingProbeRuntimeEntrypoints } from "../../test/scripts/tooling-probe-runtime.test-support.mts";
 import { benchSessionHistoryEntrypoint } from "../bench-session-history-runtime.test-support.ts";
 import { runtimeProcessBuildEntrypoints } from "./runtime-process-build-entries.mts";
@@ -265,6 +264,7 @@ export const preservedModuleBuildSources = [
 
 // Source-relative script readers retain their exact input bytes in the prepared layout.
 export const preservedModuleBuildAssets = [
+  "src/infra/runtime-worker-loader.mjs",
   "scripts/e2e/lib/kitchen-sink-plugin/npm-version.txt",
   "test/fixtures/acp/owner-agent.mjs",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/agents.json",
@@ -293,6 +293,8 @@ export const preservedModuleBuildAssets = [
 
 // Test-only roots share the invocation generation without changing package entries.
 export const vitestWorkerBuildEntries = {
+  "state/openclaw-state-read-maintenance.test-support":
+    "src/state/openclaw-state-read-maintenance.test-support.ts",
   "plugins/test-helpers/installed-plugin-index":
     "src/plugins/test-helpers/installed-plugin-index.ts",
   "legacy-config-binding-repair.runtime":
@@ -319,7 +321,6 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(externalProxyTestEntrypoints),
     ...Object.values(workspaceProcessTestEntrypoints),
     clackPrompterProcessEntrypoint,
-    ...Object.values(toolingNativeRuntimeEntrypoints),
     toolingProbeRuntimeEntrypoints.buildArtifactCache,
     toolingProbeRuntimeEntrypoints.buildIdentity,
     ...Object.values(discordAudioTestEntrypoints),
@@ -414,6 +415,9 @@ export const vitestWorkerBuildEntries = {
   "infra/sqlite-snapshot-source": "src/infra/sqlite-snapshot-source.ts",
   "infra/package-update-activation.process.test-support":
     "src/infra/package-update-activation.process.test-support.ts",
+  // The journaled kill sweep seals the built recovery helper, which only a compiled graph has.
+  "infra/package-update-release-switch.process.test-support":
+    "src/infra/package-update-release-switch.process.test-support.ts",
   // Keep provider preparation in the same compiled graph as payload rendering;
   // a source-injected plugin would miss duplicated registry scope state.
   "plugins/provider-hook-runtime": "src/plugins/provider-hook-runtime.ts",

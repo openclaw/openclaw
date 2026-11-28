@@ -73,6 +73,22 @@ describe("azure-openai-responses", () => {
     );
   });
 
+  it("rejects a malformed Azure resource name before sending a credentialed request", async () => {
+    vi.stubEnv("AZURE_OPENAI_BASE_URL", undefined);
+    vi.stubEnv("AZURE_OPENAI_RESOURCE_NAME", "evil.example/x");
+
+    const result = await run();
+    expect(requests).toHaveLength(0);
+    expect(result.errorMessage).toMatch(/Invalid Azure OpenAI resource name/);
+  });
+
+  it("keeps an explicitly configured base URL ahead of a malformed resource name", async () => {
+    vi.stubEnv("AZURE_OPENAI_RESOURCE_NAME", "evil.example/x");
+
+    await run({ azureBaseUrl: "https://aoai.internal/openai/v1" });
+    expect(requests[0]?.url.hostname).toBe("aoai.internal");
+  });
+
   it("sends a case-insensitively resolved deployment name", async () => {
     vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "gpt-5.5=Deployment-GPT-5.5");
     await runSimple({}, { ...model, id: "GPT-5.5", name: "GPT-5.5" });

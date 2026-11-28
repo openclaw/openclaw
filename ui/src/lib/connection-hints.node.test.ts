@@ -134,7 +134,8 @@ describe("resolveAuthHintKind", () => {
 });
 
 it.each([
-  ["BROWSER_WEBSOCKET_SECURITY_ERROR", true],
+  [Codes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED, true],
+  ["BROWSER_WEBSOCKET_SECURITY_ERROR", false],
   ["BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR", false],
 ] as const)("shows an insecure-context hint for %s: %s", (code, expected) => {
   expect(shouldShowInsecureContextHint("connect failed", code)).toBe(expected);

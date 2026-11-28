@@ -52,7 +52,7 @@ it("records skill use for the executing plugin tool call and reads it back by pa
   };
   const runId = "plugin-skill-usage";
   const reference = await (async () => {
-    const ctx = { runId, agentId: "main", loopDetection: { enabled: false } };
+    const ctx = { runId, agentId: "main" };
     await wrapToolWithBeforeToolCallHook(tool, ctx).execute("view-deploy", {});
     return new WeakRef(ctx);
   })();

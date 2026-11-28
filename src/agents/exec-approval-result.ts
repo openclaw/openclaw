@@ -109,6 +109,9 @@ export function formatExecDeniedReasonMessage(deniedReason: string): string {
   if (reason.includes("user-denied")) {
     return "Command did not run: an operator declined this execution approval.";
   }
+  if (reason.includes("participant-allowlist-miss")) {
+    return "Command did not run: it is not on the allowlist, and a participant cannot request approval for it. Use an allowed command or ask the session creator to run it.";
+  }
   if (reason.includes("allowlist-miss") || reason === "approval-required") {
     return "Command did not run: approval is required.";
   }

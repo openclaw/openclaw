@@ -390,12 +390,6 @@ describe("curated meeting capture", () => {
     expectSources(runtimeConfig, [original, second]);
   });
 
-  it("opens the transcript library", async () => {
-    const { page, navigate } = await mount();
-    click(page, "Transcript library");
-    expect(navigate).toHaveBeenCalledWith("meetings");
-  });
-
   it.each([" test-voice ", " unknown "])(
     "preserves %s on re-entry and save",
     async (providerId) => {
@@ -637,6 +631,17 @@ describe("curated meeting capture", () => {
     expect(runtimeConfig.state.configFormDirty).toBe(false);
   });
 
+  it("does not prescribe provider setup after the first health read fails", async () => {
+    const { page, request } = await mount({ failStatus: true });
+    click(page, "Edit source 1");
+    expect(page.textContent).not.toContain("Auto-start setup is unavailable");
+    const { pending, refresh } = await beginRefresh(page, request);
+    expect(page.textContent).not.toContain("Auto-start setup is unavailable");
+    pending.resolve(meetingStatus);
+    await waitForSolid(() => expect(refresh.disabled).toBe(false));
+    expect(page.textContent).not.toContain("Auto-start setup is unavailable");
+  });
+
   it("keeps the draft and Refresh control through a rejected health read and retry", async () => {
     const { page, request, respond } = await mount();
     click(page, "Edit source 1");
@@ -647,8 +652,11 @@ describe("curated meeting capture", () => {
     const refresh = settingsButton(page, "Refresh");
     title.focus();
     click(page, "Refresh");
+    await waitForSolid(() => expect(refresh.disabled).toBe(true));
+    expect(page.textContent).not.toContain("Auto-start setup is unavailable");
     failure.reject(new Error("Health read unavailable"));
     await waitText(page, "Health read unavailable");
+    expect(page.textContent).not.toContain("Auto-start setup is unavailable");
     expect(title.value).toBe("Unsaved meeting title");
     expect(refresh.isConnected).toBe(true);
     expect(document.activeElement).toBe(title);

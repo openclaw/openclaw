@@ -8,7 +8,6 @@ import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import { resolveOcmUpdateManager } from "../../infra/ocm-update-client.js";
 import { createUpdateRun, finishUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import {
   invokeUpdateRun,
@@ -352,18 +351,16 @@ it.each([true, false])(
   },
 );
 
-it.each(["authority", "browser-authority", "scope", "git-target"])(
+it.each(["authority", "stop", "scope", "git-target", "consent"])(
   "refuses an invalid %s before submitting to OCM",
   async (refusal) => {
     await withManager(async ({ capability, job }) => {
-      let current = true;
-      if (refusal === "browser-authority") {
+      // Stop is the one mid-request refusal left after one-time admission (#203488).
+      const stop = new AbortController();
+      if (refusal === "stop") {
         exec.mockImplementation(async (_command, args) => {
           if (args[2] === "capabilities") {
-            current = false;
-          }
-          if (args[2] === "start") {
-            job.id = args[args.indexOf("--request-id") + 1]!;
+            stop.abort(new Error("stopped"));
           }
           return {
             stdout: JSON.stringify(args[2] === "capabilities" ? capability : job),
@@ -374,16 +371,19 @@ it.each(["authority", "browser-authority", "scope", "git-target"])(
       if (refusal === "scope") {
         capability.envName = "another-env";
       }
+      const respond = vi.fn();
       const start = () =>
         invokeUpdateRun(
           refusal === "git-target"
             ? { target: { kind: "git", upstreamRef: "origin/main", upstreamSha: "a".repeat(40) } }
-            : {},
-          undefined,
+            : refusal === "consent"
+              ? { acceptCapabilities: true }
+              : {},
+          respond,
           undefined,
           {},
           {
-            hasCurrentClientAuthority: refusal === "browser-authority" ? () => current : undefined,
+            signal: stop.signal,
             sessionMutationCommitGuard:
               refusal === "authority"
                 ? () => {
@@ -392,12 +392,24 @@ it.each(["authority", "browser-authority", "scope", "git-target"])(
                 : undefined,
           },
         );
-      if (refusal === "git-target") {
+      if (refusal === "git-target" || refusal === "consent") {
         await start();
-      } else if (refusal === "browser-authority") {
-        await expect(start()).rejects.toThrow("Gateway requester authority changed");
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            message:
+              refusal === "consent"
+                ? "OCM owns this update and cannot apply capability consent. Run the update without --accept-capabilities."
+                : "This OCM version does not support an explicit Git update target.",
+          }),
+        );
       } else {
-        await expect(start()).rejects.toThrow();
+        await expect(start()).rejects.toThrow(
+          { authority: "revoked", stop: "stopped" }[refusal] ??
+            "OCM's update binding does not match",
+        );
       }
       expect(exec.mock.calls.some(([, args]) => args[2] === "start")).toBe(false);
       expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
@@ -594,8 +606,7 @@ it("redacts manager diagnostics before RPC/UI projection and probe errors", asyn
     )({ params: { runId: `ocm:${job.id}` }, respond } as never);
     const response = expectDefined(respond.mock.calls[0]?.[1], "managed update response");
     expect(JSON.stringify(response)).not.toContain(secret);
-    expect(renderUpdateRunReport(response.run).markdown).toContain("Package fetch failed");
-    expect(renderUpdateRunReport(response.run).markdown).not.toContain(secret);
+    expect(JSON.stringify(response.run.steps)).toContain("Package fetch failed");
     exec.mockRejectedValue(new Error(diagnostic));
     const error = await invokeUpdateRun({}).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);

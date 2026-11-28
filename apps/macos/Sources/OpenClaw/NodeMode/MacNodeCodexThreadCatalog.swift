@@ -559,7 +559,7 @@ extension MacNodeCodexThreadCatalog {
         let raw = try self.decodeRequestObject(paramsJSON)
         let allowed = Set(["agentId", "sourceHomeId", "threadId", "cursor", "limit"])
         if let unknown = raw.keys.first(where: { !allowed.contains($0) }) {
-            throw CatalogError.invalidParams("unknown Codex transcript parameter: \(unknown)")
+            throw CatalogError.invalidParams("unknown Codex chat history parameter: \(unknown)")
         }
         guard let threadId = try optionalString(
             raw,

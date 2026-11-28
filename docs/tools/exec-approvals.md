@@ -34,18 +34,29 @@ Node execution still checks the target policy before dispatch: caller
 requires approval even when the caller requests `full` / `off`.
 </Note>
 
+## Who can review session approvals
+
+A noncreator collaborator whose resolved Gateway role has
+`sessions.others: "invited"` and who holds a session membership can list or resolve
+only approvals raised by their own profile's turns, while the session remains
+readable. This restriction does not apply to creators, administrators, role-wide
+`view`, `suggest`, or `write` teammates, or legacy device-based approvers. Existing
+approval scopes and reviewer/device bindings still govern every caller.
+
+The Gateway records the initiating profile from authenticated turn authority,
+not tool arguments or an approval request payload. Older or unattributed
+approvals do not qualify as an invitee's own requests; their visibility to other
+callers is unchanged. The restriction covers exec, plugin, and system-agent
+requests, generic lookup and history, session events and replay, and approval
+notifications. Server-authenticated channel routes retain their separate
+reviewer custody checks; an invitation never lets an agent approve its own action.
+
 ## Where it applies
 
 Exec approvals are enforced locally on the execution host:
 
 - **Gateway host** -> `openclaw` process on the gateway machine.
 - **Node host** -> node runner (macOS companion app or headless node host).
-
-The `claude-cli` backend also checks native Bash commands against the agent's
-exec allowlist when `ask: "on-miss"`. This authorizes command arguments while
-Claude Code owns execution. It does not provide OpenClaw sandboxing. See
-[Native Bash and the exec allowlist](/gateway/cli-backends#native-bash-and-the-exec-allowlist)
-for matching, prompting, and binding restrictions.
 
 ### Trust model
 
@@ -378,7 +389,7 @@ explicitly when a no-UI approval prompt should fall back to allow.
 
 - `tools.exec.host=auto` chooses **where** exec runs: sandbox when available, otherwise gateway.
 - YOLO chooses **how** host exec is approved: `security=full` plus `ask=off`.
-- YOLO does **not** add a separate heuristic command-obfuscation approval gate or script-preflight rejection layer on top of the configured host exec policy. Node preparation still reads the target policy and resolves the working directory once. If both sides allow full/off and strict inline eval is disabled, ordinary path aliases and inline scripts do not require approval binding. Restrictive policy and later policy changes remain enforced.
+- YOLO does **not** add a separate heuristic command-obfuscation approval gate on top of the configured host exec policy. Exec has no script-preflight rejection layer in any mode. Node preparation still reads the target policy and resolves the working directory once. If both sides allow full/off and strict inline eval is disabled, ordinary path aliases and inline scripts do not require approval binding. Restrictive policy and later policy changes remain enforced.
 - `auto` does not make node or gateway routing a free override from a sandboxed session. Per-call `host=node` and `host=gateway` requests are allowed from `auto` only when no sandbox runtime is active. For a stable non-auto default, set `tools.exec.host` or use `/exec host=...` explicitly.
 
 </Warning>

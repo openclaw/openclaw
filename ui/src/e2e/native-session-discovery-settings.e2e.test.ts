@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { inspection } from "./plugins-settings-admin.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Native session discovery settings",
@@ -20,7 +21,10 @@ suite.define(() => {
     const page = await suite.browser.newPage({ viewport: { height: 1100, width: 1440 } });
     const discoveryPluginSchema = objectSchema({
       config: objectSchema({
-        sessionCatalog: objectSchema({ enabled: { type: "boolean", default: true } }),
+        sessionCatalog: {
+          ...objectSchema({ enabled: { type: "boolean", default: true } }),
+          additionalProperties: false,
+        },
       }),
     });
     const entries = Object.fromEntries(
@@ -33,6 +37,7 @@ suite.define(() => {
         "config.get",
         "config.schema",
         "plugins.list",
+        "plugins.inspect",
       ],
       methodResponses: {
         "config.get": {
@@ -59,6 +64,15 @@ suite.define(() => {
           version: "e2e",
           generatedAt: "2026-07-14T00:00:00.000Z",
         },
+        "plugins.inspect": {
+          cases: plugins.map(({ id, name }) => ({
+            match: { pluginId: id },
+            response: {
+              ...inspection,
+              plugin: { ...inspection.plugin, id, name, origin: "bundled" },
+            },
+          })),
+        },
         "plugins.list": {
           plugins: plugins.map(({ id }) => ({
             id,
@@ -82,12 +96,14 @@ suite.define(() => {
           pathname: `/settings/plugins/${pluginId}`,
           routeId: "plugin-settings",
         });
-        const setting = page.locator(".settings-row", { hasText: settingLabel });
+        const setting = page.locator('[data-setting="sessionCatalog.enabled"]');
         await setting.waitFor({ state: "visible" });
         expect(await setting.getByText("eligible paired nodes.", { exact: false }).count()).toBe(1);
-        expect(
-          await setting.getByRole("checkbox", { name: settingLabel, exact: true }).isChecked(),
-        ).toBe(expected);
+        const control = setting.getByRole("checkbox", {
+          name: `Session catalog: ${settingLabel}`,
+          exact: true,
+        });
+        expect(await control.isChecked({ timeout: 5_000 })).toBe(expected);
       };
       await readDiscoverySetting("codex", "Discover Codex sessions", true);
       await readDiscoverySetting("anthropic", "Discover Claude Code sessions", false);

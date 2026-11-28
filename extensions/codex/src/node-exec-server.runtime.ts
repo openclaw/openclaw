@@ -367,7 +367,11 @@ export async function runCodexNodeExecServer(params: {
         try {
           // Native instruction discovery must receive pending metadata promptly;
           // waiting here blocks thread/start before conversational inference.
-          if (request.method === "fs/getMetadata" || request.method === "fs/canonicalize") {
+          if (
+            request.method === "fs/getMetadata" ||
+            request.method === "fs/getMetadataBatch" ||
+            request.method === "fs/canonicalize"
+          ) {
             readiness.assertCurrent();
           }
           await readiness.wait(io.signal);

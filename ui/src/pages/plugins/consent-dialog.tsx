@@ -1,12 +1,11 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, onSettled, Show, For, Errored, Loading } from "solid-js";
+import { createMemo, For, Errored, Loading } from "solid-js";
 import type { CapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import {
   PLUGIN_DECLARED_SURFACE_GROUPS,
   type PluginDeclaredSurfaceGroup,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import { IconButton } from "../../components/solid/icon-button.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
@@ -26,7 +25,7 @@ import type {
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { pluginFallbackGradient, pluginMonogram } from "./presentation.ts";
+import { PluginArtTile } from "./presentation.tsx";
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
@@ -66,102 +65,6 @@ type PluginConsentDialogProps = {
   onConfirm: () => void;
   onRetry: () => void;
 };
-
-type ArtTileProps = {
-  registerIcon?: (readId: () => string) => () => void;
-  slug: string;
-  name: string;
-  iconUrl?: string;
-  onIconError?: () => void;
-  authorIconUrl?: string;
-  loading?: boolean;
-  class?: string;
-  whiteBackground?: boolean;
-};
-
-export function PluginArtTile(props: ArtTileProps): JSX.Element {
-  const slug = () => props.slug;
-  let disposed = false;
-  onSettled(() => {
-    const unregister = props.registerIcon?.(slug);
-    return () => {
-      disposed = true;
-      unregister?.();
-    };
-  });
-  type ImageState = { source: string | undefined; status: "loading" | "ready" | "failed" };
-  const [packageImage, setPackageImage] = createSignal<ImageState>((previous) => {
-    const source = props.iconUrl;
-    return previous && previous.source === source ? previous : { source, status: "loading" };
-  });
-  const [authorImage, setAuthorImage] = createSignal<ImageState>((previous) => {
-    const source = props.authorIconUrl;
-    return previous && previous.source === source ? previous : { source, status: "loading" };
-  });
-  const currentImage = () =>
-    packageImage().source && packageImage().status !== "failed"
-      ? { state: packageImage(), update: setPackageImage, package: true }
-      : { state: authorImage(), update: setAuthorImage, package: false };
-  const gradient = () => pluginFallbackGradient(slug());
-  const monogram = createMemo(() => pluginMonogram(props.name));
-  const source = () =>
-    currentImage().state.status === "failed" ? undefined : currentImage().state.source;
-  const pending = () =>
-    source() ? currentImage().state.status === "loading" : Boolean(props.loading);
-  const className = () => props.class ?? "plugins-tile";
-  const settle = (url: string, status: "ready" | "failed") => {
-    const image = currentImage();
-    if (disposed || image.state.source !== url) {
-      return;
-    }
-    image.update({ ...image.state, status });
-    if (status === "failed" && image.package) {
-      props.onIconError?.();
-    }
-  };
-  // Only the displayed image is admitted; failed sources stay failed until their URL changes.
-  return (
-    <>
-      {source() || pending() ? (
-        <span
-          class={[
-            className(),
-            { "plugins-tile--white": props.whiteBackground, skeleton: pending() },
-          ]}
-          data-plugin-icon-id={slug()}
-          aria-hidden="true"
-        >
-          <Show when={source()} keyed>
-            {(url) => (
-              <img
-                class="plugins-icon"
-                src={url}
-                alt=""
-                loading="eager"
-                decoding="async"
-                hidden={pending()}
-                onLoad={() => settle(url, "ready")}
-                onError={() => settle(url, "failed")}
-              />
-            )}
-          </Show>
-        </span>
-      ) : (
-        <span
-          class={[className(), `${className()}--fallback`]}
-          data-plugin-icon-id={slug()}
-          style={{
-            "--plugins-art-a": gradient()[0],
-            "--plugins-art-b": gradient()[1],
-          }}
-          aria-hidden="true"
-        >
-          {monogram() ? <span>{monogram()}</span> : <Icon name="plug" />}
-        </span>
-      )}
-    </>
-  );
-}
 
 function renderPluginMetaRow(label: string, value: JSX.Element | string, warning = false) {
   return (
