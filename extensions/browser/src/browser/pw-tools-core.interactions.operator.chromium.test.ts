@@ -99,10 +99,16 @@ describe.runIf(runChromiumProof)("operator input in Chromium", () => {
       .toBe(true);
   });
 
-  it("stops input when an iframe navigates to a blocked address", async () => {
-    const { send } = await openFormPage("/f");
-    // The burst whose key started the iframe navigation reports the denial itself.
-    await expect(send(keys("dz"))).rejects.toThrow(/blocked|private|not allowed/i);
+  it("keeps typing when an iframe navigates to a blocked address", async () => {
+    const { page, send } = await openFormPage("/f");
+    // "d" sends the iframe to a blocked host: the guard cancels that request and
+    // the frame keeps its document, so the burst neither stops nor reports it.
+    expect(await send(keys("dz"))).toMatchObject({ sent: 2 });
+    expect(await page.locator("#q").inputValue()).toBe("dz");
+    // The blocked target serves the same path and body on another origin, so
+    // only the full original URL shows the frame's document stayed in place.
+    const embed = page.frames().find((frame) => frame !== page.mainFrame());
+    expect(embed?.url()).toBe(new URL("/frame", page.url()).href);
   });
 
   it("keeps policy denial for navigation started inside a session", async () => {

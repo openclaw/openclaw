@@ -37,7 +37,15 @@ export type InteractionTargetOptions = {
 };
 
 export type NavigationTargetOptions = InteractionTargetOptions & BrowserNavigationPolicyOptions;
-export type GuardedInteractionOptions = NavigationTargetOptions & { signal?: AbortSignal };
+export type GuardedInteractionOptions = NavigationTargetOptions & {
+  signal?: AbortSignal;
+  /**
+   * A frame the page loaded on its own had a document request denied during the
+   * interaction. The guard cancels that request without failing the action; a
+   * caller waiting on that frame (a download) decides for itself.
+   */
+  onSubframeDenied?: (error: unknown) => void;
+};
 export type ElementInteractionOptions = GuardedInteractionOptions & {
   ref?: string;
   selector?: string;
@@ -148,6 +156,7 @@ export async function runGuardedPageInteraction<T>(
       ...interactionNavigationPolicy(opts),
       targetId: opts.targetId,
       assertCurrent: opts.assertCurrent,
+      onSubframeDenied: opts.onSubframeDenied,
     },
     opts.signal,
     opts.signal,
@@ -184,6 +193,7 @@ export async function runCancellablePageInteraction<T>(
         ...interactionNavigationPolicy(opts),
         targetId: opts.targetId,
         assertCurrent: opts.assertCurrent,
+        onSubframeDenied: opts.onSubframeDenied,
       },
       interruption.signal,
       opts.signal,
@@ -445,6 +455,7 @@ async function awaitNavigationGuardedInteraction<T>(
     page: Page;
     targetId?: string;
     assertCurrent?: InteractionTargetOptions["assertCurrent"];
+    onSubframeDenied?: GuardedInteractionOptions["onSubframeDenied"];
   } & BrowserNavigationPolicyOptions,
   interruptionSignal?: AbortSignal,
   signal?: AbortSignal,
@@ -482,6 +493,12 @@ async function awaitNavigationGuardedInteraction<T>(
       });
     },
     onPolicyDenied: (event) => {
+      if (event.state === "subframe") {
+        // A denied frame the page loaded on its own is cancelled by the guard
+        // and never becomes this interaction's error.
+        opts.onSubframeDenied?.(event.error);
+        return;
+      }
       observedPolicyError = event.error;
       if (event.state === "handled" && !event.sourcePreserved) {
         void quarantineUnsafeSource().catch(() => {});

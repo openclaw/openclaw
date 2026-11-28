@@ -1,5 +1,6 @@
 import { EventEmitter, once } from "node:events";
 import { vi } from "vitest";
+import type { NavigationPolicyDeniedEvent } from "./pw-session-navigation.js";
 
 export type MockRoute = {
   continue: () => Promise<void>;
@@ -48,11 +49,7 @@ export type NavigationGuardCall = {
   action: (url: string) => Promise<unknown>;
   page: { url: () => string };
   onPolicyCheckStarted?: (check: Promise<void>) => void;
-  onPolicyDenied?: (event: {
-    state: "detected" | "handled";
-    error: unknown;
-    sourcePreserved?: boolean;
-  }) => void;
+  onPolicyDenied?: (event: NavigationPolicyDeniedEvent) => void;
 };
 
 export function createGuardSession<P, L>(getPage: () => P, getLocator: () => L) {

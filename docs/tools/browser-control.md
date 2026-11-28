@@ -141,9 +141,11 @@ per action, so a burst waits for the guard's 250 ms post-action window once.
 Every document request is policy-checked while the guard is active, as with
 `POST /act`. A main-frame navigation request or commit stops the burst before
 any further input is sent; subframe navigations do not stop it and are still
-checked. The response contains `sent` (inputs delivered, in order) and
-`navigated: true` when a navigation withheld later inputs. A policy denial or
-an open dialog is reported on the request whose input caused it.
+checked: a denied subframe request is cancelled and the frame keeps its
+current document while the burst continues. The response contains `sent`
+(inputs delivered, in order) and `navigated: true` when a navigation withheld
+later inputs. A main-frame policy denial or an open dialog is reported on the
+request whose input caused it.
 Existing-session profiles answer `501` with code `OPERATOR_INPUT_UNSUPPORTED`.
 
 ### Screencast stream

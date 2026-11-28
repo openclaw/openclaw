@@ -346,7 +346,9 @@ export async function waitForDownloadViaPlaywright(
     page,
     ...navigationPolicy,
     onPolicyDenied: (event) => {
-      if (event.state === "detected") {
+      // Chrome never starts a transfer the policy denied, whether the attachment
+      // was requested by the page or by a frame it loaded, so stop waiting.
+      if (event.state === "detected" || event.state === "subframe") {
         policyDenial.abort(
           event.error instanceof Error
             ? event.error
@@ -382,13 +384,17 @@ export async function downloadViaPlaywright(
     throw new Error("path is required");
   }
 
+  // Chrome never starts a transfer the policy denied; when the clicked link's
+  // own frame is the denied document, the click still succeeds, so the capture
+  // stops on that denial instead of waiting for its timeout.
+  const policyDenial = new AbortController();
   const capture = createExplicitDownloadCapture({
     page,
     state,
     timeoutMs: timeout,
     outPath,
     rootDir: opts.rootDir,
-    signal: opts.signal,
+    signal: opts.signal ? AbortSignal.any([opts.signal, policyDenial.signal]) : policyDenial.signal,
     ssrfPolicy: opts.ssrfPolicy,
     browserProxyMode: opts.browserProxyMode,
   });
@@ -397,7 +403,16 @@ export async function downloadViaPlaywright(
     const locator = refLocator(page, ref);
     await runCancellablePageInteraction(
       page,
-      opts,
+      {
+        ...opts,
+        onSubframeDenied: (error) => {
+          policyDenial.abort(
+            error instanceof Error
+              ? error
+              : new Error("Browser navigation blocked by policy", { cause: error }),
+          );
+        },
+      },
       async (signal) => await locator.click({ timeout, signal }),
       ref,
     );

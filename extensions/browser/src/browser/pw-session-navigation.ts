@@ -127,16 +127,23 @@ export function wasBrowserNavigationSourcePreservedAfterPolicyDenial(err: unknow
   return typeof err === "object" && err !== null && sourcePreservedPolicyDenials.has(err);
 }
 
+/**
+ * Policy outcomes the guard reports while an action runs. `detected` and
+ * `handled` describe a denied main-frame document, which fails the action;
+ * `subframe` describes a denied document of a frame the page loaded on its own,
+ * which is cancelled without failing the action.
+ */
+export type NavigationPolicyDeniedEvent =
+  | { state: "detected"; error: unknown }
+  | { state: "handled"; error: unknown; sourcePreserved: boolean }
+  | { state: "subframe"; error: unknown };
+
 /** Run one selected-page action while guarding document requests. */
 export async function withPageNavigationRequestGuard<T>(
   opts: {
     action: (baselineUrl: string) => Promise<T>;
     onPolicyCheckStarted?: (check: Promise<void>) => void;
-    onPolicyDenied?: (
-      event:
-        | { state: "detected"; error: unknown }
-        | { state: "handled"; error: unknown; sourcePreserved: boolean },
-    ) => void;
+    onPolicyDenied?: (event: NavigationPolicyDeniedEvent) => void;
     page: Page;
     signal?: AbortSignal;
   } & BrowserNavigationPolicyOptions,
@@ -173,11 +180,7 @@ export async function withPageNavigationRequestGuard<T>(
     hasGuardError = true;
     firstGuardError = err;
   };
-  const emitPolicyDenied = (
-    event:
-      | { state: "detected"; error: unknown }
-      | { state: "handled"; error: unknown; sourcePreserved: boolean },
-  ) => {
+  const emitPolicyDenied = (event: NavigationPolicyDeniedEvent) => {
     try {
       opts.onPolicyDenied?.(event);
     } catch {
@@ -245,25 +248,63 @@ export async function withPageNavigationRequestGuard<T>(
     }
     await route.abort().catch(() => {});
   };
+  const assertCurrent = navigationPolicy.assertNavigationCurrent;
   const handleRoute = async (route: Route, request: Request) => {
     const preserveDocument = true;
     if (preserveDocument) {
+      const topLevel = request.isTopLevel();
+      // The policy check asserts the caller's authority inside itself and
+      // surfaces a revocation as the caller's own error, so it is tagged where
+      // it is thrown; no second authority read decides what a frame failure was.
+      let revocation: unknown;
       const policyCheck = assertBrowserNavigationAllowed({
         url: request.url(),
         ...navigationPolicy,
+        ...(assertCurrent
+          ? {
+              assertNavigationCurrent: () => {
+                try {
+                  assertCurrent();
+                } catch (err) {
+                  revocation = err ?? new Error("navigation authority revoked");
+                  throw err;
+                }
+              },
+            }
+          : {}),
         ...(opts.signal ? { signal: opts.signal } : {}),
       });
-      try {
-        opts.onPolicyCheckStarted?.(policyCheck);
-      } catch {
-        // Observation cannot change the policy decision owned by this guard.
+      if (topLevel) {
+        try {
+          opts.onPolicyCheckStarted?.(policyCheck);
+        } catch {
+          // Observation cannot change the policy decision owned by this guard.
+        }
       }
       try {
         await policyCheck;
       } catch (err) {
-        recordGuardError(err);
+        if (!topLevel && !opts.signal?.aborted && revocation === undefined) {
+          // A subframe document the page loads on its own (an embedded ad or
+          // tracker frame) is not the action's navigation: cancelling it keeps
+          // the private destination unreached and the frame's current document
+          // in place, so the action still returns its own result. A caller
+          // that waits on that frame (an explicit download) hears about the
+          // denial; only a cancellation Chromium never acknowledged fails the action.
+          if (isPolicyDenyNavigationError(err)) {
+            emitPolicyDenied({ state: "subframe", error: err });
+          }
+          try {
+            await route.preserve();
+          } catch {
+            await route.abort().catch(recordGuardError);
+          }
+          return;
+        }
+        const failure = revocation ?? err;
+        recordGuardError(failure);
         notifyPolicyDeniedDetected();
-        await stopGuardedRoute(route, true, err);
+        await stopGuardedRoute(route, true, failure);
         return;
       }
     }

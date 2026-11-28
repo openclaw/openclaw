@@ -72,8 +72,9 @@ export async function sendOperatorInputViaPlaywright(
     const onFrameNavigated = (frame: Frame) => {
       const checked = subframes.length;
       frameListener(frame);
-      // An iframe reload does not change where input goes; only a denied one stops
-      // the burst. The guard rechecks every subframe and rejects with the denial.
+      // An iframe reload does not change where input goes. The guard cancels a
+      // denied subframe request before it commits, so only a committed subframe
+      // URL the result policy rejects stops the burst.
       for (const url of subframes.slice(checked)) {
         assertBrowserNavigationResultAllowed({ url, ...policy }).catch(() => {
           subframeDenied = true;
