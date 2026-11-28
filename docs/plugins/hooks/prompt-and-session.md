@@ -547,7 +547,10 @@ The event is `{ runtime, requestKind, payload, provider, model, messages, contex
   request. Use that metadata, not text inside a message, to decide sender
   trust.
 - `contextSpans`, when present, labels quoted conversation data in embedded
-  in-history system updates. Each entry has `containerText` and UTF-16 `start`
+  in-history system updates and serialized compaction history. In a summary
+  request, tool results and messages from a recorded non-owner sender are
+  labelled as they are rendered. Slicing a span returns the selected summary
+  text, including any role label or truncation marker in that entry. Each entry has `containerText` and UTF-16 `start`
   (inclusive) and `end` (exclusive) offsets. Match the carrier against the final
   payload before screening. OpenClaw records the ranges while rendering the
   data, so adjacent runtime instructions are outside the spans. Ordinary
@@ -561,9 +564,9 @@ The event is `{ runtime, requestKind, payload, provider, model, messages, contex
   `messages` holds only that request, with no per-message sender metadata. A CLI
   `"side_question"` carries the conversation as text inside `payload.prompt`;
   `messages` holds that history with its metadata, followed by the side question.
-  A handler that decides trust from metadata must locate that text in the
-  payload itself, and cannot tell outside content apart inside a compaction
-  summary request.
+  Match the host-labelled `contextSpans` against the embedded summary payload.
+  For a CLI side question, locate the text in the prompt using the transcript
+  metadata.
 
 The hook context carries the usual agent fields (`agentId`, `sessionKey`,
 `sessionId`, `runId`, channel and sender fields when known) plus

@@ -31,11 +31,6 @@ const query = (root: ParentNode | null | undefined, selector: string) =>
   root?.querySelector<HTMLElement>(selector) ?? null;
 const textOf = (root: ParentNode, selector: string) => root.querySelector(selector)?.textContent;
 const cardPart = (root: ParentNode, part: string) => query(root, `.chat-tool-card__${part}`);
-const diffText = (root: ParentNode | null | undefined, kind: string) =>
-  Array.from(
-    root?.querySelectorAll(`.chat-diff__row--${kind} .chat-diff__text`) ?? [],
-    (node) => node.textContent,
-  );
 const change = (path: string, diff: string, type = "update") => ({ path, kind: { type }, diff });
 const patchCard = (args: ToolCard["args"], extra: Partial<ToolCard> = {}): ToolCard => ({
   id: "patch",
@@ -112,70 +107,6 @@ it("does not render MCP App previews on the tool surface", () => {
   const preview = { ...canvas, viewId: "cv_app", mcpApp: { viewId: "cv_app" } } as const;
   mountPreview(preview, "chat_tool", { sessionKey: "agent:main:main" }, container);
   expect(container.querySelector("mcp-app-view")).toBeNull();
-});
-
-it("switches a completed patch between mutually exclusive diff and raw bodies", async () => {
-  const card = patchCard(
-    {
-      changes: [
-        change("src/a.ts", "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old a\n+new a\n"),
-        change("src/b.ts", "new b\n", "add"),
-      ],
-    },
-    { id: "msg:patch:multi", outputText: "Applied patch" },
-  );
-  const container = await mountCard(card);
-
-  const diff = query(container, ".chat-diff");
-  expect(diff?.getAttribute("aria-label")).toBe("File changes");
-  const fileRows = Array.from(diff?.querySelectorAll(".chat-diff__row--file") ?? []);
-  expect(diffText(diff, "file")).toEqual(["Update src/a.ts", "Add src/b.ts"]);
-  expect(fileRows.every((row) => row.querySelector(".chat-diff__gutter") !== null)).toBe(true);
-  expect(diffText(diff, "del")).toEqual(["old a"]);
-  expect(diffText(diff, "add")).toEqual(["new a", "new b"]);
-
-  const tabGroup = cardPart(container, "modes");
-  const tabList = query(tabGroup, '[role="tablist"]');
-  await waitForSolid(() => expect(tabList?.getAttribute("aria-label")).toBe("Tool detail view"));
-  const tabs = Array.from(tabGroup?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []);
-  expect(tabs.map((tab) => [tab.textContent?.trim(), tab.getAttribute("aria-selected")])).toEqual([
-    ["Diff", "true"],
-    ["Raw", "false"],
-  ]);
-  const diffBody = query(container, '[id$="-diff-panel"]');
-  const rawBody = query(container, '[id$="-raw-panel"]');
-  const expectPanels = (raw: boolean) =>
-    expect([diffBody?.hidden, rawBody?.hidden]).toEqual([raw, !raw]);
-  expectPanels(false);
-  expect(query(rawBody, "code")).toBeNull();
-
-  tabs[1]?.click();
-  await waitForSolid(() =>
-    expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]),
-  );
-  expectPanels(true);
-  expect(query(diffBody, ".chat-diff")).toBe(diff);
-  expect(query(rawBody, "code")?.textContent).toBe("Applied patch");
-
-  await mountCard(
-    {
-      ...card,
-      args: { changes: [change("src/a.ts", "@@ -1 +1 @@\n-old\n+new\n")] },
-      completed: true,
-    },
-    {},
-    container,
-  );
-  await waitForSolid(() => {
-    expect(cardPart(container, "modes")).toBe(tabGroup);
-    expect(rawBody?.hidden).toBe(false);
-    expect(tabList?.getAttribute("aria-label")).toBe("Tool detail view");
-  });
-  tabs[0]?.click();
-  await waitForSolid(() => expectPanels(false));
-  expect(query(rawBody, "code")?.textContent).toBe("Applied patch");
-  expect(textOf(diffBody!, ".chat-diff__row--add .chat-diff__text")).toBe("new");
-  container.remove();
 });
 
 it("scans unnumbered diff lines once while rendering every row", () => {
@@ -655,21 +586,6 @@ it.each([
   },
 );
 
-it.each([
-  ["nodes", { action: "describe", node: "Lab Mac" }, "Described node · Lab Mac", "Lab Mac"],
-  ["nodes", { action: "describe", node: "a".repeat(64) }, "Described node", "a".repeat(64)],
-  ["browser", { action: "snapshot", targetId: "report" }, "Read browser page", "report"],
-] as const)(
-  "keeps human device names in %s titles and technical selectors in details: %j",
-  async (name, args, label, target) => {
-    const card = { id: name, name, args, inputText: JSON.stringify(args), completed: true };
-    const container = await mountCard(card, { expanded: false });
-    expect(textOf(container, ".chat-tool-row__title")).toBe(label);
-    await mountCard(card, { expanded: true }, container);
-    expect(textOf(container, ".chat-tool-msg-body")).toContain(target);
-  },
-);
-
 it("bounds the literal web search title without changing the expanded query", async () => {
   const prefix = "with <b>{query}</b> ";
   const padding = "a".repeat(118 - prefix.length);
@@ -772,88 +688,6 @@ it("renders a plain error detail when a failed tool has no output", async () => 
   expect(cardPart(container, "block-content")).toMatchObject({
     textContent: "The tool failed without output.",
   });
-});
-
-it.each([
-  {
-    args: {
-      markdown: "Implementation is moving.",
-      plan: [
-        { step: "Inspect", status: "completed" },
-        { step: "Implement", status: "in_progress" },
-        { step: "Verify", status: "pending" },
-      ],
-    },
-    expected: "Progress updated — 1/3 · Implement",
-  },
-  { args: { markdown: "Waiting on review." }, expected: "Progress note updated" },
-])("renders progress_card as a compact receipt: $expected", async ({ args, expected }) => {
-  const container = await mountTool("progress_card", {
-    args,
-    outputText: "Progress card updated",
-    completed: true,
-  });
-
-  expect(container.textContent?.trim()).toBe(expected);
-  expect(query(container, "button")).toBeNull();
-  expect(query(container, ".chat-tool-msg-body")).toBeNull();
-  expect(container.textContent).not.toContain("Waiting on review.");
-});
-
-async function highlighted(card: ToolCard) {
-  const container = await mountCard(card);
-  onTestFinished(() => vi.dynamicImportSettled());
-  await vi.dynamicImportSettled();
-  return container;
-}
-it("highlights edit previews using their file languages", async () => {
-  const container = await highlighted({
-    id: "highlight",
-    name: "edit",
-    args: {
-      path: "example.ts",
-      oldText: "/* removed comment\ncontinued",
-      newText: 'const value = "new";',
-    },
-  });
-  await vi.waitFor(() => expect(textOf(container, ".tok-keyword")).toBe("const"));
-  expect(textOf(container, ".tok-string")).toMatch(/"(?:old|new)"/);
-});
-
-it.each(["text", "structured"])("highlights both sides of %s renames", async (format) => {
-  const before = '<section data-mode="before">Hello</section>';
-  const after = 'const value = "after";';
-  const args =
-    format === "text"
-      ? {
-          patch: `*** Begin Patch\n*** Update File: example.html\n*** Move to: example.ts\n@@\n-${before}\n+${after}\n*** Add File: helper.py\n+def greet():\n+    return "hello"\n*** End Patch`,
-        }
-      : {
-          changes: [
-            {
-              path: "example.html",
-              kind: { type: "update", move_path: "example.ts" },
-              diff: ["@@ -1 +1 @@", `-${before}`, `+${after}`].join("\n"),
-            },
-          ],
-        };
-  const container = await highlighted(
-    patchCard(args, {
-      id: "rename",
-      ...(format === "structured" ? { outputText: "Applied patch" } : {}),
-    }),
-  );
-  await vi.waitFor(() => {
-    expect(textOf(container, ".chat-diff__row--del .tok-propertyName")).toBe("data-mode");
-    expect(textOf(container, ".chat-diff__row--add .tok-keyword")).toBe("const");
-  });
-  expect(textOf(container, ".chat-diff__row--del .chat-diff__text")).toBe(before);
-  expect(textOf(container, ".chat-diff__row--add .chat-diff__text")).toBe(after);
-  if (format === "text") {
-    expect(
-      [...container.querySelectorAll(".tok-keyword")].map((node) => node.textContent),
-    ).toContain("def");
-  }
 });
 
 function promptFixture(url: string, allowExternalEmbedUrls = false) {

@@ -659,7 +659,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
     this.retireArchivedPresentation();
     this.cancelResetConfirmationForSessionChange();
-    this.evaluateHistoryEdge();
+    this.reconcileHistoryAfterRender();
     this.panelActions?.flush();
     this.activeSessionResources.syncPane({
       state: () => this.state,

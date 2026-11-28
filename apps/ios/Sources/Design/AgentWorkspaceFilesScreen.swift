@@ -282,7 +282,6 @@ struct AgentWorkspaceFilePreview: View {
     @State private var loading = false
     @State private var errorText: String?
     @State private var shareItem: ShareItem?
-    @State private var showsShareError = false
 
     var body: some View {
         ZStack {
@@ -304,14 +303,6 @@ struct AgentWorkspaceFilePreview: View {
         }
         .sheet(item: self.$shareItem) { item in
             OpenClawChatFileShareSheet(fileURL: item.fileURL)
-        }
-        .alert("Could not share this file.", isPresented: self.$showsShareError) {
-            Button {
-                self.showsShareError = false
-            } label: {
-                Text("OK")
-                    .font(OpenClawType.subheadMedium)
-            }
         }
         .task(id: "\(self.agentId)|\(self.path)") {
             await self.load()
@@ -405,9 +396,15 @@ struct AgentWorkspaceFilePreview: View {
 
     private func share() {
         guard let file else { return }
+        // Share in the toolbar stays the other way to try again.
+        let shareFailed = {
+            self.appModel.toasts.post(.failure(
+                String(localized: "Couldn’t share this file."),
+                retry: { self.share() }))
+        }
         let safeName = (file.name as NSString).lastPathComponent
         guard !safeName.isEmpty, safeName != ".", safeName != ".." else {
-            self.showsShareError = true
+            shareFailed()
             return
         }
         // Each share gets stable bytes at a unique URL; a later same-basename
@@ -420,7 +417,7 @@ struct AgentWorkspaceFilePreview: View {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             if self.isImage(file) {
                 guard let data = Data(base64Encoded: file.content) else {
-                    self.showsShareError = true
+                    shareFailed()
                     return
                 }
                 try data.write(to: fileURL, options: .atomic)
@@ -429,7 +426,7 @@ struct AgentWorkspaceFilePreview: View {
             }
             self.shareItem = ShareItem(fileURL: fileURL)
         } catch {
-            self.showsShareError = true
+            shareFailed()
         }
     }
 }

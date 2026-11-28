@@ -271,7 +271,7 @@ export function createSessionRowProjectionContext(
     },
     preparePresentation(
       row: records.MaterializedRow,
-      readChildLinks: (row: records.Row) => readonly SessionChildLink[],
+      readChildLinks: (row: records.Row, residentOnly?: boolean) => readonly SessionChildLink[],
     ) {
       if (row.profileRevision !== profileRevision) {
         row.materialized = refreshSessionRowProfiles(row.materialized);
@@ -279,7 +279,7 @@ export function createSessionRowProjectionContext(
       }
       if (row.subagentRevision !== subagentRevision) {
         const previous = row.materialized;
-        const links = readChildLinks(row);
+        const links = readChildLinks(row, !row.privateSource);
         const swarm = buildSessionSwarmSummary(
           current.subagentRuns.swarmRunsByRequesterSessionKey.get(row.key) ?? [],
           row.key,

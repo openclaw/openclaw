@@ -1,3 +1,4 @@
+import type { RuntimeContextDataRange } from "@openclaw/llm-core/types";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { copyString } from "../utils/truncate.js";
@@ -22,6 +23,8 @@ export interface ConversationEntryDescriptor<TSource = number> {
   omissionMessages: number;
   callLabel?: string;
   toolResult?: true;
+  /** Rendered source content eligible for final request screening. */
+  screen?: true;
 }
 
 /**
@@ -85,6 +88,7 @@ function elideMiddleWithinWeight(text: string, maxChars: number): string | undef
 
 export interface BoundedConversation {
   text: string;
+  dataRanges?: RuntimeContextDataRange[];
   /** Entries left out entirely; the text names each gap where it occurs. */
   omittedEntries: number;
   /** Entries kept with their middle elided. */
@@ -119,15 +123,27 @@ export function renderConversationEntriesWithinBudget<
   readTexts?: (reads: readonly ConversationTextRead<TEntry>[]) => Iterable<string>,
 ): BoundedConversation {
   const separatorChars = ENTRY_SEPARATOR.length;
+  const dataRanges: RuntimeContextDataRange[] = [];
+  let offset = 0;
+  const recordPart = (text: string, screen?: true) => {
+    if (screen && text.length) {
+      dataRanges.push({ start: offset, end: offset + text.length });
+    }
+    offset += text.length + separatorChars;
+    return text;
+  };
   const totalChars =
     entries.reduce((sum, entry) => sum + entry.fullChars, 0) +
     separatorChars * Math.max(0, entries.length - 1);
   if (totalChars <= maxChars) {
     const text = readTexts
-      ? Array.from(readTexts(entries.map((entry) => ({ entry, variant: "full" }))), copyString)
-      : entries.map((entry) => copyString(readText(entry, "full")));
+      ? Array.from(readTexts(entries.map((entry) => ({ entry, variant: "full" }))), (part, index) =>
+          recordPart(copyString(part), entries[index]?.screen),
+        )
+      : entries.map((entry) => recordPart(copyString(readText(entry, "full")), entry.screen));
     return {
       text: text.join(ENTRY_SEPARATOR),
+      ...(dataRanges.length ? { dataRanges } : {}),
       omittedEntries: 0,
       trimmedEntries: 0,
     };
@@ -274,7 +290,7 @@ export function renderConversationEntriesWithinBudget<
     }
   }
 
-  const parts: Array<string | null> = [];
+  const parts: Array<{ text: string | null; screen?: true }> = [];
   const pending: ConversationTextRead<TEntry>[] = [];
   let omittedEntries = 0;
   let gap = 0;
@@ -286,34 +302,31 @@ export function renderConversationEntriesWithinBudget<
       continue;
     }
     if (gap > 0) {
-      parts.push(`[... ${gap} ${gap === 1 ? "entry" : "entries"} omitted ...]`);
+      parts.push({ text: `[... ${gap} ${gap === 1 ? "entry" : "entries"} omitted ...]` });
       omittedEntries += gap;
       gap = 0;
     }
     if (text !== undefined) {
       if (typeof text === "string") {
-        parts.push(text);
+        parts.push({ text, screen: entries[index]?.screen });
       } else {
-        parts.push(null);
+        parts.push({ text: null, screen: text.entry.screen });
         pending.push(text);
       }
     }
   }
-  if (!readTexts || pending.length === 0) {
-    return { text: parts.join(ENTRY_SEPARATOR), omittedEntries, trimmedEntries };
-  }
-  const rendered = readTexts(pending)[Symbol.iterator]();
+  const rendered = pending.length ? readTexts?.(pending)[Symbol.iterator]() : undefined;
   const text = parts
-    .map((part) => {
+    .map(({ text: part, screen }) => {
       if (part !== null) {
-        return part;
+        return recordPart(part, screen);
       }
-      const next = rendered.next();
-      if (next.done) {
+      const next = rendered?.next();
+      if (!next || next.done) {
         throw new Error("Compaction batch did not return all selected conversation entries");
       }
-      return copyString(next.value);
+      return recordPart(copyString(next.value), screen);
     })
     .join(ENTRY_SEPARATOR);
-  return { text, omittedEntries, trimmedEntries };
+  return { text, omittedEntries, trimmedEntries, ...(dataRanges.length ? { dataRanges } : {}) };
 }

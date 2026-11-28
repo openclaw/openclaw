@@ -51,6 +51,7 @@ import { resolveCronConfigurationRefusal } from "../configuration-refusal.js";
 import { isCronExecutionIdle } from "../execution-idle.js";
 import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
 import { CronOperatorSourceError } from "../operator-source-error.js";
+import { resolveCronRateLimitResetAt } from "../rate-limit-reset.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
 import {
@@ -602,6 +603,7 @@ async function runCronIsolatedAgentTurnInTrace(
                     ? readAgentTerminalSnapshot(err)
                     : undefined,
                 interruptedByRestart,
+                rateLimitResetAt: resolveCronRateLimitResetAt(err),
                 errorClassification:
                   err instanceof CronOperatorSourceError
                     ? { kind: "permanent" }

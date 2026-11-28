@@ -1,3 +1,7 @@
+import {
+  setRuntimeContextDataRanges,
+  type RuntimeContextDataRange,
+} from "@openclaw/llm-core/types";
 import { z } from "zod";
 import {
   escapeRuntimeContextFooter,
@@ -24,10 +28,6 @@ import {
   type CurrentInboundPromptContext,
   type RuntimeContextFragment,
 } from "../../internal-runtime-context.js";
-import {
-  setRuntimeContextDataRanges,
-  type RuntimeContextDataRange,
-} from "../../runtime-context-data-ranges.js";
 import type { AgentMessage } from "../../runtime/index.js";
 
 const RETAIN_STEERING_RUNTIME_CONTEXT = Symbol.for("openclaw.retainSteeringRuntimeContext");

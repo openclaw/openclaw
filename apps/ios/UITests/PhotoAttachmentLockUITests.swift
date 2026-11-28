@@ -24,12 +24,10 @@ final class PhotoAttachmentLockUITests: XCTestCase {
         XCTAssertTrue(exists)
         let frame = traced("query composer-options frame") { attachments.frame }
         XCTAssertFalse(frame.isEmpty)
-        // iOS 27 reports this visible SwiftUI Menu as non-hittable. Its center
-        // was verified through independent HID input; assert the resulting menu.
-        traced("tap visible composer-options center") {
+        traced("tap composer add button") {
             attachments.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         }
-        let library = app.buttons["Photo Library"]
+        let library = app.buttons["chat-composer-add-photo-library"]
         requireVisible(library, named: "Photo Library")
         traced("tap Photo Library") { library.tap() }
 
@@ -51,8 +49,15 @@ final class PhotoAttachmentLockUITests: XCTestCase {
             done.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         }
 
-        let attachment = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "photo-")).firstMatch
+        let attachment = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "photo-")).firstMatch
         requireVisible(attachment, named: "staged photo attachment")
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        let introduction = keyboard.buttons["Continue"]
+        if introduction.exists { introduction.tap() }
+        XCTAssertTrue(keyboard.keys.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertLessThan(attachment.frame.maxY, keyboard.frame.minY)
         exerciseComposer(in: app, withPhoto: true)
     }
 
@@ -106,15 +111,24 @@ final class PhotoAttachmentLockUITests: XCTestCase {
         let input = app.descendants(matching: .any)["chat-message-input"]
         requireVisible(input, named: "composer input")
         assertDraft("", in: input)
-        traced("tap composer input") { input.tap() }
+        if !withPhoto { traced("tap composer input") { input.tap() } }
         var expected = ""
         for character in "abcdefgh" {
             if !expected.isEmpty {
                 traced("one-second typing interval") { Thread.sleep(forTimeInterval: 1) }
             }
             let next = String(character)
-            traced("type character \(expected.count + 1)") { input.typeText(next) }
-            expected.append(character)
+            traced("type character \(expected.count + 1)") {
+                if withPhoto {
+                    // Type on the keyboard the picker raised: injected hardware keys can hide it.
+                    let key = app.keyboards.keys.matching(NSPredicate(format: "label ==[c] %@", next)).firstMatch
+                    XCTAssertTrue(key.exists)
+                    key.tap()
+                } else {
+                    input.typeText(next)
+                }
+            }
+            expected += withPhoto && expected.isEmpty ? next.uppercased() : next
             assertDraft(expected, in: input)
         }
 
@@ -122,9 +136,19 @@ final class PhotoAttachmentLockUITests: XCTestCase {
         requireVisible(send, named: "Send")
         let enabled = traced("query Send enabled") { send.isEnabled }
         XCTAssertTrue(enabled, "Send must be enabled after the eight-character draft")
-        let hittable = traced("query Send hittable") { send.isHittable }
-        XCTAssertTrue(hittable, "Send must be hittable without dismissing the keyboard")
-        traced("tap Send") { send.tap() }
+        if withPhoto {
+            let keyboard = app.keyboards.firstMatch
+            XCTAssertTrue(keyboard.keys.firstMatch.exists)
+            XCTAssertLessThan(send.frame.maxY, keyboard.frame.minY)
+            // Tap the visible primary action. The cleared draft below proves the touch actually landed.
+            traced("tap Send above keyboard") {
+                send.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            }
+        } else {
+            let hittable = traced("query Send hittable") { send.isHittable }
+            XCTAssertTrue(hittable, "Send must be hittable without dismissing the keyboard")
+            traced("tap Send") { send.tap() }
+        }
         let recovered = traced("wait for empty, enabled, hittable composer after Send (45s maximum)") {
             let ready = NSPredicate { _, _ in
                 input.exists && input.isEnabled && input.isHittable && (input.value as? String) == ""

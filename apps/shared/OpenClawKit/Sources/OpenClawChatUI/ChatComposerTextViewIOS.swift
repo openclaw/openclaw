@@ -46,15 +46,9 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
             return
         }
 
-        if textView.text != self.text {
-            context.coordinator.isProgrammaticUpdate = true
-            defer { context.coordinator.isProgrammaticUpdate = false }
-            textView.text = self.text
-            if textView.isFirstResponder {
-                textView.selectedRange = NSRange(location: (self.text as NSString).length, length: 0)
-            }
-            textView.invalidateIntrinsicContentSize()
-        }
+        context.coordinator.isProgrammaticUpdate = true
+        textView.applyDraftText(self.text)
+        context.coordinator.isProgrammaticUpdate = false
         context.coordinator.lastReportedText = self.text
     }
 
@@ -151,6 +145,49 @@ final class ChatComposerUITextView: UITextView {
     var onHistoryDown: (() -> Bool)?
     var onPasteImageAttachment: ((_ data: Data, _ fileName: String, _ mimeType: String) -> Void)?
 
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // UIKit has no public correction-decoration style. Match only the observed text canvas
+        // hierarchy; a changed hierarchy should bring back the underline, not hide other content.
+        // Changing only the layer's opacity preserves hit testing and UIKit's correction state.
+        for container in self.subviews where NSStringFromClass(type(of: container)) == "_UITextContainerView" {
+            for canvas in container.subviews where NSStringFromClass(type(of: canvas)) == "_UITextLayoutCanvasView" {
+                for overlay in canvas.subviews where type(of: overlay) == UIView.self {
+                    for mark in overlay.subviews where NSStringFromClass(type(of: mark)) == "_UITextUnderlineView" {
+                        // The same container also owns UIKit's range/revert highlight. Leave it alone.
+                        for rule in mark.subviews where type(of: rule) == UIView.self && rule.subviews.isEmpty {
+                            let size = rule.bounds.size
+                            if size.height > 0, size.height <= 2, size.width > size.height,
+                               rule.layer.backgroundColor != nil, rule.layer.opacity != 0
+                            {
+                                rule.layer.opacity = 0
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The one way app code changes the field's text (send, draft restore, skill, slash, dictation).
+    /// The keyboard keeps autocorrection and marked-text state for the words it saw; a change it is not
+    /// told about strands that state, and its tinted correction underline stays with no word under it.
+    /// So end composition, then tell the input delegate around the change, as UITextInput asks for edits
+    /// the text system did not make. Unlike `reloadInputViews()` or a resign, this keeps the keyboard up.
+    func applyDraftText(_ text: String) {
+        guard self.text != text else { return }
+        if self.markedTextRange != nil {
+            self.unmarkText()
+        }
+        self.inputDelegate?.textWillChange(self)
+        self.text = text
+        if self.isFirstResponder {
+            self.selectedRange = NSRange(location: (text as NSString).length, length: 0)
+        }
+        self.inputDelegate?.textDidChange(self)
+        self.invalidateIntrinsicContentSize()
+    }
+
     override var accessibilityTraits: UIAccessibilityTraits {
         // Preserve UIKit's dynamic keyboard-focus traits when exposing disabled input.
         get { self.isEditable ? super.accessibilityTraits : super.accessibilityTraits.union(.notEnabled) }
@@ -241,7 +278,8 @@ enum ChatComposerPasteSupport {
                       !data.isEmpty
                 else { continue }
                 let fileExtension = type.preferredFilenameExtension ?? "img"
-                return (data: data, fileName: "pasted-image-\(index + 1).\(fileExtension)", mimeType: mimeType)
+                let fileName = "\(OpenClawChatGeneratedAttachmentName.pasted(index: index)).\(fileExtension)"
+                return (data: data, fileName: fileName, mimeType: mimeType)
             }
             return nil
         }

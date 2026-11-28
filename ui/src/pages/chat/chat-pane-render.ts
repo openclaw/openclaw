@@ -456,6 +456,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
                 this.history.loadingOlder ||
                 (catalogKey ? this.history.catalogLoading : state.chatLoading),
               onShowEarlier: () => void this.loadOlderMessages(),
+              onSearchEarlier:
+                nativeConversation && !state.chatLoading ? this.searchEarlier : undefined,
             }
           : undefined,
       catalogPreviewImage: catalog ? this.history.catalogPreviewImage : undefined,

@@ -88,7 +88,10 @@ struct CommandSessionActionsModifier: ViewModifier {
     let archivesSession: () -> Bool
     let performMutation: (String?, @escaping Mutation) -> Void
     let fork: () -> Void
+    let preview: (() -> AnyView)?
 
+    @Environment(NodeAppModel.self) private var appModel
+    @Environment(\.openClawToastPresenter) private var toastPresenter
     @State private var editor: Editor?
     @State private var draftText = ""
     @State private var confirmsDelete = false
@@ -102,56 +105,7 @@ struct CommandSessionActionsModifier: ViewModifier {
     }
 
     private func managedContent(_ content: Content) -> some View {
-        content
-            .contextMenu {
-                OpenClawSessionColorMenu(color: self.session.color) {
-                    self.patch(color: .some($0))
-                }
-                if !self.isArchived {
-                    self.actionButton(
-                        self.session.pinned == true
-                            ? OpenClawTextValue.localized("Unpin")
-                            : OpenClawTextValue.localized("Pin"),
-                        systemImage: self.session.pinned == true ? "pin.slash" : "pin")
-                    {
-                        self.patch(pinned: self.session.pinned != true)
-                    }
-                    if self.canSnooze {
-                        self.snoozeMenu
-                    }
-                    self.actionButton(
-                        self.session.unread == true
-                            ? OpenClawTextValue.localized("Mark as Read")
-                            : OpenClawTextValue.localized("Mark as Unread"),
-                        systemImage: self.session.unread == true ? "envelope.open" : "envelope.badge")
-                    {
-                        self.patch(unread: self.session.unread != true)
-                    }
-                    self.actionButton("Rename…", systemImage: "pencil") {
-                        self.beginRename()
-                    }
-                    self.actionButton(
-                        self.session.hasActiveRun == true
-                            ? OpenClawTextValue.localized("Fork from last completed message")
-                            : OpenClawTextValue.localized("Fork"),
-                        systemImage: "arrow.triangle.branch")
-                    {
-                        self.fork()
-                    }
-                    self.groupMenu
-                }
-                if self.canArchive {
-                    self.actionButton(
-                        self.isArchived ? .localized("Unarchive") : .localized("Archive"),
-                        systemImage: "archivebox")
-                    {
-                        self.patch(archived: self.archivesSession())
-                    }
-                }
-                if self.canDelete {
-                    self.deleteButton
-                }
-            }
+        self.contextMenuContent(content)
             .alert(self.editorTitle, isPresented: self.editorBinding) {
                 TextField(self.editorPlaceholder, text: self.$draftText)
                     .font(OpenClawType.body)
@@ -163,6 +117,7 @@ struct CommandSessionActionsModifier: ViewModifier {
                         : LocalizedStringKey("Create"))
                         .font(OpenClawType.subheadSemiBold)
                 }
+                .disabled(self.editor == .newGroup && self.draftText.trimmedNonEmpty == nil)
                 Button(role: .cancel) {
                     self.editor = nil
                 } label: {
@@ -170,14 +125,18 @@ struct CommandSessionActionsModifier: ViewModifier {
                         .font(OpenClawType.subheadSemiBold)
                 }
             }
+            .tint(.primary)
             .confirmationDialog(
                 "Delete Session?",
                 isPresented: self.$confirmsDelete,
                 titleVisibility: .visible)
             {
                 Button(role: .destructive) {
-                    self.performMutation(self.session.key) { transport in
-                        try await transport.deleteSession(key: self.session.key)
+                    self.run(
+                        self.failureText(String(localized: "Couldn’t delete “%@”.")),
+                        resetActiveSessionKey: self.session.key)
+                    {
+                        try await $0.deleteSession(key: self.session.key)
                     }
                 } label: {
                     Text("Delete Session")
@@ -201,26 +160,91 @@ struct CommandSessionActionsModifier: ViewModifier {
         archived: Bool? = nil,
         unread: Bool? = nil)
     {
-        self.performMutation(archived == true ? self.session.key : nil) { transport in
-            try await transport.patchSession(
+        let failure = switch (archived, pinned, label) {
+        case (true?, _, _): self.failureText(String(localized: "Couldn’t archive “%@”."))
+        case (false?, _, _): self.failureText(String(localized: "Couldn’t unarchive “%@”."))
+        case (_, true?, _): self.failureText(String(localized: "Couldn’t pin “%@”."))
+        case (_, false?, _): self.failureText(String(localized: "Couldn’t unpin “%@”."))
+        case (_, _, .some): self.failureText(String(localized: "Couldn’t rename “%@”."))
+        default: self.failureText(String(localized: "Couldn’t update “%@”."))
+        }
+        // The row leaves the list, so archiving says so and offers Undo. Unarchive in Sessions › Archived
+        // is the other way back.
+        let success = archived == true
+            ? OpenClawToast(
+                String(localized: "Archived"),
+                systemImage: "archivebox",
+                action: .undo { self.patch(archived: false) })
+            : nil
+        self.run(failure, resetActiveSessionKey: archived == true ? self.session.key : nil, success: success) {
+            if let pinned {
+                try await self.appModel.setPersonalSidebarPin(self.session.key, pinned: pinned)
+                return
+            }
+            try await $0.patchSession(
                 key: self.session.key,
                 expectedSessionID: archived == nil ? nil : self.session.sessionId,
                 label: label,
                 category: category,
                 color: color,
-                pinned: pinned,
+                pinned: nil,
                 archived: archived,
                 unread: unread)
         }
     }
 
     private func patchSnooze(_ snoozedUntil: OpenClawChatSnoozePatch) {
-        self.performMutation(nil) { transport in
-            try await transport.patchSession(
+        let failure: String
+        var success: OpenClawToast?
+        switch snoozedUntil {
+        case let .until(wakeAt):
+            failure = self.failureText(String(localized: "Couldn’t snooze “%@”."))
+            // The row leaves the list until then; Wake session in its menu is the other way back.
+            success = OpenClawToast(
+                String(
+                    format: String(localized: "Snoozed until %@"),
+                    OpenClawChatSessionSnooze.wakeDescription(wakeAt)),
+                systemImage: "clock",
+                action: .undo { self.patchSnooze(.wake) })
+        case .wake:
+            failure = self.failureText(String(localized: "Couldn’t wake “%@”."))
+        }
+        self.run(failure, resetActiveSessionKey: nil, success: success) {
+            try await $0.patchSession(
                 key: self.session.key,
                 expectedSessionID: self.session.sessionId,
                 snoozedUntil: snoozedUntil)
         }
+    }
+
+    private func failureText(_ format: String) -> String {
+        String(format: format, SessionPresentation.title(self.session))
+    }
+
+    /// Runs a row action through the screen that owns the list. A failure is a toast with Try again,
+    /// which repeats the same action; `success` shows once the action lands.
+    private func run(
+        _ failure: String,
+        resetActiveSessionKey: String?,
+        success: OpenClawToast? = nil,
+        _ operation: @escaping Mutation)
+    {
+        let toasts = self.toastPresenter
+        let perform = self.performMutation
+        func attempt() {
+            perform(resetActiveSessionKey) { transport in
+                do {
+                    try await operation(transport)
+                } catch {
+                    if !(error is CancellationError) {
+                        await toasts?.post(.failure(failure, retry: attempt))
+                    }
+                    throw error
+                }
+                if let success { await toasts?.post(success) }
+            }
+        }
+        attempt()
     }
 
     private var canSnooze: Bool {
@@ -275,6 +299,67 @@ struct CommandSessionActionsModifier: ViewModifier {
         }
     }
 
+    @ViewBuilder
+    private func contextMenuContent(_ content: Content) -> some View {
+        if let preview = self.preview {
+            content.contextMenu {
+                self.menuItems
+            } preview: {
+                preview()
+            }
+            .tint(.primary)
+        } else {
+            content.contextMenu { self.menuItems }
+                .tint(.primary)
+        }
+    }
+
+    @ViewBuilder
+    private var menuItems: some View {
+        OpenClawSessionColorMenu(color: self.session.color) {
+            self.patch(color: .some($0))
+        }
+        if !self.isArchived {
+            self.actionButton(
+                self.session.pinned == true
+                    ? OpenClawTextValue.localized("Unpin")
+                    : OpenClawTextValue.localized("Pin"),
+                systemImage: self.session.pinned == true ? "pin.slash" : "pin")
+            {
+                self.patch(pinned: self.session.pinned != true)
+            }
+            if self.canSnooze {
+                self.snoozeMenu
+            }
+            self.actionButton(
+                self.session.unread == true
+                    ? OpenClawTextValue.localized("Mark as Read")
+                    : OpenClawTextValue.localized("Mark as Unread"),
+                systemImage: self.session.unread == true ? "envelope.open" : "envelope.badge")
+            {
+                self.patch(unread: self.session.unread != true)
+            }
+            self.actionButton("Rename…", systemImage: "pencil") {
+                self.beginRename()
+            }
+            self.actionButton("Fork chat", systemImage: "arrow.triangle.branch") {
+                self.fork()
+            }
+            self.groupMenu
+        }
+        if self.canArchive {
+            self.actionButton(
+                self.isArchived ? .localized("Unarchive") : .localized("Archive"),
+                systemImage: "archivebox")
+            {
+                self.patch(archived: self.archivesSession())
+            }
+        }
+        if self.canDelete {
+            self.deleteButton
+        }
+    }
+
     private var groupMenu: some View {
         Menu {
             ForEach(self.categories, id: \.self) { category in
@@ -301,8 +386,15 @@ struct CommandSessionActionsModifier: ViewModifier {
         Button(role: .destructive) {
             self.confirmsDelete = true
         } label: {
-            Label("Delete…", systemImage: "trash")
-                .font(OpenClawType.subhead)
+            Label {
+                Text("Delete…").font(OpenClawType.subhead)
+            } icon: {
+                if self.preview != nil, let trash = UIImage(systemName: "trash") {
+                    Image(uiImage: trash.withTintColor(.systemRed, renderingMode: .alwaysOriginal))
+                } else {
+                    Image(systemName: "trash")
+                }
+            }
         }
     }
 
@@ -376,7 +468,8 @@ extension View {
         canDelete: Bool = true,
         archivesSession: @escaping () -> Bool = { true },
         performMutation: @escaping (String?, @escaping CommandSessionActionsModifier.Mutation) -> Void,
-        fork: @escaping () -> Void) -> some View
+        fork: @escaping () -> Void,
+        preview: (() -> AnyView)? = nil) -> some View
     {
         self.modifier(CommandSessionActionsModifier(
             session: session,
@@ -388,7 +481,8 @@ extension View {
             canDelete: canDelete,
             archivesSession: archivesSession,
             performMutation: performMutation,
-            fork: fork))
+            fork: fork,
+            preview: preview))
     }
 }
 

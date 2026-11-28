@@ -595,8 +595,13 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     );
   }
 
-  readonly knownSectionOrder = () =>
-    this.sessionData.sessionsResult ? [...(this.context.sessions.state.sectionOrder ?? [])] : [];
+  readonly knownSectionOrder = () => {
+    if (!this.sessionData.sessionsResult) {
+      return [];
+    }
+    const sessions = this.context.sessions;
+    return [...(sessions.pendingSectionOrder ?? sessions.state.sectionOrder ?? [])];
+  };
 
   knownSessionCatalogIds(): string[] {
     return collectKnownSidebarSessionCatalogIds({

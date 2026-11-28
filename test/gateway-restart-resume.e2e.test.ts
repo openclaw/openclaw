@@ -38,8 +38,7 @@ import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js"
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
-const RESUME =
-  "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
+const RESUME = "The Gateway restarted while you were working.";
 const SHELL_CHECKPOINT = "no saved terminal result";
 const shellCases = [
   { cycle: 30, effect: "committed", expected: "Verified the file; no repeat." },
@@ -267,18 +266,11 @@ async function providerFixture(signal: AbortSignal, childTimer = false) {
               expect(input).toContain(
                 effect === "unknown" ? `/tool/${cycle}/tool` : shellEffectFile(cycle),
               );
-              tool(
-                effect === "unknown" ? "process" : "read",
-                effect === "unknown" ? { action: "list" } : { path: file },
-              );
+              tool("read", {
+                path: effect === "unknown" ? path.join(shellWorkspace, INDEPENDENT_FILE) : file,
+              });
             } else if (restarting && typeof toolOutput.output === "string") {
               const result = toolOutput.output;
-              if (effect === "unknown" && !issued.has(`independent:${cycle}`)) {
-                expect(result).toMatch(/No running|No active|No sessions/i);
-                issued.add(`independent:${cycle}`);
-                tool("read", { path: path.join(shellWorkspace, INDEPENDENT_FILE) });
-                return;
-              }
               expect(result).toContain(
                 effect === "unknown"
                   ? INDEPENDENT_CONTENT
@@ -1729,6 +1721,9 @@ it.skipIf(process.platform === "win32").for([true, false])(
           assert(child?.pid, "Owned Gateway process unavailable");
           const closed = once(child, "close");
           const shutdownLogStart = (await readFile(logPath, "utf8")).length;
+          expect(
+            readRestartSession(instance.state.agentDir("other"), key(cycle, "stream"), sharedStore),
+          ).not.toHaveProperty("resumeAfterRestart");
           provider.restart();
           const started = Date.now();
           if (mode === "managed") {
@@ -1842,26 +1837,20 @@ it.skipIf(process.platform === "win32").for([true, false])(
             /terminal session persistence failed|input completion persistence failed|failed to settle pending agent input|failed to release worktree run lease|Shared-state worker is retiring|PLUGIN_STATE_OPEN_FAILED/,
           );
           const markerSummary = shutdownLogs.indexOf("shutdown restart resume:");
-          const cleanCloseLine = shutdownLogs.split("\n").find((line) => {
-            if (!line.includes("agent database clean-close receipt:")) {
-              return false;
-            }
-            // Interim lease releases and other stores do not prove this store was sealed.
-            const receipt = asRecord(asRecord(JSON.parse(line))["1"]);
-            return receipt.path === sessionStore && receipt.receipt === "written";
-          });
-          const cleanClose =
-            cleanCloseLine === undefined ? -1 : shutdownLogs.indexOf(cleanCloseLine);
-          expect(markerSummary, shutdownLogs).toBeGreaterThan(-1);
-          expect(cleanClose, shutdownLogs).toBeGreaterThan(markerSummary);
-          expect(
-            readSqliteCleanCloseSeal(sessionStore, await stat(sessionStore, { bigint: true })),
-          ).toBeDefined();
-          // Reservation observations cover every store and arrive after settlement.
+          const closingDatabases = shutdownLogs.indexOf(
+            "restart trace: restart.close.agent-databases.begin ",
+          );
           const allDatabasesClosed = shutdownLogs.indexOf(
             "restart trace: restart.close.agent-databases ",
           );
-          expect(allDatabasesClosed, shutdownLogs).toBeGreaterThan(cleanClose);
+          expect(markerSummary, shutdownLogs).toBeGreaterThan(-1);
+          expect(closingDatabases, shutdownLogs).toBeGreaterThan(markerSummary);
+          expect(allDatabasesClosed, shutdownLogs).toBeGreaterThan(closingDatabases);
+          // Identical close receipts can be silent. Only the seal certifies this store's final bytes.
+          expect(
+            readSqliteCleanCloseSeal(sessionStore, await stat(sessionStore, { bigint: true })),
+            `Expected a valid clean-close seal for ${sessionStore}`,
+          ).toBeDefined();
           expect(shutdownLogs).not.toMatch(
             /shutdown failed in|agent-databases resources remain after grace/,
           );

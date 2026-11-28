@@ -37,6 +37,7 @@ import type {
   AgentSchemaInspection,
   AgentSchemaInspectionInput,
 } from "./openclaw-agent-schema-inspection.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type {
   StateSchemaInspection,
   StateSchemaInspectionInput,
@@ -68,8 +69,34 @@ function retireReader(reader: ReaderProcess): void {
   }
 }
 
+/** Fork and load code only. The normal inspection still opens and validates its own source. */
+export function prestartGatewayStateSchemaReader(env: NodeJS.ProcessEnv) {
+  if (getDatabaseEngineInput("state") || !existsSync(resolveOpenClawStateSqlitePath(env))) {
+    return undefined;
+  }
+  let available: ReturnType<typeof createAgentSchemaInspectionWorker> | undefined =
+    createAgentSchemaInspectionWorker({ preloadStateSchema: true });
+  try {
+    available.prestart();
+  } catch {
+    // If an early fork cannot start, admission still owns the ordinary attempt.
+    return undefined;
+  }
+  const take = () => {
+    const reader = available;
+    available = undefined;
+    return reader;
+  };
+  return {
+    take,
+    async [Symbol.asyncDispose]() {
+      await take()?.[Symbol.asyncDispose]();
+    },
+  };
+}
+
 /** One scheduler slot reuses imports and canonical schema contracts, never database reads. */
-export function createAgentSchemaInspectionWorker() {
+export function createAgentSchemaInspectionWorker(options?: { preloadStateSchema?: boolean }) {
   let reader: ReaderProcess | undefined;
   let disposed = false;
   let busy = false;
@@ -81,7 +108,7 @@ export function createAgentSchemaInspectionWorker() {
   const startReader = (timeoutMs: number): ReaderProcess => {
     const entry = resolveRuntimeProcessEntrypointUrl("agentSchemaInspection");
     assertChildRuntimeAvailable();
-    const child = fork(entry, [], {
+    const child = fork(entry, options?.preloadStateSchema ? ["--preload-state-schema"] : [], {
       execArgv: resolveRuntimeWorkerArgv(entry).slice(0, -1),
       serialization: "advanced",
       stdio: ["ignore", "ignore", "pipe", "ipc"],

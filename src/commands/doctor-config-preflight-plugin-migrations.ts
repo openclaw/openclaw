@@ -39,11 +39,46 @@ import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import {
   inspectPluginMigrationAvailability,
   type PluginMigrationInspection,
 } from "./doctor/shared/plugin-migration-availability.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./doctor/shared/update-phase.js";
+
+// An update rehearsal or a deferring updater still owns package installation.
+const shouldDeferInstallation = (env: NodeJS.ProcessEnv) =>
+  Boolean(resolveUpdateRehearsalRoot(env)) || shouldDeferConfiguredPluginInstallRepair(env);
+
+/**
+ * Read-only: whether {@link createDoctorPluginMigrationPreparation} would write the obligation
+ * ledger. `converged()` reopens every recorded obligation, pending or deferred, and
+ * `complete()` settles it again; an unavailable configured plugin becomes a new one.
+ * Decided from the ledger and the configured plugin set: no registry, no lifecycle lease.
+ */
+export async function checkDeferredPluginObligationsPending(params: {
+  cfg: OpenClawConfig | undefined;
+  env: NodeJS.ProcessEnv;
+}): Promise<DoctorMaintenancePending> {
+  const recorded = readDeferredPluginMigrations({
+    env: params.env,
+    includeDeferred: true,
+    artifactPreservingReadOnly: false,
+  });
+  if (recorded.length > 0) {
+    return "work";
+  }
+  if (!params.cfg) {
+    return "none";
+  }
+  // `pending` is exactly what `converged()` records; a policy-refused owner records nothing.
+  const { pending } = await inspectPluginMigrationAvailability({
+    cfg: params.cfg,
+    env: params.env,
+    deferInstallation: shouldDeferInstallation(params.env),
+  });
+  return pending.length > 0 ? "work" : "none";
+}
 
 /** One preflight retains unavailable owners until their migration reports completion. */
 export function createDoctorPluginMigrationPreparation(params: {
@@ -56,9 +91,6 @@ export function createDoctorPluginMigrationPreparation(params: {
   doctorOnlyStateMigrations: boolean;
   integrityCheck?: "quick" | "full";
 }) {
-  const shouldDeferInstallation = () =>
-    Boolean(resolveUpdateRehearsalRoot(params.env())) ||
-    shouldDeferConfiguredPluginInstallRepair(params.env());
   const previousById = new Map<string, DeferredPluginMigration>();
   const matchesOwner = (left: string, right: string) =>
     normalizePluginPolicyId(left) === normalizePluginPolicyId(right);
@@ -150,7 +182,7 @@ export function createDoctorPluginMigrationPreparation(params: {
         cfg: snapshot.sourceConfig,
         env: params.env(),
         retainedPluginIds: [...previousById.keys()],
-        deferInstallation: shouldDeferInstallation(),
+        deferInstallation: shouldDeferInstallation(params.env()),
       });
       learn(availability);
       deferred = availability.pending.map(retain);
@@ -317,7 +349,7 @@ export function createDoctorPluginMigrationPreparation(params: {
         return false;
       }
       const unavailableIds = new Set(deferred.map((plugin) => plugin.pluginId));
-      const installationDeferred = shouldDeferInstallation();
+      const installationDeferred = shouldDeferInstallation(params.env());
       const sourceConfig =
         sourceSnapshot?.sourceConfigBeforeMigrations ?? sourceSnapshot?.sourceConfig;
       const settlements: NonNullable<DeferredPluginMigrationRecordInput["settlements"]>[number][] =
