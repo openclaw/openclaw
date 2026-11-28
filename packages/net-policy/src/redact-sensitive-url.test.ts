@@ -184,3 +184,46 @@ it("redacts repeatedly encoded sensitive query parameter names", () => {
     expectRedacted(exampleUrl(`?${encodeRepeatedly("%74oken", layers)}=SECRET`), ["SECRET"]);
   }
 });
+
+// The nested-URL rules only ran when the whole string parsed as one URL. For
+// anything else the fallback scan took `[^&]*` as the value, so a nested query
+// was swallowed whole and its credential never classified -- while the same URL
+// alone was redacted. Callers pass whole lines here (git output, download
+// failures), so one leading word was enough to leak.
+it.each([
+  ["fetching ", " now"],
+  ["fatal: unable to access ", ": 403"],
+])("redacts a nested credential when text precedes the outer URL: %s", (prefix, suffix) => {
+  const inner = "https://app.test/cb?access_token=synthetic-secret-0123456789";
+  for (const nested of [inner, encodeURIComponent(inner)]) {
+    expectRedacted(`${prefix}https://auth.test/a?redirect_uri=${nested}${suffix}`, [
+      "synthetic-secret-0123456789",
+    ]);
+  }
+});
+
+it("keeps a nested URL without credentials readable in embedded text", () => {
+  const value = "fetching https://auth.test/a?redirect_uri=https://app.test/cb?page=2 now";
+  expect(redactSensitiveUrlLikeString(value)).toBe(value);
+});
+
+// Nested scanning must not shorten a mask. A raw "?" or space can sit inside a
+// value, so a sensitive value is still masked to the end of its `[^&]*` run, and
+// only a value whose own name is not sensitive is scanned for nesting. That is
+// what keeps this additive: nothing masked before becomes readable.
+it.each(["alpha?bravo", "alpha bravo"])(
+  "masks a sensitive value whole when it contains a nested separator: %s",
+  (secret) => {
+    expect(redactSensitiveUrlLikeString(`fetching https://example.test/?password=${secret}`)).toBe(
+      "fetching https://example.test/?password=***",
+    );
+  },
+);
+
+it("still classifies a credential name spliced with whitespace in embedded text", () => {
+  expect(
+    redactSensitiveUrlLikeString(
+      "fetching https://example.test/?access_ token=synthetic-secret-0123456789",
+    ),
+  ).toBe("fetching https://example.test/?access_ token=***");
+});
