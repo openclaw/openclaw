@@ -280,18 +280,34 @@ suite.define(() => {
             }
             await page.goto(`${suite.server.baseUrl}chat`);
             await gateway.waitForRequest("sessions.messages.subscribe");
+            const panel = page.locator("openclaw-chat-detail-panel:visible");
+            const outer = panel.locator(".chat-html-preview__frame");
+            const frameTop = () =>
+              outer.evaluate(
+                (frame) =>
+                  frame.getBoundingClientRect().top -
+                  frame.closest(".chat-html-preview")!.getBoundingClientRect().top,
+              );
+            let loadingTop: number | undefined;
+            await page.route(
+              `http://127.0.0.1:${sandboxPort}${sandboxUrl}`,
+              async (route) => {
+                loadingTop = await frameTop();
+                await route.continue();
+              },
+              { times: 1 },
+            );
             await page
               .locator('a.markdown-file-link[data-file-path="page.html"]')
               .filter({ hasText: /^page$/ })
               .click();
-            const panel = page.locator("openclaw-chat-detail-panel:visible");
-            const outer = panel.locator(".chat-html-preview__frame");
             await outer.waitFor();
             const document = outer.contentFrame().frameLocator("iframe");
             await document.getByRole("heading", { name: "Local HTML page" }).waitFor();
             await panel
               .locator("openclaw-chat-html-preview [role=status]")
               .waitFor({ state: "hidden" });
+            expect(await frameTop()).toBe(loadingTop);
             expect(await outer.contentFrame().locator("iframe").getAttribute("sandbox")).toBe(
               mode === "strict" ? "" : "allow-scripts allow-forms",
             );
