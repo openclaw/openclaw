@@ -8,6 +8,7 @@ import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
 import { stripMixedSilentReplyTokens } from "../auto-reply/reply/mixed-silent-reply-tokens.js";
+import { readTaggedReplyControl } from "../auto-reply/reply/tagged-reply-control.js";
 import { isSilentReplyText } from "../auto-reply/tokens.js";
 import { normalizeAgentRunRouteChange } from "./agent-run-terminal-receipt.js";
 import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.types.js";
@@ -84,9 +85,12 @@ export function prepareAgentRunTerminalReply(params: {
   rawText?: string;
 }): PreparedAgentRunTerminalReply {
   const rawText = params.rawText ?? "";
-  const text = isSilentAfterClosedReasoning(rawText)
-    ? undefined
-    : prepareAgentRunReplyText(rawText);
+  const tagged = readTaggedReplyControl(rawText);
+  const text = tagged
+    ? tagged.text
+    : isSilentAfterClosedReasoning(rawText)
+      ? undefined
+      : prepareAgentRunReplyText(rawText);
   return {
     text: text ?? "",
     terminalReply:

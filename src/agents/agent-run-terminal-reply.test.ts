@@ -44,6 +44,8 @@ describe("prepareAgentRunTerminalReply", () => {
     ["answer\rNO_REPLY", "answer"],
     ["NO_REPLY\nanswer", "answer"],
     ["NO_REPLY\nNO_REPLY", "NO_REPLY"],
+    ["<think>Done.</think><final>NO_REPLY\nNO_REPLY</final>", "NO_REPLY"],
+    ["`<final>NO_REPLY</final>`", "`<final>NO_REPLY</final>`"],
     ["no_reply\nanswer", "answer"],
     ["answer\nNo_Reply", "answer"],
     ["no_reply\nNo_Reply", "No_Reply"],
@@ -70,6 +72,7 @@ describe("prepareAgentRunTerminalReply", () => {
   it.each([
     ["Nothing to report, so NO_REPLY.\n</think>\n\nNO_REPLY", undefined],
     ["<think>quiet</think>\nno_reply", undefined],
+    ["<think>quiet</think>\n<final>no_reply</final>", undefined],
     ["<think>quiet</think>\nanswer\nNO_REPLY", "<think>quiet</think>\nanswer"],
     [
       "Alert: disk full.\n<think>check</think>\nNO_REPLY",

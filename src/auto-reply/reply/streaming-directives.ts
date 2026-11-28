@@ -1,3 +1,7 @@
+import {
+  createReasoningTagTextPartitioner,
+  type ReasoningTagTextPartitioner,
+} from "../../../packages/markdown-core/src/reasoning-tags.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import {
   parseInlineDirectives,
@@ -6,6 +10,7 @@ import {
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import { stripMixedSilentReplyTokens } from "./mixed-silent-reply-tokens.js";
 import type { ReplyDirectiveParseResult } from "./reply-directives.js";
+import { findReplyEnvelopeStart } from "./tagged-reply-control.js";
 
 type ConsumeOptions = {
   final?: boolean;
@@ -67,6 +72,12 @@ export function createStreamingDirectiveAccumulator(): StreamingDirectiveAccumul
   let hasReturnedText = false;
   let pendingProtocol = "";
   let protocolResolved = false;
+  let probeEnvelope = true;
+  let envelopeParser: ReasoningTagTextPartitioner | undefined;
+  let envelopeSource = "";
+  let visibleHead = "";
+  let probeTail = "";
+  let insideFinalEnvelope = false;
   let sourceText = "";
 
   const reset = () => {
@@ -78,19 +89,82 @@ export function createStreamingDirectiveAccumulator(): StreamingDirectiveAccumul
     hasReturnedText = false;
     pendingProtocol = "";
     protocolResolved = false;
+    probeEnvelope = true;
+    envelopeParser = undefined;
+    envelopeSource = "";
+    visibleHead = "";
+    probeTail = "";
+    insideFinalEnvelope = false;
     sourceText = "";
   };
 
   const consume = (raw: string, options?: ConsumeOptions): ReplyDirectiveParseResult | null => {
     let prepared = raw ?? "";
+    if (probeEnvelope && (envelopeParser || prepared.trimStart())) {
+      if (!envelopeParser && !prepared.trimStart().startsWith("<")) {
+        probeEnvelope = false;
+      } else {
+        envelopeParser ??= createReasoningTagTextPartitioner();
+        const deltas = envelopeParser.pushVisible(prepared);
+        if (options?.final) {
+          deltas.push(...envelopeParser.flush({ recoverUnclosed: false }));
+        }
+        for (const delta of deltas) {
+          if (delta.kind === "text" && visibleHead.length < "<final>".length) {
+            const text = visibleHead ? delta.text : delta.text.trimStart();
+            visibleHead += text.slice(0, "<final>".length - visibleHead.length).toLowerCase();
+          }
+        }
+        if (!options?.final && visibleHead !== "<final>" && "<final>".startsWith(visibleHead)) {
+          // Keep forwarding raw reasoning until a candidate opener could introduce control bytes.
+          const probe = probeTail + prepared;
+          probeTail = probe.slice(-6);
+          if (envelopeSource || /<final>/i.test(probe)) {
+            envelopeSource += prepared;
+            return null;
+          }
+        } else {
+          prepared = envelopeSource + prepared;
+          if (visibleHead === "<final>") {
+            // Inspect the full raw source at most once; reasoning examples cannot select the envelope.
+            const source = sourceText + pendingProtocol + prepared;
+            const start = findReplyEnvelopeStart(source);
+            if (start !== undefined) {
+              sourceText = source.slice(0, start);
+              prepared = source.slice(start);
+              pendingProtocol = "";
+              protocolResolved = false;
+              insideFinalEnvelope = true;
+            }
+          }
+          probeEnvelope = false;
+          envelopeParser = undefined;
+          envelopeSource = "";
+        }
+      }
+    }
     if (!protocolResolved) {
       pendingProtocol += prepared;
+      const close = insideFinalEnvelope ? pendingProtocol.indexOf("<") : -1;
+      const closingTail = close < 0 ? "" : pendingProtocol.slice(close).trimEnd().toLowerCase();
+      const candidateText =
+        close >= 0 &&
+        "</final>".startsWith(closingTail) &&
+        (!options?.final || closingTail === "</final>")
+          ? pendingProtocol.slice(0, close)
+          : pendingProtocol;
       const stripped = stripMixedSilentReplyTokens(pendingProtocol);
       if (stripped !== null) {
         prepared = stripped;
         protocolResolved = true;
       } else if (options?.final) {
-        if (isSilentReplyText(pendingProtocol)) {
+        if (
+          isSilentReplyText(candidateText) &&
+          (!insideFinalEnvelope || closingTail === "</final>")
+        ) {
+          if (close >= 0) {
+            sourceText += pendingProtocol.slice(close);
+          }
           pendingProtocol = "";
           protocolResolved = true;
           return null;
@@ -98,7 +172,7 @@ export function createStreamingDirectiveAccumulator(): StreamingDirectiveAccumul
         prepared = pendingProtocol;
         protocolResolved = true;
       } else {
-        const candidate = pendingProtocol.trimStart().toUpperCase();
+        const candidate = candidateText.trimStart().toUpperCase();
         if (
           !candidate ||
           SILENT_REPLY_TOKEN.startsWith(candidate) ||

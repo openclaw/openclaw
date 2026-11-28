@@ -7,6 +7,7 @@ import {
 import { prepareAgentRunReplyText } from "../agents/agent-run-terminal-reply.js";
 import { decodeRequesterOrigin } from "../agents/requester-origin.js";
 import { normalizeContextUsage } from "../agents/usage.js";
+import { readTaggedReplyControl } from "../auto-reply/reply/tagged-reply-control.js";
 import { buildInboundMediaUriFromPath } from "../media/inbound-media-path.js";
 import { parseInboundMediaUri } from "../media/inbound-media-uri.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
@@ -389,7 +390,8 @@ export function prepareAssistantHistoryMessage(message: unknown): unknown {
   const blocks = finalBlocks.length ? finalBlocks : readAssistantTextBlocksForPhase(entry);
   const rawText =
     typeof inlineText === "string" ? inlineText : blocks.map((block) => block.text).join("");
-  const text = prepareAgentRunReplyText(rawText);
+  const tagged = readTaggedReplyControl(rawText);
+  const text = tagged ? tagged.text : prepareAgentRunReplyText(rawText);
   if (text === undefined || text === rawText) {
     return message;
   }
@@ -398,7 +400,8 @@ export function prepareAssistantHistoryMessage(message: unknown): unknown {
   if (typeof inlineText === "string") {
     return { ...entry, [field]: text, display: true };
   }
-  let remainingPrefix = rawText.endsWith(text) ? rawText.length - text.length : 0;
+  let remainingPrefix =
+    tagged?.start ?? (rawText.endsWith(text) ? rawText.length - text.length : 0);
   let remainingLength = text.length;
   const replacements = new Map<unknown, unknown>();
   for (const block of blocks) {

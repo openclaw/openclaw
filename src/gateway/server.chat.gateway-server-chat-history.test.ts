@@ -384,6 +384,7 @@ describe("gateway server chat", () => {
         createGatewayHistoryText("assistant", "real reply", 3),
         textFieldReply("NO_REPLY", 4),
         createGatewayHistoryText("user", "NO_REPLY", 5),
+        createGatewayHistoryText("assistant", "<think>Sent.</think><final>NO_REPLY</final>", 5),
         {
           role: "assistant",
           content: [

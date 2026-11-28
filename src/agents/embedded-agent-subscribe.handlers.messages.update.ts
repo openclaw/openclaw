@@ -390,8 +390,8 @@ export function handleMessageUpdate(
     final: finalText,
   });
   const preparedSource = ctx.getPartialReplySourceText();
-  // Only the initial protocol prefix can hold or rewrite source bytes; later chunks append verbatim.
-  chunk = snapshot || !previousPreparedSource ? preparedSource : chunk;
+  // The protocol can hold or release a split prefix inside a final envelope.
+  chunk = snapshot ? preparedSource : preparedSource.slice(previousPreparedSource.length);
   let next = shouldReadPartialText
     ? (snapshot?.text ?? extractAssistantVisibleText(selectedAssistant)).trimEnd()
     : undefined;

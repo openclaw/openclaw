@@ -252,6 +252,46 @@ function emitText(
   });
 }
 
+it.each(["", "\nReady", " is literal"])(
+  "prepares a split tagged silent final with suffix %j",
+  async (suffix) => {
+    const partials: string[] = [];
+    const blocks: string[] = [];
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "tagged-final",
+      onPartialReply: (payload) => {
+        partials.push(payload.text ?? "");
+      },
+      onBlockReply: (payload) => {
+        blocks.push(payload.text ?? "");
+      },
+    });
+    onTestFinished(() => subscription.unsubscribe());
+    emit({ type: "message_start", message: textMessage("") });
+    let text = "";
+    for (const delta of [
+      "<think>Already sent.</think><fi",
+      "nal>NO_",
+      "REPLY",
+      suffix,
+      "</fi",
+      "nal>",
+    ]) {
+      text += delta;
+      emitText(emit, "text_delta", text, { delta });
+      await subscription.waitForPendingEvents();
+    }
+    emitText(emit, "text_end", text);
+    emit({ type: "message_end", message: textMessage(text) });
+    await subscription.waitForPendingEvents();
+    const expected = suffix === " is literal" ? "NO_REPLY is literal" : suffix.trim();
+    expect(partials.filter(Boolean)).not.toContain("NO_");
+    expect(partials.filter(Boolean)).not.toContain("NO_REPLY");
+    expect(partials.at(-1) ?? "").toBe(expected);
+    expect(blocks.join("")).toBe(expected);
+  },
+);
+
 const replacementChunks = [
   "The current value is one for this item. Continue. ",
   "Keep this sentence unchanged. Retain each result. ",

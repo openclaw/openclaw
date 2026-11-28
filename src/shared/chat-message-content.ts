@@ -5,6 +5,7 @@ import {
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../agents/delivery-evidence-values.js";
 import { stripMixedSilentReplyTokens } from "../auto-reply/reply/mixed-silent-reply-tokens.js";
+import { readTaggedReplyControl } from "../auto-reply/reply/tagged-reply-control.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { hasPersistedMedia } from "../sessions/user-turn-media.js";
 
@@ -222,7 +223,9 @@ export function collectAssistantSilenceBlockFact(value: unknown): AssistantSilen
   const block = asOptionalRecord(value);
   const textType = isAssistantTextContentBlockType(block?.type);
   const phase = textType && block ? parseAssistantTextSignature(block)?.phase : undefined;
-  const text = textType && typeof block?.text === "string" ? block.text : undefined;
+  const raw = textType && typeof block?.text === "string" ? block.text : undefined;
+  const tagged = raw === undefined ? undefined : readTaggedReplyControl(raw);
+  const text = tagged && tagged.text === undefined ? SILENT_REPLY_TOKEN : raw;
   const trimmed = text?.trim().toUpperCase();
   return {
     ignored:
@@ -257,7 +260,11 @@ export function assistantSilenceOverride(message: unknown): boolean | undefined 
     return false;
   }
   const inline = typeof record.text === "string" ? record.text : record.content;
-  return typeof inline === "string" ? isSilentReplyText(inline) : undefined;
+  if (typeof inline !== "string") {
+    return undefined;
+  }
+  const tagged = readTaggedReplyControl(inline);
+  return tagged ? tagged.text === undefined : isSilentReplyText(inline);
 }
 
 export function isSilentAssistantFromFacts(
@@ -314,6 +321,6 @@ export function prepareAssistantTranscriptText(
   return record.display !== true &&
     !readTerminalSourceReplyDeliveryMirror(message) &&
     text !== undefined
-    ? (stripMixedSilentReplyTokens(text) ?? text)
+    ? (readTaggedReplyControl(text)?.text ?? stripMixedSilentReplyTokens(text) ?? text)
     : text;
 }

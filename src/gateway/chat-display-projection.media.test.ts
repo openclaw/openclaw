@@ -133,6 +133,23 @@ it("caps commentary captions across an intervening image as one message", () => 
   expect(source.content[2]).toMatchObject({ text: "B".repeat(20) });
 });
 
+it("keeps the delivered reply, not the model's tagged silent final", () => {
+  const delivered = mirror({
+    openclawDeliveryMirror: {
+      kind: "message-tool-source-reply",
+      sourceTurnId: "turn",
+      final: true,
+    },
+  });
+  const raw = "<think>Already sent.</think><final>NO_REPLY</final>";
+  const source = assistant({ content: [text(raw)], __openclaw: { runId: "turn" } });
+  expect(project([delivered, source])).toEqual([delivered]);
+  expect(payloadFor(source)).toBeUndefined();
+  expect(project([assistant({ content: "<final>NO_REPLY</final>" })])).toEqual([]);
+  expect(project([{ ...source, display: true }])).toEqual([{ ...source, display: true }]);
+  expectPrepared(assistant({ content: [text("<final>NO_REPLY\nREADY</final>")] }), [text("READY")]);
+});
+
 it("preserves nontext content beside control-looking text", () => {
   const source = assistant({ content: [text("NO_REPLY"), image] });
   expect(project([source])).toEqual([source]);

@@ -340,6 +340,23 @@ it("preserves split malformed fenced code", () => {
   expect(streamed + (accumulator.consume("", { final: true })?.text ?? "")).toBe(chunks.join(""));
 });
 
+it("keeps repeated final-tag examples in reasoning without leaking or rescanning the reply", () => {
+  const stream = createStreamingDirectiveAccumulator();
+  const sample = " consider <final> again";
+  stream.consume("<think>");
+  expect(stream.sourceText).toBe("<think>");
+  const started = performance.now();
+  for (let index = 0; index < 3_000; index++) {
+    stream.consume(sample);
+  }
+  stream.consume("</think><fi");
+  stream.consume("nal>NO_");
+  expect(stream.sourceText.endsWith("NO_")).toBe(false);
+  stream.consume("REPLY</final>", { final: true });
+  expect(performance.now() - started).toBeLessThan(1_000);
+  expect(stream.sourceText).toBe("<think>" + sample.repeat(3_000) + "</think><final></final>");
+});
+
 it("streams whitespace-only chunks after visible text", () => {
   const chunks = ["X", "\n\n", "```text", "\n", "a b", "\n", "```", " ", "done", "\n"];
   const accumulator = createStreamingDirectiveAccumulator();
