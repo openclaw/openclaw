@@ -292,6 +292,7 @@ it.each([
   { language: "pt-BR", expected: "pt" },
   { command: "whisper-cli", language: "fr", request: { language: "pt-BR" }, expected: "pt" },
   { command: "whisper-cli", converted: true, expected: undefined },
+  { command: "whisper-cli", language: "auto", expected: "auto" },
   { command: "sherpa-onnx-offline", expected: undefined },
 ])("runs auto-discovered audio tools with language: %j", async (options) => {
   await withTestDir({ prefix: "openclaw-auto-language-" }, async (dir) => {

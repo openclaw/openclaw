@@ -59,6 +59,10 @@ returns them.
 | `model`    | `tools.media.models[].model`    | Deepgram model id (default: `nova-3`) |
 | `language` | `tools.media.models[].language` | Language hint (optional)              |
 
+Without a `language`, Deepgram batch models transcribe as English. Set
+`detect_language: true` in `providerOptions.deepgram` (shown below) to detect
+the spoken language instead.
+
 `providerOptions.deepgram` merges extra query params directly into the
 Deepgram `/listen` request, so any Deepgram-supported param name works
 (for example `detect_language`, `punctuate`, `smart_format`).
