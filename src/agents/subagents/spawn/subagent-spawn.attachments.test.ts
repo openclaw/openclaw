@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
@@ -65,6 +66,14 @@ const ctx = {
 };
 
 const validContent = Buffer.from("hello").toString("base64");
+const referenceBytes = Buffer.from("image-bytes");
+const reference = {
+  id: "tool-image-1",
+  name: "match.jpg",
+  mimeType: "image/jpeg",
+  sizeBytes: referenceBytes.byteLength,
+  sha256: crypto.createHash("sha256").update(referenceBytes).digest("hex"),
+};
 const attachment = (name: string, content = validContent) => ({
   name,
   content,
@@ -112,6 +121,37 @@ function stagedDir(result: Awaited<ReturnType<typeof spawn>>): string {
 function expectAttachmentError(result: Awaited<ReturnType<typeof spawn>>, error: string) {
   expect(result).toMatchObject({ status: "error", error: expect.stringContaining(error) });
 }
+
+it("resolves an authorized host-managed image reference without exposing its bytes to the spawn request", async () => {
+  const result = await materializeSubagentAttachments({
+    config: configOverride,
+    childSessionKey: "agent:main:child-reference",
+    targetAgentId: "main",
+    sandboxed: false,
+    attachmentRefs: [reference],
+    resolveAttachmentReference: async ({ reference: requested }) =>
+      requested.id === reference.id ? { ...requested, data: referenceBytes } : null,
+  });
+
+  expect(result).toMatchObject({
+    status: "ok",
+    receipt: { files: [{ name: "match.jpg", bytes: referenceBytes.byteLength }] },
+  });
+  expect(result).not.toHaveProperty("data");
+});
+
+it("fails closed for stale or unauthorized attachment references", async () => {
+  const result = await materializeSubagentAttachments({
+    config: configOverride,
+    childSessionKey: "agent:main:child-stale-reference",
+    targetAgentId: "main",
+    sandboxed: false,
+    attachmentRefs: [reference],
+    resolveAttachmentReference: async () => null,
+  });
+
+  expect(result).toMatchObject({ status: "error", error: expect.stringContaining("attachments_reference_unavailable") });
+});
 
 it.each([
   ["empty", ""],

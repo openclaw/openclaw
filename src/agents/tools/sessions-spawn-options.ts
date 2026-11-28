@@ -2,6 +2,7 @@ import type { CyberAccessProgram } from "../../../packages/gateway-protocol/src/
 import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
+import type { ResolveSubagentAttachmentReference } from "../subagents/spawn/subagent-spawn-contract.js";
 import type {
   countActiveRunsForSession,
   registerSubagentRun,
@@ -42,6 +43,8 @@ export type SessionsSpawnToolOptions = {
   signal?: AbortSignal;
   /** Retained host invocation, checked before preparation and creation. */
   assertActive?: () => void;
+  /** Resolves authorized, host-managed attachment handles. Never expose raw bytes here. */
+  resolveAttachmentReference?: ResolveSubagentAttachmentReference;
 } & SpawnedToolContext;
 
 type VisibleSessionsSpawnOptions = SessionsSpawnToolOptions & {

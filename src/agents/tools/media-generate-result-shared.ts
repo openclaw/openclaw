@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import crypto, { randomUUID } from "node:crypto";
 import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { MediaGenerationNormalizationMetadataInput } from "../../../packages/media-generation-core/src/normalization.js";
@@ -15,6 +15,7 @@ import {
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
 import { isMediaGenerationOperationCurrent } from "../media-generation-activity.js";
+import { registerGeneratedAttachment } from "./sessions-spawn-attachment-resolver.js";
 import {
   readCurrentMediaGenerationRequester,
   type MediaGenerationTaskHandle,
@@ -62,9 +63,39 @@ export async function buildMediaGenerateToolExecutionResult(params: {
   maxBytes: number;
   messages?: Array<string | null>;
   taskHandle?: MediaGenerationTaskHandle | null;
+  /** Durable spawn key admitted for resolving generated references in split-key sessions. */
+  attachmentRequesterSessionKey?: string;
   details: Record<string, unknown>;
 }): Promise<MediaGenerateToolExecutionResult> {
   const { result, attachments, mediaUrls } = params;
+  const issuedAttachments = await Promise.all(
+    attachments.map(async (attachment) => {
+      if (!attachment.path || attachment.type !== "image") return attachment;
+      try {
+        const { buffer } = await readLocalFileSafely({
+          filePath: attachment.path,
+          maxBytes: Math.min(params.maxBytes, STAGED_INPUT_MAX_BYTES),
+        });
+        return {
+          ...attachment,
+          attachmentRef: registerGeneratedAttachment({
+            path: attachment.path,
+            name: attachment.name ?? path.basename(attachment.path),
+            mimeType: attachment.mimeType ?? "image/png",
+            sizeBytes: buffer.byteLength,
+            sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+            requesterSessionKey: params.taskHandle?.requesterSessionKey,
+            requesterSessionKeys: [
+              params.taskHandle?.requesterSessionKey,
+              params.attachmentRequesterSessionKey,
+            ].filter((key): key is string => Boolean(key)),
+          }),
+        };
+      } catch {
+        return attachment;
+      }
+    }),
+  );
   const sandboxPaths: string[] = [];
   const stagingMessages: string[] = [];
   const assertCurrent = () => {
@@ -161,20 +192,20 @@ export async function buildMediaGenerateToolExecutionResult(params: {
     `Generated ${identity.count} ${label}${identity.count === 1 ? "" : "s"} with ${displayProvider}/${displayModel}.`,
     ...(warning ? [`Warning: ${warning}`] : []),
     ...(params.messages ?? []),
-    ...formatGeneratedAttachmentLines(attachments),
+    ...formatGeneratedAttachmentLines(issuedAttachments),
     ...stagingMessages,
   ]
     .filter(Boolean)
     .join("\n");
   return {
     count: identity.count,
-    attachments,
+    attachments: issuedAttachments,
     contentText,
     wakeResult: contentText,
     details: {
       ...identity,
-      media: { mediaUrls, attachments },
-      attachments,
+      media: { mediaUrls, attachments: issuedAttachments },
+      attachments: issuedAttachments,
       paths: mediaUrls,
       ...(params.taskHandle
         ? { task: { taskId: params.taskHandle.taskId, runId: params.taskHandle.runId } }

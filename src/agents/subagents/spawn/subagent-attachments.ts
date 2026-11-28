@@ -16,7 +16,12 @@ import {
   resolveSubagentSessionAttachmentRootDir,
   SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT,
 } from "../subagent-attachment-paths.js";
-import type { SpawnSubagentParams, SpawnSubagentResult } from "./subagent-spawn-contract.js";
+import type {
+  ResolveSubagentAttachmentReference,
+  SpawnSubagentParams,
+  SpawnSubagentResult,
+  SubagentAttachmentReference,
+} from "./subagent-spawn-contract.js";
 
 export { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
 
@@ -43,6 +48,63 @@ function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | nu
 }
 
 type SubagentInlineAttachment = NonNullable<SpawnSubagentParams["attachments"]>[number];
+
+function assertReferenceShape(reference: SubagentAttachmentReference): void {
+  if (!/^[a-f0-9]{64}$/i.test(reference.sha256)) {
+    throw new Error(`attachments_invalid_sha256 (name=${reference.name})`);
+  }
+  if (!Number.isSafeInteger(reference.sizeBytes) || reference.sizeBytes < 0) {
+    throw new Error(`attachments_invalid_size (name=${reference.name})`);
+  }
+  if (!/^image\/[a-z0-9.+-]+$/i.test(reference.mimeType)) {
+    throw new Error(`attachments_unsupported_mime (name=${reference.name})`);
+  }
+}
+
+async function resolveAttachmentReferences(params: {
+  refs?: SubagentAttachmentReference[];
+  resolver?: ResolveSubagentAttachmentReference;
+  requesterSessionKey?: string;
+  targetAgentId?: string;
+  maxFileBytes: number;
+}): Promise<SubagentInlineAttachment[]> {
+  if (!params.refs?.length) return [];
+  if (!params.resolver) {
+    throw new Error("attachments_reference_unavailable");
+  }
+  const resolved: SubagentInlineAttachment[] = [];
+  for (const reference of params.refs) {
+    assertReferenceShape(reference);
+    if (reference.sizeBytes > params.maxFileBytes) {
+      throw new Error(
+        `attachments_file_bytes_exceeded (name=${reference.name} bytes=${reference.sizeBytes} maxFileBytes=${params.maxFileBytes})`,
+      );
+    }
+    const value = await params.resolver({
+      reference,
+      requesterSessionKey: params.requesterSessionKey,
+      targetAgentId: params.targetAgentId,
+    });
+    if (!value) throw new Error(`attachments_reference_unavailable (id=${reference.id})`);
+    if (value.name !== reference.name || value.mimeType !== reference.mimeType) {
+      throw new Error(`attachments_reference_metadata_mismatch (id=${reference.id})`);
+    }
+    if (value.data.byteLength !== reference.sizeBytes) {
+      throw new Error(`attachments_reference_size_mismatch (id=${reference.id})`);
+    }
+    const digest = crypto.createHash("sha256").update(value.data).digest("hex");
+    if (digest !== reference.sha256.toLowerCase()) {
+      throw new Error(`attachments_reference_checksum_mismatch (id=${reference.id})`);
+    }
+    resolved.push({
+      name: value.name,
+      mimeType: value.mimeType,
+      content: value.data.toString("base64"),
+      encoding: "base64",
+    });
+  }
+  return resolved;
+}
 
 type AttachmentLimits = {
   enabled: boolean;
@@ -216,15 +278,42 @@ function prepareSubagentAttachments(params: {
   return { attachments, totalBytes };
 }
 
-export function resolveAcpSessionsSpawnImageAttachments(params: {
+export async function resolveAcpSessionsSpawnImageAttachments(params: {
   config: OpenClawConfig;
   attachments?: SubagentInlineAttachment[];
-}):
+  attachmentRefs?: SubagentAttachmentReference[];
+  resolveAttachmentReference?: ResolveSubagentAttachmentReference;
+  requesterSessionKey?: string;
+  targetAgentId?: string;
+}): Promise<
   | { status: "ok"; attachments: AcpInlineImageAttachment[] }
   | { status: "forbidden"; error: string }
   | { status: "error"; error: string }
-  | null {
-  const request = resolveSubagentAttachmentRequest(params);
+  | null
+> {
+  const maxFileBytes = resolveNonNegativeIntegerOption(
+    params.config.tools?.sessions_spawn?.attachments?.maxFileBytes,
+    1024 * 1024,
+  );
+  let attachments: SubagentInlineAttachment[];
+  try {
+    attachments = [
+      ...(params.attachments ?? []),
+      ...(await resolveAttachmentReferences({
+        refs: params.attachmentRefs,
+        resolver: params.resolveAttachmentReference,
+        requesterSessionKey: params.requesterSessionKey,
+        targetAgentId: params.targetAgentId,
+        maxFileBytes,
+      })),
+    ];
+  } catch (err) {
+    return {
+      status: "error",
+      error: err instanceof Error ? err.message : "attachments_reference_failed",
+    };
+  }
+  const request = resolveSubagentAttachmentRequest({ ...params, attachments });
   if (!request || request.status !== "ok") {
     return request;
   }
@@ -253,9 +342,34 @@ export async function materializeSubagentAttachments(params: {
   targetAgentId: string;
   sandboxed: boolean;
   attachments?: SubagentInlineAttachment[];
+  attachmentRefs?: SubagentAttachmentReference[];
+  resolveAttachmentReference?: ResolveSubagentAttachmentReference;
+  requesterSessionKey?: string;
   mountPathHint?: string;
 }): Promise<MaterializeSubagentAttachmentsResult | null> {
-  const request = resolveSubagentAttachmentRequest(params);
+  const maxFileBytes = resolveNonNegativeIntegerOption(
+    params.config.tools?.sessions_spawn?.attachments?.maxFileBytes,
+    1024 * 1024,
+  );
+  let attachments: SubagentInlineAttachment[];
+  try {
+    attachments = [
+      ...(params.attachments ?? []),
+      ...(await resolveAttachmentReferences({
+        refs: params.attachmentRefs,
+        resolver: params.resolveAttachmentReference,
+        requesterSessionKey: params.requesterSessionKey,
+        targetAgentId: params.targetAgentId,
+        maxFileBytes,
+      })),
+    ];
+  } catch (err) {
+    return {
+      status: "error",
+      error: err instanceof Error ? err.message : "attachments_reference_failed",
+    };
+  }
+  const request = resolveSubagentAttachmentRequest({ ...params, attachments });
   if (!request || request.status !== "ok") {
     return request;
   }

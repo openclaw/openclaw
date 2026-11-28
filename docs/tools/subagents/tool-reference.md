@@ -323,6 +323,37 @@ their latest assistant turn back to the requester; external delivery stays with
 the parent/requester agent.
 </Warning>
 
+### Host-managed multimodal attachments
+
+`attachmentRefs` is the stable handoff for images produced by a multimodal
+tool. The admitted turn's staged-media preparation issues the host handle;
+plugins may use that same prepared handle. A reference contains `id`, `name`, `mimeType`,
+`sizeBytes`, and a lowercase SHA-256 digest, then pass that reference to
+`sessions_spawn`. The Gateway resolves it through its authorized host resolver;
+the model never receives the private bytes or a filesystem path.
+
+References are rejected when they are stale, unauthorized, non-image, larger
+than the configured attachment limit, or when the resolved bytes do not match
+the declared size, MIME metadata, or digest. Existing inline `attachments`
+remain supported and use the same limits and staging path. Resolved references
+are staged as private child attachments and are forwarded as native ACP image
+attachments when the ACP runtime is selected.
+
+```json
+{
+  "task": "Inspect the image and summarize the visible damage",
+  "attachmentRefs": [
+    {
+      "id": "tool-image-7f3d",
+      "name": "match-photo.jpg",
+      "mimeType": "image/jpeg",
+      "sizeBytes": 183421,
+      "sha256": "<64-character sha256>"
+    }
+  ]
+}
+```
+
 With `visible: true`, `group`, `model`, `cwd`, `projectId`, `projectGitUrl`, and a same-agent `context: "fork"` are supported. Reserve this durable mode for a separate session the user requests or needs to revisit and steer independently; it appears in the sidebar when the web UI is available and still works without it. Internal QA, coding, review, and test lanes stay ordinary subagents even when they produce a PR or report or need isolated source work. Hidden native workers can request a managed worktree with `worktree: true`; an isolated checkout does not require a sidebar session. Pass `group` to place the new session in that sidebar group atomically; omitted or blank values leave it ungrouped. A sandboxed target restricts `cwd` to that agent's workspace. Non-admin callers may use `cwd` only inside a configured agent workspace. With `worktree: true`, a same-agent child can inherit the parent’s registered project or managed repository and create a separate worktree, as described under `cwd`. For another repository, omit `cwd` and select exactly one of `projectId` or `projectGitUrl`; both reuse the existing New session preparation flow at ordinary write scope. Add `worktree: true` for a separate managed worktree. Project selection does not bypass the target sandbox or grant permission to run worktree setup scripts. Do not replace a rejected persistent spawn with the synchronous `openclaw agent` CLI, whose command deadline defaults to 600 seconds. Thread binding, `mode: "session"`, thinking overrides, `lightContext`, and attachment staging are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. The default `mode: "run"`, empty `attachments`, and an empty `attachAs.mountPath` are accepted without changing that behavior. The new dashboard child inherits the requester's effective tool-policy ceiling before its first turn, except for an operator-configured [deny-only target delegation grant](/tools/subagents/tool-policy#delegate-tools-to-a-coding-agent). Session listing and addressing obey `tools.sessions.visibility`; the default `all` scope covers sessions across agents on the Gateway for unsandboxed callers. Cross-agent access is on by default and governed by `tools.agentToAgent`; use `allow` to restrict agent pairs or set `enabled: false` to block ordinary cross-agent access (requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`). Set `agent` for same-agent-only access, `tree` for current plus spawned scope (main retains its same-agent exception), or `self` for current-session-only access. Sandbox spawned-only clamps still apply. Cross-agent owned children are included by `tree`, not `agent`; preserve explicit `tree` for that workflow. See [Session tools](/concepts/session-tool#visibility) and [Managed worktrees](/concepts/managed-worktrees).
 
 Hidden native children accept `projectId`, `worktree: true`, `worktreeName`, and `worktreeBaseRef`, including with `completionTarget: "parent"`. They keep the native subagent registry, completion routing, and `cleanup` behavior. Managed preparation records the same session worktree binding used by visible sessions; the first turn starts only when that checkout is ready.

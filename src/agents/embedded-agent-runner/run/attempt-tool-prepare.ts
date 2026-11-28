@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { SessionPermissionMode } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { messageToolOwnsVisibleReply } from "../../../auto-reply/source-reply-delivery-mode.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
@@ -383,7 +384,17 @@ export async function prepareEmbeddedAttemptToolBase(params: {
           reviewTranscript: params.reviewTranscript,
         },
         sandbox: params.setup.sandbox,
-        stagedMediaPaths: resolveStagedInputMediaPaths(attempt.media),
+        stagedMediaPaths: new Map(
+          [...resolveStagedInputMediaPaths(attempt.media)].map(([alias, mediaPath]) => [
+            alias,
+            path.isAbsolute(mediaPath)
+              ? mediaPath
+              : path.resolve(
+                  params.setup.sandbox?.workspaceDir ?? params.setup.effectiveWorkspace,
+                  mediaPath,
+                ),
+          ]),
+        ),
         sessionPermissionPolicy,
         channelContext: attempt.channelContext,
         allowGatewaySubagentBinding: attempt.allowGatewaySubagentBinding,

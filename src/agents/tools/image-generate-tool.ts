@@ -669,6 +669,7 @@ export function createImageGenerateTool(
                       ),
                     ],
                     taskHandle,
+                    attachmentRequesterSessionKey: options?.requesterRunSessionKey,
                     details: {
                       ...buildMediaReferenceDetails(loadedReferenceImages, "image"),
                       referenceInputs,

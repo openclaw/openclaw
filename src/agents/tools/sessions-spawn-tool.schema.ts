@@ -149,6 +149,24 @@ function buildSessionsSpawnToolSchema(params: {
         },
       ),
     ),
+    attachmentRefs: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            id: Type.String({ minLength: 1 }),
+            name: Type.String({ minLength: 1 }),
+            mimeType: Type.String({ minLength: 1 }),
+            sha256: Type.String({ minLength: 64, maxLength: 64 }),
+            sizeBytes: Type.Integer({ minimum: 0 }),
+          },
+          {
+            description:
+              "Host-managed attachment handles returned by a multimodal tool; the child receives a validated private copy, not the handle bytes.",
+          },
+        ),
+        { maxItems: 50 },
+      ),
+    ),
     attachAs: Type.Optional(
       Type.Object(
         {

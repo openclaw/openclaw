@@ -89,6 +89,7 @@ import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { createStagedMediaAttachmentResolver } from "./tools/sessions-spawn-attachment-resolver.js";
 import { createSessionsTool } from "./tools/sessions-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSkillLibraryTool } from "./tools/skill-library-tool.js";
@@ -472,6 +473,9 @@ function* createOpenClawToolsSteps(
   const sessionsSpawnToolOptions = {
     ...options,
     assertActive: options?.assertInvocationCurrent,
+    resolveAttachmentReference: createStagedMediaAttachmentResolver(options?.stagedMediaPaths, {
+      workspaceDir: options?.workspaceDir,
+    }),
     // Only a keyed parent has a stored incarnation for spawn to check.
     expectedParentSessionId:
       (options?.runSessionKey ?? options?.agentSessionKey) ? options?.sessionId : undefined,
