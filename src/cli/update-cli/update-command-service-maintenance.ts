@@ -326,7 +326,11 @@ async function stopManagedServiceBeforeMutableUpdate(
         };
       }
     }
-    const warning = await serviceInspectionWarningMessage(undefined, serviceEnv);
+    const warning =
+      (await (
+        await import("./update-command-service-account-activation.js")
+      ).describeServiceUpdatedAsAccount(params.root)) ??
+      (await serviceInspectionWarningMessage(undefined, serviceEnv));
     const verdict: Extract<ManagedGatewayUpdateVerdict, { kind: "unavailable" }> = {
       kind: "unavailable",
       message:

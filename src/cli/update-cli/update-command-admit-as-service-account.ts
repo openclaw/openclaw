@@ -126,7 +126,7 @@ export async function admitAsServiceAccount(
     const lines = result.stderr.toString("utf8").trim().split("\n");
     const reason = (
       lines.find((line) => /\b\w*Error\b:/u.test(line)) ??
-      lines.filter((line) => !line.startsWith("Node.js v")).at(-1)
+      lines.findLast((line) => !line.startsWith("Node.js v"))
     )
       ?.replace(/[^\x20-\x7e]/gu, "")
       .trim()
