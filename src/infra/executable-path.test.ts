@@ -433,6 +433,20 @@ describe("resolveExecutable", () => {
     },
   );
 
+  it("resolves a command whose name carries a dot through PATHEXT on Windows", async () => {
+    await withMockedPlatform("win32", async () => {
+      await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+        const binDir = path.join(base, "Scripts");
+        await fs.mkdir(binDir, { recursive: true });
+        await fs.writeFile(path.join(binDir, "pip3.11.cmd"), "@echo off\r\n", "utf8");
+
+        withEnv({ PATH: binDir, PATHEXT: ".EXE;.CMD;.BAT;.COM" }, () => {
+          expect(resolveExecutable("pip3.11")).toBe(path.join(binDir, "pip3.11.cmd"));
+        });
+      });
+    });
+  });
+
   it("returns original cmd when no PATH match exists on Windows", () => {
     withMockedPlatform("win32", () => {
       expect(resolveExecutable("gog")).toBe("gog");
