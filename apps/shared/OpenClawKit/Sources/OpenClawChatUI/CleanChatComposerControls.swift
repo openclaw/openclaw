@@ -11,8 +11,21 @@ struct CleanChatComposerSurface: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     let cornerRadius: CGFloat
+    var usesSystemGlassEdge = false
 
     func body(content: Content) -> some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *), self.usesSystemGlassEdge {
+            self.platformSurface(content)
+        } else {
+            self.outlinedSurface(content)
+        }
+        #else
+        self.outlinedSurface(content)
+        #endif
+    }
+
+    private func outlinedSurface(_ content: Content) -> some View {
         self.platformSurface(content)
             .overlay(
                 RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
@@ -45,17 +58,64 @@ struct CleanChatComposerSurface: ViewModifier {
 
 enum CleanChatComposerMetrics {
     static let surfaceCornerRadius: CGFloat = 20
-    static let restingMinHeight: CGFloat = 104
     static let controlTouchSize: CGFloat = 44
     static let primaryVisualSize: CGFloat = 32
+    #if os(iOS)
+    static let footerInk = Color.primary.opacity(0.68)
+    /// The gauge needle reads one step stronger than the dial, as in the Control UI.
+    static let footerStrongInk = Color.primary.opacity(0.86)
+    static let footerOutlineSize: CGFloat = 15
+    static let footerOutlineStroke: CGFloat = 1.5
+    static let glyphControlWidth: CGFloat = 36
+    /// Open, the primary disc sits 10 pt from the trailing and bottom edges.
+    static let expandedControlInset: CGFloat = 4
+    /// Open, the 14 pt `+` glyph shares the draft's leading edge.
+    static let expandedLeadingControlInset: CGFloat = 0
+    /// The space above the first line's capitals equals the space from the last baseline to the top of the
+    /// primary disc. Inter's capitals sit in the middle of its line box (ascender minus cap height equals
+    /// the descender), so the two spaces stay equal at every text size: inset + ascender − cap height on
+    /// top, descender + gap + the disc's inset in its row below.
+    static let expandedEditorTopInset: CGFloat = 16
+    static let expandedControlsGap: CGFloat = expandedEditorTopInset - (controlTouchSize - primaryVisualSize) / 2
+    /// Concentric with the primary disc: its 16 pt radius plus its 10 pt inset.
+    static let expandedCornerRadius: CGFloat = 26
+    /// Collapsed, the same controls sit concentric with the capsule.
+    static let collapsedControlInset: CGFloat = 6
+    #endif
     static let editorInlineInset: CGFloat = 14
-    static let editorBlockInset: CGFloat = 6
     static let footerInlineInset: CGFloat = 8
     static let footerBlockInset: CGFloat = 6
     static let rowGap: CGFloat = 4
-    static let footerControlGap: CGFloat = 0
-    static let regularModelMaxWidth: CGFloat = 132
+    static let regularModelMaxWidth: CGFloat = 148
     static let compactModelWidth: CGFloat = controlTouchSize
+}
+
+struct ChatComposerPlaceholder: View {
+    let text: String
+    let compactText: String?
+
+    var body: some View {
+        Group {
+            if let compactText {
+                ViewThatFits(in: .horizontal) {
+                    Text(self.text)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                    Text(compactText)
+                        .lineLimit(1)
+                }
+            } else {
+                Text(self.text)
+            }
+        }
+        .font(OpenClawChatTypography.body)
+        #if os(iOS)
+        .foregroundStyle(OpenClawChatTheme.placeholder)
+        #else
+        .foregroundStyle(.tertiary)
+        #endif
+        .allowsHitTesting(false)
+    }
 }
 
 struct CompactChatAttachmentLabel: View {
@@ -63,8 +123,13 @@ struct CompactChatAttachmentLabel: View {
 
     var body: some View {
         Image(systemName: "plus")
-            .font(.system(size: OpenClawChatTypography.scaled(20), weight: .semibold))
-            .foregroundStyle(.secondary)
+            #if os(iOS)
+                .font(OpenClawChatTypography.composerAttachmentGlyph)
+                .foregroundStyle(CleanChatComposerMetrics.footerInk)
+            #else
+                .font(.system(size: OpenClawChatTypography.scaled(20), weight: .semibold))
+                .foregroundStyle(.secondary)
+            #endif
             .frame(
                 width: self.controlSize,
                 height: self.controlSize)
@@ -77,15 +142,22 @@ struct CleanChatContextUsageLabel: View {
     var controlSize: CGFloat = CleanChatComposerMetrics.controlTouchSize
 
     var body: some View {
-        ZStack {
+        #if os(iOS)
+        let size = CleanChatComposerMetrics.footerOutlineSize
+        let weight = CleanChatComposerMetrics.footerOutlineStroke
+        #else
+        let size: CGFloat = 18
+        let weight: CGFloat = 2.5
+        #endif
+        return ZStack {
             Circle()
-                .stroke(OpenClawChatTheme.muted.opacity(0.2), lineWidth: 2.5)
+                .stroke(OpenClawChatTheme.muted.opacity(0.2), lineWidth: weight)
             Circle()
                 .trim(from: 0, to: max(0.02, self.usage.fractionUsed ?? 0))
-                .stroke(self.tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .stroke(self.tint, style: StrokeStyle(lineWidth: weight, lineCap: .round))
                 .rotationEffect(.degrees(-90))
         }
-        .frame(width: 18, height: 18)
+        .frame(width: size, height: size)
         .frame(
             width: self.controlSize,
             height: self.controlSize)
@@ -121,9 +193,8 @@ struct CleanChatContextUsageLabel: View {
 @MainActor
 public struct OpenClawChatContextUsageControl: View {
     private let usage: OpenClawChatContextUsage
-    private let canCompact: Bool
     private let controlSize: CGFloat
-    private let onCompact: @MainActor () -> Void
+    private let items: OpenClawChatContextUsageMenuItems
 
     public init(
         usage: OpenClawChatContextUsage,
@@ -132,27 +203,13 @@ public struct OpenClawChatContextUsageControl: View {
         onCompact: @escaping @MainActor () -> Void)
     {
         self.usage = usage
-        self.canCompact = canCompact
         self.controlSize = controlSize
-        self.onCompact = onCompact
+        self.items = OpenClawChatContextUsageMenuItems(usage: usage, canCompact: canCompact, onCompact: onCompact)
     }
 
     public var body: some View {
         Menu {
-            Text(self.tokensLine)
-                .font(OpenClawChatTypography.body)
-            if let cost = self.usage.totalCost {
-                Text(verbatim: String(
-                    format: String(localized: "Thread cost %@"),
-                    ChatContextUsageFormatter.cost(cost)))
-                    .font(OpenClawChatTypography.body)
-            }
-            Divider()
-            Button(action: self.onCompact) {
-                Text("Compact Thread")
-                    .font(OpenClawChatTypography.body)
-            }
-            .disabled(!self.canCompact)
+            self.items
         } label: {
             CleanChatContextUsageLabel(usage: self.usage, controlSize: self.controlSize)
         }
@@ -162,11 +219,42 @@ public struct OpenClawChatContextUsageControl: View {
         .buttonStyle(.plain)
         .fixedSize()
         #endif
-        .help(self.tokensLine)
+        .help(self.items.tokensLine)
         .accessibilityIdentifier("chat-context-usage")
     }
+}
 
-    private var tokensLine: String {
+/// Shared contents of the context menu, independent of where its button lives.
+@MainActor
+public struct OpenClawChatContextUsageMenuItems: View {
+    private let usage: OpenClawChatContextUsage
+    private let canCompact: Bool
+    private let onCompact: @MainActor () -> Void
+
+    public init(usage: OpenClawChatContextUsage, canCompact: Bool, onCompact: @escaping @MainActor () -> Void) {
+        self.usage = usage
+        self.canCompact = canCompact
+        self.onCompact = onCompact
+    }
+
+    public var body: some View {
+        Text(self.tokensLine)
+            .font(OpenClawChatTypography.body)
+        if let cost = self.usage.totalCost {
+            Text(verbatim: String(
+                format: String(localized: "Thread cost %@"),
+                ChatContextUsageFormatter.cost(cost)))
+                .font(OpenClawChatTypography.body)
+        }
+        Divider()
+        Button(action: self.onCompact) {
+            Text("Compact Thread")
+                .font(OpenClawChatTypography.body)
+        }
+        .disabled(!self.canCompact)
+    }
+
+    var tokensLine: String {
         let used = ChatContextUsageFormatter.tokens(self.usage.usedTokens)
         guard let window = self.usage.contextWindowTokens else {
             return String(format: String(localized: "%@ tokens used"), used)
@@ -298,6 +386,7 @@ struct OpenClawChatMicButton: View {
     let isComposerEnabled: Bool
     let isAttachmentInputEnabled: Bool
     var controlSize: CGFloat = CleanChatComposerMetrics.controlTouchSize
+    var controlWidth: CGFloat?
     let onCancelDictation: @MainActor () -> Void
     let onStartDictation: @MainActor () -> Void
 
@@ -327,7 +416,7 @@ struct OpenClawChatMicButton: View {
                 .disabled(!self.isVoiceNoteRecordingEnabled(voiceNoteControl))
                 .accessibilityLabel("Record Voice Note")
                 .accessibilityIdentifier("chat-dictation-control")
-                .help("Record Voice Note")
+                .modifier(MacOnlyHelp(text: Text("Record Voice Note")))
             }
         } else if let dictationControl {
             Button(action: self.performDictationAction) {
@@ -343,10 +432,23 @@ struct OpenClawChatMicButton: View {
 
     private var label: some View {
         let showsStop = self.isDictationPending || self.dictationControl?.isActive == true
+        #if os(iOS)
+        let font = OpenClawChatTypography.composerGlyph
+        let idleTint = CleanChatComposerMetrics.footerInk
+        #else
+        let font = Font.system(size: OpenClawChatTypography.scaled(17), weight: .medium)
+        let idleTint = Color.secondary
+        #endif
         return Image(systemName: showsStop ? "stop.fill" : "mic")
-            .font(.system(size: OpenClawChatTypography.scaled(17), weight: .medium))
-            .foregroundStyle(showsStop ? OpenClawChatTheme.accent : .secondary)
-            .frame(width: self.controlSize, height: self.controlSize)
+            .font(font)
+            .foregroundStyle(showsStop ? OpenClawChatTheme.accent : idleTint)
+            #if os(iOS)
+            .offset(y: showsStop ? 0 : -1)
+            #endif
+            .frame(width: self.controlWidth ?? self.controlSize, height: self.controlSize)
+            // A full-size target in its own slot: the extra width sits on the leading side, so the glyph
+            // keeps its place next to the primary button.
+            .frame(width: self.controlSize, height: self.controlSize, alignment: .trailing)
             .contentShape(Rectangle())
     }
 
@@ -435,6 +537,20 @@ struct OpenClawChatMicButton: View {
     }
 }
 
+/// `.help` is a tooltip on macOS but the accessibility hint on iPhone and iPad, where the mic's
+/// help only repeated its label ("Dictate message", then "Dictate").
+private struct MacOnlyHelp: ViewModifier {
+    let text: Text
+
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content
+        #else
+        content.help(self.text)
+        #endif
+    }
+}
+
 private struct UnifiedChatMicMetadata: ViewModifier {
     let control: OpenClawChatDictationControl
     let isPending: Bool
@@ -444,7 +560,7 @@ private struct UnifiedChatMicMetadata: ViewModifier {
             .accessibilityLabel(self.accessibilityLabel)
             .accessibilityValue(self.accessibilityValue)
             .accessibilityIdentifier("chat-dictation-control")
-            .help(self.helpText)
+            .modifier(MacOnlyHelp(text: self.helpText))
     }
 
     private var accessibilityLabel: Text {
@@ -454,9 +570,14 @@ private struct UnifiedChatMicMetadata: ViewModifier {
     }
 
     private var accessibilityValue: Text {
-        Text((self.isPending && self.control.phase == .idle
-                ? OpenClawChatDictationControl.Phase.starting
-                : self.control.phase).statusText)
+        let phase = self.isPending && self.control.phase == .idle
+            ? OpenClawChatDictationControl.Phase.starting
+            : self.control.phase
+        #if os(iOS)
+        // Idle has nothing to report; the label already says what the button does.
+        if phase == .idle { return Text(verbatim: "") }
+        #endif
+        return Text(phase.statusText)
     }
 
     private var helpText: Text {

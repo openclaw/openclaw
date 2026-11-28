@@ -3,7 +3,6 @@ import path from "node:path";
 import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
-import { runWorkspaceFilesystemOperation } from "./workspace-filesystem.js";
 import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
 
 /** Find the nearest Git metadata, including damaged linked-worktree pointers. */
@@ -116,6 +115,8 @@ export async function ensureGitRepo(
   if (!(await isGitAvailable())) {
     return;
   }
+  // Read-only Git workers share this module. Load mutation support only for a real init.
+  const { runWorkspaceFilesystemOperation } = await import("./workspace-filesystem.js");
   guard?.assertHost?.();
   await runWorkspaceFilesystemOperation({ kind: "git-init", dir }, guard);
   const root = path.resolve(dir);

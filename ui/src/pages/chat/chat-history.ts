@@ -13,7 +13,7 @@ import { resolveChatAgentId } from "./chat-agent-id.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { hydrateChatHistory } from "./chat-history-hydration.ts";
-import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request.ts";
+import { openingHistoryLimit } from "./chat-history-request.ts";
 import type { ChatHistoryResult, ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
 import { clearHistoryCursor, historySessionId } from "./chat-history-snapshot.ts";
 import {
@@ -104,7 +104,7 @@ export async function loadChatHistory(
     method,
     sessionKey,
     requestAgentId ?? "",
-    CHAT_HISTORY_REQUEST_LIMIT,
+    openingHistoryLimit(state.settings?.compactSessionOpening),
     inputRunIds,
   ]);
   const requestKey = `${requestKeyPrefix}${requestModeKey}${JSON.stringify(readChatHistoryState(state, deltaCursor)?.stateRevision ?? null)}`;

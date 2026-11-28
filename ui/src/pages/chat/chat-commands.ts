@@ -12,7 +12,7 @@ import {
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import type { clearChatHistory } from "./chat-history-actions.ts";
+import type { clearChatHistory } from "./chat-history-clear.runtime.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";

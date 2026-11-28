@@ -196,8 +196,7 @@ export function promoteGoalContinuationYield(params: {
   ) {
     return;
   }
-  const continuation = owner.continuation;
-  if (!continuation) {
+  if (!owner.continuation) {
     return;
   }
   const { sessionKey, base } = owner.params;
