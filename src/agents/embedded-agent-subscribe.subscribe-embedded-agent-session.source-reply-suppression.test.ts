@@ -106,7 +106,7 @@ async function emitMessageToolLifecycle(
     channelId?: string;
     threadId?: string;
     details?: Record<string, unknown>;
-  } = {},
+  },
 ) {
   const id = params.toolCallId ?? "tool-message-1";
   startTool(emit, "message", id, {
