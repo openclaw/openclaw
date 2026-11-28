@@ -5,7 +5,6 @@ struct ChatTypingIndicatorBubble: View {
     @Environment(\.openClawAssistantRunContent) private var isRunContent
     private var column = ChatTranscriptIconColumn()
     let showsAssistantAvatar: Bool
-    let runIdentity: String
     #if os(iOS)
     /// The run's phase, or “Thinking” after output that is not answer text; nil shows the claw alone.
     let status: String?
@@ -23,6 +22,7 @@ struct ChatTypingIndicatorBubble: View {
     }
     #else
     @State private var startedAt = Date()
+    let runIdentity: String
     let outputTokens: Int?
     let status: String?
     #endif
@@ -72,7 +72,7 @@ struct ChatTypingIndicatorBubble: View {
             if self.showsAssistantAvatar, !self.isRunContent { ChatAssistantAvatar(size: 28) }
             HStack(spacing: self.column.spacing) {
                 #if os(iOS)
-                ChatWorkingClawView(seed: self.runIdentity, artworkSize: 20)
+                ChatWorkingClawView(artworkSize: 20)
                     .frame(width: self.column.width)
                 ZStack(alignment: .leading) {
                     // Keep the line's height while it shows the claw alone.
@@ -89,7 +89,7 @@ struct ChatTypingIndicatorBubble: View {
                     highlight: self.reduceMotion ? Color(uiColor: .secondaryLabel) : OpenClawChatTheme.assistantText))
                 .opacity(self.opacity)
                 #else
-                ChatWorkingClawView(seed: self.runIdentity).frame(width: self.column.width)
+                ChatWorkingClawView().frame(width: self.column.width)
                 self.ordinaryStatus.foregroundStyle(.secondary)
                 #endif
             }
