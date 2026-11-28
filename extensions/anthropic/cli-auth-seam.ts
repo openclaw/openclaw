@@ -1,3 +1,4 @@
+import path from "node:path";
 import { runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import {
   filterStringEntries,
@@ -60,13 +61,16 @@ export async function probeClaudeCliAuthStatus(params?: {
       packageName: "@anthropic-ai/claude-code",
     });
     const invocation = materializeWindowsSpawnProgram(program, ["auth", "status", "--json"]);
+    params?.signal?.throwIfAborted();
+    // `auth status` refreshes an expiring OAuth token under Claude Code's refresh lock, and a
+    // killed refresh leaves that lock behind, stalling or failing the next Claude turn. So a
+    // cancelled caller still joins the probe's own exit; only the deadline terminates it.
     const result = await runUtf8CommandWithTimeout([invocation.command, ...invocation.argv], {
       baseEnv: env,
       maxOutputBytes: 64 * 1024,
       maxCombinedOutputBytes: 64 * 1024,
       terminateOnOutputLimit: true,
       timeoutMs: CLAUDE_CLI_AUTH_TIMEOUT_MS,
-      signal: params?.signal,
       killProcessTree: true,
     });
     params?.signal?.throwIfAborted();
@@ -87,11 +91,18 @@ export async function probeClaudeCliAuthStatus(params?: {
       return { status: "unreadable" as const };
     }
     const authMethod = CLAUDE_CLI_AUTH_METHODS.find((method) => method === parsed.authMethod);
+    const subscriptionType =
+      authMethod === "claude.ai"
+        ? ["pro", "max", "team", "enterprise"].find((plan) => plan === parsed.subscriptionType)
+        : undefined;
     const email = authMethod === "claude.ai" ? normalizeOptionalString(parsed.email) : undefined;
+    const configDirectory = normalizeOptionalString(parsed.configDirectory);
     return {
       status: "available" as const,
       ...(authMethod ? { authMethod } : {}),
+      ...(subscriptionType ? { subscriptionType } : {}),
       ...(email && email.length <= 320 && !/[\r\n]/u.test(email) ? { email } : {}),
+      ...(configDirectory && path.isAbsolute(configDirectory) ? { configDirectory } : {}),
     };
   } catch (error) {
     params?.signal?.throwIfAborted();

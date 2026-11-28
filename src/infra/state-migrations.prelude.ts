@@ -92,6 +92,28 @@ export function createConfigMigrationSources(
   );
 }
 
+export function createMigrationDetectionStep(params: {
+  configPath: string;
+  configIncludedPaths: readonly string[];
+  stateDir: string;
+  run: LegacyStateMigrationStep["run"];
+  refusal?: PreparedLegacyStateMigrationStep["refusal"];
+}): LegacyStateMigrationStep {
+  return {
+    id: "migration-detection",
+    phase: "shared",
+    source: [
+      ...createConfigMigrationSources(params.configPath, params.configIncludedPaths),
+      { kind: "path", path: params.stateDir },
+    ],
+    target: [],
+    requiredness: "required",
+    reversibility: "not-applicable",
+    ...(params.refusal ? { refusal: params.refusal } : {}),
+    run: params.run,
+  };
+}
+
 export function createAgentTargetDiscoveryStep(params: {
   configPath: string;
   configIncludedPaths: readonly string[];
@@ -169,6 +191,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
   agentDatabaseTargets: readonly { agentId: string; path: string }[];
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   integrityCheck?: "quick" | "full";
+  reuseCleanCloseIntegrity?: boolean;
   inspectedSessionEntryPaths?: readonly string[];
   orphanSessionStores?: ReturnType<typeof inspectOrphanSessionStoreEndpoints>;
   pluginSessionStoreAgentIds: readonly string[];
@@ -193,6 +216,14 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
   ]);
   const entryStateChanges = (repaired: number) =>
     repaired > 0 ? [`Canonicalized entry state for ${repaired} durable session row(s).`] : [];
+  // Only a deferred update inspection reports warnings; Doctor --fix completes it later.
+  const entryStateResult = (report: { repaired: number; warnings?: string[] }) => ({
+    changes: entryStateChanges(report.repaired),
+    warnings: report.warnings ?? [],
+    ...(report.warnings
+      ? { warningDisposition: "recoverable" as const, outcome: "deferred" as const }
+      : {}),
+  });
 
   const sharedStep = (
     id: string,
@@ -259,10 +290,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
               }
             },
           });
-          return {
-            changes: entryStateChanges(report.repaired),
-            warnings: [],
-          };
+          return entryStateResult(report);
         },
         undefined,
         "required",
@@ -270,6 +298,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
       sharedStep("media-persistence", agentPersistence, agentPersistence, () =>
         migrateLegacyMediaPersistence({
           ...agentMigrationOptions,
+          reuseCleanCloseIntegrity: params.reuseCleanCloseIntegrity,
           isSessionEntryStatePrepared: (target) =>
             inspectedEntryStatePaths.has(normalizeDatabasePath(target.realPath)),
           prepareSessionEntryState: async (target) => {
@@ -291,7 +320,8 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
                 },
               });
               return {
-                completed: true,
+                // A deferred inspection leaves this target's media migration deferred too.
+                completed: !report.warnings,
                 changes: entryStateChanges(report.repaired),
               };
             } catch (error) {
@@ -333,10 +363,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
                 sqlitePath: target.path,
               })),
           });
-          return {
-            changes: entryStateChanges(report.repaired),
-            warnings: [],
-          };
+          return entryStateResult(report);
         },
         undefined,
         "required",

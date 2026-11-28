@@ -33,13 +33,14 @@ import {
   recordToolResultPromptProjection,
 } from "../../src/agents/embedded-agent-runner/session-prompt-state.js";
 import { bindToolResultPromptProjectionKeys } from "../../src/agents/embedded-agent-runner/tool-result-projection-key.js";
-import { replayToolResultPromptProjections } from "../../src/agents/embedded-agent-runner/tool-result-projection-replay.js";
+import { projectToolResultMessages } from "../../src/agents/embedded-agent-runner/tool-result-truncation.js";
 import { convertToLlm } from "../../src/agents/sessions/messages.js";
 import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json-normalize.js";
 import { isOwnedTranscriptPayload } from "../../src/config/sessions/transcript-json.js";
 import { cloneTranscriptView } from "../../src/config/sessions/transcript-snapshot.js";
 import type { Message } from "../../src/llm/types.js";
 import { isDeeplyFrozenPlainData } from "../../src/shared/immutable-data.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -210,13 +211,14 @@ function hydrate(session: ReturnType<typeof createSession>) {
   session.messages = convertToLlm(
     values.envelopes === "projected"
       ? normalizeMessagesForLlmBoundary(
-          replayToolResultPromptProjections(
-            bindToolResultPromptProjectionKeys(
+          projectToolResultMessages({
+            messages: bindToolResultPromptProjectionKeys(
               messages,
               createToolResultPromptProjectionState(session.projections),
             ),
-            session.projections,
-          ),
+            // Replay the admitted bytes without advancing the session's pruning state.
+            projectionState: createToolResultPromptProjectionState(session.projections),
+          }).messages,
           { sessionVersion: 4, appendOnlyRuntimeContext: true, includeTimestamp: false },
         )
       : messages,
@@ -303,12 +305,7 @@ const shapes = countShapes(sessions[0]!.messages);
 await collect();
 const inspector = values.measure === "allocation" ? new Session() : undefined;
 if (inspector) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 512,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 512);
 }
 if (values.measure === "snapshot") {
   assert.ok(values.output);

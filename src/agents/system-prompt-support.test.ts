@@ -9,8 +9,10 @@ it("routes official support separately from self-service, social, bug, and secur
   });
 
   expect(prompt).toContain("Docs: /tmp/openclaw/docs");
-  expect(prompt).toContain("For official OpenClaw support, visit https://community.openclaw.ai/.");
-  expect(prompt).toContain(
-    "Keep self-service docs, Discord social chat, reproducible GitHub bug reports, and private security reporting separate.",
-  );
+  const support = prompt.split("\n").find((line) => line.startsWith("Support:"));
+  expect(support).toContain("https://community.openclaw.ai/");
+  for (const route of ["docs", "Discord chat", "GitHub bugs", "security reports"]) {
+    expect(support).toContain(route);
+  }
+  expect(support).toContain("separate");
 });

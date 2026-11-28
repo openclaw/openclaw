@@ -264,7 +264,13 @@ describe("Bedrock thinking request composition", () => {
     ["legacy budget exhausted", legacy, { reasoning: "minimal" }, 1024, undefined],
     ["explicit request cap", adaptive, { reasoning: "high", maxTokens: 32_000 }, 32_000, "high"],
     ["native cap with thinking off", adaptive, { reasoning: "off" }, 128_000, undefined],
-    ["descriptive profile name", named, { reasoning: "xhigh" }, undefined, "xhigh"],
+    [
+      "authored 32768 cap",
+      { ...named, maxTokens: 32_768 },
+      { reasoning: "xhigh" },
+      32_768,
+      "xhigh",
+    ],
     ["native alias", nativeAlias, { reasoning: "xhigh", temperature: 0.2 }, undefined, "xhigh"],
     ["clamped alias", clampedAlias, { reasoning: "max", temperature: 0.2 }, undefined, "high"],
   ] as const)(
@@ -495,7 +501,10 @@ describe("Bedrock prompt cache ownership", () => {
     expect(payload.system).toEqual(
       mode === "none"
         ? [wireText("Stable workspace\nToday: Monday")]
-        : [wireText("Stable workspace"), ...(point ? [point] : []), wireText("Today: Monday")],
+        : [wireText("Stable workspace"), ...(point ? [point] : []), wireText("\nToday: Monday")],
+    );
+    expect(payload.system?.flatMap((block) => (block.text ? [block.text] : [])).join("")).toBe(
+      "Stable workspace\nToday: Monday",
     );
     expect(payload.messages?.[0]?.content).toEqual([wireText("Hello"), ...(point ? [point] : [])]);
     expect(payload.toolConfig?.tools?.map((tool) => tool.toolSpec?.name)).toEqual([
@@ -660,7 +669,7 @@ it.each([
   },
 );
 
-it("lifts tool images into user content for OpenAI while preserving result associations", async () => {
+it("lifts non-Claude tool images into user content, keeping result associations", async () => {
   const image = { type: "image" as const, mimeType: "image/png", data: png };
   const context = {
     messages: [
@@ -672,7 +681,7 @@ it("lifts tool images into user content for OpenAI while preserving result assoc
   };
   const before = structuredClone(context);
   const input = await capturePayload(
-    bedrockModel({ id: "us.openai.gpt-5.6-sol", input: ["text", "image"] }),
+    bedrockModel({ id: opaqueProfile, input: ["text", "image"] }),
     context,
   );
   const expectedImage = {
@@ -695,12 +704,14 @@ it("lifts tool images into user content for OpenAI while preserving result assoc
   ]);
   expect(context).toEqual(before);
 
-  const unaffected = await capturePayload(bedrockModel({ input: ["text", "image"] }), context);
+  const claude = claudeModel("global.anthropic.claude-sonnet-5", { input: ["text", "image"] });
+  const unaffected = await capturePayload(claude, context);
   expect(unaffected.messages).toEqual([
     wireUser(
       wireToolResult("call_first", [{ text: "first result" }, expectedImage, expectedImage]),
       wireToolResult("call_second", [expectedImage], "error"),
       wireToolResult("call_text", [{ text: "plain result" }]),
+      checkpoint,
     ),
   ]);
 });

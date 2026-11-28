@@ -1,4 +1,5 @@
 import type { ApplicationContext } from "../../app/context.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import type { PluginMutationResult } from "../../lib/plugins/index.ts";
@@ -33,6 +34,7 @@ export function createPluginPromptLaunch(host: {
     rowKey: string;
     isCurrent: () => boolean;
     opening: boolean;
+    confirmation: AbortController;
   } | null = null;
   const selected = () => {
     const catalog = host.state.detail?.catalog ?? host.state.catalogDetail?.result;
@@ -106,6 +108,7 @@ export function createPluginPromptLaunch(host: {
       return pending !== null;
     },
     reset(this: void) {
+      pending?.confirmation.abort();
       pending = null;
     },
     async select(prompt: string) {
@@ -114,7 +117,8 @@ export function createPluginPromptLaunch(host: {
         return;
       }
       const { installed, prompts, catalog } = selected();
-      if (!prompts?.includes(prompt)) {
+      const name = installed?.name ?? catalog?.plugin.catalog.name;
+      if (!prompts?.includes(prompt) || !name) {
         return;
       }
       const rowKey = installed ? pluginRowKey(installed.id) : `install:${catalog?.plugin.id}`;
@@ -130,10 +134,44 @@ export function createPluginPromptLaunch(host: {
           host.pathname() === pathname &&
           host.context.agentSelection.intentRevision === agentIntent,
         opening: false,
+        confirmation: new AbortController(),
       };
       pending = intent;
       host.publish();
       const consent = host.consent();
+      if (!installed || (!installed.enabled && installed.state !== "needs-setup")) {
+        const confirmed = await showConfirmDialog({
+          title: t(
+            installed
+              ? "pluginsPage.recommendedPrompts.enableTitle"
+              : "pluginsPage.recommendedPrompts.installTitle",
+            {
+              name,
+            },
+          ),
+          message: t("pluginsPage.recommendedPrompts.activationWarning"),
+          confirmLabel: t(
+            installed
+              ? "pluginsPage.recommendedPrompts.enableContinue"
+              : "pluginsPage.recommendedPrompts.installContinue",
+          ),
+          signal: intent.confirmation.signal,
+          canConfirm: () => intent.isCurrent() && !blockedReason(),
+        }).catch((error: unknown) => {
+          if (intent.isCurrent()) {
+            setMessage(rowKey, { kind: "error", text: formatUiError(error) });
+          }
+          return false;
+        });
+        // Confirmation yields; the originating route, agent and write access must still hold.
+        if (!confirmed || !intent.isCurrent() || blockedReason()) {
+          if (pending === intent) {
+            pending = null;
+            host.publish();
+          }
+          return;
+        }
+      }
       if (installed && (installed.enabled || installed.state === "needs-setup")) {
         await complete({ plugin: installed }, rowKey);
       } else if (installed) {

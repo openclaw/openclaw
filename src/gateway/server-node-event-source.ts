@@ -113,12 +113,12 @@ export async function withNodeEventSessionSource(
           current?.agentHarnessId !== entry.agentHarnessId ||
           !isDeepStrictEqual(current?.delivery, entry.delivery)
         ) {
-          throw new Error("Node event session authority changed");
+          throw new Error("Node event session changed. Retry the event.");
         }
       };
       const pending: Promise<unknown>[] = [];
       try {
-        return await consume(
+        const result = await consume(
           {
             ...opts,
             isConnectionCurrent: async () => {
@@ -142,6 +142,10 @@ export async function withNodeEventSessionSource(
             pending,
           },
         );
+        if (result) {
+          opts?.onResult?.(result);
+        }
+        return result;
       } finally {
         for (const work of pending) {
           await Promise.allSettled([work]);

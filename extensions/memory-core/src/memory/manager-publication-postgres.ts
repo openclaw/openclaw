@@ -4,6 +4,7 @@ import type {
   SearchSchema,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
+  DatabaseSearchCapabilityUnavailableError,
   isPostgresSqlConnection,
   MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_STATE_TABLE,
@@ -20,6 +21,7 @@ import {
 import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
+import { retirePublishedMemoryEmbeddingCacheRows } from "./manager-embedding-cache-retire.js";
 import {
   clearMemoryEmbeddingCacheIdentities,
   countMemoryEmbeddingCache,
@@ -29,6 +31,7 @@ import {
 } from "./manager-embedding-cache.js";
 import {
   upgradeMemoryIndexProviderKey,
+  writeMemoryEmbeddingRefusal,
   writeMemoryIndexMetadata,
 } from "./manager-index-metadata.js";
 import { readMemoryIndex } from "./manager-index-read.js";
@@ -72,7 +75,10 @@ export function bindPostgresMemoryPublication(
   context: {
     database: EngineConnection;
     admit(stage: "transaction" | "commit"): void;
-    admitSearchExtensions?: (definitions: Readonly<Record<string, SearchSchema>>) => void;
+    admitSearchExtensions?: (
+      definitions: Readonly<Record<string, SearchSchema>>,
+      options?: { rebuild: true },
+    ) => void;
   },
   stageId?: string,
 ) {
@@ -163,6 +169,11 @@ export function bindPostgresMemoryPublication(
         metadata = previousMetadata;
         created = previousCreated;
         cacheSize = previousCacheSize;
+      }
+      if (error instanceof DatabaseSearchCapabilityUnavailableError) {
+        // Deferred search admission must retain the same actionable capability
+        // error as eager admission, after the publication transaction rolls back.
+        throw Object.assign(error, { entered, committed });
       }
       return {
         ok: false,
@@ -342,9 +353,12 @@ export function bindPostgresMemoryPublication(
     }
     if (command.type === "schema.admit") {
       if (command.input.ftsEnabled) {
-        admitSearch({
-          "memory.text": memoryTextSearchSchema(command.input.ftsTokenizer ?? "unicode61"),
-        });
+        // Text rows remain canonical for this projection; changing tokenizer mode
+        // only replaces its optional trigram indexes, without re-embedding content.
+        admitSearch(
+          { "memory.text": memoryTextSearchSchema(command.input.ftsTokenizer ?? "unicode61") },
+          { rebuild: true },
+        );
       }
       const facts = rebuilding ?? readMemoryDatabaseFacts(db);
       return {
@@ -363,9 +377,12 @@ export function bindPostgresMemoryPublication(
       };
     }
     if (command.type === "vector.ensure") {
-      admitSearch({ "memory.vector": memoryVectorSearchSchema(command.input.dimensions) });
       if (rebuilding) {
+        // The stage contains the new embeddings. Keep the published projection
+        // until publication replaces its source rows and dimensions atomically.
         rebuilding.hasVectorTable = true;
+      } else {
+        admitSearch({ "memory.vector": memoryVectorSearchSchema(command.input.dimensions) });
       }
       return { ok: true, value: undefined, facts: rebuilding ?? readMemoryDatabaseFacts(db) };
     }
@@ -408,6 +425,12 @@ export function bindPostgresMemoryPublication(
             );
           }
           db.exec("DELETE FROM memory_index_chunks; DELETE FROM memory_index_sources");
+          if (rebuilding.hasVectorTable && metadata.vectorDims) {
+            admitSearch(
+              { "memory.vector": memoryVectorSearchSchema(metadata.vectorDims) },
+              { rebuild: true },
+            );
+          }
           function* sources() {
             const rows = records("reindex");
             let next = rows.next();
@@ -510,6 +533,18 @@ export function bindPostgresMemoryPublication(
         { publishFacts: true },
       );
     }
+    if (command.type === "index.writeEmbeddingRefusal") {
+      // The refusal describes the endpoint, not index content, so a staged rebuild keeps it live.
+      return write(
+        () => {
+          writeMemoryEmbeddingRefusal(db, command.input);
+          if (rebuilding) {
+            rebuilding.embeddingRefusal = command.input;
+          }
+        },
+        { publishFacts: true },
+      );
+    }
     if (command.type === "source.refresh" || command.type === "source.delete") {
       return rebuilding
         ? { ok: true, value: false }
@@ -526,6 +561,15 @@ export function bindPostgresMemoryPublication(
           cacheSize = { ...cacheSize, size: cacheSize.size - removed };
         }
         return true;
+      });
+    }
+    if (command.type === "cache.retire") {
+      return write(() => {
+        const page = retirePublishedMemoryEmbeddingCacheRows(db, command.input);
+        if (cacheSize !== undefined) {
+          cacheSize = { ...cacheSize, size: cacheSize.size - page.removed };
+        }
+        return page.next ?? null;
       });
     }
     if (command.type === "cache.prune") {
@@ -598,6 +642,9 @@ export function bindPostgresMemoryPublication(
           for (const source of sources) {
             if (!source.header) {
               throw new Error("Memory source staging was not started");
+            }
+            if (command.type === "source.replace") {
+              source.header.verifiedFile = command.input.verifiedFile;
             }
             if (rebuilding) {
               stageSource(source.header, source.fragments);

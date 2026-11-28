@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
 import { expectCallCount as expectCalls } from "../../test-utils/mock-call-assertions.js";
@@ -21,10 +22,10 @@ import {
   createFreshRunIntegrationState,
   loadSharedRunIntegrationHarness,
 } from "./run.shared-integration-harness.test-support.js";
+import type { CompactionAccountingFact } from "./run/internal-params.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let state: OpenClawTestState;
-let InitialAdmissionError: typeof import("../prepared-model-runtime.errors.js").PreparedModelRuntimeInitialRunAdmissionError;
 let OwnerNotPublishedError: typeof import("../prepared-model-runtime.errors.js").PreparedModelRuntimeOwnerNotPublishedError;
 let runAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 let registerHarness: typeof import("../harness/registry.js").registerAgentHarness;
@@ -124,10 +125,8 @@ function settledWrite(): EmbeddedRunAttemptResult["messagesSnapshot"] {
 
 beforeAll(async () => {
   runAgent = await loadSharedRunIntegrationHarness();
-  ({
-    PreparedModelRuntimeInitialRunAdmissionError: InitialAdmissionError,
-    PreparedModelRuntimeOwnerNotPublishedError: OwnerNotPublishedError,
-  } = await import("../prepared-model-runtime.errors.js"));
+  ({ PreparedModelRuntimeOwnerNotPublishedError: OwnerNotPublishedError } =
+    await import("../prepared-model-runtime.errors.js"));
   ({ registerAgentHarness: registerHarness } = await import("../harness/registry.js"));
 });
 
@@ -142,7 +141,7 @@ afterEach(async () => {
 });
 
 it.each([false, true])(
-  "wraps only initial admission refusals (committed: %s)",
+  "rethrows a runtime admission refusal unchanged (committed: %s)",
   async (committed) => {
     const refusal = new OwnerNotPublishedError("Model runtime replacement is in progress", {
       admissionBlocked: true,
@@ -155,18 +154,53 @@ it.each([false, true])(
     }
     acquire.mockRejectedValueOnce(refusal);
     const onAttemptStart = vi.fn();
-    const pending = run({ onAttemptStart });
-    if (committed) {
-      await expect(pending).rejects.toBe(refusal);
-    } else {
-      const error = await pending.catch((caught: unknown) => caught);
-      expect(error).toBeInstanceOf(InitialAdmissionError);
-      expect(error).toMatchObject({ admissionBlocked: true, cause: refusal });
-    }
+    await expect(run({ onAttemptStart })).rejects.toBe(refusal);
     expect(acquire).toHaveBeenCalledTimes(committed ? 2 : 1);
     expectCalls(committed ? 1 : 0, onAttemptStart, attempt);
   },
 );
+
+it("publishes the persisted writer before initial model admission can fail", async () => {
+  const { loadSessionEntry, replaceSessionEntry } =
+    await import("../../config/sessions/session-accessor.js");
+  const target = {
+    agentId: "main",
+    sessionId: "initial-model-refusal",
+    sessionKey: "agent:main:initial-model-refusal",
+    storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+  };
+  await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+  const params = {
+    ...fixtureRunParams(),
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+    sessionTarget: target,
+  };
+  const observe = vi.fn<(fact: CompactionAccountingFact | undefined) => void>();
+  const refusal = new OwnerNotPublishedError("Model runtime replacement is in progress", {
+    admissionBlocked: true,
+  });
+  acquire.mockImplementationOnce(async () => {
+    const entry = loadSessionEntry({
+      ...target,
+      readConsistency: "latest",
+    });
+    expect(entry?.activeWriterRunId).toBe(params.runId);
+    expect(observe).toHaveBeenCalledExactlyOnceWith({
+      kind: "durable",
+      count: 0,
+      target: {
+        ...target,
+        lifecycleRevision: entry?.lifecycleRevision,
+        activeWriterRunId: params.runId,
+      },
+    });
+    throw refusal;
+  });
+  await expect(run({ ...params, onCompactionAccounting: observe })).rejects.toBe(refusal);
+  expect(acquire).toHaveBeenCalledOnce();
+  expect(attempt).not.toHaveBeenCalled();
+});
 
 it("retains settled native work from an overloaded attempt through a later plugin refresh", async () => {
   useOpenAIPlatformAuthFixture();
@@ -305,8 +339,11 @@ it("preserves same-route text delivery dedupe across refresh", async () => {
 it("reacquires generations while preserving run authority, committed work, and one terminal", async () => {
   const { getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
     await import("../../plugins/runtime/gateway-request-scope.js");
-  const { getPluginRuntimeGenerationRegistry, withPluginRuntimeGenerationScope } =
+  const { withPluginRuntimeGenerationScope } =
     await import("../../plugins/runtime/generation-scope.js");
+  // Load alongside the scope after the integration harness resets its module graph.
+  const { getPluginRuntimeGenerationRegistry } =
+    await import("../../plugins/runtime/generation-state.js");
   const {
     getPreparedModelRuntimeBorrowedSnapshot,
     getPreparedModelRuntimePluginGeneration,

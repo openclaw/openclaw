@@ -1,4 +1,4 @@
-import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
+import { isOpenAIResponsesApi, replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -334,12 +334,9 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       allowedToolNames,
       allowProviderOwnedThinkingReplay,
     );
-    const isOpenAIResponsesApi =
-      modelApi === "openai-responses" ||
-      modelApi === "openai-chatgpt-responses" ||
-      modelApi === "azure-openai-responses";
+    const responsesApi = isOpenAIResponsesApi(modelApi);
     const replayInputsChanged = sanitized.messages !== messages;
-    let nextMessages = isOpenAIResponsesApi
+    let nextMessages = responsesApi
       ? sanitizeToolUseResultPairingForModel(sanitized.messages, true, sanitized.pairing)
       : replayInputsChanged
         ? sanitizeToolUseResultPairing(sanitized.messages)
@@ -356,15 +353,11 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       nextMessages = stripTrailingAssistantPrefillTurns(nextMessages);
       strippedTrailingAssistantPrefill ||= nextMessages !== beforeStrip;
     }
-    // Appended Bedrock users need merging without revalidating unchanged signed tools.
-    if (nextMessages === messages) {
-      if (modelApi === "bedrock-converse-stream") {
-        nextMessages = mergeConsecutiveUserMessages(nextMessages);
-      }
-    } else if (
-      sanitized.droppedAssistantMessages > 0 ||
-      transcriptPolicy?.validateAnthropicTurns ||
-      strippedTrailingAssistantPrefill
+    if (
+      nextMessages !== messages &&
+      (sanitized.droppedAssistantMessages > 0 ||
+        transcriptPolicy?.validateAnthropicTurns ||
+        strippedTrailingAssistantPrefill)
     ) {
       if (transcriptPolicy?.validateGeminiTurns) {
         nextMessages = validateGeminiTurns(nextMessages);
@@ -372,10 +365,21 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       if (transcriptPolicy?.validateAnthropicTurns) {
         nextMessages = validateAnthropicTurns(nextMessages, {
           mergeConsecutiveTurns: shouldMergeConsecutiveTurns(transcriptPolicy, modelApi),
+          mergeConsecutiveUserTurns: false,
         });
       }
     }
-    if (isOpenAIResponsesApi) {
+    // Merge after prompt replacement and projection, without rewriting stored rows
+    // or revalidating unchanged signed tools.
+    if (
+      transcriptPolicy?.validateAnthropicTurns &&
+      shouldMergeConsecutiveTurns(transcriptPolicy, modelApi)
+    ) {
+      nextMessages = mergeConsecutiveUserMessages(nextMessages, {
+        preserveContextBoundaries: modelApi !== "bedrock-converse-stream",
+      });
+    }
+    if (responsesApi) {
       nextMessages = normalizeOpenAIResponsesToolCallIds(nextMessages);
     }
     if (nextMessages === messages) {

@@ -1,5 +1,49 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { CronStoredJob } from "./types.js";
+
+export function followsSessionInferenceAccount(job: CronStoredJob | undefined): boolean {
+  return (
+    job?.systemEventAccount === "session" &&
+    job.payload.kind === "systemEvent" &&
+    job.sessionTarget === "main" &&
+    !job.inferenceBinding &&
+    !job.runtimeAuthority &&
+    !job.runtimeAuthorityRecoveryRequired
+  );
+}
+
+export function cronInferenceMigrationPayload(
+  job: Pick<CronStoredJob, "payload" | "sessionTarget" | "systemEventAccount">,
+) {
+  const payload = job.payload;
+  return (payload.kind === "systemEvent" && job.systemEventAccount !== "session") ||
+    (payload.kind === "agentTurn" && job.sessionTarget !== "main")
+    ? payload
+    : undefined;
+}
+
+/** Code on the refusal for an automation whose recorded account was removed, signed out or replaced. */
+export const CRON_INFERENCE_ACCOUNT_RETIRED_CODE = "CRON_INFERENCE_ACCOUNT_RETIRED";
+
+// Refusals whose run also gave a candidate on another provider its own credentials. Kept across
+// bundled chunks by identity, like other refusal facts.
+const bypassedAccountRefusals = resolveGlobalSingleton(
+  Symbol.for("openclaw.cronBypassedAccountRefusals"),
+  () => new WeakSet<object>(),
+);
+
+/** The run reached a fallback on another provider, so the recorded account was not its only path. */
+export function markCronAccountRefusalBypassed(refusal: unknown): void {
+  if (refusal instanceof Error) {
+    bypassedAccountRefusals.add(refusal);
+  }
+}
+
+export function isCronAccountRefusalBypassed(refusal: unknown): boolean {
+  return refusal instanceof Error && bypassedAccountRefusals.has(refusal);
+}
 
 /** Scheduler-owned identity, not a user model pin or a copy of credential material. */
 export type CronInferenceBinding = {
@@ -52,19 +96,26 @@ export function normalizeCronInferenceBinding(value: unknown): CronInferenceBind
 }
 
 /**
- * The session runtime fields a run resolves its runtime from. A binding with a captured
- * runtime supplies it, so a runtime override copied into the cron session entry cannot move
- * the job onto a runtime its account was not captured for.
+ * The session runtime fields a candidate on `provider` resolves its runtime from. A binding
+ * with a captured runtime supplies it for its own provider, so a runtime override copied into
+ * the cron session entry cannot move the job onto a runtime its account was not captured for.
+ * Other providers select live and keep the session entry.
  */
 export function resolveCronRuntimeSessionEntry<
   T extends { agentRuntimeOverride?: string; agentHarnessId?: string },
->(binding: CronInferenceBinding | undefined, entry: T): T | { agentRuntimeOverride: string } {
-  return binding?.runtime ? { agentRuntimeOverride: binding.runtime } : entry;
+>(
+  binding: CronInferenceBinding | undefined,
+  entry: T,
+  provider: string,
+): T | { agentRuntimeOverride: string } {
+  return binding?.runtime && binding.provider === provider
+    ? { agentRuntimeOverride: binding.runtime }
+    : entry;
 }
 
 /** Names a binding's account and captured runtime for scheduled-run errors. */
 export function describeCronInferenceBinding(binding: CronInferenceBinding): string {
   return binding.runtime
     ? `account ${binding.profileId} on runtime ${binding.runtime}`
-    : `account ${binding.profileId} (no recorded runtime)`;
+    : `account ${binding.profileId}`;
 }

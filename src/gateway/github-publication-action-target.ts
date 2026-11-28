@@ -26,9 +26,8 @@ export async function preparePublishingSession(
           await prepareGitHubPublicationSession(params.publishingSessionKey, { assertCurrent }),
         )
       : source;
-  const readers: SessionRead[] = [source, selected];
+  const readers: SessionRead[] = source === selected ? [source] : [source, selected];
   const assertSessions = () => {
-    assertCurrent();
     for (const reader of readers) {
       if (!reader.readCurrent().entry?.sessionId) {
         throw new Error("The GitHub publication session is unavailable.");
@@ -134,6 +133,11 @@ export function pullRequestState(
     mergeCommit: value.merged ? value.merge_commit_sha : null,
     mergeable: value.mergeable,
     mergeState: value.mergeable_state,
+    assignees: Array.isArray(value.assignees)
+      ? value.assignees.flatMap((assignee: unknown) =>
+          isRecord(assignee) && typeof assignee.login === "string" ? [assignee.login] : [],
+        )
+      : undefined,
     title: value.title,
     body: value.body ?? "",
   };

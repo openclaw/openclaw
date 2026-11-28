@@ -9,7 +9,7 @@ import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doc
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDefaultDbPath, resolveEnvVars } from "./config.js";
-import { acquireMemoryTableUsage } from "./lancedb-custody.js";
+import { acquireMemoryTableUsage, resolveLocalTablePath } from "./lancedb-custody.js";
 import {
   hasAgentScopeColumn,
   memoryAgentPredicate,
@@ -147,6 +147,11 @@ async function openMemoryTable(params: {
   env: NodeJS.ProcessEnv;
   pluginRoot: string;
   stateDir: string;
+  /**
+   * Migrations hold a usage lease. Detection takes none so it never writes into the
+   * user's table directory; `ltm optimize` prunes no versions, so its files survive.
+   */
+  custody?: true;
 }): Promise<{
   connection: LanceDbConnection | null;
   table: LanceDbTable | null;
@@ -159,10 +164,11 @@ async function openMemoryTable(params: {
     params.pluginRoot,
     params.stateDir,
   );
-  if (!dbPath.includes("://") && !fs.existsSync(dbPath)) {
+  const localPath = resolveLocalTablePath(dbPath);
+  if (localPath !== null && !fs.existsSync(localPath)) {
     return { connection: null, table: null, dbPath };
   }
-  const usage = await acquireMemoryTableUsage(dbPath);
+  const usage = params.custody ? await acquireMemoryTableUsage(dbPath) : null;
   let connection: LanceDbConnection | null = null;
   try {
     const lancedb = await import("@lancedb/lancedb");
@@ -217,7 +223,7 @@ export function createMemoryLanceDbStateMigrations(
         });
       },
       async migrateLegacyState(params: StateMigrationParams) {
-        return await withMemoryTable({ ...params, pluginRoot }, async (opened) => {
+        return await withMemoryTable({ ...params, pluginRoot, custody: true }, async (opened) => {
           if (!opened.table || hasAgentScopeColumn(await opened.table.schema())) {
             return { changes: [], warnings: [] };
           }
@@ -267,7 +273,7 @@ export function createMemoryLanceDbStateMigrations(
         });
       },
       async migrateLegacyState(params: StateMigrationParams) {
-        return await withMemoryTable({ ...params, pluginRoot }, async (opened) => {
+        return await withMemoryTable({ ...params, pluginRoot, custody: true }, async (opened) => {
           if (!opened.table) {
             return { changes: [], warnings: [] };
           }

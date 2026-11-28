@@ -117,6 +117,7 @@ function TerminalComposer(props: { state: TerminalPanelViewState }) {
                 <PanelIconButton
                   class="tp-attachment__remove"
                   label={`${t("common.remove")}: ${attachment().name}`}
+                  title={false}
                   icon={<Icon name="x" />}
                   onClick={() => props.state.onRemoveAttachment(index())}
                 />
@@ -142,11 +143,13 @@ function TerminalComposer(props: { state: TerminalPanelViewState }) {
           autocapitalize="off"
           spellcheck="false"
           onInput={(event) => props.state.onDraft(event.currentTarget.value)}
+          onPaste={(event) => props.state.upload.handlePaste(event)}
         />
         <Show when={!props.state.mobile && props.state.upload.uploadsEnabled()}>
           <PanelIconButton
             class="tp-composer__attach tp-upload"
             label={t("terminal.addFiles")}
+            title={t("terminal.addFilesLabel")}
             icon={<Icon name="paperclip" />}
             disabled={
               !props.state.connected ||

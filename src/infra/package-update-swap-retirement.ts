@@ -147,6 +147,7 @@ export async function retireVerifiedPackageSwap(params: {
   previousRoot: PackageRootIntegrityFingerprint | undefined;
   backupRoot: string;
   databaseBackupRoot: string | undefined;
+  discardDatabaseCaptures?: () => Promise<void>;
   retireLegacyBackups?: RetireLegacyPackageBackups;
   launchers: PackageLauncherBackup;
   packageBackedUp: boolean;
@@ -175,6 +176,17 @@ export async function retireVerifiedPackageSwap(params: {
   const assertRetirementCurrent = retainMutationAuthority(assertCurrent);
   const cleanupStartedAt = performance.now();
   const cleanupDeadlineAtMs = cleanupStartedAt + UPDATE_CLEANUP_BUDGET_MS;
+  const pendingCleanup = (retained: string[]): UpdateStepResult => ({
+    ...step(1, null, retained.join("\n")),
+    name: "package-backup-retention",
+    durationMs: Math.round(performance.now() - cleanupStartedAt),
+    // Only verified obsolete resources qualify the warning.
+    // Recovery refusal and unclassified link outcomes remain hard.
+    advisory: {
+      kind: "recoverable-maintenance" as const,
+      message: `Installation verification succeeded; backup cleanup remains pending. ${retained.join("\n")}. Inspect retained paths before removing obsolete backups manually.`,
+    },
+  });
   if (activation) {
     const retained = await activation.retireVerified();
     if (retained) {
@@ -186,8 +198,22 @@ export async function retireVerifiedPackageSwap(params: {
     const linkRetention =
       rootLink && packageBackedUp ? await rootLink.retire(assertRetirementCurrent) : null;
     assertRetirementCurrent();
+    if (linkRetention?.obsolete) {
+      // Retirement stops at the link, as it does for an unclassified one, so the
+      // launcher backups and database snapshots behind it stay. Name them too.
+      const alsoRetained = (label: string, target: string | undefined) =>
+        target && fsSync.existsSync(target) ? [`${label} also retained at ${target}`] : [];
+      return pendingCleanup([
+        `${linkRetention.message} (a link to a checkout: remove the link itself, never recursively)`,
+        ...alsoRetained("shim backup", launchers.backupDir),
+        ...alsoRetained(
+          "pre-migration database snapshots",
+          params.databaseBackupRoot && `${params.databaseBackupRoot}.databases`,
+        ),
+      ]);
+    }
     if (linkRetention) {
-      return { ...step(1, null, linkRetention), name: "package-backup-retention" };
+      return { ...step(1, null, linkRetention.message), name: "package-backup-retention" };
     }
     if (hadPackage && previousRoot?.kind !== "link") {
       const message = await discardPackageUpdateBackup(
@@ -214,13 +240,23 @@ export async function retireVerifiedPackageSwap(params: {
   // Verified activation ends automatic database restoration, so the snapshots
   // share the retired package backup's lifetime.
   if (params.databaseBackupRoot) {
-    const message = await discardPackageUpdateBackup(
-      `${params.databaseBackupRoot}.databases`,
-      "pre-migration database snapshots",
-      params.globalRoot,
-      assertRetirementCurrent,
-      cleanupDeadlineAtMs,
+    const snapshots = `${params.databaseBackupRoot}.databases`;
+    // Server-side captures go first; their manifests stay until the drop succeeds.
+    const pending = await params.discardDatabaseCaptures?.().then(
+      () => undefined,
+      (error: unknown) =>
+        `PostgreSQL capture cleanup remains pending at ${snapshots}: ${formatErrorMessage(error)}`,
     );
+    assertRetirementCurrent();
+    const message =
+      pending ??
+      (await discardPackageUpdateBackup(
+        snapshots,
+        "pre-migration database snapshots",
+        params.globalRoot,
+        assertRetirementCurrent,
+        cleanupDeadlineAtMs,
+      ));
     if (message) {
       messages.push(message);
     }
@@ -233,18 +269,5 @@ export async function retireVerifiedPackageSwap(params: {
   // Capture authority loss during the final filesystem await in the
   // retirement outcome, not only in the caller's later publication check.
   assertRetirementCurrent();
-  if (messages.length) {
-    return {
-      ...step(1, null, messages.join("\n")),
-      name: "package-backup-retention",
-      durationMs: Math.round(performance.now() - cleanupStartedAt),
-      // Only this verified obsolete-resource path qualifies the warning.
-      // Recovery refusal and unclassified link outcomes remain hard.
-      advisory: {
-        kind: "recoverable-maintenance" as const,
-        message: `Installation verification succeeded; backup cleanup remains pending. ${messages.join("\n")}. Inspect retained paths before removing obsolete backups manually.`,
-      },
-    };
-  }
-  return undefined;
+  return messages.length ? pendingCleanup(messages) : undefined;
 }

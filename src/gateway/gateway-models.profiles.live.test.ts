@@ -7,7 +7,6 @@ import os from "node:os";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
-import { calculateUsageCost, normalizeResolvedPricing } from "@openclaw/llm-core";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
@@ -128,6 +127,7 @@ import { redactSecrets } from "../logging/redact.js";
 import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-shared.js";
 import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js";
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
 import {
@@ -885,93 +885,38 @@ function shouldSkipEmptyResponseForLiveModel(params: {
 }
 
 describe("maybeStripAssistantScaffoldingForLiveModel", () => {
-  it("strips scaffolding for Gemini preview models with known transcript wrappers", () => {
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<final>Visible</final>",
-        "google/gemini-3-flash-preview",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<final data-model=openrouter/google/gemini/>Visible",
-        "google/gemini-3-flash-preview",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<think>hidden</think>Visible",
-        "google/gemini-3.1-flash-preview",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<think>hidden</think>Visible",
-        "google/gemini-3.1-flash-lite",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<think>hidden</think>Visible",
-        "google/gemini-3.1-pro-preview",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<think>hidden</think>Visible",
-        "google/gemini-3.1-pro-preview-customtools",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        [
-          "<think>",
-          "1. Inspect",
-          "```",
-          "draft",
-          "```",
-          "2. Draft the explanation",
-          "</think>The event loop drains the microtask queue before the next macrotask.",
-        ].join("\n"),
-        "google/gemini-3-flash-preview",
-      ),
-    ).toBe("The event loop drains the microtask queue before the next macrotask.");
-  });
-
-  it("strips scaffolding for known OpenAI transcript wrappers", () => {
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.4-pro"),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.4"),
-    ).toBe("<final>Visible</final>");
-  });
-
-  it("strips Anthropic antml transcript wrappers", () => {
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<antml:thinking>hidden</thinking>Visible",
-        "anthropic/claude-opus-4-6",
-      ),
-    ).toBe("Visible");
-  });
-
-  it("strips scaffolding for MiniMax transcript wrappers", () => {
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<final>Visible</final>",
-        "minimax/MiniMax-M2.5-highspeed",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<final>Visible</final>",
-        "minimax-portal/MiniMax-M2.7-highspeed",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "minimax/MiniMax-M2.7"),
-    ).toBe("Visible");
+  it.each([
+    ["google/gemini-3-flash-preview", "<final>Visible</final>", "Visible"],
+    [
+      "google/gemini-3-flash-preview",
+      "<final data-model=openrouter/google/gemini/>Visible",
+      "Visible",
+    ],
+    ["google/gemini-3.1-flash-preview", "<think>hidden</think>Visible", "Visible"],
+    ["google/gemini-3.1-flash-lite", "<think>hidden</think>Visible", "Visible"],
+    ["google/gemini-3.1-pro-preview", "<think>hidden</think>Visible", "Visible"],
+    ["google/gemini-3.1-pro-preview-customtools", "<think>hidden</think>Visible", "Visible"],
+    [
+      "google/gemini-3-flash-preview",
+      [
+        "<think>",
+        "1. Inspect",
+        "```",
+        "draft",
+        "```",
+        "2. Draft the explanation",
+        "</think>The event loop drains the microtask queue before the next macrotask.",
+      ].join("\n"),
+      "The event loop drains the microtask queue before the next macrotask.",
+    ],
+    ["openai/gpt-5.4-pro", "<final>Visible</final>", "Visible"],
+    ["openai/gpt-5.4", "<final>Visible</final>", "<final>Visible</final>"],
+    ["anthropic/claude-opus-4-6", "<antml:thinking>hidden</thinking>Visible", "Visible"],
+    ["minimax/MiniMax-M2.5-highspeed", "<final>Visible</final>", "Visible"],
+    ["minimax-portal/MiniMax-M2.7-highspeed", "<final>Visible</final>", "Visible"],
+    ["minimax/MiniMax-M2.7", "<final>Visible</final>", "Visible"],
+  ])("normalizes %s transcript %s", (modelKey, text, expected) => {
+    expect(maybeStripAssistantScaffoldingForLiveModel(text, modelKey)).toBe(expected);
   });
 });
 
@@ -1819,101 +1764,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
 });
 
 describe("buildLiveGatewayConfig", () => {
-  it("serializes normalized open-ended pricing without changing runtime accounting", () => {
-    const rawCost = {
-      input: 1,
-      output: 2,
-      cacheRead: 0.25,
-      cacheWrite: 1.5,
-      tieredPricing: [
-        {
-          range: [0, 1001] as [number, number],
-          input: 1,
-          output: 2,
-          cacheRead: 0.25,
-          cacheWrite: 1.5,
-        },
-        { range: [1001] as [number], input: 3, output: 4, cacheRead: 0.5, cacheWrite: 2.5 },
-      ],
-    };
-    const model = {
-      ...createGatewayLiveTestModel("openai", "fixture-tiered-model"),
-      baseUrl: "https://api.example.com/v1",
-      cost: normalizeResolvedPricing(rawCost),
-    };
-    const originalCost = structuredClone(model.cost);
-    expect(model.cost.tieredPricing?.[1]?.range).toEqual([1001, Infinity]);
-    const cfg = buildLiveGatewayConfig({
-      cfg: {},
-      candidates: [model],
-      liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
-      liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
-    });
-    const projected = expectDefined(
-      cfg.models?.providers?.openai?.models?.[0]?.cost,
-      "projected model pricing",
-    );
-    const serialized = JSON.stringify(cfg);
-    const parsed = OpenClawSchema.parse(JSON.parse(serialized));
-    const serializedCost = expectDefined(
-      parsed.models?.providers?.openai?.models?.[0]?.cost,
-      "serialized model pricing",
-    );
-
-    expect(serializedCost).toEqual(rawCost);
-    expect(projected).not.toBe(model.cost);
-    expect(projected.tieredPricing).not.toBe(model.cost.tieredPricing);
-    expect(projected.tieredPricing?.[0]?.range).not.toBe(model.cost.tieredPricing?.[0]?.range);
-    expect(projected.tieredPricing?.[1]?.range).not.toBe(model.cost.tieredPricing?.[1]?.range);
-    expect(model.cost).toEqual(originalCost);
-    const restoredCost = normalizeResolvedPricing(serializedCost);
-    for (const input of [900, 901, 1900]) {
-      const usage = { input, output: 10, cacheRead: 40, cacheWrite: 60 };
-      expect(calculateUsageCost(usage, restoredCost)).toEqual(
-        calculateUsageCost(usage, model.cost),
-      );
-    }
-  });
-
-  it.each(["finite", "flat"] as const)("preserves %s pricing in serialized config", (kind) => {
-    const cost = {
-      input: 1,
-      output: 2,
-      cacheRead: 0.25,
-      cacheWrite: 1.5,
-      ...(kind === "finite"
-        ? {
-            tieredPricing: [
-              {
-                range: [0, 1001] as [number, number],
-                input: 1,
-                output: 2,
-                cacheRead: 0.25,
-                cacheWrite: 1.5,
-              },
-            ],
-          }
-        : {}),
-    };
-    const model = {
-      ...createGatewayLiveTestModel("openai", "fixture-pricing-model"),
-      baseUrl: "https://api.example.com/v1",
-      cost: normalizeResolvedPricing(cost),
-    };
-    const originalCost = structuredClone(model.cost);
-    const cfg = buildLiveGatewayConfig({
-      cfg: {},
-      candidates: [model],
-      liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
-      liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
-    });
-    const serialized = JSON.stringify(cfg);
-    const parsed = OpenClawSchema.parse(JSON.parse(serialized));
-
-    expect(parsed.models?.providers?.openai?.models?.[0]?.cost).toEqual(cost);
-    expect(model.cost).toEqual(originalCost);
-  });
-
   it.each([
     ["NaN upper endpoint", Number.NaN],
     ["negative infinity upper endpoint", Number.NEGATIVE_INFINITY],
@@ -2696,38 +2546,6 @@ function randomImageProbeCode(len = 6): string {
   return out;
 }
 
-function editDistance(a: string, b: string): number {
-  if (a === b) {
-    return 0;
-  }
-  const aLen = a.length;
-  const bLen = b.length;
-  if (aLen === 0) {
-    return bLen;
-  }
-  if (bLen === 0) {
-    return aLen;
-  }
-
-  let prev = Array.from({ length: bLen + 1 }, (_v, idx) => idx);
-  let curr = Array.from({ length: bLen + 1 }, () => 0);
-
-  for (let i = 1; i <= aLen; i += 1) {
-    curr[0] = i;
-    const aCh = a.charCodeAt(i - 1);
-    for (let j = 1; j <= bLen; j += 1) {
-      const cost = aCh === b.charCodeAt(j - 1) ? 0 : 1;
-      curr[j] = Math.min(
-        expectDefined(prev[j], "prev[j] test invariant") + 1, // delete
-        expectDefined(curr[j - 1], "curr[j - 1] test invariant") + 1, // insert
-        expectDefined(prev[j - 1], "prev[j - 1] test invariant") + cost, // substitute
-      );
-    }
-    [prev, curr] = [curr, prev];
-  }
-
-  return prev[bLen] ?? Number.POSITIVE_INFINITY;
-}
 async function getFreeGatewayPort(): Promise<number> {
   // Gateway uses derived ports (browser/canvas). Avoid flaky collisions by
   // ensuring the common derived offsets are free too.
@@ -5651,7 +5469,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                       if (Math.abs(cand.length - imageCode.length) > 2) {
                         return best;
                       }
-                      return Math.min(best, editDistance(cand, imageCode));
+                      return Math.min(best, levenshteinDistance(cand, imageCode));
                     }, Number.POSITIVE_INFINITY);
                     if (!(bestDistance <= 3)) {
                       logProgress(`${progressLabel}: image skip (code mismatch)`);

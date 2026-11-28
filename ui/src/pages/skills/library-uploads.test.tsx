@@ -98,6 +98,44 @@ function savedReceipt(read: SkillsLibraryReadResult): SkillsLibraryReceipt {
   };
 }
 
+it("derives unsaved changes from the complete skill bundle rather than edit history", async () => {
+  const { library, draft, read, request } = await openSkill();
+  const confirm = vi.mocked(showConfirmDialog).mockClear().mockResolvedValue(false);
+  onTestFinished(() => {
+    confirm.mockReset();
+  });
+  expect(library.isDirty()).toBe(false);
+  draft.content += " changed";
+  expect(library.isDirty()).toBe(true);
+  await library.close();
+  expect(confirm).toHaveBeenCalledTimes(1);
+  expect(library.state.draft).toBe(draft);
+  draft.content = read.content;
+  expect(library.isDirty()).toBe(false);
+  draft.slug += "-renamed";
+  expect(library.isDirty()).toBe(true);
+  draft.slug = read.entry.slug;
+  draft.files = [{ ...read.files[0]!, encoding: "utf8", content: "picture" }];
+  expect(library.isDirty()).toBe(false);
+  draft.files = [{ ...draft.files[0]!, executable: true }];
+  expect(library.isDirty()).toBe(true);
+  draft.files = [{ ...draft.files[0]!, executable: false, content: "changed" }];
+  expect(library.isDirty()).toBe(true);
+  draft.files = [...read.files, { path: "empty.txt", content: "", encoding: "utf8" }];
+  expect(library.isDirty()).toBe(true);
+  draft.files = [];
+  expect(library.isDirty()).toBe(true);
+  draft.files = read.files;
+  draft.selectedFile = read.files[0]!.path;
+  draft.rollbackRevision = "not-an-edit";
+  expect(library.isDirty()).toBe(false);
+  await library.save();
+  expect(request).toHaveBeenCalledTimes(1);
+  await library.close();
+  expect(library.state.draft).toBeNull();
+  expect(confirm).toHaveBeenCalledTimes(1);
+});
+
 it.each([
   { action: "disable", outcome: "error" },
   { action: "share", outcome: "success" },
@@ -117,8 +155,8 @@ it.each([
     await waitForFast(() =>
       expect(mounted.container.querySelector(".settings-row")).not.toBeNull(),
     );
-    const dialog = mounted.container.querySelector(".skill-library-dialog")!;
     const { dialog: nativeDialog } = await getRenderedModalDialog(mounted.container);
+    const dialog = mounted.container.querySelector(".skill-library-dialog")!;
     const row = mounted.container.querySelector(".settings-row")!;
     const button = (label: string) => buttonIn(dialog, label);
     const before = action === "disable" ? "Disable" : "Share with team";
@@ -163,6 +201,7 @@ it("keeps removal confirmation outside mutation presentation", async () => {
   const confirm = vi.mocked(showConfirmDialog).mockResolvedValue(false);
   const mounted = mountLibrary(library, true);
   flush();
+  await getRenderedModalDialog(mounted.container);
   const remove = buttonIn(mounted.container, "Remove skill");
   remove.click();
   flush();
@@ -183,6 +222,7 @@ it.each(["files", "clawhub"])(
     }
     const mounted = mountLibrary(library);
     flush();
+    await getRenderedModalDialog(mounted.container);
     const dialog = mounted.container.querySelector(".skill-library-dialog")!;
     const submit = dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!;
     const reading = createDeferred<ArrayBuffer>();
@@ -222,12 +262,13 @@ it.each(["files", "clawhub"])(
     });
   },
 );
-it("disables import while disconnected without losing the local selection", () => {
+it("disables import while disconnected without losing the local selection", async () => {
   const { library, connection } = harness();
   library.setImportOpen(true);
   library.state.importSelection = [new File(["# Skill"], "SKILL.md")];
   const view = mountLibrary(library, true);
   flush();
+  await getRenderedModalDialog(view.container);
   const submit = view.container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
   expect(submit.disabled).toBe(false);
   connection.publish({ ...connection.gateway.snapshot, phase: "reconnecting" });
@@ -460,6 +501,7 @@ it("settles support-file saves after caller retirement and retains their baselin
     }),
   );
   expect(draft.baseFiles).toEqual(draft.files);
+  expect(library.isDirty()).toBe(false);
 
   config.current.uploadsEnabled = false;
   draft.content = "# Next edit";
@@ -474,15 +516,21 @@ it("settles support-file saves after caller retirement and retains their baselin
     retainFiles: ["assets/image.png", "notes.txt", "new.txt"],
     files: [],
   });
+  expect(library.isDirty()).toBe(false);
+  draft.content = read.content;
+  expect(library.isDirty()).toBe(true);
+  draft.content = "# Next edit";
+  expect(library.isDirty()).toBe(false);
 });
 
 it("hides pickers and prevents file reads while leaving manual editing available", async () => {
+  onTestFinished(installDialogPolyfill());
   const { library, config, request } = harness();
   const read = vi.fn(async () => new ArrayBuffer(1));
   config.current.uploadsEnabled = false;
   library.setImportOpen(true);
-  const container = document.createElement("div");
-  mountSolid(() => <SkillLibrary library={library} navigationActions={null} />, { container });
+  const { container } = mountLibrary(library);
+  await getRenderedModalDialog(container);
   expect(container.querySelector('input[type="file"]')).toBeNull();
   await library.importFiles([fileWithReader("SKILL.md", read)]);
   expect(read).not.toHaveBeenCalled();

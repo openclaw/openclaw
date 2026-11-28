@@ -13,7 +13,7 @@ import {
   normalizeChannelConfigEntries,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { listFeishuAccountIds, mergeFeishuAccountConfig } from "./accounts.js";
-import { FeishuConfigSchema } from "./config-schema.js";
+import { FeishuConfigSchema } from "./config-validator.js";
 import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
 
 const webhookListenerMigration = createLegacyWebhookListenerDoctorContract({

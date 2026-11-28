@@ -3,8 +3,10 @@ import {
   LazyHovercardBootstrap,
   type HovercardBootstrapTrigger,
 } from "./lazy-hovercard-registration.ts";
-import { installSessionTitleRegistrar } from "./markdown-link-display.ts";
-import { sessionProgressHoverTargetFromEvent } from "./session-progress-hovercard-target.ts";
+import {
+  installSessionTitleRegistrar,
+  sessionProgressHoverTargetFromEvent,
+} from "./session-progress-hovercard-target.ts";
 import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.tsx";
 
 const HOVERCARD_TAG = "openclaw-session-progress-hovercard-provider";
@@ -41,9 +43,9 @@ installSessionTitleRegistrar((target, label, display) => {
 
 async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigger): Promise<void> {
   if (
+    // Touch pointers are rejected by sessionProgressHoverTargetFromEvent below.
     trigger === "pointer" &&
-    ((event instanceof PointerEvent && event.pointerType === "touch") ||
-      !globalThis.matchMedia?.("(hover: hover)").matches)
+    !globalThis.matchMedia?.("(hover: hover)").matches
   ) {
     return;
   }

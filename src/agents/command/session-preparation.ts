@@ -9,7 +9,11 @@ import {
 import { buildInboundMetaSystemPrompt } from "../../auto-reply/reply/inbound-meta.js";
 import { prepareReplyConversation } from "../../auto-reply/reply/prompt-session-context.js";
 import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
-import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
+import {
+  normalizeVerboseLevel,
+  type ThinkLevel,
+  type VerboseLevel,
+} from "../../auto-reply/thinking.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
@@ -27,7 +31,8 @@ import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
 import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
-import { resolveMessageChannel } from "../../utils/message-channel.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
+import { isInternalMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { isSyntheticSourceReplyTurn } from "../reply-completion.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
@@ -83,8 +88,12 @@ export async function prepareEmbeddedSessionState(params: {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }) {
   const requestedThinkLevel = params.thinkOnce ?? params.thinkOverride ?? params.persistedThinking;
+  // A one-shot level shapes only this run; the session keeps its saved preference.
   const resolvedVerboseLevel =
-    params.verboseOverride ?? params.persistedVerbose ?? params.verboseDefault;
+    normalizeVerboseLevel(params.opts.verboseOnce) ??
+    params.verboseOverride ??
+    params.persistedVerbose ??
+    params.verboseDefault;
   // Matches Gateway admission so re-registration cannot publish private intake.
   const privateConversationWork =
     params.opts.privateCompletion === true ||
@@ -198,7 +207,6 @@ export async function prepareEmbeddedSessionState(params: {
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       params.opts.abortSignal?.throwIfAborted();
       params.opts.assertSourceCurrent?.();
-      params.opts.operatorAuthority?.assertCurrent();
     };
     await recordSessionHumanDirectMessage(
       {
@@ -248,34 +256,47 @@ export async function prepareEmbeddedSessionState(params: {
       runContext.currentChannelId = trimmedTo;
     }
   }
+  const conversationTurn =
+    !isSubagentSessionKey(sessionKey) &&
+    !isCronSessionKey(sessionKey) &&
+    isSyntheticSourceReplyTurn(opts);
+  const delivering = opts.deliver === true || opts.sourceReplyDeliveryMode === "message_tool_only";
+  // sessions_send and subagent completions run on the internal channel, which has no route, or
+  // keep their reply private. Like other lifecycle turns, their prompt describes the session's
+  // own conversation so a resumed session keeps its system prompt; this turn's routing stays in
+  // runContext.
+  const storedRoute =
+    conversationTurn &&
+    (!delivering || isInternalMessageChannel(opts.replyChannel ?? runContext.messageChannel))
+      ? deliveryContextFromSession(sessionEntry)
+      : undefined;
   const deliveryFormat =
-    (opts.deliver === true || opts.sourceReplyDeliveryMode === "message_tool_only") &&
+    (delivering || storedRoute !== undefined) &&
     buildDeliveryFormatPrompt({
       cfg,
-      channel: opts.replyChannel ?? runContext.messageChannel,
-      accountId: opts.replyAccountId ?? runContext.accountId,
+      channel: storedRoute ? storedRoute.channel : (opts.replyChannel ?? runContext.messageChannel),
+      accountId: storedRoute
+        ? storedRoute.accountId
+        : (opts.replyAccountId ?? runContext.accountId),
       agentId: sessionAgentId,
       allowBootstrap: true,
     });
   let conversationPrompt: string | undefined;
   // Reuse conversation guidance without borrowing the originating sender's authority.
-  if (
-    sessionEntry &&
-    !isSubagentSessionKey(sessionKey) &&
-    !isCronSessionKey(sessionKey) &&
-    isSyntheticSourceReplyTurn(opts)
-  ) {
+  if (sessionEntry && conversationTurn) {
+    // With no current route, the stored conversation fills every field.
+    const currentRoute = storedRoute ? undefined : runContext;
     const conversation = prepareReplyConversation({
       sessionEntry,
       ctx: {
         InternalTurnSource: "event",
-        Provider: runContext.messageChannel,
-        Surface: runContext.messageChannel,
+        Provider: currentRoute?.messageChannel,
+        Surface: currentRoute?.messageChannel,
         ChatType: sessionEntry.delivery?.kind === "internal" ? sessionEntry.chatType : undefined,
-        OriginatingChannel: runContext.messageChannel,
-        OriginatingTo: runContext.currentChannelId,
-        AccountId: runContext.accountId,
-        MessageThreadId: runContext.currentThreadTs,
+        OriginatingChannel: currentRoute?.messageChannel,
+        OriginatingTo: currentRoute?.currentChannelId,
+        AccountId: currentRoute?.accountId,
+        MessageThreadId: currentRoute?.currentThreadTs,
       },
     });
     const ctx = { ...conversation.fields, CommandAuthorized: false };

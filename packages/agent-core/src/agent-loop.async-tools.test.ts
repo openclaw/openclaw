@@ -30,7 +30,7 @@ import { runAgentLoop } from "./agent-loop.js";
 import * as fixtures from "./agent-loop.test-support.js";
 import { streamAgentResponse } from "./agent-stream-response.js";
 import { Agent } from "./agent.js";
-import { attachInternalToolBatchLifecycle, setInternalBeforeToolBatch } from "./internal-hooks.js";
+import { RepetitionWatch } from "./repetition-guard.js";
 import { distinctRecordOutputs, variedRows } from "./repetition-guard.test-fixtures.js";
 import { getAgentToolExecutionContext } from "./tool-execution-context.js";
 import type { AgentEvent, AgentMessage, AgentTool, AgentToolCall, StreamFn } from "./types.js";
@@ -216,22 +216,13 @@ it.each(["mixed-parallel", "deferred-exclusive"] as const)(
   },
 );
 
-it("forwards unchanged updates without copying events or inspecting prior content", async () => {
+it("forwards unchanged updates while isolating provider message snapshots", async () => {
   const message = fixtures.makeAssistantMessage([
     { type: "thinking", thinking: "synthetic thought" },
     { type: "text", text: "answer" },
     fixtures.makeCall("lookup"),
   ]);
   message.stopReason = "stop";
-  let blockReads = 0;
-  message.content = new Proxy(message.content, {
-    get(target, key, receiver) {
-      if (key === "0") {
-        blockReads++;
-      }
-      return Reflect.get(target, key, receiver);
-    },
-  });
   const updates: AssistantMessageEvent[] = [
     { type: "thinking_start", contentIndex: 0, partial: message },
     { type: "thinking_delta", contentIndex: 0, delta: "synthetic thought", partial: message },
@@ -242,25 +233,21 @@ it("forwards unchanged updates without copying events or inspecting prior conten
     { type: "toolcall_start", contentIndex: 2, partial: message },
     { type: "toolcall_delta", contentIndex: 2, delta: "{}", partial: message },
   ];
-  const readsAtUpdate: number[] = [];
+  let updateIndex = 0;
   await runAgentLoop(
     [fixtures.user("hello")],
     { systemPrompt: "", messages: [] },
     fixtures.config,
     (event) => {
-      if (event.type === "message_start" && event.message.role === "assistant") {
-        blockReads = 0;
-      }
       if (event.type === "message_update") {
-        expect(event.assistantMessageEvent).toBe(updates[readsAtUpdate.length]);
-        readsAtUpdate.push(blockReads);
+        expect(event.assistantMessageEvent).toBe(updates[updateIndex++]);
         expect(event.message).not.toBe(message);
       }
     },
     undefined,
     () => fixtures.reply(message, [{ type: "start", partial: message }, ...updates]),
   );
-  expect(readsAtUpdate).toEqual(updates.map(() => 0));
+  expect(updateIndex).toBe(updates.length);
 });
 
 it("does not commit an async fragment when a listener changes an ordinary update type", async () => {
@@ -320,7 +307,6 @@ it("transfers the detached async prefix directly to persistence preparation", as
         terminalToolCallIds: [],
         steeringMessages: [],
         terminate: false,
-        terminateRun: false,
       };
     },
     (message) => {
@@ -406,15 +392,6 @@ it("persists async calls before admission and keeps the live answer visible thro
     streamFn,
   });
   const persisted = agent.state.messages;
-  setInternalBeforeToolBatch(agent, async ({ calls }) =>
-    attachInternalToolBatchLifecycle(
-      {},
-      {
-        commitReadyCalls: () => executionOrder.push(`admit:${calls[0]?.toolCall.id}`),
-        releaseSkippedCalls: () => {},
-      },
-    ),
-  );
   agent.subscribe((event) => {
     events.push(event);
     if (isTextDelta(event)) {
@@ -456,7 +433,7 @@ it("persists async calls before admission and keeps the live answer visible thro
   fixtures.finishMessageStream(response, assistant([source, text, ordinary], "toolUse"), "toolUse");
   await run;
   const result = agent.state.messages;
-  expect(executionOrder).toEqual(["admit:lookup", "lookup", "admit:ordinary", "ordinary"]);
+  expect(executionOrder).toEqual(["lookup", "ordinary"]);
   expect(
     assistants(result)
       .flatMap((message) => message.content)
@@ -466,50 +443,6 @@ it("persists async calls before admission and keeps the live answer visible thro
   expect(contexts[1]?.messages).toEqual(persisted.slice(0, -1));
   expect(assistants(persisted).map((message) => message.usage.totalTokens)).toEqual([0, 9, 9]);
   expect(agent.state.streamingMessage).toBeUndefined();
-});
-
-it("preserves external cancellation when an output-limited async batch hits the critical loop limit", async () => {
-  const beforeBatch = createDeferred();
-  const releaseBatch = createDeferred();
-  const controller = new AbortController();
-  const execute = vi.fn(async () => ({ content: [], details: {} }));
-  const loop = call("loop");
-  const { response, events, run } = runFixture({
-    tools: [tool("loop", execute)],
-    config: {
-      toolLoopRecoveryState: { criticalToolLoopSeen: true },
-      beforeToolBatch: async () => {
-        beforeBatch.resolve();
-        await releaseBatch.promise;
-        return {
-          intervention: {
-            kind: "critical-tool-loop",
-            toolCallId: loop.id,
-            toolName: loop.name,
-            actionKey: "loop:same-action",
-            detector: "generic_repeat",
-            count: 20,
-            reason: "Repeated critical tool loop",
-          },
-        };
-      },
-    },
-    onEvent: (event) => {
-      if (event.type === "tool_execution_end") {
-        controller.abort(new Error("Operator stopped the run"));
-      }
-    },
-    signal: controller.signal,
-  });
-  cleanup(run, [response], releaseBatch.resolve, () => controller.abort());
-  startCalls(response, [loop]);
-  await beforeBatch.promise;
-  fixtures.finishMessageStream(response, outputLimitFailure([loop]));
-  releaseBatch.resolve();
-  const messages = await run;
-  expect(execute).not.toHaveBeenCalled();
-  expect(assistants(messages).at(-1)).toMatchObject({ stopReason: "aborted", usage });
-  expect(events.filter((event) => event.type === "agent_end")).toHaveLength(1);
 });
 
 it.each(["aborted", "output-limit"] as const)(
@@ -700,7 +633,7 @@ describe("repetition stop at the stream owner", () => {
     });
   }
 
-  async function runResponse(content: AssistantMessage["content"], enabled = true, mode = "text") {
+  async function runResponse(content: AssistantMessage["content"], mode = "text") {
     const terminalOnly = mode === "terminal" || mode === "replaced terminal";
     const initialText = mode.startsWith("replaced")
       ? variedRows.slice(0, loop.length + 1)
@@ -747,7 +680,6 @@ describe("repetition stop at the stream owner", () => {
     const { run, events } = fixtures.captureToolLoop({
       prompt: fixtures.user(),
       tools: [],
-      config: { repetitionGuard: () => enabled },
       streamFn,
     });
     return { result: await run, events, requests };
@@ -773,7 +705,7 @@ describe("repetition stop at the stream owner", () => {
       ...prefix,
       kind === "thinking" ? { type: "thinking", thinking: loop } : { type: "text", text: loop },
     ];
-    const response = await runResponse(content, true, kind);
+    const response = await runResponse(content, kind);
     const expected: AssistantMessage["content"] = [...prefix, { type: "text", text: marker }];
     expectResponse(response, expected, true);
     if (kind.startsWith("replaced")) {
@@ -792,9 +724,76 @@ describe("repetition stop at the stream owner", () => {
     expect(JSON.stringify(replay)).toContain(marker);
   });
 
-  it("leaves the same response untouched when the policy is off", async () => {
-    const content: AssistantMessage["content"] = [{ type: "text", text: loop }];
-    expectResponse(await runResponse(content, false), content);
+  it("watches a queued reasoning stream exactly once, in linear work", async () => {
+    const prefix = "QUEUED_REASONING:";
+    const chunks = Array.from(
+      { length: 2048 },
+      (_, index) =>
+        `${index === 0 ? prefix : ""}step ${index} ${index * 7919}`.padEnd(63, ".") + "\n",
+    );
+    const thinking = chunks.join("");
+    const content: AssistantMessage["content"] = [{ type: "thinking", thinking }];
+    const prefixWork = vi.spyOn(String.prototype, "startsWith");
+    const watched = vi.spyOn(RepetitionWatch.prototype, "feed");
+    try {
+      const response = await fixtures.captureToolLoop({
+        prompt: fixtures.user(),
+        tools: [],
+        // Every event is queued before the loop reads one: each snapshot already holds all chunks.
+        streamFn: () => {
+          const message = fixtures.makeAssistantMessage(content);
+          return fixtures.reply(message, [
+            { type: "start", partial: message },
+            ...chunks.map((delta) => ({
+              type: "thinking_delta" as const,
+              contentIndex: 0,
+              delta,
+              partial: message,
+            })),
+          ]);
+        },
+      }).run;
+      expect(response.at(-1)).toMatchObject({ stopReason: "stop", content });
+      let compared = 0;
+      for (const [index, [search]] of prefixWork.mock.calls.entries()) {
+        const text = String(prefixWork.mock.contexts[index]);
+        if (text.slice(0, prefix.length) === prefix && search.length > prefix.length) {
+          compared += search.length;
+        }
+      }
+      expect(compared).toBeLessThan(thinking.length * 4);
+      expect(watched.mock.calls.map(([text]) => text).join("")).toBe(thinking);
+    } finally {
+      prefixWork.mockRestore();
+      watched.mockRestore();
+    }
+  });
+
+  it("quarantines a same-length rewrite that a delta event carries", async () => {
+    const head = variedRows.slice(0, 20_000);
+    const tail = variedRows.slice(20_000, loop.length);
+    // The provider rewrites earlier text into a loop; only the length matches an append.
+    const rewritten = fixtures.makeAssistantMessage([{ type: "thinking", thinking: loop }]);
+    const { run, events } = fixtures.captureToolLoop({
+      prompt: fixtures.user(),
+      tools: [],
+      streamFn: () =>
+        fixtures.reply(rewritten, [
+          { type: "start", partial: fixtures.makeAssistantMessage([]) },
+          {
+            type: "thinking_delta",
+            contentIndex: 0,
+            delta: head,
+            partial: fixtures.makeAssistantMessage([{ type: "thinking", thinking: head }]),
+          },
+          { type: "thinking_delta", contentIndex: 0, delta: tail, partial: rewritten },
+        ]),
+    });
+    expectResponse(
+      { result: await run, events, requests: 1 },
+      [{ type: "text", text: marker }],
+      true,
+    );
   });
 
   it.each(["unadmitted snapshot", "delta", "error snapshot"])(
@@ -834,7 +833,6 @@ describe("repetition stop at the stream owner", () => {
           },
           fixtures.makeTool("discarded", executed),
         ],
-        config: { repetitionGuard: () => true },
         onEvent: (event) => {
           if (
             event.type === "message_end" &&

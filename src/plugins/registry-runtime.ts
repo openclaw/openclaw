@@ -40,6 +40,7 @@ import {
 } from "./runtime/gateway-request-scope.js";
 import { withNativeSubagentRuntimeGuard } from "./runtime/native-subagent-context.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { normalizePluginToolContractNames } from "./tool-contracts.js";
 import type { PluginRegistrationMode } from "./types.js";
 
 // A completed reaction must retain only the emptied holder, not the caller's registry closure.
@@ -587,23 +588,45 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             params,
             commandRuntime,
           ) => {
-            const { senderIsOwner: claimedOwner, messageChannel, ...remainingParams } = params;
-            const senderIsOwner = claimedOwner === true;
-            // Validate and dispatch the same host-owned values; never re-read plugin-owned authority.
-            const ingressParams = { ...remainingParams, senderIsOwner, messageChannel };
+            const { senderIsOwner, messageChannel, toolBindings, ...remainingParams } = params;
+            // The host resolves named-channel owner identity from its sender. A channel-less
+            // bridge may claim owner only when the plugin has trusted official provenance.
+            const claimsBridgeOwner = messageChannel === undefined && senderIsOwner === true;
+            // Validate and dispatch the same plugin-owned values; never re-read them later.
+            const ingressParams = {
+              ...remainingParams,
+              senderIsOwner: senderIsOwner === true,
+              messageChannel,
+              toolBindings,
+            };
+            const declaredTools = normalizePluginToolContractNames(record.contracts);
+            const foreignBinding = Object.keys(toolBindings ?? {}).find(
+              (name) => !declaredTools.includes(name),
+            );
+            if (foreignBinding !== undefined) {
+              throw new Error(
+                `Plugin "${pluginId}" cannot bind tool "${foreignBinding}" it does not declare.`,
+              );
+            }
             if (
-              // Community channels may admit guests; trusted provenance is required only for owner elevation.
-              (senderIsOwner &&
-                record.origin !== "bundled" &&
-                record.trustedOfficialInstall !== true) ||
+              claimsBridgeOwner &&
+              record.origin !== "bundled" &&
+              record.trustedOfficialInstall !== true
+            ) {
+              throw new Error(`Plugin "${pluginId}" cannot admit authenticated owner authority.`);
+            }
+            if (
               currentRegistry().plugins.find((entry) => entry.id === pluginId) !== record ||
               !isPluginRecordActive(registry, record) ||
-              !currentRegistry().channels.some(
-                (channel) => channel.pluginId === pluginId && channel.plugin.id === messageChannel,
-              )
+              // Without a channel the turn runs on the plugin's own surface (a phone or meeting bridge).
+              (messageChannel !== undefined &&
+                !currentRegistry().channels.some(
+                  (channel) =>
+                    channel.pluginId === pluginId && channel.plugin.id === messageChannel,
+                ))
             ) {
               throw new Error(
-                `Plugin "${pluginId}" cannot admit authenticated owner authority for channel "${messageChannel ?? "unknown"}".`,
+                `Plugin "${pluginId}" cannot run turns for channel "${messageChannel ?? "unknown"}": it is not the active plugin registered for that channel.`,
               );
             }
             return await runWithPluginScope(() =>

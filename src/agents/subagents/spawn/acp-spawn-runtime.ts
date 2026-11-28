@@ -56,7 +56,6 @@ type AcpSpawnInitializedSession = Awaited<
 
 export type AcpSpawnInitializedRuntime = {
   initialized: AcpSpawnInitializedSession;
-  sessionId: string;
   sessionEntry: SessionEntry;
 };
 
@@ -175,7 +174,6 @@ export async function initializeAcpSpawnRuntime(params: {
 
   return {
     initialized,
-    sessionId: initialized.sessionEntry.sessionId,
     sessionEntry: initialized.sessionEntry,
   };
 }

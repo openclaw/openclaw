@@ -82,9 +82,8 @@ function expectNoExternalDelivery(
   expect(sendMessage).not.toHaveBeenCalled();
 }
 
-function createGatewayMock(response: Record<string, unknown> | Error = {}, onCall?: () => void) {
+function createGatewayMock(response: Record<string, unknown> | Error = {}) {
   return vi.fn(async (opts: Parameters<typeof runtimeCallGateway>[0]) => {
-    onCall?.();
     if (response instanceof Error) {
       throw response;
     }
@@ -236,8 +235,6 @@ describe("live generated-media completion", () => {
         sendMessage,
         sourceTool: "image_generate",
         internalEvents: imageCompletionEvents(),
-        completionRequesterSessionId: "requester-session-dm",
-        completionRequesterLifecycleRevision: "media-lifecycle",
         requesterEntry: {
           sessionId: "requester-session-dm",
           lifecycleRevision: "media-lifecycle",
@@ -247,7 +244,7 @@ describe("live generated-media completion", () => {
         isSourceSessionEffectsAllowed: () => sourceAllowed,
       };
       const pending = await deliverFixture("discord", params);
-      expect(pending).toMatchObject({ delivered: false, disposition: "session_queued" });
+      expect(pending).toMatchObject({ delivered: false, path: "queued" });
       expectNoExternalDelivery(callGateway, sendMessage);
       sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery.mockImplementationOnce(() => {
         sourceAllowed = owner !== "retired";
@@ -257,19 +254,17 @@ describe("live generated-media completion", () => {
         ...params,
         ...(owner === "replaced" ? { currentRequesterSessionId: "replacement" } : {}),
       });
+      // A replacement session of the requester chat receives the media completion.
+      const delivered = owner !== "retired";
       expect(result).toMatchObject(
-        owner === "current"
+        delivered
           ? { delivered: true, path: "direct" }
-          : {
-              delivered: false,
-              reason:
-                owner === "retired" ? "source_owner_changed" : "completion_handoff_unavailable",
-            },
+          : { delivered: false, reason: "source_owner_changed" },
       );
-      expect(callGateway).toHaveBeenCalledTimes(owner === "current" ? 1 : 0);
-      if (owner === "current") {
+      expect(callGateway).toHaveBeenCalledTimes(delivered ? 1 : 0);
+      if (delivered) {
         expectGatewayAgentParams(callGateway, {
-          expectedExistingSessionId: "requester-session-dm",
+          expectedExistingSessionId: owner === "replaced" ? "replacement" : "requester-session-dm",
           inputProvenance: expect.objectContaining({
             kind: "inter_session",
             sourceChannel: "internal",

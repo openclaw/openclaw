@@ -311,6 +311,8 @@ it("sanitizes channel metadata before primer notes", async () => {
   });
   expect(note).toHaveBeenCalledWith(
     [
+      "Entering a supported credential saves it in the shared secret store. If you run the CLI while the Gateway is running, this requires local Gateway admin access. Without that access, use an existing secret reference where supported, or stop the Gateway before entering the credential.",
+      "",
       "Inbound DM safety defaults to pairing: unknown senders get a pairing code first.",
       "Approve with: openclaw pairing approve <channel> <code>",
       'Open/public DMs require dmPolicy="open" plus allowFrom=["*"].',

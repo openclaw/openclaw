@@ -1,5 +1,4 @@
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
-import { buildAgentOnboardingGreeting } from "../../../../src/shared/agent-onboarding.js";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
@@ -10,17 +9,15 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import { isSessionTitlePending, resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { CreationComposer } from "../new-session/creation-composer-render.tsx";
 import { NewSessionBody } from "../new-session/draft-body.solid.tsx";
-import { ChatAvatar } from "./chat-avatar-view.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
-import { MessageMarkdown } from "./components/chat-message-text-view.tsx";
 import { ChatPaneHeader } from "./components/chat-pane-header.tsx";
 import type { ChatPaneHeaderProps } from "./components/chat-pane-header.types.ts";
 import { ChatPaneMobileHeader } from "./components/chat-pane-mobile-header.tsx";
@@ -154,7 +151,10 @@ function PendingSessionCreateContent(
         title:
           displayName ??
           (row ? resolveSessionDisplayName(props.sessionKey, row) : t("newSession.title")),
-        titlePending: submitting && !displayName && !row && !background,
+        titlePending:
+          submitting &&
+          !displayName &&
+          (row ? isSessionTitlePending(props.sessionKey, row) : !background),
         session: undefined,
         incognito: isIncognitoSessionKey(props.sessionKey),
         catalog: false,
@@ -204,29 +204,6 @@ function PendingSessionCreateContent(
             : undefined,
         renderDraft: () => (
           <div class="new-session-page__starting chat-thread-inner">
-            <Show when={creatingAgent}>
-              {/* The shared greeting is a presentation preview; only the Gateway persists it. */}
-              <div class="chat-group assistant">
-                <ChatAvatar
-                  role="assistant"
-                  assistant={{
-                    agentId,
-                    name: displayName ?? t("agentChip.newAgent"),
-                    avatar: null,
-                  }}
-                />
-                <div class="chat-group-messages">
-                  <div class="chat-bubble chat-bubble--first">
-                    <MessageMarkdown
-                      markdown={buildAgentOnboardingGreeting(displayName)}
-                      messageKey={`${composerId}-greeting`}
-                      options={{ role: "assistant", isStreaming: false }}
-                      markdownOptions={{ codeBlockChrome: "none" }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </Show>
             <div class="chat-group assistant chat-group--working">
               <div class="chat-group-messages">
                 <ChatWorkingIndicator

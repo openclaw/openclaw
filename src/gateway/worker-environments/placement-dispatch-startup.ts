@@ -7,6 +7,7 @@ import {
   supportsCurrentWorkerLaunch,
 } from "../../worker/worker-build-identity.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
+import { sessionLog } from "../session-log.js";
 import {
   DevicePlacementUnavailableError,
   resolveDevicePlacementEligibility,
@@ -34,6 +35,7 @@ import type {
 import { requireWorkerProfile } from "./service-validation.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
+import { boundedWorkerError } from "./worker-error.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 
 export type WorkerDevicePlacementRequirementResolver = (
@@ -62,6 +64,15 @@ export function createWorkerPlacementDispatchStartup(options: {
 }) {
   const { environments, placements } = options;
 
+  const resolvePlacementRequirement = (request: WorkerPlacementDispatchRequest) =>
+    request.devicePlacement ??
+    options.resolveDevicePlacementRequirement?.({
+      sessionId: request.sessionId,
+      sessionKey: request.sessionKey,
+      agentId: request.agentId,
+      executionMode: request.executionMode,
+    });
+
   const validateDevicePlacement = async (request: WorkerPlacementDispatchRequest) => {
     if (!request.deviceId) {
       return;
@@ -69,7 +80,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     const eligibility = await resolveDevicePlacementEligibility({
       environmentService: environments,
       deviceId: request.deviceId,
-      requirement: request.devicePlacement,
+      requirement: await resolvePlacementRequirement(request),
       executionMode: request.executionMode,
       config: getRuntimeConfig(),
     });
@@ -85,16 +96,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     if (!deviceId) {
       return undefined;
     }
-    const requirement =
-      request.devicePlacement ??
-      (options.resolveDevicePlacementRequirement
-        ? await options.resolveDevicePlacementRequirement({
-            sessionId: request.sessionId,
-            sessionKey: request.sessionKey,
-            agentId: request.agentId,
-            executionMode: request.executionMode,
-          })
-        : undefined);
+    const requirement = await resolvePlacementRequirement(request);
     if (!requirement) {
       throw new Error("Node-backed cloud placement has no authoritative runtime requirement");
     }
@@ -121,6 +123,10 @@ export function createWorkerPlacementDispatchStartup(options: {
     placement: WorkerDispatchPlacement;
     intent: WorkerProviderPreparedIntent;
     assertCurrent: WorkerPlacementAuthorization;
+    signal?: AbortSignal;
+    markPhase?: (phase: string) => void;
+    retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
+    onFallback: (placement: WorkerDispatchPlacement) => void;
   }) => {
     const preparation =
       params.intent.profileSnapshot.runtimePreparation ??
@@ -188,7 +194,77 @@ export function createWorkerPlacementDispatchStartup(options: {
         }),
       });
       if (placement) {
-        return { placement, environment, admittedNode };
+        const startedAt = performance.now();
+        const refreshed =
+          readWorkerProjectSnapshot(environment.profileSnapshot.project)?.baseCommit !==
+          params.intent.profileSnapshot.project?.baseCommit;
+        params.markPhase?.(refreshed ? "reserveRefresh" : "reserveExact");
+        try {
+          const assertClaimCurrent = () => {
+            assertCurrent();
+            const current = placements.get(params.request.sessionId);
+            if (
+              current?.state !== "provisioning" ||
+              current.environmentId !== environment.environmentId ||
+              current.generation !== placement.generation ||
+              !options.isCurrentNodePlacement?.(node, requirement, params.request.executionMode)
+            ) {
+              throw new Error("Prepared worker lost its claimed placement before refresh");
+            }
+          };
+          const ready = await environments.refreshPreparedEnvironment({
+            environmentId: environment.environmentId,
+            ownerEpoch: environment.ownerEpoch,
+            sessionId: params.request.sessionId,
+            expectedGeneration: placement.generation,
+            intent: params.intent,
+            signal: params.signal,
+            assertCurrent: assertClaimCurrent,
+            readNativeCredential: params.request.readNativeCredential,
+            retainCredentialCleanup: params.retainCredentialCleanup,
+          });
+          assertClaimCurrent();
+          sessionLog.info("Prepared worker adopted", {
+            mode: refreshed ? "refreshed" : "exact",
+            elapsedMs: Math.round(performance.now() - startedAt),
+          });
+          return { placement, environment: ready, admittedNode };
+        } catch (error) {
+          // The durable claim closes this spare before any refresh writes. Failed
+          // refreshes cannot return partially updated contents to the pool.
+          params.assertCurrent();
+          sessionLog.warn(
+            `Prepared worker adoption failed; provisioning normally: ${boundedWorkerError(error)}`,
+          );
+          await placements.fail(
+            {
+              sessionId: params.request.sessionId,
+              expectedGeneration: placement.generation,
+              recoveryError: boundedWorkerError(error),
+            },
+            params.assertCurrent,
+          );
+          try {
+            await environments.destroy(environment.environmentId);
+          } catch (cleanupError) {
+            sessionLog.warn(
+              `Prepared worker cleanup deferred: ${boundedWorkerError(cleanupError)}`,
+            );
+          }
+          params.assertCurrent();
+          params.onFallback(
+            await placements.startDispatch(
+              {
+                sessionId: params.request.sessionId,
+                sessionKey: params.request.sessionKey,
+                agentId: params.request.agentId,
+                executionMode: params.request.executionMode,
+              },
+              { assertCurrent: params.assertCurrent },
+            ),
+          );
+          return undefined;
+        }
       }
     }
     return undefined;

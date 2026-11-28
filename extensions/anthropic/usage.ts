@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type {
   ProviderFetchUsageSnapshotContext,
   ProviderResolveUsageAuthContext,
@@ -6,6 +8,7 @@ import type {
 import {
   addProviderUsageModel,
   asProviderUsageObject,
+  buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
   buildProviderUsageHistorySnapshot,
   cleanProviderUsageCredential,
@@ -13,19 +16,29 @@ import {
   decodeProviderUsageAdminToken,
   encodeProviderUsageAdminToken,
   fetchProviderUsagePages,
-  fetchClaudeUsage,
   parseProviderUsageNonNegativeInteger,
   parseProviderUsageNumber,
   resolveProviderUsageDailyPeriod,
   resolveProviderUsageDisplayName,
   type ProviderUsageSnapshot,
 } from "openclaw/plugin-sdk/provider-usage";
-import { CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
+import {
+  fetchClaudeUsage,
+  fetchClaudeWebUsage,
+  resolveClaudeWebSessionKey,
+} from "./claude-usage.js";
+import { probeClaudeCliAuthStatus } from "./cli-auth-seam.js";
+import {
+  CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_COMMAND,
+  CLAUDE_CLI_PROFILE_ID,
+} from "./cli-constants.js";
 
 const ANTHROPIC_COST_URL = "https://api.anthropic.com/v1/organizations/cost_report";
 const ANTHROPIC_MESSAGES_USAGE_URL =
   "https://api.anthropic.com/v1/organizations/usage_report/messages";
 const ANTHROPIC_ADMIN_TOKEN_PREFIX = "openclaw:anthropic-admin:v1:";
+const CLAUDE_WEB_SESSION_TOKEN_PREFIX = "openclaw:anthropic-web-session:v1:";
 const ANTHROPIC_USAGE_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 const ANTHROPIC_USAGE_HISTORY_DAYS = 30;
 
@@ -54,7 +67,14 @@ export async function fetchAnthropicUsage(
 ): Promise<ProviderUsageSnapshot> {
   const adminKey = decodeProviderUsageAdminToken(ANTHROPIC_ADMIN_TOKEN_PREFIX, ctx.token);
   if (!adminKey) {
-    const snapshot = await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
+    const webSessionKey = decodeProviderUsageAdminToken(CLAUDE_WEB_SESSION_TOKEN_PREFIX, ctx.token);
+    const snapshot = webSessionKey
+      ? ((await fetchClaudeWebUsage(webSessionKey, ctx.timeoutMs, ctx.fetchFn)) ??
+        buildUsageErrorSnapshot(
+          "anthropic",
+          "Claude web usage unavailable. Renew the claude.ai session in CLAUDE_AI_SESSION_KEY, CLAUDE_WEB_SESSION_KEY or CLAUDE_WEB_COOKIE, then retry.",
+        ))
+      : await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
     if (snapshot.error) {
       return snapshot;
     }
@@ -229,10 +249,23 @@ export async function resolveAnthropicUsageAuth(
   const oauthToken = await ctx.resolveOAuthToken({
     excludeProfileIds: [CLAUDE_CLI_PROFILE_ID],
   });
+  // Stored setup-token profiles resolve here too, but setup tokens lack the user:profile
+  // scope the OAuth usage endpoint requires. Use a configured claude.ai session instead.
+  if (oauthToken && (await isStoredSetupToken(ctx.agentDir, oauthToken.authProfileId))) {
+    const sessionKey = resolveClaudeWebSessionKey(ctx.env);
+    return sessionKey
+      ? {
+          ...oauthToken,
+          token: encodeProviderUsageAdminToken(CLAUDE_WEB_SESSION_TOKEN_PREFIX, sessionKey),
+        }
+      : await resolveClaudeNativeLoginUsageAuth(ctx);
+  }
   if (oauthToken) {
     return oauthToken;
   }
 
+  // Configured bearers carry no credential type, and the setup-token shape check
+  // also matches scoped OAuth access tokens, so they keep the OAuth usage path.
   const apiKey = storedCandidates[0];
   if (apiKey) {
     const { validateAnthropicSetupToken } = await import("openclaw/plugin-sdk/provider-auth");
@@ -241,9 +274,78 @@ export async function resolveAnthropicUsageAuth(
     }
   }
 
-  // Claude owns its native refresh-token family. Do not resolve a copied
-  // claude-cli profile here: generic OAuth refresh invalidates Claude's login.
-  return { handled: true };
+  // Never resolve a copied claude-cli profile here: generic OAuth refresh
+  // invalidates Claude's login. Read Claude's own login instead.
+  return await resolveClaudeNativeLoginUsageAuth(ctx);
+}
+
+/**
+ * Usage auth from the native Claude CLI login, only when config routes turns through
+ * claude-cli. Claude owns the refresh-token family, so OpenClaw only reads the current
+ * access token. `claude auth status` runs the backend's command in the env its local turns
+ * get (claude-cli has no configurable command or env): it confirms the claude.ai login,
+ * reports its directory, and refreshes an expiring token under Claude's own lock.
+ * Keychain-only logins (macOS) stay unread, so nothing prompts.
+ */
+async function resolveClaudeNativeLoginUsageAuth(
+  ctx: ProviderResolveUsageAuthContext,
+): Promise<ProviderResolvedUsageAuth> {
+  if (!ctx.configuredCliBackends?.includes(CLAUDE_CLI_BACKEND_ID)) {
+    return { handled: true };
+  }
+  const status = await probeClaudeCliAuthStatus({
+    command: CLAUDE_CLI_COMMAND,
+    env: ctx.env,
+    signal: ctx.signal,
+  });
+  if (
+    status.status !== "available" ||
+    status.authMethod !== "claude.ai" ||
+    !status.configDirectory ||
+    // Claude reads credentials from this root instead of its config directory.
+    ctx.env.CLAUDE_SECURESTORAGE_CONFIG_DIR !== undefined
+  ) {
+    return { handled: true };
+  }
+  const raw = await fs
+    .readFile(path.join(status.configDirectory, ".credentials.json"), "utf8")
+    .catch(() => undefined);
+  let login: Record<string, unknown> | undefined;
+  try {
+    login = asProviderUsageObject(
+      asProviderUsageObject(raw ? JSON.parse(raw) : undefined)?.claudeAiOauth,
+    );
+  } catch {
+    login = undefined;
+  }
+  const token = typeof login?.accessToken === "string" ? login.accessToken.trim() : "";
+  const expiresAt = typeof login?.expiresAt === "number" ? login.expiresAt : 0;
+  // The usage endpoint rejects tokens without the user:profile scope.
+  const scoped = !Array.isArray(login?.scopes) || login.scopes.includes("user:profile");
+  if (!token || expiresAt <= Date.now() || !scoped) {
+    return { handled: true };
+  }
+  const subscriptionType =
+    typeof login?.subscriptionType === "string" ? login.subscriptionType : status.subscriptionType;
+  const rateLimitTier = typeof login?.rateLimitTier === "string" ? login.rateLimitTier : undefined;
+  return {
+    token,
+    ...(subscriptionType ? { subscriptionType } : {}),
+    ...(rateLimitTier ? { rateLimitTier } : {}),
+    ...(status.email ? { email: status.email } : {}),
+  };
+}
+
+async function isStoredSetupToken(
+  agentDir: string | undefined,
+  profileId: string | undefined,
+): Promise<boolean> {
+  if (!profileId) {
+    return false;
+  }
+  const { findPersistedAuthProfileCredentialAsync } =
+    await import("openclaw/plugin-sdk/agent-runtime");
+  return (await findPersistedAuthProfileCredentialAsync({ agentDir, profileId }))?.type === "token";
 }
 
 /** Formats keychain plan metadata like ("max", "default_max_20x") as "Max (20x)". */

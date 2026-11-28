@@ -18,6 +18,7 @@ import { userProfileDisplayName } from "../shared/user-profile-display-name.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { stageUserProfileEmailBindingChange } from "./user-profile-events.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
+import { openClawIdProfileProvider } from "./user-profile-openclaw-id.types.js";
 import type {
   UserProfileAvatar,
   UserProfileAvatarInspection,
@@ -39,6 +40,18 @@ import type {
 
 export type UserProfileRow = UserProfilesDatabase["user_profiles"];
 export type UserProfileMetadataRow = Omit<UserProfileRow, "avatar">;
+
+/** Presentation only: sign-in aliases are not necessarily email addresses. */
+export function isUserProfileEmailAddress(alias: string): boolean {
+  return /^[^\s@/:]+@[^\s@/:]+$/u.test(alias);
+}
+
+/** Older profiles inferred their name from an issuer-qualified proxy subject. */
+export function userProfileEditableDisplayName(name: string | null | undefined): string | null {
+  // A deliberately chosen name with this same opaque shape is also hidden; the
+  // saved name and authentication binding remain intact and can be edited.
+  return name && !/^https?:\/\/\S+#\S+$/iu.test(name.trim()) ? name : null;
+}
 
 export function insertUserProfile(
   db: EngineConnection,
@@ -64,7 +77,7 @@ export function insertUserProfile(
 export function toUserProfile(row: Omit<UserProfileMetadataRow, "avatar_sha256">): UserProfile {
   return {
     id: row.id,
-    displayName: row.display_name,
+    displayName: userProfileEditableDisplayName(row.display_name),
     avatarMime: normalizeUserProfileAvatarMime(row.avatar_mime),
     mergedInto: row.merged_into,
     ...(row.role ? { role: row.role } : {}),
@@ -105,9 +118,9 @@ export function projectUserProfileListItem(
 ) {
   return {
     ...toUserProfile(row),
-    emails: [...(bindings.emailsByProfile.get(row.id) ?? [])].toSorted((left, right) =>
-      Buffer.compare(Buffer.from(left), Buffer.from(right)),
-    ),
+    emails: [...(bindings.emailsByProfile.get(row.id) ?? [])]
+      .filter(isUserProfileEmailAddress)
+      .toSorted((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right))),
     githubIdentity: row.githubIdentity ? { ...row.githubIdentity } : null,
     hasAvatar: row.has_avatar === 1,
   };
@@ -231,18 +244,38 @@ export function selectProfileDisplayEntries(db: EngineConnection, ids?: string[]
             .$asScalar()
             .as("gateway_owner_created_at")
         : eb.val<number | null>(null).as("gateway_owner_created_at"),
+    )
+    .select((eb) =>
+      tableExists(db, "user_profile_identities")
+        ? eb
+            .exists(
+              eb
+                .selectFrom("user_profile_identities")
+                .select("profile_id")
+                .where("provider", "=", openClawIdProfileProvider)
+                .whereRef("profile_id", "=", "user_profiles.id"),
+            )
+            .as("has_openclaw_id_identity")
+        : eb.val(0).as("has_openclaw_id_identity"),
     );
   const rows = executeSqliteQuerySync(db, ids ? query.where("id", "in", ids) : query).rows;
   // Worker transfer removes SQLite rows' null prototype; compare plain descriptors on both sides.
-  return rows.map(({ gateway_owner_created_at, ...row }): [string, ProfileDisplayRow] => [
-    row.id,
-    {
-      ...row,
-      ...(gateway_owner_created_at == null
-        ? {}
-        : { gatewayOwnerCreatedAt: gateway_owner_created_at }),
-    },
-  ]);
+  return rows.map(
+    ({
+      gateway_owner_created_at,
+      has_openclaw_id_identity,
+      ...row
+    }): [string, ProfileDisplayRow] => [
+      row.id,
+      {
+        ...row,
+        ...(has_openclaw_id_identity ? { hasOpenClawIdIdentity: true } : {}),
+        ...(gateway_owner_created_at == null
+          ? {}
+          : { gatewayOwnerCreatedAt: gateway_owner_created_at }),
+      },
+    ],
+  );
 }
 
 function normalizeUserProfileAvatarMime(value: string | null): UserProfileAvatarMime | null {
@@ -457,7 +490,7 @@ export function projectUserProfileDisplay(
     displayName:
       userProfileDisplayName(
         profile.id,
-        profile.display_name,
+        userProfileEditableDisplayName(profile.display_name),
         profile.githubIdentity?.login ?? profile.githubLogin,
       ) ?? null,
     avatarRevision:
@@ -501,6 +534,9 @@ export function projectCatalogUserProfileIdentity(
   return (
     profile && {
       profileId: profile.id,
+      ...(profile.openclawIdAccountIds
+        ? { openclawIdAccountIds: profile.openclawIdAccountIds }
+        : {}),
       role: profile.role ?? null,
       githubLogin: profile.githubLogin ?? null,
       aliases: new Set(
@@ -573,6 +609,9 @@ export function bindPreparedUserProfileIdentity(
     const profile = assertCurrent(requiredEmailBindingIds, requiredGithubAccountIds);
     return {
       profileId,
+      ...(profile.openclawIdAccountIds
+        ? { openclawIdAccountIds: profile.openclawIdAccountIds }
+        : {}),
       assignedRole: profile.role || null,
       githubLogin: profile.githubLogin ?? null,
     };
@@ -602,8 +641,12 @@ export function bindPreparedUserProfileIdentity(
       return {
         profile: {
           profileId: profile.profileId,
+          ...(profile.openclawIdAccountIds
+            ? { openclawIdAccountIds: profile.openclawIdAccountIds }
+            : {}),
           emails: [...(bindings.emailsByProfile.get(profileId) ?? [])].toSorted(),
           ...projectUserProfileGitHubFacts(rows.get(profileId)),
+          ...(rows.get(profileId)?.hasOpenClawIdIdentity ? { hasOpenClawIdIdentity: true } : {}),
           assignedRole: profile.assignedRole,
           githubLogin: profile.githubLogin,
         },

@@ -78,7 +78,7 @@ shell-completion metadata.
 
 | Task                          | Command                                                                                       | Notes                                                 |
 | ----------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| Run a text/model prompt       | `openclaw infer model run --prompt "..." --json`                                              | Local by default                                      |
+| Run a text/model prompt       | `openclaw infer model run --prompt "..." --json`                                              | Local unless a Gateway is running                     |
 | Run a model prompt on images  | `openclaw infer model run --prompt "Describe this" --file ./image.png --model provider/model` | Repeat `--file` for multiple images                   |
 | Generate an image             | `openclaw infer image generate --prompt "..." --json`                                         | Use `image edit` when starting from an existing file  |
 | Describe an image file or URL | `openclaw infer image describe --file ./image.png --prompt "..." --json`                      | `--model` must be an image-capable `<provider/model>` |
@@ -98,9 +98,15 @@ shell-completion metadata.
 - `image edit` and `image describe-many` require at least one `--file`; `embedding create` requires at least one `--text`. Repeat the flag for multiple inputs. Omitting it is a usage error, not an empty successful result, and no inference request is sent.
 - Use `model run --thinking <level>` for a one-shot thinking/reasoning override: `off`, `minimal`, `low`, `medium`, `high`, `adaptive`, `xhigh`, or `max`.
 - For `image describe`, `audio transcribe`, and `video describe`, `--model` must use the form `<provider/model>`.
+- For `audio transcribe` and `video describe`, `--model` sends the file only to that model; if it fails, the error is returned and no configured `tools.media.models` entry is tried.
 - For `image describe`, `--file` accepts local paths and HTTP(S) URLs; remote URLs go through the normal media-fetch SSRF policy.
 - Stateless execution commands (`model run`, `image *`, `audio *`, `video *`, `web *`, `embedding *`) default to local. Gateway-managed state commands (`tts status`) default to gateway.
 - The local path never requires the gateway to be running.
+- `model run` without `--local` or `--gateway` runs locally only when no Gateway owns the state directory. When a local Gateway is running, the CLI runs it through that Gateway instead (`transport: "gateway"` in the JSON envelope), because the Gateway owns the shared credentials and their OAuth refresh. A local run beside it could refresh a token the Gateway would then keep reading in its stale form.
+- `model run --local` refuses while a Gateway owns the state directory, and makes no provider call. Omit `--local` to run it through the Gateway, or stop the Gateway first.
+- While a Gateway owns the state directory, a local command never refreshes or stores a shared sign-in. This covers `image *`, `audio *`, `video *`, `web *`, `embedding *`, and local `tts convert`. A sign-in that is still valid is used as is, and the Gateway refreshes it on its next turn. An expired sign-in is refused before any change: the error names the Gateway and says to run the work through the Gateway, retry after the Gateway's next turn refreshes the sign-in, or stop the Gateway. With no Gateway running, these commands refresh and run locally as before.
+- `model auth login` follows `openclaw models auth login`: with a Gateway running, the sign-in runs through that Gateway. `model auth logout` follows `openclaw models auth logout`: it refuses while a Gateway owns the state directory; stop the Gateway first.
+- A local `model run` holds the state directory for its duration, so concurrent local runs on one state directory fail instead of running side by side. Run them one at a time, or start the Gateway and let the runs go through it.
 - Provider inventory commands whose `configured` state can come from saved agent auth accept
   `--agent <id>`. Without it, they use `agents.defaults.systemAgent.agentId` or the sole configured
   agent; explicit multi-agent fleets with no system owner must pass `--agent`. The provider catalog
@@ -111,6 +117,7 @@ shell-completion metadata.
   `embedding create`, and `model auth login/logout/status`) also accept `--agent <id>`. They resolve
   an explicit id first, then `agents.defaults.systemAgent.agentId`, then the sole configured agent.
 - Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged. An interrupt cancels image generation or editing and discards late provider results before output writes begin. It also stops an in-progress provider-URL video download instead of letting it finish and publish a late result.
+- Ctrl-C or SIGTERM cancels image description downloads and provider requests, and prevents later model fallback attempts.
 - Local `model run` is a lean one-shot provider completion: it resolves the configured agent model and auth but does not start a chat-agent turn, load tools, or open bundled MCP servers.
 - Model runs load the catalog for case correction only when an explicit model override contains uppercase characters. Runs using the configured default or a lowercase model ref skip that catalog lookup.
 - `model run --file` attaches image files (auto-detected MIME type) to the prompt; repeat `--file` for multiple images. Non-image files are rejected — use `infer audio transcribe` or `infer video describe` instead.
@@ -129,18 +136,18 @@ openclaw infer model run --prompt "Reply with exactly: smoke-ok" --json
 openclaw infer model run --prompt-file ./prompts/judge.txt --json
 openclaw infer model run --prompt-stdin --json < ./prompts/judge.txt
 openclaw infer model run --prompt "Summarize this changelog entry" --model openai/gpt-5.4 --json
-openclaw infer model run --prompt "Describe this image in one sentence" --file ./photo.jpg --model google/gemini-2.5-flash --json
+openclaw infer model run --prompt "Describe this image in one sentence" --file ./photo.jpg --model google/gemini-3.5-flash-lite --json
 openclaw infer model run --prompt "Use more reasoning here" --thinking high --json
 openclaw infer model providers --agent <id> --json
 openclaw infer model inspect --model gpt-6-astra --json
 ```
 
-Use full `<provider/model>` refs with `--local` to smoke-test one provider without starting the Gateway or loading the agent tool surface:
+Use full `<provider/model>` refs with `--local` to smoke-test one provider without starting the Gateway or loading the agent tool surface (stop a running Gateway first):
 
 ```bash
 openclaw infer model run --local --model anthropic/claude-sonnet-4-6 --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model cerebras/gpt-oss-120b --prompt "Reply with exactly: pong" --json
-openclaw infer model run --local --model google/gemini-2.5-flash --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model google/gemini-3.5-flash-lite --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model groq/openai/gpt-oss-120b --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model llmman/qwen3.8 --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model llmman/gemma4:e4b --prompt "Describe this image." --file ./photo.jpg --json
@@ -191,6 +198,7 @@ openclaw infer image describe --file ./photo.jpg --model ollama/qwen2.5vl:7b --p
 Notes:
 
 - Use `image edit` when starting from existing input files; `--size`, `--aspect-ratio`, or `--resolution` add geometry hints on providers/models that support them.
+- `image edit --file` accepts regular files and symlinks to regular files. Special files such as FIFOs are refused before any provider request.
 - `image generate` and `image edit` accept positive numeric `W:H` aspect ratios, including `7:5` and `1.5:1`. Malformed values such as `16x9`, `16/9`, or `0:5` fail before a provider request or output file is created.
 - `--output-format png --background transparent` with `--model openai/gpt-image-1.5` gives transparent-background OpenAI PNG output; `--openai-background` is an OpenAI-specific alias for the same hint. Providers that do not declare background support report it as an ignored override (see `ignoredOverrides` in the [JSON envelope](#json-output)).
 - `--quality low|medium|high|auto` works for providers that support image-quality hints, including OpenAI. OpenAI also accepts `--openai-moderation low|auto`.
@@ -200,7 +208,7 @@ Notes:
   ```bash
   openclaw infer image providers --json
   openclaw infer image generate \
-    --model google/gemini-3.1-flash-image \
+    --model google/gemini-nano-banana-2.1 \
     --prompt "Minimal flat test image: one blue square on a white background, no text." \
     --output ./openclaw-infer-image-smoke.png \
     --json
@@ -227,9 +235,18 @@ openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --jso
 
 `--model` must be `<provider/model>`.
 
-For audio transcription and video description on POSIX systems, `--file` follows
-directory symlinks before resolving `..`, matching filesystem path resolution.
-Final-file symlinks remain subject to the existing media-directory checks.
+If transcription skips a file, the error reports the reason when available,
+such as a missing file or the minimum or maximum size limit.
+
+An accepted interrupt cancels the pending transcription request and suppresses
+late transcript output.
+
+The same cancellation behavior applies to `infer video describe`: interruption
+stops the pending provider request and suppresses late description output.
+
+On POSIX systems, `--file` and `--output` paths follow directory symlinks
+before resolving `..`, matching filesystem path resolution. Final-file symlinks
+remain subject to the existing media-directory checks.
 
 For CLI-backed transcription, the result's `provider` identifies the tool family
 and `model` reports the executed command. Auto-detected tools report their resolved
@@ -255,6 +272,7 @@ Notes:
 - `tts status` only supports `--gateway` (it reflects gateway-managed TTS state).
 - Local and loopback-Gateway `tts convert --output` copies stage beside the destination and replace it only after success; a failed copy leaves an existing file unchanged.
 - If interruption is accepted before the output copy begins, `tts convert` leaves the requested destination unchanged. Completed synthesis audio remains in the media store for its normal lifetime.
+- Interrupting `tts convert --gateway` cancels the caller's pending RPC and exits with status 130 without printing a late result. Gateway-owned speech synthesis keeps its existing lifetime.
 - Remote-Gateway `tts convert --output` is rejected before requesting speech synthesis.
 - Use `tts convert --provider <id>` when selecting a provider without overriding its model.
 - `--channel <id>` is an output-format hint, not a delivery request. Local conversion

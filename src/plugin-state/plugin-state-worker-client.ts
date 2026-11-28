@@ -132,11 +132,13 @@ async function executeAdmitted<Key extends keyof PluginStateWorkerOperations>(
       capturedContext ?? captureOpenClawStateWorkerContext({ path: databasePath, env });
     if (checks.readDependency) {
       const identity = context.admission.identity.key;
-      recordPluginStateReadDependency({
-        ...checks.readDependency,
-        identity: identity.startsWith("file:") ? identity : undefined,
-        assertCurrent: context.admission.assertCurrent,
-      });
+      recordPluginStateReadDependency(
+        {
+          ...checks.readDependency,
+          identity: identity.startsWith("file:") ? identity : undefined,
+        },
+        context.admission,
+      );
     }
     // SAFETY: Key and input are correlated by every caller; this forms the dispatch union.
     const typedCommand = command as PluginStateCommand;
@@ -614,6 +616,7 @@ export async function lookupManyPluginStateInWorker(
   if (input.keys.length === 0) {
     return [];
   }
+  input.keys = [...input.keys];
   const results = await execute(
     { env, assertActive, sessionEntryCurrent, context, signal },
     { type: "pluginState.lookupMany", input },
@@ -647,8 +650,39 @@ export function clearRuntimeHealthInWorker(
 
 export const countPluginStateInWorker = createOperation("pluginState.count", () => 0);
 export const registerPluginStateJournalInWorker = createOperation("pluginState.appendJournal");
-export const listPluginStateInKeyRangeInWorker = createOperation(
-  "pluginState.entriesInKeyRange",
-  () => [],
-);
+const listKeyRange = createOperation("pluginState.entriesInKeyRange", () => []);
+export function listPluginStateInKeyRangeInWorker(params: Input<"pluginState.entriesInKeyRange">) {
+  return listKeyRange({ ...params, valueFilter: params.valueFilter && { ...params.valueFilter } });
+}
 export const movePluginStateEntriesInWorker = createOperation("pluginState.moveEntries");
+
+/**
+ * Confirm committed truth for an indeterminate publication. This bypasses resident views and
+ * queues one bounded committed read on the canonical worker, after the uncertain operation's
+ * own worker work or on a replacement worker after loss. A terminal database failure, missing
+ * database, or worker error rejects so the caller stays denied.
+ */
+export async function confirmPluginStateCommittedInWorker(
+  context: OpenClawStateWorkerContext,
+  scope: { pluginId: string; namespace: string },
+  signal?: AbortSignal,
+): Promise<void> {
+  const { runOpenClawStateWorkerOperation } =
+    await import("../state/openclaw-state-worker-store.js");
+  const result = await runOpenClawStateWorkerOperation(
+    context,
+    (worker) =>
+      worker.execute({
+        type: "pluginState.loadNamespace",
+        // The read only needs to commit-order behind prior work; rows are not retained.
+        input: { pluginId: scope.pluginId, namespace: scope.namespace, maxBytes: 0 },
+      }),
+    { signal, existingOnly: true },
+  );
+  if (result === undefined) {
+    throw new Error("Plugin state committed truth is unavailable");
+  }
+  if (!result.ok) {
+    throw restorePluginStateWorkerFailure(result.error);
+  }
+}

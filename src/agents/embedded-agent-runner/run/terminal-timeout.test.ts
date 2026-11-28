@@ -35,10 +35,7 @@ vi.mock("./auth-profile-success.js", () => ({
   reportEmbeddedRunSuccessfulAuthBinding: vi.fn(),
 }));
 
-async function resolveTerminal(
-  overrides: Partial<EmbeddedRunAttemptResult> = {},
-  commentary?: string,
-) {
+async function resolveTerminal(overrides: Partial<EmbeddedRunAttemptResult>, commentary?: string) {
   const assistant = buildEmbeddedRunnerAssistant({
     stopReason: "toolUse",
     content: [
@@ -83,7 +80,6 @@ async function resolveTerminal(
     throw new Error("Expected terminal completion without replay");
   }
   expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
-  expect(input.armPostCompactionGuard).not.toHaveBeenCalled();
   expect(attempt.messagesSnapshot).toEqual(messages);
   return { input, attempt, result: resolved.result };
 }

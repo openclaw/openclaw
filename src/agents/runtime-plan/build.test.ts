@@ -1,6 +1,7 @@
 import {
   createNativeOpenAIResponsesModel,
   createParameterFreeTool,
+  normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../../config/config.js";
@@ -37,7 +38,7 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
 const gpt54Model = { ...createNativeOpenAIResponsesModel(), baseUrl: undefined };
 const apiModel = { ...gpt54Model, baseUrl: "https://api.openai.com/v1" };
 
-function buildPlan(overrides: Partial<Parameters<typeof buildAgentRuntimePlan>[0]> = {}) {
+function buildPlan(overrides: Partial<Parameters<typeof buildAgentRuntimePlan>[0]>) {
   return buildAgentRuntimePlan({
     provider: "openai",
     modelId: "gpt-5.4",
@@ -133,9 +134,13 @@ describe("AgentRuntimePlan", () => {
       const config = (accessPrograms?: Record<string, unknown>) => ({
         agents: { defaults: { params: accessPrograms === undefined ? {} : { accessPrograms } } },
       });
-      const build = (accessPrograms?: Record<string, unknown>) =>
+      const build = (
+        accessPrograms?: Record<string, unknown>,
+        cyberAccessPrograms?: Parameters<typeof buildAgentRuntimePlan>[0]["cyberAccessPrograms"],
+      ) =>
         buildPlan({
           config: config(accessPrograms),
+          cyberAccessPrograms,
           harnessId: runtime,
           harnessRuntime: runtime,
           model: apiModel,
@@ -149,6 +154,16 @@ describe("AgentRuntimePlan", () => {
           },
         });
       expect(build().transport.resolveExtraParams().accessPrograms).toEqual({ cyber: "standard" });
+      // A model that cannot run at Standard defaults to its one advertised program.
+      expect(build(undefined, ["daybreak_red"]).transport.extraParams.accessPrograms).toEqual({
+        cyber: "daybreak_red",
+      });
+      expect(
+        build(undefined, ["standard", "daybreak_blue"]).transport.extraParams.accessPrograms,
+      ).toEqual({ cyber: "standard" });
+      expect(
+        build({ cyber: "standard" }, ["daybreak_red"]).transport.extraParams.accessPrograms,
+      ).toEqual({ cyber: "standard" });
       const configured = build({ cyber: "daybreak_blue" });
       expect(configured.transport.resolveExtraParams().accessPrograms).toEqual({
         cyber: "daybreak_blue",
@@ -198,12 +213,26 @@ describe("AgentRuntimePlan", () => {
     ).toContain("<persona_latch>");
   });
 
-  it("keeps OpenClaw-owned tool-schema normalization reachable from the plan", () => {
+  it("applies prepared provider tool-schema normalization through the plan", () => {
     const plan = buildPlan({ model: apiModel });
     const normalized = plan.tools.normalize([createParameterFreeTool()] as never);
     expect(normalized).toHaveLength(1);
     expect(normalized[0]?.name).toBe("ping");
     expect(normalized[0]?.parameters).toStrictEqual({});
+
+    const prepared = buildPlan({
+      model: apiModel,
+      providerRuntimeHandle: preparedHandle({
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        normalizeToolSchemas: ({ tools }) =>
+          tools.map((tool) => ({ ...tool, parameters: normalizedParameterFreeSchema() })),
+      }),
+    });
+    expect(
+      prepared.tools.normalize([createParameterFreeTool()] as never)[0]?.parameters,
+    ).toStrictEqual(normalizedParameterFreeSchema());
   });
 
   it("reuses the provider handle prepared before plan construction", () => {

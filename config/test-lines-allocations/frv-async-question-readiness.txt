@@ -1,0 +1,2 @@
+# Preserve the async-question assertions while joining the existing native lazy-panel readiness helper. Exact net test growth.
+2

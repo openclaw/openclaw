@@ -311,7 +311,7 @@ it.each([
     );
   },
 );
-it("keeps a saved off preference clearable on a no-op route", () => {
+it("hides speed controls while preserving a saved off preference on a no-op route", () => {
   const sessionsResult = session("claude-sonnet-5", "anthropic");
   expectFast(
     {
@@ -323,7 +323,7 @@ it("keeps a saved off preference clearable on a no-op route", () => {
         model("claude-opus-5", "Opus 5", "anthropic", { supportsFastMode: true }),
       ],
     },
-    { supported: true, disabled: false, nextValue: "" },
+    { supported: false, disabled: true, nextValue: "", persistedOverride: "off" },
   );
 });
 
@@ -451,12 +451,12 @@ it("uses Standard for a model's authoritative Standard-only capability without c
       currentOverride: "off",
       label: "Standard",
       disabled: true,
-      supported: true,
+      supported: false,
       ultrafastSupported: false,
     });
     expectFast(
       fastRoute({ supportsFastMode: false, serviceTiers: ["priority", "ultrafast"] }, { fastMode }),
-      { disabled: !fastMode },
+      { disabled: true, supported: false },
     );
   }
 });
@@ -468,7 +468,7 @@ it.each<[string[], Partial<FastState>]>([
   ],
   [
     ["default"],
-    { active: false, currentOverride: "off", label: "Standard", disabled: true, supported: true },
+    { active: false, currentOverride: "off", label: "Standard", disabled: true, supported: false },
   ],
 ])("recovers saved Ultrafast with tiers %j", (serviceTiers, expected) => {
   expectFast(fastRoute({ supportsServiceTierRecovery: true, serviceTiers }), {

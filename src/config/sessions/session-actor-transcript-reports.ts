@@ -19,11 +19,7 @@ export async function withMemoryReportWorker<T>(
   run: (
     operation: Pick<SqliteWorkerStore<TranscriptReportWorkerOperations>, "execute">,
     assertCurrent: () => void,
-    publish: (result: {
-      projectionNeedsReconcile: boolean;
-      cliHistoryChanged?: boolean;
-      sessionEntryChanged?: boolean;
-    }) => void,
+    publish: (result: { projectionNeedsReconcile: boolean; sessionEntryChanged?: boolean }) => void,
   ) => Promise<Result<T, TranscriptAppendRefusal>>,
 ): Promise<Result<T, TranscriptAppendRefusal>> {
   const target = withOwnedSessionTranscriptWriterFence(scope);

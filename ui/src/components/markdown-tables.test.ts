@@ -8,7 +8,6 @@ import {
   resetTranscriptSession,
 } from "../pages/chat/components/chat-thread-interactions.ts";
 import { installDialogPolyfill, waitForRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
-import { installSessionTitleRegistrar } from "./markdown-link-display.ts";
 import {
   enhanceMarkdownTables,
   handleMarkdownTableInteraction,
@@ -16,6 +15,7 @@ import {
 } from "./markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { SessionLinkTitler } from "./session-link-titling.ts";
+import { installSessionTitleRegistrar } from "./session-progress-hovercard-target.ts";
 
 const writeText = vi.fn(async (_text: string) => undefined);
 
@@ -208,6 +208,8 @@ describe("Markdown table interactions", () => {
     await Promise.resolve();
     expect(changedWidth).not.toHaveBeenCalled();
     expect(otherWidth).not.toHaveBeenCalled();
+    const readStyle = vi.fn(window.getComputedStyle.bind(window));
+    vi.stubGlobal("getComputedStyle", readStyle);
     deliverTableResize(viewport, 100);
     expect(changedWidth).not.toHaveBeenCalled();
     expect(otherWidth).not.toHaveBeenCalled();
@@ -215,6 +217,7 @@ describe("Markdown table interactions", () => {
     vi.advanceTimersToNextFrame();
     expect(changedWidth).not.toHaveBeenCalled();
     expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
+    expect(readStyle).not.toHaveBeenCalledWith(viewport);
 
     changedWidth.mockClear();
     query(shell, ".markdown-table__copy").replaceChildren(document.createElement("span"));

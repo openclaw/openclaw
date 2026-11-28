@@ -31,6 +31,7 @@ import { spawnProcess } from "../../src/process/spawn-utils.js";
 import { shutdownProcessSupervisor } from "../../src/process/supervisor/index.js";
 import { createProcessSupervisor } from "../../src/process/supervisor/supervisor.js";
 import { spawnTerminalPty } from "../../src/process/terminal-pty.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -130,7 +131,6 @@ try {
     mode: "child",
     argv: [process.execPath, "-e", code],
     cwd: process.env.OPENCLAW_STATE_DIR,
-    memoryLimitBytes: 1024 ** 3,
     timeoutMs: 30_000,
   });
   const outcome = await run.wait();
@@ -143,7 +143,6 @@ try {
     mode: "child",
     argv: [process.execPath, "-e", `require('node:fs').readFileSync(3); ${code}`],
     cwd: process.env.OPENCLAW_STATE_DIR,
-    memoryLimitBytes: 1024 ** 3,
     timeoutMs: 30_000,
     secretInput: { fd: 3, createData: () => Buffer.from("synthetic-input") },
   });
@@ -219,12 +218,7 @@ try {
           fs.writeFileSync(trace, "");
           const inspector = new Session();
           if (values.allocation) {
-            inspector.connect();
-            await inspector.post("HeapProfiler.startSampling", {
-              samplingInterval: 32768,
-              includeObjectsCollectedByMajorGC: true,
-              includeObjectsCollectedByMinorGC: true,
-            });
+            await startCollectedHeapSampling(inspector, 32768);
           }
           const cpu = process.cpuUsage();
           const loadBefore = loadavg();

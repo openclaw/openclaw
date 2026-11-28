@@ -1,10 +1,12 @@
 import { Portal } from "@solidjs/web";
 import { Errored, For, Loading, Show, createMemo, lazy, onSettled, type Element } from "solid-js";
+import { isNativeMacWebChromeHost } from "../../app/native-web-chrome.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import { registryFor } from "../../components/overlay-registry.ts";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
@@ -67,6 +69,7 @@ function MobileHostBoundary(props: { children: Element; fallback?: Element }) {
 }
 
 export function SidebarRegionView(props: SidebarRegionViewProps) {
+  const macTitlebar = isNativeMacWebChromeHost();
   let shell!: HTMLElement;
   let regionView: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | undefined;
   let detailsMount!: HTMLDivElement;
@@ -145,7 +148,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
                   <header class="rail-header">
                     <strong>{definition().label}</strong>
                     <button
-                      class="rail-header__action"
+                      class="oc-icon-button oc-icon-button--28 rail-header__action"
                       type="button"
                       aria-label={t("chat.sidebarColumns.close", { panel: definition().label })}
                       onClick={() => props.callbacks.closeSlot(panel().slot)}
@@ -191,6 +194,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
         <Loading fallback={<RegionPlaceholder />}>
           <ChatSidebarRegion
             ref={regionRefs}
+            visualPresentation={props.visualPresentation}
             elements={elements}
             panelIdPrefix={props.panelIdPrefix}
             mobileHost={props.mobileHost}
@@ -323,17 +327,20 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
       </div>
       <Show when={props.externalPanelsToggle}>
         <div class="sidebar-region__panels-toggle">
-          <openclaw-tooltip prop:content={t("chat.sessionHeader.panels")}>
-            <button
-              type="button"
-              class="btn btn--ghost btn--icon chat-icon-btn chat-pane__panels-toggle"
-              aria-label={t("chat.sessionHeader.panels")}
-              aria-expanded={sideVisible() ? "true" : "false"}
-              onClick={() => props.callbacks.setOpen(!sideVisible())}
-            >
-              <Icon name={sideVisible() ? "sessionPanelsActive" : "sessionPanels"} />
-            </button>
-          </openclaw-tooltip>
+          <IconButton
+            size={28}
+            class={["chat-pane__panels-toggle", { "macos-titlebar-sidebar-toggle": macTitlebar }]}
+            label={t("chat.sessionHeader.panels")}
+            icon={
+              macTitlebar
+                ? "macosTitlebarSidebar"
+                : sideVisible()
+                  ? "sessionPanelsActive"
+                  : "sessionPanels"
+            }
+            aria-expanded={sideVisible() ? "true" : "false"}
+            onClick={() => props.callbacks.setOpen(!sideVisible())}
+          />
         </div>
       </Show>
       <div

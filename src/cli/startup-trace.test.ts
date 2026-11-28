@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { sampleTrackedWorkerMemory, trackNativeWorkerForCpu } from "../infra/worker-cpu.js";
+import { ExitError } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewayDispatchStartupTrace,
@@ -34,6 +35,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   flushDiagnosticsTimeline();
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
@@ -57,6 +59,42 @@ it.each(["gateway", "status"])("foreground progress: %s", async (command) => {
 });
 
 it.each(["0", "1"])(
+  "reports pending parallel bootstrap steps only when traced (trace=%s)",
+  async (enabled) => {
+    vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", enabled);
+    vi.spyOn(process, "argv", "get").mockReturnValue(["node", "openclaw", "gateway", "run"]);
+    const start = (name: string) => {
+      const entered = createDeferredCore<boolean>();
+      const done = createDeferredCore<string>();
+      const result = measureGatewayBootstrapStep(name, () => {
+        entered.resolve(
+          messages().some((line) => line.includes(`startup trace: ${name} starting total=`)),
+        );
+        return done.promise;
+      });
+      return { entered: entered.promise, done, result };
+    };
+    const catalog = start("gateway.catalog-startup-snapshot");
+    const model = start("gateway.model-runtime-import");
+    const traced = enabled === "1";
+    expect(await Promise.all([catalog.entered, model.entered])).toEqual([traced, traced]);
+    expect(messages()).toHaveLength(traced ? 2 : 0);
+
+    catalog.done.resolve("snapshot");
+    await expect(catalog.result).resolves.toBe("snapshot");
+    if (traced) {
+      expect(messages().at(-1)).toMatch(
+        /startup trace: gateway\.catalog-startup-snapshot \d+\.\dms total=/u,
+      );
+    }
+    const failure = new Error("model unavailable");
+    model.done.reject(failure);
+    await expect(model.result).rejects.toBe(failure);
+    expect(messages()).toHaveLength(traced ? 3 : 0);
+  },
+);
+
+it.each(["0", "1"])(
   "captures phase memory before buffered logs flush (trace=%s)",
   async (enabled) => {
     vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", enabled);
@@ -67,7 +105,14 @@ it.each(["0", "1"])(
     trace.setLineFormatter((message) => message);
     expect(messages().at(-1)).toMatch(/ rssMb=128\.0 heapUsedMb=\d+\.\d workers=0 /);
 
-    await measureGatewayBootstrapStep("cli.bootstrap.admission.database-readiness", () => {});
+    await measureGatewayBootstrapStep(
+      "cli.bootstrap.admission.database-readiness",
+      () => {},
+      () => ({ stateIntegrityCheckCount: 1, stateIntegrityReason: "schema-mismatch" }),
+    );
+    expect(messages().at(-1)).toContain(
+      "stateIntegrityCheckCount=1 stateIntegrityReason=schema-mismatch",
+    );
     expect(messages().at(-1)).toMatch(/ rssMb=256\.0 heapUsedMb=\d+\.\d workers=0 /);
   },
 );
@@ -105,6 +150,25 @@ it("reports environment selection sub-phases without full tracing only for gatew
       }
     }
   }
+});
+
+it.each(["0", "1"])("leaves a refused start's remedy last (trace=%s)", async (enabled) => {
+  vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", enabled);
+  vi.spyOn(process, "argv", "get").mockReturnValue(["node", "openclaw", "gateway", "run"]);
+  const trace = makeTrace(["gateway", "run"], "cli.main");
+  trace.setLineFormatter((message) => message);
+  const reason = "Free space on the PostgreSQL server, then run openclaw update.";
+  const refusal = new ExitError(78, reason);
+  await expect(
+    trace.measure("gateway-run-pre-bootstrap", () =>
+      measureGatewayBootstrapStep("cli.bootstrap.state-upgrade", () => {
+        process.stderr.write(`${reason}\n`);
+        throw refusal;
+      }),
+    ),
+  ).rejects.toBe(refusal);
+  expect(messages()).toHaveLength(3);
+  expect(messages().at(-1)).toBe(`${reason}\n`);
 });
 
 it("formats live worker counts and cached heap coverage without requesting samples", async () => {
@@ -169,24 +233,47 @@ it.each([
 );
 
 it.each(["timeline", ""])(
-  "records startup phases with initial diagnostics=%j",
+  "retains observed startup times through delayed activation and flush with diagnostics=%j",
   async (diagnostics) => {
     const timelinePath = path.join(directories.make("openclaw-startup-trace-"), "timeline.jsonl");
     vi.stubEnv("OPENCLAW_DIAGNOSTICS", diagnostics);
     vi.stubEnv("OPENCLAW_DIAGNOSTICS_TIMELINE_PATH", timelinePath);
+    const origin = performance.timeOrigin;
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const timestamp = (elapsed: number) => new Date(origin + elapsed).toISOString();
     const trace = makeTrace(["agent", "--local"]);
+    now = 120;
     trace.mark("bootstrap");
-    await trace.measure("run-main-import", () => Promise.resolve());
+    now = 200;
+    const loading = trace.measure("run-main-import", () => {
+      now = 350;
+      vi.setSystemTime(origin + now);
+      return "loaded";
+    });
+    // Activation awaits must not move the earlier mark or backdate the operation's start.
+    now = 300;
+    vi.setSystemTime(origin + now);
+    await expect(loading).resolves.toBe("loaded");
     await expect(
       trace.measure("command-execution", async () => "done", { timeline: false }),
     ).resolves.toBe("done");
 
+    now = 1_000;
+    vi.setSystemTime(origin + now);
     if (!diagnostics) {
       expect(await trace.requiresDiagnosticsConfig()).toBe(true);
       expect(fs.existsSync(timelinePath)).toBe(false);
       await trace.configureDiagnosticsTimeline({ diagnostics: { flags: ["timeline"] } });
     }
 
+    now = 1_100;
+    trace.mark("configured");
+    now = 2_000;
+    // A wall-clock adjustment during the queued write must not change its observed time.
+    vi.setSystemTime(origin - 60_000);
+    await trace.configureDiagnosticsTimeline({ diagnostics: { flags: ["timeline"] } });
     flushDiagnosticsTimeline();
     const events = fs
       .readFileSync(timelinePath, "utf8")
@@ -196,11 +283,19 @@ it.each(["timeline", ""])(
     expect(events).toEqual(
       expect.arrayContaining([
         timelineEvent("mark", "bootstrap", {
-          durationMs: expect.any(Number),
-          attributes: expect.objectContaining({ totalMs: expect.any(Number) }),
+          timestamp: timestamp(120),
+          durationMs: 20,
+          attributes: expect.objectContaining({ totalMs: 20 }),
         }),
-        timelineEvent("span.start", "run-main-import"),
-        timelineEvent("span.end", "run-main-import", { durationMs: expect.any(Number) }),
+        timelineEvent("span.start", "run-main-import", { timestamp: timestamp(300) }),
+        timelineEvent("span.end", "run-main-import", {
+          timestamp: timestamp(350),
+          durationMs: 50,
+        }),
+        timelineEvent("mark", "configured", {
+          timestamp: timestamp(1_100),
+          attributes: expect.objectContaining({ totalMs: 1_000 }),
+        }),
       ]),
     );
     expect(events).not.toContainEqual(expect.objectContaining({ name: "entry.command-execution" }));

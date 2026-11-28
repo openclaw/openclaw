@@ -27,8 +27,8 @@ import {
   type KeywordSearchHit,
   type MemoryRetrievalResult,
 } from "./manager-search-retrieval.js";
+import type { MemoryKeywordWorkerResult } from "./manager-search-types.js";
 import { prepareExactPathMatcher } from "./manager-search.js";
-import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
 import type { MemorySourceFileStateRow } from "./manager-source-state.js";
 import { applyRetrievalRanking, prepareActiveProjectKeys } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
@@ -311,9 +311,15 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
         }
       }
       const indexIdentity = refreshSearchIdentity();
+      const shouldRepairConfiguredScope =
+        searchSyncEnabled &&
+        indexIdentity.status === "mismatched" &&
+        indexIdentity.owner === "configuration" &&
+        indexIdentity.code === "scope";
       const shouldRepairIdentity =
         hasIndexedContent &&
         (indexIdentity.status === "missing" ||
+          shouldRepairConfiguredScope ||
           (searchSyncEnabled &&
             indexIdentity.status === "mismatched" &&
             indexIdentity.owner === "openclaw" &&
@@ -485,11 +491,11 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
               throw err;
             }
             if (fallbackAttempt) {
-              this.markLocalEmbeddingProviderDegraded(err);
+              this.markEmbeddingProviderFailure(err);
               throw err;
             }
             opts?.onPartialResults?.(null);
-            this.markLocalEmbeddingProviderDegraded(err);
+            this.markEmbeddingProviderFailure(err);
             const message = formatErrorMessage(err);
             const activatedFallback =
               isMemoryEmbeddingOperationError(err) && (await this.activateSearchFallback(message));

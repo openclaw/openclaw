@@ -19,6 +19,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
@@ -63,12 +64,22 @@ import {
   SearchTestStatus,
   type SearchTestOutcomeProps,
 } from "./search-results.tsx";
-import { AdvancedSearchSettings, SearchProviderRow } from "./search-setup.tsx";
 import "./search-page.css";
+import { AdvancedSearchSettings, SearchProviderRow } from "./search-setup.tsx";
 
 registerRouteSubtitlesEnglish();
 
 registerEnglishCatalog(registerSettingsEnglish);
+
+const maxSearchQueryCodePoints = 500;
+
+function isSearchQueryTooLong(value: string): boolean {
+  // A code point uses at most two UTF-16 units. Avoid expanding a large paste.
+  return (
+    value.length > 2 * maxSearchQueryCodePoints ||
+    Array.from(value).length > maxSearchQueryCodePoints
+  );
+}
 
 /** Results arrive unvalidated, and the page renders these fields without further checks. */
 function isSearchStatus(value: unknown): value is WebSearchStatusResult {
@@ -109,6 +120,7 @@ export function SearchPage() {
   // The localized default seeds an editable draft; locale changes must not replace user input.
   const initialQuery = i18n.t("searchPage.queryDefault");
   const [query, setQuery] = createSignal(initialQuery);
+  const queryTooLong = createMemo(() => isSearchQueryTooLong(query()));
   let selectedAgent = "";
   // Capture the initial receipt before the Gateway binding admits its first load.
   let configRevision = searchConfigRevision(context.runtimeConfig.state);
@@ -218,7 +230,7 @@ export function SearchPage() {
     invalidateTest();
     loadingActive = true;
     const selected = selection(modelValue);
-    let requestedConfigRevision = configRevision;
+    const requestedConfigRevision = configRevision;
     const current = () =>
       active() &&
       gateway.isCurrent(scope) &&
@@ -231,22 +243,21 @@ export function SearchPage() {
         .then(() => runtime.ensureSchemaLoaded())
         .catch(() => undefined);
     }
+    // Model choices are supplementary; they must not hold the settings page open.
+    void loadModelCatalog(scope.client, { agentId: selected.agentId })
+      .then((catalog) => {
+        if (active() && gateway.isCurrent(scope) && selected.agentId === selection().agentId) {
+          setModels(catalog?.models ?? []);
+        }
+      })
+      .catch(() => undefined);
     const request = (async () => {
       try {
-        const catalog = await loadModelCatalog(scope.client, { agentId: selected.agentId }).catch(
-          () => null,
-        );
-        // Search config scopes the status request, not the agent's catalog read.
-        requestedConfigRevision = configRevision;
-        if (!current()) {
-          return;
-        }
         const status = await scope.client.request("webSearch.status", selected);
         if (current()) {
           if (!isSearchStatus(status)) {
             throw new UserFacingError(t("searchPage.statusNotReady"));
           }
-          setModels(catalog?.models ?? []);
           setResult(status);
           if (!setupDecided) {
             setupDecided = true;
@@ -314,14 +325,15 @@ export function SearchPage() {
   });
 
   async function test(scope: GatewayConnectionScope | null) {
-    const queryText = (queryInput?.value ?? query()).trim();
+    const draft = queryInput?.value ?? query();
+    const queryText = draft.trim();
     const runtime = context.runtimeConfig;
     if (
       !scope ||
       !gateway.isCurrent(scope) ||
       !canEdit() ||
       !queryText ||
-      queryText.length > 500 ||
+      isSearchQueryTooLong(draft) ||
       !(result()?.testProvider || result()?.route.testable) ||
       activeTest ||
       !isSearchConfigSettled(runtime.state) ||
@@ -448,10 +460,10 @@ export function SearchPage() {
               <Errored
                 fallback={(error) =>
                   gateway.connected ? (
-                    <div role="alert" class="callout danger">
+                    <InlineAlert tone="danger" role="alert">
                       {formatUiError(error())}
                       <RetryAction onRetry={() => void load()} />
-                    </div>
+                    </InlineAlert>
                   ) : undefined
                 }
               >
@@ -465,10 +477,10 @@ export function SearchPage() {
             )}
           </Show>
           {configState().lastError ? (
-            <div role="alert" class="callout danger">
+            <InlineAlert tone="danger" role="alert">
               {configState().lastError}
               <RetryAction onRetry={() => void retryConfig(gateway.capture())} />
-            </div>
+            </InlineAlert>
           ) : undefined}
           <Loading>
             <Show when={result()}>
@@ -567,6 +579,15 @@ export function SearchPage() {
                         <Show when={canTestHere()}>
                           <SettingsRow
                             title={t("searchPage.query")}
+                            description={
+                              <Show when={queryTooLong()}>
+                                <span id="search-query-length-error">
+                                  {t("searchPage.queryTooLong", {
+                                    limit: String(maxSearchQueryCodePoints),
+                                  })}
+                                </span>
+                              </Show>
+                            }
                             control={
                               <input
                                 ref={(element) => {
@@ -574,7 +595,10 @@ export function SearchPage() {
                                 }}
                                 class="settings-input"
                                 aria-label={t("searchPage.query")}
-                                maxlength="500"
+                                aria-invalid={queryTooLong() ? "true" : undefined}
+                                aria-describedby={
+                                  queryTooLong() ? "search-query-length-error" : undefined
+                                }
                                 disabled={testing()}
                                 value={query()}
                                 placeholder={t("searchPage.queryPlaceholder")}
@@ -602,7 +626,7 @@ export function SearchPage() {
                                 disabled={
                                   !canEdit() ||
                                   !query().trim() ||
-                                  query().trim().length > 500 ||
+                                  queryTooLong() ||
                                   testing() ||
                                   loading() ||
                                   !isSearchConfigSettled(configState()) ||

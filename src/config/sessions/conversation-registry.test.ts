@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import * as admissionTurn from "../../infra/sqlite-database-admission-turn.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../../infra/sqlite-worker-contract.js";
 import { withAgentDatabaseCloseFence } from "../../state/openclaw-agent-db-resources.js";
 import {
@@ -12,6 +13,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import * as executionOwner from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import {
@@ -214,8 +216,30 @@ describe("conversation registry", () => {
         },
       );
       let pending: Promise<unknown> | undefined;
+      const captured = createDeferred();
+      const queued = createDeferred();
+      const capture = executionOwner.captureOpenClawAgentDatabaseExecutionAsync;
+      const enqueue = admissionTurn.runWithSqliteDatabaseAdmissionTurn;
       try {
         await awaitGateBeforeSettlement(entered.promise, held, "Writer did not acquire its lane");
+        const captureSpy = vi
+          .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecutionAsync")
+          .mockImplementation(async (...args) => {
+            const execution = await capture(...args);
+            captured.resolve();
+            return execution;
+          });
+        const queueSpy = vi
+          .spyOn(admissionTurn, "runWithSqliteDatabaseAdmissionTurn")
+          .mockImplementation((...args) => {
+            const result = enqueue(...args);
+            queued.resolve();
+            return result;
+          });
+        onTestFinished(() => {
+          captureSpy.mockRestore();
+          queueSpy.mockRestore();
+        });
         const identity = address("peer-a", "reef:peer-a", { accountId: undefined });
         pending =
           operation === "registration"
@@ -229,6 +253,11 @@ describe("conversation registry", () => {
               );
         const rejected = expect(pending).rejects.toThrow(
           "Agent database target changed before write admission",
+        );
+        await awaitGateBeforeSettlement(
+          Promise.all([captured.promise, queued.promise]),
+          pending,
+          "Conversation operation settled before capturing and queuing its target",
         );
         fs.renameSync(databasePath, `${databasePath}.previous`);
         fs.writeFileSync(databasePath, "");

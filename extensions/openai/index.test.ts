@@ -296,9 +296,7 @@ describe("openai plugin", () => {
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Grounded emotion when fitting:");
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Sparse natural emoji ok.");
     expectOpenAIPromptContribution(provider, sectionOverrides, { trigger: "heartbeat" });
-    for (const modelId of ["openai/gpt-5.4-mini", "gpt-6-astra"]) {
-      expectOpenAIPromptContribution(provider, sectionOverrides, { modelId });
-    }
+    expectOpenAIPromptContribution(provider, sectionOverrides, { modelId: "openai/gpt-5.4-mini" });
     for (const modelId of ["gpt-image-1", "openai/gpt-7-x"]) {
       expect(promptContribution(provider, { modelId })).toBeUndefined();
     }

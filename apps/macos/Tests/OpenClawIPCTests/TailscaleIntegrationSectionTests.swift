@@ -182,7 +182,6 @@ struct TailscaleIntegrationSectionTests {
             state.connectionMode = .local
             // A loaded document with no local-only save goes through the connected config.set path.
             await ConfigStore._testSetOverrides(.init(
-                isRemoteMode: { false },
                 loadLocal: {
                     var auth: [String: Any] = credentials
                     auth["allowTailscale"] = true

@@ -4,7 +4,6 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { createUpdateErrorFact } from "../infra/update-failure-facts.js";
 import { updateRunFixture } from "../infra/update-run-fixture.test-support.js";
-import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -86,6 +85,7 @@ it.each([
           ? { reason, owner: "[redacted]" }
           : { reason };
     expect(lost).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST", loss });
+    expect(lost).toHaveProperty("message", expect.stringContaining("retry the operation"));
     const transported = new Error("worker envelope");
     retainOpenClawStateWorkerErrorPayload(transported, encodeOpenClawStateWorkerError(lost));
     const hydrated = hydrateOpenClawStateWorkerError(transported);
@@ -105,14 +105,8 @@ it.each([
     expect(
       record?.steps.find((step) => step.step === "plugin-finalization")?.failureFacts?.[0],
     ).toMatchObject({ leaseLoss: loss });
-    const report = renderUpdateRunReport(record!);
-    expect(report.markdown).toContain(`lease loss: ${reason}`);
-    expect(JSON.stringify({ record, report, lost, hydrated })).not.toContain(
-      "private-original-token",
-    );
-    expect(JSON.stringify({ record, report, lost, hydrated })).not.toContain(
-      "private-replacement-token",
-    );
+    expect(JSON.stringify({ record, lost, hydrated })).not.toContain("private-original-token");
+    expect(JSON.stringify({ record, lost, hydrated })).not.toContain("private-replacement-token");
     executeSqliteQuerySync(db, sql.deleteFrom("state_leases"));
   },
 );
@@ -125,7 +119,7 @@ it("preserves the generic loss when the diagnostic row cannot be read", () => {
   ).toThrowError(
     expect.objectContaining({
       code: "OPENCLAW_STATE_LEASE_LOST",
-      message: "state lease synthetic/diagnostics was lost",
+      message: "state lease synthetic/diagnostics was lost; retry the operation",
     }),
   );
 });

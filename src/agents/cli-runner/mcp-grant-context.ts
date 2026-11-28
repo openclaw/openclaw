@@ -1,12 +1,15 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
+import { isToolPolicyMessageProvider } from "../agent-tools.message-provider-policy.js";
 import { cloneExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import {
-  bindActiveCronAuthorityCurrentness,
   bindCronManagementToolConstruction,
   captureCronRequesterGrantIssuer,
 } from "../cron-creator-authority-context.js";
@@ -14,6 +17,7 @@ import type { DelegationCapability } from "../delegation-capability.js";
 import { buildHarnessHostRequester } from "../harness/host-requester.js";
 import { captureRequesterOrigin } from "../requester-origin.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../session-permission-exec-mode.js";
+import { isSessionProjectMoveEligible } from "../session-project-guidance.js";
 import { resolveStoredSessionPermissionPolicy } from "../tool-fs-policy.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -39,7 +43,6 @@ export function finalizeCliMcpGrant(
     return undefined;
   }
   const cronRequesterGrantIssuer = captureCronRequesterGrantIssuer(context.runId);
-  const cronAuthorityCheck = bindActiveCronAuthorityCurrentness(context.runId);
   const withCronManagementToolConstruction = bindCronManagementToolConstruction(context.runId);
   const personalToolParticipants = source.toolAuthorityFingerprint
     ? source.replyOperation?.personalToolParticipants
@@ -52,7 +55,6 @@ export function finalizeCliMcpGrant(
       ...(nativeAuthorityPending ? { nativeCronCreatorToolAllowlist: null } : {}),
     },
     ...(cronRequesterGrantIssuer ? { cronRequesterGrantIssuer } : {}),
-    ...(cronAuthorityCheck ? { cronAuthorityCheck } : {}),
     ...(withCronManagementToolConstruction ? { withCronManagementToolConstruction } : {}),
     admittedRunContext: source.admittedRunContext,
     toolPolicyConfig: source.config,
@@ -166,9 +168,12 @@ export function buildCliMcpGrantContext(params: {
   const groupChannel = normalizeOptionalString(params.run.groupChannel);
   const groupSpace = normalizeOptionalString(params.run.groupSpace);
   const spawnedBy = normalizeOptionalString(params.run.spawnedBy);
-  const messageProvider = resolveGatewayMessageChannel(
-    params.run.messageChannel ?? params.run.messageProvider,
-  );
+  // A tool-policy surface that is not a delivery channel ("voice") still filters tools, as it
+  // does for an embedded run.
+  const policyProvider = normalizeOptionalLowercaseString(params.run.messageProvider);
+  const messageProvider =
+    resolveGatewayMessageChannel(params.run.messageChannel ?? params.run.messageProvider) ??
+    (isToolPolicyMessageProvider(policyProvider) ? policyProvider : undefined);
   const currentChannelId = normalizeOptionalString(params.run.currentChannelId);
   const grantedToolsAllow = params.run.cliToolAvailability?.openClaw;
   const delegationCapability = readCliMcpDelegationCapability(params.run);
@@ -203,10 +208,21 @@ export function buildCliMcpGrantContext(params: {
     ...(params.runtimePolicyAgentId ? { runtimePolicyAgentId: params.runtimePolicyAgentId } : {}),
     agentId: params.agentId,
     sessionId: normalizeOptionalString(params.run.sessionId),
+    ...(isSessionProjectMoveEligible(
+      params.config,
+      params.agentId,
+      params.run.sessionEntry,
+      params.run.cwd?.trim() || params.run.workspaceDir,
+    )
+      ? { sessionProjectMoveEligible: true }
+      : {}),
     runId: normalizeOptionalString(params.run.runId),
     workspaceDir: params.run.workspaceDir,
     ...(normalizeOptionalString(params.run.cwd) ? { cwd: params.run.cwd?.trim() } : {}),
     ...(params.run.toolOverrides?.webSearch === false ? { webSearchDisabled: true as const } : {}),
+    ...(params.run.toolBindings ? { toolBindings: structuredClone(params.run.toolBindings) } : {}),
+    // Compaction lists the session's tools only so its request prefix matches the turns'.
+    ...(params.run.controlOperation ? { toolCallsRefused: true as const } : {}),
     // Same enforcement point for the fallback delegation gate, so an
     // unrestricted run keeps its exact prior grant shape.
     ...(delegationCapability ? { delegationCapability } : {}),

@@ -158,16 +158,17 @@ describe("ollama provider models", () => {
   });
 
   it.each<[name: string, url: string, maxTokens: number, remote?: Partial<OllamaTagModel>]>([
-    ["local-model", localUrl, 8192],
-    ["minimax-m3", localUrl, 8192],
-    ["kimi-k3", localUrl, 8192],
+    // Local output defaults keep half of the 32k local num_ctx cap for the prompt.
+    ["local-model", localUrl, 16_384],
+    ["minimax-m3", localUrl, 16_384],
+    ["kimi-k3", localUrl, 16_384],
     ["minimax-m3", "https://ollama.com", 131_072],
     ["kimi-k3", "https://ollama.com", 1_048_576],
     ["glm-5.2:cloud", localUrl, 131_072],
-    ["unknown:cloud", localUrl, 262_144],
-    ["unknown", "https://ollama.com", 262_144],
-    ["remote-stub", localUrl, 262_144, { remote_host: "https://ollama.com" }],
-    ["remote-model-stub", localUrl, 262_144, { remote_model: "upstream-model" }],
+    ["unknown:cloud", localUrl, 32_768],
+    ["unknown", "https://ollama.com", 32_768],
+    ["remote-stub", localUrl, 32_768, { remote_host: "https://ollama.com" }],
+    ["remote-model-stub", localUrl, 32_768, { remote_model: "upstream-model" }],
   ])("discovers %s output limits at %s", async (name, url, maxTokens, remote) => {
     stubDiscovery([{ name, ...remote }], {
       capabilities: completion,

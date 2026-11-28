@@ -110,23 +110,33 @@ export async function recordSessionOperatorSource(
 }
 
 /**
- * Restore a person's recorded source for this session through the shared operator-source owner,
- * which rechecks device pairing, auth method, shared-secret generation, profile identity and role
- * policy on every use. Returns undefined when the session retains no source for the person.
+ * Admit a person's recorded requester reference for a new session turn.
+ * Returns undefined when the session retains no source for the person.
  */
 export async function restoreSessionOperatorSource(
   params: SessionTarget & {
     context: GatewayRequestContext;
     profileId: string;
+    /** Named-role session turns restore only an overriding membership source. */
+    memberOnly?: boolean;
     assertCurrent: () => void;
   },
 ): Promise<Awaited<ReturnType<typeof restoreGatewayQueuedOperatorRecovery>> | undefined> {
-  const entry = await readSessionEntryReadOnlyInWorker(params, params.assertCurrent);
+  const entry = await readSessionEntryReadOnlyInWorker(params, params.assertCurrent).catch(
+    (cause: unknown) => {
+      throw new Error("Session is unavailable for this principal.", { cause });
+    },
+  );
   const snapshot = entry?.operatorSources?.[params.profileId];
-  if (!snapshot || snapshot.profileId !== params.profileId) {
+  if (
+    !snapshot ||
+    snapshot.profileId !== params.profileId ||
+    (params.memberOnly && snapshot.openclawIdPrincipal?.kind !== "member")
+  ) {
     return undefined;
   }
   return restoreGatewayQueuedOperatorRecovery({
+    agentId: params.agentId,
     source: { kind: "gateway", snapshot },
     context: params.context,
     assertCurrent: params.assertCurrent,

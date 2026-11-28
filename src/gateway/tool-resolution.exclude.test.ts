@@ -43,7 +43,7 @@ vi.mock("../agents/openclaw-tools.js", () => ({
 }));
 
 // mock-isolation: Filter synthetic mediated tools without filesystem or exec initialization.
-vi.mock("../agents/agent-tools.js", () => ({
+vi.mock("../agents/agent-tools.async.js", () => ({
   createOpenClawCodingToolsInternalAsync: async (...args: Parameters<typeof codingTools>) =>
     codingTools(...args),
 }));
@@ -52,7 +52,8 @@ vi.mock("../channels/plugins/index.js", () => ({
   getLoadedChannelPlugin: getChannelPlugin,
 }));
 
-vi.mock("../agents/lazy-exec-tool.js", () => ({
+vi.mock("../agents/lazy-exec-tool.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/lazy-exec-tool.js")>()),
   createLazyExecTool: createExec,
   resolveExecToolConfig: vi.fn(() => ({})),
 }));
@@ -233,7 +234,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
             content: [
               {
                 type: "text",
-                text: "sessions needs the owner's authority, and this turn was not started by the owner. Do not retry sessions.",
+                text: "I did not run sessions. It needs the Gateway owner's authority, and this turn does not run with it. Ask the Gateway owner to do it. Do not retry sessions.",
               },
             ],
           });
@@ -466,6 +467,27 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
     }
   });
+
+  it.each([
+    { nodeExecAllowed: true, available: false },
+    { nodeExecAllowed: undefined, available: true },
+  ])(
+    "applies wildcard sender policy to a senderless capped grant: nodeExecAllowed=$nodeExecAllowed",
+    async ({ nodeExecAllowed, available }) => {
+      // A capped CLI grant drops node exec; its run's sender policy must still apply.
+      const result = await resolveTools({
+        cfg: { tools: { toolsBySender: { "*": { deny: ["sessions_spawn"] } } } },
+        sessionKey: "agent:main:voice:15550001234",
+        senderIsOwner: true,
+        messageProvider: "voice",
+        toolsAllow: ["read", "sessions_spawn"],
+        nodeExecAllowed,
+      });
+
+      expect(toolNames(result).includes("sessions_spawn")).toBe(available);
+      expect(toolNames(result)).toContain("read");
+    },
+  );
 
   it("does not inherit node-only exec as a generic child or cron capability", async () => {
     const result = await resolveNodeExecTools({

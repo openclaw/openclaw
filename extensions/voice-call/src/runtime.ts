@@ -4,7 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import type { PluginLogger, PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  assertRealtimeVoiceAgentConsultModelSelectionUnlocked,
+  assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync,
   consultRealtimeVoiceAgent,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   resolveRealtimeVoiceAgentConsultToolsAllow,
@@ -304,6 +304,12 @@ export async function createVoiceCallRuntime(params: {
             typeof call.metadata?.requesterSessionKey === "string"
               ? call.metadata.requesterSessionKey
               : undefined;
+          const assertCallCurrent = () => {
+            handlerContext.abortSignal?.throwIfAborted();
+            if (manager.getCall(callId) !== call || TerminalStates.has(call.state)) {
+              throw new Error(`Call "${callId}" is no longer active`);
+            }
+          };
           const modelLockParams = {
             cfg,
             agentRuntime,
@@ -311,7 +317,8 @@ export async function createVoiceCallRuntime(params: {
             sessionKey,
             spawnedBy: requesterSessionKey,
           };
-          assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
+          await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
+          assertCallCurrent();
           const fastContext = await resolveRealtimeVoiceFastContextConsult({
             cfg,
             agentId,
@@ -326,65 +333,68 @@ export async function createVoiceCallRuntime(params: {
             // Memory reads for this caller stay bound to the consult and its live call.
             liveness: {
               signal: handlerContext.abortSignal,
-              assertCurrent() {
-                if (manager.getCall(callId) !== call || TerminalStates.has(call.state)) {
-                  throw new Error(`Call "${callId}" is no longer active`);
-                }
-              },
+              assertCurrent: assertCallCurrent,
             },
           });
-          handlerContext.abortSignal?.throwIfAborted();
+          assertCallCurrent();
           if (fastContext.handled) {
-            assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
+            await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
+            assertCallCurrent();
             return fastContext.result;
           }
-          const { provider: agentProvider, model } = resolveVoiceResponseModel({
-            cfg,
-            agentId,
-            voiceConfig: effectiveConfig,
-            agentRuntime,
-          });
-          const thinkLevel =
-            effectiveConfig.realtime.consultThinkingLevel ??
-            agentRuntime.resolveThinkingDefault({
+          // Only an explicit responseModel overrides the call agent's own model selection, so
+          // its runtime (including Claude CLI) and fallbacks apply as they do for a typed turn.
+          const responseModel = effectiveConfig.responseModel
+            ? resolveVoiceResponseModel({
+                cfg,
+                agentId,
+                voiceConfig: effectiveConfig,
+                agentRuntime,
+              })
+            : undefined;
+          // Webhook handlers run outside the Gateway; agent tools such as sessions_send dispatch
+          // through the service context's in-process Gateway.
+          const runInServiceContext = params.runInServiceContext ?? (<T>(run: () => T): T => run());
+          return await runInServiceContext(() =>
+            consultRealtimeVoiceAgent({
               cfg,
-              provider: agentProvider,
-              model,
-            });
-          return await consultRealtimeVoiceAgent({
-            cfg,
-            agentRuntime,
-            logger: log,
-            agentId,
-            sessionKey,
-            messageProvider: "voice",
-            lane: "voice",
-            runIdPrefix: `voice-realtime-consult:${callId}`,
-            args,
-            transcript: mapVoiceCallConsultTranscript(call, handlerContext),
-            surface: "a live phone call",
-            userLabel: "Caller",
-            assistantLabel: "Agent",
-            questionSourceLabel: "caller",
-            provider: agentProvider,
-            model,
-            thinkLevel,
-            fastMode: effectiveConfig.realtime.consultFastMode,
-            timeoutMs: effectiveConfig.responseTimeoutMs,
-            spawnedBy: requesterSessionKey,
-            contextMode: requesterSessionKey ? "fork" : undefined,
-            toolsAllow: (() => {
-              const allowed = resolveRealtimeVoiceAgentConsultToolsAllow(
-                effectiveConfig.realtime.toolPolicy,
-              );
-              return allowed?.length ? [...allowed, "voice_call"] : allowed;
-            })(),
-            toolBindings: {
-              voice_call: { kind: "active-call", callId: call.callId },
-            },
-            extraSystemPrompt: `${REALTIME_VOICE_CONSULT_SYSTEM_PROMPT} The bound call id is ${JSON.stringify(call.callId)}.\n\n${buildCallBriefInstructions(call)}`,
-            abortSignal: handlerContext.abortSignal,
-          });
+              agentRuntime,
+              logger: log,
+              agentId,
+              sessionKey,
+              messageProvider: "voice",
+              // The remote party's number as the verified provider webhook reports it, the same
+              // identity inbound admission checks, so toolsBySender rules apply to the caller.
+              senderId: (call.direction === "inbound" ? call.from : call.to).trim() || undefined,
+              lane: "voice",
+              runIdPrefix: `voice-realtime-consult:${callId}`,
+              args,
+              transcript: mapVoiceCallConsultTranscript(call, handlerContext),
+              surface: "a live phone call",
+              userLabel: "Caller",
+              assistantLabel: "Agent",
+              questionSourceLabel: "caller",
+              runner: "agent-turn",
+              provider: responseModel?.provider,
+              model: responseModel?.model,
+              thinkLevel: effectiveConfig.realtime.consultThinkingLevel,
+              fastMode: effectiveConfig.realtime.consultFastMode,
+              timeoutMs: effectiveConfig.responseTimeoutMs,
+              spawnedBy: requesterSessionKey,
+              contextMode: requesterSessionKey ? "fork" : undefined,
+              toolsAllow: (() => {
+                const allowed = resolveRealtimeVoiceAgentConsultToolsAllow(
+                  effectiveConfig.realtime.toolPolicy,
+                );
+                return allowed?.length ? [...allowed, "voice_call"] : allowed;
+              })(),
+              toolBindings: {
+                voice_call: { kind: "active-call", callId: call.callId },
+              },
+              extraSystemPrompt: `${REALTIME_VOICE_CONSULT_SYSTEM_PROMPT} The bound call id is ${JSON.stringify(call.callId)}.\n\n${buildCallBriefInstructions(call)}`,
+              abortSignal: handlerContext.abortSignal,
+            }),
+          );
         },
       );
     }

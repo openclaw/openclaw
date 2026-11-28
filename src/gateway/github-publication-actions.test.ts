@@ -7,7 +7,7 @@ import {
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   loadSessionEntryReadOnly,
@@ -15,9 +15,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import {
-  ensureCanonicalUserProfileForEmail,
-  setCanonicalUserProfileRole,
-} from "../state/user-profile-writes.js";
+  ensureProjectRegistrySchema,
+  insertProjectRegistryInDatabase,
+} from "../projects/project-registry.kernel.js";
+import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import {
   commandResult,
   githubPublicationTestMocks,
@@ -25,7 +26,6 @@ import {
   persistPublicationTestSession,
   SESSION_KEY,
 } from "./github-publication.test-support.js";
-import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { createContext as createRequestContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { prepareGatewayConnectOperatorAccess } from "./server/ws-connection/connect-operator-access.js";
@@ -50,6 +50,113 @@ describe("session PR actions through the agent tool and registered Gateway metho
     sandbox: "required",
     realWorktree: true,
   });
+
+  it.each(["published", "bound"] as const)(
+    "posts a comment without approval only on the session's %s PR",
+    async (selection) => {
+      const f = await fixture();
+      ensureProjectRegistrySchema({ database: f.database });
+      const project = insertProjectRegistryInDatabase(f.database.db, {
+        source: "registered",
+        displayName: "OpenClaw",
+        repoRoot: f.local!.cwd,
+        originUrl: "https://github.com/openclaw/openclaw.git",
+      });
+      await upsertSessionEntryCore(f.guestSource.session, { projectId: project.id });
+      const entry = loadSessionEntryReadOnly(f.guestSource.session)!;
+      if (selection === "bound") {
+        await upsertSessionEntryCore(f.guestSource.session, {
+          worktree: {
+            ...entry.worktree!,
+            githubPullRequest: {
+              url: "https://github.com/openclaw/openclaw/pull/7",
+              host: "github.com",
+              number: 7,
+              base: {
+                repository: "openclaw/openclaw",
+                repositoryId: 10,
+                branch: "main",
+                commit: "a".repeat(40),
+              },
+              head: {
+                repository: "contributor/openclaw",
+                repositoryId: 20,
+                branch: "topic",
+                commit: "b".repeat(40),
+              },
+              origin: "external-pr",
+              preparedHeadCommit: "b".repeat(40),
+            },
+          },
+        });
+      }
+      vi.stubGlobal("fetch", async () => Response.json({ visibility: "public" }));
+      onTestFinished(() => {
+        vi.unstubAllGlobals();
+      });
+      const issueNumber = selection === "bound" ? 7 : 125200;
+      const url = `https://github.com/openclaw/openclaw/pull/${issueNumber}#issuecomment-123`;
+      const body = "I verified the fix.";
+      mocks.runCommand
+        .mockClear()
+        .mockResolvedValue(commandResult(JSON.stringify({ id: 123, url, body, authorId: 42 })));
+      await expect(
+        f.invoke("guest", { action: "create_comment", issueNumber, body }),
+      ).resolves.toMatchObject({ details: { status: "posted", url } });
+      await expect(
+        f.invoke("guest", {
+          action: "create_comment",
+          issueNumber: selection === "bound" ? 125200 : 8,
+          body,
+        }),
+      ).rejects.toThrow("GitHub comment approval is unavailable");
+      if (selection === "bound") {
+        const current = loadSessionEntryReadOnly(f.guestSource.session)!.worktree!;
+        for (const boundUrl of [
+          "https://github.com/other/openclaw/pull/7",
+          "https://other.example/openclaw/openclaw/pull/7",
+        ]) {
+          await upsertSessionEntryCore(f.guestSource.session, {
+            worktree: {
+              ...current,
+              githubPullRequest: { ...current.githubPullRequest!, url: boundUrl },
+            },
+          });
+          await expect(
+            f.invoke("guest", { action: "create_comment", issueNumber, body }),
+          ).rejects.toThrow("GitHub comment approval is unavailable");
+        }
+      }
+      expect(mocks.runCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.arrayContaining(["POST", `repos/openclaw/openclaw/issues/${issueNumber}/comments`]),
+        expect.objectContaining({ input: JSON.stringify({ body }) }),
+      );
+    },
+  );
+
+  it.each(["local", "repository"] as const)(
+    "lets a guest manage its %s task PR from the unbound parent while preserving merge authority",
+    async (backend) => {
+      const parent = "agent:main:dashboard:publication-parent";
+      const f = await createPublicationActionFixture(backend, parent);
+      const invoke = (action: string, extra: Record<string, unknown> = {}, raw = false) =>
+        f.invoke("guest", { action, ...f.expected, ...extra }, parent, { raw });
+      await invoke("edit", { title: "Task PR title", expectedTitle: f.state.title });
+      expect(f.state.title).toBe("Task PR title");
+      expect((await invoke("ready", {}, true)).details).toMatchObject({ state: "open" });
+      expect((await invoke("request_review")).details).toMatchObject({
+        reviewRequest: { status: "posted" },
+      });
+      expect(f.writes.map((write) => write.action)).toEqual(["edit", "ready", "request_review"]);
+      expect(
+        loadSessionEntryReadOnly({ agentId: "main", sessionKey: parent })?.worktree,
+      ).toBeUndefined();
+      await expect(invoke("merge", { mergeMethod: "squash" })).rejects.toThrow(
+        /scope|permission/iu,
+      );
+      expect(f.writes.map((write) => write.action)).toEqual(["edit", "ready", "request_review"]);
+    },
+  );
 
   it.each(["local", "repository"] as const)(
     "posts only the fixed re-review command for the guest's current %s PR",
@@ -175,7 +282,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
         admission.authorization!.assertCurrent();
         await expect(
           f.invoke("guest", { ...args, action }, SESSION_KEY, { client }),
-        ).rejects.toThrow("The original GitHub publication requester is no longer authorized.");
+        ).rejects.toThrow("This requester is not authorized to publish from this conversation.");
         expect(f.writes).toEqual([]);
         expect(f.state.draft).toBe(true);
       } finally {
@@ -185,42 +292,34 @@ describe("session PR actions through the agent tool and registered Gateway metho
     expect(f.writes).toEqual([]);
   });
 
-  it.each(["request_review", "edit", "ready", "close"] as const)(
-    "revalidates authority after the PR read for %s",
+  it.each(["request_review", "ready"] as const)(
+    "revalidates the GitHub publisher after the PR read for %s",
     async (action) => {
       const f = await fixture();
-      const actor = action === "close" ? "admin" : "guest";
-      if (action === "edit") {
-        f.state.head.sha = "b".repeat(40);
-      }
-      const args =
-        action === "edit"
-          ? {
-              title: "New title",
-              expectedTitle: f.state.title,
-              expectedHeadCommit: f.state.head.sha,
-            }
-          : {};
-      if (action === "request_review" || action === "ready") {
-        f.onRead(async () => {
-          mocks.matchesIdentity.mockReturnValue(false);
-        });
-        await expect(f.action(actor, action, args)).rejects.toThrow("The GitHub publisher changed");
-        expect(f.writes).toEqual([]);
-        mocks.matchesIdentity.mockReturnValue(true);
-      }
       f.onRead(async () => {
-        if (actor === "admin") {
-          await setCanonicalUserProfileRole(f.maintainerProfile, "revoked");
-          invalidateOperatorRolePolicy(f.maintainerProfile);
-        } else {
-          await f.revoke();
-        }
+        mocks.matchesIdentity.mockReturnValue(false);
       });
-      await expect(f.action(actor, action, args)).rejects.toThrow("Your operator role changed");
+      await expect(f.action("guest", action, {})).rejects.toThrow("The GitHub publisher changed");
       expect(f.writes).toEqual([]);
+      mocks.matchesIdentity.mockReturnValue(true);
     },
   );
+
+  it("refuses an edit when the lifecycle changes during the awaited PR read", async () => {
+    const f = await fixture();
+    f.onRead(async () => {
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: SESSION_KEY },
+        {
+          lifecycleRevision: randomUUID(),
+        },
+      );
+    });
+    await expect(
+      f.action("guest", "edit", { title: "Unauthorized edit", expectedTitle: f.state.title }),
+    ).rejects.toThrow(/changed|lifecycle/iu);
+    expect(f.writes).toEqual([]);
+  });
 
   it("reports uncertain re-reviews without retrying the POST", async () => {
     const f = await fixture();
@@ -348,15 +447,20 @@ describe("session PR actions through the agent tool and registered Gateway metho
 
   it("preserves the original attribution after an edit appends another publication footer", async () => {
     const f = await fixture();
+    const participant = "\n\nRequested by Grace Hopper via OpenClaw";
+    f.state.body = f.state.body.replace("\n\n## Worked on by", `${participant}\n\n## Worked on by`);
     const original = f.state.body;
     const replacement = "\n\n## Worked on by\n\n- @other\n\n<!-- openclaw-publication:fake -->";
     await f.action("guest", "edit", { expectedBody: original, body: original + replacement });
-    await expect(
-      f.action("guest", "edit", {
-        expectedBody: original + replacement,
-        body: "Replacement description" + replacement,
-      }),
-    ).rejects.toThrow("attribution");
+    for (const body of [
+      "Replacement description" + replacement,
+      original.replace(participant, "") + replacement,
+      original.replace("Grace Hopper", "Publisher Account") + replacement,
+    ]) {
+      await expect(
+        f.action("guest", "edit", { expectedBody: original + replacement, body }),
+      ).rejects.toThrow("attribution");
+    }
     expect(f.state.body).toBe(original + replacement);
     expect(f.writes).toHaveLength(1);
   });

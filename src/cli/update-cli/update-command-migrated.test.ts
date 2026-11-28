@@ -258,7 +258,6 @@ it.for([
       status: "not-attempted" as const,
       reason: "state-migrated-no-rollback",
     };
-    progress.onRollbackOutcome?.(rollbackOutcome);
     await progress.onStepComplete?.({ ...migrationStep, durationMs: 100, exitCode: 1 });
     vi.advanceTimersByTime(500);
     presentation.dispose();

@@ -23,14 +23,11 @@ function evaluate(
   });
 }
 
-describe("authorization-backed exec allowlist", () => {
+describe.skipIf(process.platform === "win32")("authorization-backed exec allowlist", () => {
   it.each([
     { command: `echo "$HOME"; python3 -c 'print(1)'`, analysisOk: false, first: ["echo", "$HOME"] },
     { command: `sh -c 'echo ok; python3 -c "print(1)"'`, analysisOk: true, first: ["echo", "ok"] },
   ])("keeps inline-eval segments visible for $command", async ({ command, analysisOk, first }) => {
-    if (process.platform === "win32") {
-      return;
-    }
     const result = await evaluate(command);
     expect(result).toMatchObject({ analysisOk, allowlistSatisfied: false });
     expect(result.segments.map((segment) => segment.argv)).toEqual([
@@ -40,9 +37,6 @@ describe("authorization-backed exec allowlist", () => {
   });
 
   it("keeps glued allowlisted inline-eval commands one-shot in strict mode", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
     const dir = makeExecApprovalsTempDir();
     const pythonPath = makeExecutable(dir, "python3");
     const env = makePathEnv(dir);
@@ -55,7 +49,7 @@ describe("authorization-backed exec allowlist", () => {
     expect(result).toMatchObject({ analysisOk: true, allowlistSatisfied: true });
     expect(result.segments.map((segment) => segment.argv)).toEqual([["python3", "-xcprint"]]);
     expect(
-      resolveAllowAlwaysPersistenceDecision({
+      await resolveAllowAlwaysPersistenceDecision({
         segments: result.segments,
         authorizationPlan: result.authorizationPlan,
         commandText: command,
@@ -70,9 +64,6 @@ describe("authorization-backed exec allowlist", () => {
   it.each(["NODE_OPTIONS=--x tool", "NODE_OPTIONS+=--x tool"])(
     "keeps env-assignment preludes prompt-only for allowlisted executables: %s",
     async (command) => {
-      if (process.platform === "win32") {
-        return;
-      }
       const dir = makeExecApprovalsTempDir();
       const toolPath = makeExecutable(dir, "tool");
       const result = await evaluate(command, {
@@ -108,9 +99,6 @@ describe("authorization-backed exec allowlist", () => {
   ] as const)(
     "requires approval for unsafe shell syntax: %s",
     async (command, bins, reason, argv) => {
-      if (process.platform === "win32") {
-        return;
-      }
       const result = await evaluate(command, { safeBins: new Set(bins) });
       expect(result).toMatchObject({ analysisOk: reason === null, allowlistSatisfied: false });
       if (reason) {

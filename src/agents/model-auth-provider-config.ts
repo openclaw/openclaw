@@ -20,7 +20,7 @@ import {
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
-import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import { isShellEnvAppliedKey } from "../infra/shell-env.js";
 import { canResolveEnvSecretRefInReadOnlyPath } from "../plugin-sdk/secret-ref-readonly.internal.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
@@ -151,14 +151,22 @@ export function getCustomProviderApiKey(
 /** Resolves custom provider API keys that are usable without mutating secret stores. */
 export function resolveUsableCustomProviderApiKey(params: {
   cfg: OpenClawConfig | undefined;
+  sourceConfig?: OpenClawConfig;
   provider: string;
   env?: NodeJS.ProcessEnv;
   secretSentinels?: boolean;
+  authStore?: AuthProfileStore;
 }): {
   apiKey: string;
   source: string;
 } | null {
-  const input = resolveProviderConfigSecretInput(params.cfg, params.provider);
+  if (
+    params.authStore &&
+    (resolveInlineProviderApiKeyCooldownUntil(params.authStore, params.provider) ?? 0) > Date.now()
+  ) {
+    return null;
+  }
+  const input = resolveProviderConfigSecretInput(params.cfg, params.provider, params.sourceConfig);
   const { providerConfig: customProviderConfig, ref: apiKeyRef } = input;
   if (apiKeyRef) {
     const envVarName = apiKeyRef.source === "env" ? apiKeyRef.id.trim() : "";
@@ -228,7 +236,8 @@ export const hasUsableCustomProviderApiKey = (
   cfg: OpenClawConfig | undefined,
   provider: string,
   env?: NodeJS.ProcessEnv,
-) => Boolean(resolveUsableCustomProviderApiKey({ cfg, provider, env }));
+  sourceConfig?: OpenClawConfig,
+) => Boolean(resolveUsableCustomProviderApiKey({ cfg, provider, env, sourceConfig }));
 
 /** True when explicit provider config should outrank profile/environment auth. */
 export function shouldPreferExplicitConfigApiKeyAuth(
@@ -704,8 +713,7 @@ export function resolveRuntimeProviderConfigApiKeyAuth(params: {
 }
 
 function resolveEnvSourceLabel(envVars: string[], label = envVars.join(" + ")): string {
-  const applied = new Set(getShellEnvAppliedKeys());
-  const shellApplied = envVars.some((envVar) => applied.has(envVar));
+  const shellApplied = envVars.some(isShellEnvAppliedKey);
   const prefix = shellApplied ? "shell env: " : "env: ";
   return `${prefix}${label}`;
 }

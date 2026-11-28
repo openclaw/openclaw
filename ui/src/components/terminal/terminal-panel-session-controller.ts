@@ -461,6 +461,10 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
         void resumeTransport();
         return;
       }
+      if (action.kind === "restore") {
+        void api.restoreSessions();
+        return;
+      }
       void ownedIntentQueue.queue(action);
     },
     connectHost(): void {
@@ -483,6 +487,11 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
       // Read after binding: the queue reloads its persisted record for the first
       // panel in a document, so an earlier read would miss a carried-over intent.
       updateState({ booting: ownedIntentQueue.hasActions });
+      if (state.booting) {
+        // A panel mounted to carry out a request (the agent's terminal_show, a dock
+        // handoff) shows that terminal; the session list is the empty panel's landing.
+        host.resetTerminalSessionPicker();
+      }
     },
     /** A retained standalone dock can become the destination without remounting. */
     activateHost(): void {
@@ -603,7 +612,7 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
     discard: (tab) => discardCancelledTab(tab),
     exited: (tab) => handleExit(tab.id, { reason: "disconnected", exitCode: null }),
     setBooting: (booting) => updateState({ booting }),
-    setError: (text) => api.setError(text),
+    setError: (text, retryAction) => api.setError(text, retryAction),
   });
 
   let refreshError: TerminalPanelError | null = null;

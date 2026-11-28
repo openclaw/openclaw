@@ -19,7 +19,7 @@ export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
   transport: "remote",
   authProviderId: "google",
   autoSelectPriority: 30,
-  supportsMultimodalEmbeddings: ({ model }) => isGeminiEmbedding2Model(model),
+  mediaModalities: ({ model }) => (isGeminiEmbedding2Model(model) ? ["image", "audio"] : []),
   create: async (options) => {
     const { provider, client } = await createGeminiEmbeddingProvider({
       ...options,

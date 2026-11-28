@@ -13,7 +13,7 @@ import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
-import { SessionManager } from "../sessions/index.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import {
   createBackgroundMaintenanceEngine,
   createMaintenanceGate,
@@ -88,7 +88,7 @@ async function createTranscriptOwners(stateDir: string) {
     runs,
     published,
     unsubscribe,
-    runMaintenance(maintain: Maintain, overrides: Partial<ContextEngineMaintenanceParams> = {}) {
+    runMaintenance(maintain: Maintain, overrides: Partial<ContextEngineMaintenanceParams>) {
       const run = runContextEngineMaintenance({
         ...target,
         sessionTarget: target,

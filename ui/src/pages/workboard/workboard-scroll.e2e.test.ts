@@ -2,7 +2,7 @@ import { WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../../test-helpers/control-ui-plugin-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 import {
   cardFitsWithinWorkboardContent,
@@ -31,7 +31,7 @@ suite.define(() => {
         statuses: WORKBOARD_STATUSES,
       });
       const initial = response(cards.slice(0, 1));
-      const gateway = await installMockGateway(page, {
+      const gateway = await installNativePluginMockGateway(page, {
         ...workboardUi,
         sessions: [],
         methodResponses: {
@@ -171,7 +171,7 @@ suite.define(() => {
         position: (index + 1) * 1000,
       }));
       const board = makeBoard("default", { total: cards.length, active: cards.length });
-      await installMockGateway(page, {
+      await installNativePluginMockGateway(page, {
         ...workboardUi,
         sessions: [],
         methodResponses: {
@@ -216,7 +216,7 @@ suite.define(() => {
     await suite.withPage({}, async ({ page }) => {
       const cards = createMobileScrollCards(baseTime);
       await page.setViewportSize({ height: 700, width: 390 });
-      await installMockGateway(page, {
+      await installNativePluginMockGateway(page, {
         ...workboardUi,
         sessions: [],
         methodResponses: {

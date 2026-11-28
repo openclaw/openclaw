@@ -10,17 +10,33 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createGatewayChatMetadataLifecycle } from "../gateway/server-chat-metadata-lifecycle.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
+import { requestModelsList } from "../gateway/server-methods/models-list-result.openai-routes.test-support.js";
 import { registerGatewayModelCatalogPrivateAccess } from "../gateway/server-model-catalog-auth.js";
-import { loadPreparedGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog.js";
+import {
+  loadGatewayModelCatalogSnapshot as loadPublicModelCatalogSnapshot,
+  loadPreparedGatewayModelCatalogSnapshot,
+  readPreparedGatewayModelCatalogOwnerSnapshot,
+} from "../gateway/server-model-catalog.js";
+import { createGatewayRequestContext } from "../gateway/server-request-context.js";
+import { makeContextParams } from "../gateway/server-request-context.test-support.js";
+import { createGatewaySidecarStopOwner } from "../gateway/server-sidecar-owners.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
 import { isPendingOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
-import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import {
+  ensureAuthProfileStoreAsync,
+  saveAuthProfileStore,
+} from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
 import { stubCatalogEnv } from "./prepared-model-catalog-worker.shared.test-support.js";
@@ -47,6 +63,7 @@ import {
   expectCatalogAuth,
   writeFixturePlugin,
 } from "./prepared-model-catalog-worker.test-support.js";
+import type { PreparedModelCatalogWorkerTask } from "./prepared-model-catalog-worker.types.js";
 import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
 import {
   getPreparedModelFullCatalogAuth,
@@ -67,8 +84,9 @@ import {
   usePreparedCatalogWorkerFixtures,
   writeCodexAuth,
 } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-const { makeTempDir, retireAfterTest, waitForWorkers, observeCatalogEntry } =
+const { makeTempDir, retireAfterTest, waitForWorkers, observeCatalogEntry, observeWorkers } =
   usePreparedCatalogWorkerFixtures({ observeCatalogWork: true });
 
 let receipts: FixtureReceiptChannel;
@@ -173,6 +191,108 @@ describe("prepared model catalog worker boundary", () => {
     expect(driftedAgentDir).not.toBe(agentDir);
     expect(resolveAgentWorkspaceDir(config, "main")).not.toBe(workspaceDir);
     await expect(project()).resolves.toMatchObject(expectedOwner);
+  });
+
+  it("settles models.list follow-up reads after real worker external-auth discovery", async ({
+    signal,
+  }) => {
+    const fixture = await createCatalogFixture(
+      makeTempDir,
+      0,
+      {},
+      {
+        receiptBroadcastName: receipts.broadcastName,
+      },
+    );
+    stubCatalogEnv(fixture.env);
+    const config: OpenClawConfig = {
+      ...fixture.config,
+      agents: {
+        ...fixture.config.agents,
+        entries: {
+          main: { agentDir: fixture.agentDir, workspace: fixture.workspaceDir },
+        },
+      },
+    };
+    saveProfiles(fixture.agentDir, {
+      ...(await ensureAuthProfileStoreAsync(fixture.agentDir, { config, readOnly: true })).profiles,
+      [EXTERNAL_AUTH_PROFILE_ID]: {
+        type: "oauth",
+        provider: PROVIDER_ID,
+        access: "startup-not-real",
+        refresh: "startup-refresh-not-real",
+        expires: Date.now() + 60_000,
+      },
+    });
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    const snapshot = getPreparedModelRuntimeSnapshot({
+      config,
+      agentId: "main",
+      agentDir: fixture.agentDir,
+    })!;
+    const settled = createDeferred();
+    const broadcast = vi.fn((event: string) => {
+      const catalog = snapshot.readFullModelCatalog?.();
+      if (
+        event === "chat.metadata.changed" &&
+        !catalog?.pendingProviders?.length &&
+        catalog?.entries.some(({ id }) => id === "plugin-generation-v1")
+      ) {
+        settled.resolve();
+      }
+    });
+    const contextParams = makeContextParams({ broadcast });
+    const lifecycle = await createGatewayChatMetadataLifecycle({
+      getConfig: () => config,
+      log: contextParams.log,
+    });
+    const loader = (params?: Parameters<typeof loadPublicModelCatalogSnapshot>[0]) =>
+      loadPublicModelCatalogSnapshot({ ...params, getConfig: () => config });
+    registerGatewayModelCatalogPrivateAccess(loader, {
+      loadDeferred: (params) =>
+        loadPreparedGatewayModelCatalogSnapshot({ ...params, getConfig: () => config }),
+      readPrepared: (params) =>
+        readPreparedGatewayModelCatalogOwnerSnapshot({ ...params, getConfig: () => config }),
+    });
+    const context = createGatewayRequestContext({
+      ...contextParams,
+      runtime: { ...contextParams.runtime, loadGatewayModelCatalogSnapshot: loader },
+      chatMetadataLifecycle: lifecycle,
+    });
+    context.getRuntimeConfig = context.getCommittedRuntimeConfig = () => config;
+    const sidecars = createGatewaySidecarStopOwner();
+    retireAfterTest(() => sidecars.stop());
+    await lifecycle.attachContext(context, sidecars.publish);
+    broadcast.mockClear();
+    await using held = heldDiscovery(fixture);
+    const request = () => requestModelsList(context, { agentId: "main", view: "all" });
+    const pending = held.track(request());
+    await held.entered(pending, signal);
+    expect(await pending).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ pendingProviders: expect.arrayContaining([PROVIDER_ID]) }),
+      undefined,
+    );
+    held.release();
+    await withinTest(settled.promise, signal);
+    const discovery = fs.readFileSync(fixture.marker, "utf8");
+    expect(discovery).toBe("start\ndone\n");
+    broadcast.mockClear();
+    for (let read = 0; read < 2; read++) {
+      const response = await request();
+      expect(response.mock.calls[0]?.[0]).toBe(true);
+      const result = structuredClone(response.mock.calls[0]?.[1]);
+      expect(result).toMatchObject({
+        models: expect.arrayContaining([catalogEntry("plugin-generation-v1")]),
+      });
+      expect(result).not.toHaveProperty("pendingProviders");
+      await nextTurn();
+      expect(fs.readFileSync(fixture.marker, "utf8")).toBe(discovery);
+      expect(broadcast).not.toHaveBeenCalled();
+    }
   });
 
   it("keeps unaffected workers live across scoped sibling reloads", async ({ signal }) => {
@@ -711,17 +831,55 @@ describe("prepared model catalog worker boundary", () => {
       authStore.profiles[`${provider}:default`] =
         type === "api_key" ? { type, provider, keyRef: ref } : { type, provider, tokenRef: ref };
     }
+    const ref = { provider: PROVIDER_ID, modelId: "sqlite-model" };
+    const model = makeProviderModelFixture({
+      id: ref.modelId,
+      provider: ref.provider,
+      api: "openai-completions",
+      baseUrl: "https://worker-catalog.invalid/v1",
+    });
     const worker = createPreparedModelCatalogWorker({
       agentFacts: makeCatalogAgentFacts(catalogInput(fixture, { inheritedAuthDir: undefined }), {
         authStore,
+        configuredModelRefs: [ref],
+        configuredRuntimeModels: [{ ...ref, model }],
       }),
       pluginMetadataSnapshot: fixture.pluginMetadataSnapshot,
       isCurrent: fixture.isCurrent,
       retirementSignal: fixture.retirementSignal,
     });
-    const { modelCatalog: catalog } = await worker.loadCatalog();
-
-    expect(catalog.entries).toContainEqual(catalogEntry("ref-proof-api-true-token-true"));
+    const transfers: Array<{ kind: string; refs: string[]; models: string[] }> = [];
+    const observer = observeWorkers((thread) => {
+      const post = thread.postMessage.bind(thread);
+      vi.spyOn(thread, "postMessage").mockImplementation((message, ...rest) => {
+        const task = (message as { input?: PreparedModelCatalogWorkerTask }).input;
+        if (task?.value) {
+          const { configuredModelRefs, configuredRuntimeModels } = task.value.catalogFacts;
+          transfers.push({
+            kind: task.request.kind,
+            refs: configuredModelRefs.map((row) => row.modelId),
+            models: configuredRuntimeModels.map((row) => row.modelId),
+          });
+        }
+        post(message, ...rest);
+      });
+    });
+    observer.subscribe();
+    try {
+      const refresh = () => worker.loadAuth({ providerIds: [PROVIDER_ID] });
+      expect(profileFrom(await refresh())).toMatchObject({ access: "v1:A" });
+      const { modelCatalog: catalog } = await worker.loadCatalog();
+      expect(catalog.entries).toContainEqual(catalogEntry("ref-proof-api-true-token-true"));
+      expect(profileFrom(await refresh())).toMatchObject({ access: "v1:A" });
+      const auth = { kind: "auth-refresh", refs: [], models: [] };
+      expect(transfers).toEqual([
+        auth,
+        { kind: "catalog", refs: [ref.modelId], models: [ref.modelId] },
+        auth,
+      ]);
+    } finally {
+      observer.close();
+    }
   });
 });
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";

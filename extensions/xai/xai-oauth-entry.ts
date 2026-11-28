@@ -5,45 +5,45 @@ import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 const PROVIDER_ID = "xai";
 const XAI_OAUTH_METHOD_ID = "oauth";
 const XAI_OAUTH_CHOICE_ID = "xai-oauth";
-const XAI_DEVICE_CODE_METHOD_ID = "device-code";
-const XAI_DEVICE_CODE_CHOICE_ID = "xai-device-code";
 
 const loadXaiOAuthRuntime = createLazyRuntimeModule(() => import("./xai-oauth.js"));
+
+const matchesSharedAccount: NonNullable<ProviderAuthMethod["matchesSharedAccount"]> = (
+  credential,
+  existing,
+) => {
+  if (
+    credential.type !== "oauth" ||
+    existing.type !== "oauth" ||
+    credential.provider !== PROVIDER_ID ||
+    existing.provider !== PROVIDER_ID
+  ) {
+    return false;
+  }
+  // OAuth subjects are issuer-scoped. Equal email addresses do not identify an account.
+  return Boolean(
+    credential.issuer?.trim() &&
+    credential.accountId?.trim() &&
+    credential.issuer === existing.issuer &&
+    credential.accountId === existing.accountId,
+  );
+};
 
 export function createXaiOAuthAuthMethod(): ProviderAuthMethod {
   return {
     id: XAI_OAUTH_METHOD_ID,
     label: "xAI OAuth",
-    hint: "Remote-friendly browser sign-in without a localhost callback",
+    hint: "Device-code sign-in; works over SSH and on remote hosts",
     kind: "oauth",
+    matchesSharedAccount,
     wizard: {
       choiceId: XAI_OAUTH_CHOICE_ID,
       choiceLabel: "xAI OAuth",
-      choiceHint: "Remote-friendly browser sign-in without a localhost callback",
+      choiceHint: "Device-code sign-in; works over SSH and on remote hosts",
       groupId: PROVIDER_ID,
       groupLabel: "xAI (Grok)",
       groupHint: "API key or OAuth",
       methodId: XAI_OAUTH_METHOD_ID,
-    },
-    run: async (ctx) => (await loadXaiOAuthRuntime()).loginXaiDeviceCode(ctx),
-  };
-}
-
-export function createXaiDeviceCodeAuthMethod(): ProviderAuthMethod {
-  return {
-    id: XAI_DEVICE_CODE_METHOD_ID,
-    label: "xAI device code",
-    hint: "Deprecated alias for xAI OAuth device-code login",
-    kind: "device_code",
-    wizard: {
-      choiceId: XAI_DEVICE_CODE_CHOICE_ID,
-      choiceLabel: "xAI device code",
-      choiceHint: "Compatibility alias for xAI OAuth device-code sign-in",
-      assistantVisibility: "manual-only",
-      groupId: PROVIDER_ID,
-      groupLabel: "xAI (Grok)",
-      groupHint: "API key or OAuth",
-      methodId: XAI_DEVICE_CODE_METHOD_ID,
     },
     run: async (ctx) => (await loadXaiOAuthRuntime()).loginXaiDeviceCode(ctx),
   };

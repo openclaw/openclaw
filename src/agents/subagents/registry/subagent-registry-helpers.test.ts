@@ -11,12 +11,11 @@ import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import {
   capFrozenResultText,
-  logAnnounceGiveUp,
   resolveAnnounceRetryDelayMs,
   safeRemoveAttachmentsDir,
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
-function createRunEntry(overrides: Omit<SubagentRunRecordOverrides, "runId"> = {}) {
+function createRunEntry(overrides: Omit<SubagentRunRecordOverrides, "runId">) {
   return createSubagentRunRecord({
     runId: "run-1",
     task: "finish the task",
@@ -155,23 +154,4 @@ describe("safeRemoveAttachmentsDir", () => {
     await expect(fs.readFile(externalSentinel, "utf8")).resolves.toBe("must-survive");
     await expect(fs.readdir(externalDir)).resolves.toEqual(["sentinel.txt"]);
   });
-});
-
-describe("logAnnounceGiveUp", () => {
-  it.each([
-    [
-      "gateway timeout\nphase: routed dispatch failed",
-      'deliveryError="gateway timeout phase: routed dispatch failed"',
-      "\n",
-    ],
-    [`${"x".repeat(1_999)}🚀tail`, `${"x".repeat(1_999)}…`, "\uD83D"],
-  ])(
-    "keeps delivery errors bounded and on one well-formed log line (%s)",
-    (lastError, included, excluded) => {
-      using log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-      logAnnounceGiveUp(createRunEntry({ delivery: { status: "failed", lastError } }), "expiry");
-      expect(log).toHaveBeenCalledWith(expect.stringContaining(included));
-      expect(String(log.mock.calls[0]?.[0])).not.toContain(excluded);
-    },
-  );
 });

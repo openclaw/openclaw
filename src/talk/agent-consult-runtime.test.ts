@@ -15,7 +15,10 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { consultRealtimeVoiceAgent } from "./agent-consult-runtime.js";
+import {
+  consultRealtimeVoiceAgent,
+  consultRealtimeVoiceAgentInSessionRuntime,
+} from "./agent-consult-runtime.js";
 import {
   createOrResumeClientVoiceSession,
   registerClientVoiceConsultRun,
@@ -44,6 +47,9 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
     payloads,
     meta: {},
   }));
+  const runCommandFromIngress = vi.fn<ConsultParams["agentRuntime"]["runCommandFromIngress"]>(
+    async () => ({ payloads, meta: {} }) as never,
+  );
   const prepareSessionEntryPatch = vi.fn<
     ConsultParams["agentRuntime"]["session"]["prepareSessionEntryPatch"]
   >(async (params) => {
@@ -80,8 +86,10 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
         prepareSessionEntryPatch,
       },
       runEmbeddedAgent,
+      runCommandFromIngress,
     },
     runEmbeddedAgent,
+    runCommandFromIngress,
     sessionStore,
   };
 }
@@ -89,8 +97,12 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
 type ConsultParams = Parameters<typeof consultRealtimeVoiceAgent>[0];
 type TestRuntime = ReturnType<typeof createAgentRuntime>["runtime"];
 
-function runConsult(runtime: TestRuntime, params: Partial<ConsultParams> = {}) {
-  return consultRealtimeVoiceAgent({
+function runConsult(
+  runtime: TestRuntime,
+  params: Partial<ConsultParams> = {},
+  sessionRuntime = false,
+) {
+  return (sessionRuntime ? consultRealtimeVoiceAgentInSessionRuntime : consultRealtimeVoiceAgent)({
     agentRuntime: runtime as never,
     cfg: {},
     logger: { warn: vi.fn() },
@@ -330,6 +342,131 @@ describe("realtime voice agent consult runtime", () => {
     );
   });
 
+  it("runs an agent-turn consult as a turn of the prepared consult session", async () => {
+    const { runtime, runEmbeddedAgent, runCommandFromIngress, sessionStore } = createAgentRuntime([
+      { text: "Passed it on." },
+      { text: "Tool failed.", isError: true },
+    ]);
+    const toolBindings = { voice_call: { kind: "active-call", callId: "call-1" } };
+
+    const result = await runConsult(runtime, {
+      runner: "agent-turn",
+      agentId: "estimator",
+      sessionKey: "agent:estimator:voice:15550001234",
+      senderId: "+15550001234",
+      toolsAllow: ["read", "voice_call"],
+      toolBindings,
+      fastMode: true,
+      timeoutMs: 9_500,
+      args: { question: "Tell the engineer the slab is poured." },
+    });
+
+    expect(result).toEqual({ text: "Passed it on." });
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    // The turn prepares its own workspace with the typed-turn bootstrap policy.
+    expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
+    const voiceSession = expectDefined(
+      sessionStore["agent:estimator:voice:15550001234"],
+      "voice session",
+    );
+    expect(voiceSession.sessionId).toMatch(/\S/u);
+    const [turn, commandRuntime] = expectDefined(runCommandFromIngress.mock.calls[0], "agent turn");
+    expect(turn).toStrictEqual({
+      message: expect.stringContaining("User request:\nTell the engineer the slab is poured."),
+      agentId: "estimator",
+      sessionKey: "agent:estimator:voice:15550001234",
+      messageProvider: "voice",
+      runContext: {
+        senderId: "+15550001234",
+        accountId: undefined,
+        currentChannelId: undefined,
+        currentThreadTs: undefined,
+      },
+      workspaceDir: state.statePath("workspace"),
+      senderIsOwner: false,
+      allowModelOverride: false,
+      provider: undefined,
+      model: undefined,
+      thinkingOnce: undefined,
+      thinkingOnceClosest: true,
+      fastMode: true,
+      verboseOnce: "off",
+      timeout: "10",
+      runId: expect.stringMatching(/^voice-consult-/u),
+      lane: "voice",
+      extraSystemPrompt: expect.stringContaining("live voice bridge"),
+      toolsAllow: ["read", "voice_call"],
+      toolBindings,
+      deliver: false,
+      abortSignal: expect.any(AbortSignal),
+    });
+    expect(commandRuntime.exit).toEqual(expect.any(Function));
+  });
+
+  it("runs an agent-turn consult in its session's workspace and reply target, undelivered", async () => {
+    const { runtime, runCommandFromIngress, sessionStore } = createAgentRuntime();
+    sessionStore["voice:google-meet:meet-1"] = {
+      sessionId: "call-session",
+      spawnedBy: "agent:main:discord:channel:123",
+      spawnedWorkspaceDir: "/work/project-b",
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "discord",
+          to: "channel:123",
+          accountId: "work",
+          threadId: "thread-456",
+        },
+      }),
+      updatedAt: 1,
+    };
+
+    await runConsult(runtime, { runner: "agent-turn", sessionKey: "voice:google-meet:meet-1" });
+
+    const [turn] = expectDefined(runCommandFromIngress.mock.calls[0], "agent turn");
+    expect(turn).toMatchObject({
+      messageProvider: "discord",
+      runContext: {
+        accountId: "work",
+        currentChannelId: "channel:123",
+        currentThreadTs: "thread-456",
+      },
+      workspaceDir: "/work/project-b",
+      verboseOnce: "off",
+      deliver: false,
+    });
+    // `verbose` would save the level to the session the consult shares.
+    expect(turn).not.toHaveProperty("verbose");
+  });
+
+  it("cancels a running agent-turn consult when the caller hangs up", async () => {
+    const { runtime, runCommandFromIngress } = createAgentRuntime();
+    const started = createDeferred<AbortSignal>();
+    runCommandFromIngress.mockImplementationOnce(async (opts) => {
+      const signal = expectDefined(opts.abortSignal, "turn abort signal");
+      started.resolve(signal);
+      return await new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("turn aborted")), { once: true });
+      });
+    });
+    const hangup = new AbortController();
+
+    const consult = runConsult(runtime, { runner: "agent-turn", abortSignal: hangup.signal });
+    const turnSignal = await started.promise;
+    hangup.abort(new Error("call ended"));
+
+    await expect(consult).rejects.toMatchObject({ name: "AbortError" });
+    expect(turnSignal.aborted).toBe(true);
+  });
+
+  it("refuses embedded tool context adaptation on an agent-turn consult", async () => {
+    const { runtime, runCommandFromIngress } = createAgentRuntime();
+
+    await expect(
+      runConsult(runtime, { runner: "agent-turn", prepareToolContext: () => ({}) }),
+    ).rejects.toThrow("An agent-turn consult cannot adapt embedded tool context.");
+    expect(runCommandFromIngress).not.toHaveBeenCalled();
+  });
+
   it.each(["consult", "requester"])(
     "fails closed before forking or dispatching from a locked %s session",
     async (lockedSession) => {
@@ -560,6 +697,78 @@ describe("realtime voice agent consult runtime", () => {
       permissionMode: "workspace",
       toolOverrides: { webSearch: false },
       traceAuthorized: false,
+    });
+  });
+
+  it("keeps the high voice default for plugin bridges even when the parent chat sets thinking", async () => {
+    // Bridges run the embedded owner, which does not read session thinking.
+    const bridge = createAgentRuntime();
+    const sessionKey = "agent:main:bridge-thinking";
+    bridge.sessionStore[sessionKey] = {
+      sessionId: "bridge-thinking",
+      updatedAt: 1,
+      thinkingLevel: "low",
+    };
+    await runConsult(bridge.runtime, { agentId: "main", sessionKey });
+    expect(requireEmbeddedAgentCall(bridge.runEmbeddedAgent).thinkLevel).toBe("high");
+  });
+
+  it("leaves the lock to the session runtime while preserving the high voice default", async () => {
+    const sessionKey = "agent:main:session-runtime";
+    const bridge = createAgentRuntime();
+    bridge.sessionStore[sessionKey] = { ...lockedEntry, sessionId: "locked-bridge" };
+    // Bridges without the session runtime still refuse to cross a locked native transcript.
+    // An old untyped caller cannot opt the public helper out of its model lock.
+    const legacyOptions = { dispatchesInSessionRuntime: true, agentId: "main", sessionKey };
+    await expect(runConsult(bridge.runtime, legacyOptions)).rejects.toThrow(/locked/i);
+    expect(bridge.runEmbeddedAgent).not.toHaveBeenCalled();
+
+    const session = createAgentRuntime();
+    session.sessionStore[sessionKey] = { ...lockedEntry, sessionId: "locked-session" };
+    await expect(
+      runConsult(
+        session.runtime,
+        {
+          agentId: "main",
+          sessionKey,
+        },
+        true,
+      ),
+    ).resolves.toEqual({ text: "Speak this." });
+    // Voice retains its high default; the command owner normalizes runtime support.
+    expect(requireEmbeddedAgentCall(session.runEmbeddedAgent).thinkLevel).toBe("high");
+
+    const plain = createAgentRuntime();
+    await runConsult(plain.runtime, { agentId: "main", sessionKey: "agent:main:bridge" });
+    expect(requireEmbeddedAgentCall(plain.runEmbeddedAgent).thinkLevel).toBe("high");
+
+    await expect(
+      runConsult(
+        createAgentRuntime().runtime,
+        {
+          agentId: "main",
+          sessionKey: "agent:main:override",
+          provider: "openai",
+        },
+        true,
+      ),
+    ).rejects.toThrow("Session-runtime consults use the session's own model selection");
+  });
+
+  it.each([
+    ["a caller listed in commands.ownerAllowFrom", "facetime:owner@example.com", true],
+    ["an allowed caller not listed there", "facetime:guest@example.com", false],
+  ])("decides owner from the sender for %s", async (_name, senderId, owner) => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+
+    await runConsult(runtime, {
+      cfg: { commands: { ownerAllowFrom: ["facetime:owner@example.com", "+15550001111"] } },
+      senderId,
+    });
+
+    expect(requireEmbeddedAgentCall(runEmbeddedAgent)).toMatchObject({
+      senderId,
+      senderIsOwner: owner,
     });
   });
 });

@@ -12,6 +12,8 @@ import {
 } from "../../app/notifications-auto-prompt.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
+import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { currentDisplaySpeechConfig } from "../../lib/config/config-state-model.ts";
@@ -33,7 +35,8 @@ import {
 import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { ChatPaneComposerHandoff } from "./chat-pane-attachment-handoff.ts";
-import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
+import { chatSessionPresentationKey, watchPresentation } from "./chat-pane-session-presentation.ts";
+import { initializeChatPaneSettings } from "./chat-pane-startup-subscriptions.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
@@ -46,7 +49,6 @@ import {
 } from "./chat-send-actions.ts";
 import { requestChatSend, resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { chatOfflineQueueStorageError } from "./chat-send-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
@@ -93,8 +95,14 @@ import {
 import type { RunOutputUsage } from "./tool-stream-contract.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 
+registerChatComposerEnglish();
+
 type ChatPageElement = {
+  inlineCommandPresentation?: import("./chat-inline-command-presentation.ts").InlineCommandPresentation;
+  inlineCommandPreparationError?: string;
+  isCurrent?: () => boolean;
   sessionKey?: string;
+  agentId?: string;
   dispatchEvent: (event: Event) => boolean;
   getBoundingClientRect?: () => DOMRect;
   transcriptLoadingChanged?: () => void;
@@ -116,6 +124,7 @@ export function createPageState(
 ): ChatPageHost {
   const settings = loadSettings();
   const initialSessionKey = page.sessionKey?.trim() || settings.sessionKey;
+  const assistantAgentId = page.agentId || context.agentSelection.state.selectedId;
   const sidebarSessionKey = canonicalUiSessionKeyForPersistence(
     { agentsList: context.agents.state.agentsList, hello: context.gateway?.snapshot.hello },
     initialSessionKey,
@@ -125,16 +134,15 @@ export function createPageState(
   const assistantIdentity = cachedChatAssistantIdentity(
     {
       sessionKey: initialSessionKey,
-      assistantAgentId: context.agentSelection.state.selectedId,
+      assistantAgentId,
       agentsList: context.agents.state.agentsList,
       hello: context.gateway.snapshot.hello,
     },
     context,
   );
-  const errors = createChatErrorState();
   const presentedFields = {
     settings,
-    accessPreferenceRevision: 0,
+    inlineCommandPresentation: page.inlineCommandPresentation,
     assistantName: assistantIdentity.name,
     assistantAvatar: assistantIdentity.avatar,
     assistantAvatarStatus: assistantIdentity.avatarStatus ?? null,
@@ -152,7 +160,7 @@ export function createPageState(
     terminalAvailable: false,
     browserPanelAvailable: false,
     browserPanelUnavailableReason: "disconnected",
-    assistantAgentId: context.agentSelection.state.selectedId,
+    assistantAgentId,
     sessionKey: initialSessionKey,
     currentSessionId: undefined,
     chatLoading: false,
@@ -197,7 +205,7 @@ export function createPageState(
     sidebarContent: null,
     imageLightbox: null,
   } satisfies Partial<ChatPageHost>;
-  const state = Object.assign(errors, presentedFields, {
+  const state = Object.assign(createChatErrorState(), presentedFields, {
     uploadConfig: context.config,
     outboxRecovery: {
       gateway: context.gateway,
@@ -209,6 +217,8 @@ export function createPageState(
       return () => retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...options });
     },
     sessions: context.sessions,
+    readChatAgentsList: () =>
+      context.agents.state.client === state.client ? context.agents.state.agentsList : null,
     hasPendingInitialTurn: (sessionKey: string) =>
       context.placementStartup.hasPendingTurn(sessionKey),
     chatSubmissions: context.chatSubmissions,
@@ -245,7 +255,7 @@ export function createPageState(
     sessionsResult: null,
     sessionsResultAgentId: null,
     sessionsArchivedFilter: "active",
-    agentsSelectedId: context.agentSelection.state.selectedId,
+    agentsSelectedId: assistantAgentId,
     refreshSessionsAfterChat: new Map<string, { sessionKey: string; agentId?: string }>(),
     pendingSessionMessageReloadSessionKey: null,
     chatSubmitGuards: new Set<string>(),
@@ -300,17 +310,7 @@ export function createPageState(
   state.handleChatScroll = (event) => handleChatScroll(state, event);
   state.handleChatDraftChange = (next, mentions) => handleChatDraftChange(state, next, mentions);
   state.handleChatInputHistoryKey = (input) => handleChatInputHistoryKey(state, input);
-  state.applySettings = (patch) => {
-    const next = { ...state.settings, ...patch };
-    state.settings = patchSettings({
-      chatShowThinking: next.chatShowThinking,
-      chatShowToolCalls: next.chatShowToolCalls,
-      chatPersistCommentary: next.chatPersistCommentary,
-      chatSendShortcut: next.chatSendShortcut,
-      chatBubbleSessionKeys: next.chatBubbleSessionKeys,
-      chatBubbleDisabledSessionKeys: next.chatBubbleDisabledSessionKeys,
-    });
-  };
+  initializeChatPaneSettings(state, page);
   attachChatRealtimeActions(
     state,
     () => !chatProviderReviewRow(state)?.providerReview,
@@ -329,9 +329,7 @@ export function createPageState(
       return resolveSpeechTextLimit(config);
     },
   );
-  state.accessPreferences = DraftPreferenceState.forChat(context, () => {
-    state.accessPreferenceRevision = (state.accessPreferenceRevision ?? 0) + 1;
-  });
+  state.accessPreferences = DraftPreferenceState.forChat(context);
   state.loadAssistantIdentity = () => {
     if (!state.connected) {
       const cachedIdentity = cachedChatAssistantIdentity(state, context);
@@ -364,7 +362,7 @@ export function createPageState(
     return handleSendChat(state, messageOverride, options, submissionAction);
   };
   state.handleAbortChat = (options) => handleAbortChat(state, options);
-  state.removeQueuedMessage = (id) => {
+  state.removeQueuedMessage = (id, source = "remove") => {
     if (cancelPendingQueuedChatInput(state, id)) {
       return;
     }
@@ -377,7 +375,10 @@ export function createPageState(
       setChatError(state, null);
       void resumeStoredChatOutboxes(state);
     } else if (outcome === "rejected") {
-      setChatError(state, chatOfflineQueueStorageError());
+      setChatError(
+        state,
+        t(source === "discard" ? "chat.queue.discardFailed" : "chat.queue.removeFailed"),
+      );
     }
   };
   state.retryQueuedChatMessage = (id) => retryQueuedChatMessage(state, id);
@@ -633,7 +634,8 @@ export function createPageState(
   }
   {
     const source = chatRunPresentation(state);
-    const projection = projectOwner(source, (owner) => owner.values);
+    // Tool activity also publishes run receipts; it does not change the text row.
+    const projection = projectOwner(source, (owner) => owner.values.chatStream, Object.is);
     const nonText = projectSource(source, {
       read: (owner) => owner.values,
       subscribe: (owner, notify) => owner.subscribeNonText(notify),
@@ -680,7 +682,7 @@ export function createPageState(
         ),
       subscribe: (_owner, notify) => {
         onChange = notify;
-        const stop = context.sessions.subscribe(notify);
+        const stop = watchPresentation(context.sessions, notify);
         return () => {
           onChange = undefined;
           stop();

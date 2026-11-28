@@ -33,7 +33,7 @@ describe("web provider public artifacts", () => {
         onlyPluginIds: [pluginId],
         manifestRecords: registry.plugins,
       }),
-    ).not.toBeNull();
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ pluginId })]));
   });
 
   it.each(webFetchPluginIds)("loads public web-fetch artifacts for %s", (pluginId) => {
@@ -42,6 +42,6 @@ describe("web provider public artifacts", () => {
         onlyPluginIds: [pluginId],
         manifestRecords: registry.plugins,
       }),
-    ).not.toBeNull();
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ pluginId })]));
   });
 });

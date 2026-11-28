@@ -37,7 +37,6 @@ import type {
   GatewayLifecycleRuntime,
   GatewayLifecycleSessionMethod,
 } from "./server-instance-runtime.types.js";
-import { registerGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -188,7 +187,6 @@ export function createGatewayInstanceRuntime(
       const operatorAuthority = dispatchOptions.operatorRunAuthority;
       if (operatorAuthority) {
         assertAdmittedRunOperatorAuthority(operatorAuthority);
-        operatorAuthority.assertCurrent();
       }
       const releaseOperatorAuthority = operatorAuthority?.retain?.();
       let delegatedToolPolicyHandoffId: string | undefined;
@@ -199,7 +197,6 @@ export function createGatewayInstanceRuntime(
         const needsDedicatedPrincipal = Boolean(
           dispatchOptions.allowModelOverride === true ||
           dispatchOptions.allowSyntheticModelOverride === true ||
-          dispatchOptions.allowSyntheticCronRunContinuation === true ||
           dispatchOptions.runtimeContextFragments ||
           dispatchOptions.internalDeliverySuppressErrors === true ||
           delegatedToolPolicyHandoffId ||
@@ -225,7 +222,6 @@ export function createGatewayInstanceRuntime(
                 allowModelOverride:
                   dispatchOptions.allowModelOverride === true ||
                   dispatchOptions.allowSyntheticModelOverride === true,
-                cronRunContinuation: dispatchOptions.allowSyntheticCronRunContinuation === true,
                 runtimeContextFragments: dispatchOptions.runtimeContextFragments,
                 internalDeliverySuppressErrors: dispatchOptions.internalDeliverySuppressErrors,
                 delegatedToolPolicyHandoffId,
@@ -247,7 +243,6 @@ export function createGatewayInstanceRuntime(
             assertContextCurrent();
             dispatchOptions.signal?.throwIfAborted();
             dispatchOptions.assertAdmissionCurrent?.();
-            operatorAuthority?.assertCurrent();
           },
           executionSource: dispatchOptions.executionSource,
           prepareDispatchCurrent: dispatchOptions.prepareDispatchCurrent,
@@ -291,6 +286,7 @@ export function createGatewayInstanceRuntime(
         to: payload.to,
         accountId: payload.accountId,
         threadId: payload.threadId,
+        replyToId: payload.replyToId,
         content: payload.text,
         gatewayOwnedDelivery: true,
         bestEffort: true,
@@ -309,7 +305,6 @@ export function createGatewayInstanceRuntime(
       return { suppressed: result.deliveryStatus === "suppressed" };
     },
   };
-  const releaseLifecycleRuntime = registerGatewayLifecycleRuntime(lifecycle);
 
   const pendingApprovalPublications = new Map<string, Set<symbol>>();
   const publishRequestedAsync = async (
@@ -493,7 +488,6 @@ export function createGatewayInstanceRuntime(
     close: () => {
       closed = true;
       lifecycleTyping.close();
-      releaseLifecycleRuntime();
       approvalSubscribers.clear();
       pendingApprovalPublications.clear();
       routeCoordinator.close();

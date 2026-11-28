@@ -1,5 +1,27 @@
-import { expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { beforeEach, expect, it, vi } from "vitest";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
+
+const probeClaudeCliAuthStatus = vi.hoisted(() => vi.fn());
+// mock-isolation: native login fixtures must not execute the host's Claude CLI.
+vi.mock("./cli-auth-seam.js", () => ({ probeClaudeCliAuthStatus }));
+
+beforeEach(() => {
+  probeClaudeCliAuthStatus.mockReset();
+  probeClaudeCliAuthStatus.mockResolvedValue({ status: "missing" });
+});
+
+const storedProfileTypes: Record<string, "oauth" | "token"> = {
+  "anthropic:setup": "token",
+  "anthropic:oauth": "oauth",
+};
+// mock-isolation: profile types come from this fixture, not a real auth-profile store.
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  findPersistedAuthProfileCredentialAsync: async ({ profileId }: { profileId: string }) =>
+    storedProfileTypes[profileId] ? { type: storedProfileTypes[profileId] } : undefined,
+}));
 
 const requestUrl = (input: string | URL | Request) =>
   new URL(input instanceof Request ? input.url : input);
@@ -93,12 +115,69 @@ it("aggregates provider-reported costs, cache tokens, models, and categories", a
   }
 });
 
-it("uses a stored setup token when no Admin API or OAuth credential is available", async () => {
-  const token = `sk-ant-oat01-${"a".repeat(80)}`;
+const setupToken = `sk-ant-oat01-${"a".repeat(80)}`;
+const webSessionToken = 'openclaw:anthropic-web-session:v1:{"token":"sk-ant-session"}';
+const webSessionEnv = { CLAUDE_AI_SESSION_KEY: "sk-ant-session" };
+// resolveOAuthToken also resolves stored `token` profiles.
+const setupTokenProfile = {
+  resolveOAuthToken: async () => ({
+    token: setupToken,
+    authProfileId: "anthropic:setup",
+    email: "setup@example.com",
+  }),
+};
+
+it("skips OAuth usage for a stored setup-token profile without a web session", async () => {
+  expect(await resolveAuth(setupTokenProfile)).toEqual({ handled: true });
+});
+
+it("keeps OAuth usage for a configured setup-token-shaped bearer", async () => {
   const result = await resolveAuth({
-    resolveApiKeyCandidatesFromConfigAndStore: async () => [token],
+    env: webSessionEnv,
+    resolveApiKeyCandidatesFromConfigAndStore: async () => [setupToken],
   });
-  expect(result).toEqual({ token });
+  expect(result).toEqual({ token: setupToken });
+});
+
+it("routes a stored setup-token profile to the claude.ai web session", async () => {
+  const auth = await resolveAuth({ ...setupTokenProfile, env: webSessionEnv });
+  expect(auth).toEqual({
+    token: webSessionToken,
+    authProfileId: "anthropic:setup",
+    email: "setup@example.com",
+  });
+
+  const fetchFn = vi.fn(async (input: string | URL | Request) =>
+    requestUrl(input).pathname === "/api/organizations"
+      ? Response.json([{ uuid: "org-a" }])
+      : Response.json({ five_hour: { utilization: 12 } }),
+  );
+  const snapshot = await fetchUsage({ ...auth, fetchFn: fetchFn as typeof fetch });
+  expect(snapshot).toMatchObject({
+    windows: [{ label: "5h", usedPercent: 12 }],
+    accountEmail: "setup@example.com",
+  });
+  expect(fetchFn.mock.calls.map(([input]) => requestUrl(input).href)).toEqual([
+    "https://claude.ai/api/organizations",
+    "https://claude.ai/api/organizations/org-a/usage",
+  ]);
+});
+
+it("reports an unavailable web session instead of polling OAuth usage", async () => {
+  const fetchFn = vi.fn(async () => new Response("down", { status: 503 }));
+  const snapshot = await fetchUsage({ token: webSessionToken, fetchFn });
+  expect(snapshot.error).toMatch(/^Claude web usage unavailable\. Renew the claude\.ai session/);
+  expect(fetchFn).toHaveBeenCalledOnce();
+});
+
+it("keeps OAuth usage for an OAuth profile whose token is also the configured bearer", async () => {
+  const oauth = { token: setupToken, authProfileId: "anthropic:oauth", subscriptionType: "max" };
+  const result = await resolveAuth({
+    env: webSessionEnv,
+    resolveApiKeyCandidatesFromConfigAndStore: async () => [setupToken],
+    resolveOAuthToken: async () => oauth,
+  });
+  expect(result).toEqual(oauth);
 });
 
 it("prefers a stored Admin API key when normal API and OAuth credentials coexist", async () => {
@@ -124,6 +203,107 @@ it("does not refresh the native Claude login for usage polling", async () => {
   expect(resolveOAuthToken).toHaveBeenCalledWith({
     excludeProfileIds: ["anthropic:claude-cli"],
   });
+});
+
+const nativeLogin = {
+  accessToken: "native-access-token",
+  refreshToken: "native-refresh-token",
+  expiresAt: Date.now() + 3_600_000,
+  scopes: ["user:inference", "user:profile"],
+  subscriptionType: "max",
+  rateLimitTier: "default_claude_max_20x",
+};
+
+function withNativeLogin<T>(
+  login: Record<string, unknown>,
+  run: () => Promise<T>,
+  status: Record<string, unknown> = { authMethod: "claude.ai", email: "cli@example.com" },
+): Promise<T> {
+  return withTempDir("openclaw-claude-usage-", async (configDirectory) => {
+    await fs.writeFile(
+      path.join(configDirectory, ".credentials.json"),
+      JSON.stringify({ claudeAiOauth: login }),
+    );
+    probeClaudeCliAuthStatus.mockResolvedValue({ status: "available", configDirectory, ...status });
+    return await run();
+  });
+}
+
+const claudeCliRoute = { configuredCliBackends: ["claude-cli"] };
+const inferenceApiKey = {
+  resolveApiKeyCandidatesFromConfigAndStore: async () => ["sk-ant-api03-inference"],
+};
+
+it.each([
+  ["with no OpenClaw credential", {}],
+  ["behind a stored setup-token profile", setupTokenProfile],
+  ["behind an inference API key", inferenceApiKey],
+])("reads the native Claude CLI login for usage %s", async (_name, overrides) => {
+  // The backend's own config root selects the login, not the default one.
+  const env = { ANTHROPIC_API_KEY: "cleared-for-claude", CLAUDE_CONFIG_DIR: "/srv/claude-work" };
+  const auth = await withNativeLogin(nativeLogin, () =>
+    resolveAuth({ ...claudeCliRoute, ...overrides, env }),
+  );
+  expect(auth).toEqual({
+    token: "native-access-token",
+    subscriptionType: "max",
+    rateLimitTier: "default_claude_max_20x",
+    email: "cli@example.com",
+  });
+  expect(probeClaudeCliAuthStatus).toHaveBeenCalledWith({
+    command: "claude",
+    env,
+    signal: undefined,
+  });
+
+  const fetchFn = vi.fn(async () => Response.json({ five_hour: { utilization: 40 } }));
+  const snapshot = await fetchUsage({ ...auth, fetchFn });
+  expect(snapshot).toMatchObject({
+    plan: "Max (20x)",
+    accountEmail: "cli@example.com",
+    windows: [{ label: "5h", usedPercent: 40 }],
+  });
+  expect(fetchFn).toHaveBeenCalledWith(
+    "https://api.anthropic.com/api/oauth/usage",
+    expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: "Bearer native-access-token" }),
+    }),
+  );
+});
+
+it.each([
+  ["no Claude CLI route", {}],
+  ["only another backend's route", { configuredCliBackends: ["google-gemini-cli"] }],
+])("never reads a native Claude login with %s", async (_name, route) => {
+  for (const overrides of [{}, setupTokenProfile, inferenceApiKey]) {
+    const auth = await withNativeLogin(nativeLogin, () => resolveAuth({ ...route, ...overrides }));
+    expect(auth).toEqual({ handled: true });
+  }
+  expect(probeClaudeCliAuthStatus).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["an expired token Claude could not refresh", { ...nativeLogin, expiresAt: Date.now() - 1 }],
+  ["a token without the user:profile scope", { ...nativeLogin, scopes: ["user:inference"] }],
+])("skips native usage for %s", async (_name, login) => {
+  expect(await withNativeLogin(login, () => resolveAuth(claudeCliRoute))).toEqual({
+    handled: true,
+  });
+});
+
+it.each(["not-installed", "missing", "timeout"])(
+  "reports no native usage when the Claude CLI probe is %s",
+  async (status) => {
+    probeClaudeCliAuthStatus.mockResolvedValue({ status });
+    expect(await resolveAuth(claudeCliRoute)).toEqual({ handled: true });
+  },
+);
+
+it("skips native usage when Claude authenticates with something other than claude.ai", async () => {
+  const auth = await withNativeLogin(nativeLogin, () => resolveAuth(claudeCliRoute), {
+    authMethod: "api_key",
+  });
+  expect(auth).toEqual({ handled: true });
 });
 
 it.each([

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import * as service from "../../daemon/service.js";
 import {
   createMockGatewayService,
@@ -9,7 +10,8 @@ import {
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
-import * as updateRunner from "../../infra/update-runner-git.js";
+import * as updateGlobal from "../../infra/update-global.js";
+import * as updateRunner from "../../infra/update-runner-git-release.js";
 import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
 import * as exec from "../../process/exec.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
@@ -17,6 +19,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import * as shared from "./shared.js";
+import * as updateConfig from "./update-command-config.js";
 import { updateGitInstall } from "./update-command-git.js";
 import { prepareUpdateCommand, resolveUpdateCommandAdmissionEnv } from "./update-command-run.js";
 import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
@@ -48,8 +51,6 @@ function gitUpdateParams(root: string): Parameters<typeof updateGitInstall>[0] {
     inspectGitTarget: refuseMutation,
     validateCandidate: refuseMutation,
     beforeGitMutation: refuseMutation,
-    getManagedServiceEnv: () => undefined,
-    getSnapshotSource: async () => ({ config: {}, env: process.env }),
   };
 }
 
@@ -144,7 +145,7 @@ describe("FreeBSD pkg update admission", () => {
         pkgQueryResult(claimed ? `${root}/package.json\n` : ""),
       );
       const publish = vi.fn();
-      vi.spyOn(updateRunner, "updateGitCheckout").mockImplementation(async ({ opts }) => {
+      vi.spyOn(updateRunner, "updateGitRelease").mockImplementation(async ({ opts }) => {
         await opts.beforeGitMutation({});
         publish();
         return { status: "ok", mode: "git", root, steps: [], durationMs: 0 };
@@ -170,19 +171,16 @@ describe("FreeBSD pkg update admission", () => {
       const checkout = vi
         .spyOn(shared, "ensureGitCheckout")
         .mockRejectedValue(new Error("unexpected checkout mutation"));
-      const getSnapshotSource = vi.fn(async () => ({ config: {}, env: process.env }));
       mockOwnership(selected);
       await expect(
         updateGitInstall({
           ...gitUpdateParams(requested),
           switchToGit: true,
           installKind: "package",
-          getSnapshotSource,
         }),
       ).rejects.toMatchObject({ reason: "pkg-owned-install" });
       expect(manager).not.toHaveBeenCalled();
       expect(checkout).not.toHaveBeenCalled();
-      expect(getSnapshotSource).not.toHaveBeenCalled();
     });
   });
 
@@ -258,4 +256,66 @@ describe("FreeBSD pkg update admission", () => {
       expect(enter).not.toHaveBeenCalled();
     });
   });
+});
+
+it("uses the requested discovery budget to select the installed package manager", async () => {
+  await withPackageRoots(async (base, root) => {
+    mockOwnership();
+    vi.spyOn(updateConfig, "readUpdateChannelConfig").mockResolvedValue({
+      configSnapshot: createTestConfigSnapshot({}, {}, path.join(base, "openclaw.json")),
+      configReadFailure: undefined,
+      legacyConfigPlan: undefined,
+      storedChannel: null,
+    });
+    const command = vi
+      .spyOn(exec, "runCommandWithTimeout")
+      .mockImplementation(async (argv, options) => {
+        const timeoutMs = typeof options === "number" ? options : options.timeoutMs;
+        const available = argv[1] === "root" && timeoutMs === 120_000;
+        return createCommandResult({
+          code: available ? 0 : 1,
+          stdout: available
+            ? `${argv[0] === "pnpm" ? path.dirname(root) : path.join(base, "foreign")}\n`
+            : "",
+        });
+      });
+    const selected = new Error("fixture: package manager selected");
+    const installTarget = vi
+      .spyOn(updateGlobal, "resolveGlobalInstallTarget")
+      .mockRejectedValue(selected);
+    const enter = vi.fn(refuseMutation);
+    mockInvokingRoot(root);
+    const prepared = await prepareUpdateCommand({
+      dryRun: true,
+      json: true,
+      restart: false,
+      timeout: "1",
+    });
+
+    await expect(
+      resolveUpdateCommandTarget(
+        { json: true, dryRun: true },
+        { triageTarget: { env: process.env } },
+        undefined,
+        prepared,
+        { enter },
+        120_000,
+      ),
+    ).rejects.toBe(selected);
+    expect(installTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ manager: "pnpm", pkgRoot: root, timeoutMs: 120_000 }),
+    );
+    expect(
+      command.mock.calls
+        .filter(([argv]) => argv[1] === "root")
+        .map(([argv, options]) => [
+          argv[0],
+          typeof options === "number" ? options : options.timeoutMs,
+        ]),
+    ).toEqual([
+      ["npm", 120_000],
+      ["pnpm", 120_000],
+    ]);
+    expect(enter).not.toHaveBeenCalled();
+  }, "linux");
 });

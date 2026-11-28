@@ -89,6 +89,19 @@ function createSubscriptionState(options?: {
   return { selected, state, subscribeMessages, unsubscribeMessages, publishedLoads };
 }
 
+it("retains the same-session observer until forced replacement succeeds", async () => {
+  const previous = { key: "agent:main:selected", agentId: null } satisfies Subscription;
+  const h = createSubscriptionState({ previous });
+  h.subscribeMessages.mockRejectedValueOnce(new Error("Replacement admission failed"));
+  await expect(syncSubscription(h.state, { force: true })).resolves.toBe(false);
+  expect(h.state.chatSessionMessageSubscription).toBe(previous);
+  expect(h.unsubscribeMessages).not.toHaveBeenCalled();
+  h.subscribeMessages.mockResolvedValueOnce(h.selected);
+  await expect(syncSubscription(h.state, { force: true })).resolves.toBe(true);
+  expect(h.state.chatSessionMessageSubscription).toEqual(h.selected);
+  expect(h.unsubscribeMessages).toHaveBeenCalledExactlyOnceWith(previous);
+});
+
 it.each([0, 120_000])(
   "makes the new subscription ready before old release (clock step %s)",
   async (step) => {
@@ -190,7 +203,12 @@ it.each(["dispose", "selection", "capability", "deadline"] as const)(
     if (change === "deadline") {
       expect(subscribeMessages.mock.calls.length).toBeGreaterThan(1);
       expect(subscribeMessages.mock.calls.length).toBeLessThan(20);
-      expect(historyLoad(state)).toMatchObject({ phase: "failed", retryable: true });
+      expect(historyLoad(state)).toMatchObject({
+        phase: "failed",
+        message:
+          "This session changed before OpenClaw could finish checking for updates. Try again.",
+        retryable: true,
+      });
       expect(state.sessionsError).toBeNull();
     } else {
       expect(subscribeMessages).toHaveBeenCalledTimes(1);
@@ -214,7 +232,11 @@ it.each([
   const { state } = createSubscriptionState({ subscribeMessages });
   await expect(syncSubscription(state)).resolves.toBe(false);
   expect(subscribeMessages).toHaveBeenCalledOnce();
-  expect(historyLoad(state)).toMatchObject({ phase: "failed", retryable: false });
+  expect(historyLoad(state)).toMatchObject({
+    phase: "failed",
+    retryable: false,
+    message: error.message,
+  });
 });
 
 it("keeps a successful replacement and warns when the previous release fails", async () => {

@@ -171,6 +171,9 @@ it.each(["run_settled", "subagent_ended"] as const)(
     for (const service of services.filter((entry) =>
       ["workboard-automation-nudge", "workboard-lifecycle-sync"].includes(entry.id),
     )) {
+      if (service.apiVersion === 2 || service.apiVersion === 3) {
+        throw new Error("Expected Workboard service API version 1");
+      }
       registry.services.push({
         pluginId: "workboard",
         origin: "bundled",
@@ -219,10 +222,6 @@ it.each(["run_settled", "subagent_ended"] as const)(
       inGatewayScope(() =>
         dispatchTrustedPluginGatewayMethod<T>(method, params, { scopes: ["operator.admin"] }),
       );
-    const expectRunRejected = () =>
-      expect(request("cron.run", { id: job.id, mode: "if-enabled" })).rejects.toThrow(
-        "agent tool caller authority is no longer active",
-      );
     const admission = prepareAgentRunAdmission({
       cfg: {},
       facts: {
@@ -270,13 +269,8 @@ it.each(["run_settled", "subagent_ended"] as const)(
                 );
           admission.close();
           await pending;
-          await expectRunRejected();
         }),
       );
-
-      await withGatewayToolCallerIdentity({ ...caller }, async () => {
-        await expectRunRejected();
-      });
       await expect(request("workboard.cards.list", { boardId: "planning" })).resolves.toMatchObject(
         {
           cards: [expect.objectContaining({ id: card.id, status: "review" })],

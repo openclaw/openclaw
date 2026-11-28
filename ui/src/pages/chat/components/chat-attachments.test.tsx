@@ -237,14 +237,19 @@ describe("chat attachment read failures", () => {
     vi.unstubAllGlobals();
   });
 
-  async function expectFileToast(message = "File too large.", description = "Try a smaller file.") {
+  async function expectFileToast(
+    message = "File too large.",
+    description: string | null = "Try a smaller file.",
+  ) {
     await toastHost.updateComplete;
     await vi.dynamicImportSettled();
     await waitForSolid(() => {
       expect(toastHost.querySelectorAll(".app-toast")).toHaveLength(1);
       expect(toastHost.querySelector(".app-toast--error")).not.toBeNull();
       expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(message);
-      expect(toastHost.querySelector(".app-toast__description")?.textContent).toBe(description);
+      expect(toastHost.querySelector(".app-toast__description")?.textContent ?? null).toBe(
+        description,
+      );
     });
   }
 
@@ -486,8 +491,8 @@ describe("chat attachment read failures", () => {
       });
       await toastHost.updateComplete;
       await expectFileToast(
-        name === "empty.png" ? "Could not attach file." : "File too large.",
-        name === "empty.png" ? "Try again." : "Try a smaller file.",
+        name === "empty.png" ? "OpenClaw can’t attach empty files." : "File too large.",
+        name === "empty.png" ? null : "Try a smaller file.",
       );
       if (accepted) {
         await vi.waitFor(() => expect(onAttachmentsChange).toHaveBeenCalled());
@@ -651,6 +656,7 @@ it("retains focused pasted-text actions when a peer read completes and uses curr
   h.previewProps.draft = "Current draft";
   h.previewProps.onDraftChange = currentDraftChange;
   await h.done.promise;
+  await waitForSolid(() => expect(container.textContent).toContain("Restored text"));
 
   expect(h.attachments.map(({ fileName }) => fileName)).toEqual([
     "pasted-text-123.txt",
@@ -747,9 +753,6 @@ describe("attachment removal names", () => {
     const buttons = [...container.querySelectorAll<HTMLButtonElement>(".chat-attachment-remove")];
     const labels = names.map((name) => (name?.trim() ? "Remove " + name : "Remove attachment"));
     expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual(labels);
-    expect(
-      buttons.map((button) => (button.parentElement as HTMLElement & { content: string }).content),
-    ).toEqual(labels);
     buttons[2]?.click();
     expect(h.attachments.map(({ id }) => id)).toEqual(
       originals.filter((_, index) => index !== 2).map(({ id }) => id),

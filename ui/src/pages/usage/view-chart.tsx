@@ -1,10 +1,9 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
-import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
-import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { formatUsd } from "../../lib/reactive/format.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
+import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import "../../components/tooltip.ts";
 import {
   formatAnalysisCost,
@@ -12,7 +11,7 @@ import {
   formatDayLabel,
   formatFullDate,
 } from "./metrics.ts";
-import type { ProviderSeries } from "./provider-series.ts";
+import { type ProviderSeries, UNASSIGNED_SERIES_COLOR } from "./provider-series.ts";
 import type { CostDailyEntry, UsageProps, UsageTotals } from "./types.ts";
 
 function tokenCategory<Key extends "output" | "input" | "cacheWrite" | "cacheRead">(
@@ -70,11 +69,11 @@ export function DailyChartCompact(props: {
   selectedDays: string[];
   chartMode: "tokens" | "cost";
   dailyChartMode: UsageProps["display"]["dailyChartMode"];
-  onDailyChartModeChange: (mode: UsageProps["display"]["dailyChartMode"]) => void;
   providerSeries: ProviderSeries[];
   onSelectDay: UsageProps["callbacks"]["filters"]["onSelectDay"];
   range: UsageChartRange;
 }) {
+  const providerDisplayLabel = useProviderDisplayLabel();
   const calendar = createMemo((): { days: CostDailyEntry[]; pending: Set<string> } => {
     /**
      * Every calendar day of the range, so columns never move as a report fills in. Missing days are
@@ -104,6 +103,8 @@ export function DailyChartCompact(props: {
   const days = () => calendar().days;
   const dates = createMemo(() => days().map((day) => day.date));
   const isTokens = () => props.chartMode === "tokens";
+  const dayTotal = (day: CostDailyEntry | undefined) =>
+    (isTokens() ? day?.totalTokens : day?.totalCost) ?? 0;
   const measure = (value: number) =>
     isTokens() ? formatUsageTokens(value) : formatAnalysisCost(value);
   const axisLabel = (value: number) =>
@@ -133,7 +134,7 @@ export function DailyChartCompact(props: {
         .filter((entry) => entry.values.some((value) => value > 0));
       // Usage without per-model rows still counts toward the day, as "Other".
       const other = daily.map((day, index) => {
-        const total = tokens ? day.totalTokens : day.totalCost;
+        const total = dayTotal(day);
         const rest = total - providers.reduce((sum, entry) => sum + (entry.values[index] ?? 0), 0);
         return rest > total * 0.001 ? rest : 0;
       });
@@ -141,7 +142,7 @@ export function DailyChartCompact(props: {
         providers.push({
           id: "other",
           label: t("usage.daily.other"),
-          color: "var(--oc-border-strong)",
+          color: UNASSIGNED_SERIES_COLOR,
           values: other,
         });
       }
@@ -152,7 +153,7 @@ export function DailyChartCompact(props: {
         id: "total",
         label: t(tokens ? "usage.metrics.tokens" : "usage.metrics.cost"),
         color: "var(--accent)",
-        values: daily.map((day) => (tokens ? day.totalTokens : day.totalCost)),
+        values: daily.map(dayTotal),
       },
     ];
   });
@@ -207,18 +208,6 @@ export function DailyChartCompact(props: {
             {formatFullDate(props.range.startDate)} – {formatFullDate(props.range.endDate)}
           </div>
         </div>
-        <SettingsSegmented
-          mode="buttons"
-          class="sessions-toggle"
-          value={props.dailyChartMode}
-          onChange={(mode) => props.onDailyChartModeChange(mode)}
-          onReselect={(mode) => props.onDailyChartModeChange(mode)}
-          options={[
-            { value: "total", label: t("usage.daily.total") },
-            { value: "by-type", label: t("usage.daily.byType") },
-            { value: "by-provider", label: t("usage.daily.byProvider") },
-          ]}
-        />
       </div>
       <Show
         when={dates().length > 0}
@@ -306,7 +295,7 @@ export function DailyChartCompact(props: {
                     {formatFullDate(dates()[active().index] ?? "")} ·{" "}
                     {calendar().pending.has(dates()[active().index] ?? "")
                       ? t("usage.daily.pending")
-                      : measure(totals()[active().index] ?? 0)}
+                      : measure(dayTotal(days()[active().index]))}
                   </strong>
                   <Show when={series().length > 1}>
                     <For each={series().filter((entry) => (entry.values[active().index] ?? 0) > 0)}>

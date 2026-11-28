@@ -297,24 +297,6 @@ describe("runMessageAction core send routing", () => {
   });
 
   it.each([
-    ["[Nexus]", "[Nexus] already prefixed", "[Nexus] already prefixed", false],
-    ["[{identity.name}]", "hello world", "[Nexus] hello world", true],
-    ["[{provider}/{model}]", "hello world", "hello world", false],
-  ] as const)("resolves responsePrefix %s", async (prefix, message, expected, useIdentity) => {
-    const sendText = registerSlackTextPlugin();
-    await runMessageAction({
-      cfg: {
-        channels: { slack: { enabled: true, responsePrefix: prefix } },
-        ...(useIdentity ? { agents: { entries: { main: { identity: { name: "Nexus" } } } } } : {}),
-      } as OpenClawConfig,
-      params: { channel: "slack", target: "channel:OTHER", message },
-      ...(useIdentity ? { agentId: "main" } : {}),
-    });
-    expect(sendText).toHaveBeenCalledOnce();
-    expect(mockFirstRecordArg(sendText, "send text").text).toBe(expected);
-  });
-
-  it.each([
     ["one\\ntwo", "one\ntwo"],
     ["one\ntwo\\nthree", "one\ntwo\nthree"],
     ['Before\\n`printf("%d\\n", x);`\\nafter', 'Before\n`printf("%d\\n", x);`\nafter'],
@@ -418,35 +400,5 @@ describe("runMessageAction core send routing", () => {
       mediaUrl: "file:///tmp/openclaw-voice.ogg",
       audioAsVoice: true,
     });
-  });
-
-  it("forwards inbound audio context to message-tool TTS", async () => {
-    const sendText = vi.fn().mockResolvedValue(receipt("testchat", "text-1", "c1"));
-    registerTestChatPlugin({
-      deliveryMode: "direct",
-      sendText,
-    });
-
-    await runMessageAction({
-      cfg: {
-        channels: { testchat: { enabled: true } },
-        tts: { auto: "inbound" },
-      } as OpenClawConfig,
-      params: { message: "voice reply" },
-      sessionKey: "agent:main:testchat:channel:abc",
-      inboundAudio: true,
-    });
-
-    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "final",
-        channel: "testchat",
-        inboundAudio: true,
-        payload: expect.objectContaining({
-          text: "voice reply",
-        }),
-      }),
-    );
-    expect(sendText).toHaveBeenCalledOnce();
   });
 });

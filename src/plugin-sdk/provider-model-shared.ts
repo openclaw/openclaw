@@ -174,6 +174,7 @@ export type {
 } from "../config/types.models.js";
 export {
   bindsClaudeThinkingPrefix,
+  isReleasedAdaptiveClaudeGeneration,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeHaiku55ModelIdentity,
   resolveClaudeModelIdentity,
@@ -209,7 +210,11 @@ export type {
   UnifiedModelCatalogProviderPlugin,
 } from "../plugins/types.js";
 
-export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+export {
+  DEFAULT_CONTEXT_TOKENS,
+  DEFAULT_MODEL_MAX_TOKENS,
+  resolveDefaultModelMaxTokens,
+} from "../agents/defaults.js";
 export {
   GPT5_BEHAVIOR_CONTRACT,
   GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY,
@@ -372,7 +377,7 @@ type BuildProviderReplayFamilyHooksOptions =
   | {
       /** Family that switches between Anthropic and OpenAI-compatible replay by request context. */
       family: "hybrid-anthropic-openai";
-      /** Whether Anthropic-model replay should drop thinking blocks in hybrid mode. */
+      /** Ignored: Anthropic-model replay keeps stored thinking; the API strips what a model does not read. */
       anthropicModelDropThinkingBlocks?: boolean;
     };
 

@@ -1,7 +1,27 @@
-.model-setup,
-.model-setup__loading-sections {
+.model-setup {
   display: grid;
   gap: 18px;
+}
+
+/* First-run additions are direct items of the Models page; empty hosts take no space. */
+openclaw-model-setup-page,
+.model-setup__dialogs {
+  display: contents;
+}
+
+.model-setup__results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.model-setup__results:empty {
+  display: none;
+}
+
+/* Detected after the Models catalog painted: render last so visible rows stay in place. */
+.model-setup__results--below {
+  order: 1;
 }
 
 .model-setup__intro {
@@ -11,20 +31,10 @@
   gap: 16px;
 }
 
-.model-setup__intro h1 {
-  margin: 0;
-  font-size: 20px;
-}
-
-.model-setup-wizard h2 {
+.model-setup-wizard .oc-dialog__title,
+.model-setup-wizard .model-setup-wizard__success-title {
   margin: 0;
   font-size: var(--overlay-modal-title-size);
-}
-
-.model-setup__intro p {
-  margin: 6px 0 0;
-  color: var(--muted);
-  max-width: 720px;
 }
 
 .model-setup__rows {
@@ -32,50 +42,12 @@
   gap: 10px;
 }
 
-.model-setup__loading-row {
-  min-height: 72px;
-}
-
-.model-setup__loading-section--selected .model-setup__loading-row {
-  min-height: 73px;
-}
-
-.model-setup__loading-section--candidates .model-setup__loading-row {
-  min-height: 79px;
-}
-
-.model-setup__loading-section--sign-in .model-setup__loading-row {
-  min-height: 68px;
-}
-
-.model-setup__loading-intro {
-  margin: 0 0 12px;
-}
-
-.model-setup__loading-icon,
 .model-setup__icon {
   width: 24px;
   height: 24px;
   flex: 0 0 24px;
-}
-
-.model-setup__loading-copy {
-  display: grid;
-  flex: 1;
-  gap: 8px;
-}
-
-.model-setup__loading-status {
-  height: 14px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 14px;
-}
-
-.model-setup__loading-action {
-  width: 96px;
-  height: 36px;
-  flex: none;
+  object-fit: contain;
+  border-radius: 5px;
 }
 
 .model-setup__row {
@@ -94,24 +66,8 @@
   flex: 1;
 }
 
-.model-setup__row-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 3px;
-}
-
-.model-setup__icon {
-  object-fit: contain;
-  border-radius: 5px;
-}
-
 .model-setup__icon.provider-brand-icon--fallback {
   font-size: 11px;
-}
-
-.model-setup__current-copy {
-  min-width: 0;
 }
 
 .model-setup__row-actions {
@@ -120,10 +76,6 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
-}
-
-.model-setup__empty > p {
-  margin: 0 0 12px;
 }
 
 .model-setup__recommendations {
@@ -175,12 +127,6 @@
 .model-setup__testing {
   margin-top: 8px;
   color: var(--accent);
-}
-
-.model-setup__verified {
-  margin-top: 8px;
-  color: var(--ok);
-  font-weight: 600;
 }
 
 .model-setup__failure {
@@ -237,6 +183,10 @@
   max-height: min(420px, 58dvh);
 }
 
+.model-setup-discovery .model-setup-provider-select__menu {
+  --oc-overlay-max-width: anchor-size(width);
+}
+
 .model-setup-provider-select__trigger {
   display: flex;
   align-items: center;
@@ -279,11 +229,6 @@
   flex: 1;
   min-width: 0;
   gap: 2px;
-}
-
-.model-setup-provider-select__copy strong,
-.model-setup-provider-select__copy span,
-.model-setup-provider-select__copy small {
   overflow-wrap: anywhere;
 }
 
@@ -407,12 +352,17 @@
   outline: none;
 }
 
-.model-setup-wizard--auth .model-setup-wizard__body {
+.model-setup-wizard--auth .model-setup-wizard__body,
+.model-setup-wizard--auth .wizard-step__form {
   display: flex;
   flex-direction: column;
 }
 
-.model-setup-wizard--auth .model-setup-wizard__body > .wizard-step__actions:last-child {
+.model-setup-wizard--auth .wizard-step__form {
+  flex: 1;
+}
+
+.model-setup-wizard--auth .wizard-step__actions:last-child {
   margin-top: auto;
 }
 
@@ -450,6 +400,8 @@
   color: var(--muted);
   font-size: 14px;
   line-height: 1.5;
+  /* The signed-in account and the model ready line stay on separate lines. */
+  white-space: pre-line;
 }
 
 .model-setup-wizard__error {
@@ -486,8 +438,6 @@
     flex-direction: column;
   }
 
-  .model-setup__loading-icon,
-  .model-setup__loading-action,
   .model-setup__row > .btn {
     align-self: flex-start;
   }

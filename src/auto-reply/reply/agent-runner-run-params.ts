@@ -12,6 +12,7 @@ import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
 } from "../../config/model-provider-config.js";
+import { followsSessionInferenceAccount } from "../../cron/inference-binding.js";
 import { resolveCronFallbacksOverride } from "../../cron/isolated-agent/run-fallback-policy.js";
 import { resolveCronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
@@ -99,13 +100,14 @@ export function buildRunEntrySelection(
     agentDir: selection.agentDir,
     fallbacksOverride: selection.fallbacksOverride,
     cyberAccessProgram: run.cyberAccessProgram,
-    userLockedAuthProfileId: run.scheduledAutomation
-      ? run.scheduledAutomation.job.inferenceBinding?.source === "user"
-        ? run.scheduledAutomation.job.inferenceBinding.profileId
-        : undefined
-      : run.authProfileIdSource === "user"
-        ? run.authProfileId
-        : undefined,
+    userLockedAuthProfileId:
+      run.scheduledAutomation && !followsSessionInferenceAccount(run.scheduledAutomation.job)
+        ? run.scheduledAutomation.job.inferenceBinding?.source === "user"
+          ? run.scheduledAutomation.job.inferenceBinding.profileId
+          : undefined
+        : run.authProfileIdSource === "user"
+          ? run.authProfileId
+          : undefined,
   };
 }
 
@@ -154,8 +156,9 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
   // Add guidance after queue summarization so overflow cannot discard it.
   const prompt = isExecCompletionInputProvenance(turn.followupRun.run.inputProvenance)
     ? `[OpenClaw exec completion]\n${turn.commandBody}\n\n` +
-      "Treat this completion as an internal continuation, not a new user request. " +
-      "Reconcile it with the conversation and continue any outstanding authorized work. " +
+      // One turn can carry several batched results; keep the guidance count-neutral.
+      "Treat each completion result above as an internal continuation, not a new user request. " +
+      "Reconcile the results with the conversation and continue any outstanding authorized work. " +
       "Report requested results not yet delivered, meaningful outcome changes, or new unresolved failures, blockers, or decisions. " +
       "Stay silent for routine output, duplicate or superseded results, and failures already recovered from; do not recap them or announce that nothing changed. " +
       `If no user-facing update is needed, reply ${SILENT_REPLY_TOKEN} only.`
@@ -217,6 +220,7 @@ export function buildReplyRunStateParams(run: FollowupRun["run"]) {
     inputProvenance: run.inputProvenance,
     senderIsOwner: run.senderIsOwner,
     gitContributorProfileId: run.gitContributorProfileId,
+    mcpRequesterProfileId: run.mcpRequesterProfileId,
     conversationToolPolicy: run.conversationToolPolicy,
     requesterOrigin: run.requesterOrigin,
     operatorProfileId: run.operatorProfileId,
@@ -225,7 +229,9 @@ export function buildReplyRunStateParams(run: FollowupRun["run"]) {
     approvalReviewerDeviceId: run.approvalReviewerDeviceId,
     terminalReplyExpectation: run.terminalReplyExpectation,
     clientCaps: run.clientCaps,
+    pinnedWidgetAuthoring: run.internalEventExecution?.pinnedWidgetAuthoring,
     bootstrapUserProfileId: run.bootstrapUserProfileId,
+    sessionUserProfileId: run.sessionUserProfileId,
     gatewayUiCommandTarget: run.gatewayUiCommandTarget,
     taskSuggestionDeliveryMode: run.taskSuggestionDeliveryMode,
   };

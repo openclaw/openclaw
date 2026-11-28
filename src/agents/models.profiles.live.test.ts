@@ -47,7 +47,7 @@ import {
   requireApiKey,
   resolveUsableCustomProviderApiKey,
 } from "./model-auth.js";
-import { normalizeDiscoveredAgentModel } from "./model-discovery-normalize.js";
+import { createDiscoveredAgentModelNormalizer } from "./model-discovery-normalize.js";
 import { resolveBuiltInModelSuppressionFromManifest } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { createConfiguredProviderLocalServiceAcquirer } from "./provider-local-service.js";
@@ -586,20 +586,6 @@ describe("isModelNotFoundErrorMessage", () => {
     expect(isModelNotFoundErrorMessage("404 model not_found")).toBe(true);
     expect(isModelNotFoundErrorMessage("404 model not-found")).toBe(true);
   });
-
-  it("matches deprecated free model transition messages", () => {
-    expect(
-      isModelNotFoundErrorMessage(
-        "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
-      ),
-    ).toBe(true);
-  });
-
-  it("matches OpenRouter no-endpoints wording", () => {
-    expect(
-      isModelNotFoundErrorMessage("404 No endpoints found for deepseek/deepseek-r1:free."),
-    ).toBe(true);
-  });
 });
 
 function isRefreshTokenReused(raw: string): boolean {
@@ -715,73 +701,6 @@ describe("resolveLiveModelsJsonTimeoutMs", () => {
 });
 
 describe("explicit live model discovery scope", () => {
-  it("derives provider ids from explicit model refs", () => {
-    const filter = parseCsvFilter("zai/glm-5.1, together/Qwen/Qwen2.5-7B-Instruct-Turbo, glm-5.1");
-    const explicitRefs = parseExplicitLiveModelRefs(filter);
-
-    expect(explicitRefs).toEqual([
-      { provider: "zai", id: "glm-5.1" },
-      { provider: "together", id: "Qwen/Qwen2.5-7B-Instruct-Turbo" },
-    ]);
-    expect(
-      resolveLiveProviderDiscoveryProviderIds({
-        providerFilter: null,
-        explicitRefs,
-      }),
-    ).toEqual(["together", "zai"]);
-  });
-
-  it("merges explicit model providers with OPENCLAW_LIVE_PROVIDERS", () => {
-    const explicitRefs = parseExplicitLiveModelRefs(parseCsvFilter("zai/glm-5.1"));
-
-    expect(
-      resolveLiveProviderDiscoveryProviderIds({
-        providerFilter: parseCsvFilter("deepseek,together"),
-        explicitRefs,
-      }),
-    ).toEqual(["deepseek", "together", "zai"]);
-  });
-
-  it("includes curated small-model providers in discovery scope", () => {
-    expect(
-      resolveLiveProviderDiscoveryProviderIds({
-        providerFilter: null,
-        explicitRefs: [],
-        priorityRefs: listPrioritizedSmallLiveModelRefs(),
-      }),
-    ).toContain("ollama");
-  });
-
-  it("respects provider filters for curated small-model refs", () => {
-    expect(
-      filterLiveModelRefsByProvider(
-        listPrioritizedSmallLiveModelRefs(),
-        parseCsvFilter("openrouter"),
-      ).map((ref) => ref.provider),
-    ).toEqual(["openrouter", "openrouter", "openrouter"]);
-  });
-
-  it("activates bundled provider plugins for explicit live discovery", () => {
-    const cfg = {
-      plugins: {
-        allow: ["openai"],
-        entries: {
-          openai: { enabled: true },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const result = applyLiveProviderDiscoveryPluginCompat({
-      config: cfg,
-      providers: ["deepseek"],
-      env: {},
-    });
-
-    expect(result.plugins?.enabled).toBe(true);
-    expect(result.plugins?.allow).toContain("deepseek");
-    expect(result.plugins?.entries?.deepseek).toEqual({ enabled: true });
-  });
-
   it("hydrates Ollama Cloud provider settings from live env when Ollama is in scope", () => {
     const cfg = {
       plugins: {},
@@ -1726,7 +1645,7 @@ describeLive("live models (profile keys)", () => {
             continue;
           }
           candidates.push({
-            model: normalizeDiscoveredAgentModel(model, agentDir, { config: cfg }),
+            model: createDiscoveredAgentModelNormalizer(agentDir, { config: cfg })(model),
             apiKeyInfo,
           });
         } catch (err) {

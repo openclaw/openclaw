@@ -1,0 +1,2 @@
+# Join the real native-skills HTTP fixture close when configuration writing rejects.
+5

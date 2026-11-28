@@ -111,5 +111,9 @@
         "default": 14
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me decide whether to enable Logbook and understand its privacy and retention settings.",
+    "Draft a standup from a day already tracked in Logbook without starting capture or sending it."
+  ]
 }

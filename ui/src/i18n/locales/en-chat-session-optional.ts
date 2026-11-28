@@ -31,6 +31,9 @@ const catalog = {
       contextShowAll: "Show all {count}",
     },
     sessionAutomation: {
+      created: "Created",
+      removed: "Removed",
+      unavailable: "Automation unavailable",
       emptyHint: "Automations attached to this session will appear here.",
       scheduleUnavailable: "Schedule unavailable",
       atTime: "at {time}",
@@ -43,7 +46,6 @@ const catalog = {
       everyHours: "Every {count} hours",
       everyDuration: registerChatSessionEnglish.catalog.chat.sessionAutomation.everyDuration,
       onceAt: registerChatSessionEnglish.catalog.chat.sessionAutomation.onceAt,
-      today: registerChatSessionEnglish.catalog.chat.sessionAutomation.today,
       tomorrow: registerChatSessionEnglish.catalog.chat.sessionAutomation.tomorrow,
       hourMinutes: "At minutes {minutes} of every hour",
       clockFields: "Hours: {hours}; minutes: {minutes}; seconds: {seconds}",
@@ -163,31 +165,6 @@ const catalog = {
         "Transferring the update to this device: {transferred} of {total} ({percent}%). The next reply starts when it finishes.",
       installingBody: "Installing the update on this device.",
     },
-    taskSuggestions: {
-      eyebrow: "Suggested task · in {repo}",
-      startSession: "Start in a new session",
-      startOptions: "Choose where to start the task",
-      startWorktree: "Start in a new worktree",
-      chooseRepository: "Choose repository",
-      repositoryFolder: "Repository folder",
-      chooseRepositoryHelp:
-        "Choose a Git repository with a commit. Your task will start in a new worktree; its instructions are preserved.",
-      startCurrentSession: "Start in this session",
-      copyPrompt: "Copy prompt",
-      copyPromptFailed: registerChatSessionEnglish.catalog.chat.taskSuggestions.copyPromptFailed,
-      promptCopied: "Copied",
-      showInstructions: "Show instructions",
-      hideInstructions: "Hide instructions",
-      previous: "Previous suggested task",
-      next: "Next suggested task",
-      starting: "Starting…",
-      dismiss: "Dismiss {title}",
-      started: "Task started",
-      startUnconfirmed: registerChatSessionEnglish.catalog.chat.taskSuggestions.startUnconfirmed,
-      adminRequired: registerChatSessionEnglish.catalog.chat.taskSuggestions.adminRequired,
-      reconnectRequired: registerChatSessionEnglish.catalog.chat.taskSuggestions.reconnectRequired,
-      unavailable: registerChatSessionEnglish.catalog.chat.taskSuggestions.unavailable,
-    },
     skillLearned: {
       label: "Learned",
       created: "Created",
@@ -198,6 +175,7 @@ const catalog = {
       undo: "Undo",
       undoing: "Undoing…",
       undone: "Undone",
+      alreadyUndone: "Already undone",
       undoError: "Couldn’t undo the skill change. Try again. Details: {error}",
     },
     youtube: {
@@ -238,6 +216,11 @@ const catalog = {
       askImageUnsupported:
         "This side chat model can’t read images. Choose a model that supports images, then try again.",
       askRateLimited: "Side chat reached its question limit. Try again shortly.",
+      askTimeout: "Side chat timed out.",
+      askStop: "Stop side chat answer",
+      askStopped: "Answer stopped.",
+      askStopFailed: "Couldn’t stop the side chat answer. Try again.",
+      askStillWaiting: "Still waiting for an answer",
       askUnavailable: "Side chat cannot answer right now.",
       askRetry: "Retry",
       health: {
@@ -271,6 +254,7 @@ const catalog = {
       readHighlighted: "Open highlighted source",
       readPlain: "Open plain source",
       fileTree: "Changed files tree",
+      fileTreeTooltip: "File tree",
       searchFiles: "Search changed files",
       noMatchingFiles: "No files match this view.",
       cycleMode: "Diff mode: {mode}. Switch to next mode",
@@ -308,6 +292,7 @@ const catalog = {
       branchName: "Branch name",
       uncommittedStay: "Uncommitted changes stay in the session checkout.",
       viewOptions: "Change view options",
+      viewOptionsTooltip: "View options",
       collapseCode: "Collapse code",
       collapseFunctions: "Collapse functions and classes",
       expandCode: "Expand code",
@@ -403,9 +388,9 @@ const catalog = {
     workspaceFiles: {
       attachments: "Attachments",
       attachmentsLoading: "Loading attachments…",
-      attachmentsUnknown: "Transcript attachment coverage is not yet known.",
+      attachmentsUnknown: "Chat attachment coverage is not yet known.",
       attachmentsPartial:
-        "Showing attachments available in the loaded transcript. Earlier or omitted content may contain more.",
+        "Showing attachments available in the loaded chat. Earlier or omitted content may contain more.",
       mobile: {
         searchFolder: "Search in {folder}",
         empty: "No files match this filter.",
@@ -418,6 +403,17 @@ const catalog = {
         closeSearch: "Close file search",
         filePath: "File path",
         hiddenFolders: "Show hidden folders",
+      },
+      display: {
+        label: "Session files view and order",
+        view: "View",
+        viewList: "List",
+        viewGrid: "Grid",
+        sortBy: "Sort by",
+        sortDefault: "Default",
+        sortDate: "Date",
+        sortName: "Name",
+        sortType: "Type",
       },
       label: "Session workspace",
       collapse: registerChatSessionEnglish.catalog.chat.workspaceFiles.collapse,
@@ -466,7 +462,6 @@ export const registerChatSessionOptionalEnglish = Object.assign(
     Object.assign(en.chat.providerPolicy, catalog.chat.providerPolicy);
     Object.assign(en.chat.diskSpace, catalog.chat.diskSpace);
     Object.assign(en.chat.workerRuntimeInstall, catalog.chat.workerRuntimeInstall);
-    Object.assign(en.chat.taskSuggestions, catalog.chat.taskSuggestions);
     Object.assign(en.chat.skillLearned, catalog.chat.skillLearned);
     Object.assign(en.chat.youtube, catalog.chat.youtube);
     Object.assign(en.chat.rail, catalog.chat.rail);

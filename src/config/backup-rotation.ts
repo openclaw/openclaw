@@ -43,6 +43,8 @@ export async function prepareConfigFileWrite(
     }
   };
   assertCurrent?.();
+  // Refuse invalid source bytes before staging them as recovery history.
+  assertBeforeMutation();
   let backup: Awaited<ReturnType<typeof tempFile>> | undefined;
   try {
     if (params.previousRaw !== null) {
@@ -81,6 +83,7 @@ export async function prepareConfigFileWrite(
       return replaceFileAtomicSync({
         filePath: configPath,
         content: params.content,
+        allowDrvfsRenameRecovery: true,
         dirMode: params.dirMode ?? 0o700,
         mode: 0o600,
         copyFallbackOnPermissionError: true,

@@ -129,6 +129,33 @@ export class ServiceOwnershipRefusalError extends Error {
   }
 }
 
+/** A loaded system unit observed running under an account other than this process. */
+export type SystemdServiceAccountMismatch = {
+  unitName: string;
+  unitPath: string;
+  serviceUser: string;
+  programArguments: string[];
+  workingDirectory: string;
+};
+
+/** The same refusal, carrying what was observed so callers can name the unit and its account. */
+export class SystemdServiceAccountRefusalError extends ServiceOwnershipRefusalError {
+  constructor(readonly mismatch: SystemdServiceAccountMismatch) {
+    super("systemd-account-refused");
+  }
+}
+
+export function findSystemdServiceAccountMismatch(
+  error: unknown,
+): SystemdServiceAccountMismatch | undefined {
+  for (const candidate of collectNestedErrorCandidates(error)) {
+    if (candidate instanceof SystemdServiceAccountRefusalError) {
+      return candidate.mismatch;
+    }
+  }
+  return undefined;
+}
+
 export function findServiceOwnershipRefusal(
   error: unknown,
 ): ServiceOwnershipRefusalError | undefined {
@@ -181,6 +208,13 @@ export class ServiceDefinitionInspectionError extends Error {
 
 export class GatewayServiceStopUnsafeError extends Error {
   override name = "GatewayServiceStopUnsafeError";
+}
+
+/** The Gateway that answers a maintenance drain is not the process its caller inspected. */
+export class GatewayMaintenanceResidentChangedError extends Error {
+  constructor() {
+    super("Gateway process changed during maintenance drain");
+  }
 }
 
 /** Native preparation can wrap a custody refusal alongside an authority or cleanup failure. */

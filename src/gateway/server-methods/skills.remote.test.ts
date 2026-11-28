@@ -73,10 +73,10 @@ it("reads remote skill status, cards and binary requirements through the workspa
     agents: { entries: { main: { workspace: gateway } } },
   };
   const loadSkills = vi.fn(async (request: WorkspaceSkillSourceRequest) => ({
-    ...readWorkspaceSkillSources({
+    ...(await readWorkspaceSkillSources({
       ...request,
       sourcePlan: resolveWorkspaceSkillSourcePlan(remote, { workspaceOnly: true }),
-    }),
+    })),
     runtime: { platform: hostPlatform, bins: ["host-tool", "brew"] },
   }));
   const release = registerAgentWorkspaceAccess(gateway, {

@@ -6,7 +6,11 @@ import { createProgressiveList } from "../lib/reactive/progressive-list.ts";
 import { SECTION_META } from "./config-form.meta.ts";
 import { collectLiftedHelp } from "./config-form.node.collection.ts";
 import { ConfigNode } from "./config-form.node.tsx";
-import { matchesConfigSectionSearch, parseConfigSearchQuery } from "./config-form.search.ts";
+import {
+  matchesConfigSectionSearch,
+  parseConfigSearchQuery,
+  type ConfigSearchCriteria,
+} from "./config-form.search.ts";
 import {
   hintForPath,
   humanize,
@@ -18,6 +22,7 @@ import {
 } from "./config-form.shared.ts";
 import { splitConfigSchemaByTier } from "./config-form.tiers.ts";
 import { Icon } from "./solid/icon.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 import { SettingsDisclosure } from "./solid/settings-disclosure.tsx";
 import { SettingsEmpty, SettingsPage, LearnMoreLink } from "./solid/settings-ui.tsx";
@@ -79,7 +84,9 @@ type Section = {
   path: string[];
 };
 
-function ConfigSection(props: { section: Section; form: ConfigFormProps }): SolidJSX.Element {
+type SectionFormProps = { form: ConfigFormProps; criteria: ConfigSearchCriteria | undefined };
+
+function ConfigSection(props: SectionFormProps & { section: Section }): SolidJSX.Element {
   const hints = createMemo(() => props.form.uiHints);
   const curated = () => props.form.curatedSections?.[String(props.section.path[0])];
   const meta = createMemo(() => {
@@ -180,31 +187,27 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
             <Show when={hasSectionHelp()}>
               {
                 <span class="settings-section__docs">
-                  <openclaw-tooltip
-                    prop:content={t("configForm.sectionHelp", { section: meta().label })}
+                  <button
+                    ref={setDocsTrigger}
+                    id={docsTriggerId()}
+                    type="button"
+                    class="settings-section__help-button"
+                    aria-label={t("configForm.sectionHelp", { section: meta().label })}
+                    aria-controls={`settings-section-help-popover-${props.section.id}`}
+                    aria-haspopup="dialog"
+                    onClick={() => docsPopover.overlay.request(!docsPopover.overlay.open)}
                   >
-                    <button
-                      ref={setDocsTrigger}
-                      id={docsTriggerId()}
-                      type="button"
-                      class="settings-section__help-button"
-                      aria-label={t("configForm.sectionHelp", { section: meta().label })}
-                      aria-controls={`settings-section-help-popover-${props.section.id}`}
-                      aria-haspopup="dialog"
-                      onClick={() => docsPopover.overlay.request(!docsPopover.overlay.open)}
-                    >
-                      <span aria-hidden="true">
-                        <Icon name="circleQuestionMark" />
-                      </span>
-                    </button>
-                  </openclaw-tooltip>
+                    <span aria-hidden="true">
+                      <Icon name="circleQuestionMark" />
+                    </span>
+                  </button>
                   <Show when={docsTrigger()}>
                     {(trigger) => (
                       <Popover
                         ref={(handle) => (docsPopover = handle)}
                         id={`settings-section-help-popover-${props.section.id}`}
                         label={t("configForm.sectionHelp", { section: meta().label })}
-                        class="settings-section__help-popover"
+                        class="settings-section__help-popover config-section-help__popover"
                         anchor={trigger()}
                         placement="bottom-end"
                       >
@@ -261,7 +264,7 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
               collapseObjects: curated() ? !revealTarget() : revealTarget() ? false : undefined,
               progressive: props.form.progressive,
               summarizeObject: curated()?.summarizeObject,
-              searchCriteria: parseConfigSearchQuery(props.form.searchQuery ?? ""),
+              searchCriteria: props.criteria,
               revealSensitive: props.form.revealSensitive ?? false,
               maskSensitive: props.form.maskSensitive,
               isSensitivePathRevealed: props.form.isSensitivePathRevealed,
@@ -283,6 +286,10 @@ export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
   const selectedSection = createMemo(() => props.activeSection);
   const selectedSubsection = createMemo(() => props.activeSubsection);
   const query = createMemo(() => props.searchQuery);
+  const searchCriteria = createMemo(() => {
+    const text = query();
+    return text ? parseConfigSearchQuery(text) : undefined;
+  });
   const searchValue = createMemo(() => props.value);
   const sections = createMemo((): Section[] => {
     const schema = schemaInput();
@@ -327,8 +334,8 @@ export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
   });
   const visibleSections = createMemo(() => {
     const all = sections();
-    const searchQuery = query();
-    if (!searchQuery) {
+    const criteria = searchCriteria();
+    if (!criteria) {
       return all;
     }
     getLocale();
@@ -342,7 +349,7 @@ export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
         schema: schema!.properties![key]!,
         value: value?.[key],
         hints: uiHints,
-        query: searchQuery,
+        criteria,
         label: SECTION_META[key]?.label,
         description: SECTION_META[key]?.description,
       });
@@ -355,7 +362,7 @@ export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
     >
       <Show
         when={schemaType(props.schema!) === "object" && props.schema!.properties}
-        fallback={<div class="callout danger">{t("configForm.unsupportedSchema")}</div>}
+        fallback={<InlineAlert tone="danger">{t("configForm.unsupportedSchema")}</InlineAlert>}
       >
         <Show
           when={visibleSections().length > 0}
@@ -373,14 +380,14 @@ export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
             </Show>
           }
         >
-          <ConfigSections sections={visibleSections()} form={props} />
+          <ConfigSections sections={visibleSections()} form={props} criteria={searchCriteria()} />
         </Show>
       </Show>
     </Show>
   );
 }
 
-function ConfigSections(props: { sections: Section[]; form: ConfigFormProps }): SolidJSX.Element {
+function ConfigSections(props: SectionFormProps & { sections: Section[] }): SolidJSX.Element {
   const visible = createProgressiveList(() => props.sections, {
     initial: 0,
     batch: 7,
@@ -389,7 +396,9 @@ function ConfigSections(props: { sections: Section[]; form: ConfigFormProps }): 
   return (
     <SettingsPage busy={visible.pending()}>
       <For each={visible.items()} keyed={(section) => section.id}>
-        {(section) => <ConfigSection section={section()} form={props.form} />}
+        {(section) => (
+          <ConfigSection section={section()} form={props.form} criteria={props.criteria} />
+        )}
       </For>
     </SettingsPage>
   );

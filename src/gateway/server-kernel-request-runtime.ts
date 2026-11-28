@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { getResourceProfile } from "../infra/gateway-resource-profile.js";
 import { retireQuestionChannelGateway } from "../infra/question-channel-runtime.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { bindLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
@@ -9,8 +10,10 @@ import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-s
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeGatewayDeviceRevocation } from "./device-revocation.js";
 import { shouldUseGatewayOwnerProfile } from "./gateway-owner-profile.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
+import { registerGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
 import { readPreparedServerMethodModelCatalogs } from "./server-methods/optional-model-catalog.js";
 import type { GatewayHostLifecycle } from "./server-public.js";
@@ -24,6 +27,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   log: GatewayLogger;
   logHealth: GatewayLogger;
   hostLifecycle?: GatewayHostLifecycle;
+  waitForPostReadyWork?: () => Promise<void>;
 }) {
   const { coreRuntime: runtime, log, logHealth } = params;
   const {
@@ -62,7 +66,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       logHealth,
     });
   });
-  gatewayRequestContext.restartResumeWindow = runtime.opts.restartResumeWindow;
+  gatewayRequestContext.restartResumeWindows = runtime.opts.restartResumeWindows;
   const projectionReady = runtime.opts.updateCanary
     ? undefined
     : startupTrace.measure("sessions.projection", async () => {
@@ -114,7 +118,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
         shouldUseGatewayOwnerProfile({
           role: "operator",
           authMethod: runtime.getResolvedAuth().mode,
-          rolesConfigured: Boolean(getRuntimeConfig().gateway?.roles),
+          rolesConfigured: isNamedOperatorRoleEnforcementEnabled(getRuntimeConfig()),
         })
       ) {
         try {
@@ -138,30 +142,41 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       if (projectionLifetime.closing) {
         throw new Error("Gateway closed during session projection startup");
       }
-      // Facts are ready, but display rows remain lazy. Warm the recent page while sidecars start.
-      void runtime.connectionWork
-        .track(() =>
-          runWithGatewayIndependentRootWorkAdmission(
-            async () => {
-              const { listProjectedSessions } = await import("./session-utils-list.js");
-              runtime.connectionWork.signal.throwIfAborted();
-              await startupTrace.measure("sessions.first-page", () =>
-                listProjectedSessions({
-                  projection,
-                  opts: { limit: 100, archived: false, rowMode: "sidebar" },
-                  acceptsSerializedJson: true,
-                }),
-              );
-            },
-            "startup:session-row-prewarm",
-            runtime.connectionWork.signal,
-          ),
-        )
-        .catch((error: unknown) => {
-          if (!runtime.connectionWork.signal.aborted) {
-            log.warn(`Session first-page preparation failed: ${formatErrorMessage(error)}`);
-          }
-        });
+      const controlUiEnabled =
+        runtime.opts.controlUiEnabled ?? getRuntimeConfig().gateway?.controlUi?.enabled ?? true;
+      if (controlUiEnabled) {
+        // Facts are required; display rows are advisory. Lean warmup waits outside root
+        // admission so it cannot keep the post-ready idle gate busy itself.
+        void runtime.connectionWork
+          .track(async () => {
+            if (getResourceProfile() === "lean" && params.waitForPostReadyWork) {
+              await params.waitForPostReadyWork();
+            }
+            if (runtime.lifecycle.closePreludeStarted || runtime.connectionWork.signal.aborted) {
+              return;
+            }
+            return runWithGatewayIndependentRootWorkAdmission(
+              async () => {
+                const { listProjectedSessions } = await import("./session-utils-list.js");
+                runtime.connectionWork.signal.throwIfAborted();
+                await startupTrace.measure("sessions.first-page", () =>
+                  listProjectedSessions({
+                    projection,
+                    opts: { limit: 100, archived: false, rowMode: "sidebar" },
+                    acceptsSerializedJson: true,
+                  }),
+                );
+              },
+              "startup:session-row-prewarm",
+              runtime.connectionWork.signal,
+            );
+          })
+          .catch((error: unknown) => {
+            if (!runtime.connectionWork.signal.aborted) {
+              log.warn(`Session first-page preparation failed: ${formatErrorMessage(error)}`);
+            }
+          });
+      }
     }
     if (!runtime.opts.updateCanary) {
       await startupTrace.measure("gateway.lifetime-sidecars", () =>
@@ -195,7 +210,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     "gateway.instance-runtime-import",
     () => import("./server-instance-runtime.js"),
   );
-  const gatewayInstanceRuntime = createGatewayInstanceRuntime({
+  const instanceRuntime = createGatewayInstanceRuntime({
     getContext: () => gatewayRequestContext,
     getMethodRegistry: () => getAttachedGatewayMethodRegistry(),
     // Request entry fences new calls during the prelude. Retained principals
@@ -203,6 +218,16 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     isDispatchAvailable: () => startupState.dispatchReady,
     logError: (message) => log.error(message),
   });
+  // The listening Gateway is the process-global lifecycle owner; embedded hosts build the
+  // same runtime for their own context without claiming it.
+  const releaseLifecycleRuntime = registerGatewayLifecycleRuntime(instanceRuntime.lifecycle);
+  const gatewayInstanceRuntime = {
+    ...instanceRuntime,
+    close: () => {
+      instanceRuntime.close();
+      releaseLifecycleRuntime();
+    },
+  };
   gatewayInstanceRuntimeRef.current = gatewayInstanceRuntime;
   gatewayRequestContext.resolveGatewayContext = () =>
     gatewayInstanceRuntime.isAvailable() ? gatewayRequestContext : undefined;

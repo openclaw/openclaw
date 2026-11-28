@@ -262,7 +262,9 @@ public enum OpenClawChatGatewayPayloadCodec {
             thinkingLevels: model.thinkinglevels.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) },
             thinkingDefault: model.thinkingdefault,
             input: model.input.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) },
-            agentRuntime: model.agentruntime.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) })
+            agentRuntime: model.agentruntime.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) },
+            providerName: model.providername,
+            serviceTiers: model.servicetiers)
     }
 
     public static func commandChoice(_ entry: CommandEntry) -> OpenClawChatCommandChoice {
@@ -296,6 +298,8 @@ public enum OpenClawChatGatewayPayloadCodec {
             acceptsArgs: entry.acceptsargs)
     }
 
+    private struct PreferencesChangedPayload: Decodable { let keys: [String] }
+
     private struct MetadataChangedPayload: Decodable {
         let modelSelectionChanged: Bool?
         let modelCatalogChanged: Bool?
@@ -303,76 +307,109 @@ public enum OpenClawChatGatewayPayloadCodec {
         let agentId: String?
     }
 
+    /// One name registry drives both admission and the exhaustive decoder below.
+    /// session.narration is intentionally absent: foreground chat uses full streams,
+    /// and bounded narration tails cannot replace transcript messages.
+    private enum EventKind: String {
+        case tick
+        case chatMetadataChanged = "chat.metadata.changed"
+        case preferencesChanged = "users.prefs.changed"
+        case configChanged = "config.changed"
+        case sessionsChanged = "sessions.changed"
+        case sessionReaction = "session.reaction"
+        case sessionObserver = "session.observer"
+        case seqGap
+        case health
+        case chat
+        case sessionMessage = "session.message"
+        case sessionTool = "session.tool"
+        case agent
+        case progressCardChanged = "progressCard.changed"
+        case sessionPullRequestsChanged = "controlUi.sessionPullRequests.changed"
+        case questionRequested = "question.requested"
+        case questionResolved = "question.resolved"
+    }
+
+    /// Checks only the name, before a transport buffers or decodes the payload.
+    /// Session, agent, reason, and stream selection remain with the event consumers.
+    public static func acceptsEvent(_ frame: EventFrame) -> Bool {
+        EventKind(rawValue: frame.event) != nil
+    }
+
     public static func event(from frame: EventFrame) -> OpenClawChatTransportEvent? {
+        guard let kind = EventKind(rawValue: frame.event) else { return nil }
         func decode<T: Decodable>(_ type: T.Type) -> T? {
             frame.payload.flatMap { try? GatewayPayloadDecoding.decode($0, as: type) }
         }
 
-        switch frame.event {
-        case "tick":
+        switch kind {
+        case .tick:
             return .tick
-        case "chat.metadata.changed":
+        case .chatMetadataChanged:
             let payload = decode(MetadataChangedPayload.self)
             return payload?.modelSelectionChanged == true ? .modelSelectionChanged : .chatMetadataChanged(
                 modelCatalogChanged: payload?.modelCatalogChanged != false || payload?.authChanged == true,
                 agentID: payload?.agentId)
-        case "config.changed":
+        case .preferencesChanged:
+            return decode(PreferencesChangedPayload.self)?.keys
+                .contains("ui.railShortcuts") == true ? .personalPinsChanged : nil
+        case .configChanged:
             return .modelSelectionChanged
-        case "sessions.changed":
+        case .sessionsChanged:
             return decode(OpenClawChatSessionsChangedEvent.self).map(OpenClawChatTransportEvent.sessionsChanged)
-        case "session.reaction":
+        case .sessionReaction:
             guard let event = decode(SessionReactionEvent.self),
                   let reaction = try? self.reactionEvent(event) else { return nil }
             return .sessionReaction(reaction)
-        case "session.narration":
-            // Native foreground subscriptions use full streams; bounded narration
-            // tails cannot replace transcript messages.
-            return nil
-        case "session.observer":
+        case .sessionObserver:
             return decode(SessionObserverDigest.self).map(OpenClawChatTransportEvent.sessionObserver)
-        case "seqGap":
+        case .seqGap:
             return .seqGap
-        case "health":
+        case .health:
             guard let payload = frame.payload else { return nil }
             let ok = (try? GatewayPayloadDecoding.decode(
                 payload,
                 as: OpenClawGatewayHealthOK.self))?.ok ?? true
             return .health(ok: ok)
-        case "chat":
+        case .chat:
             return decode(OpenClawChatEventPayload.self).map(OpenClawChatTransportEvent.chat)
-        case "session.message":
-            guard let message = decode(OpenClawSessionMessageEventPayload.self)
-            else { return nil }
-            if var canonicalMessage = message.message,
-               canonicalMessage.transcriptMessageID?
-                   .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
-                   let messageID = message.messageId?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !messageID.isEmpty
-            {
-                // Live events carry durable transcript identity on their envelope.
-                // Preserve it on the row so history cannot replay the same message.
-                canonicalMessage.transcriptMessageID = messageID
-                return .sessionMessage(OpenClawSessionMessageEventPayload(
-                    sessionKey: message.sessionKey,
-                    agentId: message.agentId,
-                    message: canonicalMessage,
-                    messageId: message.messageId,
-                    messageSeq: message.messageSeq,
-                    hasActiveRun: message.hasActiveRun,
-                    activeRunIds: message.activeRunIds,
-                    activeRunIdsPresent: message.activeRunIdsPresent))
-            }
-            return .sessionMessage(message)
-        case "agent":
+        case .sessionMessage:
+            return decode(OpenClawSessionMessageEventPayload.self).map { .sessionMessage(self.canonicalized($0)) }
+        // The Gateway mirrors the same tool payload under session.tool for attached viewers.
+        case .agent, .sessionTool:
             return decode(OpenClawAgentEventPayload.self).map(OpenClawChatTransportEvent.agent)
-        case "progressCard.changed":
+        case .progressCardChanged:
             return decode(ProgressCardChangedEvent.self).map(OpenClawChatTransportEvent.progressCardChanged)
-        case "question.requested":
+        case .sessionPullRequestsChanged:
+            return decode(OpenClawSessionPullRequestsChangedEvent.self)
+                .map(OpenClawChatTransportEvent.sessionPullRequestsChanged)
+        case .questionRequested:
             return decode(QuestionRecord.self).map(OpenClawChatTransportEvent.questionRequested)
-        case "question.resolved":
+        case .questionResolved:
             return decode(OpenClawQuestionResolvedEvent.self).map(OpenClawChatTransportEvent.questionResolved)
-        default:
-            return nil
         }
+    }
+
+    /// Live events carry durable transcript identity on their envelope. Preserve it on the row so history
+    /// cannot replay the same message.
+    private static func canonicalized(
+        _ message: OpenClawSessionMessageEventPayload) -> OpenClawSessionMessageEventPayload
+    {
+        guard var canonicalMessage = message.message,
+              canonicalMessage.transcriptMessageID?
+                  .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+                  let messageID = message.messageId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !messageID.isEmpty
+        else { return message }
+        canonicalMessage.transcriptMessageID = messageID
+        return OpenClawSessionMessageEventPayload(
+            sessionKey: message.sessionKey,
+            agentId: message.agentId,
+            message: canonicalMessage,
+            messageId: message.messageId,
+            messageSeq: message.messageSeq,
+            hasActiveRun: message.hasActiveRun,
+            activeRunIds: message.activeRunIds,
+            activeRunIdsPresent: message.activeRunIdsPresent)
     }
 }

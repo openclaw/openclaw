@@ -8,6 +8,7 @@ import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { sleep } from "../utils/sleep.js";
 import {
   createSessionObserverCompletion,
   reportSessionObserverDegradation,
@@ -37,6 +38,7 @@ beforeEach(() => {
           modelIdNormalization: {
             providers: { openai: { aliases: { "private-manifest-alias": "gpt-test" } } },
           },
+          modelCatalog: { providers: { openai: { defaultUtilityModel: "gpt-test", models: [] } } },
         },
       ],
     }),
@@ -131,6 +133,54 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
   },
 );
 
+it.each([
+  { name: "provider default", utilityModel: undefined, agentUtilityModel: undefined, warnings: 0 },
+  {
+    name: "configured fallback",
+    utilityModel: { fallbacks: ["openai/gpt-recovery"] },
+    agentUtilityModel: undefined,
+    warnings: 1,
+  },
+  {
+    name: "per-agent model",
+    utilityModel: undefined,
+    agentUtilityModel: "openai/gpt-test",
+    warnings: 1,
+  },
+])(
+  "only posts a conversation warning for explicit utility settings: $name",
+  async ({ utilityModel, agentUtilityModel, warnings }) => {
+    const notices: AgentEventPayload[] = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      if (evt.stream === "notice") {
+        notices.push(evt);
+      }
+    });
+    const prepareModel = vi.fn(async () => {
+      throw new Error("Synthetic utility model failure");
+    });
+    const harness = createHarness({
+      prepareModel,
+      config: {
+        agents: {
+          defaults: { model: "openai/gpt-main", utilityModel },
+          entries: { main: { utilityModel: agentUtilityModel } },
+        },
+      },
+    });
+    try {
+      await startAndAddToolNotes(harness.observer);
+      await advance(24_000);
+      expect(prepareModel).toHaveBeenCalledTimes(2);
+      expect(notices).toHaveLength(warnings);
+      await advance(60_000);
+      expect(prepareModel).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
+    }
+  },
+);
+
 it("names missing models and exhausted utility fallbacks without exposing provider error text", async () => {
   const cfg = {
     agents: {
@@ -186,7 +236,7 @@ it("names missing models and exhausted utility fallbacks without exposing provid
 
 function completionAfter(delay?: number) {
   return vi.fn(
-    (params: { abortSignal?: AbortSignal }) =>
+    (params: { abortSignal?: AbortSignal; timeoutMs: number }) =>
       new Promise<ReturnType<typeof modelMessage>>((resolve, reject) => {
         params.abortSignal!.addEventListener("abort", () => reject(new Error("aborted")), {
           once: true,
@@ -196,6 +246,8 @@ function completionAfter(delay?: number) {
             () => resolve(modelMessage({ headline: "Working", health: "on-track" })),
             delay,
           );
+        } else {
+          setTimeout(() => reject(new Error("candidate timed out")), params.timeoutMs);
         }
       }),
   );
@@ -218,6 +270,7 @@ it("reports a redacted, collapsed, bounded prefix of the last of two rejected re
     prepareModel: vi.fn(async () => ({ ...preparedModel(), config: {} })),
     completeModel,
     isCurrent: () => true,
+    readEntry: async () => undefined,
   });
   const error = await request(observerState(), []).catch((caught: unknown) => caught);
   expect(error).toBeInstanceOf(Error);
@@ -248,20 +301,89 @@ it("publishes a digest from a utility model that answers after 15s", async () =>
   expectBroadcast(harness, { headline: "Working", health: "on-track" });
 });
 
-it("aborts stuck completions at the cap and disables the run after two failures", async () => {
+it("gives the last utility fallback its own model budget after slow preparation", async () => {
+  const isolated = vi.fn(async (params: Parameters<typeof runUtilityCompletion>[0]) => {
+    const recovers = params.provider === "anthropic";
+    await sleep(recovers ? 29_000 : params.timeoutMs);
+    if (!recovers) {
+      throw new FailoverError("Candidate timed out", { reason: "timeout" });
+    }
+    return modelMessage({ headline: "Recovered", health: "on-track" });
+  });
+  const completeModel = vi.fn<typeof defaultCompleteModel>((params) =>
+    runUtilityCompletion(params, isolated),
+  );
+  const request = createSessionObserverCompletion({
+    getConfig: () => ({
+      agents: {
+        defaults: {
+          utilityModel: { primary: "openai/gpt-test", fallbacks: ["anthropic/claude-haiku-5-5"] },
+        },
+      },
+    }),
+    prepareModel: vi.fn(async () => {
+      await sleep(2_000);
+      return { ...preparedModel(), useUtilityModel: true as const };
+    }),
+    completeModel,
+    isCurrent: () => true,
+    readEntry: async () => undefined,
+  });
+  const settled = request(observerState(), []).catch((error: unknown) => error);
+  await advance(2_000 + 30_000 + 29_000);
+  await expect(settled).resolves.toMatchObject({ headline: "Recovered", health: "on-track" });
+});
+
+it("disables the run after two timed-out completions", async () => {
   const completeModel = completionAfter();
-  const signal = (index: number) => completeModel.mock.calls[index]?.[0].abortSignal;
   const harness = createHarness({ completeModel });
   await startAndAddToolNotes(harness.observer);
-  await advance(12_000);
-  await advance(29_999);
-  expect(signal(0)?.aborted).toBe(false);
-  await advance(1);
-  expect(signal(0)?.aborted).toBe(true);
+  await advance(12_000 + 30_000);
   expect(completeModel).toHaveBeenCalledTimes(2);
-  await advance(30_000);
-  expect(signal(1)?.aborted).toBe(true);
-  await advance(60_000);
+  await advance(90_000);
   expect(completeModel).toHaveBeenCalledTimes(2);
   expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
+});
+
+it("uses a healthy configured fallback when the primary returns invalid observer JSON", async () => {
+  const cfg = {
+    agents: {
+      defaults: {
+        utilityModel: { primary: "fixture/primary", fallbacks: ["fixture/recovery"] },
+      },
+    },
+  };
+  const attempted: string[] = [];
+  const complete: NonNullable<Parameters<typeof runUtilityCompletion>[1]> = async (request) => {
+    attempted.push(request.model);
+    return {
+      ...modelMessage(
+        request.model === "recovery"
+          ? { headline: "Recovered", health: "on-track" }
+          : { headline: "Invalid optional field", health: "on-track", planProgress: null },
+      ),
+      provider: request.provider,
+      model: request.model,
+    };
+  };
+  const request = createSessionObserverCompletion({
+    getConfig: () => cfg,
+    prepareModel: async () => ({
+      ...preparedModel(),
+      config: cfg,
+      provider: "fixture",
+      model: "primary",
+      useUtilityModel: true,
+    }),
+    completeModel: (params) => runUtilityCompletion(params, complete),
+    isCurrent: () => true,
+    readEntry: async () => undefined,
+  });
+  const result = await request(observerState({ utilityModelRef: "fixture/primary" }), []).catch(
+    (error: unknown) => error,
+  );
+  expect({ result, attempted }).toMatchObject({
+    result: { headline: "Recovered", health: "on-track" },
+    attempted: ["primary", "recovery"],
+  });
 });

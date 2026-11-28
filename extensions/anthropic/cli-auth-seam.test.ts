@@ -26,7 +26,11 @@ function mockStatus(payload: unknown, code: number | null = 0) {
 }
 
 it("asks Claude CLI for its active account and returns only safe display fields", async () => {
-  const account = { authMethod: "claude.ai", email: "account@example.test" };
+  const account = {
+    authMethod: "claude.ai",
+    email: "account@example.test",
+    subscriptionType: "max",
+  };
   mockStatus({
     loggedIn: true,
     ...account,
@@ -44,6 +48,18 @@ it("asks Claude CLI for its active account and returns only safe display fields"
     ["/test/claude", "auth", "status", "--json"],
     expect.objectContaining({ timeoutMs: 10_000, killProcessTree: true }),
   );
+});
+
+it.each([
+  ["/claude/config", { configDirectory: "/claude/config" }],
+  ["relative/config", {}],
+])("reports only an absolute Claude config directory: %s", async (configDirectory, expected) => {
+  mockStatus({ loggedIn: true, authMethod: "claude.ai", configDirectory });
+  expect(await probeClaudeCliAuthStatus({ command: "/test/claude" })).toEqual({
+    status: "available",
+    authMethod: "claude.ai",
+    ...expected,
+  });
 });
 
 it.each(['["CLAUDE_CODE_OAUTH_TOKEN"]', "CLAUDE_CODE_OAUTH_TOKEN, OTHER"])(
@@ -155,3 +171,26 @@ it("does not turn a cancelled probe into a logged-out account", async () => {
   });
   await expect(probeClaudeCliAuthStatus({ signal: controller.signal })).rejects.toBe(reason);
 });
+
+it.skipIf(process.platform === "win32")(
+  "lets a cancelled probe finish Claude's token refresh and release its lock",
+  () =>
+    withTempDir("anthropic-cli-auth-", async (dir) => {
+      const lock = path.join(dir, ".oauth_refresh.lock");
+      const claude = path.join(dir, "claude");
+      // Models Claude Code: `auth status` holds the refresh lock while it refreshes the token.
+      await fs.writeFile(
+        claude,
+        `#!${process.execPath}\nconst fs = require("node:fs");\nfs.mkdirSync(${JSON.stringify(lock)});\nsetTimeout(() => { fs.rmdirSync(${JSON.stringify(lock)}); process.stdout.write('{"loggedIn":true}'); }, 500);\n`,
+        { mode: 0o755 },
+      );
+      runCommand.mockImplementation(actual.runUtf8CommandWithTimeout);
+      const controller = new AbortController();
+      const reason = new Error("discovery cancelled mid-refresh");
+      const probe = probeClaudeCliAuthStatus({ command: claude, signal: controller.signal });
+      await vi.waitFor(() => expect(fs.stat(lock)).resolves.toBeDefined(), { interval: 5 });
+      controller.abort(reason);
+      await expect(probe).rejects.toBe(reason);
+      await expect(fs.stat(lock)).rejects.toMatchObject({ code: "ENOENT" });
+    }),
+);

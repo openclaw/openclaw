@@ -83,6 +83,9 @@ openclaw plugins marketplace list <source> [--json]
 openclaw plugins marketplace refresh [--feed-profile <name>] [--expected-sha256 <sha256>] [--json]
 ```
 
+An accepted interrupt cancels the pending catalog reads for read-only
+`plugins search` and suppresses late search results or errors.
+
 For slow install, inspect, uninstall, or registry-refresh investigation, run the
 command with `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1`. The trace writes phase timings
 to stderr and keeps JSON output parseable. See [Debugging](/help/debugging#plugin-lifecycle-trace).

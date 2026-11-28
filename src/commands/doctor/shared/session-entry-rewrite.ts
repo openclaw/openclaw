@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sql } from "kysely";
 import type { DoctorSessionScanScope } from "../../../config/sessions/session-accessor.sqlite-canonical-inventory.js";
@@ -30,8 +31,14 @@ import { deriveSessionPredicateColumns } from "../../../config/sessions/session-
 import { stripRuntimeOnlySessionSkillsFields } from "../../../config/sessions/store-entry-shape.js";
 import { assertSupportedSessionStoreEntry } from "../../../config/sessions/supported-session-store.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import { decodeQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 import { withEngineStoreAdmission } from "../../../infra/database-engine/admission-scope.js";
-import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../../../infra/kysely-sync.js";
+import { jsonPathValue } from "../../../infra/database-engine/json-values.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
+} from "../../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../../infra/sql-connection.js";
 import {
   prepareArtifactPreservingSqliteRead,
@@ -42,7 +49,8 @@ import {
   readDatabasePathIdentitySync,
   type DatabaseFileIdentity,
 } from "../../../infra/sqlite-worker-identity.js";
-import { hasUpdateDoctorMigrationCapture } from "../../../infra/update-doctor-migration-attribution.js";
+import { hasUpdateDoctorMigrationCapture } from "../../../infra/update-doctor-migration-context.js";
+import { withArtifactPreservingStateReads } from "../../../state/artifact-preserving-state-reads.js";
 import { agentEngineInput } from "../../../state/openclaw-agent-db-engine.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../../state/openclaw-agent-db-identity.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent-db-readonly-open.js";
@@ -50,13 +58,18 @@ import { withOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent
 import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
+  type OpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
-import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-maintenance-context.js";
+import {
+  getOpenClawDatabaseMaintenanceScope,
+  readCustodiedDrainedSqliteSource,
+} from "../../../state/openclaw-state-maintenance-context.js";
 import { chunkItems } from "../../../utils/chunk-items.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
 } from "../../../utils/delivery-context.read.js";
+import { doctorMigrationBackupPath } from "../../doctor-migration-backup-names.js";
 import {
   inspectLegacyRestartTombstone,
   migrateLegacySessionEntryState,
@@ -79,7 +92,7 @@ export async function scanDoctorSessionEntryRecords(
   scope: DoctorSessionScanScope,
   visit: (record: { sessionKey: string; entry: Record<string, unknown> }) => void,
   expectedIdentity: DatabaseFileIdentity,
-  visitStartupRow?: (row: StartupSessionRow) => void,
+  visitStartupRow?: (row: StartupSessionRow, database: Pick<OpenClawAgentDatabase, "db">) => void,
 ): Promise<void> {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const databaseOptions = toDatabaseOptions(resolved);
@@ -110,6 +123,7 @@ export async function scanDoctorSessionEntryRecords(
             WHERE key IN (${sql.join(LEGACY_SESSION_ENTRY_STATE_FIELDS)})
               OR key IN ('provider', 'lastProvider', 'room')
               OR key = 'mainRestartRecovery'
+              OR key = 'resumeAfterRestart'
               OR (key = 'pendingFinalDelivery' AND json_typeof(value) = 'boolean')
               OR (key = 'status' AND value #>> '{}' IN ('running', 'queued'))
               OR (key IN (${sql.join(SESSION_ENTRY_NUMERIC_FIELDS)}) AND json_typeof(value) = 'string')
@@ -119,6 +133,7 @@ export async function scanDoctorSessionEntryRecords(
             WHERE key IN (${sql.join(LEGACY_SESSION_ENTRY_STATE_FIELDS)})
               OR key IN ('provider', 'lastProvider', 'room')
               OR key = 'mainRestartRecovery'
+              OR key = 'resumeAfterRestart'
               OR (key = 'pendingFinalDelivery' AND type IN ('true', 'false'))
               OR (key = 'status' AND value IN ('running', 'queued'))
               OR (key IN (${sql.join(SESSION_ENTRY_NUMERIC_FIELDS)}) AND type = 'text')
@@ -140,7 +155,7 @@ export async function scanDoctorSessionEntryRecords(
               .select(["current_session_id", "updated_at"])
               .select(legacyState.as("legacy_state")),
           )) {
-            visitStartupRow(row);
+            visitStartupRow(row, database);
             if (row.legacy_state) {
               visitLegacyRow(row);
             }
@@ -158,6 +173,15 @@ export async function scanDoctorSessionEntryRecords(
       return scan(databaseOptions, expectedIdentity);
     }
     assertSourceCurrent();
+    if (readCustodiedDrainedSqliteSource(scope.storePath)) {
+      // The backup owner has already drained WAL under the same maintenance custody.
+      const inPlace = withArtifactPreservingStateReads(
+        () => scan(databaseOptions, expectedIdentity),
+        { agentDatabases: true },
+      );
+      assertSourceCurrent();
+      return inPlace;
+    }
     // The child pins the original source identity; the reader keeps its private identity.
     await using capturedSnapshot = {
       preparation: startSqliteReadOnlyLocationAsync(scope.storePath, {
@@ -183,16 +207,70 @@ export async function scanDoctorSessionEntryRecords(
   }
 }
 
-/** Startup normalizes legacy outcomes before canonical reads; clean stores stay read-only. */
-export async function repairLegacySessionRunOutcomes(
+/** Rotated cuts copied a tree and appended a leaf; in-place cuts marked the displaced branch. */
+function readUncountedCutWindow(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  entry: Record<string, unknown> | null,
+): string | undefined {
+  if (typeof entry?.sessionId !== "string" || entry.compactionCount !== undefined) {
+    return undefined;
+  }
+  const rotated = typeof entry.previousSessionId === "string";
+  if (!rotated && typeof entry.lifecycleRevision !== "string") {
+    return undefined;
+  }
+  const leaves = getSessionKysely(database.db)
+    .selectFrom("transcript_event_identities as leaf")
+    .where("leaf.session_id", "=", entry.sessionId)
+    .where("leaf.event_type", "=", "leaf");
+  if (rotated) {
+    return executeSqliteQueryTakeFirstSync(database.db, leaves.select("leaf.seq").limit(1))
+      ? entry.sessionId
+      : undefined;
+  }
+  const rows = iterateSqliteQuerySync(
+    database.db,
+    leaves
+      .innerJoin("transcript_events as event", (join) =>
+        join.onRef("event.session_id", "=", "leaf.session_id").onRef("event.seq", "=", "leaf.seq"),
+      )
+      .select((eb) =>
+        eb.fn
+          .coalesce(
+            "event.event_json",
+            jsonPathValue(
+              database.db,
+              eb.ref("event.navigation_json"),
+              eb.val("$.report.entry"),
+              "json",
+            ),
+          )
+          .as("marker"),
+      )
+      .orderBy("leaf.seq", "desc"),
+  );
+  for (const { marker } of rows) {
+    if (marker && safeParseJsonRecord(marker)?.billsDisplaced === true) {
+      return entry.sessionId;
+    }
+  }
+  return undefined;
+}
+
+/** Normalize legacy entries before canonical reads; clean stores stay read-only. */
+export async function repairLegacyStartupSessionEntries(
   scope: DoctorSessionScanScope,
   assertCurrent: () => void,
-  visitStartupRow: (row: StartupSessionRow) => void,
+  visitStartupEntry: (
+    entry: ReturnType<typeof parseSqliteSessionEntryRecord>,
+    sessionKey: string,
+  ) => void,
   warn: (message: string) => void,
 ): Promise<{ repaired: number; terminalUnmatched: number }> {
   assertCurrent();
   const expectedIdentity = readDatabasePathIdentitySync(scope.storePath);
-  const sessionKeys: string[] = [];
+  const runKeys = new Set<string>();
+  const cutKeys = new Set<string>();
   const tombstones = new Set<string>();
   const warnings = new Map<string, string>();
   let terminalUnmatched = 0;
@@ -217,15 +295,27 @@ export async function repairLegacySessionRunOutcomes(
       ) {
         tombstones.add(sessionKey);
       }
-      if (entry.status === "running" || entry.status === "queued" || tombstones.has(sessionKey)) {
-        sessionKeys.push(sessionKey);
+      const resume = entry.resumeAfterRestart;
+      if (
+        entry.status === "running" ||
+        entry.status === "queued" ||
+        tombstones.has(sessionKey) ||
+        (isRecord(resume) && ("queuedInputIds" in resume || "queuedInputSources" in resume))
+      ) {
+        runKeys.add(sessionKey);
       }
     },
     expectedIdentity,
-    visitStartupRow,
+    (row, database) => {
+      const entry = parseSqliteSessionEntryRecord(row);
+      visitStartupEntry(entry, row.session_key);
+      if (readUncountedCutWindow(database, entry) !== undefined) {
+        cutKeys.add(row.session_key);
+      }
+    },
   );
   assertCurrent();
-  if (sessionKeys.length === 0) {
+  if (runKeys.size === 0 && cutKeys.size === 0) {
     reportWarnings();
     return { repaired: 0, terminalUnmatched };
   }
@@ -241,28 +331,72 @@ export async function repairLegacySessionRunOutcomes(
     const { createVerifiedSqliteSnapshot } = await import("../../../infra/sqlite-snapshot.js");
     await createVerifiedSqliteSnapshot({
       sourcePath: scope.storePath,
-      targetPath: `${scope.storePath}.pre-startup-migration-restart-recovery-${randomUUID()}.bak`,
+      targetPath: doctorMigrationBackupPath(scope.storePath, randomUUID(), "restart-recovery"),
       preserveRowIds: true,
       beforePublish: assertRepairCurrent,
     });
     assertRepairCurrent();
   }
+  const countCut = cutKeys.size
+    ? (await import("../../../config/sessions/session-accessor.sqlite-compaction-selection.js"))
+        .countRetainedCutCompactions
+    : undefined;
   const repair = () =>
     withEngineStoreAdmission(() => {
       assertRepairCurrent();
       return rewriteDoctorSessionEntries({
         scope,
-        sessionKeys,
-        rawTransform: (entry, sessionKey, updatedAt) => {
+        sessionKeys: [...runKeys, ...cutKeys],
+        rawTransform: (stored, sessionKey, updatedAt, database) => {
+          const cut = cutKeys.has(sessionKey)
+            ? readUncountedCutWindow(database, stored)
+            : undefined;
+          const entry =
+            countCut && cut !== undefined
+              ? { ...stored, compactionCount: countCut(database, cut) }
+              : stored;
+          if (!runKeys.has(sessionKey)) {
+            return { entry };
+          }
           const tombstone = inspectLegacyRestartTombstone(entry);
           if (tombstone && !tombstone.doctorOnly) {
             warnings.set(sessionKey, tombstone.warning);
           }
-          return tombstone
+          const entryRepair: SessionEntryStateRepair = tombstone
             ? migrateLegacySessionEntryState(entry, updatedAt, {
                 preserveTerminalRestartCustody: true,
               })
             : { entry: migrateLegacySessionRunOutcome(entry, updatedAt) };
+          const resume = entry.resumeAfterRestart;
+          if (isRecord(resume) && ("queuedInputIds" in resume || "queuedInputSources" in resume)) {
+            const inputs: NonNullable<SessionEntryStateRepair["pendingInputOrigins"]>["inputs"] =
+              [];
+            if (isRecord(resume.queuedInputSources) && typeof entry.sessionId === "string") {
+              for (const [inputId, origin] of Object.entries(resume.queuedInputSources)) {
+                if (!isRecord(origin) || typeof origin.runId !== "string") {
+                  continue;
+                }
+                try {
+                  const source = decodeQueuedOperatorRecoverySource(origin.source);
+                  if (source.kind !== "unavailable") {
+                    inputs.push({
+                      inputId,
+                      runId: origin.runId,
+                      sourceJson: JSON.stringify(source),
+                    });
+                  }
+                } catch {
+                  // Invalid legacy provenance cannot restore authority; row recovery reports its absence.
+                }
+              }
+              entryRepair.pendingInputOrigins = { sessionId: entry.sessionId, inputs };
+            }
+            const marker = { ...resume };
+            delete marker.queuedInputIds;
+            delete marker.queuedInputSources;
+            entryRepair.entry = { ...entryRepair.entry, resumeAfterRestart: marker };
+          }
+          return entryRepair;
         },
         expectedIdentity,
         assertCurrent,
@@ -295,6 +429,7 @@ export function rewriteDoctorSessionEntries(
           entry: Record<string, unknown>,
           sessionKey: string,
           updatedAt: number,
+          database: Pick<OpenClawAgentDatabase, "db">,
         ) => SessionEntryStateRepair;
         transform?: never;
       }
@@ -341,6 +476,7 @@ export function rewriteDoctorSessionEntries(
           let numericProjection: ReturnType<typeof bindSessionEntryNumericChanges> | undefined;
           let snapshots: ReturnType<typeof splitSessionEntrySnapshots>["snapshots"] | undefined;
           let entryValid = row.entry_valid;
+          let retiresArchiveUndo: boolean;
           if (params.rawTransform) {
             const entry = safeParseJsonRecord(row.entry_json);
             if (!entry) {
@@ -352,8 +488,26 @@ export function rewriteDoctorSessionEntries(
             const previousFields = new Map(
               Object.entries(entry).map(([key, value]) => [key, JSON.stringify(value)]),
             );
-            const repair = params.rawTransform(entry, sessionKey, row.updated_at);
+            const repair = params.rawTransform(entry, sessionKey, row.updated_at, database);
             const transformed = repair.entry;
+            if (repair.pendingInputOrigins?.inputs.length) {
+              for (const origin of repair.pendingInputOrigins.inputs) {
+                executeSqliteQuerySync(
+                  database.db,
+                  db
+                    .updateTable("session_pending_inputs")
+                    .set({ origin_source_json: origin.sourceJson })
+                    .where("session_key", "=", sessionKey)
+                    .where("session_id", "=", row.current_session_id)
+                    .where("session_id", "=", repair.pendingInputOrigins.sessionId)
+                    .where("input_id", "=", origin.inputId)
+                    .where("run_id", "=", origin.runId)
+                    .where("state", "=", "queued")
+                    .where("consumed_event_id", "is", null)
+                    .where("origin_source_json", "is", null),
+                );
+              }
+            }
             numericProjection = repair.numericChanges
               ? bindSessionEntryNumericChanges(repair.numericChanges)
               : undefined;
@@ -390,6 +544,9 @@ export function rewriteDoctorSessionEntries(
             if (entryJson === row.entry_json) {
               continue;
             }
+            retiresArchiveUndo = ["pinnedAt", "archivedAt", "lifecycleRevision", "sessionId"].some(
+              (key) => previousFields.get(key) !== JSON.stringify(transformed[key]),
+            );
             if (previousFields.get("status") !== JSON.stringify(transformed.status)) {
               runOutcome = transformed;
             }
@@ -415,10 +572,20 @@ export function rewriteDoctorSessionEntries(
             attachSessionEntrySnapshots(entry, row);
             const previousJson = JSON.stringify(entry);
             const previousStatus = entry.status;
+            const archiveFacts = (candidate: SessionEntry) => [
+              candidate.sessionId,
+              candidate.lifecycleRevision,
+              candidate.archivedAt,
+              candidate.pinnedAt,
+            ];
+            const previousArchive = archiveFacts(entry);
             const transformedEntry = params.transform(entry, sessionKey);
             if (JSON.stringify(transformedEntry) === previousJson) {
               continue;
             }
+            retiresArchiveUndo = archiveFacts(transformedEntry).some(
+              (value, index) => value !== previousArchive[index],
+            );
             nextEntry = stripRuntimeOnlySessionSkillsFields(transformedEntry);
             ({ entryJson, snapshots } = splitSessionEntrySnapshots(nextEntry));
             entryValid = 1;
@@ -442,6 +609,7 @@ export function rewriteDoctorSessionEntries(
               .updateTable("session_nodes")
               .set({
                 entry_json: entryJson,
+                ...(retiresArchiveUndo ? { archive_undo_marker: null } : {}),
                 ...numericProjection?.node,
                 ...predicateColumns,
                 session_started_at: /* kysely-allow-raw: exact int64 bind; generated INTEGER reads are numbers. */ sql<

@@ -20,6 +20,7 @@ import { SettingsPage, SettingsRow, SettingsStatus } from "../../components/soli
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError, formatUiExternalText, UserFacingError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import type { NotificationAgentCatalog } from "./notification-agents.tsx";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import type { ConfigProps } from "./view-types.ts";
 import {
@@ -42,7 +43,7 @@ export type NotificationsSectionProps = Pick<
   | "onWebPushTest"
   | "onWebPushSetUserPreferences"
   | "onWebPushSetDevicePreferences"
->;
+> & { notificationAgents?: NotificationAgentCatalog; onNotificationAgentsLoad?: () => void };
 
 function NotificationSection(props: {
   title: string;
@@ -227,11 +228,7 @@ function WebPushSection(props: {
   actions: NotificationsSectionProps;
 }) {
   const read = createMemo(() => props.push.read);
-  const authoritativePreferences = createMemo(() => {
-    read();
-    return props.push.preferences;
-  });
-  const [preferences, setPreferences] = createOptimistic(() => authoritativePreferences());
+  const [preferences, setPreferences] = createOptimistic(() => props.push.preferences);
   const [saving, setSaving] = createOptimistic(false, { equals: false });
   const commandOutcome = createMemo(() => props.push.command);
   const present = action(function* (
@@ -247,7 +244,7 @@ function WebPushSection(props: {
       );
     }
     yield completion;
-    void refresh(authoritativePreferences);
+    void refresh(preferences);
   });
   const submit = (
     completion: Promise<void> | undefined,
@@ -261,6 +258,7 @@ function WebPushSection(props: {
         void present(completion, edit).catch(() => {});
       });
     }
+    return completion;
   };
   const busy = () => saving() || props.push.loading;
   const registered = () => props.push.subscription === "registered";
@@ -296,6 +294,9 @@ function WebPushSection(props: {
           ? "configView.notifications.gatewayAccessRequired"
           : "configView.notifications.gatewayDisconnected",
       );
+    }
+    if (props.push.supported && props.push.canManage && registered()) {
+      return t("configView.notifications.testAllBrowsersHint");
     }
     return undefined;
   };
@@ -335,7 +336,7 @@ function WebPushSection(props: {
                     <button
                       class="btn"
                       disabled={busy() || !props.actions.connected}
-                      onClick={() => submit(props.actions.onWebPushUnsubscribe?.())}
+                      onClick={() => void submit(props.actions.onWebPushUnsubscribe?.())}
                     >
                       <Icon name="x" /> {t("configView.notifications.unsubscribe")}
                     </button>
@@ -343,9 +344,9 @@ function WebPushSection(props: {
                       <button
                         class="btn"
                         disabled={busy() || !props.actions.connected}
-                        onClick={() => submit(props.actions.onWebPushTest?.())}
+                        onClick={() => void submit(props.actions.onWebPushTest?.())}
                       >
-                        <Icon name="send" /> {t("configView.notifications.sendTest")}
+                        <Icon name="send" /> {t("configView.notifications.testAllBrowsers")}
                       </button>
                     </Show>
                   </>
@@ -354,7 +355,7 @@ function WebPushSection(props: {
                     <button
                       class="btn primary"
                       disabled={busy() || !props.actions.connected}
-                      onClick={() => submit(props.actions.onWebPushSubscribe?.())}
+                      onClick={() => void submit(props.actions.onWebPushSubscribe?.())}
                     >
                       <Show when={busy()}>
                         <span class="btn__spinner" aria-hidden="true" />
@@ -388,13 +389,25 @@ function WebPushSection(props: {
       </NotificationSection>
       <Errored fallback={renderWebPushError}>
         <Loading on={props.push.read} fallback={null}>
-          <Show when={props.push.canReadPreferences ? latest(preferences) : (read(), undefined)}>
+          {(latest(read), null)}
+          <Show when={props.push.canReadPreferences && latest(preferences)}>
             {(current) => (
-              <div class="settings-stack" inert={busy() || isPending(authoritativePreferences)}>
+              <div class="settings-stack">
                 <Show when={current().durableIdentity}>
                   <UserNotificationPreferences
+                    submission={props.push.agentSelections?.user}
+                    writePending={busy() || isPending(read)}
+                    presentationScope={props.actions.presentationRetired()}
+                    agentCatalog={props.actions.notificationAgents}
+                    onLoadAgents={props.actions.onNotificationAgentsLoad}
                     disabled={!props.push.canManage || !props.actions.connected}
                     preferences={current().user}
+                    onSaveAgents={(ids) =>
+                      props.actions.onWebPushSetUserPreferences?.(
+                        { ...current().user, agentIds: ids ?? [] },
+                        "agentIds",
+                      )
+                    }
                     onChange={(value) =>
                       submit(props.actions.onWebPushSetUserPreferences?.(value), {
                         scope: "user",
@@ -404,8 +417,24 @@ function WebPushSection(props: {
                   />
                 </Show>
                 <DeviceNotificationPreferences
+                  submission={props.push.agentSelections?.device}
+                  writePending={busy() || isPending(read)}
+                  presentationScope={props.actions.presentationRetired()}
+                  agentCatalog={props.actions.notificationAgents}
+                  onLoadAgents={props.actions.onNotificationAgentsLoad}
+                  inheritedAgentIds={
+                    props.push.agentSelections?.user?.state === "pending"
+                      ? props.push.agentSelections.user.agentIds
+                      : current().user.agentIds
+                  }
                   disabled={!props.push.canManage || !props.actions.connected}
                   preferences={current().device}
+                  onSaveAgents={(agentIds) =>
+                    props.actions.onWebPushSetDevicePreferences?.(
+                      { ...current().device, agentIds },
+                      "agentIds",
+                    )
+                  }
                   onChange={(value) =>
                     submit(props.actions.onWebPushSetDevicePreferences?.(value), {
                       scope: "device",

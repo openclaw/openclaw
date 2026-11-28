@@ -1,6 +1,4 @@
 import { AsyncResource } from "node:async_hooks";
-import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildChannelInboundEventContext } from "../channels/inbound-event/context.js";
 import {
@@ -19,6 +17,7 @@ import {
 import { recordAcceptedSessionParticipantInput } from "../sessions/session-participant-input-recording.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -145,8 +144,12 @@ afterEach(async () => {
 });
 
 it("keeps adopted channel operations usable after their captured registry is collected", async () => {
+  const references: WeakRef<object>[] = [];
   class RetainedService {
     id = "retired-channel-scope";
+    constructor() {
+      references.push(new WeakRef(this));
+    }
     start() {}
   }
   const registryBuilder = createRegistry(createPluginRuntime());
@@ -193,8 +196,7 @@ it("keeps adopted channel operations usable after their captured registry is col
   })();
   const input = { channelId: record.id, targetSessionKey: "agent:main:channel:dm:fixture" };
   try {
-    await setImmediate();
-    expect(queryObjects(RetainedService)).toBe(0);
+    await expectCollected(...references);
     for (const readChannel of [() => capturedChannel, () => api.runtime.channel]) {
       await resource.runInAsyncScope(async () => {
         const channel = readChannel();
@@ -390,7 +392,7 @@ describe("bundled channel ingress runtime ownership", () => {
     }
   });
 
-  it("binds authenticated owner turns to the exact live trusted channel plugin", async () => {
+  it("binds ingress turns to the live channel plugin, trusted or not", async () => {
     const runtime = createPluginRuntime();
     const command = vi.fn(async () => ({ payloads: [] }));
     Object.defineProperty(runtime.agent, "runCommandFromIngress", {
@@ -413,61 +415,116 @@ describe("bundled channel ingress runtime ownership", () => {
     };
     const { record: owner, api: ownerApi } = addPlugin("discord", "bundled", "discord");
     const { api: foreignApi } = addPlugin("foreign", "bundled");
-    const { record: untrusted, api: untrustedApi } = addPlugin(
-      "impostor",
+    const { record: community, api: communityApi } = addPlugin(
+      "community-chat",
       "workspace",
       "community",
     );
     markPluginRegistryActive(registryBuilder.registry);
     const options = {
-      message: "owner turn",
+      message: "voice turn",
       messageChannel: "discord" as const,
-      senderIsOwner: true,
+      runContext: { senderId: "owner-1" },
       allowModelOverride: false,
     };
     const commandRuntime = { log: vi.fn(), error: vi.fn() } as never;
     const retained = ownerApi.runtime.agent.runCommandFromIngress;
 
     await expect(retained(options, commandRuntime)).resolves.toEqual({ payloads: [] });
-    expect(command).toHaveBeenCalledWith(options, commandRuntime);
+    expect(command).toHaveBeenLastCalledWith(
+      { ...options, senderIsOwner: false, toolBindings: undefined },
+      commandRuntime,
+    );
     await expect(
       foreignApi.runtime.agent.runCommandFromIngress(options, commandRuntime),
-    ).rejects.toThrow('Plugin "foreign" cannot admit authenticated owner authority');
-    const guestOptions = { ...options, messageChannel: "community", senderIsOwner: false };
-    const retainedGuest = untrustedApi.runtime.agent.runCommandFromIngress;
-    await expect(retainedGuest(guestOptions, commandRuntime)).resolves.toEqual({ payloads: [] });
-    expect(command).toHaveBeenLastCalledWith(guestOptions, commandRuntime);
-    let ownerClaimReads = 0;
+    ).rejects.toThrow('Plugin "foreign" cannot run turns for channel "discord"');
+
+    // A community plugin's owner claim no longer fails the turn; the host decides owner.
+    const claimed = { ...options, messageChannel: "community", senderIsOwner: true };
+    const retainedCommunity = communityApi.runtime.agent.runCommandFromIngress;
+    await expect(retainedCommunity(claimed, commandRuntime)).resolves.toEqual({ payloads: [] });
+    expect(command).toHaveBeenLastCalledWith(
+      { ...claimed, toolBindings: undefined },
+      commandRuntime,
+    );
     let channelReads = 0;
-    const changingGuestOptions = {
-      ...guestOptions,
-      get senderIsOwner() {
-        return ownerClaimReads++ > 0;
-      },
+    const changingOptions = {
+      ...options,
       get messageChannel() {
         return channelReads++ === 0 ? "community" : "discord";
       },
     };
-    await expect(retainedGuest(changingGuestOptions, commandRuntime)).resolves.toEqual({
+    await expect(retainedCommunity(changingOptions, commandRuntime)).resolves.toEqual({
       payloads: [],
     });
     expect(command).toHaveBeenLastCalledWith(
-      expect.objectContaining({ messageChannel: "community", senderIsOwner: false }),
+      expect.objectContaining({ messageChannel: "community" }),
       commandRuntime,
     );
-    expect({ ownerClaimReads, channelReads }).toEqual({ ownerClaimReads: 1, channelReads: 1 });
-    await expect(
-      retainedGuest({ ...guestOptions, senderIsOwner: true }, commandRuntime),
-    ).rejects.toThrow('Plugin "impostor" cannot admit authenticated owner authority');
+    expect(channelReads).toBe(1);
 
     registryBuilder.rollbackPluginGlobalSideEffects(owner.id, owner);
     await expect(retained(options, commandRuntime)).rejects.toThrow(
-      'Plugin "discord" cannot admit authenticated owner authority',
+      'Plugin "discord" cannot run turns for channel "discord"',
     );
-    registryBuilder.rollbackPluginGlobalSideEffects(untrusted.id, untrusted);
-    await expect(retainedGuest(guestOptions, commandRuntime)).rejects.toThrow(
-      'Plugin "impostor" cannot admit authenticated owner authority',
+    registryBuilder.rollbackPluginGlobalSideEffects(community.id, community);
+    await expect(retainedCommunity(claimed, commandRuntime)).rejects.toThrow(
+      'Plugin "community-chat" cannot run turns for channel "community"',
     );
+    expect(command).toHaveBeenCalledTimes(3);
+  });
+
+  it("admits channel-less voice-bridge turns with bindings only for the plugin's own tools", async () => {
+    const runtime = createPluginRuntime();
+    const command = vi.fn(async () => ({ payloads: [] }));
+    Object.defineProperty(runtime.agent, "runCommandFromIngress", {
+      configurable: true,
+      value: command,
+    });
+    const registryBuilder = createRegistry(runtime);
+    const addPlugin = (id: string, origin: "bundled" | "workspace") => {
+      const record = createPluginRecord({ id, origin, contracts: { tools: [`${id}_call`] } });
+      registryBuilder.registry.plugins.push(record);
+      return registryBuilder.createApi(record, { config: {} }).runtime.agent.runCommandFromIngress;
+    };
+    const bundled = addPlugin("phone", "bundled");
+    const community = addPlugin("bridge", "workspace");
+    markPluginRegistryActive(registryBuilder.registry);
+    const commandRuntime = { log: vi.fn(), error: vi.fn() } as never;
+    const guest = {
+      message: "caller turn",
+      allowModelOverride: false,
+      toolBindings: { phone_call: { kind: "active-call", callId: "call-1" } },
+    };
+
+    await expect(bundled(guest, commandRuntime)).resolves.toEqual({ payloads: [] });
+    expect(command).toHaveBeenLastCalledWith(
+      { ...guest, senderIsOwner: false, messageChannel: undefined },
+      commandRuntime,
+    );
+    // A bundled bridge that authenticated its owner (FaceTime owner handles) may elevate.
+    await expect(bundled({ ...guest, senderIsOwner: true }, commandRuntime)).resolves.toEqual({
+      payloads: [],
+    });
+    expect(command).toHaveBeenLastCalledWith(
+      { ...guest, senderIsOwner: true, messageChannel: undefined },
+      commandRuntime,
+    );
+    const communityGuest = { message: "caller turn", allowModelOverride: false };
+    await expect(community(communityGuest, commandRuntime)).resolves.toEqual({ payloads: [] });
+
+    await expect(
+      community({ ...communityGuest, senderIsOwner: true }, commandRuntime),
+    ).rejects.toThrow('Plugin "bridge" cannot admit authenticated owner authority');
+    await expect(bundled({ ...guest, messageChannel: "discord" }, commandRuntime)).rejects.toThrow(
+      'Plugin "phone" cannot run turns for channel "discord"',
+    );
+    await expect(
+      bundled({ ...guest, toolBindings: { browser: { kind: "tab" } } }, commandRuntime),
+    ).rejects.toThrow('Plugin "phone" cannot bind tool "browser" it does not declare.');
+    await expect(
+      community({ ...communityGuest, toolBindings: guest.toolBindings }, commandRuntime),
+    ).rejects.toThrow('Plugin "bridge" cannot bind tool "phone_call" it does not declare.');
     expect(command).toHaveBeenCalledTimes(3);
   });
 
@@ -694,7 +751,9 @@ describe("bundled channel ingress runtime ownership", () => {
 
     expectIngress(bundled, { ...first }, "unknown");
     expectIngress(bundled, [first, same], "present", { messageId: "message-2" });
-    expectIngress(bundled, [first, mixed], "unknown");
+    expectIngress(bundled, [await bundled.resolveIngress("person-a"), mixed], "unknown", {
+      senderId: "person-b",
+    });
   });
 });
 

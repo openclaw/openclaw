@@ -283,12 +283,15 @@ describe("attemptServerEndpointCompaction", () => {
   });
 
   it("preserves the transcript for client recovery when the budget endpoint rejects", async () => {
-    requestPreparedCompactionMock.mockRejectedValueOnce(new Error("Context window exceeded"));
+    requestPreparedCompactionMock.mockRejectedValueOnce(
+      new Error("400 Your input exceeds the context window of this model."),
+    );
     const onCompactionCommitted = vi.fn();
     const { session, result } = attempt({ trigger: "budget", onCompactionCommitted });
     const before = structuredClone(session.sessionManager.getBranch());
 
-    await expect(result).resolves.toBeUndefined();
+    const outcome = await result;
+    expect(outcome, JSON.stringify(vi.mocked(log.warn).mock.calls)).toBe("context-overflow");
     expect(requestPreparedCompactionMock).toHaveBeenCalledOnce();
     expect(onCompactionCommitted).not.toHaveBeenCalled();
     expect(session.sessionManager.getBranch()).toEqual(before);
@@ -302,7 +305,7 @@ describe("attemptServerEndpointCompaction", () => {
   ] as const)(
     "admits a returned window iff it fits after charging %s",
     async (_name, fits, fixedTokens, pendingTokens, reserveTokens) => {
-      const userText = fits ? "old history ".repeat(4_000) : "source text ".repeat(400);
+      const userText = fits ? "old history ".repeat(100) : "source text ".repeat(400);
       const session = createSession(openAIModel, undefined, userText);
       const before = structuredClone(session.sessionManager.getBranch());
       const response = createCompactionResponse(openAIModel, fits ? sourceText : userText);

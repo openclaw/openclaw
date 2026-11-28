@@ -14,6 +14,7 @@ import {
   type BootRecordOwner,
 } from "./boot-record.ts";
 import type { ApplicationGatewayConnection } from "./gateway.ts";
+import { retirePluginRecoveryStorage } from "./plugin-recovery-storage.ts";
 import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import { clearWarmBootState } from "./warm-boot-retirement.ts";
 
@@ -47,6 +48,7 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
   let scope: string | undefined;
   let capturedOwner: BootRecordOwner | undefined;
   let liveOwner: BootRecordOwner | undefined;
+  let hasReceivedHello = false;
   return {
     get hasWarmBoot() {
       return capturedOwner !== undefined;
@@ -88,6 +90,22 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
           ? bootRecordOwner(credentials)
           : undefined;
     },
+    connectionAfterHello(connection: ApplicationGatewayConnection, controlUiBuildFresh: boolean) {
+      // Preserve pending initial recovery only when hello changes no authority.
+      // Later hellos, stale builds, and retired bootstrap credentials fence it.
+      const preserveInitialConnection =
+        !hasReceivedHello &&
+        controlUiBuildFresh &&
+        !connection.bootstrapToken &&
+        connection.bootstrapProfile === undefined;
+      hasReceivedHello = true;
+      return preserveInitialConnection
+        ? connection
+        : { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
+    },
+    acceptRecoveryScope(gatewayUrl: string, recoveryScope?: string): void {
+      retirePluginRecoveryStorage(gatewayUrl, recoveryScope);
+    },
     retire(clearCaches: boolean): void {
       const gatewayScope = scope;
       const owners = capturedOwner ? [capturedOwner] : [];
@@ -100,6 +118,7 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
       if (!gatewayScope) {
         return;
       }
+      retirePluginRecoveryStorage(gatewayScope);
       const clear = clearCaches ? clearWarmBootState : clearBootRecords;
       for (const owner of owners) {
         void clear(gatewayScope, owner);

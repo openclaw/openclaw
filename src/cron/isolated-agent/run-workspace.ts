@@ -5,6 +5,10 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionEffectRef } from "../../sessions/session-controller.lifecycle.js";
+import {
+  resolveSessionSkillExecutionWorkspace,
+  type ExecutionSkillWorkspace,
+} from "../../skills/loading/workspace-skill-roots.js";
 import { resolveUserPath } from "../../utils.js";
 import {
   CronSessionLifecycleClaimError,
@@ -97,7 +101,9 @@ async function resolveCronSessionWorkspace(params: {
   defaultWorkspaceDir: string;
   parentBinding?: CronParentWorkspaceBinding;
   assertCurrent: () => void;
-}): Promise<{ workspaceDir: string; cwd?: string; lease?: CronWorkspaceLease }> {
+}): Promise<
+  { workspaceDir: string; cwd?: string; lease?: CronWorkspaceLease } & ExecutionSkillWorkspace
+> {
   const bound = params.parentBinding ?? resolveTargetBinding(params);
   if (!bound) {
     return { workspaceDir: params.defaultWorkspaceDir };
@@ -128,13 +134,17 @@ async function resolveCronSessionWorkspace(params: {
     : params.defaultWorkspaceDir;
   const cwd = requestedCwd ? await fs.realpath(resolveUserPath(requestedCwd)) : undefined;
   params.assertCurrent();
-  return await prepareCronSessionWorktree({
+  const selected = await prepareCronSessionWorktree({
     sessionKey: bindingKey,
     entry,
     workspaceDir,
     cwd,
     assertCurrent: params.assertCurrent,
   });
+  return {
+    ...selected,
+    ...resolveSessionSkillExecutionWorkspace(entry, selected.workspaceDir),
+  };
 }
 
 /** The in-session target's own row; it must be the session this run executes in. */

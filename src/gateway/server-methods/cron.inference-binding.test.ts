@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { removeAuthProfilesAcrossOwnerStores } from "../../agents/auth-profiles/profiles.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.entry.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { saveCronJobsStore } from "../../cron/store.js";
@@ -63,6 +64,71 @@ function captureAuthority(
 }
 
 describe("cron handler inference binding persistence", () => {
+  it("records the requested account without converting a main-session system event", async ({
+    fixture,
+  }) => {
+    await fixture.invoke("cron.add", {
+      ...createParams(),
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "Reminder" },
+    });
+    const before = await fixture.reload();
+    expect(before.inferenceBinding).toBeUndefined();
+    await updateModel(fixture, before.id, `openai/gpt-4.1@${subscriptionId}`);
+    const after = await fixture.reload();
+    expect(after).toMatchObject({
+      id: before.id,
+      sessionTarget: "main",
+      schedule: before.schedule,
+      payload: before.payload,
+      inferenceBinding: { profileId: subscriptionId, source: "user" },
+    });
+    expect(after.payload).toEqual(before.payload);
+    await fixture.invoke(
+      "cron.update",
+      {
+        id: before.id,
+        patch: { payload: { kind: "agentTurn", model: `openai/different-model@${platformId}` } },
+      },
+      null,
+      { expectedSuccess: false },
+    );
+    expect(await fixture.reload()).toEqual(after);
+  });
+
+  it("recovers a bound system event onto an environment key after account removal", async ({
+    fixture,
+  }) => {
+    const payload = { kind: "systemEvent", text: "Reminder" } as const;
+    await fixture.invoke("cron.add", { ...createParams(), sessionTarget: "main", payload });
+    const created = await fixture.reload();
+    await updateModel(fixture, created.id, `openai/gpt-4.1@${platformId}`);
+    const before = await fixture.reload();
+    expect(before.inferenceBinding?.profileId).toBe(platformId);
+
+    await fixture.useUnstoredCredential("openai");
+    await withEnvAsync({ OPENAI_API_KEY: "synthetic-recovery-key" }, async () => {
+      await fixture.invoke(
+        "cron.update",
+        {
+          id: before.id,
+          patch: { payload: { kind: "agentTurn", model: "openai/different-model" } },
+        },
+        null,
+        { expectedSuccess: false },
+      );
+      await updateModel(fixture, before.id, "openai/gpt-4.1");
+    });
+    const after = await fixture.reload();
+    expect(after.inferenceBinding).toBeUndefined();
+    expect(after.payload).toEqual(payload);
+    expect(after).toMatchObject({
+      id: before.id,
+      schedule: before.schedule,
+      sessionTarget: "main",
+    });
+  });
+
   it("replaces a stored account with an explicit native CLI login without replacing the job", async ({
     fixture,
   }) => {
@@ -231,6 +297,65 @@ describe("cron handler inference binding persistence", () => {
     },
   );
 
+  it.for(["environment", "configuration"] as const)(
+    "recovers a deleted account onto a %s key only after an explicit plain-model edit",
+    async (source, { fixture }) => {
+      await fixture.invoke("cron.add", createParams());
+      const original = await fixture.reload();
+      const key = "synthetic-recovery-key";
+      await withEnvAsync({ OPENAI_API_KEY: key }, async () => {
+        await updateModel(fixture, original.id, "openai/gpt-4.1");
+        expect((await fixture.reload()).inferenceBinding).toEqual(original.inferenceBinding);
+      });
+      await fixture.useUnstoredCredential("openai", source === "configuration" ? key : undefined);
+      await withEnvAsync(
+        { OPENAI_API_KEY: source === "environment" ? key : undefined },
+        async () => {
+          await expect(fixture.resolveAuth(original.inferenceBinding!)).rejects.toThrow(
+            "which was removed or signed out",
+          );
+          await fixture.invoke("cron.update", { id: original.id, patch: { name: "Recover me" } });
+          await fixture.invoke("cron.update", {
+            id: original.id,
+            patch: { payload: { kind: "agentTurn", model: null } },
+          });
+          const before = await fixture.reload();
+          expect(before.inferenceBinding).toEqual(original.inferenceBinding);
+
+          await updateModel(fixture, original.id, "openai/gpt-4.1");
+          const recovered = await fixture.reload();
+          expect(recovered.inferenceBinding).toBeUndefined();
+          expect(recovered).toMatchObject({
+            id: before.id,
+            createdAtMs: before.createdAtMs,
+            name: before.name,
+            schedule: before.schedule,
+            delivery: before.delivery,
+            payload: { ...before.payload, model: "openai/gpt-4.1" },
+          });
+        },
+      );
+    },
+  );
+
+  it.for(["another stored account", "no credentials"] as const)(
+    "does not release a deleted binding onto %s",
+    async (remaining, { fixture }) => {
+      await fixture.invoke("cron.add", createParams());
+      const original = await fixture.reload();
+      await removeAuthProfilesAcrossOwnerStores({
+        profileIds: remaining === "no credentials" ? [platformId, subscriptionId] : [platformId],
+      });
+      await fixture.invoke(
+        "cron.update",
+        { id: original.id, patch: { payload: { kind: "agentTurn", model: "openai/gpt-4.1" } } },
+        null,
+        { expectedSuccess: false },
+      );
+      expect(await fixture.reload()).toEqual(original);
+    },
+  );
+
   it.for([
     [{ runtime: "openclaw" }, undefined, "stored inference account"],
     [{ registered: false }, undefined, "codex"],
@@ -345,10 +470,15 @@ describe("cron handler inference binding persistence", () => {
     expect((await fixture.reload()).inferenceBinding).toEqual(originalBinding);
     personal.owner.invalidated = false;
     await fixture.invoke("cron.update", patch, personal.owner);
-    expect((await fixture.reload()).inferenceBinding).toMatchObject({
+    const adopted = await fixture.reload();
+    expect(adopted.inferenceBinding).toMatchObject({
       profileId: personal.profileId,
       source: "user",
       authRequirement: "api-key",
+    });
+    await withEnvAsync({ OPENAI_API_KEY: "synthetic-direct-key" }, async () => {
+      await updateModel(fixture, created.id, "openai/gpt-4.1", personal.owner);
+      expect((await fixture.reload()).inferenceBinding).toEqual(adopted.inferenceBinding);
     });
   });
 
@@ -371,6 +501,7 @@ describe("cron handler inference binding persistence", () => {
     await fixture.invoke("cron.add", createParams());
     const created = await fixture.reload();
     fixture.addAgent("secondary");
+    fixture.setSystemAgent("main");
     await fixture.invoke("cron.update", { id: created.id, patch: { agentId: "main" } });
     expect((await fixture.reload()).inferenceBinding).toEqual(created.inferenceBinding);
     await fixture.invoke("cron.update", { id: created.id, patch: { agentId: "secondary" } }, null, {
@@ -392,6 +523,25 @@ describe("cron handler inference binding persistence", () => {
     expect(moved.inferenceBinding?.authorizationId).not.toBe(
       created.inferenceBinding?.authorizationId,
     );
+  });
+
+  it("edits an agent-less job on a multi-agent gateway through the configured system agent", async ({
+    fixture,
+  }) => {
+    await fixture.invoke("cron.add", createParams());
+    const created = await fixture.reload();
+    expect(created.agentId).toBeUndefined();
+    fixture.addAgent("secondary");
+    fixture.setSystemAgent("main");
+    await fixture.invoke("cron.update", { id: created.id, patch: { name: "Renamed" } });
+    expect(await fixture.reload()).toMatchObject({
+      name: "Renamed",
+      inferenceBinding: created.inferenceBinding,
+    });
+    await updateModel(fixture, created.id, "openai/gpt-4o@" + subscriptionId);
+    const updated = await fixture.reload();
+    expect(updated.agentId).toBeUndefined();
+    expect(updated.inferenceBinding).toMatchObject({ profileId: subscriptionId, source: "user" });
   });
 
   it("adopts an explicit account on an aliased model but not on a plain alias", async ({

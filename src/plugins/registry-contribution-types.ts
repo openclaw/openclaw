@@ -78,6 +78,11 @@ export type MemoryEmbeddingProviderCreateResult = Omit<EmbeddingProviderCreateRe
 export type MemoryEmbeddingProviderAdapter = Omit<EmbeddingProviderAdapter, "create"> & {
   autoSelectPriority?: number;
   allowExplicitWhenConfiguredAuto?: boolean;
+  /**
+   * @deprecated Use `mediaModalities`. A true answer still means image and audio, for
+   * published ClawHub embedding plugins that predate it. Remove once they declare
+   * `mediaModalities`.
+   */
   supportsMultimodalEmbeddings?: (params: { model: string }) => boolean;
   create: (
     options: MemoryEmbeddingProviderCreateOptions,
@@ -410,6 +415,17 @@ export type LearnContribution = {
 export type LearnContributionRegistration = {
   pluginId: string;
   contribution: LearnContribution;
+};
+
+/** A passive memory backend the selected slot owner may open through its provider runtime. */
+export type MemoryBackendRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  providerRuntime: MemoryProviderRuntime;
+  /** "legacy" when the host adapts a file-shaped `runtime` into the provider contract. */
+  adapter?: "native" | "legacy";
+  /** Object the backend's plugin instance is bound to; defaults to providerRuntime. */
+  instanceOwner?: object;
 };
 
 export type MemoryPluginCapabilityRegistration = {

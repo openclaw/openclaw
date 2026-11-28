@@ -12,7 +12,7 @@ struct ChatDictationActivityRow: View {
                 HStack(spacing: 8) {
                     if self.control.phase == .listening {
                         TalkWaveformView(phase: .listening(
-                            level: self.control.level,
+                            level: self.control.resolvedLevel,
                             speechActive: !self.control.partialTranscript.isEmpty))
                             .frame(width: 28, height: 18)
                             .accessibilityHidden(true)
@@ -74,24 +74,5 @@ struct ChatDictationActivityRow: View {
         self.dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
             : AnyLayout(HStackLayout(spacing: 8))
-    }
-}
-
-struct ChatAttachmentActivityRow: View {
-    let title: LocalizedStringKey
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
-                .accessibilityHidden(true)
-            Text(self.title)
-                .font(OpenClawChatTypography.caption)
-            Spacer(minLength: 0)
-        }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("chat-attachment-activity")
     }
 }

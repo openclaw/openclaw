@@ -142,6 +142,7 @@ const runtimePluginIds = () => mocks.resolvePluginProvidersCore.mock.calls[0]?.[
 describe("resolvePluginDiscoveryProvidersRuntime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolvePluginProvidersCore.mockReturnValue([]);
     mockManifestPlugins([createManifestPlugin("deepseek")]);
     mocks.resolvePluginMetadataSnapshot.mockImplementation(
       (params?: { pluginMetadataSnapshot?: unknown }) =>
@@ -190,6 +191,14 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
 
   it("counts mixed static manifest entries for entries-only complete coverage", () => {
     const entryProvider = createProvider("deepseek", "static");
+    const readId = vi.fn((id: string) => id);
+    const models = Array.from({ length: 32 }, (_, i) => ({
+      contextWindow: 128_000,
+      maxTokens: 4_096,
+      get id() {
+        return readId(`catalog-model-${i}`);
+      },
+    }));
     mocks.loadSource.mockReturnValue(entryProvider);
     mockManifestPlugins([
       createManifestPlugin("deepseek"),
@@ -197,7 +206,7 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
         ...catalogManifest(
           "xiaomi",
           {
-            xiaomi: manifestProvider("mimo-v2-flash"),
+            xiaomi: { ...manifestProvider("mimo-v2-flash"), models },
             "xiaomi-token-plan": manifestProvider("mimo-v2.5-pro"),
           },
           { xiaomi: "static", "xiaomi-token-plan": "runtime" },
@@ -213,13 +222,56 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
 
     expect(providers.map((provider) => provider.id)).toEqual(["xiaomi", "deepseek"]);
     expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
+    expect(readId).toHaveBeenCalled();
+    readId.mockClear();
+
+    const entriesOnly = { discoveryEntriesOnly: true, includeManifestModelCatalogProviders: false };
+    expect(discoverProviders(entriesOnly).map(({ id }) => id)).toEqual(["deepseek"]);
+    mocks.loadSource.mockClear();
     expect(
-      discoverProviders({
-        discoveryEntriesOnly: true,
-        includeManifestModelCatalogProviders: false,
-      }).map(({ id }) => id),
-    ).toEqual(["deepseek"]);
+      discoverProviders({ ...entriesOnly, requireCompleteDiscoveryEntryCoverage: true }),
+    ).toEqual([]);
+    expect(mocks.loadSource).not.toHaveBeenCalled();
+    expect(readId).not.toHaveBeenCalled();
+
+    const runtimeProvider = createProvider("xiaomi-token-plan", "catalog");
+    mocks.resolvePluginProvidersCore.mockReturnValue([runtimeProvider]);
+    const full = { ...entriesOnly, discoveryEntriesOnly: false };
+    expect(discoverProviders(full).map(({ id }) => id)).toEqual(["deepseek", "xiaomi-token-plan"]);
+    expect(runtimePluginIds()).toEqual(["xiaomi"]);
+    expect(readId).toHaveBeenCalled();
+    mocks.resolvePluginProvidersCore.mockClear();
+    expect(discoverProviders({ ...full, requireCompleteDiscoveryEntryCoverage: true })).toEqual([
+      runtimeProvider,
+    ]);
+    expect(runtimePluginIds()).toEqual(["xiaomi"]);
   });
+
+  it.each([false, true])(
+    "loads full registration only for uncovered runtime catalogs (sibling covered: %s)",
+    (siblingCovered) => {
+      const manifest = createManifestPlugin("fixture");
+      manifest.providers = ["fixture", "sibling"];
+      manifest.modelCatalog = { discovery: { fixture: "runtime", sibling: "refreshable" } };
+      mockManifestPlugins([manifest]);
+      const entries = [createProvider("fixture", "catalog")];
+      if (siblingCovered) {
+        entries.push(createProvider("sibling", "catalog"));
+      }
+      mocks.loadSource.mockReturnValue(entries);
+      mocks.resolvePluginProvidersCore.mockReturnValue([]);
+
+      const providers = discoverProviders({ onlyPluginIds: ["fixture"] });
+
+      expect(providers.map(({ catalog }) => catalog)).toEqual(
+        entries.map(({ catalog }) => catalog),
+      );
+      expect(runtimePluginIds()).toEqual(["fixture"]);
+      expect(mocks.resolvePluginProvidersCore.mock.calls[0]?.[0]?.registryScope).toBe(
+        siblingCovered ? "loaded" : undefined,
+      );
+    },
+  );
 
   it("keeps unscoped discovery bounded for mixed live and static-only entries", () => {
     const codexEntryProvider = createProvider("codex", "catalog");

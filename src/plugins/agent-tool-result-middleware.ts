@@ -1,12 +1,11 @@
 // Applies plugin middleware to agent tool results at runtime boundaries.
 import type {
-  AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
   AgentToolResultMiddlewareRuntime,
   AgentToolResultMiddlewareScope,
 } from "./agent-tool-result-middleware-types.js";
 import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
-import { getActivePluginRegistry } from "./runtime.js";
+import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
 import {
   createPluginToolMatcherScope,
   pluginToolMatcherCoversTool,
@@ -100,7 +99,7 @@ export function agentToolResultMiddlewareRegistrationCoversTool(
 export function getAgentToolResultMiddlewareMatcherScope(
   runtime: AgentToolResultMiddlewareRuntime,
 ): PluginToolMatcherScope | undefined {
-  const matchers = (getActivePluginRegistry()?.agentToolResultMiddlewares ?? []).flatMap(
+  const matchers = (getPluginRegistryForContext()?.agentToolResultMiddlewares ?? []).flatMap(
     (registration) =>
       readAgentToolResultMiddlewareScopes(registration)
         .filter((scope) => scope.runtimes.includes(runtime))
@@ -109,12 +108,15 @@ export function getAgentToolResultMiddlewareMatcherScope(
   return createPluginToolMatcherScope(matchers);
 }
 
-export function listAgentToolResultMiddlewares(
+export function listAgentToolResultMiddlewareRegistrations(
   runtime: AgentToolResultMiddlewareRuntime,
-): AgentToolResultMiddleware[] {
+  toolName?: string,
+): PluginAgentToolResultMiddlewareRegistration[] {
   return (
-    getActivePluginRegistry()
-      ?.agentToolResultMiddlewares?.filter((entry) => entry.runtimes.includes(runtime))
-      .map((entry) => entry.handler) ?? []
+    getPluginRegistryForContext()?.agentToolResultMiddlewares?.filter((entry) =>
+      toolName === undefined
+        ? entry.runtimes.includes(runtime)
+        : agentToolResultMiddlewareRegistrationCoversTool(entry, runtime, toolName),
+    ) ?? []
   );
 }

@@ -232,7 +232,8 @@ extension OpenClawChatViewModel {
                   self.reactionState === state,
                   self.isCurrentReactionTarget(target)
             else { return }
-            self.errorText = error.localizedDescription
+            // A background load: the messages still show, only their reactions are missing.
+            chatUILogger.error("chat reactions load failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

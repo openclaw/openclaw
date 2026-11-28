@@ -21,6 +21,7 @@ import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { callGateway } from "../../../gateway/call.js";
 import { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
+import { registerGatewayLifecycleRuntime } from "../../../gateway/server-lifecycle-runtime-context.js";
 import { createRequestGatewayMethodRegistry } from "../../../gateway/server-methods.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import {
@@ -60,7 +61,6 @@ import {
   resolvePreparedRunAdmission,
   type AdmittedRunOperatorAuthority,
 } from "../../admitted-run-context.js";
-import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import { assertAgentHarnessExecutionEnvironment } from "../../harness/execution-environment.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { prepareOperatorModelPolicy } from "../../operator-model-policy.js";
@@ -90,8 +90,8 @@ import { registerAccessRequestSpawnCases } from "./subagent-spawn.access-request
 import { registerAccessStateSpawnCases } from "./subagent-spawn.access-state.test-support.js";
 import { registerNativeCancellationCases } from "./subagent-spawn.cancellation.test-support.js";
 import { registerCollectorResultSpawnCases } from "./subagent-spawn.collector-results.test-support.js";
-import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
 import { registerGuestSpawnCases } from "./subagent-spawn.guest.test-support.js";
+import { createHeldModelRun } from "./subagent-spawn.held-model-run.test-support.js";
 import { registerParticipantSpawnCases } from "./subagent-spawn.participants.test-support.js";
 import { registerNativePluginSpawnCases } from "./subagent-spawn.plugin-native.test-support.js";
 import { readBoundExecutionState } from "./subagent-spawn.production-boundary.diagnostics.test-support.js";
@@ -103,12 +103,12 @@ import {
   createSpawnOperatorSource,
   holdSpawnCapacity,
   prepareIsolatedChildAdmissionProof,
-  recordSpawnBoundaryFinal,
 } from "./subagent-spawn.production-boundary.test-support.js";
 import { registerRequestCustodySpawnCases } from "./subagent-spawn.request-custody.test-support.js";
 import { registerYieldedRequesterBatchCase } from "./subagent-spawn.requester-yield.test-support.js";
 import { registerOperatorSpawnRollbackCases } from "./subagent-spawn.rollback.test-support.js";
 import { createSpawnBoundaryConfig, throwBoundFailures } from "./subagent-spawn.test-helpers.js";
+import { registerToolUsageRankingSpawnCase } from "./subagent-spawn.tool-usage-ranking.test-support.js";
 import { registerManagedWorktreeSpawnCases } from "./subagent-spawn.worktree.test-support.js";
 
 vi.mock("../announce/subagent-announce.js", { spy: true });
@@ -276,11 +276,20 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
     return validateRuntimeAuthority(identity);
   };
   const methodRegistry = createRequestGatewayMethodRegistry();
-  const runtime = createGatewayInstanceRuntime({
+  const instanceRuntime = createGatewayInstanceRuntime({
     getContext: () => context,
     getMethodRegistry: () => methodRegistry,
     isDispatchAvailable: () => true,
   });
+  // This fixture stands in for the listening Gateway, which owns the process lifecycle runtime.
+  const releaseLifecycleRuntime = registerGatewayLifecycleRuntime(instanceRuntime.lifecycle);
+  const runtime = {
+    ...instanceRuntime,
+    close: () => {
+      instanceRuntime.close();
+      releaseLifecycleRuntime();
+    },
+  };
   context.createAgentTurnFacade = runtime.createAgentTurnFacade;
   context.lifecycleRuntime = runtime.lifecycle;
   vi.spyOn(runtime.lifecycle, "waitForAgent").mockResolvedValue({ status: "pending" });
@@ -289,6 +298,7 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
 }
 
 const waitForEmbeddedRun = createEmbeddedRunWaiter(runEmbeddedAgent);
+const holdModelRun = createHeldModelRun(runEmbeddedAgent);
 type BoundParent = Awaited<ReturnType<typeof createBoundParent>>;
 
 function readSession(bound: BoundParent, sessionKey = parentSessionKey) {
@@ -303,35 +313,6 @@ async function collectFailures(failures: unknown[], ...actions: (() => unknown)[
       failures.push(error);
     }
   }
-}
-
-function holdModelRun(
-  bound: BoundParent,
-  text: string,
-  onStart?: (params: Parameters<typeof runEmbeddedAgent>[0]) => Promise<void>,
-) {
-  const result = createDeferred<EmbeddedAgentRunResult>();
-  const started = createDeferred();
-  runEmbeddedAgent.mockImplementationOnce(async (params) => {
-    try {
-      if (onStart) {
-        await onStart(params);
-      }
-    } catch (error) {
-      started.reject(error);
-      throw error;
-    }
-    started.resolve();
-    const reply = await result.promise;
-    await recordSpawnBoundaryFinal({
-      storePath: bound.storePath,
-      sessionKey: expectDefined(params.sessionKey, "child session"),
-      runId: params.runId,
-      text,
-    });
-    return reply;
-  });
-  return { started: started.promise, finish: () => result.resolve(visibleResult(text)) };
 }
 
 async function closeBoundGateway(
@@ -448,7 +429,6 @@ describe("recursive spawn production boundary", () => {
         },
       };
       let consented: boolean | undefined;
-      let revokedSource: unknown;
       const modelRun = holdModelRun(bound, "child complete", async (params) => {
         consented = await assertAgentHarnessExecutionEnvironment(harness, params);
         const admitted = await resolvePreparedRunAdmission({
@@ -460,13 +440,6 @@ describe("recursive spawn production boundary", () => {
         // The harness host captures this assertion and checks it right before native dispatch.
         const active = expectDefined(resolveAdmittedRunActiveAssertion(admitted), "active child");
         active();
-        // Removing the spawning owner after admission must stop that dispatch.
-        bound.cfg.commands = { ownerAllowFrom: [] };
-        try {
-          active();
-        } catch (error) {
-          revokedSource = error;
-        }
       });
       let childRunId: string | undefined;
       const failures: unknown[] = [];
@@ -483,7 +456,6 @@ describe("recursive spawn production boundary", () => {
         await waitForEmbeddedRun(bound, details.runId, modelRun.started);
         expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({ senderIsOwner: owner });
         expect(consented).toBe(owner);
-        expect(revokedSource !== undefined).toBe(owner);
       } catch (error) {
         failures.push(error);
       } finally {
@@ -520,6 +492,15 @@ describe("recursive spawn production boundary", () => {
   registerYieldedRequesterBatchCase(boundSpawnFixture);
   registerOperatorSpawnRollbackCases(boundSpawnFixture);
   registerNativeCancellationCases(boundSpawnFixture);
+  registerToolUsageRankingSpawnCase({
+    ...boundSpawnFixture,
+    configure: async (update) => {
+      runtimeConfig = update(runtimeConfig);
+      await state.writeConfig(runtimeConfig);
+      clearConfigCache();
+      setRuntimeConfigSnapshot(runtimeConfig);
+    },
+  });
 
   registerAccessStateSpawnCases({ ...boundSpawnFixture, holdModelRun });
   registerAccessRequestSpawnCases(boundSpawnFixture);

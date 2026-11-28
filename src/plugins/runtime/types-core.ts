@@ -128,9 +128,14 @@ export type PluginRuntimeCore = {
     }) => Promise<RuntimeConfigReplaceResult>;
   };
   agent: {
+    /**
+     * @deprecated No model is configured by default anymore; these are the retired implicit
+     * values. Read the agent's model with `modelConfig.resolveDefaultModelForAgent`, which
+     * returns undefined when none is configured. Kept for the SDK deprecation window.
+     */
     defaults: {
-      model: typeof import("../../agents/defaults.js").DEFAULT_MODEL;
-      provider: typeof import("../../agents/defaults.js").DEFAULT_PROVIDER;
+      model: string;
+      provider: string;
     };
     resolveAgentDir: typeof import("../../agents/agent-scope.js").resolveAgentDir;
     resolveAgentWorkspaceDir: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
@@ -149,9 +154,14 @@ export type PluginRuntimeCore = {
     resolveThinkingPolicy: (
       params: PluginRuntimeThinkingPolicyRequest,
     ) => PluginRuntimeThinkingPolicy;
-    /** Admit a turn for this exact trusted channel plugin and its authenticated sender. */
+    /**
+     * Admit a turn for this plugin's own channel and authenticated sender. Named channels derive
+     * owner from `runContext.senderId`. Without `messageChannel`, a bundled or trusted official
+     * plugin may claim owner for its authenticated bridge sender. `toolBindings` may scope only
+     * tools the calling plugin declares.
+     */
     runCommandFromIngress: (
-      opts: import("../../agents/command/types.js").AgentCommandIngressOpts,
+      opts: import("../../agents/command/types.js").AgentCommandPluginIngressOpts,
       runtime: import("../../runtime.js").RuntimeEnv,
     ) => ReturnType<typeof import("../../agents/agent-command.js").agentCommandFromIngress>;
     runEmbeddedAgent: (
@@ -346,7 +356,9 @@ export type PluginRuntimeCore = {
   };
   system: {
     captureSessionEventTarget: typeof import("./runtime-session-events.js").captureSessionEventTarget;
-    enqueueSessionEvent: typeof import("./runtime-session-events.js").enqueueSessionEvent;
+    enqueueSessionEvent: ReturnType<
+      typeof import("./runtime-session-events.js").createSessionEventEnqueuer
+    >;
     enqueueSystemEvent: typeof import("./system-events.js").enqueueSystemEventFromSdk;
     /** Current generation of a session; a later `postSessionNotice` skips it once reset or replaced. */
     captureSessionGeneration: typeof import("./runtime-session-notice.js").capturePluginSessionGeneration;

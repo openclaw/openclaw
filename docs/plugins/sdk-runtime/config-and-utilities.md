@@ -110,6 +110,11 @@ Metadata discovery still does not execute plugin code. See
 
 ### Process and network utilities
 
+`getAsyncWorkSignal()` from `openclaw/plugin-sdk/concurrency-runtime` returns the
+active host work scope's cancellation signal, or `undefined` outside a managed
+scope. Pass it to cancellable reads and check it before publishing their results.
+Already-accepted mutations retain their owner's settlement policy.
+
 `runInDetachedAsyncContext` from `openclaw/plugin-sdk/concurrency-runtime` starts
 work in the host's context-free async root. Use it at an independently admitted
 service request boundary when a long-lived listener can retain its startup
@@ -173,10 +178,14 @@ endpoints outside that path. Unknown identities are rejected on supported hosts;
 hosts without native birth-identity support and other platforms leave existing
 processes untouched. PID 1 can itself be a live owner on Linux.
 
-For a subprocess that requires Node.js, use `resolveNodeRuntimeExecutable` from
-the same subpath. It reuses the current Node executable and resolves a real Node
-binary when the host runs under Bun, skipping Bun's `node` shim. An unavailable
-Node runtime returns `undefined`; the caller reports the missing requirement.
+For a subprocess that requires Node.js, await `resolveNodeRuntimeExecutableAsync` from
+the same subpath. It reuses the current Node executable when supported by OpenClaw,
+or finds a supported Node binary, skipping older Node versions and Bun's `node`
+shim. An unavailable supported Node runtime returns `undefined`; the caller
+reports the missing requirement.
+Cold discovery creates and removes its probe script and waits for the child asynchronously.
+The synchronous `resolveNodeRuntimeExecutable` remains available for CLI tooling;
+Gateway request paths should use the async form.
 
 Interactive process adapters can use `spawnTerminalPty` from the same subpath.
 It owns platform-specific terminal creation. On macOS and Linux, Bun uses its
@@ -345,10 +354,23 @@ Native RPC error messages retain their original text; `agent.wait` renders the
 supplemental diagnostic at its terminal result boundary.
 
 Channel plugins must admit authenticated agent turns through their injected
-`api.runtime.agent.runCommandFromIngress(options, runtime)` capability. The host
-accepts owner authority only from the exact active, trusted plugin registered for
-`options.messageChannel`; guest turns retain their non-owner identity. The public
-`agentCommandFromIngress` SDK helper never accepts a caller-supplied owner claim.
+`api.runtime.agent.runCommandFromIngress(options, runtime)` capability. A named
+`options.messageChannel` must be a channel the calling plugin registers. Owner
+authority for a named channel comes from its authenticated `runContext.senderId`
+when `commands.ownerAllowFrom` lists that sender. A plugin-supplied
+`senderIsOwner` claim is ignored for named channels and logs a deprecation
+warning. Plugins without a channel, such as phone, meeting, and FaceTime
+bridges, omit `messageChannel`; bundled or trusted official plugins may mark
+their authenticated sender as owner. Other turns remain guests.
+`options.toolBindings` may scope only tools the calling plugin declares in
+`contracts.tools`. The public `agentCommandFromIngress` SDK helper never accepts
+a caller-supplied owner claim.
+
+`consultRealtimeVoiceAgent` from `openclaw/plugin-sdk/realtime-voice` accepts
+`runner: "agent-turn"` to run the consult as a turn of the consult session through
+`runCommandFromIngress`. The agent's runtime selection (including Claude CLI),
+fallbacks, and tool policy then apply as they do for a typed message. The default
+`runner: "embedded"` runs `runEmbeddedAgent` on the given provider and model.
 
 Model-picker integrations use two focused runtime subpaths. Import the typed
 `ModelPickerAction` and `ModelPickerCapabilityProfile` contracts from

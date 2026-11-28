@@ -128,10 +128,13 @@ explicitly, for example to `"${OMLX_API_KEY}"`.
 
 <Warning>
 Changing the embedding provider, model, provider settings, sources, scope,
-chunking, or tokenizer can make the existing SQLite vector index incompatible.
-OpenClaw pauses vector search and reports an index identity warning instead of
-automatically re-embedding everything. Rebuild when you are ready with
-`openclaw memory status --index --agent <id>` or
+chunking, or tokenizer can make the existing memory index incompatible.
+For a scope-only mismatch, the next normal memory search requests a shadow
+rebuild of the configured corpus before serving results. This can re-embed
+content and incur provider costs.
+Other identity mismatches pause vector search and report a warning instead of
+automatically re-embedding everything. Inspect the index with
+`openclaw memory status --index --agent <id>` or rebuild when ready with
 `openclaw memory index --force --agent <id>`.
 </Warning>
 
@@ -550,8 +553,10 @@ The "Memory file watching is tracking ..." warning reports an advisory count of
 watched paths or directories, not a measured host limit or confirmed exhaustion.
 Remove unnecessary `memory.search.extraPaths` entries or narrow their directory
 roots. Global entries and `agents.entries.<id>.memory.search.extraPaths` entries
-are combined: an empty per-agent list does not remove global roots. Changing only
-an entry's `pattern` filters indexed files, not the directory tree being watched.
+are combined: an empty per-agent list does not remove global roots. A `pattern`
+without `**`, braces, brackets, parentheses, or `.`/`..` segments also stops the
+watcher at the depth the pattern can match (`*/README.md` watches two levels);
+other patterns filter indexed files, not the directory tree being watched.
 Events outside every applicable pattern are ignored when they cannot affect an
 indexed file or directory. Events with no path or an unknown entry type remain
 conservative when indexed content could have changed.
@@ -631,10 +636,12 @@ auto-injected.
 
 Paths can be absolute or workspace-relative. Directories are scanned recursively for supported
 files. Object entries narrow a directory with a root-relative glob using `/` separators; direct
-file entries are indexed exactly. Entries with the same resolved directory share one scan, and
-scans skip subdirectories that their patterns can prove irrelevant. Complex patterns retain
-conservative traversal. The builtin engine skips symlinks. When a configured root is a
-symlink, `openclaw memory status` names the skipped root in text and JSON output and recommends
+file entries are indexed exactly. Wildcards do not implicitly include dotfiles or hidden
+directories: use an explicit dot pattern such as `.*.md` or `.notes/**/*.md` to include them.
+Brace alternatives and extglobs are supported. Entries with the same resolved directory share
+one scan, and scans skip subdirectories that their patterns can prove irrelevant. The builtin
+engine skips symlinks. When a configured root is a symlink, `openclaw memory status` names the
+skipped root in text and JSON output and recommends
 configuring its resolved absolute directory instead.
 
 Set `evergreen: true` only for stable reference sources whose relevance should not fall as their
@@ -667,21 +674,39 @@ does not mean its edited contents were imported. Unsafe source paths and failed 
 
 ---
 
-## Multimodal memory (Gemini)
+<a id="multimodal-memory-gemini" />
 
-Index images and audio alongside Markdown using Gemini Embedding 2:
+## Multimodal memory
+
+Index images and audio alongside Markdown with an embedding model that embeds
+them, such as Gemini Embedding 2:
 
 | Key                       | Type       | Default    | Description                            |
 | ------------------------- | ---------- | ---------- | -------------------------------------- |
 | `multimodal.enabled`      | `boolean`  | `false`    | Enable multimodal indexing             |
+| `multimodal.allowPartial` | `boolean`  | `false`    | Skip unsupported media modalities      |
 | `multimodal.modalities`   | `string[]` | --         | `["image"]`, `["audio"]`, or `["all"]` |
 | `multimodal.maxFileBytes` | `number`   | `10485760` | Max file size for indexing (10 MiB)    |
 
 <Note>
-Only applies to files in `extraPaths`. Default memory roots stay Markdown-only. Requires `gemini-embedding-2` (the legacy preview identifier is also accepted). `fallback` must be `"none"`.
+Only applies to files in `extraPaths`. Default memory roots stay Markdown-only. `fallback` must be `"none"`.
 </Note>
 
-Supported formats: `.jpg`, `.jpeg`, `.png` (images); `.mp3`, `.wav` (audio).
+Each embedding provider declares which media its models embed. By default,
+memory search rejects an embedding model that cannot embed every configured
+modality and leaves the existing index unchanged.
+
+Set `memory.search.multimodal.allowPartial` to `true` to index the supported
+subset, or only Markdown if the model supports no media. `openclaw memory status`
+shows unsupported modalities under **Skipped media**. Rebuilding then removes
+their entries from the index, not the original files.
+
+`gemini-embedding-2` (and its legacy preview identifier) embeds images and audio.
+Other providers are treated as text-only unless their plugin declares media support.
+
+Supported formats: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.heic`, `.heif`
+(images); `.mp3`, `.wav`, `.ogg`, `.opus`, `.m4a`, `.m2a`, `.aac`, `.flac`
+(audio). The provider may reject formats it does not accept.
 
 ---
 

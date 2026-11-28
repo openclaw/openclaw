@@ -1,9 +1,12 @@
 import { createMemo, For, Loading, Show } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import "../../components/modal-dialog.tsx";
+import { Radio } from "../../components/solid/radio.tsx";
 import {
   DocsLink,
   SettingsEmpty,
@@ -16,8 +19,8 @@ import {
 import { formatRelativeTimestamp } from "../../lib/reactive/format.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import type { SecretsStoreState } from "../../lib/secrets-store/index.ts";
-import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import "../../styles/secrets-store.css";
+import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import type { SecretsPageState } from "./state.ts";
 
 type SecretsStoreViewProps = {
@@ -151,13 +154,15 @@ function SecretsTable(props: SecretsStoreViewProps) {
         <Show
           when={props.read().length > 0}
           fallback={
-            <SettingsEmpty
-              message={
-                <>
-                  {t("secretsStore.empty")} <DocsLink url={DOCS_URL}>{t("common.docs")}</DocsLink>
-                </>
-              }
-            />
+            <Show when={props.state.store.loaded}>
+              <SettingsEmpty
+                message={
+                  <>
+                    {t("secretsStore.empty")} <DocsLink url={DOCS_URL}>{t("common.docs")}</DocsLink>
+                  </>
+                }
+              />
+            </Show>
           }
         >
           <div class="secrets-store__list" role="list">
@@ -168,6 +173,13 @@ function SecretsTable(props: SecretsStoreViewProps) {
                   const item = entry();
                   return item.kind === "env" ? item.value : item.allowedHosts?.join(", ");
                 };
+                const nameEnd = () => {
+                  const name = entry().name,
+                    underscore = name.lastIndexOf("_");
+                  return underscore > 0 && name.length - underscore <= 16
+                    ? underscore
+                    : Math.max(0, name.length - 10);
+                };
                 return (
                   <div
                     class="settings-row secrets-store__row"
@@ -176,13 +188,22 @@ function SecretsTable(props: SecretsStoreViewProps) {
                   >
                     <div class="settings-row__text">
                       <code class="settings-row__title secrets-store__name" title={entry().name}>
-                        {entry().name}
+                        <Show when={!secret()} fallback={entry().name}>
+                          <span class="secrets-store__env-name">
+                            <span>{entry().name.slice(0, nameEnd())}</span>
+                            <span>{entry().name.slice(nameEnd())}</span>
+                          </span>
+                        </Show>
                       </code>
-                      <span
+                      <div
                         class={[
                           "settings-row__desc",
                           "secrets-store__meta",
-                          { "secrets-store__meta--flow": secret() },
+                          {
+                            "secrets-store__meta--flow": secret(),
+                            "secrets-store__meta--attributed":
+                              !secret() && Boolean(entry().updatedBy),
+                          },
                         ]}
                       >
                         <Show when={detail()}>
@@ -203,14 +224,30 @@ function SecretsTable(props: SecretsStoreViewProps) {
                             </>
                           )}
                         </Show>
-                        <time
-                          class="secrets-store__updated"
-                          datetime={new Date(entry().updatedAtMs).toISOString()}
-                          title={timestamp().format(entry().updatedAtMs)}
+                        <Show
+                          when={!secret() && entry().updatedBy}
+                          fallback={
+                            <time
+                              class="secrets-store__updated"
+                              datetime={new Date(entry().updatedAtMs).toISOString()}
+                              title={timestamp().format(entry().updatedAtMs)}
+                            >
+                              {updatedLabel(entry())}
+                            </time>
+                          }
                         >
-                          {updatedLabel(entry())}
-                        </time>
-                      </span>
+                          <details class="secrets-store__updated secrets-store__attribution">
+                            <summary title={updatedLabel(entry())}>
+                              <time datetime={new Date(entry().updatedAtMs).toISOString()}>
+                                {updatedLabel(entry())}
+                              </time>
+                            </summary>
+                            <span>
+                              {entry().updatedBy} · {timestamp().format(entry().updatedAtMs)}
+                            </span>
+                          </details>
+                        </Show>
+                      </div>
                     </div>
                     <div class="settings-row__control">
                       <SettingsStatus
@@ -269,9 +306,9 @@ function SecretDialog(props: {
         <div class="oc-dialog__body">
           {props.children}
           <Show when={props.view.state.formError}>
-            <div class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               {props.view.state.formError}
-            </div>
+            </InlineAlert>
           </Show>
         </div>
         <openclaw-modal-actions class="oc-dialog__footer">
@@ -326,7 +363,7 @@ function EntryDialog(props: SecretsStoreViewProps) {
           <legend>{t("secretsStore.accessMode")}</legend>
           <For each={["secret", "env"] as const} keyed={false}>
             {(kind) => (
-              <label
+              <Radio
                 class={[
                   "secrets-store-mode",
                   {
@@ -335,18 +372,15 @@ function EntryDialog(props: SecretsStoreViewProps) {
                       props.state.draft.kind === kind() && kind() === "env",
                   },
                 ]}
+                name="access-mode"
+                value={kind()}
+                checked={props.state.draft.kind === kind()}
+                disabled={props.busy}
+                onChange={() => {
+                  const selectedKind = kind();
+                  props.state.act((state) => state.patchDraft({ kind: selectedKind }));
+                }}
               >
-                <input
-                  type="radio"
-                  name="access-mode"
-                  value={kind()}
-                  checked={props.state.draft.kind === kind()}
-                  disabled={props.busy}
-                  onChange={() => {
-                    const selectedKind = kind();
-                    props.state.act((state) => state.patchDraft({ kind: selectedKind }));
-                  }}
-                />
                 <span>
                   <strong>
                     {t(
@@ -363,7 +397,7 @@ function EntryDialog(props: SecretsStoreViewProps) {
                     )}
                   </small>
                 </span>
-              </label>
+              </Radio>
             )}
           </For>
         </fieldset>
@@ -393,8 +427,7 @@ function BulkDialog(props: SecretsStoreViewProps) {
           })}
         </div>
         <label class="secrets-store-checkbox">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={props.state.bulkAutoDetect}
             disabled={props.busy}
             onChange={(event) =>
@@ -409,9 +442,9 @@ function BulkDialog(props: SecretsStoreViewProps) {
           </span>
         </label>
         <Show when={props.bulkInvalidNames.length > 0}>
-          <div class="callout danger" role="alert">
+          <InlineAlert tone="danger" role="alert">
             {t("secretsStore.badName")} {props.bulkInvalidNames.join(", ")}
-          </div>
+          </InlineAlert>
         </Show>
       </SecretDialog>
     </Show>
@@ -423,7 +456,7 @@ export function SecretsStore(props: SecretsStoreViewProps) {
     <>
       <SettingsPage wide>
         <Show when={props.state.store.error}>
-          <div class="callout danger secrets-store__message" role="alert">
+          <InlineAlert tone="danger" class="secrets-store__message" role="alert">
             <span>{props.state.store.error}</span>
             <Show when={props.state.canCall("secrets.store.list")}>
               <button
@@ -438,12 +471,17 @@ export function SecretsStore(props: SecretsStoreViewProps) {
                 {t("common.retry")}
               </button>
             </Show>
-          </div>
+          </InlineAlert>
         </Show>
         <Show when={props.state.notice}>
-          <div class="callout success secrets-store__message" role="status" aria-live="polite">
+          <InlineAlert
+            tone="success"
+            class="secrets-store__message"
+            role="status"
+            aria-live="polite"
+          >
             {props.state.notice}
-          </div>
+          </InlineAlert>
         </Show>
         <SettingsSection
           actions={

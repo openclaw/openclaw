@@ -17,14 +17,16 @@ import {
 } from "./setup-apply.test-harness.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import * as configModule from "../config/config.js";
 import { materializeRuntimeConfig } from "../config/materialize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isDisposableEntrypoint } from "../daemon/durable-service-entrypoint.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { VERSION } from "../version.js";
 import { projectInferenceRoute } from "./inference-route.js";
 import { applySystemAgentSetup } from "./setup-apply.js";
 
@@ -88,7 +90,11 @@ function persistedReads(
 }
 
 describe("applySystemAgentSetup transaction boundaries", () => {
-  beforeEach(resetSetupApplyMocks);
+  beforeEach(() => {
+    resetSetupApplyMocks();
+    vi.stubEnv("OPENCLAW_PROFILE", "");
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
+  });
 
   it("rejects a config created after the initial inference check before writing", async () => {
     mocks.state.initialSnapshot = snapshot("present", {}, { agents: { entries: { main: {} } } });
@@ -446,6 +452,23 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      "chooses full",
+      {},
+      "Tool profile: full (tools.profile). This profile allows every tool, including files, commands, the web and plugins.",
+    ],
+    [
+      "keeps messaging",
+      { tools: { profile: "messaging" } },
+      'Tool profile: messaging (tools.profile). This profile allows chat, messages and sessions, but not files, commands or the web. To add one tool, list it in agents.entries.main.tools.alsoAllow, or set tools.profile to "full".',
+    ],
+  ] as const)("says what the tool profile allows when setup %s", async (_case, tools, line) => {
+    start({ ...mainAgentModelConfig(), ...tools });
+    const result = await apply();
+    expect(result.lines).toContain(line);
+  });
+
   it("reports explicitly skipped service installation", async () => {
     const gateway = { status: "skipped", reason: "explicit" };
     mocks.ensureGatewayService.mockResolvedValueOnce({ gateway });
@@ -477,6 +500,35 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       });
     },
   );
+
+  it("npx skipped service installation prints a runnable foreground command", async () => {
+    const root = testTempDirs.make("openclaw-setup-entrypoint-");
+    const entrypoint = path.join(
+      root,
+      ".npm",
+      "_npx",
+      "testhash",
+      "node_modules",
+      "openclaw",
+      "openclaw.mjs",
+    );
+    await fs.mkdir(path.dirname(entrypoint), { recursive: true });
+    await fs.writeFile(entrypoint, "");
+    const originalArgv = [...process.argv];
+    process.argv = [process.execPath, await fs.realpath(entrypoint)];
+    onTestFinished(() => {
+      process.argv = originalArgv;
+    });
+    expect(await isDisposableEntrypoint(process.argv[1]!)).toBe(true);
+
+    const gateway = { status: "skipped", reason: "explicit" };
+    mocks.ensureGatewayService.mockResolvedValueOnce({ gateway });
+    const result = await apply({ surface: "cli", installDaemon: false });
+
+    expect(result.lines).toContain(
+      `Gateway: service installation skipped. Run \`npx openclaw@${VERSION} gateway run\` to start it in the foreground.`,
+    );
+  });
 
   it("keeps setup incomplete when the installed gateway never becomes reachable", async () => {
     mocks.ensureGatewayService.mockResolvedValueOnce({

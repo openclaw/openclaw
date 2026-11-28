@@ -135,6 +135,14 @@ Classify a transport by the recovery guarantee at its receive boundary:
   process crash window and supports local restart recovery; completion
   tombstones are near-inert against platform replay.
 
+If the same receiver also handles direct interactions such as Slack buttons or
+shortcuts, call `monitor.dispatchDirect(() => dispatch(event))` before the
+listener acknowledges the delivery. Each call owns independent Gateway work
+until dispatch finishes. New calls are rejected during Gateway drain, after
+the plugin owner quiesces, or after account stop; stop waits for accepted listeners.
+Direct interactions are never
+written to the ingress queue, so they cannot be replayed after process loss.
+
 Use 30 days as the fleet tombstone-TTL convention, not as an SDK default. A
 high-volume redelivery window normally uses a 20,000-entry completed cap;
 lower-volume awaited and non-replay transports normally use 1,000-2,000.
@@ -144,6 +152,14 @@ than completed caps. TTL and cap both prune rows, so effective retention ends
 when the first bound is reached. Deviate only for a documented platform retry
 horizon, preserved shipped replay-guard window, expected volume or disk budget,
 or non-replay transport, and cover the retention contract with tests.
+
+Queue-cap policy drops are intentional non-outcomes. The shared drain records
+their reason for replay protection without calling a channel's dead-letter
+notification hook or asking the sender to retry. Health and Doctor dead-letter
+counts exclude these rows. `listFailed()` still includes them for inspection.
+The failed-row cap applies separately to policy drops and actual failures, with
+the same failed-row TTL for both. Telegram therefore retains at most 1,000 of
+each, so a flood of policy drops cannot evict its actual dead letters.
 
 ### At-least-once side effects
 

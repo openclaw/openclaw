@@ -633,6 +633,7 @@ it.each(["resolve", "reject"] as const)(
           : { error: callFailure },
       );
       await settlement.promise;
+      await expect(timeout.settled).rejects.toBeInstanceOf(AggregateError);
       expect(settlement.done).toBe(true);
       expect(await instance.dispose()).toBe(result);
       expect(result.errors).toEqual([timeout, cleanupFailure]);

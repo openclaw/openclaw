@@ -2,15 +2,15 @@ import {
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
   type WorkerInferenceErrorReason,
   type WorkerInferenceEventFrame,
-  type WorkerInferenceStartParams,
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
   validateWorkerInferenceTerminalFrame,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import type { InferenceTurnIdentity } from "./inference.types.js";
 
 type WorkerInferenceFrameContext = {
-  request: Pick<WorkerInferenceStartParams, "runEpoch" | "sessionId" | "runId" | "turnId">;
+  storeInput: InferenceTurnIdentity;
   seq: number;
 };
 
@@ -64,10 +64,10 @@ export function terminalFrame(
     type: "event",
     event: "worker.inference.terminal",
     payload: {
-      runEpoch: entry.request.runEpoch,
-      sessionId: entry.request.sessionId,
-      runId: entry.request.runId,
-      turnId: entry.request.turnId,
+      runEpoch: entry.storeInput.runEpoch,
+      sessionId: entry.storeInput.sessionId,
+      runId: entry.storeInput.runId,
+      turnId: entry.storeInput.turnId,
       seq,
       outcome,
     },

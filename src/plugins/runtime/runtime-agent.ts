@@ -3,7 +3,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentIds,
 } from "../../agents/agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   resolveEmbeddedCliBackendDispatchEligibility,
   resolveEmbeddedCliBackendDispatchEligibilityAsync,
@@ -42,6 +42,7 @@ import {
   updateSessionStoreEntry,
   upsertSessionEntry,
 } from "../../plugin-sdk/session-store-runtime.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import {
   beginSessionEffect,
@@ -49,6 +50,7 @@ import {
 } from "../../sessions/session-controller.lifecycle.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { warnPluginSdkDeprecation } from "../sdk-deprecation.js";
+import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
 import { createRuntimeSessionEntry } from "./runtime-agent-session-create.js";
 import { ensurePluginAgentWorkspace } from "./runtime-agent-workspace.js";
@@ -66,11 +68,14 @@ const loadToolAvailabilityRuntime = createLazyRuntimeModule(
   () => import("../../agents/tool-availability-explanation.js"),
 );
 const loadAgentCommandRuntime = createLazyRuntimeModule(async () => {
-  const [command, identity] = await Promise.all([
+  const [command, identity, readIngressSenderAdmission] = await Promise.all([
     import("../../agents/agent-command.js"),
     import("../../agents/agent-command-execution-identity.js"),
+    import("../../gateway/operator-admission.js").then(
+      (admission) => admission.readIngressSenderAdmission,
+    ),
   ]);
-  return { command, identity };
+  return { command, identity, readIngressSenderAdmission };
 });
 
 function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | undefined {
@@ -231,7 +236,8 @@ export function createRuntimeAgent(
   config: PluginRuntime["config"] = createRuntimeConfig(),
 ): PluginRuntime["agent"] {
   const agentRuntime = {
-    defaults: { model: DEFAULT_MODEL, provider: DEFAULT_PROVIDER },
+    // Deprecated compatibility values; core never selects them.
+    defaults: { model: "gpt-6-astra", provider: DEFAULT_PROVIDER },
     resolveAgentDir,
     resolveAgentWorkspaceDir,
     resolveAgentIdentity,
@@ -287,19 +293,43 @@ export function createRuntimeAgent(
   defineCachedValue(agentRuntime, "runCommandFromIngress", () =>
     createLazyRuntimeMethod(
       loadAgentCommandRuntime,
-      ({ command, identity }) =>
+      ({ command, identity, readIngressSenderAdmission }) =>
         async (
           opts: Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[0],
           runtime: Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[1],
-        ) =>
-          await command.agentCommandFromGatewayIngress(
-            {
-              ...identity.sanitizePublicAgentCommandIngressOpts(opts),
-              senderIsOwner: opts.senderIsOwner === true,
-            },
-            runtime,
-            undefined,
-          ),
+        ) => {
+          const channelTurn = opts.messageChannel !== undefined;
+          if (channelTurn && opts.senderIsOwner === true) {
+            warnPluginSdkDeprecation({
+              family: "ingress-owner-claim",
+              method: "runCommandFromIngress({ senderIsOwner })",
+              replacement: "runContext.senderId",
+              pluginId: getPluginRuntimeGatewayRequestScope()?.pluginId,
+              compatibility: "The host ignores the claim and decides owner from the sender.",
+            });
+          }
+          // Like runEmbeddedAgent, a bridge consult may outlive the request that opened it.
+          return await runWithGatewayDetachedWorkContinuation(
+            () =>
+              command.agentCommandFromGatewayIngress(
+                {
+                  ...identity.sanitizePublicAgentCommandIngressOpts(opts),
+                  senderIsOwner: channelTurn
+                    ? readIngressSenderAdmission(config.current({ clone: true }), {
+                        ...opts,
+                        senderId: opts.runContext?.senderId,
+                      }).grant.owner
+                    : opts.senderIsOwner === true,
+                  // The plugin-scoped wrapper admitted these bindings for the caller's own tools.
+                  toolBindings: opts.toolBindings,
+                },
+                runtime,
+                undefined,
+              ),
+            `plugin:${getPluginRuntimeGatewayRequestScope()?.pluginId ?? "unknown"}:run-command-from-ingress`,
+            opts.abortSignal,
+          );
+        },
     ),
   );
   defineCachedValue(agentRuntime, "runEmbeddedAgent", () =>

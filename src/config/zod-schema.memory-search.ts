@@ -22,6 +22,7 @@ export const MemorySearchSchema = z
     multimodal: z
       .strictObject({
         enabled: z.boolean().optional(),
+        allowPartial: z.boolean().optional(),
         modalities: z
           .array(z.union([z.literal("image"), z.literal("audio"), z.literal("all")]))
           .optional(),

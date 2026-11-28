@@ -11,10 +11,12 @@ import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-u
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
-  installMockGateway,
-  type ControlUiMockGatewayScenario,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installNativePluginMockGateway,
+  type NativeControlUiMockGatewayScenario,
+} from "../test-helpers/control-ui-plugin-e2e.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import {
@@ -56,8 +58,8 @@ async function createProofContext() {
   return { page, close: () => suite.closeBrowserContext(context) };
 }
 
-async function setupDashboard(page: Page, scenario: ControlUiMockGatewayScenario) {
-  const gateway = await installMockGateway(page, {
+async function setupDashboard(page: Page, scenario: NativeControlUiMockGatewayScenario) {
+  const gateway = await installNativePluginMockGateway(page, {
     ...scenario,
     sessionKey,
     featureMethods: [
@@ -343,6 +345,11 @@ suite.define(() => {
     await page.setViewportSize({ width: 1440, height: 900 });
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     const widgetActions = preview.locator("[data-widget-actions]");
+    await expect
+      .poll(() =>
+        widgetActions.getByRole("button", { name: "Annotate widget", exact: true }).count(),
+      )
+      .toBe(1);
     await expect.poll(() => preview.locator(".chat-tool-card__preview-header").count()).toBe(0);
     await expectStyle(preview.locator(".chat-tool-card__preview-panel"), "padding", "0px");
     await page.mouse.move(0, 0);
@@ -368,7 +375,7 @@ suite.define(() => {
         gap: pinBox.left - box.right,
         actionLeftOffset: moreBox.left - pinBox.left,
         actionVerticalGap: moreBox.top - pinBox.bottom,
-        top: pinBox.top - box.top,
+        top: element.querySelector("[data-widget-actions]")!.getBoundingClientRect().top - box.top,
         box: { x: box.x, y: box.y, width: box.width, height: box.height },
         panelWidth: panelBox.width,
       };

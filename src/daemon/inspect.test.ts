@@ -10,6 +10,7 @@ import {
   listManagedOpenClawGatewayServices,
 } from "./inspect.js";
 import * as launchdRuntime from "./launchd-runtime.js";
+import { findInstalledSystemdGatewayScope } from "./systemd-scope.js";
 
 const nativePlistHost = vi.hoisted(() => process.platform === "darwin");
 const loadedSystemdUnits = vi.hoisted(() =>
@@ -215,6 +216,42 @@ it("resets inline metadata for an unbranded systemd command", async () => {
     errors: [],
   });
 });
+
+it.skipIf(originalPlatform === "win32")(
+  "reads only eligible unit definitions for a scoped systemd installation",
+  async () => {
+    const { home, write } = nativeFixture("linux");
+    const dir = "/etc/systemd/system";
+    const alias = `${dir}/openclaw@gateway.service`;
+    const other = `${dir}/openclaw@other.service`;
+    const vendor = `${dir}/vendor.service`;
+    await write(other, CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
+    await write(vendor, CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
+    await fs.symlink("vendor.service", path.join(home, "native", alias));
+    vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: home });
+    vi.spyOn(fs, "access").mockRejectedValue(
+      Object.assign(new Error("missing"), { code: "ENOENT" }),
+    );
+
+    const reads = vi.mocked(fs.readFile);
+    const unitReads = () =>
+      reads.mock.calls
+        .map(([file]) => file)
+        .filter((file) => typeof file === "string" && file.endsWith(".service"));
+    const expected = { scope: "system", unitPath: alias, unitName: "openclaw@gateway.service" };
+    await expect(
+      findInstalledSystemdGatewayScope({
+        HOME: home,
+        OPENCLAW_STATE_DIR: path.join(home, "alternate-state"),
+      }),
+    ).resolves.toEqual(expected);
+    expect(unitReads()).toEqual([alias]);
+
+    reads.mockClear();
+    await expect(findInstalledSystemdGatewayScope({ HOME: home })).resolves.toEqual(expected);
+    expect(unitReads()).toEqual([alias, other, vendor]);
+  },
+);
 
 it("includes current, sibling, custom, and template systemd Gateways while preserving incomplete inspection", async () => {
   const { home, write, userDir } = nativeFixture("linux", "managed-systemd-");

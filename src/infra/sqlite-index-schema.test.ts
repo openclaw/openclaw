@@ -45,10 +45,8 @@ function traceSqlExecutions(
 ): {
   database: DatabaseSync;
   statements: string[];
-  readonly materializedIndexSqlBytes: number;
 } {
   const statements: string[] = [];
-  let materializedIndexSqlBytes = 0;
   function observe(row: unknown) {
     if (
       row &&
@@ -57,7 +55,6 @@ function traceSqlExecutions(
       typeof row.sql === "string" &&
       /^CREATE (?:UNIQUE )?INDEX\b/iu.test(row.sql)
     ) {
-      materializedIndexSqlBytes += Buffer.byteLength(row.sql, "utf8");
       onIndexSql?.(row.sql);
     }
   }
@@ -103,9 +100,6 @@ function traceSqlExecutions(
       },
     }) as DatabaseSync,
     statements,
-    get materializedIndexSqlBytes() {
-      return materializedIndexSqlBytes;
-    },
   };
 }
 
@@ -157,7 +151,10 @@ describe("repairCanonicalSqliteIndexes", () => {
           }
           return sum + Buffer.byteLength(row.sql, "utf8");
         }, 0);
-        const traced = traceSqlExecutions(db);
+        let materializedIndexSqlBytes = 0;
+        const traced = traceSqlExecutions(db, (sql) => {
+          materializedIndexSqlBytes += Buffer.byteLength(sql, "utf8");
+        });
 
         expect(
           repairCanonicalSqliteIndexes(traced.database, "test database", schema, {
@@ -166,7 +163,7 @@ describe("repairCanonicalSqliteIndexes", () => {
         ).toEqual([]);
 
         expect(db.prepare("PRAGMA schema_version").get()).toEqual(before);
-        expect(traced.materializedIndexSqlBytes).toBeLessThanOrEqual(indexSqlBytes);
+        expect(materializedIndexSqlBytes).toBeLessThanOrEqual(indexSqlBytes);
         expect(traced.statements.length).toBeLessThanOrEqual(7);
       } finally {
         db.close();
@@ -243,6 +240,80 @@ describe("repairCanonicalSqliteIndexes", () => {
           { id: 1, tenant_id: "Tenant", external_id: null, active: 1 },
           { id: 2, tenant_id: "Other", external_id: "two", active: 0 },
         ]);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  it.each([
+    { state: "healthy", check: "quick", failure: undefined },
+    { state: "healthy", check: "full", failure: undefined },
+    { state: "orphan", check: "full", failure: /foreign_key_check failed/ },
+    { state: "duplicates", check: "full", failure: /UNIQUE constraint failed/ },
+    { state: "unknown parent", check: "full", failure: /foreign key mismatch/ },
+  ] as const)(
+    "checks and atomically repairs an FK parent index ($state, $check)",
+    ({ state, check, failure }) => {
+      const db = new DatabaseSync(":memory:");
+      const schema = `
+      CREATE TABLE parents (id INTEGER PRIMARY KEY, key TEXT NOT NULL);
+      CREATE UNIQUE INDEX idx_parent_key ON parents(key);
+      CREATE TABLE children (parent_key TEXT REFERENCES parents(key));
+      ${state === "unknown parent" ? "CREATE TABLE other (key TEXT); CREATE TABLE other_children (parent_key TEXT REFERENCES other(key));" : ""}
+    `;
+      const diagnostics = {};
+      try {
+        db.exec(`${schema}
+        PRAGMA foreign_keys = OFF;
+        DROP INDEX idx_parent_key;
+        CREATE INDEX idx_parent_key ON parents(key);
+        INSERT INTO parents VALUES (1, 'one');
+        INSERT INTO children VALUES ('${state === "orphan" ? "absent" : "one"}');
+        ${state === "duplicates" ? "INSERT INTO parents VALUES (2, 'one');" : ""}
+        PRAGMA foreign_keys = ON;
+      `);
+        const before = db.prepare("SELECT * FROM parents ORDER BY id").all();
+        const indexBefore = db
+          .prepare("SELECT sql FROM sqlite_schema WHERE name = 'idx_parent_key'")
+          .get();
+        expect(() => db.prepare("PRAGMA foreign_key_check").all()).toThrow(/foreign key mismatch/);
+        const repair = () =>
+          runSqliteIntegrityOperationSync(
+            verifyAndRepairCanonicalSqliteIndexSteps(
+              db,
+              "test database",
+              sqliteSchemaFixture(schema),
+              {
+                integrity: { check },
+                diagnostics,
+                validateAfterRepair: () =>
+                  assertSqliteSchemaContains(db, "test database", sqliteSchemaFixture(schema)),
+              },
+            ),
+          );
+        if (failure) {
+          expect(repair).toThrow(failure);
+          expect(
+            db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'idx_parent_key'").get(),
+          ).toEqual(indexBefore);
+          expect(diagnostics).toMatchObject({ integrityGateOutcome: "failed" });
+        } else {
+          expect(repair()).toEqual(["idx_parent_key"]);
+          expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+          expect(diagnostics).toMatchObject({
+            integrityGateMode: check,
+            integrityGateOutcome: "healthy",
+          });
+          expect(() => db.exec("INSERT INTO parents VALUES (2, 'one')")).toThrow(
+            /UNIQUE constraint failed/,
+          );
+        }
+        expect(db.prepare("SELECT * FROM parents ORDER BY id").all()).toEqual(before);
+        expect(db.prepare("SELECT * FROM children").all()).toEqual([
+          { parent_key: state === "orphan" ? "absent" : "one" },
+        ]);
+        expect(db.isTransaction).toBe(false);
       } finally {
         db.close();
       }

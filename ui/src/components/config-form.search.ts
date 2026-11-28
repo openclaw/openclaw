@@ -2,6 +2,7 @@ import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { indexFirstByKey } from "../../../src/shared/dedupe-by-key.ts";
+import { foldSearchCase } from "../../../src/shared/search-case.js";
 import type { ConfigUiHints } from "../api/types.ts";
 import {
   hintForPath,
@@ -64,9 +65,9 @@ export function resolveConfigFieldMeta(
 }
 
 function defaultTextMatcher(value: string, query: string): boolean {
-  return normalizeLowercaseStringOrEmpty(value)
+  return foldSearchCase(normalizeLowercaseStringOrEmpty(value))
     .normalize("NFC")
-    .includes(normalizeLowercaseStringOrEmpty(query).normalize("NFC"));
+    .includes(foldSearchCase(normalizeLowercaseStringOrEmpty(query)).normalize("NFC"));
 }
 
 function matchesTags(filterTags: string[], fieldTags: string[]): boolean {
@@ -194,15 +195,12 @@ export function matchesConfigSectionSearch(params: {
   schema: JsonSchema;
   value: unknown;
   hints: ConfigUiHints;
-  query: string;
+  criteria: ConfigSearchCriteria;
   label?: string;
   description?: string;
   textMatcher?: ConfigSearchTextMatcher;
 }): boolean {
-  if (!params.query) {
-    return true;
-  }
-  const criteria = parseConfigSearchQuery(params.query);
+  const { criteria } = params;
   const metadataMatches =
     criteria.tags.length === 0 &&
     criteria.text.length > 0 &&

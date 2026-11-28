@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { compareProviderAuthChoiceGroups } from "./provider-auth-choice-order.js";
 import {
   resolveManifestDeclaredProviderAuthChoices,
@@ -6,6 +8,7 @@ import {
 
 export type ProviderLoginOption = {
   id: string;
+  pluginId?: string;
   brandId: string;
   label: string;
   hint?: string;
@@ -54,8 +57,35 @@ function loginKind(choice: ProviderAuthChoiceMetadata): ProviderLoginOption["kin
   return choice.appGuidedAuth ?? (choice.appGuidedSecret ? "secret" : undefined);
 }
 
+/** CLI `--device-code` (method `device-code`) also selects a declared device-code sign-in with another method id. */
+export function matchesProviderLoginMethod(
+  choice: Pick<ProviderAuthChoiceMetadata, "methodId" | "appGuidedAuth">,
+  method: string,
+): boolean {
+  return (
+    choice.methodId.toLowerCase() === method ||
+    (method === "device-code" && choice.appGuidedAuth === "device-code")
+  );
+}
+
 export function isProviderLoginChoiceStartable(choice: ProviderAuthChoiceMetadata): boolean {
   return loginKind(choice) !== undefined;
+}
+
+export function hasProviderModelSignIn(
+  params: NonNullable<Parameters<typeof resolveManifestDeclaredProviderAuthChoices>[0]> & {
+    pluginId: string;
+    metadataSnapshot: PluginMetadataSnapshot;
+  },
+): boolean {
+  const { pluginId, ...lookup } = params;
+  const { providers, modelCatalogProviders } = lookup.metadataSnapshot.owners;
+  return resolveManifestDeclaredProviderAuthChoices(lookup).some(
+    (choice) =>
+      choice.pluginId === pluginId &&
+      (providers.has(choice.providerId) || modelCatalogProviders.has(choice.providerId)) &&
+      isProviderLoginChoiceStartable(choice),
+  );
 }
 
 /** CLI API-key logins use the same credential-only runner without changing UI discovery. */
@@ -66,45 +96,88 @@ export function isProviderCliLoginChoiceStartable(choice: ProviderAuthChoiceMeta
   );
 }
 
+type LoginGroup = { id: string; label: string };
+
+export function sortProvidersForLogin<T extends LoginGroup>(
+  providers: readonly T[],
+  { config, workspaceDir }: { config?: OpenClawConfig; workspaceDir?: string },
+): T[] {
+  const groups = new Map<string, LoginGroup>();
+  for (const choice of resolveManifestDeclaredProviderAuthChoices({
+    config,
+    workspaceDir,
+    includeUntrustedWorkspacePlugins: false,
+  })) {
+    if (choice.groupId) {
+      const group = { id: choice.groupId, label: choice.groupLabel ?? choice.groupId };
+      const existing = groups.get(choice.providerId);
+      if (!existing || compareProviderAuthChoiceGroups(group, existing) < 0) {
+        groups.set(choice.providerId, group);
+      }
+    }
+  }
+  return providers.toSorted(
+    (a, b) =>
+      compareProviderAuthChoiceGroups(groups.get(a.id) ?? a, groups.get(b.id) ?? b) ||
+      a.label.localeCompare(b.label) ||
+      a.id.localeCompare(b.id),
+  );
+}
+
+/** Order the provider groups first, then their methods, even for unlabelled declarations. */
+export function sortProviderLoginChoices(
+  choices: readonly ProviderAuthChoiceMetadata[],
+): ProviderAuthChoiceMetadata[] {
+  const labels = new Map<string, string>();
+  for (const choice of choices) {
+    if (choice.groupLabel) {
+      const id = choice.groupId ?? choice.providerId;
+      const existing = labels.get(id);
+      if (!existing || choice.groupLabel.localeCompare(existing) < 0) {
+        labels.set(id, choice.groupLabel);
+      }
+    }
+  }
+  const group = (choice: ProviderAuthChoiceMetadata): LoginGroup => {
+    const id = choice.groupId ?? choice.providerId;
+    return { id, label: labels.get(id) ?? id };
+  };
+  return choices.toSorted(
+    (a, b) =>
+      compareProviderAuthChoiceGroups(group(a), group(b)) ||
+      (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0) ||
+      Number(b.onboardingFeatured === true) - Number(a.onboardingFeatured === true) ||
+      a.choiceLabel.localeCompare(b.choiceLabel, "en") ||
+      a.choiceId.localeCompare(b.choiceId),
+  );
+}
+
 export function listProviderLoginOptions(
   choices: readonly ProviderAuthChoiceMetadata[],
 ): ProviderLoginOption[] {
-  return (
-    choices
-      .filter(isEligible)
-      // oxlint-disable-next-line unicorn/no-array-sort -- filter creates a private array.
-      .sort(
-        (a, b) =>
-          compareProviderAuthChoiceGroups(
-            { id: a.groupId ?? a.providerId, label: a.groupLabel ?? a.choiceLabel },
-            { id: b.groupId ?? b.providerId, label: b.groupLabel ?? b.choiceLabel },
-          ) ||
-          (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0) ||
-          Number(b.onboardingFeatured === true) - Number(a.onboardingFeatured === true) ||
-          a.choiceLabel.localeCompare(b.choiceLabel, "en") ||
-          a.choiceId.localeCompare(b.choiceId),
-      )
-      .flatMap((choice): ProviderLoginOption[] => {
-        const kind = loginKind(choice);
-        if (!kind) {
-          return [];
-        }
-        return [
-          {
-            id: formatProviderLoginChoiceRef(choice),
-            brandId: choice.providerId,
-            label: choice.choiceLabel,
-            hint: choice.choiceHint,
-            groupLabel: choice.groupLabel,
-            icon: choice.icon,
-            website: choice.website,
-            docsUrl: choice.docsUrl,
-            kind,
-            featured: choice.onboardingFeatured === true,
-            ...(choice.credentialOnly !== true ? { requiresSetup: true as const } : {}),
-          },
-        ];
-      })
+  return sortProviderLoginChoices(choices.filter(isEligible)).flatMap(
+    (choice): ProviderLoginOption[] => {
+      const kind = loginKind(choice);
+      if (!kind) {
+        return [];
+      }
+      return [
+        {
+          id: formatProviderLoginChoiceRef(choice),
+          pluginId: choice.pluginId,
+          brandId: choice.providerId,
+          label: choice.choiceLabel,
+          hint: choice.choiceHint,
+          groupLabel: choice.groupLabel,
+          icon: choice.icon,
+          website: choice.website,
+          docsUrl: choice.docsUrl,
+          kind,
+          featured: choice.onboardingFeatured === true,
+          ...(choice.credentialOnly !== true ? { requiresSetup: true as const } : {}),
+        },
+      ];
+    },
   );
 }
 

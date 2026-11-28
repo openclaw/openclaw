@@ -14,6 +14,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { hasLoadedDetailsSubagents } from "../chat-spawned-subagent.ts";
@@ -33,6 +34,7 @@ type Props = {
 
 /** The pane owns the durable card, lifetime and all actions. */
 export function ChatDetailsProgress(props: Props) {
+  let host!: HTMLElement;
   const live = createMemo<ChatDetailsSnapshot["progress"]>(() => {
     const details = props.props;
     if (!details?.progressCard) {
@@ -68,7 +70,7 @@ export function ChatDetailsProgress(props: Props) {
     return progress && write ? { write, progress } : undefined;
   });
   return (
-    <openclaw-chat-details-progress>
+    <openclaw-chat-details-progress ref={(element) => (host = element)}>
       <Show when={receipt()} keyed>
         {(value) => {
           onSettled(() => value.write({ progress: value.progress }));
@@ -92,7 +94,22 @@ export function ChatDetailsProgress(props: Props) {
           placement="details"
           desktopDetails={props.desktop}
           onDismiss={props.props?.onDismissProgressCard}
-          onClearSaved={props.props?.onClearSavedProgressCard}
+          onClearSaved={
+            props.props?.onClearSavedProgressCard &&
+            ((card) => {
+              const panel = host.closest<HTMLElement>(".chat-details");
+              props.props?.onClearSavedProgressCard?.(card);
+              // Menu returns focus to its trigger before the card unmounts.
+              queueMicrotask(() => {
+                if (
+                  document.activeElement === document.body ||
+                  host.contains(document.activeElement)
+                ) {
+                  panel?.focus({ preventScroll: true });
+                }
+              });
+            })
+          }
           sessionStatus={presentation()?.sessionStatus}
           startedAt={presentation()?.startedAt}
           endedAt={presentation()?.endedAt}
@@ -245,12 +262,9 @@ export function MobileTaskProgressControls(props: MobileTaskProgressProps) {
           class="oc-menu-item oc-menu-item--switch task-progress-details__show-in-chat"
         >
           <span class="oc-menu-item__label">{t("sessionProgressCard.showInChat")}</span>
-          <span
-            class="task-progress-details__switch"
-            data-checked={props.showTaskProgress ? "true" : "false"}
-            aria-hidden="true"
-            inert
-          />
+          <span class="task-progress-details__switch" inert>
+            <SwitchIndicator checked={props.showTaskProgress} size="sm" />
+          </span>
         </button>
       ),
     },

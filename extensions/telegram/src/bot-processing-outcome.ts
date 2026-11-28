@@ -6,6 +6,10 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 export type TelegramMessageProcessingResult =
   | { kind: "completed" }
   | { kind: "skipped" }
+  | {
+      kind: "dropped";
+      reason: Parameters<NonNullable<ChannelIngressMonitorLifecycle["onDropped"]>>[0];
+    }
   | { kind: "failed-retryable"; error: unknown };
 
 type TelegramUpdateProcessingFrame = {
@@ -153,7 +157,7 @@ export function createTelegramSpooledReplayParticipant(
     }
     settled = true;
     ownerAbortSignal?.removeEventListener("abort", onOwnerAbort);
-    if (result.kind !== "completed") {
+    if (result.kind === "failed-retryable" || result.kind === "skipped") {
       abortController.abort(result.kind === "failed-retryable" ? result.error : result.kind);
     }
     resolveTask(result);

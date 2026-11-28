@@ -154,21 +154,25 @@ function currentFactories(root: string, staged: boolean, ref?: string) {
   return { entries, locations };
 }
 
-export function main(root = process.cwd(), argv = process.argv.slice(2)) {
+function check(root: string, input: { argv: string[] } | { frozenSha: string }) {
   try {
-    const args = parseRatchetArgs(argv);
+    const frozenSha = "frozenSha" in input ? input.frozenSha : undefined;
+    const args = "argv" in input ? parseRatchetArgs(input.argv) : { prune: false, staged: false };
     if (args.staged && args.prune) {
       throw new Error("--prune cannot be combined with --staged");
     }
-    const base = resolveRatchetBase(root, args);
+    const base = frozenSha ?? resolveRatchetBase(root, args);
     if (!base) {
       throw new Error("Mock factory ratchet requires a Git base commit");
     }
     const reference = loadRatchetReference(root, base, BASELINE, parseBaseline);
+    if (frozenSha && reference === null) {
+      throw new Error(`Missing ${BASELINE} in frozen candidate ${frozenSha}`);
+    }
     // Bootstrap and old branch bases derive existing debt from that revision's
     // sources; a missing ledger never authorizes new factories or allowances.
     const allowed = reference ?? currentFactories(root, false, base).entries;
-    const current = currentFactories(root, args.staged);
+    const current = currentFactories(root, args.staged, frozenSha);
     const write = (entries: Set<string>) =>
       fs.writeFileSync(
         path.join(root, BASELINE),
@@ -190,7 +194,9 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       console.log(`Initialized ${BASELINE}: ${current.entries.size} exact factories.`);
       return 0;
     }
-    const baseline = loadRatchetSnapshot(root, BASELINE, args.staged, parseBaseline);
+    const baseline = frozenSha
+      ? allowed
+      : loadRatchetSnapshot(root, BASELINE, args.staged, parseBaseline);
     const delta = compareRatchetSets(current.entries, baseline);
     const expanded = compareRatchetSets(baseline, allowed).added;
     if (
@@ -227,6 +233,15 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     console.error(error instanceof Error ? error.message : String(error));
     return 1;
   }
+}
+
+export function main(root = process.cwd(), argv = process.argv.slice(2)) {
+  return check(root, { argv });
+}
+
+/** Run the exact-candidate guard from trusted tooling without a candidate checkout. */
+export function checkFrozenMockExports(root: string, frozenSha: string) {
+  return check(root, { frozenSha });
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

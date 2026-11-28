@@ -155,6 +155,7 @@ export function SidebarPanelLauncher(props: {
                     aria-disabled={!type().available ? "true" : undefined}
                     onClick={() => {
                       if (type().available) {
+                        type().prepare?.();
                         props.onOpen(type().slot);
                       }
                     }}
@@ -250,19 +251,21 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
       id={`side-panel-type-${id}`}
       class="side-panel-type-menu"
       panelClass="side-panel-type-menu__panel"
-      triggerClass="rail-header__action side-panel-type-menu__trigger"
+      triggerClass="oc-icon-button oc-icon-button--28 rail-header__action side-panel-type-menu__trigger"
       triggerAttributes={{ title: t("chat.sidePanel.addTab") }}
       placement="bottom-start"
       label={t("chat.sidePanel.addTab")}
       trigger={<Icon name="plus" />}
       items={entries()()}
       onSelect={(item) => {
-        const slot = props.panelDefinitions.find(
+        const definition = props.panelDefinitions.find(
           (type) => type.available && type.slot === item.id,
-        )?.slot;
-        if (!slot) {
+        );
+        if (!definition) {
           return;
         }
+        definition.prepare?.();
+        const slot = definition.slot;
         const alreadyOpen = openSlots().has(slot);
         props.callbacks?.openSlot(slot);
         const request = HOSTED_TAB_REQUESTS.find(([panel]) => panel === slot);
@@ -650,8 +653,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
             <Show when={state().tabs.length > 0 && props.callbacks?.newTab}>
               <button
                 type="button"
-                class="rail-header__action tabstrip-new"
-                title={t("browser.newTab")}
+                class="oc-icon-button oc-icon-button--28 rail-header__action tabstrip-new"
                 aria-label={t("browser.newTab")}
                 disabled={closing()}
                 onClick={() => props.callbacks?.newTab?.open()}
@@ -669,8 +671,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
             <Show when={props.onOpenMobileLauncher} fallback={<TypeMenu {...props} />}>
               <button
                 type="button"
-                class="rail-header__action tabstrip-new"
-                title={t("browser.newTab")}
+                class="oc-icon-button oc-icon-button--28 rail-header__action tabstrip-new"
                 aria-label={t("browser.newTab")}
                 onClick={() => props.onOpenMobileLauncher?.()}
               >

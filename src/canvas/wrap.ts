@@ -3,6 +3,153 @@ import { escapeHtml } from "../shared/html-escape.js";
 import { WIDGET_MEDIA_SOURCES } from "../shared/widget-media.js";
 import { WIDGET_THEME_MESSAGE_TYPE, WIDGET_THEME_TOKENS } from "../shared/widget-theme.js";
 
+// Serialized into the trusted wrapper before any widget-authored script runs.
+// Geometry and bounded DOM labels only; this channel cannot save a comment.
+const WIDGET_INSPECTOR_SCRIPT = String.raw`(function installWidgetInspector(port             ) {
+  if (typeof document.elementFromPoint !== "function") {
+    return;
+  }
+  const listen = window.addEventListener.bind(window);
+  const post = port.postMessage.bind(port);
+  const call = Function.prototype.call.bind(Function.prototype.call);
+  const dataOf = Object.getOwnPropertyDescriptor(MessageEvent.prototype, "data") .get ;
+  const targetAt = document.elementFromPoint.bind(document);
+  const boundsOf = Element.prototype.getBoundingClientRect;
+  const attr = Element.prototype.getAttribute;
+  const tagOf = Object.getOwnPropertyDescriptor(Element.prototype, "localName") .get ;
+  const textOf = Object.getOwnPropertyDescriptor(Node.prototype, "textContent") .get ;
+  const slice = String.prototype.slice;
+  const stop = Event.prototype.stopImmediatePropagation;
+  const prevent = Event.prototype.preventDefault;
+  const raf = window.requestAnimationFrame.bind(window);
+  let inspection = 0;
+  let pointer                                      ;
+  let pending = false;
+  let lastHover = "";
+  const stringify = JSON.stringify;
+  const rectValues = ["left", "top", "right", "bottom"].map(
+    (key) => Object.getOwnPropertyDescriptor(DOMRectReadOnly.prototype, key) .get ,
+  );
+  const target = () => {
+    const element = pointer && targetAt(pointer.x, pointer.y);
+    if (!element) return;
+    const tag         = call(tagOf, element);
+    if (tag === "html" || tag === "body" || tag === "iframe") return;
+    const rect = call(boundsOf, element);
+    return {
+      element,
+      tag,
+      left: call(rectValues[0], rect),
+      top: call(rectValues[1], rect),
+      right: call(rectValues[2], rect),
+      bottom: call(rectValues[3], rect),
+    };
+  };
+  const hover = () => {
+    if (!inspection || pending) return;
+    pending = true;
+    raf(() => {
+      pending = false;
+      if (!inspection) return;
+      const hit = target();
+      const rect = hit && { left: hit.left, top: hit.top, right: hit.right, bottom: hit.bottom };
+      const next = stringify(rect ?? null);
+      if (next !== lastHover) {
+        lastHover = next;
+        post({ type: "openclaw:widget-inspect-hover", inspection, rect });
+      }
+    });
+  };
+  const end = () => {
+    post({ type: "openclaw:widget-inspect-cancel", inspection });
+    inspection = 0;
+    pointer = undefined;
+  };
+  port.addEventListener("message", (event) => {
+    const data = call(dataOf, event);
+    if (data?.type === "openclaw:widget-prompt-host-ready") {
+      post({ type: "openclaw:widget-inspect-ready" });
+    } else if (
+      data?.type === "openclaw:widget-inspect-mode" &&
+      typeof data.inspection === "number"
+    ) {
+      inspection = data.inspection;
+      pointer = undefined;
+      lastHover = "";
+    }
+  });
+  listen(
+    "pointermove",
+    (event) => {
+      if (inspection && event.isTrusted) {
+        pointer = { x: event.clientX, y: event.clientY };
+        hover();
+      }
+    },
+    true,
+  );
+  listen(
+    "pointerout",
+    (event) => {
+      if (event.isTrusted && !event.relatedTarget) {
+        pointer = undefined;
+        hover();
+      }
+    },
+    true,
+  );
+  listen("scroll", hover, true);
+  listen("resize", hover);
+  const intercept = (event       ) => {
+    if (!inspection || !event.isTrusted) return;
+    call(prevent, event);
+    call(stop, event);
+  };
+  listen("pointerdown", intercept, true);
+  listen("pointerup", intercept, true);
+  listen("auxclick", intercept, true);
+  listen("contextmenu", intercept, true);
+  listen(
+    "click",
+    (event) => {
+      if (!inspection || !event.isTrusted) return;
+      intercept(event);
+      if (event.button !== 0 || event.detail === 0) return;
+      pointer = { x: event.clientX, y: event.clientY };
+      const hit = target();
+      if (!hit) return;
+      const { element, tag, ...rect } = hit;
+      const id = call(slice, call(attr, element, "id") ?? "", 0, 80);
+      const text = call(
+        slice,
+        call(attr, element, "aria-label") ||
+          call(attr, element, "alt") ||
+          call(attr, element, "title") ||
+          call(textOf, element) ||
+          "",
+        0,
+        240,
+      );
+      post({ type: "openclaw:widget-inspect-pick", inspection, rect, tag, id, text });
+      // Remain armed until the host retires this mode; a double-click must not activate the widget.
+    },
+    true,
+  );
+  listen(
+    "keydown",
+    (event) => {
+      if (!inspection || !event.isTrusted) return;
+      if (event.key === "Escape") {
+        intercept(event);
+        end();
+      } else if (event.key === "Enter" || event.key === " ") {
+        intercept(event);
+      }
+    },
+    true,
+  );
+})(c.port1);`;
+
 const WIDGET_BODY_HEIGHT =
   "Math.ceil(Math.max(b.scrollHeight,b.offsetHeight,b.getBoundingClientRect().height))";
 // The existing post-render chat-host message confirms geometry in saved documents, too.
@@ -22,8 +169,8 @@ const WIDGET_BASE_STYLES = `:root{color-scheme:light dark;
 --accent:#bd4531;--accent-fill:#bd4531;--accent-fg:#ffffff;
 --ok:#15803d;--warn:#b45309;--danger:#dc2626;--info:#2563eb;
 --radius:10px;
---radius-full:9999px;--scrollbar-size:12px;--scrollbar-thumb-inset:3px;
---scrollbar-thumb:color-mix(in srgb,var(--muted) 32%,transparent);
+--radius-full:9999px;--scrollbar-size:12px;--scrollbar-thumb:color-mix(in srgb,var(--muted) 10%,transparent);
+--scrollbar-thumb-near:color-mix(in srgb,var(--muted) 16%,transparent);
 --scrollbar-thumb-hover:color-mix(in srgb,var(--muted) 64%,transparent);
 --font-body:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
@@ -38,7 +185,7 @@ const WIDGET_BASE_STYLES = `:root{color-scheme:light dark;
 --border:#1e2028;--border-strong:#2e3040;
 --accent:#ff5c5c;--accent-fill:#d13c3c;--accent-fg:#ffffff;
 --ok:#22c55e;--warn:#f59e0b;--danger:#ef4444;--info:#3b82f6}}
-*{box-sizing:border-box}@supports not selector(::-webkit-scrollbar-thumb){*{scrollbar-color:var(--scrollbar-thumb) transparent;scrollbar-width:thin}}html,body{margin:0}::-webkit-scrollbar{width:var(--scrollbar-size);height:var(--scrollbar-size);background:var(--surface)}::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}::-webkit-scrollbar-button{display:none}::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);background-clip:content-box;border:var(--scrollbar-thumb-inset) solid transparent;border-radius:var(--radius-full)}::-webkit-scrollbar-thumb:hover{background:var(--scrollbar-thumb-hover);background-clip:content-box}.openclaw-chat-host,.openclaw-chat-host body{scrollbar-width:none}.openclaw-chat-host::-webkit-scrollbar,.openclaw-chat-host body::-webkit-scrollbar{display:none}
+*{box-sizing:border-box}@supports not selector(::-webkit-scrollbar-thumb){*{scrollbar-color:var(--scrollbar-thumb) transparent;scrollbar-width:thin}*:hover{scrollbar-color:var(--scrollbar-thumb-near) transparent}}html,body{margin:0}::-webkit-scrollbar{width:var(--scrollbar-size);height:var(--scrollbar-size);background:var(--surface)}::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}::-webkit-scrollbar-button{display:none}::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);background-clip:content-box;border:var(--scrollbar-thumb-inset,calc(var(--scrollbar-size)/4)) solid transparent;border-radius:var(--radius-full)}@property --scrollbar-hover{syntax:"<integer>";inherits:false;initial-value:0}:hover{--scrollbar-hover:1}:hover::-webkit-scrollbar-thumb{background-color:var(--scrollbar-thumb-near)}::-webkit-scrollbar-thumb:hover,::-webkit-scrollbar-thumb:active{background-color:var(--scrollbar-thumb-hover)}.openclaw-chat-host,.openclaw-chat-host body{scrollbar-width:none}.openclaw-chat-host::-webkit-scrollbar,.openclaw-chat-host body::-webkit-scrollbar{display:none}
 body{display:flow-root;font:14px/1.5 var(--font-body);color:var(--text)}
 h1,h2,h3{margin:0 0 8px;color:var(--text-strong);font-weight:600}
 h1{font-size:18px}h2{font-size:16px}h3{font-size:14px}
@@ -119,6 +266,7 @@ export function buildWidgetDocument(
     'const apply=Reflect.apply;const dataOf=Object.getOwnPropertyDescriptor(MessageEvent.prototype,"data").get;' +
     "const c=new MessageChannel();" +
     "const promptPost=c.port1.postMessage.bind(c.port1);" +
+    WIDGET_INSPECTOR_SCRIPT +
     "const b=new MessageChannel();const bridgePost=b.port1.postMessage.bind(b.port1);" +
     "const promptWaiting=[];let inlinePromptReady=false;" +
     'c.port1.addEventListener("message",event=>{if(apply(dataOf,event,[])?.type!=="openclaw:widget-prompt-host-ready"||inlinePromptReady)return;' +

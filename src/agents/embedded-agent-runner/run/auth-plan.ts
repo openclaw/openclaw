@@ -220,6 +220,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     const unrecorded =
       runParams.trigger === "cron" &&
       !runParams.authProfileBinding &&
+      !runParams.scheduledLiveProviderAuth &&
       !runParams.scheduledRuntimeAuthority
         ? prepared.attempts.find(({ plan }) => {
             const source = plan.credentialSource;
@@ -231,6 +232,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
         : undefined;
     if (unrecorded) {
       throw createUnrecordedScheduledAccountRefusal({
+        jobId: runParams.inputProvenance?.jobId,
         runtime: harness.id,
         modelRef: `${params.provider}/${params.modelId}`,
         profileId: unrecorded.kind === "profile" ? unrecorded.profileId : undefined,

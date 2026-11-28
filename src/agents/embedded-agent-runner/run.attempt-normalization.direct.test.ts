@@ -118,7 +118,7 @@ describe("normalizeEmbeddedRunAttempt", () => {
 
   it.each([
     ["mid-turn truncation", 2, "recovery", 1],
-    ["no-op after a successful tool", 0, "progress_continuation", 1],
+    ["no-op after a successful tool", 0, "recovery", 1],
     ["compaction with current-attempt provenance", undefined, "recovery", 0],
   ] as const)(
     "preserves retry accounting for %s",
@@ -127,6 +127,7 @@ describe("normalizeEmbeddedRunAttempt", () => {
       const assistant = makeCliUsageAssistant("stop");
       const attempt = makeAttempt(
         {
+          pressure: "overflow",
           route: continues ? "truncate_tool_results_only" : "compact_only",
           handled: true,
           ...(continues ? { source: "mid-turn" as const } : {}),

@@ -39,6 +39,17 @@ errors. `Retry-After` and exhausted quota reset headers are honored by the provi
 error parser. A full-refill reset is not a minimum wait when the bucket still has
 tokens and the provider supplies a shorter retry hint.
 
+A timed 429 with a retry delay longer than one minute also uses this shared
+route/account gate, even without organization-TPM wording. When the remaining
+wait exceeds `retry.provider.maxRetryDelayMs`, later turns fail fast without
+sending another request to that route. The terminal notice names the limited
+model, gives the provider's reset time as a relative wait and an absolute date,
+and points to the model picker or `agents.defaults.model.fallbacks` in Settings.
+Dates use the configured UI locale and `agents.defaults.userTimezone` when
+available, otherwise the host's locale and timezone. Short or unknown waits
+retain the brief retry notice. These in-memory gates do not survive a Gateway
+restart; saved auth-profile cooldowns retain their existing persistence.
+
 During recovery, interactive turns take priority over subagents and background
 work such as reviews and titles. Queued requests resume one at a time with
 100–250 ms of jitter between admissions. The status reads **Waiting for rate
@@ -304,6 +315,8 @@ When a provider has multiple profiles, OpenClaw chooses an order like this:
   </Step>
 </Steps>
 
+With multiple Codex subscriptions, **Settings → Models → Provider access → OpenAI** shows one bar per quota window. Each segment shows what is left on that account, not a share of a combined allowance. The Credits row shows each account’s reported balance separately: zero is a reported balance; a dash means no balance was reported. Select an account name for its plan and account actions, or a quota segment for its reset time. When the order is editable, drag a segment left or right (or focus it and use the arrow keys) to change the selected agent’s stored priority. This does not change a session’s explicitly selected account.
+
 If no explicit order is configured, OpenClaw uses a round-robin order:
 
 - **Primary key:** profile type (**OAuth, then static token, then API key**).
@@ -347,7 +360,7 @@ Use `auth.order.openai` for the user-facing order:
 }
 ```
 
-Use `openai:*` for both ChatGPT/Codex OAuth profiles and OpenAI API-key profiles. When the subscription hits a Codex usage limit, OpenClaw records the exact reset time when Codex provides one. It tries the next ordered auth profile, and keeps the run inside the Codex harness. Once the reset time passes, the subscription profile is eligible again and the next automatic selection can return to it.
+Use `openai:*` for both ChatGPT/Codex OAuth profiles and OpenAI API-key profiles. When the subscription hits a Codex usage limit, OpenClaw records the exact reset time when Codex provides one. It tries the next ordered auth profile, and keeps the run inside the Codex harness. Once the reset time passes, the subscription profile is eligible again and the next automatic selection can return to it. Purchased credits on the same ChatGPT account and user cover exhausted included usage. Separate quota limits and spending caps still apply.
 
 Use a user-pinned profile to make one account/key the durable first preference for that session. If it becomes unavailable, OpenClaw temporarily rotates through the remaining eligible `auth.order.openai` profiles and returns to the pinned profile after recovery.
 
@@ -361,7 +374,7 @@ Same-model rate-limit retries also record the failed profile before waiting, usi
 
 After bounded recovery, a model-silent or request timeout records profile cooldown only when an authorized replacement profile is selected or a model fallback is configured; otherwise the profile stays available for the next turn.
 
-A provider plugin can declare `managesOwnAvailability: true` in `openclaw.plugin.json` when its upstream gateway owns capacity recovery. This applies to the plugin's declared providers and skips only rate-limit and overload cooldowns (`rate_limit` and `overloaded`). OpenRouter and Kilo Gateway use this declaration. Billing, authentication, permanent credential failures, and provider-reported subscription blocks remain enforced. Routing and auth status use the same policy, including before the provider runtime loads. There is no user configuration setting.
+A provider plugin can declare `managesOwnAvailability: true` in `openclaw.plugin.json` when its upstream gateway owns capacity recovery. This applies to the plugin's declared providers and skips only rate-limit and overload cooldowns (`rate_limit` and `overloaded`). ClawRouter, OpenRouter, and Kilo Gateway use this declaration. Billing, authentication, permanent credential failures, and provider-reported subscription blocks remain enforced. Routing and auth status use the same policy, including before the provider runtime loads. A rate-limit or overload window stored before the declaration is ignored, and a later failure of another kind starts its own window. Its failure count restarts too, unless another active restriction, such as a billing disable or subscription block, keeps the count. There is no user configuration setting.
 
 CLI-backed runtimes settle profile health only after their resume, fork, and fresh-session recovery attempts finish. A terminal credential failure cools down the exact selected profile before model fallback. A successful run clears stale failure state. Transcript, format, context, pre-provider timeout, and ambient CLI failures without a selected profile do not change shared profile health.
 

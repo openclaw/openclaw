@@ -4,6 +4,7 @@ const FEATURED_PROVIDER_AUTH_GROUP_ORDER = new Map<string, number>([
   ["xai", 2],
   ["google", 3],
   ["anthropic", 4],
+  ["copilot", 5],
 ]);
 const providerAuthGroupCollator = new Intl.Collator(undefined, { sensitivity: "base" });
 
@@ -18,9 +19,12 @@ export function compareProviderAuthChoiceGroups(
 ): number {
   const priorityA = FEATURED_PROVIDER_AUTH_GROUP_ORDER.get(a.id) ?? Number.POSITIVE_INFINITY;
   const priorityB = FEATURED_PROVIDER_AUTH_GROUP_ORDER.get(b.id) ?? Number.POSITIVE_INFINITY;
-  return (
+  const order =
     priorityA - priorityB ||
     providerAuthGroupCollator.compare(a.label, b.label) ||
-    providerAuthGroupCollator.compare(a.id, b.id)
-  );
+    providerAuthGroupCollator.compare(a.id, b.id);
+  if (order !== 0 || a.id === b.id) {
+    return order;
+  }
+  return a.id < b.id ? -1 : 1;
 }

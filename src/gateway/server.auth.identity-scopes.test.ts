@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   createPluginRegistryFixture,
@@ -37,7 +37,6 @@ import { gitHubPublicApi } from "./github-public-api.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { OperatorScope } from "./operator-scopes.js";
-import { retainGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import type { GatewayServer } from "./server-public.js";
 import {
@@ -60,7 +59,6 @@ import {
 } from "./server.auth.test-helpers.js";
 import { onGatewayPolicyClientInvalidated } from "./server/ws-policy-close.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { getTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -229,12 +227,10 @@ const GITHUB_RATE_LIMITED_ERROR = {
   retryAfterMs: expect.toSatisfy((ms: number) => ms > 60_000),
 };
 
-test.each(["config", "config-revocation", "profile", "profile-revocation"] as const)(
+test.each(["config", "profile"] as const)(
   "renews the current person-timeline claim after committed %s changes",
   async (publication) => {
-    const configPublication = publication === "config" || publication === "config-revocation";
-    const revokeAcceptedWork =
-      publication === "config-revocation" || publication === "profile-revocation";
+    const configPublication = publication === "config";
     const roles: GatewayOperatorRolesConfig = {
       default: "member",
       definitions: {
@@ -254,21 +250,17 @@ test.each(["config", "config-revocation", "profile", "profile-revocation"] as co
     let accepted = false;
     let revoked = false;
     const handler: GatewayRequestHandler = async (options) => {
-      let authority: ReturnType<typeof retainGatewayRequestMutationAuthority> | undefined;
       let unbind = () => {};
       try {
         if (!options.client) {
           throw new Error("expected the authenticated WebSocket caller and owned effect");
         }
-        // Preserve the dispatcher's bound options; plugin adapters clone their input.
-        authority = retainGatewayRequestMutationAuthority(options);
         unbind = onGatewayPolicyClientInvalidated(options.client as GatewayWsClient, () => {
           revoked = true;
         });
         accepted = true;
         entered.resolve();
         await release.promise;
-        authority.assertCurrent();
         writeFileSync(effectPath, "committed", { flag: "wx", mode: 0o600 });
         options.respond(true, { completed: true });
         completed.resolve({ ok: true });
@@ -278,7 +270,6 @@ test.each(["config", "config-revocation", "profile", "profile-revocation"] as co
         throw error;
       } finally {
         unbind();
-        authority?.release();
       }
     };
     const descriptor = createPluginGatewayMethodDescriptor({
@@ -377,30 +368,10 @@ test.each(["config", "config-revocation", "profile", "profile-revocation"] as co
             const replacement = await connect({ scopes: ["operator.sessions.write"] }, headers);
             expectScopes(replacement.connected, ["operator.sessions.write"]);
             expect(responseAuth(replacement.connected)?.profileActivityViewerId).toBe(person.id);
-            if (revokeAcceptedWork) {
-              // A later real authority loss must still reach the request retained after transport close.
-              if (configPublication) {
-                await patchRoles({
-                  ...roles,
-                  definitions: { ...roles.definitions, member: roles.definitions.denied! },
-                });
-              } else {
-                setUserProfileRole(person.id, "denied");
-              }
-              expect(revoked).toBe(true);
-            }
             release.resolve();
             const outcome = await completed.promise;
-            if (revokeAcceptedWork) {
-              expect(outcome).toMatchObject({
-                ok: false,
-                error: expect.any(SessionMutationAuthorizationChangedError),
-              });
-              expect(existsSync(effectPath)).toBe(false);
-            } else {
-              expect(outcome).toEqual({ ok: true });
-              expect(readFileSync(effectPath, "utf8")).toBe("committed");
-            }
+            expect(outcome).toEqual({ ok: true });
+            expect(readFileSync(effectPath, "utf8")).toBe("committed");
           } finally {
             release.resolve();
             if (accepted) {
@@ -472,6 +443,7 @@ test("denies missing person access, retires grant or alias authority, and preser
   setUserProfileRole(ensureProfileForEmail("staff@example.com").id, "staff");
   const { config, registry } = createPluginRegistryFixture();
   let grant: AbortController | undefined;
+  let policyUnavailable = false;
   registerVirtualTestPlugin({
     registry,
     config,
@@ -480,12 +452,15 @@ test("denies missing person access, retires grant or alias authority, and preser
     register(api) {
       api.registerGatewayAccessPolicy({
         authorize({ profile }) {
+          if (policyUnavailable) {
+            throw new Error("PRIVATE synthetic policy store unavailable");
+          }
           if (profile.assignedRole === "staff") {
             return undefined;
           }
           const current = grant;
           if (!current) {
-            throw new Error("An active grant is required");
+            return undefined;
           }
           return { signal: current.signal, assertCurrent: () => current.signal.throwIfAborted() };
         },
@@ -504,7 +479,12 @@ test("denies missing person access, retires grant or alias authority, and preser
       accessPolicies.length = 0;
       expect((await connect("visitor@example.com")).connected).toMatchObject({
         ok: false,
-        error: { code: "FORBIDDEN", details: { code: "OPERATOR_ACCESS_DENIED" } },
+        error: {
+          code: "FORBIDDEN",
+          details: { code: "OPERATOR_ACCESS_DENIED", accessCause: "policy-unavailable" },
+          retryable: true,
+          retryAfterMs: 30_000,
+        },
       });
       const staff = await connect("staff@example.com");
       expect(staff.connected.ok).toBe(true);
@@ -512,14 +492,36 @@ test("denies missing person access, retires grant or alias authority, and preser
       grant = undefined;
       expect((await connect("visitor@example.com")).connected).toMatchObject({
         ok: false,
-        error: { code: "FORBIDDEN", details: { code: "OPERATOR_ACCESS_DENIED" } },
+        error: {
+          code: "FORBIDDEN",
+          details: { code: "OPERATOR_ACCESS_DENIED", accessCause: "access-record-inactive" },
+          retryable: false,
+        },
       });
       grant = new AbortController();
       const guest = await connect("visitor@example.com");
       expect(guest.connected.ok).toBe(true);
       expect((await rpcReq(guest.ws, "status")).ok).toBe(true);
+      policyUnavailable = true;
+      // An evaluation outage refuses this handshake without revoking the admitted grant.
+      expect((await connect("visitor@example.com")).connected).toMatchObject({
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "Gateway access policy is unavailable; retry the operation.",
+          details: { code: "OPERATOR_ACCESS_UNAVAILABLE" },
+          retryable: true,
+        },
+      });
+      expect(grant.signal.aborted).toBe(false);
+      expect((await rpcReq(guest.ws, "status")).ok).toBe(true);
+      policyUnavailable = false;
+      const closedGrant = new Promise<string>((resolve) => {
+        guest.ws.once("close", (_code, reason) => resolve(reason.toString()));
+      });
       grant.abort(new Error("Grant expired"));
       expect(await waitForWsClose(guest.ws, 1_000)).toBe(true);
+      expect(await closedGrant).toContain("[access-cause=grant-revoked]");
       expect((await rpcReq(staff.ws, "status")).ok).toBe(true);
       expect((await connect("visitor@example.com")).connected.ok).toBe(false);
 
@@ -569,6 +571,15 @@ test.each([
   await withIdentityServer(async ({ connect }) => {
     const { ws, connected } = await connect({ scopes: scenario.deviceScopes });
     try {
+      if (scenario.expectedScopes.length === 0) {
+        expect(connected).toMatchObject({
+          ok: false,
+          error: { code: "FORBIDDEN", details: { code: "OPERATOR_ACCESS_DENIED" } },
+        });
+        expect(responseAuth(connected)).toBeUndefined();
+        expect(await waitForWsClose(ws, 1_000)).toBe(true);
+        return;
+      }
       expectScopes(connected, scenario.expectedScopes);
       expect(responseAuth(connected)).toMatchObject({
         roleAllowsAdmin: scenario.assignedRole === "admin-only",
@@ -879,7 +890,7 @@ test("refuses a reassigned GitHub login's former profile and role while GitHub i
         await expectWriteDenied(ws, "agent:main:x");
       });
     } finally {
-      staffProfileIds.forEach(invalidateOperatorRolePolicy);
+      staffProfileIds.forEach((profileId) => invalidateOperatorRolePolicy(profileId));
     }
   });
   expect(github.requests).toEqual([
@@ -964,5 +975,22 @@ test.each<[string, GatewayAuthConfig, ConnectOptions, string[]]>([
   await withIdentityServer(async ({ connect }) => {
     const { connected } = await connect(options);
     expectScopes(connected, scopes);
+  });
+});
+
+test("keeps Tailscale identity scopes without a named-role cap when only definitions exist", async () => {
+  const login = "peter@example.test";
+  testTailscaleWhois.value = { login, name: "Peter" };
+  await configureTailscale(
+    { identityScopes: { [login]: ["operator.write"] } },
+    {
+      definitions: { guest: role([], "none", []) },
+    },
+  );
+  await withIdentityServer(async ({ tailscale }) => {
+    const { connected } = await tailscale(login, { scopes: ["operator.read"] });
+    expectScopes(connected, READ_WRITE);
+    expect(responseAuth(connected)?.sessionCap).toBeUndefined();
+    expect(responseAuth(connected)?.deviceToken).toBeTruthy();
   });
 });

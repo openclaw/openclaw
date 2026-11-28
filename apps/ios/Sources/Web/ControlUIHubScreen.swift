@@ -132,9 +132,7 @@ struct ControlUIHubScreen: View {
                         AuthenticatedControlUI.basicProxyCredential(config: config)
                     },
                     accessCookie: accessCookieAdmission.cookie,
-                    accessAdmissionIsCurrent: authorization.map { authorization in
-                        { authorization.isCurrent() }
-                    },
+                    accessAdmissionIsCurrent: authorization?.isCurrent,
                     accessResponseCheck: authorization?.checkResponse,
                     onAccessCookieBoundaryFailure: { self.failedAccessBoundaryIdentity = webContentIdentity })
                     // Unrelated SwiftUI updates must not reload a live desktop or shell.
@@ -146,9 +144,9 @@ struct ControlUIHubScreen: View {
         }
         .navigationTitle(self.page.title)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(
-            self.usesNativeNavigationChrome || self.headerSidebarAction != nil ? .visible : .hidden,
-            for: .navigationBar)
+        .modifier(OpenClawSidebarRevealToolbarVisibility(action: self.headerSidebarAction) { isRevealShown in
+            self.usesNativeNavigationChrome || isRevealShown ? .visible : .hidden
+        })
         .toolbar {
             if self.usesNativeNavigationChrome, let gatewayAction {
                 ToolbarItem(placement: .topBarTrailing) {

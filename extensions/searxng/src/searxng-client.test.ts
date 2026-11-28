@@ -65,9 +65,26 @@ it.each([
   expect(fetch).not.toHaveBeenCalled();
 });
 
+it.each([
+  [{ country: "DE" }, "unsupported_country"],
+  [{ freshness: "week" }, "unsupported_freshness"],
+  [{ date_after: "2026-01-01" }, "unsupported_date_filter"],
+] as const)(
+  "reports unsupported filter %j instead of searching unfiltered",
+  async (filter, error) => {
+    const fetch = mockFetch([]);
+    await expect(search({ ...filter })).resolves.toMatchObject({ error });
+    expect(fetch).not.toHaveBeenCalled();
+  },
+);
+
 it("builds the configured request and normalizes, filters, and caps its results", async () => {
   const fetch = mockFetch([
-    row("cat", { content: "Meow", img_src: "https://img.test/cat.jpg" }),
+    row("cat", {
+      content: "Meow",
+      img_src: "https://img.test/cat.jpg",
+      publishedDate: "2026-11-27T09:15:00",
+    }),
     row("bad-title", { title: { text: "bad" } }),
     row("bad-url", { url: 3 }),
     row("text", { content: { text: "bad" } }),
@@ -83,6 +100,7 @@ it("builds the configured request and normalizes, filters, and caps its results"
         title: expect.stringContaining("cat"),
         snippet: expect.stringContaining("Meow"),
         img_src: "https://img.test/cat.jpg",
+        published: "2026-11-27T09:15:00",
         siteName: "example.com",
       },
       { url: "https://example.com/text" },
@@ -105,7 +123,7 @@ it("preserves the upstream HTTP error status", async () => {
   await expect(search()).rejects.toMatchObject({ status: 429, statusCode: 429 });
 });
 
-it("rejects invalid and incomplete response bodies", async () => {
+it("rejects invalid, incomplete, and failed-engine responses", async () => {
   const fetch = mockFetch(new Response("{"));
   await expect(search()).rejects.toThrow("SearXNG returned invalid JSON.");
 
@@ -120,17 +138,23 @@ it("rejects invalid and incomplete response bodies", async () => {
   });
   fetch.mockResolvedValueOnce(new Response(stream));
   await expect(search()).rejects.toThrow("SearXNG response incomplete after 7 bytes.");
+  mockFetch(Response.json({ results: [], unresponsive_engines: [["engine", "timeout"]] }));
+  await expect(search()).rejects.toThrow("engine (timeout)");
 });
 
-it.each(["example.com", "internal"])("gates private redirects from search.%s", async (host) => {
-  const redirect = "https://127.0.0.1/search";
+it.each([
+  ["example.com", "127.0.0.1", false],
+  ["internal", "127.0.0.1", false],
+  ["internal", "search.internal", true],
+] as const)("gates redirects from search.%s to %s", async (host, redirectHost, allowed) => {
+  const redirect = `https://${redirectHost}/search`;
   const fetch = mockFetch(Response.redirect(redirect), [row("local")]);
   const endpoint = `https://search.${host}/searxng`;
   const pending = search({ config: searchConfig(endpoint) });
-  if (host === "internal") {
+  if (allowed) {
     await expect(pending).resolves.toMatchObject({ count: 1 });
   } else {
     await expect(pending).rejects.toMatchObject({ name: "SsrFBlockedError" });
   }
-  expect(fetch).toHaveBeenCalledTimes(host === "internal" ? 2 : 1);
+  expect(fetch).toHaveBeenCalledTimes(allowed ? 2 : 1);
 });

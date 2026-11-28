@@ -23,6 +23,7 @@ import { createConnectionBootstrapCoordinator } from "../../ui/src/app/connectio
 import { SidebarOwnerSessionCounts } from "../../ui/src/components/sidebar-owner-session-counts.ts";
 import { createSessionCapability } from "../../ui/src/lib/sessions/index.ts";
 import type { SessionGateway } from "../../ui/src/lib/sessions/session-types.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -143,12 +144,7 @@ async function run(active: boolean) {
     countsReads = primaryReads = 0;
     globalThis.gc?.();
     if (inspector) {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 16_384,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 16_384);
     }
     const start = process.hrtime.bigint();
     const cpu = process.cpuUsage();

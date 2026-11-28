@@ -2,11 +2,11 @@
 import { localeLowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { capCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction-summary-budget.js";
+import { copyString } from "../../../packages/agent-core/src/harness/utils/truncate.js";
+import type { Model } from "../../llm/types.js";
 import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/query.js";
-import type {
-  CompactionSummarizationInstructions,
-  summarizeCompactionHistory,
-} from "../compaction.js";
+import type { CompactionSummarizationInstructions } from "../compaction-summary.types.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 
 const MAX_EXTRACTED_IDENTIFIERS = 12;
@@ -32,10 +32,17 @@ const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, include identifiers only when needed for continuity; do not enforce literal-preservation rules.";
 
-export function resolveSummaryReserveTokens(
-  requestedReserveTokens: number,
-  model: NonNullable<Parameters<typeof summarizeCompactionHistory>[0]["model"]>,
-): number {
+const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
+const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
+
+export function resolveQualityGuardMaxRetries(value: number | undefined): number {
+  return Math.min(
+    MAX_QUALITY_GUARD_MAX_RETRIES,
+    Math.max(0, Math.floor(value ?? DEFAULT_QUALITY_GUARD_MAX_RETRIES)),
+  );
+}
+
+export function resolveSummaryReserveTokens(requestedReserveTokens: number, model: Model): number {
   // Safeguard owns retained-summary policy, so its summary requests reserve at most 20k output
   // tokens; generic callers own their output budget.
   const requested = Math.max(1, Math.min(Math.floor(requestedReserveTokens), 20_000));
@@ -47,12 +54,44 @@ export function resolveSummaryReserveTokens(
 }
 
 /** Demotes canonical headings when a summary is embedded as supporting context. */
-export function nestRequiredSummaryHeadings(text: string): string {
+function nestRequiredSummaryHeadings(text: string): string {
   return text.replace(/^##[ \t]+\S.*$/gmu, (heading) =>
     REQUIRED_SUMMARY_SECTIONS.some((required) => required === heading.trim())
       ? heading.replace("##", "###")
       : heading,
   );
+}
+
+const SPLIT_TURN_SECTION_HEADING = "**Turn Context (split turn):**";
+
+function nestMarkdownHeadings(text: string): string {
+  return text.replace(/^##(?=[ \t]+\S)/gmu, "###");
+}
+
+export function normalizeLegacySplitTurnSummary(summary: string | undefined): string | undefined {
+  const splitTurnStart = summary?.indexOf(SPLIT_TURN_SECTION_HEADING) ?? -1;
+  if (!summary || splitTurnStart < 0) {
+    return summary;
+  }
+  const splitTurnContentStart = splitTurnStart + SPLIT_TURN_SECTION_HEADING.length;
+  // Shipped safeguard summaries nested a second complete summary after this owned boundary.
+  // Demote its headings only in the next model input; the persisted old boundary stays untouched.
+  return `${summary.slice(0, splitTurnContentStart)}${nestRequiredSummaryHeadings(summary.slice(splitTurnContentStart))}`;
+}
+
+export function formatGeneratedSplitTurnSection(
+  summary: string,
+  onTruncated: () => void,
+  maxChars: number,
+): string {
+  const heading = `${SPLIT_TURN_SECTION_HEADING}\n\n`;
+  const summaryBudget = maxChars - heading.length;
+  const nestedSummary = nestMarkdownHeadings(summary);
+  const cappedSummary = capCompactionSummary(nestedSummary, summaryBudget);
+  if (cappedSummary.length < nestedSummary.length) {
+    onTruncated();
+  }
+  return `${heading}${cappedSummary}`;
 }
 
 /** Wraps operator-provided compaction instruction text as untrusted prompt data. */
@@ -94,16 +133,12 @@ export function buildCompactionStructureInstructions(
   const identifierSectionInstruction =
     resolveExactIdentifierSectionInstruction(summarizationInstructions);
   const sectionsTemplate = [
-    "Produce a compact, factual summary with these exact section headings:",
+    "Produce a compact summary under these exact headings:",
     ...REQUIRED_SUMMARY_SECTIONS,
     identifierSectionInstruction,
-    "Do not omit unresolved asks from the user.",
-    "Record completed requests outside ## Pending user asks; list only unresolved user requests there.",
-    "Use tool results to update task status: a check that ran and returned a failing result is completed, not an open TODO. Record its result under ## Decisions and keep only the remaining remediation in ## Open TODOs (e.g. failing tests -> fix the failures, not run the same tests again).",
-    "Treat prior summaries as drafts to update: reconcile them with all supplied messages, including preserved turns and split-turn progress, and remove stale duplicate detail.",
-    "Apply explicit corrections and observed results in the main sections. Preserve unaffected facts; retain superseded values only as clearly labeled history, never as competing current decisions.",
-    "A factual correction is not a pending task unless the user requested work that remains undone. Distinguish requested, attempted, completed, and failed actions without inferring overall success from a completed check.",
-    "Before returning, check that all sections agree on current facts and status. Appending a correction in context is insufficient if the main summary still asserts the old state. If evidence does not resolve a conflict, record the uncertainty.",
+    "Record settled user decisions, explicit approvals, and observed outcomes under ## Decisions, updating superseded facts when corrected.",
+    "Limit ## Open TODOs to unfinished user-requested work or unresolved execution failures.",
+    "Keep only stated constraints in ## Constraints/Rules and unresolved user requests in ## Pending user asks.",
   ].join("\n");
   const latestRequestBlock = latestUnresolvedUserRequest
     ? wrapUntrustedInstructionBlock("Latest unresolved user request", latestUnresolvedUserRequest)
@@ -403,7 +438,7 @@ function summaryIncludesIdentifier(summary: string, identifier: string): boolean
 export function extractOpaqueIdentifiers(text: string): string[] {
   // Decimal/scientific syntax is unambiguous numeric data, including unit suffixes. Integer tokens
   // with letters remain opaque because the suffix may be part of an exact identifier.
-  return uniqueStrings(
+  return extractOpaqueIdentifiersFromFacts([
     Array.from(
       text.matchAll(
         /(https?:\/\/\S+|(?<![A-Za-z0-9._-])\/[\w.-]{2,}(?:\/[\w.-]+)+|[A-Za-z]:\\[\w\\.-]+|(?<![A-Za-z0-9._-])[A-Za-z0-9._-]+\.[A-Za-z0-9._/-]+:\d{1,5})|(?:(?:(?:\d+\.\d+|\.\d+)(?:[eE][+-]?\d+)?|\d+\.[eE][+-]?\d+|\d+\.?[eE][+-]\d+|(?![A-Fa-f0-9]{8,}(?![A-Fa-f0-9]))\d+\.?[eE]\d+)(?:(?=[A-Za-z]+(?![A-Za-z0-9]))(?=[A-Za-z]*[G-Zg-z])[A-Za-z]+)?(?![A-Za-z0-9])|(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*(?:[A-Fa-f0-9]{8,}|\d{6,}))([A-Za-z0-9_-]+))/g,
@@ -412,7 +447,14 @@ export function extractOpaqueIdentifiers(text: string): string[] {
     )
       .map((value) => normalizeOpaqueIdentifier(sanitizeExtractedIdentifier(value)))
       .filter((value) => value.length >= 4),
-  ).slice(0, MAX_EXTRACTED_IDENTIFIERS);
+  ]).map(copyString);
+}
+
+/** Newline-separated message text cannot form a cross-message identifier match. */
+export function extractOpaqueIdentifiersFromFacts(facts: readonly (readonly string[])[]): string[] {
+  // Twelve unique identifiers from a single row already fill the final quota;
+  // no later identifier in that row can enter the first twelve of the sequence.
+  return uniqueStrings(facts.flat()).slice(0, MAX_EXTRACTED_IDENTIFIERS);
 }
 
 function tokenizeAskOverlapText(text: string, includeFallbackTokens = false): string[] {

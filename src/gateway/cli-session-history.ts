@@ -44,6 +44,7 @@ import type {
 export type CliHistoryRevision = {
   database: EngineConnection;
   generation?: string;
+  updatedAt: number | null;
   indexedSeq: number;
   leafEventId: string | null;
 };
@@ -116,7 +117,7 @@ export async function prepareCliSessionHistoryReader(
   }
   const native = {
     cliSessionId: binding.sessionId,
-    homeDir: params.cliHistoryHomeDir,
+    projectsDir: params.cliHistoryProjectsDir,
     localSessionId: params.sessionId,
     reseedReceipt: binding.reseedReceipt,
   };
@@ -126,8 +127,9 @@ export async function prepareCliSessionHistoryReader(
     retire(identity);
     return undefined;
   }
+  // A confirmed steer can acquire native identity without appending or rotating admission.
   const revisionKey = (value: CliHistoryRevision) =>
-    JSON.stringify([value.generation, value.indexedSeq, value.leafEventId]);
+    JSON.stringify([value.generation, value.updatedAt, value.indexedSeq, value.leafEventId]);
   const localRevision = revision ? revisionKey(revision) : undefined;
   const key = JSON.stringify([localRevision, source[1], params.entry?.sessionStartedAt]);
   let cached = revision?.database ? indexes.get(identity) : undefined;

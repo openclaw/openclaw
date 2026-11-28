@@ -36,7 +36,7 @@ full-history checkouts retain their history.
 
 All three accept Node **24.16.0+ on 24.x or 26.1.0+** (24.22.1+/26.12.1+ strongly recommended for security) with a WAL-reset-safe linked SQLite library. When Node is missing and nvm is not detected, `install.sh` provisions Node 26 through Homebrew on macOS and the supported Node 24 LTS line through NodeSource on Linux. When a supported RPM-owned Node links unsafe SQLite, `install.sh` preserves the distro package and provisions a user-space Node runtime through `install-cli.sh`. The rootless `install-cli.sh` downloads Node 24.22.1 on macOS and glibc Linux. FreeBSD uses an installed system runtime. Linux ARMv7 is unsupported. On Windows, winget/Chocolatey/Scoop install the supported Node LTS line, and the portable fallback downloads Node 26.
 
-For npm installs, `install.sh` and `install.ps1` query the selected package’s `engines.node` before accepting an existing runtime. A runtime that does not satisfy the target release is upgraded through the normal Node provisioning path. The lookup has a bounded timeout; if npm or package metadata is unavailable, the installers use the conservative Node 24.22.1 / 26.12.1 floor required by the published default releases. The SQLite capability checks still apply. For git installs, they read `engines.node` from the selected checkout after clone/update and before selecting Node and bootstrapping pnpm. This retains a compatible runtime for main while respecting stricter engine requirements in older refs.
+For npm installs, `install.sh` and `install.ps1` query the selected package’s `engines.node` before accepting an existing runtime. A runtime that does not satisfy the target release is upgraded through the normal Node provisioning path. The lookup has a bounded timeout; if npm or package metadata is unavailable, the installers use the Node 24.16.0 / 26.1.0 compatibility floors. A compatible runtime below 24.22.1 on 24.x or 26.12.1 prints a security warning without triggering a download solely for that recommendation. The SQLite capability checks still apply. For git installs, they read `engines.node` from the selected checkout after clone/update and before selecting Node and bootstrapping pnpm. This retains a compatible runtime for main while respecting stricter engine requirements in older refs.
 
 On a fresh host, the installers provision Node/npm first, then query the requested package's engine requirement before installing it. `install.sh --beta` preserves the beta request through that bootstrap, selects the beta once npm is available, and checks that beta's engines. If the beta tag cannot be resolved after npm is available, it falls back to `latest` with a warning.
 
@@ -169,6 +169,7 @@ checks also default to five minutes.
   </Step>
   <Step title="Post-install tasks">
     - Resolves the just-installed `openclaw` binary for follow-up commands
+    - If its bin directory was missing from the caller's original `PATH`, the final summary keeps the shell setup step visible, prints a shell-specific PATH repair, and uses the quoted executable path for immediate commands. A piped installer cannot change its parent shell's environment.
     - npm-prefix and daemon-status checks use a default five-second timeout; completed checks return without waiting for that deadline.
     - For an unconfigured install, starts onboarding before doctor or gateway checks. With `--no-onboard` or no TTY, it prints the command to finish setup later.
     - For a configured install, refreshes and restarts a loaded gateway service best-effort and runs repair Doctor. Upgrade repair failures are fatal; plugin update failures remain warnings.
@@ -409,6 +410,13 @@ Quote `--prefix` and `--git-dir` values containing spaces or shell characters wh
     If a gateway service is already loaded from that same prefix, the script runs
     `openclaw gateway install --force`, which activates the replacement service,
     and then checks gateway health best-effort.
+  </Step>
+  <Step title="Show PATH setup">
+    If `<prefix>/bin` was not on `PATH` when the installer started, prints a
+    shell-specific command that adds it for the current shell and, unless the
+    installer starts onboarding itself, the full-path `openclaw onboard` command.
+    The installer does not add it to shell startup files, and `--json` output is
+    unchanged.
   </Step>
 </Steps>
 

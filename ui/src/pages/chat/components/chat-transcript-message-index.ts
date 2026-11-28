@@ -2,6 +2,7 @@ import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { nativeHistoryMessageIdentity } from "../../../lib/chat/history-message-identity.ts";
+import { getMessageDerivations } from "../../../lib/chat/message-derivations.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import {
@@ -10,7 +11,10 @@ import {
   coalesceAgentRunFrames,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
-import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
+import {
+  assistantGroupCanOwnActiveRunStatus,
+  explicitlyAbortedRunId,
+} from "../chat-assistant-reply.ts";
 import { isHandoffBoundaryItem } from "../chat-sessions-yield.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { coalesceSystemEvents } from "../chat-system-event-grouping.ts";
@@ -19,6 +23,7 @@ import {
   type buildCachedChatItems,
   findLiveStreamIndex,
   getExpansionStateVersion,
+  getExplicitToolExpansion,
   getChatItemsGeneration,
   setExpansionState,
 } from "../chat-thread.ts";
@@ -27,6 +32,7 @@ import {
   coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
+  resolveTurnRunDurations,
 } from "../chat-turn-presentation.ts";
 import { readLiveTerminalRevision } from "../terminal-message-identity.ts";
 import { prepareChatStreamRender } from "./chat-message-markdown-view.tsx";
@@ -41,16 +47,14 @@ import type { LoadedReplySource } from "./chat-reply-preview.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
-import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
-import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 import { CHAT_TRANSCRIPT_ESTIMATED_ROW_PX } from "./chat-transcript-session.ts";
-import type { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 
 type ChatRenderItem = SystemEventRenderItem;
-const COMPLETED_FRAME_ROW_MESSAGE_LIMIT = 1;
 
 type TranscriptChain = Readonly<{
   searchActive: boolean;
+  interruptedRunIds: ReadonlySet<string>;
+  runDurations: ReadonlyMap<string, number>;
   workGroups: readonly Extract<ChatRenderItem, { kind: "work-group" }>[];
   collapsedItems: readonly ChatRenderItem[];
   transcriptItems: readonly ChatRenderItem[];
@@ -163,7 +167,11 @@ export function projectTranscriptChain(
     bubbleMode?: boolean;
     messages?: readonly unknown[];
     activeRunId?: string | null;
-    session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
+    activeRunIds?: readonly string[];
+    session?: Pick<
+      GatewaySessionRow,
+      "key" | "lastRunId" | "status" | "runtimeMs" | "abortedLastRun"
+    >;
   },
 ): TranscriptChain {
   const { session } = options;
@@ -178,9 +186,11 @@ export function projectTranscriptChain(
     options.bubbleMode,
     options.messages,
     options.activeRunId,
+    JSON.stringify(options.activeRunIds),
     session?.key,
     session?.lastRunId,
     session?.status,
+    session?.abortedLastRun,
     session?.runtimeMs,
     readLiveTerminalRevision(),
   ];
@@ -188,9 +198,11 @@ export function projectTranscriptChain(
   if (cached?.key.every((value, index) => Object.is(value, key[index]))) {
     return cached.value;
   }
+  const streamRuns = coalesceStreamRuns(chatItems);
+  const runDurations = resolveTurnRunDurations(streamRuns, options);
   const frames = coalesceAgentRunFrames(
     coalesceActivityRuns(
-      collapseCompletedTurnWork(coalesceStreamRuns(chatItems), options),
+      collapseCompletedTurnWork(streamRuns, { ...options, runDurations }),
       options,
     ),
     options,
@@ -243,7 +255,15 @@ export function projectTranscriptChain(
           }
         : undefined;
   }
+  const interruptedRunIds = new Set(
+    (options.messages ?? []).flatMap((message) => {
+      const runId = explicitlyAbortedRunId(message);
+      return runId ? [runId] : [];
+    }),
+  );
   const value: TranscriptChain = {
+    interruptedRunIds,
+    runDurations,
     collapsedItems,
     transcriptItems,
     workGroups: transcriptItems.flatMap((candidate) =>
@@ -302,28 +322,30 @@ function estimateMessageGroupSize(group: MessageGroup): number | undefined {
 
 // Loaded history messages are immutable. Fingerprint each once, rather than
 // reserializing every loaded row whenever an older page rebuilds the index.
-const messageRevisions = new WeakMap<object, string>();
 function messageRevision(message: object): string {
-  let revision = messageRevisions.get(message);
+  const facts = getMessageDerivations(message);
+  let revision = facts.revision;
   if (revision === undefined) {
     const identity = nativeHistoryMessageIdentity(message) ?? JSON.stringify(message);
     revision = `${identity.length}:${fnv1aUtf16(identity)}`;
-    messageRevisions.set(message, revision);
+    facts.revision = revision;
   }
   return revision;
 }
 
 export function projectTranscriptIndex(
   chain: TranscriptIndexSource,
-  expandedToolCards: Map<string, boolean>,
+  sharedExpansion: Map<string, boolean>,
   props: Pick<
     ChatThreadProps,
     "assistantName" | "currentAgentId" | "agents" | "userId" | "userName" | "messageReactions"
   >,
+  readerExpandedWork?: ReadonlySet<string>,
 ): TranscriptIndex {
   const cacheKey = [
-    expandedToolCards,
-    getExpansionStateVersion(expandedToolCards),
+    sharedExpansion,
+    getExpansionStateVersion(sharedExpansion),
+    readerExpandedWork,
     props.assistantName,
     props.currentAgentId,
     props.agents,
@@ -332,17 +354,25 @@ export function projectTranscriptIndex(
     props.messageReactions,
   ];
   return indexes(chain, cacheKey, (): TranscriptIndex => {
+    // This derived view is pane-local; it never publishes automatic expansion.
+    const expandedToolCards = readerExpandedWork?.size ? new Map(sharedExpansion) : sharedExpansion;
+    for (const key of readerExpandedWork ?? []) {
+      if (getExplicitToolExpansion(sharedExpansion, key) === undefined) {
+        expandedToolCards.set(key, true);
+      }
+    }
     // Smaller transcripts scroll more cheaply without repeatedly mounting fragments.
     let sourceCount = 0;
-    const windowCompletedFrames = chain.transcriptItems.some((item) => {
+    const prepareIdleFrameFragments = chain.transcriptItems.some((item) => {
       for (const group of chatItemGroups(item)) {
         sourceCount += group.messages.length;
-        if (sourceCount > 256) {
+        if (sourceCount > 512) {
           return true;
         }
       }
       return false;
     });
+    const windowCompletedFrames = sourceCount > 256;
     const loadedReplySources = new Map<string, LoadedReplySource>();
     const messageRowKeysById = new Map<string, string>();
     const transcriptMessageKeys = new Map<string, string>();
@@ -369,11 +399,13 @@ export function projectTranscriptIndex(
       // Settled items keep their identity across unrelated live-tail changes.
       // Reactions replace their map; active and continuation rows never enter this memo.
       const revision = rowRevisions(item, [key, props.messageReactions], () => {
-        const messages = groups.flatMap((group) =>
-          group.messages.map(({ message }) => [
-            message && typeof message === "object" ? messageRevision(message) : message,
-            props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
-          ]),
+        const messages = groups.flatMap<unknown>((group) =>
+          group.compaction
+            ? [group.compaction]
+            : group.messages.map(({ message }) => [
+                message && typeof message === "object" ? messageRevision(message) : message,
+                props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
+              ]),
         );
         const content = JSON.stringify(
           item.kind === "agent-run-frame"
@@ -389,13 +421,14 @@ export function projectTranscriptIndex(
     for (const item of chain.transcriptItems) {
       const rendered =
         windowCompletedFrames && item.kind === "agent-run-frame"
-          ? completedFrameRows(item, expandedToolCards)
+          ? completedFrameRows(item, expandedToolCards, prepareIdleFrameFragments ? 1 : 2)
           : [item];
       for (const rowItem of rendered) {
         // Rich work sources include their Markdown and paired tool output.
-        // Only split runs need advance materialization. Ordinary rows already
-        // fit the virtual window; retaining them duplicates mixed-session DOM.
-        const retainDom = rowItem.kind === "agent-run-frame" && Boolean(rowItem.fragment);
+        // Medium histories warm data while idle and retain visited fragments.
+        // Larger split runs also materialize unseen rows while idle.
+        const fragment = rowItem.kind === "agent-run-frame" && Boolean(rowItem.fragment);
+        const retainDom = fragment;
         const estimatedSize =
           rowItem.kind === "agent-run-frame" && rowItem.fragment
             ? rowItem.parts.reduce(
@@ -409,7 +442,12 @@ export function projectTranscriptIndex(
             : rowItem.kind === "group"
               ? estimateMessageGroupSize(rowItem)
               : undefined;
-        rows.push({ ...row(rowItem), estimatedSize, retainDom, prewarm: rowItem.kind === "group" });
+        rows.push({
+          ...row(rowItem),
+          estimatedSize,
+          retainDom,
+          prewarm: rowItem.kind === "group" || (fragment && !prepareIdleFrameFragments),
+        });
       }
       if (item.kind === "work-group" && expandedToolCards.get(item.key)) {
         for (const group of item.groups) {
@@ -487,6 +525,7 @@ export function projectTranscriptIndex(
 function completedFrameRows(
   frame: AgentRunFrameRenderItem,
   expanded: ReadonlyMap<string, boolean>,
+  messageLimit: number,
 ): AgentRunFrameRenderItem[] {
   // Without an answer, the summary keeps the original row through disclosure changes.
   if (frame.outcome.kind !== "completed" || !frame.outcome.actionOwner) {
@@ -530,17 +569,9 @@ function completedFrameRows(
   };
   const append = (part: AgentRunFrameRenderItem["parts"][number]): void => {
     // Paired tool results can leave an entire run in one assistant group.
-    if (
-      part.kind === "group" &&
-      part.role === "assistant" &&
-      part.messages.length > COMPLETED_FRAME_ROW_MESSAGE_LIMIT
-    ) {
-      for (
-        let offset = 0;
-        offset < part.messages.length;
-        offset += COMPLETED_FRAME_ROW_MESSAGE_LIMIT
-      ) {
-        const messages = part.messages.slice(offset, offset + COMPLETED_FRAME_ROW_MESSAGE_LIMIT);
+    if (part.kind === "group" && part.role === "assistant" && part.messages.length > messageLimit) {
+      for (let offset = 0; offset < part.messages.length; offset += messageLimit) {
+        const messages = part.messages.slice(offset, offset + messageLimit);
         append(
           Object.assign({}, part, {
             key: offset === 0 ? part.key : `group:${part.role}:${messages[0]!.key}`,
@@ -551,7 +582,7 @@ function completedFrameRows(
       return;
     }
     const weight = chatItemGroups(part).reduce((total, group) => total + group.messages.length, 0);
-    if (count + weight > COMPLETED_FRAME_ROW_MESSAGE_LIMIT) {
+    if (count + weight > messageLimit) {
       finishChunk();
     }
     pending.push(part);
@@ -644,48 +675,58 @@ export type PlacedContentRow = Extract<TranscriptRow, { kind: "content" }> & {
 
 export function projectTranscriptRows(
   rows: readonly TranscriptRow<ChatRenderItem>[],
-  workPreviews: ReturnType<typeof projectTranscriptWorkPreviews>,
   contentRows: readonly PlacedContentRow[],
-): readonly TranscriptRow<ChatRenderItem>[] {
-  const key = [workPreviews, ...contentRows.flatMap((row) => [row.key, row.after])];
+  compactActivity: boolean,
+) {
+  if (!compactActivity && !contentRows.length) {
+    return rows;
+  }
+  const key = [compactActivity, ...contentRows.flatMap((row) => [row.key, row.after])];
   return presentationRows(rows, key, () => {
-    if (!workPreviews.size && !contentRows.length) {
-      return rows;
-    }
-    const placed = Map.groupBy(
-      contentRows.filter((row) => row.after !== undefined),
-      (row) => row.after,
-    );
-    const take = (after: string | null) => {
-      const found = placed.get(after) ?? [];
-      placed.delete(after);
-      return found;
-    };
-    const result: TranscriptRow<ChatRenderItem>[] = take(null);
-    for (const row of rows) {
-      result.push(row);
-      const previews = workPreviews.get(row.key);
-      // Work groups and run frames render their previews inline.
+    const placed = contentRows.length ? Map.groupBy(contentRows, (row) => row.after) : undefined;
+    const trailing = placed?.get(undefined);
+    let result: TranscriptRow<ChatRenderItem>[] | undefined = placed
+      ? (placed.get(null) ?? [])
+      : undefined;
+    placed?.delete(undefined);
+    placed?.delete(null);
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index]!;
+      const next = rows[index + 1];
+      const after = placed?.get(row.key);
+      const item = row.kind === "item" ? row.item : undefined;
+      const following = next?.kind === "item" ? next.item : undefined;
+      // Inserted content breaks visual adjacency; it never transfers run ownership.
       if (
-        previews &&
-        !(
-          row.kind === "item" &&
-          (row.item.kind === "work-group" || row.item.kind === "agent-run-frame")
-        )
+        compactActivity &&
+        !after &&
+        row.kind === "item" &&
+        following?.kind === "group" &&
+        following.compaction &&
+        !following.runId &&
+        !following.startsActivityGroup &&
+        (item?.kind === "activity-run" ||
+          (item?.kind === "agent-run-frame" &&
+            (item.outcome.kind === "active" ||
+              (item.outcome.kind === "completed" && !item.outcome.actionOwner)) &&
+            item.parts.every((part) => part.kind === "activity-run")))
       ) {
-        const content: NativeTranscriptView = { kind: "work-previews", previews };
-        result.push({
-          kind: "content",
-          key: `work-previews:${row.key}`,
-          content: new GuardedTranscriptItem([content], content),
+        (result ??= rows.slice(0, index)).push({
+          ...row,
+          compactActivity: true,
+          revision: row.revision && row.revision + ":compact-activity",
         });
+      } else {
+        result?.push(row);
       }
-      result.push(...take(row.key));
+      if (after) {
+        result?.push(...after);
+        placed?.delete(row.key);
+      }
     }
     // An anchor outside these rows keeps its content visible at the end.
-    return result.concat(
-      [...placed.values()].flat(),
-      contentRows.filter((row) => row.after === undefined),
-    );
+    return placed
+      ? (result ?? []).concat([...placed.values()].flat(), trailing ?? [])
+      : (result ?? rows);
   });
 }

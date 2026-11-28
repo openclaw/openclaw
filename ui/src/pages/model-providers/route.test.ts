@@ -57,6 +57,7 @@ function createModelsRouter(selectedId: string | null = "main") {
   const context = Object.freeze({
     gateway: store.gateway,
     agents,
+    agentSelection: chatSelection,
     settingsAgentSelection: selection,
   }) satisfies Parameters<NonNullable<typeof page.loader>>[0];
   const router = createRouter<RouteId, typeof context, null, ModelProvidersRouteData>({
@@ -190,6 +191,21 @@ it.each([true, false])("preserves provider deep links when connected=%s", async 
   });
 });
 
+it.each([
+  ["?firstRun=1", "research"],
+  ["", "main"],
+])("loads credentials for the agent that owns %s", async (search, agentId) => {
+  const h = createModelsRouter("main");
+  // First run sets up the application's agent, not the one Settings last showed.
+  h.chatSelection.set("research");
+  await h.router.navigateLocation(
+    { pathname: "/settings/model-providers", search, hash: "" },
+    h.context,
+  );
+  expect(h.data()).toMatchObject({ agentId, firstRun: search !== "" });
+  expect(h.modelCalls("models.authStatus").at(-1)?.[1]).toMatchObject({ agentId });
+});
+
 it.each<[OwnerChange, Boundary]>([
   ["navigation", "import"],
   ["disconnect", "import"],
@@ -283,3 +299,22 @@ it.each(["navigation", "preload"] as const)(
     expect(h.data()?.data.authStatus).toEqual(authStatus);
   },
 );
+
+it("adopts auth rows without waiting for a pending catalog", async () => {
+  const h = createModelsRouter();
+  const { started, response } = holdRequests(h, ["models.list"]);
+  const navigation = h.navigate();
+  await started.promise;
+  try {
+    await vi.waitFor(() => {
+      expect(h.data()?.data.authStatus).toEqual(authStatus);
+    });
+    expect(h.catalog()).toBeUndefined();
+    expect(h.data()?.catalog?.promise).toBeInstanceOf(Promise);
+  } finally {
+    response.resolve();
+    await navigation;
+  }
+  expect(await h.data()?.catalog?.promise).toMatchObject({ catalogError: null });
+  expect(h.catalog()).toEqual(catalog);
+});

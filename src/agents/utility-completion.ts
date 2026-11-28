@@ -14,6 +14,7 @@ import {
   type ModelCatalogDecisionParams,
 } from "./model-catalog-decisions.js";
 import { createModelCatalogSnapshotView } from "./model-catalog-view.js";
+import type { ModelFallbackResultClassifier } from "./model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
 import {
@@ -21,7 +22,7 @@ import {
   getPreparedModelRuntimeAuthMaterializations,
 } from "./prepared-model-runtime-auth.js";
 import { acquirePreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
-import { resolveSimpleCompletionSelectionForAgent } from "./simple-completion-runtime.js";
+import { resolveSimpleCompletionSelectionForAgent } from "./simple-completion-selection.js";
 import { readUtilityModelSetting } from "./utility-model-setting.js";
 import { resolveAutomaticUtilityRuntimeOverride } from "./utility-model.js";
 
@@ -74,10 +75,13 @@ export async function runUtilityCompletion(
   params: Parameters<typeof runIsolatedCompletion>[0] & {
     useUtilityModel?: boolean;
     onAttempt?: (attempt: UtilityCompletionAttempt) => void;
+    classifyResult?: ModelFallbackResultClassifier<
+      Awaited<ReturnType<typeof runIsolatedCompletion>>
+    >;
   },
   run?: typeof runIsolatedCompletion,
 ) {
-  const { onAttempt, ...request } = params;
+  const { onAttempt, classifyResult, ...request } = params;
   const complete = run ?? (await import("./isolated-completion.js")).runIsolatedCompletion;
   const attempt = (candidate: Parameters<typeof runIsolatedCompletion>[0]) => {
     onAttempt?.(candidate);
@@ -97,6 +101,22 @@ export async function runUtilityCompletion(
     return await attempt(request);
   }
   const { runWithModelFallback } = await import("./model-fallback-runner.js");
+  // The caller's currency guard cancels its own work: carry that as the caller-cancel
+  // fact the fallback chain already honors, so a stale task never tries the next model.
+  const cancel = new AbortController();
+  const { assertCurrent } = params;
+  const guarded = assertCurrent
+    ? {
+        assertCurrent: () => {
+          try {
+            assertCurrent();
+          } catch (error) {
+            cancel.abort(error);
+            throw error;
+          }
+        },
+      }
+    : {};
   const result = await runWithModelFallback({
     cfg: params.config,
     agentId: params.agentId,
@@ -105,7 +125,9 @@ export async function runUtilityCompletion(
     model: params.model,
     requestedRouteResolution: "resolved",
     fallbacksOverride: fallbacks,
-    abortSignal: params.abortSignal,
+    abortSignal: params.abortSignal
+      ? AbortSignal.any([params.abortSignal, cancel.signal])
+      : cancel.signal,
     operatorAuthority: params.operatorAuthority,
     resolveAgentHarnessRuntimeOverride: (provider, model) =>
       provider === params.provider && model === params.model
@@ -113,9 +135,11 @@ export async function runUtilityCompletion(
         : undefined,
     // Isolated completion already owns credential selection and profile rotation.
     skipAuthProfileRuntime: true,
+    classifyResult,
     run: (provider, model, options) =>
       attempt({
         ...request,
+        ...guarded,
         provider,
         model,
         ...(options?.modelRoutingProvenance.stage === "fallback"

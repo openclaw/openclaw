@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -169,6 +170,28 @@ class ChatTurnRecapResolverTest {
   }
 
   @Test
+  fun missingOrWrongSessionAnchorWaitsForSettlementAndPreservesSettledRecap() {
+    val resolver = TurnRecapResolver()
+    val missing: ChatTranscriptAnchorState? = null
+    val terminal = done(runEndedAt, runtimeMs = 2_000L)
+    val matching = transcript("assistant-1", completedEndedAt = runEndedAt)
+    val otherSession =
+      matching.copy(
+        sessionKey = "agent:other:main",
+        newestItemId = "other-assistant",
+        completedNewestItemId = "other-assistant",
+      )
+    val expected = TurnRecap(runtimeMs = 2_000L, outputTokens = null)
+
+    resolver.resolve(session, true, done(previousEndedAt), missing)
+    assertNull(resolver.resolve(session, false, terminal, missing))
+    assertNull(resolver.resolve(session, false, terminal, otherSession))
+    assertEquals(expected, resolver.resolve(session, false, terminal, matching))
+    assertEquals(expected, resolver.resolve(session, false, terminal, missing))
+    assertEquals(expected, resolver.resolve(session, false, terminal, otherSession))
+  }
+
+  @Test
   fun emptyTranscriptWaitsForTheCompletedItemBeforeSettling() {
     val resolver = TurnRecapResolver()
     resolver.resolve(session, true, done(previousEndedAt), transcript(null))
@@ -301,8 +324,8 @@ class ChatTurnRecapResolverTest {
     newestItemId: String?,
     completedEndedAt: Long? = null,
     completedNewestItemId: String? = newestItemId.takeIf { completedEndedAt != null },
-  ): TurnRecapTranscriptState =
-    TurnRecapTranscriptState(
+  ): ChatTranscriptAnchorState =
+    ChatTranscriptAnchorState(
       sessionKey = session,
       newestItemId = newestItemId,
       completedEndedAt = completedEndedAt,

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createSignal } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiReplacement } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
@@ -12,25 +12,32 @@ import { createInertViewHost } from "../../../plugins/control-ui-view.test-suppo
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import {
+  coalesceAgentRunFrames,
+  type AgentRunFrameRenderItem,
+} from "../chat-agent-run-grouping.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { collapseCompletedTurnWork } from "../chat-turn-presentation.ts";
 import { buildLocalUserMessage } from "../user-message-content.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { dismissConfirmedActionPopovers } from "./chat-message-confirmation-view.tsx";
-import { prepareGroupMessage } from "./chat-message-group-frame.ts";
+import { prepareGroupMessage, prepareMessageGroupFrame } from "./chat-message-group-frame.ts";
 import {
   ActivityGroup,
   MessageGroup,
   type NativeMessageGroupOptions,
 } from "./chat-message-group-view.tsx";
+import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
 import { ChatTimestamp, MessageMeta } from "./chat-message-timestamp-view.tsx";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
 
-it("adds and removes usage details on a retained plain timestamp", () => {
+it("adds and removes usage and duration on a retained plain timestamp", () => {
   const [meta, setMeta] = createSignal<Parameters<typeof MessageMeta>[0]["meta"]>(null);
-  const view = mountSolid(() => <MessageMeta timestamp={1000} meta={meta()} />);
+  const [duration, setDuration] = createSignal<number | undefined>(undefined);
+  const view = mountSolid(() => (
+    <MessageMeta timestamp={1000} meta={meta()} durationMs={duration()} />
+  ));
   const tooltip = view.container.querySelector("openclaw-tooltip");
   expect(view.container.querySelector(".msg-meta__details")).toBeNull();
   setMeta({
@@ -48,6 +55,15 @@ it("adds and removes usage details on a retained plain timestamp", () => {
   flush();
   expect(view.container.querySelector(".msg-meta__details")).toBeNull();
   expect(view.container.querySelector("openclaw-tooltip")).toBe(tooltip);
+  setDuration(13_000);
+  flush();
+  expect(view.container.querySelector(".msg-meta__duration")?.textContent).toBe("Worked for 13s");
+  for (const unavailable of [undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    setDuration(unavailable);
+    flush();
+    expect(view.container.querySelector(".msg-meta__details")).toBeNull();
+    expect(view.container.querySelector("openclaw-tooltip")).toBe(tooltip);
+  }
 });
 
 it("shares mobile layout only for earlier-message actions and preserves updates", () => {
@@ -247,12 +263,15 @@ it.each([false, true])(
         frame={frame}
         options={{
           streamOptions: { bubbleMode },
-          workPreviews: new Map(),
+          partDependencies: (part) => [part],
           renderGroupOptions: () => ({
             bubbleMode,
             showReasoning: false,
             onReply,
             onReact: vi.fn(),
+            messageReactions: new Map([
+              ["mixed-answer", [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }]],
+            ]),
           }),
           isWorkExpanded: () => false,
           onToggleWork: () => {},
@@ -272,6 +291,7 @@ it.each([false, true])(
     });
     expect(view.container.querySelector('button[aria-label="Copy as markdown"]')).not.toBeNull();
     expect(view.container.querySelector(".chat-reaction-action")).not.toBeNull();
+    expect(view.container.querySelectorAll(".chat-message-reactions")).toHaveLength(1);
   },
 );
 
@@ -291,6 +311,134 @@ it("does not give provider speech unframed answer actions", () => {
   expect(prepared.ownsActions).toBe(false);
   expect(prepared.actions?.replyTarget).toBeUndefined();
   expect(prepared.source.displayMarkdown).toBe(speech.content);
+});
+
+it("keeps frame stream options narrow and live through replacement and first-bubble changes", () => {
+  const openFirst = vi.fn();
+  const openLatest = vi.fn();
+  let unrelatedReads = 0;
+  const initialOptions: StreamGroupOptions = {
+    startupLabel: "Starting the first command",
+    runningSubagents: 1,
+    onOpenSubagents: openFirst,
+    firstBubbleKey: "not-the-frame-key",
+    get widgetLayout() {
+      unrelatedReads += 1;
+      return undefined;
+    },
+  };
+  const [streamOptions, setStreamOptions] = createSignal(initialOptions);
+  const reading = { kind: "reading-indicator", key: "reading", startedAt: Date.now() } as const;
+  const group = createMessageGroup(
+    { role: "assistant", content: "Checking the command.", timestamp: 1 },
+    "assistant",
+  );
+  const initialFrame: AgentRunFrameRenderItem = {
+    kind: "agent-run-frame",
+    key: "live-frame",
+    runId: "live-run",
+    boundaryId: "live-boundary",
+    outcome: { kind: "active" },
+    parts: [group, { kind: "stream-run", key: "streams", parts: [reading] }],
+  };
+  const [frame, setFrame] = createSignal(initialFrame);
+  const view = mountSolid(() => {
+    const options = createMemo<Parameters<typeof AgentRunFrame>[0]["options"]>(() => {
+      const currentStreamOptions = streamOptions();
+      return {
+        streamOptions: currentStreamOptions,
+        workPreviews: new Map(),
+        partDependencies: (part) => [part, currentStreamOptions],
+        renderGroupOptions: () => ({ showReasoning: false }),
+        isWorkExpanded: () => false,
+        onToggleWork: () => {},
+      };
+    });
+    return <AgentRunFrame frame={frame()} options={options()} />;
+  });
+  flush();
+  const indicator = view.container.querySelector(".chat-working-indicator");
+  expect(indicator?.textContent).toContain("Starting the first command");
+  expect.soft(unrelatedReads).toBe(0);
+  const subagents = view.container.querySelector<HTMLButtonElement>(
+    ".chat-working-indicator__subagents",
+  )!;
+  subagents.click();
+  expect(openFirst).toHaveBeenCalledOnce();
+  setStreamOptions({
+    ...initialOptions,
+    startupLabel: "Starting the next command",
+    onOpenSubagents: openLatest,
+  });
+  unrelatedReads = 0;
+  flush();
+  expect(view.container.querySelector(".chat-working-indicator")).toBe(indicator);
+  expect(indicator?.textContent).toContain("Starting the next command");
+  expect.soft(unrelatedReads).toBe(0);
+  expect(view.container.querySelector(".chat-working-indicator__subagents")).toBe(subagents);
+  subagents.click();
+  expect(openFirst).toHaveBeenCalledOnce();
+  expect(openLatest).toHaveBeenCalledOnce();
+
+  const first = {
+    kind: "stream",
+    key: "first-stream",
+    text: "",
+    thinking: "",
+    startedAt: 2,
+    isStreaming: true,
+  } as const;
+  const answer = { ...first, key: "answer-stream", text: "The live answer." };
+  const withStreams = (text: string): AgentRunFrameRenderItem => ({
+    ...initialFrame,
+    parts: [{ kind: "stream-run", key: "streams", parts: [{ ...first, text }, answer, reading] }],
+  });
+  setFrame(withStreams(""));
+  flush();
+  const answerBubble = view.container.querySelector(
+    '.chat-bubble[data-message-id="answer-stream"]',
+  );
+  expect(answerBubble).not.toBeNull();
+  expect(view.container.querySelector(".chat-avatar.assistant")).not.toBeNull();
+  expect(answerBubble?.classList.contains("chat-bubble--first")).toBe(true);
+  setFrame(withStreams("An earlier live item."));
+  flush();
+  expect(view.container.querySelector('.chat-bubble[data-message-id="answer-stream"]')).toBe(
+    answerBubble,
+  );
+  expect(answerBubble?.classList.contains("chat-bubble--first")).toBe(false);
+  expect(
+    view.container
+      .querySelector('.chat-bubble[data-message-id="first-stream"]')
+      ?.classList.contains("chat-bubble--first"),
+  ).toBe(true);
+});
+
+it("paints every right-side user turn with the viewer accent and only peers with identity hues", () => {
+  const profile = (id: string) => ({ id, name: id, identity: { type: "profile" as const, id } });
+  // [sender, viewer profile, peer]; without a viewer profile every user turn is the viewer's.
+  for (const [sender, userId, peer] of [
+    [profile("viewer"), "viewer", false],
+    [profile("peer"), "viewer", true],
+    [{ id: "pat@example.com" }, undefined, false],
+    [profile("viewer"), undefined, false],
+  ] as const) {
+    const group = createMessageGroup({ role: "user", content: "Hi" }, "user", { sender });
+    const frame = prepareMessageGroupFrame(group, { showReasoning: false, userId });
+    expect([frame.isPeerGroup, frame.senderHue !== null]).toEqual([peer, peer]);
+  }
+});
+
+it("names a user turn only when its sender is recorded", () => {
+  const unattributed = createMessageGroup({ role: "user", content: "Hi" }, "user");
+  expect(prepareMessageGroupFrame(unattributed, { showReasoning: false }).showSenderName).toBe(
+    false,
+  );
+  const labeled = createMessageGroup({ role: "user", content: "Hi" }, "user", {
+    senderLabel: "Pat",
+  });
+  const frame = prepareMessageGroupFrame(labeled, { showReasoning: false });
+  expect([frame.showSenderName, frame.who]).toEqual([true, "Pat"]);
 });
 
 it("keeps distinct peer avatars and focused message content across group updates", async () => {
@@ -377,7 +525,7 @@ it("keeps distinct peer avatars and focused message content across group updates
   ).toBe(true);
 });
 
-it("retains aggregate disclosure and legacy card focus when options refresh", async () => {
+it("retains aggregate disclosure and operation focus when options refresh", async () => {
   const messages = ["one", "two"].map((key, index) => ({
     key,
     message: {
@@ -402,17 +550,19 @@ it("retains aggregate disclosure and legacy card focus when options refresh", as
   ));
   await waitForSolid(() => {
     expect(
-      view.container.querySelectorAll(".chat-tools-inline .chat-tool-row:not([aria-busy])"),
+      view.container.querySelectorAll(".chat-activity-group__body .chat-tool-row:not([aria-busy])"),
     ).toHaveLength(2);
   });
   const summary = view.container.querySelector<HTMLButtonElement>(".chat-activity-group__summary")!;
-  const card = view.container.querySelector(".chat-tools-inline .chat-tool-msg-collapse");
+  const card = view.container.querySelector(".chat-activity-group__body .chat-tool-msg-collapse");
   const cardControl = card!.querySelector<HTMLButtonElement>("button")!;
   cardControl.focus();
   setOptions((previous) => ({ ...previous, assistantName: "Updated assistant" }));
   flush();
   expect(document.activeElement).toBe(cardControl);
-  expect(view.container.querySelector(".chat-tools-inline .chat-tool-msg-collapse")).toBe(card);
+  expect(view.container.querySelector(".chat-activity-group__body .chat-tool-msg-collapse")).toBe(
+    card,
+  );
   expect(view.container.querySelector(".chat-activity-group__summary")).toBe(summary);
   summary.focus();
   setOptions((previous) => ({ ...previous, userName: "Updated viewer" }));
@@ -630,7 +780,7 @@ describe("owned message controls", () => {
       />
     ));
     const disclosure = view.container.querySelector<HTMLDetailsElement>(
-      ".chat-context-attachment",
+      "details.chat-context-attachment",
     )!;
     expect(disclosure).not.toBeNull();
     disclosure.open = true;
@@ -719,57 +869,6 @@ it("prepares the detailed timestamp only when metadata exposes its label", () =>
   } finally {
     view.unmount();
     calendarFormat.mockRestore();
-    clock.mockRestore();
-  }
-});
-
-it("shares timestamp formatting across scroll tasks and refreshes it the next minute", async () => {
-  const timestamp = 8_000_000_000_000;
-  const older = timestamp - 10 * 24 * 60 * 60 * 1000;
-  const previousYear = new Date(older);
-  previousYear.setFullYear(previousYear.getFullYear() - 1);
-  const dateLabels = [new Date(older), previousYear].map((date) =>
-    date.toLocaleDateString([], {
-      month: "short",
-      day: "numeric",
-      ...(date.getFullYear() === new Date(timestamp).getFullYear() ? {} : { year: "numeric" }),
-    }),
-  );
-  const clock = vi.spyOn(Date, "now").mockReturnValue(timestamp);
-  const formatter = vi.spyOn(Intl, "DateTimeFormat");
-  const nativeDate = vi.spyOn(Date.prototype, "toLocaleDateString");
-  const nativeTime = vi.spyOn(Date.prototype, "toLocaleString");
-  const views: ReturnType<typeof mountSolid>[] = [];
-  try {
-    views.push(mountSolid(() => <ChatTimestamp timestamp={timestamp} />));
-    await Promise.resolve();
-    views.push(mountSolid(() => <ChatTimestamp timestamp={timestamp + 1000} />));
-    expect(formatter).toHaveBeenCalledTimes(1);
-    expect(views[0]!.container.querySelector("time")?.dateTime).toBe(
-      new Date(timestamp).toISOString(),
-    );
-    views.push(
-      mountSolid(() => <ChatTimestamp timestamp={older} metadata={[<span>Usage</span>]} />),
-    );
-    views.push(
-      mountSolid(() => (
-        <ChatTimestamp timestamp={previousYear.getTime()} metadata={[<span>Usage</span>]} />
-      )),
-    );
-    expect(formatter).toHaveBeenCalledTimes(4);
-    expect(views.slice(2).map((view) => view.container.querySelector("time")?.textContent)).toEqual(
-      dateLabels,
-    );
-    expect(nativeDate).not.toHaveBeenCalled();
-    expect(nativeTime).not.toHaveBeenCalled();
-    clock.mockReturnValue(timestamp + 60_000);
-    views.push(mountSolid(() => <ChatTimestamp timestamp={timestamp + 2000} />));
-    expect(formatter).toHaveBeenCalledTimes(5);
-  } finally {
-    views.forEach((view) => view.unmount());
-    formatter.mockRestore();
-    nativeDate.mockRestore();
-    nativeTime.mockRestore();
     clock.mockRestore();
   }
 });

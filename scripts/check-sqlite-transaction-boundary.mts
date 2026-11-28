@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
+import path from "node:path";
 import * as ts from "typescript/ast";
+import { SymbolFlags, type Checker, type Type } from "typescript/sync";
+import { createNativeTypeScriptProject } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectFileViolations,
@@ -49,27 +52,6 @@ function hasAsyncModifier(node: ts.FunctionLikeDeclaration) {
   return node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) === true;
 }
 
-function collectLocalAsyncFunctionNames(sourceFile: ts.SourceFile) {
-  const names = new Set<string>();
-  const visit = (node: ts.Node) => {
-    if (ts.isFunctionDeclaration(node) && node.name && hasAsyncModifier(node)) {
-      names.add(node.name.text);
-    }
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
-      const initializer = unwrapExpression(node.initializer);
-      if (
-        (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) &&
-        hasAsyncModifier(initializer)
-      ) {
-        names.add(node.name.text);
-      }
-    }
-    node.forEachChild(visit);
-  };
-  visit(sourceFile);
-  return names;
-}
-
 function collectSynchronousTransactionAliases(sourceFile: ts.SourceFile) {
   const aliases = new Map<string, string>();
   for (const statement of sourceFile.statements) {
@@ -90,20 +72,123 @@ function collectSynchronousTransactionAliases(sourceFile: ts.SourceFile) {
   return aliases;
 }
 
-function isAsyncCallback(expression: ts.Expression, localAsyncFunctionNames: Set<string>) {
-  const unwrapped = unwrapExpression(expression);
-  if (ts.isArrowFunction(unwrapped) || ts.isFunctionExpression(unwrapped)) {
-    return hasAsyncModifier(unwrapped);
+function mayReturnThenable(type: Type, checker: Checker): boolean {
+  const hasThen = (result: Type): boolean =>
+    result.isUnionType()
+      ? result.getTypes().some(hasThen)
+      : Boolean(checker.getTypeOfPropertyOfType(result, "then")?.getCallSignatures().length);
+  const signatures = type.getNonNullableType().getCallSignatures();
+  // An overload set may expose a synchronous invocation. Do not condemn it from
+  // an unrelated async overload; unresolved/erased types are not proof either.
+  return (
+    signatures.length > 0 && signatures.every((s) => hasThen(checker.getReturnTypeOfSignature(s)))
+  );
+}
+
+function valueDeclaration(expression: ts.Expression, checker: Checker) {
+  const node = unwrapExpression(expression);
+  // A shorthand's name denotes the property; its value symbol owns the callback.
+  let symbol = ts.isShorthandPropertyAssignment(node.parent)
+    ? checker.getShorthandAssignmentValueSymbol(node.parent)
+    : checker.getSymbolAtLocation(node);
+  if (symbol && symbol.flags & SymbolFlags.Alias) {
+    symbol = checker.getAliasedSymbol(symbol);
   }
-  return ts.isIdentifier(unwrapped) && localAsyncFunctionNames.has(unwrapped.text);
+  return symbol?.valueDeclaration?.resolve();
+}
+
+function isAsyncCallback(
+  expression: ts.Expression,
+  checker: Checker,
+  seen = new Set<ts.Node>(),
+): boolean {
+  const node = unwrapExpression(expression);
+  if (seen.has(node)) {
+    return false;
+  }
+  seen.add(node);
+  if (
+    ((ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && hasAsyncModifier(node)) ||
+    mayReturnThenable(checker.getTypeAtLocation(node), checker)
+  ) {
+    return true;
+  }
+  // A void callback annotation can erase the Promise result. Follow the actual
+  // declaration, including imports, without confusing a shadowed local name.
+  const declaration = valueDeclaration(node, checker);
+  return declaration && ts.isFunctionDeclaration(declaration)
+    ? hasAsyncModifier(declaration)
+    : Boolean(
+        declaration &&
+        ts.isVariableDeclaration(declaration) &&
+        ts.isVariableDeclarationList(declaration.parent) &&
+        declaration.parent.flags & ts.NodeFlags.Const &&
+        declaration.initializer &&
+        isAsyncCallback(declaration.initializer, checker, seen),
+      );
+}
+
+function hasAsyncCommitHook(expression: ts.Expression, checker: Checker): boolean {
+  const node = unwrapExpression(expression);
+  const hook = checker.getTypeOfPropertyOfType(checker.getTypeAtLocation(node), "withCommit");
+  if (hook && mayReturnThenable(hook, checker)) {
+    return true;
+  }
+  if (ts.isObjectLiteralExpression(node)) {
+    // Last assignment wins. Optional spreads may leave an earlier hook intact.
+    for (const property of node.properties.toReversed()) {
+      if (ts.isSpreadAssignment(property)) {
+        if (hasAsyncCommitHook(property.expression, checker)) {
+          return true;
+        }
+        const spreadHook = checker.getTypeAtLocation(property.expression).getProperty("withCommit");
+        if (spreadHook && !(spreadHook.flags & SymbolFlags.Optional)) {
+          return false;
+        }
+      } else {
+        const name = property.name;
+        const computed = ts.isComputedPropertyName(name)
+          ? checker.getTypeAtLocation(name.expression)
+          : undefined;
+        const key = computed
+          ? computed.isStringLiteralType()
+            ? computed.value
+            : undefined
+          : ts.isIdentifier(name) || ts.isStringLiteral(name)
+            ? name.text
+            : undefined;
+        if (key === "withCommit") {
+          return ts.isMethodDeclaration(property)
+            ? hasAsyncModifier(property) ||
+                mayReturnThenable(checker.getTypeAtLocation(property), checker)
+            : ts.isPropertyAssignment(property)
+              ? isAsyncCallback(property.initializer, checker)
+              : ts.isShorthandPropertyAssignment(property) &&
+                ts.isIdentifier(property.name) &&
+                isAsyncCallback(property.name, checker);
+        }
+      }
+    }
+    return false;
+  }
+  // Options properties remain mutable even on const bindings. An erased hook
+  // type cannot be recovered safely from the object's original initializer.
+  return false;
+}
+
+function isPostgresTransaction(node: ts.CallExpression, checker: Checker) {
+  const declaration = checker.getResolvedSignature(node).declaration?.resolve();
+  const owner = declaration?.getSourceFile().fileName.replaceAll("\\", "/");
+  return (
+    owner?.endsWith("/src/infra/sql-connection.ts") ||
+    owner?.endsWith("/src/infra/postgres-sync/connection.ts")
+  );
 }
 
 export function findSqliteTransactionBoundaryViolations(
-  _content: string,
-  _fileName: string,
   sourceFile: ts.SourceFile,
+  checker: Checker,
 ) {
-  const localAsyncFunctionNames = collectLocalAsyncFunctionNames(sourceFile);
   const transactionAliases = collectSynchronousTransactionAliases(sourceFile);
   const violations: Array<{ line: number; reason: string }> = [];
 
@@ -147,10 +232,15 @@ export function findSqliteTransactionBoundaryViolations(
       const canonicalName = calledName
         ? (transactionAliases.get(calledName) ?? calledName)
         : undefined;
-      const boundary = canonicalName ? transactionBoundaries.get(canonicalName) : undefined;
+      const boundary =
+        canonicalName === "runTransaction" && isPostgresTransaction(node, checker)
+          ? { callback: 0, options: 1 }
+          : canonicalName
+            ? transactionBoundaries.get(canonicalName)
+            : undefined;
       const callbackIndex = boundary?.callback;
       const callback = callbackIndex === undefined ? undefined : node.arguments[callbackIndex];
-      if (canonicalName && callback && isAsyncCallback(callback, localAsyncFunctionNames)) {
+      if (canonicalName && callback && isAsyncCallback(callback, checker)) {
         violations.push({
           line: toLine(sourceFile, callback),
           reason: `passes an async callback to synchronous SQLite transaction helper "${canonicalName}"`,
@@ -158,30 +248,11 @@ export function findSqliteTransactionBoundaryViolations(
       }
       const options =
         boundary?.options === undefined ? undefined : node.arguments[boundary.options];
-      const literal = options && unwrapExpression(options);
-      if (literal && ts.isObjectLiteralExpression(literal)) {
-        for (const property of literal.properties) {
-          const name = "name" in property ? property.name : undefined;
-          if (
-            !name ||
-            !(ts.isIdentifier(name) || ts.isStringLiteral(name)) ||
-            name.text !== "withCommit"
-          ) {
-            continue;
-          }
-          const async = ts.isMethodDeclaration(property)
-            ? hasAsyncModifier(property)
-            : ts.isPropertyAssignment(property)
-              ? isAsyncCallback(property.initializer, localAsyncFunctionNames)
-              : ts.isShorthandPropertyAssignment(property) &&
-                localAsyncFunctionNames.has(name.text);
-          if (async) {
-            violations.push({
-              line: toLine(sourceFile, property),
-              reason: "passes an async commit hook to synchronous SQLite transaction helper",
-            });
-          }
-        }
+      if (options && hasAsyncCommitHook(options, checker)) {
+        violations.push({
+          line: toLine(sourceFile, options),
+          reason: "passes an async commit hook to synchronous SQLite transaction helper",
+        });
       }
     }
 
@@ -193,12 +264,47 @@ export function findSqliteTransactionBoundaryViolations(
 
 async function main() {
   const repoRoot = resolveRepoRoot(import.meta.url);
-  const violations = await collectFileViolations({
+  const names = [
+    ...transactionBoundaries.keys(),
+    ...removedAsyncTransactionNames,
+    "runTransaction",
+  ];
+  const candidates = await collectFileViolations({
     repoRoot,
     sourceRoots: resolveSourceRoots(repoRoot, ["src", "extensions", "packages"]),
     skipFile: (filePath) => /(^|[\\/])dist([\\/]|$)/.test(filePath),
-    findViolations: findSqliteTransactionBoundaryViolations,
+    findViolations: (content, file) =>
+      names.some((name) => content.includes(name)) ? [{ file }] : [],
   });
+  const violations: Array<{ path: string; line: number; reason: string }> = [];
+  if (candidates.length) {
+    // One semantic snapshot resolves imported results and spread properties. Only
+    // candidate files are roots; unrelated repository diagnostics are not a gate.
+    const configFileName = path.join(repoRoot, "tsconfig.transaction-boundary.json");
+    using session = createNativeTypeScriptProject({
+      cwd: repoRoot,
+      configFileName,
+      files: {
+        [configFileName]: JSON.stringify({
+          extends: "./tsconfig.json",
+          files: candidates.map(({ file }) => file),
+          include: [],
+        }),
+      },
+    });
+    for (const candidate of candidates) {
+      const source = session.project.program.getSourceFile(candidate.file);
+      if (!source) {
+        throw new Error(`Native TypeScript did not load ${candidate.path}`);
+      }
+      for (const violation of findSqliteTransactionBoundaryViolations(
+        source,
+        session.project.checker,
+      )) {
+        violations.push({ path: candidate.path, ...violation });
+      }
+    }
+  }
   if (violations.length === 0) {
     console.log("SQLite transaction boundary guard passed.");
     return;

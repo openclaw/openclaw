@@ -1,6 +1,6 @@
 // Runs the repository check lanes selected by CLI arguments.
 import { performance } from "node:perf_hooks";
-import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
+import { booleanFlag, parseFlagArgs, stringFlag, stringListFlag } from "./lib/arg-utils.mts";
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 
@@ -47,12 +47,13 @@ export const PREFLIGHT_CHECKS: CheckCommand[] = [
 
 export function usage() {
   return [
-    "Usage: node --import tsx scripts/check.mts [--base <ref>] [--timed] [--include-architecture] [--include-test-types]",
+    "Usage: node --import tsx scripts/check.mts [--base <ref>] [--stage <name>] [--timed] [--include-architecture] [--include-test-types]",
     "",
     "Runs the local check graph: guard preflights, typecheck, lint, and policy guards.",
     "",
     "Options:",
     "  --base <ref>            Compare ratchets against the fork with this Git ref.",
+    "  --stage <name>          Select preflight, typecheck, lint, or policy (repeatable).",
     "  --timed                 Print timing summary even when checks pass.",
     "  --include-architecture  Run architecture import-cycle checks instead of runtime cycles.",
     "  --include-test-types    Typecheck production and test sources.",
@@ -63,9 +64,17 @@ export function usage() {
 function parseCheckArgs(argv: string[]) {
   return parseFlagArgs(
     argv,
-    { base: "", help: false, includeArchitecture: false, includeTestTypes: false, timed: false },
+    {
+      base: "",
+      help: false,
+      includeArchitecture: false,
+      includeTestTypes: false,
+      stages: [] as string[],
+      timed: false,
+    },
     [
       stringFlag("--base", "base", { rejectShortOptions: true }),
+      stringListFlag("--stage", "stages", { rejectShortOptions: true }),
       booleanFlag("--timed", "timed", true, { repeatable: true }),
       booleanFlag("--include-architecture", "includeArchitecture", true, { repeatable: true }),
       booleanFlag("--include-test-types", "includeTestTypes", true, { repeatable: true }),
@@ -90,12 +99,9 @@ export async function main(argv = process.argv.slice(2)) {
     process.exitCode = 2;
     return;
   }
-  if (args.help) {
-    console.log(usage());
-    process.exitCode = 0;
-    return;
-  }
 
+  const selected = new Set(args.stages);
+  const runsPreflight = selected.size === 0 || selected.has("preflight");
   const tailChecks = [
     { name: "webhook body guard", args: ["lint:webhook:no-low-level-body-read"] },
     { name: "runtime action config guard", args: ["check:no-runtime-action-load-config"] },
@@ -115,12 +121,17 @@ export async function main(argv = process.argv.slice(2)) {
     { name: "pairing store guard", args: ["lint:auth:no-pairing-store-group"] },
     { name: "pairing account guard", args: ["lint:auth:pairing-account-scope"] },
     args.includeArchitecture
-      ? { name: "architecture import cycles", args: ["check:architecture"] }
+      ? {
+          name: "architecture import cycles",
+          // The completed preflight already enforced the legacy-store guard.
+          args: [runsPreflight ? "check:architecture:after-preflight" : "check:architecture"],
+        }
       : { name: "runtime import cycles", args: ["check:import-cycles"] },
   ].filter((command) => command !== null);
 
   const stages = [
     {
+      key: "preflight",
       name: "preflight guards",
       parallel: true,
       commands: PREFLIGHT_CHECKS.map((command) =>
@@ -130,6 +141,7 @@ export async function main(argv = process.argv.slice(2)) {
       ),
     },
     {
+      key: "typecheck",
       name: "typecheck",
       parallel: false,
       commands: args.includeTestTypes
@@ -141,6 +153,7 @@ export async function main(argv = process.argv.slice(2)) {
           ],
     },
     {
+      key: "lint",
       name: "lint",
       parallel: false,
       commands: [
@@ -149,16 +162,33 @@ export async function main(argv = process.argv.slice(2)) {
       ],
     },
     {
+      key: "policy",
       name: "policy guards",
       parallel: true,
       commands: tailChecks,
     },
   ];
 
+  const unknown = args.stages.find((key) => !stages.some((stage) => stage.key === key));
+  if (unknown !== undefined) {
+    console.error(`unknown stage: ${unknown}\n\n${usage()}`);
+    process.exitCode = 2;
+    return;
+  }
+
+  if (args.help) {
+    console.log(usage());
+    process.exitCode = 0;
+    return;
+  }
+
   const timings = [];
   let exitCode = 0;
 
   for (const stage of stages) {
+    if (selected.size > 0 && !selected.has(stage.key)) {
+      continue;
+    }
     console.error(`\n[check] ${stage.name}`);
     const results = stage.parallel
       ? await Promise.all(stage.commands.map((command) => runCommand(command)))

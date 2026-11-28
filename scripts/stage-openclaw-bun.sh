@@ -19,17 +19,44 @@ done
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bun.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 TAG="$(node -p 'require(process.argv[1]).tag' "$PIN")"
-CACHE_DIR="$ROOT_DIR/.cache/openclaw-bun/$TAG"
+CACHE_DIR="${OPENCLAW_BUN_CACHE_ROOT:-$ROOT_DIR/.cache/openclaw-bun}/$TAG"
 mkdir -p "$CACHE_DIR"
 download() {
-  curl --fail --location --proto '=https' --proto-redir '=https' --no-progress-meter --show-error \
+  local TIMEFORMAT="bun-stage phase=download seconds=%3R"
+  # After one browser-download failure, reuse the API route for this release.
+  if [[ ! -f "$WORK/release.json" ]] &&
+     { time curl --fail --location --proto '=https' --proto-redir '=https' --no-progress-meter --show-error \
+       --connect-timeout 15 --max-time 300 \
+       --output "$WORK/$1" "https://github.com/openclaw/bun/releases/download/$TAG/$1"; }; then
+    return
+  fi
+  if [[ ! -f "$WORK/release.json" ]]; then
+    echo "WARN: Bun release download failed; trying the GitHub asset API" >&2
+    time curl --fail --location --proto '=https' --proto-redir '=https' --no-progress-meter --show-error \
+      --connect-timeout 15 --max-time 30 --retry 2 --retry-max-time 60 \
+      --output "$WORK/release.json" "https://api.github.com/repos/openclaw/bun/releases/tags/$TAG"
+  fi
+  local asset_id
+  asset_id="$(node - "$WORK/release.json" "$TAG" "$1" <<'JS'
+const assert = require('node:assert/strict');
+const release = require(process.argv[2]);
+assert.equal(release.tag_name, process.argv[3], 'Bun release tag mismatch');
+const assets = release.assets.filter(asset => asset.name === process.argv[4]);
+assert.equal(assets.length, 1, 'Missing or duplicate Bun release asset');
+assert(Number.isSafeInteger(assets[0].id) && assets[0].id > 0, 'Invalid Bun release asset ID');
+console.log(assets[0].id);
+JS
+)"
+  time curl --fail --location --proto '=https' --proto-redir '=https' --no-progress-meter --show-error \
     --connect-timeout 15 --max-time 300 --retry 7 --retry-max-time 300 \
-    --output "$WORK/$1" "https://github.com/openclaw/bun/releases/download/$TAG/$1"
+    --header 'Accept: application/octet-stream' \
+    --output "$WORK/$1" "https://api.github.com/repos/openclaw/bun/releases/assets/$asset_id"
 }
-download SHA256SUMS
-download manifest.json
 # The release metadata and independent source pin must agree before any payload runs.
-node - "$PIN" "$WORK" "$PLATFORM" "$@" <<'JS'
+validate_release_metadata() {
+  local metadata_dir="$1"
+  shift
+  node - "$PIN" "$metadata_dir" "$PLATFORM" "$@" <<'JS'
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
@@ -59,6 +86,26 @@ for (const arch of arches) {
   assert.equal(checksum(artifact.asset), artifact.sha256, 'Bun release archive sha256 mismatch');
 }
 JS
+}
+# Immutable, pin-validated metadata needs no network refresh. Invalid cache bytes
+# fall back to release downloads; downloaded metadata still fails closed.
+TIMEFORMAT="bun-stage phase=metadata seconds=%3R"
+time {
+  if [[ -f "$CACHE_DIR/SHA256SUMS" && ! -L "$CACHE_DIR/SHA256SUMS" &&
+        -f "$CACHE_DIR/manifest.json" && ! -L "$CACHE_DIR/manifest.json" ]] &&
+     validate_release_metadata "$CACHE_DIR" "$@" >/dev/null 2>&1; then
+    :
+  else
+    download SHA256SUMS
+    download manifest.json
+    validate_release_metadata "$WORK" "$@"
+    for metadata in SHA256SUMS manifest.json; do
+      cached_metadata="$(mktemp "$CACHE_DIR/.$metadata.XXXXXX")"
+      cp "$WORK/$metadata" "$cached_metadata"
+      mv -f "$cached_metadata" "$CACHE_DIR/$metadata"
+    done
+  fi
+}
 INPUTS=()
 for arch in "$@"; do
   read -r COMMIT REVISION ASSET ARCHIVE_SHA EXECUTABLE EXECUTABLE_SHA < <(node - "$PIN" "$PLATFORM-$arch" <<'JS'
@@ -68,54 +115,69 @@ console.log(pin.commit, pin.revision, artifact.asset, artifact.sha256, artifact.
 JS
 )
   mkdir -p "$WORK/$arch"
-  actual=""
-  if [[ -f "$CACHE_DIR/$ASSET" && ! -L "$CACHE_DIR/$ASSET" ]]; then
-    actual="$(shasum -a 256 "$CACHE_DIR/$ASSET" | awk '{print $1}')"
-  fi
-  if [[ "$actual" != "$ARCHIVE_SHA" ]]; then
-    download "$ASSET"
-    [[ "$(shasum -a 256 "$WORK/$ASSET" | awk '{print $1}')" == "$ARCHIVE_SHA" ]] || {
-      echo "ERROR: Bun $ASSET sha256 mismatch" >&2; exit 1;
-    }
-    mv -f "$WORK/$ASSET" "$CACHE_DIR/$ASSET"
-  fi
-  # Extract the pinned executable's bytes only, never paths supplied by the zip.
-  unzip -p "$CACHE_DIR/$ASSET" "$EXECUTABLE" > "$WORK/$arch/bun"
-  [[ "$(shasum -a 256 "$WORK/$arch/bun" | awk '{print $1}')" == "$EXECUTABLE_SHA" ]] || {
-    echo "ERROR: Bun executable checksum mismatch" >&2; exit 1;
+  TIMEFORMAT="bun-stage phase=archive seconds=%3R"
+  time {
+    actual=""
+    if [[ -f "$CACHE_DIR/$ASSET" && ! -L "$CACHE_DIR/$ASSET" ]]; then
+      actual="$(shasum -a 256 "$CACHE_DIR/$ASSET" | awk '{print $1}')"
+    fi
+    if [[ "$actual" != "$ARCHIVE_SHA" ]]; then
+      download "$ASSET"
+      [[ "$(shasum -a 256 "$WORK/$ASSET" | awk '{print $1}')" == "$ARCHIVE_SHA" ]] || {
+        echo "ERROR: Bun $ASSET sha256 mismatch" >&2; exit 1;
+      }
+      mv -f "$WORK/$ASSET" "$CACHE_DIR/$ASSET"
+    fi
   }
-  chmod 0755 "$WORK/$arch/bun"
-  EXECUTOR=()
-  if [[ "$PLATFORM" == darwin ]]; then
-    native_arch="${arch/x64/x86_64}"
-    [[ "$(/usr/bin/lipo -archs "$WORK/$arch/bun")" == "$native_arch" ]] || {
-      echo "ERROR: Bun executable architecture mismatch" >&2; exit 1;
+  # Extract the pinned executable's bytes only, never paths supplied by the zip.
+  TIMEFORMAT="bun-stage phase=extract seconds=%3R"
+  time {
+    unzip -p "$CACHE_DIR/$ASSET" "$EXECUTABLE" > "$WORK/$arch/bun"
+  }
+  TIMEFORMAT="bun-stage phase=executable seconds=%3R"
+  time {
+    [[ "$(shasum -a 256 "$WORK/$arch/bun" | awk '{print $1}')" == "$EXECUTABLE_SHA" ]] || {
+      echo "ERROR: Bun executable checksum mismatch" >&2; exit 1;
     }
-    EXECUTOR=(/usr/bin/arch -"$native_arch")
-  else
-    node - "$WORK/$arch/bun" "$arch" <<'JS'
+    chmod 0755 "$WORK/$arch/bun"
+    EXECUTOR=()
+    if [[ "$PLATFORM" == darwin ]]; then
+      native_arch="${arch/x64/x86_64}"
+      [[ "$(/usr/bin/lipo -archs "$WORK/$arch/bun")" == "$native_arch" ]] || {
+        echo "ERROR: Bun executable architecture mismatch" >&2; exit 1;
+      }
+      EXECUTOR=(/usr/bin/arch -"$native_arch")
+    else
+      node - "$WORK/$arch/bun" "$arch" <<'JS'
 const assert = require('node:assert/strict');
 const bytes = require('node:fs').readFileSync(process.argv[2]);
 assert(bytes.subarray(0, 6).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1])) && bytes.readUInt16LE(18) === (process.argv[3] === 'arm64' ? 183 : 62), 'Bun executable architecture mismatch');
 JS
-  fi
-  if [[ "$PLATFORM-$arch" == "$(node -p '`${process.platform}-${process.arch}`')" ]] ||
-     { [[ "$PLATFORM" == darwin ]] && "${EXECUTOR[@]}" /usr/bin/true 2>/dev/null; }; then
-    [[ "$("${EXECUTOR[@]}" "$WORK/$arch/bun" --revision)" == "$REVISION" &&
-       "$("${EXECUTOR[@]}" "$WORK/$arch/bun" -p 'Bun.revision')" == "$COMMIT" ]] || {
-      echo "ERROR: Bun fork revision mismatch" >&2; exit 1;
-    }
-  else
-    echo "WARN: Bun $PLATFORM-$arch execution skipped; verify on a matching host (or Rosetta for Darwin x64)" >&2
-  fi
+    fi
+  }
+  TIMEFORMAT="bun-stage phase=revision seconds=%3R"
+  time {
+    if [[ "$PLATFORM-$arch" == "$(node -p '`${process.platform}-${process.arch}`')" ]] ||
+       { [[ "$PLATFORM" == darwin ]] && "${EXECUTOR[@]}" /usr/bin/true 2>/dev/null; }; then
+      [[ "$("${EXECUTOR[@]}" "$WORK/$arch/bun" --revision)" == "$REVISION" &&
+         "$("${EXECUTOR[@]}" "$WORK/$arch/bun" -p 'Bun.revision')" == "$COMMIT" ]] || {
+        echo "ERROR: Bun fork revision mismatch" >&2; exit 1;
+      }
+    else
+      echo "WARN: Bun $PLATFORM-$arch execution skipped; verify on a matching host (or Rosetta for Darwin x64)" >&2
+    fi
+  }
   INPUTS+=("$WORK/$arch/bun")
 done
-mkdir -p "$DESTINATION/bin"
-if [[ "${#INPUTS[@]}" -gt 1 ]]; then
-  /usr/bin/lipo -create "${INPUTS[@]}" -output "$DESTINATION/bin/bun"
-else
-  cp "${INPUTS[0]}" "$DESTINATION/bin/bun"
-fi
-chmod 0755 "$DESTINATION/bin/bun"
-cp "$PIN" "$DESTINATION/bun-manifest.json"
+TIMEFORMAT="bun-stage phase=install seconds=%3R"
+time {
+  mkdir -p "$DESTINATION/bin"
+  if [[ "${#INPUTS[@]}" -gt 1 ]]; then
+    /usr/bin/lipo -create "${INPUTS[@]}" -output "$DESTINATION/bin/bun"
+  else
+    cp "${INPUTS[0]}" "$DESTINATION/bin/bun"
+  fi
+  chmod 0755 "$DESTINATION/bin/bun"
+  cp "$PIN" "$DESTINATION/bun-manifest.json"
+}
 echo "Staged OpenClaw Bun $TAG [$PLATFORM ${*}]"

@@ -3,10 +3,6 @@ import "./update-command-service-maintenance.test-support.js";
 import { expect, it } from "vitest";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
-import {
-  renderUpdateRunReport,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { prepareUpdateServiceResult } from "./update-command-result.js";
@@ -46,8 +42,6 @@ it("keeps Task Scheduler codes in final update warnings and bounded failure fact
     });
     expect(result.steps[0]?.failureFacts?.[0]?.message).toContain("HRESULT 0x80070005");
     expect(result.steps[0]?.failureFacts?.[0]?.message?.length).toBeLessThanOrEqual(200);
-    const report = renderUpdateRunReport(updateRunReportInputFromResult(result));
-    expect(report.markdown).toContain("HRESULT 0x80070005");
     expect(inspected.serviceMutationAllowed).toBe(false);
     expect(service.stop).not.toHaveBeenCalled();
     expect(service.install).not.toHaveBeenCalled();
