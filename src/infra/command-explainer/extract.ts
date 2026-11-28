@@ -15,17 +15,16 @@ import {
   POSIX_PARSEABLE_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
 } from "../shell-wrapper-resolution.js";
-import {
-  decodeShellText,
-  hasEscapedLineContinuation,
-  hasUnescapedDynamicPattern,
-} from "./shell-text.js";
+import { decodeShellText, hasEscapedLineContinuation, shellWordValue } from "./shell-text.js";
 import {
   resolveCommandOperators,
   type CommandOperatorSource,
   type RecordedCommandStep,
 } from "./topology.js";
 import {
+  assertExplainableShellSource,
+  CommandExplanationUnsupportedControlCharacterError,
+  SHELL_CONTROL_CHARACTERS,
   getBashParserForCommandExplanation,
   type BashCommandParser,
 } from "./tree-sitter-runtime.js";
@@ -60,6 +59,7 @@ type CommandArgv = {
 };
 
 type WalkState = {
+  allowLiteralControlArguments: boolean;
   parse: BashCommandParser;
   wrapperPayloadDepth: number;
   spanBase: SpanBase;
@@ -148,16 +148,6 @@ function decodedSourceOffsetsForNode(node: TreeSitterNode, value: string): numbe
   return Array.from({ length: value.length + 1 }, (_, index) => prefixLength + index);
 }
 
-type ShellWordValue = { kind: "literal"; value: string } | { kind: "dynamic"; value: string };
-
-const DYNAMIC_WORD_NODE_TYPES = new Set([
-  "arithmetic_expansion",
-  "command_substitution",
-  "expansion",
-  "process_substitution",
-  "simple_expansion",
-]);
-
 const COMMAND_ARGUMENT_NODE_TYPES = new Set([
   "ansi_c_string",
   "arithmetic_expansion",
@@ -171,81 +161,6 @@ const COMMAND_ARGUMENT_NODE_TYPES = new Set([
   "string",
   "word",
 ]);
-
-function hasDynamicWordPart(root: TreeSitterNode): boolean {
-  const pending = [root];
-  for (let node = pending.pop(); node; node = pending.pop()) {
-    if (DYNAMIC_WORD_NODE_TYPES.has(node.type)) {
-      return true;
-    }
-    for (const child of node.namedChildren) {
-      pending.push(child);
-    }
-  }
-  return false;
-}
-
-function shellWordValue(node: TreeSitterNode): ShellWordValue {
-  if (DYNAMIC_WORD_NODE_TYPES.has(node.type)) {
-    return { kind: "dynamic", value: node.text };
-  }
-  if (
-    node.type !== "command_name" &&
-    node.type !== "concatenation" &&
-    node.namedChildren.some((child) => hasDynamicWordPart(child))
-  ) {
-    return {
-      kind: "dynamic",
-      value: node.type === "string" ? decodeShellText(node.text, "double") : node.text,
-    };
-  }
-
-  switch (node.type) {
-    case "command_name":
-    case "concatenation": {
-      const parts = node.namedChildren;
-      if (
-        node.type === "command_name" ? parts.length === 0 : hasUnescapedDynamicPattern(node.text)
-      ) {
-        return {
-          kind: hasUnescapedDynamicPattern(node.text) ? "dynamic" : "literal",
-          value: decodeShellText(node.text),
-        };
-      }
-      let value = "";
-      let dynamic = false;
-      for (const part of parts) {
-        const partValue = shellWordValue(part);
-        value += partValue.value;
-        if (partValue.kind !== "literal") {
-          dynamic = true;
-          if (node.type === "command_name") {
-            break;
-          }
-        }
-      }
-      return { kind: dynamic ? "dynamic" : "literal", value };
-    }
-    case "word":
-      return {
-        kind: hasUnescapedDynamicPattern(node.text) ? "dynamic" : "literal",
-        value: decodeShellText(node.text),
-      };
-    case "raw_string":
-      return { kind: "literal", value: node.text.slice(1, -1) };
-    case "string":
-      return { kind: "literal", value: decodeShellText(node.text, "double") };
-    case "ansi_c_string":
-      return { kind: "literal", value: decodeShellText(node.text, "ansi-c") };
-    default:
-      return {
-        kind: node.namedChildren.some((child) => shellWordValue(child).kind === "dynamic")
-          ? "dynamic"
-          : "literal",
-        value: decodeShellText(node.text),
-      };
-  }
-}
 
 function appendCommandArgument(node: TreeSitterNode, parsed: CommandArgv, state: WalkState): void {
   const value = shellWordValue(node);
@@ -648,7 +563,12 @@ function visitNode(
       if (step.executable) {
         output.commands.push(step);
         const wrapperPayload = recordCommandRisks(parsed, span, output);
-        if (wrapperPayload && state.wrapperPayloadDepth < MAX_WRAPPER_PAYLOAD_DEPTH) {
+        if (wrapperPayload && state.wrapperPayloadDepth >= MAX_WRAPPER_PAYLOAD_DEPTH) {
+          throw new CommandExplanationWorkLimitError(
+            "Shell wrapper nesting exceeds the command explanation work limit",
+          );
+        }
+        if (wrapperPayload) {
           const wrapperTree = state.parse(wrapperPayload.command);
           const wrapperSpanBase = wrapperPayload.spanBase;
           try {
@@ -664,8 +584,8 @@ function visitNode(
                 span: spanFromNode(wrapperTree.rootNode, wrapperSpanBase),
               });
             }
-            walk(wrapperTree.rootNode, output, "wrapper-payload", {
-              parse: state.parse,
+            walk(wrapperPayload.command, wrapperTree.rootNode, output, "wrapper-payload", {
+              ...state,
               wrapperPayloadDepth: state.wrapperPayloadDepth + 1,
               spanBase: wrapperSpanBase,
               parentCommandId: commandId,
@@ -680,7 +600,32 @@ function visitNode(
   return childContext;
 }
 
+// Only accept bytes covered by literal argument spans in the original source. Gaps
+// matter: the Bash grammar can silently consume control characters between tokens.
+function hasOnlyLiteralControlArguments(source: string, root: TreeSitterNode): boolean {
+  const command = root.firstNamedChild;
+  if (root.hasError || root.childCount !== 1 || command?.type !== "command") {
+    return false;
+  }
+  let checkedThrough = 0;
+  for (const argument of command.childrenForFieldName("argument")) {
+    if (argument.type !== "raw_string" && argument.type !== "string") {
+      continue;
+    }
+    const word = shellWordValue(argument);
+    if (word.kind !== "literal" || word.value !== argument.text.slice(1, -1)) {
+      continue;
+    }
+    if (SHELL_CONTROL_CHARACTERS.test(source.slice(checkedThrough, argument.startIndex))) {
+      return false;
+    }
+    checkedThrough = argument.endIndex;
+  }
+  return !SHELL_CONTROL_CHARACTERS.test(source.slice(checkedThrough));
+}
+
 function walk(
+  source: string,
   root: TreeSitterNode,
   output: MutableExplanation,
   rootContext: CommandContext,
@@ -694,6 +639,7 @@ function walk(
   output.remainingNodes -= root.descendantCount;
 
   // Shell syntax is model-controlled, so keep depth-first traversal off the call stack.
+  const initialRiskCount = output.risks.length;
   const pending: WalkFrame[] = [{ node: root, context: rootContext, state: rootState }];
   for (let frame = pending.pop(); frame; frame = pending.pop()) {
     const { node, context, state } = frame;
@@ -705,9 +651,21 @@ function walk(
       }
     }
   }
+  if (
+    SHELL_CONTROL_CHARACTERS.test(source) &&
+    (!rootState.allowLiteralControlArguments ||
+      output.risks.length !== initialRiskCount ||
+      !hasOnlyLiteralControlArguments(source, root))
+  ) {
+    throw new CommandExplanationUnsupportedControlCharacterError();
+  }
 }
 
-export async function explainShellCommand(source: string): Promise<CommandExplanation> {
+export async function explainShellCommand(
+  source: string,
+  { allowLiteralControlArguments = true } = {},
+): Promise<CommandExplanation> {
+  assertExplainableShellSource(source);
   // Finish and delete each tree without yielding: overlapping walks grow the WASM high-water mark.
   const parse = await getBashParserForCommandExplanation();
   const tree = parse(source);
@@ -720,7 +678,8 @@ export async function explainShellCommand(source: string): Promise<CommandExplan
       hasParseError: tree.rootNode.hasError,
       remainingNodes: MAX_COMMAND_EXPLANATION_NODES,
     };
-    walk(tree.rootNode, output, "top-level", {
+    walk(source, tree.rootNode, output, "top-level", {
+      allowLiteralControlArguments,
       parse,
       wrapperPayloadDepth: 0,
       spanBase: ROOT_SPAN_BASE,

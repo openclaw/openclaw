@@ -217,6 +217,49 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     }
   });
 
+  it("blocks commands hidden behind CR, VT, or FF before spawning while ordinary text still runs", async () => {
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+      agents: {},
+    });
+    const exec = tool(reviewer(), "allowlist");
+    const control = await exec.execute("ordinary-whitespace", { command: "true \t# note\npwd" });
+    expect(control.details).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+      aggregated: `${root}\n`,
+    });
+    boundary.spawn.mockClear();
+    const marker = path.join(root, "control-byte-marker");
+    for (const separator of ["\r", "\v", "\f"]) {
+      // The Bash parser read `#;touch …` as a comment; bash ran it after `true<byte>#`.
+      await expect(
+        exec.execute("control-byte", { command: `true${separator}#;touch ${marker}` }),
+      ).rejects.toThrow(/unsupported control characters/);
+      expect(boundary.spawn).not.toHaveBeenCalled();
+      expect(fs.existsSync(marker)).toBe(false);
+    }
+  });
+
+  it("preserves quoted argument bytes through an allowlisted executable", async () => {
+    const touch = fs.realpathSync("/usr/bin/touch");
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+      agents: { main: { allowlist: [{ pattern: touch }] } },
+    });
+    const data = "é🦞a\rb\vc\fd";
+    const result = await tool(reviewer(), "allowlist").execute("literal-data", {
+      command: `${touch} 'single-${data}' "double-${data}"`,
+    });
+    expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
+    // The filesystem preserves the argument bytes that terminal output sanitization removes.
+    expect(fs.existsSync(path.join(root, `single-${data}`))).toBe(true);
+    expect(fs.existsSync(path.join(root, `double-${data}`))).toBe(true);
+    expect(boundary.spawn).toHaveBeenCalledOnce();
+  });
+
   it("executes static assignments and blocks recursive assignments before process creation", async () => {
     const echoPath = fs.realpathSync("/bin/echo");
     saveExecApprovals({

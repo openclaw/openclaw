@@ -7,6 +7,16 @@ const require = createRequire(import.meta.url);
 
 export type BashCommandParser = (source: string) => TreeSitter.Tree;
 
+export const SHELL_CONTROL_CHARACTERS = /[\r\v\f]/u;
+
+export class CommandExplanationUnsupportedControlCharacterError extends Error {
+  constructor() {
+    super("Shell command contains unsupported control characters");
+  }
+}
+export class CommandExplanationSourceSizeLimitError extends Error {}
+export class CommandExplanationParseTimeoutError extends Error {}
+
 let parserPromise: Promise<BashCommandParser> | null = null;
 const MAX_COMMAND_EXPLANATION_SOURCE_CHARS = 128 * 1024;
 const MAX_COMMAND_EXPLANATION_PARSE_MS = 500;
@@ -35,9 +45,7 @@ function parseBashForCommandExplanation(
   parser: TreeSitter.Parser,
   source: string,
 ): TreeSitter.Tree {
-  if (source.length > MAX_COMMAND_EXPLANATION_SOURCE_CHARS) {
-    throw new Error("Shell command is too large to explain");
-  }
+  assertExplainableShellSource(source);
   const deadlineMs = performance.now() + MAX_COMMAND_EXPLANATION_PARSE_MS;
   let timedOut = false;
   const tree = parser.parse(source, null, {
@@ -49,11 +57,24 @@ function parseBashForCommandExplanation(
   if (!tree) {
     parser.reset();
     if (timedOut) {
-      throw new Error(
+      throw new CommandExplanationParseTimeoutError(
         `tree-sitter-bash timed out after ${MAX_COMMAND_EXPLANATION_PARSE_MS}ms while parsing shell command`,
       );
     }
     throw new Error("tree-sitter-bash returned no parse tree");
   }
   return tree;
+}
+
+export function assertExplainableShellSource(source: string): void {
+  // Without a quoted argument or room to parse, these bytes cannot be verified as data.
+  if (
+    SHELL_CONTROL_CHARACTERS.test(source) &&
+    (source.length > MAX_COMMAND_EXPLANATION_SOURCE_CHARS || !/['"]/u.test(source))
+  ) {
+    throw new CommandExplanationUnsupportedControlCharacterError();
+  }
+  if (source.length > MAX_COMMAND_EXPLANATION_SOURCE_CHARS) {
+    throw new CommandExplanationSourceSizeLimitError("Shell command is too large to explain");
+  }
 }

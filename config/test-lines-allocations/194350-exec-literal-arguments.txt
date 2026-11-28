@@ -1,0 +1,3 @@
+# The real Gateway allowlist launches one process and checks both quoted filenames byte for byte.
+# Guard cases distinguish literal arguments from ambiguous source and cover Windows handling.
+19

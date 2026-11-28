@@ -344,7 +344,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       if (!params.command) {
         throw new Error("Provide a command to start.");
       }
-      await rejectUnsafeExecControlShellCommand(params.command);
+      await rejectUnsafeExecControlShellCommand(params.command, host);
       let workdir: string | undefined;
       let containerWorkdir = sandbox?.containerWorkdir;
       let discardPreparedSandboxWorkdir: (() => void) | null = null;

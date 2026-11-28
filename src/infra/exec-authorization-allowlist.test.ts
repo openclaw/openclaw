@@ -24,6 +24,44 @@ function evaluate(
 }
 
 describe("authorization-backed exec allowlist", () => {
+  it.each(["\r", "\v", "\f"])(
+    "requires approval for shell text containing %j",
+    async (separator) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const dir = makeExecApprovalsTempDir();
+      const toolPath = makeExecutable(dir, "tool");
+      for (const { command, allowlist } of [
+        { command: `true${separator}#; printf unexpected`, allowlist: [] },
+        { command: `tool arg${separator}#; printf unexpected`, allowlist: [{ pattern: toolPath }] },
+        { command: `sh -c 'true${separator}#; printf unexpected'`, allowlist: [] },
+        {
+          command: `sh -c $'true\\x${separator.charCodeAt(0).toString(16)}#; printf unexpected'`,
+          allowlist: [],
+        },
+      ]) {
+        const result = await evaluate(command, {
+          allowlist,
+          cwd: dir,
+          env: makePathEnv(dir),
+        });
+        expect(result).toMatchObject({ analysisOk: false, allowlistSatisfied: false });
+        expect(requiresExecApproval({ ask: "on-miss", security: "allowlist", ...result })).toBe(
+          true,
+        );
+      }
+    },
+  );
+
+  it("keeps POSIX whitespace eligible for builtin authorization", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const result = await evaluate("true \t# comment\ntrue");
+    expect(result).toMatchObject({ analysisOk: true, allowlistSatisfied: true });
+  });
+
   it.each([
     { command: `echo "$HOME"; python3 -c 'print(1)'`, analysisOk: false, first: ["echo", "$HOME"] },
     { command: `sh -c 'echo ok; python3 -c "print(1)"'`, analysisOk: true, first: ["echo", "ok"] },
