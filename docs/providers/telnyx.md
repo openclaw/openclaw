@@ -32,7 +32,6 @@ openclaw --version
 
 ```bash
 openclaw plugins install telnyx
-openclaw gateway restart
 ```
 
 ## Getting started
