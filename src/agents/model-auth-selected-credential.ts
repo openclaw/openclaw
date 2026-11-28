@@ -4,16 +4,19 @@ import { resolveProviderModelRouteAuthRequirement } from "./provider-model-route
 
 export type SelectedModelCredential =
   | { source: "harness" }
-  | ({ mode?: string; requirement?: ProviderModelRouteAuthRequirement; identityKey: string } & (
-      | { source: "profile"; profileId: string }
-      | { source: "direct"; provider: string }
-    ));
+  | ({
+      mode?: string;
+      authFlow?: string;
+      requirement?: ProviderModelRouteAuthRequirement;
+      identityKey: string;
+    } & ({ source: "profile"; profileId: string } | { source: "direct"; provider: string }));
 
 /** Normalize a selection made by availability or the physical attempt's auth owner. */
 export function resolveSelectedModelCredential(params: {
   provider: string;
   profileId?: string;
   mode?: string;
+  authFlow?: string;
   authRequirement?: ProviderModelRouteAuthRequirement | null;
   runtimeAuth?: { id: string; source: "native" };
 }): SelectedModelCredential | undefined {
@@ -25,6 +28,7 @@ export function resolveSelectedModelCredential(params: {
   }
   const auth = {
     mode: params.mode,
+    ...(params.authFlow ? { authFlow: params.authFlow } : {}),
     requirement: resolveProviderModelRouteAuthRequirement(params.mode, params.authRequirement),
   };
   return params.profileId

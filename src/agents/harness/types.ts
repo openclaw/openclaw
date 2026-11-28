@@ -30,6 +30,8 @@ export type AgentHarnessSessionRuntimeOwnership = {
 export type AgentHarnessPreparedAuthSupport = {
   source: "profile" | "direct" | "harness" | "none";
   mode?: string;
+  /** Provider-owned grant kind, distinct from credential storage mode. */
+  authFlow?: string;
   requirement?: ProviderModelRouteAuthRequirement;
 };
 export type AgentHarnessSupportContext = {
