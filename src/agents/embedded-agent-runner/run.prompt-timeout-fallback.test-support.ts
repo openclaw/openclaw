@@ -29,7 +29,7 @@ let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 const model = { provider: "openai", model: "gpt-5.4" };
 
-function runPrompt(runId: string, overrides: Partial<Parameters<typeof runEmbeddedAgent>[0]> = {}) {
+function runPrompt(runId: string, overrides: Partial<Parameters<typeof runEmbeddedAgent>[0]>) {
   return runEmbeddedAgent({
     ...createOverflowRunParams(state),
     ...model,
@@ -64,7 +64,7 @@ function completedAttempt(text?: string) {
     currentAttemptCompletedAssistant: assistant,
   });
 }
-function settledWriteTimeout(prompt: string, aborted = false) {
+function settledWriteTimeout(prompt: string, aborted: boolean) {
   const toolUseAssistant = buildEmbeddedRunnerAssistant({
     stopReason: "toolUse",
     ...model,
