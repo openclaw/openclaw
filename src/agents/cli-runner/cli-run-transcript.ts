@@ -91,14 +91,22 @@ export function buildCliHookAssistantMessage(params: {
 type CliAgentEndHookParams = Parameters<typeof runAgentEndSideEffectsAsync>[0];
 
 export async function runCliAgentEndHook(
-  params: RunCliAgentParams,
+  { params, modelId }: PreparedCliRunContext,
   hookParams: CliAgentEndHookParams,
 ): Promise<void> {
+  const sideEffects = {
+    ...hookParams,
+    ctx: {
+      ...hookParams.ctx,
+      modelProviderId: params.modelProvider ?? params.provider,
+      modelId,
+    },
+  };
   if (!params.messageChannel && !params.messageProvider) {
-    await awaitAgentEndSideEffects(hookParams);
+    await awaitAgentEndSideEffects(sideEffects);
     return;
   }
-  await runAgentEndSideEffectsAsync(hookParams);
+  await runAgentEndSideEffectsAsync(sideEffects);
 }
 
 export async function persistApprovedCliUserTurnTranscript(

@@ -97,3 +97,16 @@ export function buildPreparedContext(params: PreparedContextOverrides = {}): Pre
     },
   );
 }
+
+export function withParams(
+  context: PreparedCliRunContext,
+  overrides: Partial<PreparedCliRunContext["params"]>,
+): PreparedCliRunContext {
+  return { ...context, params: { ...context.params, ...overrides } };
+}
+
+export function makeClaudePreparedContext(
+  overrides: PreparedContextOverrides = {},
+): PreparedCliRunContext {
+  return buildPreparedContext({ provider: "claude-cli", model: "opus", ...overrides });
+}

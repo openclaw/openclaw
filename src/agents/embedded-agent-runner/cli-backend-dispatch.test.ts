@@ -275,7 +275,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
         }),
       );
       const dispatched = runCliAgent.mock.calls[0]?.[0];
-      expect(dispatched).toMatchObject({ provider: "claude-cli" });
+      expect(dispatched).toMatchObject({ provider: "claude-cli", modelProvider: "anthropic" });
       expect(dispatched.requesterModel).toEqual(
         requestedRouteResolution === "resolved"
           ? { provider: "anthropic", model: "claude-opus-4-8" }
