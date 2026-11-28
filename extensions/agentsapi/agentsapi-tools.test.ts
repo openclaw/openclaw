@@ -153,12 +153,15 @@ it("keeps both untrusted-content markers when an image precedes the envelope", a
     const placeholder = "[Image result omitted from Agents API function output]\n";
     expect(result.output.startsWith(placeholder)).toBe(true);
     expect(result.output).toContain(`<<<EXTERNAL_UNTRUSTED_CONTENT id="${id}">>>`);
-    expect(result.output.endsWith(`<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${id}">>>`)).toBe(true);
-    // The notice reports what this one cut removed (a second pass once reported a few chars).
-    // The truncator sets the notice between blank lines: `head\n\n[notice]\n\ntail`.
-    const notice = /\n\n\[\.\.\. (\d+) chars omitted\]\n\n/u.exec(result.output);
+    // The closed frame, then the trusted notice outside it, last.
+    const end = `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${id}">>>\n\n`;
+    const notice = /\[\.\.\. (\d+) chars omitted\]$/u.exec(result.output);
     assert(notice);
-    const kept = result.output.length - placeholder.length - notice[0].length;
+    expect(result.output.slice(0, notice.index).endsWith(end)).toBe(true);
+    // The notice reports what this one cut removed (a second pass once reported a few chars):
+    // every other char sent is the page's, except the placeholder, the blank line and the
+    // `\n…\n` between the body's kept head and tail.
+    const kept = notice.index - placeholder.length - 2 - "\n…\n".length;
     expect(Number(notice[1])).toBe(wrapped.length - kept);
   });
 });

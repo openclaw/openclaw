@@ -74,8 +74,10 @@ describe("Codex dynamic-tool results go through the one tool-result bound", () =
       expect(text.slice(0, frameEnd).replace(/id="[a-f0-9]{16}"/u, "")).toBe(
         wrapped.slice(0, frameEnd).replace(/id="[a-f0-9]{16}"/u, ""),
       );
-      expect(text).toMatch(/chars omitted/u);
-      expect(text).toMatch(/\nLAST\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>$/u);
+      // The trusted notice follows the closed frame, outside it.
+      expect(text).toMatch(
+        /\nLAST\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>\n\n\[\.\.\. \d+ chars omitted\]$/u,
+      );
     },
   );
 
@@ -100,7 +102,9 @@ describe("Codex dynamic-tool results go through the one tool-result bound", () =
     expect(text.slice(0, frameEnd).replace(/id="[a-f0-9]{16}"/u, "")).toBe(
       wrapped.slice(0, frameEnd).replace(/id="[a-f0-9]{16}"/u, ""),
     );
-    expect(text).toMatch(/\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>$/u);
+    expect(text).toMatch(
+      /\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>\n\n\[\.\.\. \d+ chars omitted\]$/u,
+    );
   });
 
   it("keeps images and bounds mixed text blocks within the shared budget", async () => {

@@ -369,18 +369,21 @@ export function findExternalContentFrames(
     "gu",
   );
   for (const open of text.matchAll(opens)) {
-    const after = open.index + open[0].length;
     if (open.index < (frames.at(-1)?.end ?? 0)) {
       continue;
     }
+    // The frame keeps the metadata header wrapExternalContent writes after the start marker.
+    const header = /\n(?:(?:Source|Task|From|Subject): [^\n]*\n)+---\n/y;
+    header.lastIndex = open.index + open[0].length;
+    const bodyStart = header.test(text) ? header.lastIndex : open.index + open[0].length;
     const close = `<<<${EXTERNAL_CONTENT_END_NAME} id=${open[1]}"${open[2]}${open[1]}">>>`;
-    const bodyEnd = text.indexOf(close, after);
+    const bodyEnd = text.indexOf(close, bodyStart);
     if (bodyEnd < 0) {
       continue;
     }
     const warning = open.index - warned.length;
     const start = warning >= 0 && text.startsWith(warned, warning) ? warning : open.index;
-    frames.push({ start, bodyStart: after, bodyEnd, end: bodyEnd + close.length });
+    frames.push({ start, bodyStart, bodyEnd, end: bodyEnd + close.length });
   }
   return frames;
 }

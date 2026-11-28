@@ -15,7 +15,8 @@ const textOf = (content: unknown[]) =>
 /**
  * The fail-closed contract: untrusted text (every payload carries `UNTRUSTED-`) appears only
  * inside a whole frame, every start marker has its end marker, one trusted notice sits outside
- * every frame with the true omitted count, and the result is a fixed point of the bound.
+ * every frame with the true omitted count, and the text is a fixed point of the bound (an image
+ * the share cannot hold is the context guard's to drop).
  */
 async function expectFailClosed(content: Block[], contextWindowTokens: number) {
   const bounded = await boundToolResult({ content, details: {} }, contextWindowTokens, false);
@@ -37,7 +38,9 @@ async function expectFailClosed(content: Block[], contextWindowTokens: number) {
   const elided = texts.join("").split(ELISION).length - 1;
   const original = textOf(content).join("").length;
   expect(Number(notice[1])).toBe(original - (sent - elided * ELISION.length));
-  expect(await boundToolResult(bounded, contextWindowTokens, false)).toBe(bounded);
+  const textOnly = bounded.content.filter((block) => (block as Block).type === "text");
+  const again = await boundToolResult({ content: textOnly }, contextWindowTokens, false);
+  expect(again.content).toBe(textOnly);
   return { bounded, shown };
 }
 
