@@ -180,7 +180,9 @@ struct NativeUsageScreen: View {
                 }
             }
         } footer: {
-            Text(verbatim: self.dates.formatted(date: .abbreviated, time: .omitted) + " · " + TimeZone.current
+            let dates = self.dates
+            let interval = dates.lowerBound..<dates.upperBound
+            Text(verbatim: interval.formatted(.interval.year().month(.abbreviated).day()) + " · " + TimeZone.current
                 .identifier)
                 .font(OpenClawType.caption)
         }
