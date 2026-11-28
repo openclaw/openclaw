@@ -66,16 +66,23 @@ function findEnvelope(content: unknown[]) {
  * Head and tail are kept; an untrusted-content envelope whose frame fits keeps its warning and
  * both markers whole and only its body is cut. The full text goes to a private file (a producer's own file
  * is reused). `spill: false` (a reader that cannot open the file) or a failed write keeps the
- * same cut with a size-only notice.
+ * same cut with a size-only notice. `reservedChars` is the text a route adds when it serializes
+ * the bounded result (separators, placeholders for blocks it cannot send), so that route's own
+ * cap never cuts a bounded result.
  */
 export async function boundToolResult<T extends { content: unknown[]; details?: unknown }>(
   result: T,
   contextWindowTokens: number | undefined,
   spill?: PrivateTempFileOptions | false,
+  reservedChars = 0,
 ): Promise<T> {
-  const budget = resolveToolResultBudget(contextWindowTokens) ?? {
+  const routeBudget = resolveToolResultBudget(contextWindowTokens) ?? {
     maxChars: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     maxContextChars: Infinity,
+  };
+  const budget = {
+    ...routeBudget,
+    maxChars: Math.max(0, routeBudget.maxChars - reservedChars),
   };
   // Fit is judged on the result as sent; only a result that does not fit is cut.
   if (

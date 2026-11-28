@@ -77,6 +77,17 @@ export type AgentsApiToolSurface = {
   readonly lastToolError: AgentHarnessAttemptResult["lastToolError"];
 };
 
+/** The function output: each text block, and a placeholder for each other block, one per line. */
+function serializeFunctionOutput(content: readonly unknown[]): string {
+  return content
+    .map((block) =>
+      isRecord(block) && block.type === "text" && typeof block.text === "string"
+        ? block.text
+        : "[Image result omitted from Agents API function output]",
+    )
+    .join("\n");
+}
+
 /** Gateway functions retain host authority; shell and file tools stay in the hosted VM. */
 export async function buildAgentsApiToolSurface(
   params: AgentHarnessAttemptParamsV2,
@@ -401,7 +412,17 @@ export async function buildAgentsApiToolSurface(
         signal,
         boundaries: executionBoundaries,
         // File tools run in the hosted VM, which cannot open a Gateway file: size-only notice.
-        resultBound: { contextWindowTokens: contextTokens, spill: false },
+        // The bound reserves the separators and placeholders this adapter adds when it serializes.
+        resultBound: {
+          contextWindowTokens: contextTokens,
+          spill: false,
+          reservedChars: (content) =>
+            serializeFunctionOutput(
+              content.map((block) =>
+                isRecord(block) && block.type === "text" ? { type: "text", text: "" } : block,
+              ),
+            ).length,
+        },
         prepareArguments: (args) => {
           if (!isRecord(args)) {
             throw new Error(`Arguments for OpenClaw tool ${call.name} must be an object`);
@@ -560,16 +581,10 @@ export async function buildAgentsApiToolSurface(
           assertCurrent();
           signal.throwIfAborted();
           dispatchAfterHook(presented);
-          // The invocation owner bounded each block; separators and image placeholders added
-          // here keep the adapter's own cap on the serialized string.
+          // The bound reserved this serialization's separators and placeholders; the cap here
+          // never cuts a bounded result.
           const text = sliceToolResultTextToBudget(
-            presented.content
-              .map((block) =>
-                block.type === "text"
-                  ? block.text
-                  : "[Image result omitted from Agents API function output]",
-              )
-              .join("\n") || "Tool completed with no text output.",
+            serializeFunctionOutput(presented.content) || "Tool completed with no text output.",
             maxOutputChars,
           );
           return {

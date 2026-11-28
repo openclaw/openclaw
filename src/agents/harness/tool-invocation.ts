@@ -36,8 +36,15 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
   ) => void;
   snapshotResult?: (result: AgentToolResult<unknown>) => unknown;
   applyMiddleware: (event: AgentToolResultMiddlewareEvent) => Promise<AgentToolResult<unknown>>;
-  /** Inputs of the one tool-result bound applied after middleware; `spill: false` when the reader cannot open a Gateway file. */
-  resultBound?: { contextWindowTokens?: number; spill?: PrivateTempFileOptions | false };
+  /**
+   * Inputs of the one tool-result bound applied after middleware; `spill: false` when the reader
+   * cannot open a Gateway file; `reservedChars` for the text the route's serialization adds.
+   */
+  resultBound?: {
+    contextWindowTokens?: number;
+    spill?: PrivateTempFileOptions | false;
+    reservedChars?: (content: unknown[]) => number;
+  };
   onExecutionResult?: (execution: AgentHarnessToolExecution) => void;
   onResult: (result: AgentHarnessToolPresentation) => TResult | Promise<TResult>;
   onError: (failure: AgentHarnessToolInvocationFailure) => TResult | Promise<TResult>;
@@ -120,6 +127,7 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
       middlewareResult,
       params.resultBound?.contextWindowTokens,
       params.resultBound?.spill,
+      params.resultBound?.reservedChars?.(middlewareResult.content),
     );
     const presentation = resolveAgentHarnessToolResultPresentation({
       result,

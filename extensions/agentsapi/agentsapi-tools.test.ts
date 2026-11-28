@@ -124,6 +124,38 @@ it("bounds oversized output with head, tail and a size-only notice", async () =>
   });
 });
 
+// The adapter's own cap on the joined output cut the end of a bounded result: an image block
+// before one untrusted envelope pushed the end marker past the cap.
+it("keeps both untrusted-content markers when an image precedes the envelope", async () => {
+  const wrapped = wrapExternalContent(
+    Array.from({ length: 40_000 }, (_, i) => `line ${i}`).join("\n"),
+    { source: "web_fetch" },
+  );
+  const id = /<<<EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})">>>/u.exec(wrapped)?.[1];
+  assert(id);
+  const tool: AnyAgentTool = {
+    name: "fixture_envelope",
+    label: "Fixture envelope",
+    description: "Returns a synthetic wrapped page after an image",
+    parameters: Type.Object({}, { additionalProperties: false }),
+    execute: async () => ({
+      content: [
+        { type: "image", data: "AA==", mimeType: "image/png" },
+        { type: "text", text: wrapped },
+      ],
+      details: {},
+    }),
+  };
+  await withFixtureTool(tool, async (surface) => {
+    const result = await execute(surface, tool.name, "envelope", {});
+    assert(result.success);
+    expect(result.output).toMatch(/^\[Image result omitted from Agents API function output\]\n/u);
+    expect(result.output).toContain(`<<<EXTERNAL_UNTRUSTED_CONTENT id="${id}">>>`);
+    expect(result.output).toMatch(/\[\.\.\. \d+ chars omitted\]/u);
+    expect(result.output.endsWith(`<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${id}">>>`)).toBe(true);
+  });
+});
+
 describe("a delivered send to a configured delivery target", () => {
   // Shape of a cron send: the delivery target is the current source and the
   // message tool confirms the source reply.
