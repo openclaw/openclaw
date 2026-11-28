@@ -50,6 +50,18 @@ it("asks Claude CLI for its active account and returns only safe display fields"
   );
 });
 
+it.each([
+  ["/claude/config", { configDirectory: "/claude/config" }],
+  ["relative/config", {}],
+])("reports only an absolute Claude config directory: %s", async (configDirectory, expected) => {
+  mockStatus({ loggedIn: true, authMethod: "claude.ai", configDirectory });
+  expect(await probeClaudeCliAuthStatus({ command: "/test/claude" })).toEqual({
+    status: "available",
+    authMethod: "claude.ai",
+    ...expected,
+  });
+});
+
 it.each(['["CLAUDE_CODE_OAUTH_TOKEN"]', "CLAUDE_CODE_OAUTH_TOKEN, OTHER"])(
   "keeps the runtime child's preserved login: %s",
   async (preserve) => {

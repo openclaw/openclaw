@@ -7,9 +7,9 @@ import { readSessionPendingInputReceiptsInWorker } from "../../config/sessions/s
 import { isTerminalSessionStatus } from "../../config/sessions/types.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
-import { respondChatHistoryUnavailable, type ChatHistoryMethod } from "./chat-history-recovery.js";
+import type { ChatHistoryMethod } from "./chat-history-recovery.js";
 import { captureQueuedChatInputRunIds, readChatPendingInputs } from "./chat-pending-inputs.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+import type { GatewayClient } from "./types.js";
 
 /** Exact receipts and the display page belong to the current physical session, not archived history. */
 export async function readChatHistoryPendingInputs(
@@ -23,7 +23,6 @@ export async function readChatHistoryPendingInputs(
     messageId?: string;
     client: GatewayClient | null;
     method: ChatHistoryMethod;
-    respond: RespondFn;
   },
 ) {
   const { sessionId } = scope;
@@ -74,23 +73,11 @@ export async function readChatHistoryPendingInputs(
     pendingInputs,
     inputReceipts,
     inputConsumptions,
-    hasCompatibleQueue: (sessionInfo: GatewaySessionRow | undefined) => {
-      if (
-        current &&
-        sessionInfo?.hasActiveRun === false &&
-        sessionInfo.lastRunId &&
-        isTerminalSessionStatus(sessionInfo.status) &&
-        !matchesTerminal?.(sessionInfo.lastRunId, sessionInfo.status)
-      ) {
-        // Omission alone cannot protect clients that infer an empty queue from the display page.
-        respondChatHistoryUnavailable(
-          options.method,
-          options.respond,
-          "session run changed while reading history; reload the conversation",
-        );
-        return false;
-      }
-      return true;
-    },
+    hasCompatibleQueue: (sessionInfo: GatewaySessionRow | undefined) =>
+      !current ||
+      sessionInfo?.hasActiveRun !== false ||
+      !sessionInfo.lastRunId ||
+      !isTerminalSessionStatus(sessionInfo.status) ||
+      matchesTerminal?.(sessionInfo.lastRunId, sessionInfo.status) === true,
   };
 }

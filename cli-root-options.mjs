@@ -146,18 +146,11 @@ export function getCommandArgsWithRootOptions(argv, options) {
   return parseCommandArgsWithRootOptions(argv, options, true);
 }
 
-/** Keep option roles intact when another command must use the same root selectors. */
-export function getCommandOptionsWithRootOptions(argv, options) {
-  return parseCommandArgsWithRootOptions(argv, options, false, true);
-}
-
-function parseCommandArgsWithRootOptions(argv, options, returnTail, returnOptions = false) {
+function parseCommandArgsWithRootOptions(argv, options, returnTail) {
   const args = argv.slice(2);
   const booleanFlags = new Set(options.booleanFlags ?? []);
   const valueFlags = new Set(options.valueFlags ?? []);
   const positionals = [];
-  const rootOptions = [];
-  const commandOptions = [];
   let commandIndex = 0;
   let literal = false;
 
@@ -179,9 +172,6 @@ function parseCommandArgsWithRootOptions(argv, options, returnTail, returnOption
         ? consumeRootCommandOptionToken(args, index)
         : consumeRootOptionToken(args, index);
     if (rootConsumed > 0) {
-      // Gateway's post-command --dev bootstraps its workspace, not a root profile.
-      const destination = commandIndex > 0 && booleanFlags.has(arg) ? commandOptions : rootOptions;
-      destination.push(...args.slice(index, index + rootConsumed));
       index += rootConsumed - 1;
       continue;
     }
@@ -196,7 +186,6 @@ function parseCommandArgsWithRootOptions(argv, options, returnTail, returnOption
       if (optionConsumed === 0 || commandIndex === 0) {
         return null;
       }
-      commandOptions.push(arg);
       index += optionConsumed - 1;
       continue;
     }
@@ -213,14 +202,10 @@ function parseCommandArgsWithRootOptions(argv, options, returnTail, returnOption
       continue;
     }
     positionals.push(arg);
-    if (!returnOptions && positionals.length === options.maxPositionals) {
+    if (positionals.length === options.maxPositionals) {
       return positionals;
     }
   }
 
-  return commandIndex < options.commandPath.length
-    ? null
-    : returnOptions
-      ? { rootOptions, commandOptions }
-      : positionals;
+  return commandIndex < options.commandPath.length ? null : positionals;
 }

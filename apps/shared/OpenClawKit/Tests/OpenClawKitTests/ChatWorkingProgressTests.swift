@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import OpenClawChatUI
 
@@ -10,7 +11,7 @@ struct ChatWorkingProgressTests {
     #if os(iOS)
     @Test @MainActor func `working row shows the claw alone until something names the step`() {
         func label(status: String?, tool: String? = nil) -> String? {
-            ChatTypingIndicatorBubble(showsAssistantAvatar: false, runIdentity: "run", status: status, toolLabel: tool)
+            ChatTypingIndicatorBubble(showsAssistantAvatar: false, status: status, toolLabel: tool)
                 .label
         }
         #expect(label(status: nil) == nil)
@@ -45,27 +46,42 @@ struct ChatWorkingProgressTests {
     }
     #endif
 
-    @Test func `stance selection is deterministic for a run and salt`() {
-        let salt: UInt32 = 0xA1B2_C3D4
-        let run = "run-4c71b7e8"
-        let first = ChatWorkingClawStance.seeded(run, salt: salt)
-        #expect(first == ChatWorkingClawStance.seeded(run, salt: salt))
-        #expect(first == .southpaw)
-        #expect(ChatWorkingClawStance.seeded("run-a", salt: salt) == .standard)
-        #expect(ChatWorkingClawStance.seeded("run-6", salt: salt) == .spin)
-    }
-
-    @Test func `zen samples the breath and deliberate snip keyframes`() {
-        for (elapsed, scale) in [(0.0, 1.0), (1.8, 1.08), (3.3, 1.0), (6.0, 1.0)] {
-            let pose = ChatWorkingClawMotion.pose(stance: .zen, elapsed: elapsed)
-            self.expectClose(pose.bodyScale, scale)
-            #expect(pose.bodyRotation == 0)
-            #expect(pose.xOffset == 0)
-            #expect(pose.yOffset == 0)
+    #if os(macOS)
+    @Test @MainActor func `working claws face the same way across runs`() throws {
+        func renderedClaw(run: Int) throws -> Data {
+            let row = ChatTypingIndicatorBubble(
+                showsAssistantAvatar: false, runIdentity: "run-\(run)", outputTokens: nil, status: nil)
+                .environment(\.scenePhase, .inactive)
+                .frame(width: 240, height: 40, alignment: .leading)
+                .frame(width: 28, height: 40, alignment: .leading)
+                .clipped()
+            let renderer = ImageRenderer(content: row)
+            renderer.scale = 2
+            return try #require(renderer.cgImage?.dataProvider?.data) as Data
         }
-        for (elapsed, jaw) in [(3.6, -10.0), (4.2, -24.0), (4.56, 2.0), (5.16, -10.0)] {
-            let pose = ChatWorkingClawMotion.pose(stance: .zen, elapsed: elapsed)
-            self.expectClose(pose.jawRotation, jaw)
+        let first = try renderedClaw(run: 0)
+        try #require(first.contains { $0 != 0 })
+        for run in 1...32 {
+            let next = try renderedClaw(run: run)
+            try #require(next == first, "The claw changed orientation in run \(run)")
+        }
+    }
+    #endif
+
+    @Test func `working claw pinches twice then rests on every loop`() {
+        for cycle in [0.0, 2.4, 4.8] {
+            for (progress, body, jaw) in [
+                (0.0, 0.0, -10.0),
+                (0.10, -4, -26),
+                (0.16, 3, 4),
+                (0.26, -4, -24),
+                (0.32, 3, 4),
+                (0.75, 0, -10),
+            ] {
+                let pose = ChatWorkingClawMotion.pose(elapsed: cycle + 2.4 * progress)
+                self.expectClose(pose.bodyRotation, body)
+                self.expectClose(pose.jawRotation, jaw)
+            }
         }
     }
 

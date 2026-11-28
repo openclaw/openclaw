@@ -150,7 +150,8 @@ describe("Codex subagent native tool policy", () => {
     expect(policy.toolPolicyRestricted).toBe(false);
     const config = threadConfig(policy);
     expect(config["features.code_mode"]).toBe(true);
-    expect(config["agents.enabled"]).toBeUndefined();
+    // sessions_spawn is the only subagent surface: every Codex thread disables native delegation.
+    expect(config["agents.enabled"]).toBe(false);
   });
 
   it("restricts the whole native surface for an unaudited denial", async () => {
@@ -196,9 +197,9 @@ describe("Codex subagent native tool policy", () => {
     for (const tool of ["gateway", "openclaw", "sessions_send", "conversations_turn"]) {
       expect(isToolAllowedByPolicies(tool, policy.runtimePolicies), tool).toBe(false);
     }
-    // Session and conversation denies keep the native shell and file surface,
-    // and are enforced by disabling native delegation (the native tools that
-    // can address other threads).
+    // Session and conversation denies keep the native shell and file surface;
+    // native delegation (the native tools that can address other threads) is
+    // disabled on every Codex thread.
     expect(policy.toolPolicyRestricted).toBe(false);
     const config = threadConfig(policy);
     expect(config["features.code_mode"]).toBe(true);

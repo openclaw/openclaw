@@ -711,7 +711,7 @@ export function createModelProviders(
       props,
       cards,
       installedAgentsAvailable: installedAgents.available(),
-      loginMessage: state.messages.connection ?? login.pageActions.loginMessage,
+      loginMessage: state.messages.connection ?? login.loginMessage,
       discovery: {
         agentLabel,
         credentialChoices:

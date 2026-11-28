@@ -157,7 +157,7 @@ export function createTelegramSpooledReplayParticipant(
     }
     settled = true;
     ownerAbortSignal?.removeEventListener("abort", onOwnerAbort);
-    if (result.kind !== "completed") {
+    if (result.kind === "failed-retryable" || result.kind === "skipped") {
       abortController.abort(result.kind === "failed-retryable" ? result.error : result.kind);
     }
     resolveTask(result);

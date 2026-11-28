@@ -175,7 +175,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/session-git-diff.tsx":
     case "ui/src/lib/sessions/usage.ts":
     case "src/shared/weak-owner-map.ts":
-    case "src/shared/assistant-display-content.ts":
     case "src/shared/agent-run-status.ts":
     case "ui/src/app/assistant-media.ts":
     case "ui/src/lib/image-download.ts":
@@ -342,6 +341,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/nodes/device-signing.noble.ts":
     case "ui/src/lib/nodes/device-signing.runtime.ts":
       return "device-signing-runtime";
+    case "src/shared/assistant-display-content.ts":
     case "ui/src/pages/chat/chat-live-events.runtime.ts":
     case "ui/src/pages/chat/chat-gateway.ts":
     case "ui/src/pages/chat/tool-stream.ts":

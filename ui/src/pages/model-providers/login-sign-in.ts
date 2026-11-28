@@ -59,7 +59,6 @@ export function createLoginSignIn(
     loginProviders: (
       providers: undefined,
       authStatus: ModelAuthStatusResult | null,
-      allowSetup: boolean,
     ) => Array<{ choices: LoginChoice[] }>;
   },
 ) {
@@ -124,9 +123,6 @@ export function createLoginSignIn(
 
   function adopt(selected: LoginChoice, allowSetup: boolean): void {
     const kind = selected.kind;
-    if (kind === "setup-secret") {
-      return;
-    }
     authProviderId = canonicalModelAuthProviderId(selected.authProvider);
     authProviderLabel = kind === "secret" ? undefined : selected.groupLabel;
     // Browser and device sign-ins can select a model; a pasted secret only saves. A
@@ -275,7 +271,7 @@ export function createLoginSignIn(
     }
     const allowSetup = recovery.selectModel ?? host.allowSetup();
     const selected = host
-      .loginProviders(undefined, authStatus, allowSetup)
+      .loginProviders(undefined, authStatus)
       .flatMap((group) => group.choices)
       .find((choice) => choice.id === recovery.authChoice);
     if (selected) {
