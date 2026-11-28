@@ -2,9 +2,12 @@ import childProcess from "node:child_process";
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 
-export function installProcfsFixture({ open, readdir, onSpawn }) {
+export function installProcfsFixture({ open, readdir, readFile, onSpawn }) {
   if (open) {
     fs.open = open;
+  }
+  if (readFile) {
+    fs.readFile = readFile;
   }
   if (readdir) {
     fs.readdir = readdir;
