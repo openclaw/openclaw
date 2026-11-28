@@ -38,6 +38,12 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => (
 
 const resolveAuth = providerAuthMocks.resolveApiKeyForProvider;
 
+const { searchWarn } = vi.hoisted(() => ({ searchWarn: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  createSubsystemLogger: () => ({ warn: searchWarn }),
+}));
+
 function profileAuth(
   apiKey: string,
   mode: "oauth" | "api-key" = "oauth",
@@ -431,6 +437,29 @@ describe("xai web search config resolution", () => {
 
 describe("xai x_search tool", () => {
   const citation = "https://x.com/openclaw/status/1";
+
+  it.each(["grok-4-1-fast-non-reasoning", "grok-4.3", undefined])(
+    "warns only when the response reports a different model: %s",
+    async (returnedModel) => {
+      searchWarn.mockClear();
+      const mockFetch = installXaiWebSearchFetch({
+        ...answerPayload("Search answer"),
+        model: returnedModel,
+      });
+      const result = await runXSearch("model mismatch", {
+        xSearch: { model: "grok-4.3", cacheTtlMinutes: 0 },
+      });
+      expect(firstFetchBody(mockFetch).model).toBe("grok-4.3");
+      expect(result.details).toMatchObject({ content: expect.stringContaining("Search answer") });
+      if (returnedModel && returnedModel !== "grok-4.3") {
+        expect(searchWarn).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining(`requested model "grok-4.3" but xAI returned "${returnedModel}"`),
+        );
+      } else {
+        expect(searchWarn).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   function createConfiguredXSearchTool(config: Parameters<typeof xaiPluginConfig>[0] = {}) {
     const tool = createXSearchTool({

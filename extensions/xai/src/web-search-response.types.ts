@@ -1,4 +1,5 @@
 export type XaiWebSearchResponse = {
+  model?: string;
   output?: Array<{
     type?: string;
     text?: string;
