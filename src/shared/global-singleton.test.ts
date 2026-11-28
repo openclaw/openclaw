@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import {
   drainGlobalSingletonLifecycleState as drain,
   readGlobalSingleton,
