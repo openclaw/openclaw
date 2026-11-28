@@ -11,6 +11,7 @@ import {
   decisionToolResult,
   parseDecisionEvaluateInput,
   rubricVersion,
+  type UndeclaredDecisionModelDiagnostic,
 } from "./decision-tool-contract.js";
 import { DecisionEvaluateInput, DecisionEvaluateOutput } from "./decision-tool-schema.js";
 
@@ -58,6 +59,45 @@ export function createDecisionTool(
     }
     return undefined;
   };
+  const resolveUndeclaredModel = (
+    selection: ReturnType<typeof resolveDecisionModelSetting>,
+  ): UndeclaredDecisionModelDiagnostic | undefined => {
+    if (!selection) {
+      return undefined;
+    }
+    const modelId = splitTrailingAuthProfile(selection.model).model;
+    const declared = new Set<string>();
+    if (models) {
+      for (const model of models) {
+        if (model.provider === selection.provider && model.inference?.decision) {
+          declared.add(model.id);
+        }
+      }
+    } else {
+      for (const plugin of plugins) {
+        const providers = plugin.modelCatalog?.providers;
+        if (
+          !providers ||
+          !Object.prototype.propertyIsEnumerable.call(providers, selection.provider)
+        ) {
+          continue;
+        }
+        for (const entry of providers[selection.provider]?.models ?? []) {
+          if (entry.inference?.decision) {
+            declared.add(entry.id);
+          }
+        }
+      }
+    }
+    if (declared.size === 0 || declared.has(modelId)) {
+      return undefined;
+    }
+    return {
+      provider: selection.provider,
+      modelId,
+      declaredModels: Array.from(declared),
+    };
+  };
   const capabilities = resolveCapabilities(selected);
   return {
     name: "decision_evaluate",
@@ -87,6 +127,9 @@ export function createDecisionTool(
       const currentConfig = getRuntimeConfig();
       const currentSelection = resolveDecisionModelSetting(currentConfig, agentId);
       const currentCapabilities = resolveCapabilities(currentSelection);
+      const undeclaredModel = currentCapabilities
+        ? undefined
+        : resolveUndeclaredModel(currentSelection);
       const evaluation = await evaluateDecisionV2Operation(
         batch,
         {
@@ -100,7 +143,7 @@ export function createDecisionTool(
         currentConfig,
       );
       operationSignal.throwIfAborted();
-      const result = decisionToolResult(evaluation.outcome, currentCapabilities);
+      const result = decisionToolResult(evaluation.outcome, currentCapabilities, undeclaredModel);
       completeDecisionEvaluation(evaluation);
       return result;
     },
