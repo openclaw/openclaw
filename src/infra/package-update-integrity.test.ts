@@ -1,3 +1,4 @@
+import { chmodSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
@@ -93,9 +94,10 @@ describe.runIf(process.platform !== "win32")("metadata-only drift during a packa
       await writeDriftPackage(root);
       const clean = await scan(root);
       const target = path.join(root, "dist", "entry.js");
-      interceptPackageFileHashes(async (file, _stat, next) => {
+      interceptPackageFileHashes((file, stat, next) => {
         if (file === target) {
-          await fs.chmod(file, (await fs.stat(file)).mode & 0o7777);
+          // Keep admission synchronous: a batch flush cannot see hashes the fixture has not queued.
+          chmodSync(file, Number(stat.mode & 0o7777n));
         }
         return next();
       });
