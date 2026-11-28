@@ -245,6 +245,8 @@ public protocol OpenClawChatCommandOutbox: Sendable {
     /// Availability-aware read used by the FIFO restoration gate. Nil means
     /// storage was not readable, not that the queue was empty.
     func loadCommandsIfAvailable() async -> [OpenClawChatOutboxCommand]?
+    /// Payload-free observation with the same staleness and availability semantics.
+    func loadCommandStatusesIfAvailable() async -> [(id: String, status: OpenClawChatOutboxCommand.Status)]?
     /// Crash safety: rows stuck in 'sending' from a previous process become
     /// failed once per store lifetime. Delivery is ambiguous after a crash,
     /// so only explicit user retry may replay them; acknowledged rows stay
@@ -421,6 +423,33 @@ extension OpenClawChatCommandOutbox {
         replacementID _: String? = nil) async -> OpenClawChatOutboxUpdateResult
     {
         .unavailable
+    }
+}
+
+/// The last known look of one agent on one Gateway, so a cold start can draw the agent's name
+/// and avatar before `agents.list` and `agent.identity.get` answer.
+public struct OpenClawChatCachedAgentIdentity: Equatable, Sendable {
+    public let agentID: String
+    public let rosterName: String?
+    public let identityName: String?
+    public let emoji: String?
+    public let isDefault: Bool
+    public let avatar: Data?
+
+    public init(
+        agentID: String,
+        rosterName: String?,
+        identityName: String?,
+        emoji: String?,
+        isDefault: Bool,
+        avatar: Data?)
+    {
+        self.agentID = agentID
+        self.rosterName = rosterName
+        self.identityName = identityName
+        self.emoji = emoji
+        self.isDefault = isDefault
+        self.avatar = avatar
     }
 }
 

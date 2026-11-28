@@ -32,10 +32,8 @@ import {
 import * as pluginRuntime from "../plugins/runtime.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import {
-  getPluginRuntimeGenerationRegistry,
-  withPluginRuntimeGenerationScope,
-} from "../plugins/runtime/generation-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import {
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,
@@ -94,7 +92,7 @@ vi.mock("./agent-bundle-mcp-tools.js", async (importOriginal) => {
 });
 
 // mock-isolation: Keep tool assembly inert while provider normalization and lifetime stay real.
-vi.mock("./agent-tools.js", () => {
+vi.mock("./agent-tools.async.js", () => {
   const execute = async () => {
     throw new Error("Inventory must not execute tools");
   };

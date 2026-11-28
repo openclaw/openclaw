@@ -1,22 +1,27 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as logger from "../../logger.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
-import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
+import {
+  finalizeAgentToolAvailability,
+  gateAgentToolExecution,
+} from "../agent-tool-availability.js";
 import { runWithAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import { applyEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { projectAgentToolDefinition } from "../prepared-tool-surface.js";
+import { projectAgentToolDefinition } from "../prepared-tool-definition.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import { TOOL_CALL_RAW_TOOL_NAME, createToolSearchTools } from "../tool-search.js";
 import { prepareAgentToolSurfacePresentation } from "../tool-surface-plan.js";
 import { createAgentsWaitTool } from "../tools/agents-wait-tool.js";
 import { createSessionsSpawnTool } from "../tools/sessions-spawn-tool.js";
+import { createAgentHarnessPromptToolPolicy } from "./prompt-tool-policy.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "./tool-surface-bridge.js";
 
 type RuntimeOptions = Parameters<typeof createAgentHarnessToolSurfaceRuntimeCore>[0];
@@ -81,9 +86,91 @@ afterEach(() => {
     runtime.cleanup();
   }
   clearRuntimeConfigSnapshot();
+  vi.restoreAllMocks();
 });
 
 describe("createAgentHarnessToolSurfaceRuntime", () => {
+  it.each(["code-mode", "tool-search"] as const)(
+    "does not count a hidden catalog behind execution-denied %s controls",
+    async (mode) => {
+      const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+      const codeMode = mode === "code-mode";
+      const runtime = createRuntime({
+        tools: { codeMode, toolSearch: codeMode ? false : { enabled: true, mode: "tools" } },
+      });
+      const catalog = Array.from({ length: 65 }, (_, index) => createStubTool(`hidden_${index}`));
+      const surface = runtime.compactTools(catalog);
+      const deniedControls = surface.tools.map((tool) =>
+        gateAgentToolExecution(tool, "outside requester authority"),
+      );
+      for (const control of deniedControls) {
+        expect((await control.execute("denied-control", {})).details).toMatchObject({
+          gated: true,
+        });
+      }
+      const policy = createAgentHarnessPromptToolPolicy({
+        tools: deniedControls,
+        catalogRef: runtime.toolSearchCatalogRef,
+        codeModeControlsEnabled: codeMode,
+        diagnosticIdentity: { sessionKey: `agent:main:denied-controls-${mode}` },
+      });
+      const applied = policy.apply();
+      expect(warn).not.toHaveBeenCalled();
+      // Diagnostic reachability must not alter stable offered definitions or prompt policy.
+      expect(applied.tools.map((tool) => tool.name)).toEqual(
+        surface.tools.map((tool) => tool.name),
+      );
+      expect(applied.callableToolNames).toContain("hidden_64");
+      expect(runtime.toolSearchCatalogRef?.current?.entries).toHaveLength(65);
+    },
+  );
+
+  it.each(["direct", "code-mode", "tool-search"] as const)(
+    "warns once per session/catalog above 64 effective tools (%s)",
+    (mode) => {
+      const codeMode = mode === "code-mode";
+      const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+      const config: OpenClawConfig = {
+        tools: {
+          codeMode,
+          toolSearch: mode === "tool-search" ? { enabled: true, mode: "tools" } : false,
+        },
+      };
+      const sessionKey = `agent:main:large-catalog-${mode}`;
+      const catalog = Array.from({ length: 65 }, (_, index) =>
+        createStubTool(index === 0 ? "read" : `catalog_${index}`),
+      );
+      const compact = (key: string, selected = catalog) => {
+        const surface = createRuntime(config, { sessionKey: key }).compactTools(selected);
+        surface.promptToolPolicy.apply();
+        return surface;
+      };
+      compact(sessionKey, catalog.slice(0, 64));
+      compact(sessionKey, [
+        ...catalog.slice(0, 64),
+        gateAgentToolExecution(catalog[64]!, "not authorized"),
+      ]);
+      const restricted = createRuntime(config, { sessionKey }).compactTools(catalog);
+      expect(warn).not.toHaveBeenCalled();
+      restricted.promptToolPolicy.apply({
+        toolsAllow: catalog.slice(0, 64).map((tool) => tool.name),
+      });
+      expect(warn).not.toHaveBeenCalled();
+      const surface = compact(sessionKey);
+      expect(surface.tools).toHaveLength(codeMode ? 2 : mode === "tool-search" ? 4 : 65);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenLastCalledWith(expect.stringContaining("catalog contains 65 tools"));
+      expect(warn).toHaveBeenLastCalledWith(
+        expect.stringContaining("not the provider-advertised tool count"),
+      );
+      compact(sessionKey, catalog.toReversed());
+      expect(warn).toHaveBeenCalledTimes(1);
+      compact(sessionKey, [...catalog.slice(0, 64), createStubTool("replacement")]);
+      compact(`${sessionKey}-other`);
+      expect(warn).toHaveBeenCalledTimes(3);
+    },
+  );
+
   it.each(["tools", "directory"] as const)(
     "preserves selectors across shared harness and worker %s projections",
     (mode) => {
@@ -124,8 +211,8 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
         expect(policy.toolSchemaDirectoryPrompt).not.toContain("native_direct");
         expect(policy.toolSchemaDirectoryPrompt).toContain(
           mode === "directory" && supportsDeferredToolCalls
-            ? "Call a unique deferred tool name directly"
-            : "Deferred names are not directly callable",
+            ? "Call a unique name directly"
+            : "not directly callable: call dispatch_action",
         );
       }
       expect(config.tools?.toolSearch).toEqual(configuredSearch);
@@ -355,7 +442,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
   it.each(
     [true, false].flatMap((lean) => ["agentId", "sessionKey"].map((scope) => ({ lean, scope }))),
   )(
-    "preserves lean=$lean directory presentation across worker projection via $scope",
+    "preserves lean=$lean filtering and names-only worker directories via $scope",
     ({ lean, scope }) => {
       const config: OpenClawConfig = {
         agents: {
@@ -375,14 +462,14 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       });
       const surface = runtime.compactTools([lookup, createStubTool("browser")]);
       const prompt = surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
-      expect(prompt).toContain("- fixture_lookup (core)");
-      expect(prompt?.includes("Search the local archive.")).toBe(!lean);
-      expect(prompt?.includes("- browser (core)")).toBe(!lean);
+      expect(prompt?.split("\n")[0]).toBe(
+        lean ? "Deferred tools: fixture_lookup" : "Deferred tools: browser, fixture_lookup",
+      );
+      expect(prompt).not.toContain("Search the local archive.");
       const projected = worker.compactTools([lookup], { prepared: { preserveToolNames: [] } });
       const directory = projected.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
-      expect(directory?.split("\n").filter((line) => line.startsWith("- "))).toEqual([
-        lean ? "- fixture_lookup (core)" : "- fixture_lookup (core): Search the local archive.",
-      ]);
+      expect(directory?.split("\n")[0]).toBe("Deferred tools: fixture_lookup");
+      expect(directory).not.toContain("Search the local archive.");
     },
   );
 

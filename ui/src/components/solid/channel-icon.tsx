@@ -1,5 +1,5 @@
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
-import { pluginFallbackGradient, pluginMonogram } from "../../pages/plugins/presentation.ts";
+import { pluginFallbackGradient, pluginMonogram } from "../../pages/plugins/presentation.tsx";
 import "../../styles/channels.css";
 
 export function ChannelIcon(props: {

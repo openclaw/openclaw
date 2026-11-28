@@ -143,6 +143,13 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/link-reader-checks.tsx",
+      "text": "linkReader.checksGroupNeutral"
+    },
+    {
+      "count": 1,
       "kind": "html-attribute",
       "name": "title",
       "path": "ui/src/components/lobster-pet-scene-view.tsx",
@@ -304,6 +311,13 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "placeholder",
+      "path": "ui/src/pages/config/talk-transcription.tsx",
+      "text": "openrouter/openai/whisper-large-v3-turbo"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/updates-recorded-attempt.tsx",
@@ -336,13 +350,6 @@
       "name": "placeholder",
       "path": "ui/src/pages/connection/view.tsx",
       "text": "wss://gateway.example:443"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/pages/cron/view-delivery.tsx",
-      "text": "agent:main:main"
     },
     {
       "count": 1,
@@ -413,6 +420,55 @@
       "name": "text",
       "path": "ui/src/pages/plugins/consent-dialog.tsx",
       "text": "v"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/roles/role-editor.tsx",
+      "text": "agents"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/roles/role-editor.tsx",
+      "text": "gateway.roles.definitions."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/roles/role-editor.tsx",
+      "text": "sandbox"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/roles/role-editor.tsx",
+      "text": "sessions.invitedPermission"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/roles/role-editor.tsx",
+      "text": "sessions.invitedTools"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/roles/role-editor.tsx",
+      "text": "sessions.maxInvitedAccess"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/roles/role-editor.tsx",
+      "text": "sessions.others"
     },
     {
       "count": 1,

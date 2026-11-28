@@ -85,8 +85,12 @@ async function newPublicationContext() {
 async function openPublicationPage(
   options: Parameters<typeof installPublicationGateway>[1] = {},
   branch?: string,
+  width?: number,
 ) {
   const page = await (await newPublicationContext()).newPage();
+  if (width) {
+    await page.setViewportSize({ width, height: width < 768 ? 844 : 800 });
+  }
   const gateway = await installPublicationGateway(page, options);
   await page.goto(
     options.sessionKey
@@ -99,6 +103,67 @@ async function openPublicationPage(
 }
 
 suite.define(() => {
+  it.each([1180, 390])("keeps publication status checks responsive at %ipx", async (width) => {
+    const requestId = "8c698e8a-bdc7-4927-a0f2-73a842c2d7b5";
+    const result = {
+      requestId,
+      status: "publishing",
+      publisher: sharedPublisher,
+      message: "The Gateway is publishing the reconciled workspace.",
+    };
+    const { page, gateway } = await openPublicationPage(
+      {
+        assistantName: "Lobster",
+        agentModel: "gpt-4.1",
+        workspace: "/synthetic/progress-audit",
+        communityInvite: false,
+        methodResponses: {
+          "sessions.github.options": {
+            ...publicationOptions,
+            latestShared: { result, confirmation: null },
+          },
+          "sessions.github.status": { result, confirmation: null },
+        },
+      },
+      "openclaw/publication-progress",
+      width,
+    );
+    const mobile = width === 390;
+    const surface = page.locator(
+      mobile ? ".github-publication-mobile" : ".chat-pr-branch-menu:popover-open",
+    );
+    const action = surface.locator("button.chat-pr__create");
+    if (!mobile) {
+      await surface.locator(".chat-pr__publication-status > summary").click();
+    }
+    const prior = await gateway.deferNext("sessions.github.status");
+    await action.click();
+    await gateway.waitForRequest("sessions.github.status", { after: prior });
+    await expect.poll(() => action.isDisabled()).toBe(true);
+    expect(await action.getAttribute("aria-busy")).toBe("true");
+    expect(await action.textContent()).toContain("Loading");
+    await action.locator(".btn__spinner").waitFor();
+    await gateway.rejectDeferred("sessions.github.status", {
+      code: "UNAVAILABLE",
+      message: "Synthetic status check unavailable.",
+    });
+    await expect.poll(() => action.isEnabled()).toBe(true);
+    await surface.getByText("Synthetic status check unavailable.", { exact: true }).waitFor();
+    await gateway.deferNext("sessions.github.status");
+    await action.click();
+    await expect.poll(() => action.isDisabled()).toBe(true);
+    await action.locator(".btn__spinner").waitFor();
+    await gateway.resolveDeferred("sessions.github.status", { result, confirmation: null });
+    await expect.poll(() => action.isEnabled()).toBe(true);
+    expect(await action.textContent()).toContain("Check publication");
+    expect(await action.getAttribute("aria-busy")).toBeNull();
+    expect(
+      await surface.getByText("Synthetic status check unavailable.", { exact: true }).count(),
+    ).toBe(0);
+    expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
+    expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
+  });
+
   it("carries the selected agent through the complete global publication flow", async () => {
     await suite.withPage(createLightDesktopControlUiContextOptions(), async ({ page }) => {
       const sessionKey = "global";

@@ -9,7 +9,7 @@ struct SlashFilterCache {
 }
 
 private let chatSendingLogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
-private let localSessionCommands: Set<String> = ["/new", "/reset", "/clear", "/compact"]
+let localSessionCommands: Set<String> = ["/new", "/reset", "/clear", "/compact"]
 
 extension OpenClawChatViewModel {
     public var canSend: Bool {
@@ -69,7 +69,9 @@ extension OpenClawChatViewModel {
         // hydration cannot retire its owner before asynchronous validation starts.
         guard let draft = captureSendDraft(queueMode: queueMode) else { return nil }
         isSubmittingDraft = true
-        return Task { await self.performSend(draft) }
+        let task = Task { await self.performSend(draft) }
+        self.composerDraftSync.send = task
+        return task
     }
 
     public func loadSlashCommandsIfNeeded() {
@@ -320,6 +322,7 @@ extension OpenClawChatViewModel {
             self.applyDeferredExternalStateIfReady()
         }
 
+        guard await self.prepareNewChatDraftSettings(for: draft.session) else { return }
         guard await self.prepareLiveRoute(for: draft) else { return }
         guard await self.validateAttachmentBudgetForSend(draft.attachments, session: draft.session) else { return }
         guard self.composerModelAvailabilityMessage == nil else {
@@ -361,7 +364,7 @@ extension OpenClawChatViewModel {
             session: currentSessionSnapshot(),
             replyTarget: Self.isSlashCommandDraft(trimmed) ? nil : replyTarget,
             queueMode: queueMode,
-            composerSessionKey: self.composerSessionKey(for: sessionKey),
+            composerSessionKey: self.visibleComposerKey,
             composerRevision: composerRevision(for: sessionKey))
     }
 
@@ -376,6 +379,7 @@ extension OpenClawChatViewModel {
                 return false
             }
             if input == draft.input { input = "" }
+            self.flushComposerDraftText()
             switch command {
             case "/new": await performStartNewSession(inheritCurrentSession: true, worktree: false)
             case "/compact": await performCompact()
@@ -447,6 +451,7 @@ extension OpenClawChatViewModel {
             text: draft.outgoingMessageText,
             draftInput: draft.input,
             draftRevision: draft.composerRevision,
+            draftComposerKey: draft.composerSessionKey,
             draftAttachments: draft.attachments,
             queueMode: draft.queueMode,
             session: draft.session)
@@ -506,6 +511,9 @@ extension OpenClawChatViewModel {
                 fileName: attachment.fileName,
                 content: attachment.data.base64EncodedString())
         }
+        #if os(iOS)
+        inlineVideos.remember(draft.attachments, messageKey: Self.outboxUserIdempotencyKey(runId))
+        #endif
         let userContent = Self.userContent(
             messageText: draft.outgoingMessageText,
             attachments: draft.attachments,
@@ -521,15 +529,18 @@ extension OpenClawChatViewModel {
                 content: userContent,
                 timestamp: userMessageTimestamp,
                 idempotencyKey: "\(runId):user"))
+        self.localSendRevision &+= 1
         pendingLocalUserEchoMessageIDsByRunID[runId] = userMessageID
         runMessageScopesByRunID[runId] = currentRunMessageScope()
 
-        // Clear input immediately for responsive UX (before network await).
-        if input == draft.input {
+        // Reconnect can suspend long enough for a new draft to have the same text.
+        if input == draft.input, self.composerRevision(for: draft.session.key) == draft.composerRevision {
             input = ""
         }
         let sentAttachmentIDs = Set(draft.attachments.map(\.id))
         attachments.removeAll { sentAttachmentIDs.contains($0.id) }
+        // A live send has no outbox insert to clear its draft, so persist the current composer now.
+        self.flushComposerDraftText()
 
         return LiveSendAttempt(
             draft: draft,
@@ -733,6 +744,7 @@ extension OpenClawChatViewModel {
     }
 
     private func finishAcceptedComposerSend(_ draft: SendDraft) {
+        if self.newChatDraft?.key == draft.session.key { self.newChatDraft = nil }
         self.recordSuccessfulInput(
             draft.trimmed,
             transcriptEcho: draft.outgoingMessageText,

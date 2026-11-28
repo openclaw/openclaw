@@ -282,6 +282,74 @@ describe("workboard tools", () => {
     );
   });
 
+  it("accepts the same unique short card ID in read, claim, comment, and move", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({ title: "Short ID card" });
+    const id = card.id.slice(0, 8);
+    using list = vi.spyOn(store, "list");
+    const tools = toolSet(store);
+
+    expect(await runTool(tools, "read", { id })).toMatchObject({ card: { id: card.id } });
+    expect(await runTool(tools, "claim", { id })).toMatchObject({
+      card: { id: card.id, status: "running" },
+    });
+    await runTool(tools, "comment", { id, body: "Using the displayed ID" });
+    await runTool(tools, "move", { id, status: "review" });
+    expect(await runTool(tools, "read", { id: card.id })).toMatchObject({
+      card: {
+        id: card.id,
+        status: "review",
+        metadata: { comments: [expect.objectContaining({ body: "Using the displayed ID" })] },
+      },
+    });
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("rejects ambiguous card prefixes without changing matching cards", async () => {
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    const first = await store.create({ title: "First" });
+    const id = first.id.slice(0, 8);
+    const secondId = `${id}-second`;
+    await stores.cards.register(secondId, {
+      version: 1,
+      card: { ...first, id: secondId, title: "Second", events: [] },
+    });
+    const thirdId = `${id}-third`;
+    await stores.cards.register(thirdId, {
+      version: 1,
+      card: { ...first, id: thirdId, title: "Third", events: [] },
+    });
+    const before = await store.list();
+    const tools = toolSet(store);
+
+    await expect(executeTool(tools, "read", { id })).rejects.toThrow(
+      `Ambiguous card id prefix: ${id} (at least 2 matches)`,
+    );
+    await expect(executeTool(tools, "move", { id, status: "ready" })).rejects.toThrow(
+      `Ambiguous card id prefix: ${id} (at least 2 matches)`,
+    );
+    expect(await store.list()).toEqual(before);
+  });
+
+  it("prefers exact IDs and treats punctuation, case and Unicode literally", async () => {
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    const card = await store.create({ title: "Template" });
+    for (const id of ["A%_🌟", "A%_🌟-longer", "Axy🌟-other", "ä-id", "\u{10ffff}-id"]) {
+      await stores.cards.register(id, { version: 1, card: { ...card, id, events: [] } });
+    }
+    const tools = toolSet(store);
+    expect(await runTool(tools, "read", { id: " A%_🌟 " })).toMatchObject({
+      card: { id: "A%_🌟" },
+    });
+    expect(await runTool(tools, "read", { id: "A%_🌟-" })).toMatchObject({
+      card: { id: "A%_🌟-longer" },
+    });
+    for (const id of ["ä", "\u{10ffff}"]) {
+      expect(await runTool(tools, "read", { id })).toMatchObject({ card: { id: `${id}-id` } });
+    }
+    await expect(executeTool(tools, "read", { id: "a%_" })).rejects.toThrow("card not found");
+  });
+
   it("keeps the read card and context together and reads committed edits on the next call", async () => {
     const { store, stores } = createWorkboardSqliteTestHarness();
     const card = await store.create({ title: "Before edit", notes: "Original instructions" });
@@ -709,6 +777,68 @@ describe("workboard tools", () => {
       });
     }
     expect(await previousStore.list()).toEqual([]);
+  });
+
+  it("refuses a late completion from a run the card has already retried", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({ title: "Quiet slow job", status: "ready" });
+    const sessionKey = "agent:alpha:subagent:workboard-quiet-slow";
+    // Dispatch an attempt the way the dispatcher does: claim, prepare, accept.
+    const launch = async (runId: string) => {
+      const claim = await store.claim(card.id, { ownerId: "alpha" });
+      const prepared = await store.prepareExecutionLaunch(card.id, {
+        requestedSessionKey: sessionKey,
+        now: claim.card.updatedAt + 1,
+        scope: { ownerId: "alpha", token: claim.token },
+      });
+      await store.acceptExecutionLaunch(card.id, {
+        expectedLaunch: prepared.launch,
+        expectedSessionKey: prepared.launch.requestedSessionKey,
+        expectedRunId: prepared.launch.provisionalRunId,
+        sessionKey,
+        runId,
+        execution: { ...prepared.card.execution!, sessionKey, runId },
+        acceptedAt: prepared.launch.preparedAt + 1,
+      });
+    };
+    await launch("old-run");
+    // The operator gives up on the silent first run and retries the card.
+    await store.block(card.id, { reason: "Silent; retrying." }, null);
+    await store.unblock(card.id);
+    await store.move(card.id, "ready", undefined);
+    await launch("new-run");
+
+    const oldRun = toolsByName(
+      createWorkboardTools({ store, context: { agentId: "alpha", runId: "old-run" } }),
+    );
+    await expect(
+      executeTool(oldRun, "complete", { id: card.id, summary: "OLD-17" }),
+    ).rejects.toThrow("superseded");
+    expect(await store.get(card.id)).toMatchObject({
+      status: "running",
+      runId: "new-run",
+      metadata: {
+        attempts: [
+          { runId: "old-run", status: "blocked" },
+          { runId: "new-run", status: "running" },
+        ],
+      },
+    });
+
+    const newRun = toolsByName(
+      createWorkboardTools({ store, context: { agentId: "alpha", runId: "new-run" } }),
+    );
+    const completed = await runTool(newRun, "complete", { id: card.id, summary: "NEW-62" });
+    expect(completed.card).toMatchObject({
+      status: "done",
+      metadata: {
+        automation: { summary: "NEW-62" },
+        attempts: [
+          { runId: "old-run", status: "blocked" },
+          { runId: "new-run", status: "succeeded" },
+        ],
+      },
+    });
   });
 });
 

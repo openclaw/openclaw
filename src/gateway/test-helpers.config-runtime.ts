@@ -117,6 +117,15 @@ export function loadGatewayTestConfig(): OpenClawConfig {
   }).config;
 }
 
+export function writeGatewayTestConfig(configPath: string, config: Record<string, unknown>) {
+  // Atomic writes must not broaden an existing private fixture parent under the ambient umask.
+  return writeJsonAtomic(configPath, config, {
+    durable: false,
+    trailingNewline: true,
+    dirMode: "preserve",
+  });
+}
+
 /** Creates gateway-test overrides without importing the facade that re-exports mocked IO. */
 export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): GatewayConfigOverrides {
   const readConfigFileSnapshot = async (): Promise<ConfigFileSnapshot> => {
@@ -166,7 +175,7 @@ export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): Gate
   const writeConfigFile = vi.fn(
     async (cfg: Record<string, unknown>, options?: ConfigWriteOptions) => {
       const configPath = resolveConfigPath();
-      await writeJsonAtomic(configPath, cfg, { durable: false, trailingNewline: true });
+      await writeGatewayTestConfig(configPath, cfg);
       const config = loadGatewayTestConfig();
       await finalizeRuntimeSnapshotWrite({
         nextSourceConfig: config,

@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  installDatabaseProcessRole,
+  withEngineStoreAdmission,
+} from "../../infra/database-engine/admission-scope.js";
 import {
   mixedAgentConnection,
   useMixedAgentPair,
@@ -12,10 +15,8 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import {
-  readTranscriptExportSnapshotReadOnlySync,
-  readTranscriptStatsSync,
-} from "./session-accessor.sqlite-read.js";
+import { readTranscriptExportSnapshotReadOnlySync } from "./session-accessor.sqlite-export-read.js";
+import { readTranscriptStatsSync } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
@@ -40,8 +41,12 @@ describe.skipIf(!mixedAgentConnection)(
   "PostgreSQL transcript exports above the slice budget",
   () => {
     useMixedAgentPair("postgres", "postgres");
+    beforeAll(() => {
+      // Deferred slices are read after the batch's first await, as in the transcript worker.
+      installDatabaseProcessRole("cli-oneshot");
+    });
 
-    function seedLargeSession() {
+    function seedLargeSession(rows?: { count: number; bytes: number }) {
       const database = withEngineStoreAdmission(() =>
         openOpenClawAgentDatabase({ agentId: "main" }),
       );
@@ -54,14 +59,18 @@ describe.skipIf(!mixedAgentConnection)(
       };
       const events = [
         { type: "session", version: 3, id: sessionId, timestamp: "2026-04-01T05:46:39.000Z" },
-        // Two 2.5 MiB rows take the transcript past the 4 MiB retained-snapshot limit, and each
-        // fills a 2 MiB slice, so a sliced read would issue one payload query per row.
-        ...[0, 1].map((index) => ({
+        // By default two 2.5 MiB rows take the transcript past the 4 MiB retained-snapshot limit,
+        // and each fills a 2 MiB slice.
+        ...Array.from({ length: rows?.count ?? 2 }, (_, index) => ({
           type: "message",
           id: `entry-${index}`,
-          parentId: index === 0 ? null : "entry-0",
+          parentId: index === 0 ? null : `entry-${index - 1}`,
           timestamp: "2026-04-01T05:46:40.000Z",
-          message: { role: "user", content: "lobster ".repeat((2.5 * MIB) / 8), timestamp: 1 },
+          message: {
+            role: "user",
+            content: "lobster ".repeat((rows?.bytes ?? 2.5 * MIB) / 8),
+            timestamp: 1,
+          },
         })),
       ];
       withEngineStoreAdmission(() => {
@@ -78,35 +87,57 @@ describe.skipIf(!mixedAgentConnection)(
     }
 
     const begins = () => observed.filter((sql) => /^BEGIN\b/i.test(sql));
-    // Payload reads project the decoded row as "event_json"; metadata reads only size it.
+    // Head reads project the decoded row as "event_json"; slice reads also select its size.
     const payloadQueries = () => observed.filter((sql) => sql.includes(' as "event_json"'));
+    const sliceQueries = () => observed.filter((sql) => sql.includes('as "payload_bytes"'));
 
-    it("memory batch reads a large transcript in its read-only snapshot without the writer lock", async () => {
+    it("memory batch streams a large transcript in bounded read-only slices without the writer lock", async () => {
       const { scope } = seedLargeSession();
       const entry = {
         absPath: path.join(path.dirname(scope.storePath), `${scope.sessionId}.jsonl`),
         options: scope,
       };
-      // The batch reads synchronously before the first await.
+      // The batch head is read synchronously before the first await.
       let prepared: ReturnType<typeof collectSessionMemoryEntries> | undefined;
       withEngineStoreAdmission(() => {
         prepared = collectSessionMemoryEntries([entry]);
       });
       const [result] = await prepared!;
       expect(result && "entry" in result ? result.entry?.content : undefined).toContain("lobster");
-      expect(begins()).toEqual(["BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"]);
+      expect(begins().length).toBeGreaterThan(1);
+      expect(new Set(begins())).toEqual(
+        new Set(["BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"]),
+      );
       expect(observed.filter((sql) => sql.includes("pg_advisory_xact_lock"))).toEqual([]);
-      expect(payloadQueries()).toHaveLength(1);
+      expect(payloadQueries()).toEqual([]);
+      expect(sliceQueries().length).toBeGreaterThan(0);
     });
 
-    it("single export fetches every payload with one query", () => {
+    it("single export reads a large transcript one byte-budgeted row per slice", () => {
       const { events, scope } = seedLargeSession();
       const snapshot = withEngineStoreAdmission(() =>
         readTranscriptExportSnapshotReadOnlySync(scope),
       );
       expect(snapshot?.events).toEqual(events);
-      expect(begins()).toHaveLength(1);
-      expect(payloadQueries()).toHaveLength(1);
+      expect(payloadQueries()).toEqual([]);
+      // Each 2.5 MiB row ends a slice (the session row shares the first); a final empty
+      // slice confirms nothing follows the last row.
+      expect(sliceQueries()).toHaveLength(3);
+    });
+
+    // Many small rows never reach the byte budget, so only a row bound keeps PostgreSQL
+    // from buffering the whole transcript in one result (#201571).
+    it("pages a many-row transcript with row-bounded queries", () => {
+      const { events, scope } = seedLargeSession({ count: 600, bytes: 8 * 1024 });
+      const snapshot = withEngineStoreAdmission(() =>
+        readTranscriptExportSnapshotReadOnlySync(scope),
+      );
+      expect(snapshot?.events).toEqual(events);
+      expect(payloadQueries()).toEqual([]);
+      expect(sliceQueries().length).toBeGreaterThanOrEqual(3);
+      for (const query of sliceQueries()) {
+        expect(query).toMatch(/\blimit\b/iu);
+      }
     });
   },
 );

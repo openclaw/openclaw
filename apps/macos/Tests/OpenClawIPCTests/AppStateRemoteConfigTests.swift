@@ -360,6 +360,9 @@ struct AppStateRemoteConfigTests {
             let state = AppState(preview: true)
             state._testEnableGatewayConfigSync()
             let nextURL = try #require(URL(string: "wss://gateway-b.example.test:443"))
+            let expectedURL = try #require(URL(string: promoteProfile
+                    ? "wss://gateway-b.example.test:443"
+                    : "wss://gateway-b.example.test"))
             let adapter = DashboardPrimaryGatewayAdapter(
                 state: state,
                 endpoint: { _ in
@@ -382,7 +385,7 @@ struct AppStateRemoteConfigTests {
             await state._testAwaitGatewayConfigSync()
 
             let persisted = OpenClawConfigFile.loadDict()
-            #expect(GatewayRemoteConfig.resolveGatewayUrl(root: persisted) == nextURL)
+            #expect(GatewayRemoteConfig.resolveGatewayUrl(root: persisted) == expectedURL)
             #expect(GatewayRemoteConfig.resolveTokenString(root: persisted) ==
                 (promoteProfile ? "gateway-b-token" : nil))
             if !promoteProfile {
@@ -398,7 +401,7 @@ struct AppStateRemoteConfigTests {
             #expect(GatewayRemoteConfig.resolveTLSFingerprint(root: persisted) == nil)
             #expect(state.connectionMode == .remote)
             #expect(state.remoteTransport == .direct)
-            #expect(state.remoteUrl == nextURL.absoluteString)
+            #expect(state.remoteUrl == expectedURL.absoluteString)
             #expect(state.remoteToken == (promoteProfile ? "gateway-b-token" : ""))
             #expect(!state.remoteTokenUnsupported)
             #expect(state.gatewayConfigIsCurrentForRouting)
@@ -581,7 +584,10 @@ struct AppStateRemoteConfigTests {
             let root = OpenClawConfigFile.loadDict()
             let expectedHost = interruption == "cancel" || interruption == "observed-file-round-trip" ? "previous" :
                 canPromote ? "delayed" : "newer"
-            #expect(GatewayRemoteConfig.resolveUrlString(root: root) == "wss://\(expectedHost).example:443")
+            let expectedURL = interruption == "selection"
+                ? "wss://newer.example"
+                : "wss://\(expectedHost).example:443"
+            #expect(GatewayRemoteConfig.resolveUrlString(root: root) == expectedURL)
             #expect(GatewayRemoteConfig.resolveTokenString(root: root) == "\(expectedHost)-token")
             if interruption != "cancel", interruption != "selection" {
                 #expect((root["agents"] as? [String: [String: String]])?["defaults"]?["workspace"] ==

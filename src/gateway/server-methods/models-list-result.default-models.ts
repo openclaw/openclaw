@@ -40,31 +40,36 @@ export async function resolveDefaultModelsPreview(
   const includeAgentUtilityModel =
     request.includeDefaultModels === true && !request.sessionKey && !request.authProfileId;
   const { cfg, metadataSnapshot, snapshot: catalog } = params;
+  const selection = resolveUtilityModelSelectionForAgent({
+    cfg,
+    agentId: params.agentId,
+    catalog,
+    metadataSnapshot,
+  });
   const utilityModel: NonNullable<ModelsListResult["utilityModel"]> =
-    resolveUtilityModelSelectionForAgent({
-      cfg,
-      agentId: params.agentId,
-      catalog,
-      metadataSnapshot,
-    }) ?? {
-      modelRef: null,
-      source:
-        readUtilityModelSetting(cfg, params.agentId).kind === "disabled" ? "disabled" : "none",
-    };
+    "modelRef" in selection
+      ? selection
+      : {
+          modelRef: null,
+          source:
+            readUtilityModelSetting(cfg, params.agentId).kind === "disabled" ? "disabled" : "none",
+        };
   const primary = resolveDefaultModelForAgent({
     cfg,
     manifestPlugins: metadataSnapshot,
     allowPluginNormalization: false,
   });
   const automaticUtilityModel =
-    resolveAutomaticUtilityModelRef({
-      cfg,
-      primaryProvider: primary.provider,
-      primaryModelRef: resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
-      primaryModelId: primary.model,
-      catalog,
-      metadataSnapshot,
-    }) ?? null;
+    (primary &&
+      resolveAutomaticUtilityModelRef({
+        cfg,
+        primaryProvider: primary.provider,
+        primaryModelRef: resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
+        primaryModelId: primary.model,
+        catalog,
+        metadataSnapshot,
+      })) ??
+    null;
   // The picker shows the defaults for all agents, so report a route only for a sole
   // agent that runs exactly that setting: its own override would describe another model.
   const agentId = tryResolveLegacyCompatibilityAgentId(cfg);

@@ -115,7 +115,7 @@ describe("system-agent delegation scenario tool policy", () => {
           {},
         );
         expect(result.details).toMatchObject({ gated: true });
-        expect(JSON.stringify(result.content)).toContain("openclaw needs the owner's authority");
+        expect(JSON.stringify(result.content)).toContain("I did not run openclaw.");
       } else {
         expect(policy.delegate).toBeDefined();
       }

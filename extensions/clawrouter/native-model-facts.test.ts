@@ -21,6 +21,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => providerAuthRuntimeMo
 import plugin from "./index.js";
 import {
   buildClawRouterProviderConfig,
+  decisionCapabilities,
   normalizeClawRouterResolvedModel,
 } from "./provider-catalog.js";
 
@@ -124,6 +125,32 @@ async function captureRequestBody(
 }
 
 describe("ClawRouter native model facts", () => {
+  it("publishes only matching Luna routes and preserves the complete Decision execution row", async () => {
+    const registered = await registerSingleProviderPlugin(plugin);
+    const route = {
+      provider: "clawrouter",
+      id: "openai/gpt-6-luna",
+      name: "Luna",
+      api: "openai-responses",
+      baseUrl: "https://router.example/v1",
+      contextWindow: 100_000,
+      params: { marker: "configured" },
+    } as const;
+    const nonChat = { ...route, baseUrl: "https://second.example/v1", inference: { chat: false } };
+    const entries = [
+      { ...route, provider: "another" },
+      { ...route, id: "another-model" },
+      { ...route, api: "openai-completions" as const },
+      route,
+      nonChat,
+    ];
+    const rows = await registered.augmentModelCatalog?.({ env: {}, entries });
+    expect(rows).toEqual([
+      { ...route, inference: { ...decisionCapabilities, chat: true } },
+      { ...nonChat, inference: { ...decisionCapabilities, chat: false } },
+    ]);
+  });
+
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
   });
@@ -168,14 +195,15 @@ describe("ClawRouter native model facts", () => {
   });
 
   it("gives routed OpenAI and Claude rows the native facts for the same upstream model", async () => {
+    const anthropic = catalogProvider("anthropic", "claude-opus-5-5", ...MESSAGES);
+    anthropic.models.push(...catalogProvider("anthropic", "claude-haiku-4-5", ...MESSAGES).models);
     const provider = await buildCatalog([
       catalogProvider("openai", "gpt-6.1-sol", ...RESPONSES, [], {
         supportedReasoningEfforts: ["low", "high"],
       }),
       catalogProvider("openai", "gpt-6-luna", ...RESPONSES),
       catalogProvider("openai", "gpt-5.5", ...RESPONSES),
-      catalogProvider("anthropic", "claude-opus-5-5", ...MESSAGES),
-      catalogProvider("anthropic", "claude-haiku-4-5", ...MESSAGES),
+      anthropic,
     ]);
     const routed = Object.fromEntries(
       provider.models.map((model) => [model.id, modelFacts(model)]),
@@ -200,11 +228,10 @@ describe("ClawRouter native model facts", () => {
       codeMode: "capable",
       mediaInput: { image: { maxSidePx: 1568 } },
     });
-    // The service catalog owns route-level reasoning and tool-strictness contracts.
+    // The service catalog keeps ownership of the route's reasoning contract.
     expect(provider.models.find(({ id }) => id === "openai/gpt-6.1-sol")?.compat).toEqual({
       codeMode: "preferred",
       supportsTemperature: false,
-      supportsStrictMode: true,
       supportsReasoningEffort: true,
       supportedReasoningEfforts: ["low", "high"],
     });
@@ -229,10 +256,7 @@ describe("ClawRouter native model facts", () => {
       "openai/gpt-6-unknown",
     ]);
     for (const model of provider.models) {
-      // Strictness support belongs to the routed API, not inherited model identity.
-      expect(model.compat, model.id).toEqual(
-        model.api === "openai-responses" ? { supportsStrictMode: true } : undefined,
-      );
+      expect(model.compat, model.id).toBeUndefined();
       expect(model.mediaInput, model.id).toBeUndefined();
     }
   });
@@ -242,12 +266,13 @@ describe("ClawRouter native model facts", () => {
       ["llm.stream"],
       [["/v1beta/models/${model}:streamGenerateContent", "google.generate_content"]],
     ];
+    const anthropic = catalogProvider("anthropic", "claude-opus-5-5", ...MESSAGES);
+    // Not in the bundled catalog: the developer is not inferred from the id or provider.
+    anthropic.models.push(...catalogProvider("anthropic", "claude-opus-6", ...MESSAGES).models);
     const provider = await buildCatalog([
-      catalogProvider("anthropic", "claude-opus-5-5", ...MESSAGES),
+      anthropic,
       catalogProvider("openai", "gpt-6.1-sol", ...RESPONSES),
       catalogProvider("google-gemini", "gemini-3.5-flash", ...google),
-      // Not in the bundled catalog: the developer is not inferred from the id or provider.
-      catalogProvider("anthropic", "claude-opus-6", ...MESSAGES),
       // Another wire API is another route contract, so it inherits no identity facts.
       catalogProvider("openai", "gpt-6-astra", ["llm.chat"]),
       catalogProvider("acme", "claude-opus-5-5", ...MESSAGES),
@@ -279,12 +304,11 @@ describe("ClawRouter native model facts", () => {
   it("resolves routed Claude models with the native image limits used for compression", async () => {
     // Runtime model resolution prefers this hook's model; image compression reads its mediaInput.
     const registered = await registerSingleProviderPlugin(plugin);
+    const anthropic = catalogProvider("anthropic", "claude-opus-5-5", ...MESSAGES);
+    anthropic.models.push(...catalogProvider("anthropic", "claude-haiku-4-5", ...MESSAGES).models);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       Response.json({
-        providers: [
-          catalogProvider("anthropic", "claude-opus-5-5", ...MESSAGES),
-          catalogProvider("anthropic", "claude-haiku-4-5", ...MESSAGES),
-        ],
+        providers: [anthropic],
       }),
     );
     onTestFinished(() => fetchMock.mockRestore());

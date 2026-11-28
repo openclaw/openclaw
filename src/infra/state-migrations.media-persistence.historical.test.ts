@@ -42,7 +42,10 @@ import type { SqlConnection } from "./sql-connection.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
 import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenance-required.js";
-import { historicalV14AgentSchemaSql } from "./state-migrations.media-persistence.historical-schema.test-support.js";
+import {
+  historicalV14AgentSchemaSql,
+  historicalV16AgentSchemaSql,
+} from "./state-migrations.media-persistence.historical-schema.test-support.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
 import { repairDoctorSessionWindowsBeforeMigration } from "./state-migrations.session-window-repair.js";
@@ -312,10 +315,7 @@ it.each([
   "Doctor migrates published beta.6 v16 only with valid rows and known schema: %s",
   async (scenario) => {
     const { env, dbPath } = createAgentPaths("media-persistence-beta6-v16-");
-    const schema = fs.readFileSync(
-      new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v16.sql", import.meta.url),
-      "utf8",
-    );
+    const schema = historicalV16AgentSchemaSql();
     const entry = JSON.stringify({ sessionId: "beta6", updatedAt: 1000 });
     expect(createHash("sha256").update(schema).digest("hex")).toBe(
       "7463624a2f664f2af1dd130da09110cfc617c30a2219c4a1ef6f152b011a5c83",

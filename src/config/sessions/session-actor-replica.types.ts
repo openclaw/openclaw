@@ -24,6 +24,7 @@ export type ReplicaCell = {
   entry?: SessionActorEntryFacts;
   transcript?: SessionActorTranscriptReplica;
   transcriptBytes: number;
+  sharedFields?: object[];
   generation?: string;
   handles: number;
   bytes: number;
@@ -31,6 +32,7 @@ export type ReplicaCell = {
 export type ReplicaPool = {
   cells: Map<string, ReplicaCell>;
   cellsBySessionKey: Map<string, Set<ReplicaCell>>;
+  sharedFields: Map<object, { bytes: number; references: number }>;
   snapshots: number;
   bytes: number;
   unsubscribe?: () => void;

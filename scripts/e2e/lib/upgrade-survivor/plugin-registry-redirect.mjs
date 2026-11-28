@@ -1,4 +1,6 @@
 const registryValue = process.env.OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY?.trim();
+// A cell that serves its own core release also redirects `openclaw` package reads.
+const redirectCore = process.env.OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY_CORE === "1";
 
 if (registryValue) {
   const registry = new URL(registryValue);
@@ -27,7 +29,10 @@ if (registryValue) {
     }
     if (
       requestUrl.origin !== "https://registry.npmjs.org" ||
-      !decodedPath.startsWith("/@openclaw/")
+      !(
+        decodedPath.startsWith("/@openclaw/") ||
+        (redirectCore && (decodedPath === "/openclaw" || decodedPath.startsWith("/openclaw/")))
+      )
     ) {
       return originalFetch(input, init);
     }

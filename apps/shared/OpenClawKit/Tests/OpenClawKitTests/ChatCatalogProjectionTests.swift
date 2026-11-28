@@ -86,6 +86,30 @@ struct ChatCatalogProjectionTests {
         #expect(model.effectiveThinkingLevelForSend("high") == "high")
     }
 
+    @Test func `effort control is offered only when the model has levels or speed options`() throws {
+        let plain = try self.viewModel(#"{"id":"choice","name":"Choice","provider":"fixture"}"#)
+        plain.syncThinkingLevelOptions()
+        #expect(!plain.composerOffersEffortChoices)
+        let levels = try self.viewModel(
+            #"{"id":"choice","name":"Choice","provider":"fixture","thinkingLevels":[{"id":"low","label":"low"},{"id":"high","label":"high"}]}"#)
+        levels.syncThinkingLevelOptions()
+        #expect(levels.composerOffersEffortChoices)
+        let speedOnly = try self
+            .viewModel(#"{"id":"choice","name":"Choice","provider":"fixture","supportsFastMode":true}"#)
+        speedOnly.syncThinkingLevelOptions()
+        #expect(!speedOnly.showsThinkingPicker)
+        #expect(speedOnly.composerOffersEffortChoices)
+    }
+
+    @Test func `effort controls stay open while a reply runs`() throws {
+        let model = try self.viewModel(#"{"id":"choice","name":"Choice","provider":"fixture"}"#)
+        #expect(model.composerPhoneEffortLockReason == nil)
+        model.pendingRuns.insert("r")
+        #expect(model.hasActiveRunForComposerSettings)
+        #expect(model.composerPhoneEffortLockReason == nil)
+        #expect(!model.composerModelChoicesLocked)
+    }
+
     @Test func `unknown availability stays selectable without refusal guidance`() throws {
         let model = try self.viewModel(#"{"id":"choice","name":"Choice","provider":"fixture"}"#)
         model.modelAvailabilityIsSessionScoped = true
@@ -179,8 +203,9 @@ struct ChatCatalogProjectionTests {
 
         #expect(model.modelSelectionID == OpenClawChatViewModel.defaultModelSelectionID)
         #expect(model.isSelectedModel(OpenClawChatViewModel.defaultModelSelectionID))
-        #expect(model.composerInlineModelLabel == (hasDefault ? "allowed" : "Default"))
-        #expect(model.selectedModelChoice(for: model.sessions.first)?.selectionID == (hasDefault ? "fixture/allowed" : nil))
+        #expect(model.composerInlineModelLabel == (hasDefault ? "Allowed" : "Default"))
+        #expect(model.selectedModelChoice(for: model.sessions.first)?
+            .selectionID == (hasDefault ? "fixture/allowed" : nil))
         #expect(model.sessions.first?.model == "historical")
         #expect(model.sessions.first?.modelProvider == "fixture")
         #expect(model.canSelectModel("fixture/allowed"))
@@ -206,5 +231,19 @@ struct ChatCatalogProjectionTests {
                 .utf8))
         model.syncSelectedModel()
         #expect(model.effectiveThinkingLevelForSend("high", sessionKey: "other") == "high")
+    }
+
+    @Test(arguments: [
+        ("Claude Opus 5.5", "Claude Opus 5.5"),
+        ("Anthropic Claude Opus 5.5", "Claude Opus 5.5"),
+        ("Claude Opus 5.5 (Anthropic)", "Claude Opus 5.5"),
+        ("anthropic/claude-opus-5-5", "claude-opus-5-5"),
+        ("", "claude-opus-5-5"),
+    ])
+    func `composer model label reads the catalog name without the provider`(name: String, expected: String) throws {
+        let model = try self.viewModel(
+            #"{"id":"claude-opus-5-5","name":"\#(name)","provider":"anthropic"}"#)
+        model.sessionDefaults = .init(modelProvider: "anthropic", model: "claude-opus-5-5", contextTokens: nil)
+        #expect(model.composerInlineModelLabel == expected)
     }
 }

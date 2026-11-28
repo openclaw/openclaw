@@ -72,7 +72,7 @@ defineDiscordVoiceTests(
           scheduler: createTestPluginServiceScheduler(),
           readPolicy,
           client: client as never,
-          cfg,
+          readConfig: () => cfg,
           discordConfig,
           accountId: "default",
           runtime: createRuntime(),
@@ -124,7 +124,7 @@ defineDiscordVoiceTests(
             expect(result).toEqual({ value: { text: "Authorized delegation completed." } });
             expect(agentCommandMock).toHaveBeenCalledOnce();
             expect(lastAgentCommandArgs()).toMatchObject({
-              senderIsOwner: false,
+              runContext: { senderId: "333" },
               extraSystemPrompt: expect.stringContaining(
                 'user_id="444" display_name="Roster member"',
               ),
@@ -219,7 +219,7 @@ defineDiscordVoiceTests(
           await vi.advanceTimersByTimeAsync(1_000);
           expect(agentCommandMock).toHaveBeenCalledOnce();
           expect(lastAgentCommandArgs()).toMatchObject({
-            senderIsOwner: false,
+            runContext: { senderId: "333" },
             extraSystemPrompt: expect.stringContaining("Fresh voice context."),
           });
         } finally {
@@ -239,7 +239,7 @@ defineDiscordVoiceTests(
           fixture.bridge.onTranscript?.("user", "stop using the slow path", true);
           await vi.advanceTimersByTimeAsync(1_000);
           expect(agentCommandMock).toHaveBeenCalledOnce();
-          expect(lastAgentCommandArgs()).toMatchObject({ senderIsOwner: false });
+          expect(lastAgentCommandArgs()).toMatchObject({ runContext: { senderId: "333" } });
         } finally {
           await fixture.manager.destroy();
           vi.useRealTimers();

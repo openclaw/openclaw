@@ -149,9 +149,18 @@ runs reuse that prepared config and its normalized plugin policy. Replacing the
 config, metadata snapshot, or managed environment selects new facts; retained runs
 keep their own generation. Mutable setup inputs retain only same-turn deduplication.
 
+Fallback health reads retain normalized model transports in the selected registry
+load context for each captured config. Repeated fallback runs reuse the provider,
+model ID, endpoint, and headers without activating providers again. Config
+publication or registry replacement selects new routes; account eligibility and
+rate-limit state remain live reads. Scoped inspections using another metadata
+snapshot keep normal resolution.
+
 Gateway model admission uses the configured agent's workspace and plugin inventory,
 including its published discovery catalog. A session opened in another folder keeps
-that folder as its execution cwd without losing discovered models. Standalone hosts
+that folder as its execution cwd without losing discovered models. Read-only lookups
+from that session, such as `sessions_spawn` model checks, `/models`, reset-model and
+thinking-level lookups, read the same published catalog. Standalone hosts
 continue to scope plugin discovery to their requested workspace.
 
 Setup provider detection loads providers from the metadata snapshot that
@@ -304,7 +313,11 @@ actual write begins.
 Registered services, hooks, tools, session MCP overlays, generated skill-link
 publication, and activation state remain runtime-owned.
 An active registry pins its chosen artifact binding so source and built modules
-cannot split its registrations. Native ESM module lifetime still follows Node's
+cannot split its registrations. Before draining a replaced plugin, reload awaits
+rollback-source capture through the existing host-local source owner. Filesystem
+copying is asynchronous so foreground work can continue; captured paths, native
+references, and frozen aliases retain their existing ownership. Source custody
+and recovery forks keep their synchronous contract. Native ESM module lifetime still follows Node's
 module loader. Manifest-derived questions such as "which plugin owns this
 provider?" use the metadata snapshot without executing plugin code. The persisted
 installed index belongs to management and startup; it is not a freshness signal

@@ -12,8 +12,13 @@ import {
 } from "../agents/embedded-agent-error-observation.js";
 import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
 import { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
+import { resolveEmbeddedSessionContextLimits } from "../agents/embedded-agent-runner/run/session-context-limits.js";
 import type { EmbeddedRunAttemptParams } from "../agents/embedded-agent-runner/run/types.js";
 import { classifyFailoverReason } from "../agents/failover/classify.js";
+import {
+  AgentHarnessModelRequestPolicyError,
+  AgentHarnessRuntimeUpdateRequiredError,
+} from "../agents/harness/errors.js";
 import type { AgentHarnessAttemptParamsV2 } from "../agents/harness/types.js";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import type { NormalizedUsage } from "../agents/usage.js";
@@ -22,6 +27,9 @@ import type { OpenClawConfig } from "../config/types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { AssistantMessage, ToolResultMessage, Usage } from "../llm/types.js";
+
+// Official harness runtime-update failures share the host lifecycle error identity.
+export { AgentHarnessRuntimeUpdateRequiredError };
 
 /** Own cancellation admission without interpreting a backend's native stop receipt. */
 export function createAgentHarnessAttemptCancellation(params: {
@@ -242,6 +250,14 @@ export function createAgentHarnessAttemptLifecycle(params: {
     let terminalData = data;
     if (data.error) {
       const { provider, modelId: model } = params.attempt;
+      const policyDenial =
+        data.error instanceof AgentHarnessModelRequestPolicyError ? data.error : undefined;
+      // Host-created errors own their codes; clients act on them (for example, a new session).
+      const hostCode =
+        policyDenial?.code ??
+        (data.error instanceof AgentHarnessRuntimeUpdateRequiredError
+          ? data.error.code
+          : undefined);
       const rawError = formatErrorMessage(data.error);
       const observed = buildApiErrorObservationFields(rawError, { provider });
       terminalData = {
@@ -254,7 +270,9 @@ export function createAgentHarnessAttemptLifecycle(params: {
           provider,
           model,
           failoverReason: classifyFailoverReason(rawError, { provider }),
-          httpStatus: observed.httpCode ? Number(observed.httpCode) : undefined,
+          httpStatus:
+            policyDenial?.status ?? (observed.httpCode ? Number(observed.httpCode) : undefined),
+          ...(hostCode ? { providerErrorCode: hostCode } : {}),
         }),
       };
     }
@@ -310,18 +328,15 @@ export function selectSupportedReasoningEffort<TEffort extends string>(params: {
   );
 }
 
-/** Bound transcript reads to the model budget while preserving owned tool frames. */
+/**
+ * Bound harness transcript reads with the embedded runner's guard, so harness history also moves
+ * only at compaction. Past the guard, tool-result bodies are omitted before older turns drop.
+ * @param _contextTokenBudget Deprecated and ignored: the bound no longer depends on the budget.
+ */
 export function resolveAgentHarnessHistoryLimits(
-  contextTokenBudget?: number,
+  _contextTokenBudget?: number,
 ): SessionModelContextLimits {
-  return {
-    maxBytes: Math.min(
-      64 * 1024 * 1024,
-      Math.max(1024, Math.floor((contextTokenBudget ?? 128_000) * 8)),
-    ),
-    maxEvents: 10_000,
-    toolResultOverflow: "omit",
-  };
+  return { ...resolveEmbeddedSessionContextLimits({}), toolResultOverflow: "omit" };
 }
 
 export function shouldIncludeAgentHarnessRuntimeContext(
@@ -390,6 +405,9 @@ export function createAgentHarnessAssistantMessage(
     errorMessage:
       options.errorMessage ??
       (options.promptError ? formatErrorMessage(options.promptError) : undefined),
+    ...(options.promptError instanceof AgentHarnessModelRequestPolicyError
+      ? { errorCode: options.promptError.code }
+      : {}),
     ...(options.diagnostics ? { diagnostics: options.diagnostics } : {}),
     timestamp: options.timestamp ?? Date.now(),
   };

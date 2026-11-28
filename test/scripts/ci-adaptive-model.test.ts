@@ -86,13 +86,13 @@ it("keeps unknown dependency features unknown and rejects malformed model data",
   input.baseline.invocations[0]!.complete = true;
   for (const file of input.baseline.invocations[0]!.files) {
     file.complete = true;
-    file.dependencies = ["src/shared/string.ts"];
+    file.dependencies = [file.project === "first" ? "src/shared/string.ts" : "src/other.ts"];
   }
   expect(
     captureAdaptiveModelRanking({ ...input, modelBytes: model(dependencyTree) }).rows.map(
       (row) => row.score,
     ),
-  ).toEqual([1, 1]);
+  ).toEqual([1, 0]);
   for (const bytes of [
     Buffer.from("not json"),
     model({ score: 2 }),

@@ -7,7 +7,6 @@ import type {
 
 const restartFailureReasons: Partial<Record<GatewayRestartWaitOutcome, string>> = {
   "auth-rejected": "the Gateway rejected this CLI's credentials",
-  "plugin-errors": "activated plugins reported load errors",
   "channel-errors": "channel health checks failed",
   "version-mismatch": "the running Gateway version did not match the expected version",
   "build-id-mismatch": "the running Gateway build did not match the expected build",
@@ -41,6 +40,9 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
   const refusal = snapshot.runtime?.systemd?.startRefusal;
   if (refusal) {
     lines.push(`SERVICE-DEFINITION: ${refusal.message}`);
+  }
+  if (snapshot.operatorScopeWarning) {
+    lines.push(snapshot.operatorScopeWarning);
   }
   if (snapshot.waitOutcome === "still-starting") {
     lines.push(formatGatewayStillStarting(snapshot));
@@ -105,6 +107,10 @@ export function formatGatewayRestartFailure(params: {
   }
   if (params.health.waitOutcome === "still-starting") {
     const message = formatGatewayStillStarting(params.health);
+    return { statusLine: message, failMessage: message };
+  }
+  if (params.health.waitOutcome === "connected-no-operator-scope") {
+    const message = `Gateway connected without operator.read scope, but HTTP readiness was not confirmed. ${params.health.operatorScopeWarning ?? "Reconnect with credentials granted operator.read, then run openclaw gateway status --deep."}`;
     return { statusLine: message, failMessage: message };
   }
   if (params.health.waitOutcome === "port-held") {

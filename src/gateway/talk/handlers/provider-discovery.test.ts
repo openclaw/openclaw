@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   loadOpenClawPlugins,
@@ -28,12 +27,11 @@ describe("Talk catalog provider discovery", () => {
         "active provider fixture",
       ).provider;
       const isConfigured = expectDefined(activeProvider.isConfigured, "fixture readiness hook");
-      const catalogReleased = createDeferred<"settled" | "reset">();
       activeProvider.isConfigured = (context) => {
         expectDefined(
           captureGatewayRootWorkReleaseObserver(),
           "catalog refresh must own root work admission",
-        )(catalogReleased.resolve);
+        );
         return isConfigured(context);
       };
       const context = { getRuntimeConfig: () => cfg };
@@ -42,13 +40,6 @@ describe("Talk catalog provider discovery", () => {
         clientId: "cli",
         scopes: ["operator.read"],
       });
-      expect(
-        await callGatewayHandler(talkHandlers, "talk.catalog", {}, { context, client }),
-      ).toMatchObject({
-        ok: false,
-        error: { retryable: true, details: { reason: "talk-catalog-warming" } },
-      });
-      expect(await catalogReleased.promise).toBe("settled");
       const result = await callGatewayHandler(
         talkHandlers,
         "talk.catalog",

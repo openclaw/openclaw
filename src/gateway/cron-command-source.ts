@@ -20,7 +20,6 @@ export async function runCronCommandUnderSource(
     deliveryAttemptFence: params.deliveryAttemptFence,
   });
   try {
-    operator?.authority.assertCurrent();
     const revoked = operator?.authority.signal;
     // Revocation reaches the runner's existing pre-spawn check and process-tree cancellation.
     const abortSignal =

@@ -10,8 +10,12 @@ import { WebSocketServer } from "ws";
 import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 
+// The saved-key store is fixture-owned; no test reads real credentials.
+const savedKey = vi.fn<(lookup: object) => Promise<string | undefined>>();
 const provider = buildMistralRealtimeTranscriptionProvider({
   createRealtimeTranscriptionWebSocketSession,
+  isProviderAuthProfileConfiguredAsync: async (lookup) => (await savedKey(lookup)) !== undefined,
+  resolveProviderAuthProfileApiKey: savedKey,
 });
 let cleanup: (() => Promise<void>) | undefined;
 const delta = (text: string) => ({ type: "transcription.text.delta", text });
@@ -41,6 +45,7 @@ async function createRealtimeServer(
   onPartial: (text: string) => void = vi.fn(),
 ) {
   const requests: URL[] = [];
+  const authorizations: unknown[] = [];
   const sockets: WebSocket[] = [];
   const closed = createDeferred<void>();
   const errorReceived = createDeferred<void>();
@@ -51,6 +56,7 @@ async function createRealtimeServer(
   wss.on("connection", (ws, request) => {
     const connectionIndex = sockets.push(ws) - 1;
     requests.push(new URL(request.url ?? "/", "http://127.0.0.1"));
+    authorizations.push(request.headers.authorization);
     ws.on("close", () => closed.resolve());
     ws.on("message", (data) => {
       const message = JSON.parse(rawDataToString(data, "utf8")) as { type?: unknown };
@@ -80,6 +86,7 @@ async function createRealtimeServer(
   await session.connect();
   return {
     requests,
+    authorizations,
     sockets,
     session,
     onPartial,
@@ -100,6 +107,7 @@ afterEach(async () => {
   await cleanup?.();
   cleanup = undefined;
   vi.unstubAllEnvs();
+  savedKey.mockReset();
 });
 
 it("normalizes nested provider config and connects with its URL parameters", async () => {
@@ -130,9 +138,32 @@ it("normalizes nested provider config and connects with its URL parameters", asy
   expect(requests[0]?.searchParams.get("target_streaming_delay_ms")).toBe("240");
 });
 
-it("requires an API key when creating sessions", () => {
+it.each([
+  ["a saved Mistral key", "", "", "Bearer saved-key"],
+  ["the Voice Call key before a saved one", "config-key", "", "Bearer config-key"],
+  ["MISTRAL_API_KEY before a saved one", "", "env-key", "Bearer env-key"],
+])("connects with %s", async (_name, apiKey, envKey, authorization) => {
+  vi.stubEnv("MISTRAL_API_KEY", envKey);
+  savedKey.mockResolvedValue("saved-key");
+  const readiness = { cfg: {}, providerConfig: { apiKey } };
+  // Unnamed, as a candidate of automatic selection, the saved key does not count.
+  expect(await provider.isConfiguredAsync?.(readiness)).toBe(authorization !== "Bearer saved-key");
+  expect(await provider.isConfiguredAsync?.({ ...readiness, selectedExplicitly: true })).toBe(true);
+  const { authorizations } = await createRealtimeServer([], { apiKey });
+  expect(authorizations).toEqual([authorization]);
+  // Only a provider with no other key asks the store, and only for its own API key.
+  const lookup = expect.objectContaining({ provider: "mistral", profileTypes: ["api_key"] });
+  expect(savedKey.mock.calls).toEqual(
+    authorization === "Bearer saved-key" ? [[lookup], [lookup]] : [],
+  );
+});
+
+it("requires an API key when connecting", async () => {
   vi.stubEnv("MISTRAL_API_KEY", "");
-  expect(() => provider.createSession({ providerConfig: {} })).toThrow("Mistral API key missing");
+  expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig: {} })).toBe(false);
+  const session = provider.createSession({ providerConfig: {} });
+  await expect(session.connect()).rejects.toThrow("Mistral API key missing");
+  session.close();
 });
 
 it.each<[string, Record<string, unknown>[], string[], string[]]>([

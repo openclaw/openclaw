@@ -1,5 +1,6 @@
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { composerInputFocusElement } from "../../lib/composer-input.ts";
 import { showToast } from "../../lib/toast.ts";
 import { releaseChatAttachmentPayload } from "./attachment-payload-store.ts";
 import { canAdmitBrowserAnnotation } from "./browser-annotation-admission.ts";
@@ -53,7 +54,10 @@ export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
     if (this.state) {
       this.chatState.attachmentInputProps(this.state).onAttachmentsChange(remaining);
     }
-    focusAfterUpdate(() => getChatComposerState(this.presentationId).composerTextarea);
+    focusAfterUpdate(() => {
+      const input = getChatComposerState(this.presentationId).composerTextarea;
+      return input && composerInputFocusElement(input);
+    });
 
     let settled = false;
     const finalizeRemoval = () => {

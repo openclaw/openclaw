@@ -211,7 +211,7 @@ describe("lmstudio stream wrapper", () => {
       prepareModel.mockResolvedValueOnce({ modelKey: canonicalKey });
     } else {
       prepareModel.mockRejectedValueOnce(
-        new LmstudioModelLoadError(canonicalKey, undefined, new Error("load failed")),
+        new LmstudioModelLoadError(canonicalKey, 32_768, false, new Error("load failed")),
       );
     }
     const { run, baseStream } = harness();

@@ -1,6 +1,4 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { hasGeneratedMediaCompletionEvent } from "../../agents/internal-event-contract.js";
 import {
   resolveAgentMainSessionKey,
   resolveChannelResetConfig,
@@ -9,13 +7,12 @@ import {
 } from "../../config/sessions.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { CRON_RUN_ENDED_ERROR, isEndedCronRun } from "../../infra/agent-run-registry.automation.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
   respondDeletedAgentSession,
-  resolveAgentSessionWorkStartError,
-  type RestoredCronContinuation,
+  resolveAgentSessionWorkStartBlock,
 } from "../agent-turn/agent-handler-helpers.js";
 import {
   takeInProcessFreshChildSession,
@@ -35,8 +32,6 @@ type PrepareAgentSessionParams = {
   agentId?: string;
   recipientChannel?: string;
   request: AgentRunRequest;
-  canUseCronRunContinuation: boolean;
-  lifecycleGeneration: string;
   effectiveBootstrapContextRunKind?: "default" | "cron";
   preAttachmentSession?: { canonicalKey: string; sessionId?: string };
   respond: GatewayRequestHandlerOptions["respond"];
@@ -101,51 +96,7 @@ async function prepareAdmittedAgentSession(
     return undefined;
   }
 
-  let effectiveBootstrapContextRunKind = params.effectiveBootstrapContextRunKind;
-  let restoredCronContinuationIdentity:
-    | Pick<RestoredCronContinuation, "lifecycleRevision" | "sessionId">
-    | undefined;
-  const isGeneratedMediaCronContinuation =
-    hasGeneratedMediaCompletionEvent(params.request.internalEvents) &&
-    parseCronRunScopeSuffix(canonicalKey).runId !== undefined;
-  if (isGeneratedMediaCronContinuation) {
-    if (!params.canUseCronRunContinuation) {
-      respondError(
-        params.respond,
-        ErrorCodes.INVALID_REQUEST,
-        "cron run completion handoffs are reserved for server-owned callers",
-      );
-      return undefined;
-    }
-    const marker = entry?.cronRunContinuation;
-    const continuationSessionId = normalizeOptionalString(entry?.sessionId);
-    const staleClaim =
-      marker?.phase === "continuing" &&
-      marker.ownerLifecycleGeneration !== params.lifecycleGeneration;
-    if (staleClaim || (marker?.phase === "ready" && marker.basePersisted !== true)) {
-      respondError(
-        params.respond,
-        ErrorCodes.INVALID_REQUEST,
-        staleClaim
-          ? "cron run continuation owner was lost during gateway restart"
-          : "cron run continuation base session was not persisted",
-      );
-      return undefined;
-    }
-    if (!marker || marker.phase !== "ready" || !continuationSessionId) {
-      respondError(params.respond, ErrorCodes.UNAVAILABLE, "cron run continuation is not ready");
-      return undefined;
-    }
-    if (params.requestedSessionId && params.requestedSessionId !== continuationSessionId) {
-      respondError(params.respond, ErrorCodes.UNAVAILABLE, "cron run continuation session changed");
-      return undefined;
-    }
-    restoredCronContinuationIdentity = {
-      lifecycleRevision: marker.lifecycleRevision,
-      sessionId: continuationSessionId,
-    };
-    effectiveBootstrapContextRunKind = "cron";
-  }
+  const effectiveBootstrapContextRunKind = params.effectiveBootstrapContextRunKind;
 
   const sessionExistedBeforeAttachmentSetup =
     params.preAttachmentSession?.canonicalKey === canonicalKey
@@ -173,9 +124,16 @@ async function prepareAdmittedAgentSession(
   if (deleted instanceof Promise ? await deleted : deleted) {
     return undefined;
   }
-  const archivedSessionError = resolveAgentSessionWorkStartError(canonicalKey, entry);
-  if (archivedSessionError) {
-    respondError(params.respond, ErrorCodes.INVALID_REQUEST, archivedSessionError);
+  const workStartBlock = resolveAgentSessionWorkStartBlock(canonicalKey, entry);
+  if (workStartBlock) {
+    respondError(params.respond, ErrorCodes.INVALID_REQUEST, workStartBlock.message, {
+      retryable: workStartBlock.retryable,
+    });
+    return undefined;
+  }
+  // The cron executor resumes its own yields in place; nothing else starts a turn on its run.
+  if (isEndedCronRun(canonicalKey)) {
+    respondError(params.respond, ErrorCodes.INVALID_REQUEST, CRON_RUN_ENDED_ERROR);
     return undefined;
   }
 
@@ -209,7 +167,6 @@ async function prepareAdmittedAgentSession(
     touchInteraction: visibleRequest,
     sessionPersistedBeforeGatewayAdmission: entry !== undefined,
     effectiveBootstrapContextRunKind,
-    restoredCronContinuationIdentity,
     freshChild: freshChild !== undefined,
   };
 }

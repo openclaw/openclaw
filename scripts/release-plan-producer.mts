@@ -47,6 +47,7 @@ const TOOLING_MODULE_PATHS = [
   "scripts/lib/release-plan-source.mts",
   "scripts/lib/release-upgrade-baseline.mjs",
   "scripts/lib/release-validation-waivers.mjs",
+  "scripts/lib/release-validation-waivers.json",
   "scripts/lib/release-version.mjs",
   "scripts/release-plan-contract.mjs",
   "scripts/release-plan-producer-core.mts",
@@ -291,7 +292,6 @@ function captureQualificationIdentity(params: ReleaseInventorySource, runGh: Run
     runAttempt = fields.get("runAttempt"),
     artifactId = fields.get("artifactId");
   if (
-    params.candidateSha !== params.toolingSha ||
     params.qualificationInputs === undefined ||
     fields.get("repository") !== REPOSITORY ||
     typeof workflowSha !== "string" ||
@@ -356,15 +356,30 @@ function captureQualificationIdentity(params: ReleaseInventorySource, runGh: Run
       throw new Error("Invalid admission run");
     }
     const runFields = new Map<string, unknown>(Object.entries(run));
+    const capturedOperators = new Set<string>();
     for (const actor of [runFields.get("actor"), runFields.get("triggering_actor")]) {
       if (actor === null || typeof actor !== "object" || Array.isArray(actor)) {
         throw new Error("Invalid admission actor");
       }
-      const login = new Map<string, unknown>(Object.entries(actor)).get("login");
-      if (typeof login !== "string" || !/^[A-Za-z0-9-]{1,39}$/u.test(login)) {
+      const operatorFields = new Map<string, unknown>(Object.entries(actor));
+      const login = operatorFields.get("login");
+      const id = operatorFields.get("id");
+      if (
+        typeof login !== "string" ||
+        !/^[A-Za-z0-9-]{1,39}$/u.test(login) ||
+        typeof id !== "number" ||
+        !Number.isSafeInteger(id) ||
+        id <= 0
+      ) {
         throw new Error("Invalid admission actor");
       }
-      api("collaborators/" + login + "/permission");
+      // The verified child consumes one live grant for matching ID/login roles.
+      // Keep the sealed replay exact without sharing grants across observations.
+      const identity = `${id}:${login}`;
+      if (!capturedOperators.has(identity)) {
+        api("collaborators/" + login + "/permission");
+        capturedOperators.add(identity);
+      }
     }
   };
   api("contents/.github/workflows/openclaw-release-prepare.yml?ref=" + workflowSha);
@@ -372,6 +387,7 @@ function captureQualificationIdentity(params: ReleaseInventorySource, runGh: Run
   api("actions/artifacts/" + artifactId);
   api("actions/runs/" + runId + "/attempts/" + runAttempt + "/jobs?per_page=100");
   api("actions/artifacts/" + artifactId + "/zip", true);
+  api("contents/scripts/lib/release-validation-waivers.json?ref=" + params.toolingSha);
   const finalAuthorityStart = responses.length;
   api("actions/artifacts/" + artifactId);
   producer();
@@ -773,6 +789,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     main();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
+    // Identity lookups wrap the gh failure; retain its diagnostic without dumping captured stdout.
+    if (error instanceof Error && error.cause instanceof Error) {
+      console.error(`Caused by: ${error.cause.message}`);
+    }
     console.error("[release-plan-producer] FAILED (exit 1)");
     process.exitCode = 1;
   }

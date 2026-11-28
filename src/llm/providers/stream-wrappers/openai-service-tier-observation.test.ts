@@ -3,10 +3,6 @@ import { createAssistantMessageEventStream, type StreamFn } from "@openclaw/llm-
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createOpenAIResponsesTransportStreamFn } from "../../../../packages/ai/src/transports/openai-responses-client.js";
 import { makeProviderModelFixture } from "../../../agents/test-helpers/provider-model-fixture.js";
-import {
-  registerAgentRunContext,
-  resetAgentRunRegistryForTest,
-} from "../../../infra/agent-run-registry.js";
 import { createOpenAIServiceTierObservationWrapper } from "./openai-service-tier-observation.js";
 import { createOpenAIFastModeWrapper } from "./openai.js";
 
@@ -63,15 +59,14 @@ beforeEach(() => {
   log.debug.mockClear();
   provider.tiers.length = 0;
   provider.rejectUltrafast = true;
-  registerAgentRunContext("run-fixture", {});
 });
 afterEach(() => {
-  resetAgentRunRegistryForTest();
   vi.useRealTimers();
 });
 const attribution = {
   runId: "run-fixture",
   sessionId: "session-fixture",
+  authScope: "/agents/fixture",
   accountRoute: "profile:openai:fixture",
 };
 const retry = ["ultrafast", "priority"];
@@ -134,7 +129,7 @@ it("attributes a successful slower retry to the original rejected tier without a
 });
 
 async function providerTurn(
-  runId = attribution.runId,
+  scope: Partial<typeof attribution>,
   options: Parameters<StreamFn>[2] = {},
   record: Parameters<typeof createOpenAIServiceTierObservationWrapper>[1] = () => true,
 ) {
@@ -142,7 +137,7 @@ async function providerTurn(
   const stream = createOpenAIServiceTierObservationWrapper(
     createOpenAIFastModeWrapper(createOpenAIResponsesTransportStreamFn(), "ultrafast"),
     record,
-    { ...attribution, runId },
+    { ...attribution, ...scope },
   );
   const result = await stream(model, { messages: [] }, { apiKey: "synthetic-key", ...options });
   expect((await result.result()).stopReason).toBe("stop");
@@ -154,7 +149,7 @@ it("bounds persistent rejections across 30 model calls and probes after 20 coold
     onPayload: async (payload: unknown) => ({ ...Object(payload), service_tier: "ultrafast" }),
   };
   for (let turn = 0; turn < 30; turn++) {
-    await providerTurn(attribution.runId, options, record);
+    await providerTurn({ accountRoute: "profile:openai:bounded" }, options, record);
   }
   expect(record).toHaveBeenLastCalledWith(model, observation("priority"));
   expect(provider.tiers).toEqual([
@@ -166,24 +161,30 @@ it("bounds persistent rejections across 30 model calls and probes after 20 coold
   ]);
 });
 
-it("probes after ten minutes, resets on success, and isolates a new run", async () => {
+it("probes after ten minutes, resets on success, and keeps the cooldown for later runs", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(1_000);
-  await providerTurn();
-  await providerTurn();
+  const account = { accountRoute: "profile:openai:probe" };
+  await providerTurn(account);
+  await providerTurn(account);
   vi.setSystemTime(600_999);
-  await providerTurn();
+  await providerTurn(account);
   expect(provider.tiers.at(-1)).toBe("priority");
   vi.setSystemTime(601_000);
   provider.rejectUltrafast = false;
-  await providerTurn();
+  await providerTurn(account);
   expect(provider.tiers.at(-1)).toBe("ultrafast");
   provider.rejectUltrafast = true;
-  await providerTurn();
-  await providerTurn();
-  await providerTurn();
+  await providerTurn(account);
+  await providerTurn(account);
+  await providerTurn(account);
   expect(provider.tiers.slice(-5)).toEqual([...retry, ...retry, "priority"]);
-  registerAgentRunContext("fresh-run", {});
-  await providerTurn("fresh-run");
+  // A rejected tier belongs to the account/model route, so a later turn does not pay for it again.
+  await providerTurn({ ...account, runId: "later-run" });
+  expect(provider.tiers.at(-1)).toBe("priority");
+  await providerTurn({ accountRoute: "profile:openai:other", runId: "later-run" });
+  expect(provider.tiers.slice(-2)).toEqual(retry);
+  // Another agent's auth store may hold a different key under the same profile id.
+  await providerTurn({ ...account, authScope: "/agents/other", runId: "later-run" });
   expect(provider.tiers.slice(-2)).toEqual(retry);
 });

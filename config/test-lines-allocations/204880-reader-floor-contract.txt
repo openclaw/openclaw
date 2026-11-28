@@ -1,0 +1,7 @@
+# Reader-floor contract #204880, measured against main 8aaf3820112a:
+# 550 net test lines after consolidation, less the 400-line allowance.
+# Approved allocation 150: step-44 contract and six non-additive negatives,
+# plus optional-floor reference catalog (5), persisted-floor refusal (2),
+# and cold-worker zero-comparison-DDL coverage (6).
+# Plus cap-required fixture extraction/formatting (10), without new assertions.
+150

@@ -35,10 +35,7 @@ async function reopen(host: Awaited<ReturnType<typeof mountMenu>>, coordinate = 
 
 it("keeps advertised native menu shortcuts ahead of composer autotype", async () => {
   const actions: SessionMenuAction[] = [];
-  const host = await mountMenu({
-    groups: ["Research", "Personal"],
-    onAction: (action) => actions.push(action),
-  });
+  const host = await mountMenu({ onAction: (action) => actions.push(action) });
   const root = host.parentElement!;
   const composer = root.appendChild(document.createElement("div"));
   composer.className = "agent-chat__composer-combobox";
@@ -46,16 +43,13 @@ it("keeps advertised native menu shortcuts ahead of composer autotype", async ()
   const capture = (event: KeyboardEvent) => focusChatComposerFromKeydown(root, event, input);
   document.addEventListener("keydown", capture, true);
   try {
-    const expected: SessionMenuAction[] = [
-      { kind: "toggle-archived" },
-      { kind: "move-to-group", category: "Research" },
-    ];
-    for (const [index, key] of ["a", "1"].entries()) {
+    const expected: SessionMenuAction[] = [{ kind: "toggle-archived" }, { kind: "fork" }];
+    for (const [index, key] of ["a", "f"].entries()) {
       if (index) {
         await reopen(host);
       }
-      const target = index ? await openSubmenu(host, "Move to group") : host;
-      focusAndPress(menuItem(target, index ? "Personal" : "Pin session"), key, true);
+      const target = index ? await openSubmenu(host, "Advanced") : host;
+      focusAndPress(menuItem(target, index ? "Fork session" : "Pin session"), key, true);
       await waitForSolid(() => expect(actions).toEqual(expected.slice(0, index + 1)));
       expect(document.activeElement).not.toBe(input);
     }
@@ -111,7 +105,6 @@ it("preserves focus and owner search with the Solid application provider", async
   const owner = menuItem(host, "Assign to…");
   const ownerPanel = await openSubmenu(host, "Assign to…");
   await waitForSolid(() => expect(owner.getAttribute("aria-expanded")).toBe("true"));
-  ownerPanel.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
   await waitForSolid(() => expect(ownerPanel.querySelector('input[type="search"]')).not.toBeNull());
   const search = ownerPanel.querySelector<HTMLInputElement>('input[type="search"]')!;
   search.value = "Research";

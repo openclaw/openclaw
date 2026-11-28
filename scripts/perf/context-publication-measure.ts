@@ -24,6 +24,7 @@ import { parseArgs } from "node:util";
 import type { SessionMaintenanceConfig } from "../../src/config/types.base.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -113,12 +114,7 @@ try {
       gc();
       const inspector = new Session();
       if (values.mode === "allocation") {
-        inspector.connect();
-        await inspector.post("HeapProfiler.startSampling", {
-          samplingInterval: 4096,
-          includeObjectsCollectedByMajorGC: true,
-          includeObjectsCollectedByMinorGC: true,
-        });
+        await startCollectedHeapSampling(inspector, 4096);
       }
       const durations: number[] = [];
       const operations: Record<string, number> = {};

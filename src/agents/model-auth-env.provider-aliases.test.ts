@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as shellEnv from "../infra/shell-env.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
@@ -63,6 +64,31 @@ describe("resolveEnvApiKey provider auth aliases", () => {
     });
     expect(load).not.toHaveBeenCalled();
     expect(current).toHaveBeenCalledWith({ ...scope, env, allowWorkspaceScopedSnapshot: true });
+  });
+
+  it("labels selected env keys without copying shell provenance during discovery", () => {
+    using snapshotKeys = vi.spyOn(shellEnv, "getShellEnvAppliedKeys");
+    using appliedKey = vi
+      .spyOn(shellEnv, "isShellEnvAppliedKey")
+      .mockImplementation((key) => key === "EXTERNAL_CLOUD_API_KEY");
+    const options = { ...lookup, setupProviderFallbackRefs: [] };
+    const provider = "cloud-alias";
+    expect(resolveProviderDirectAuthPlanningEvidence(provider, {}, options)).toBeNull();
+    expect(resolveEnvApiKey(provider, {}, options)).toBeNull();
+    expect(appliedKey).not.toHaveBeenCalled();
+
+    const source = "shell env: EXTERNAL_CLOUD_API_KEY";
+    expect(resolveProviderDirectAuthPlanningEvidence(provider, env, options)).toEqual({
+      kind: "environment",
+      mode: "api-key",
+      source,
+    });
+    expect(resolveEnvApiKey(provider, env, options)).toEqual({
+      apiKey: env.EXTERNAL_CLOUD_API_KEY,
+      source,
+    });
+    expect(appliedKey.mock.calls).toEqual([["EXTERNAL_CLOUD_API_KEY"], ["EXTERNAL_CLOUD_API_KEY"]]);
+    expect(snapshotKeys).not.toHaveBeenCalled();
   });
 
   it("passes config and workspace scope to setup-provider fallback", () => {

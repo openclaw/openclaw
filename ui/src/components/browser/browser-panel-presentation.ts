@@ -10,9 +10,10 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
-import { browserRequestReferencedTabs, type BrowserDashboardTarget } from "./browser-client.ts";
+import type { BrowserDashboardTarget } from "./browser-client.ts";
 import { createBrowserPanel, type BrowserPanelHost } from "./browser-panel-owner.ts";
 import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
+import { browserRequestReferencedTabs } from "./browser-session-tab-list.ts";
 import {
   browserTabKey,
   readBrowserTabTarget,
@@ -276,10 +277,6 @@ export function createBrowserPanelPresentation(
         ? (event.detail as BrowserPanelToggleDetail) // SAFETY: shared panel event payload; consumed fields are validated below.
         : null;
     synchronizeBrowserContext();
-    const browserTab = readBrowserTabTarget(detail?.browserTab);
-    if (detail?.browserTab !== undefined && !browserTab) {
-      return;
-    }
     const normalizedRequestedUrl =
       typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
     let shouldRefresh = true;
@@ -310,10 +307,6 @@ export function createBrowserPanelPresentation(
         newTab: true,
         native: detail?.native,
       });
-    } else if (browserTab) {
-      // Consume the current result so it cannot replace this explicit card choice.
-      consumedPreferredRevision = preferredRevision();
-      void browser.selectTab(browserTab.targetId, browserTab);
     } else if (detail?.newTab === true) {
       browser.beginNewTab();
     } else if (shouldRefresh && !followPreferredTab()) {

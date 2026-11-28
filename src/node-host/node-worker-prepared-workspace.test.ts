@@ -6,13 +6,16 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as workspaceManifestWorker from "../gateway/worker-environments/workspace-manifest-worker.js";
 import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
 } from "../gateway/worker-environments/workspace-manifest.js";
-import * as workspaceReconcile from "../gateway/worker-environments/workspace-reconcile-core.js";
+import { workspaceProcessTestEntrypoints } from "../gateway/worker-environments/workspace-process-runtime.test-support.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as processExec from "../process/exec.js";
+import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -195,6 +198,8 @@ function manifestPath(homeDir: string, manifestRef: string) {
 
 describe("prepared node workspace ownership", () => {
   it("reuses checkpoint hashes across registration and bind processes, falling back for missing or corrupt memos", async () => {
+    const workspaceUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.nodeWorkspace);
+    const stateUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase);
     const f = await fixture(true);
     const reads = path.join(f.root, "content-reads");
     const memo = manifestPath(f.homeDir, f.registration.preparedManifestRef).replace(
@@ -214,8 +219,8 @@ describe("prepared node workspace ownership", () => {
           "-e",
           `
           import fs from 'node:fs';
-          import { NodeWorkerWorkspaceRuntime } from './src/node-host/node-worker-workspace.ts';
-          import { closeOpenClawStateDatabaseAsync } from './src/state/openclaw-state-db.ts';
+          import { NodeWorkerWorkspaceRuntime } from ${JSON.stringify(workspaceUrl.href)};
+          import { closeOpenClawStateDatabaseAsync } from ${JSON.stringify(stateUrl.href)};
           try {
             await new NodeWorkerWorkspaceRuntime({ env: process.env, ephemeral: true }).prepare(JSON.parse(fs.readFileSync(0, 'utf8')));
           } catch (error) { console.error(error.message); process.exitCode = 1; }
@@ -885,11 +890,17 @@ describe("prepared node workspace ownership", () => {
         });
       }
       if (lateChange === "apply failure") {
-        const applyDirectories = workspaceReconcile.applyWorkspaceDirectoryChanges;
-        vi.spyOn(workspaceReconcile, "applyWorkspaceDirectoryChanges").mockImplementation(
-          async (params) => {
-            await applyDirectories(params);
-            throw new Error("injected failure after patch application");
+        const compute = workspaceManifestWorker.runWorkspaceFilesystemComputation;
+        vi.spyOn(workspaceManifestWorker, "runWorkspaceFilesystemComputation").mockImplementation(
+          async (command, options) => {
+            const result = await compute(command, options);
+            if (command.type === "workspace.reconcile.apply") {
+              expect(await fsp.readFile(path.join(f.workspaceDir, "source.txt"), "utf8")).toBe(
+                "session overlay\n",
+              );
+              throw new Error("injected failure after patch application");
+            }
+            return result;
           },
         );
       }

@@ -1,6 +1,6 @@
 // The non-isolated runner resets modules between files but preserves customElements.
 // A dedicated jsdom context keeps the registered pane class on this file's module graph.
-import { createEffect, createRoot, flush } from "solid-js";
+import { createComponent, createEffect, createSignal, createRoot, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-lifecycle.test/"} */
@@ -15,17 +15,20 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { registerComposerEditor } from "../../lib/composer-input.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
 import {
   gatewayHelloForMethods,
   SESSION_MUTATION_TEST_METHODS,
 } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
 } from "./chat-application-context.test-support.ts";
+import { EXPECTED_CHAT_REFUSAL } from "./chat-error-state.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
@@ -42,6 +45,7 @@ import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
 } from "./components/chat-message-confirmation-view.tsx";
+import { ChatSessionSuggestions } from "./components/chat-session-suggestions.solid.tsx";
 import * as chatThread from "./components/chat-thread-interactions.ts";
 import { handleChatDraftChange } from "./input-history.ts";
 import { beginQueuedMessageEdit, cancelQueuedMessageEdit } from "./queued-message-edit.ts";
@@ -280,6 +284,42 @@ it("publishes a disconnected gateway snapshot through reactive page state", () =
   }
 });
 
+it("routes explicit composer focus to its visible editor after the textarea is hidden", () => {
+  const { pane } = barePane();
+  const surface = document.body.appendChild(document.createElement("div"));
+  surface.className = "agent-chat__input";
+  const textarea = surface.appendChild(document.createElement("textarea"));
+  textarea.hidden = true;
+  const editor = surface.appendChild(document.createElement("div"));
+  editor.tabIndex = 0;
+  const dispose = registerComposerEditor(textarea, {
+    element: editor,
+    focusElement: editor,
+    scrollElement: editor,
+    coordsAtPos: () => null,
+    sync: vi.fn(),
+    requestSync: vi.fn(),
+    focus: () => editor.focus(),
+    select: vi.fn(),
+    replace: vi.fn(),
+    replaceAll: vi.fn(),
+    undo: vi.fn(),
+  });
+  try {
+    getChatComposerState(pane.presentationId).composerTextarea = textarea;
+    const lifecycle = pane as TestChatPane & {
+      focusComposer: boolean;
+      updated: (changes?: Map<PropertyKey, unknown>) => void;
+    };
+    lifecycle.focusComposer = true;
+    lifecycle.updated(new Map([["focusComposer", false]]));
+    expect(document.activeElement).toBe(editor);
+  } finally {
+    dispose();
+    surface.remove();
+  }
+});
+
 it("renews the attention cue for repeated draft prefill", () => {
   vi.useFakeTimers();
   const { pane } = barePane();
@@ -442,6 +482,7 @@ it.each(["attachments", "mentions"] as const)(
           : "chat.sessionSuggestions.attachmentsUnsupported",
       ),
     );
+    expect(state.lastErrorDetail).toBe(EXPECTED_CHAT_REFUSAL);
     expect(state.chatMessage).toBe("@Alex text only");
   },
 );
@@ -704,4 +745,73 @@ it("dismisses only confirmations owned by the disconnected pane", () => {
   for (const check of checkRemovals) {
     check();
   }
+});
+
+it("shows only live author resolutions, closes dismissed chips, and retires accepted transcript receipts", async () => {
+  const request = vi.fn();
+  const { pane, state } = createSuggestionPane(request);
+  pane.context.gateway.snapshot.selfUser = { id: "alice" } as never;
+  selectSuggestionRows(state, { ...suggestionRow(state), sharingRole: "viewer" });
+  const pending = pendingSuggestion(state, "pending");
+  const accepted = { ...pendingSuggestion(state, "accepted"), state: "accepted" as const };
+  const dismissed = { ...pendingSuggestion(state, "dismissed"), state: "dismissed" as const };
+  const list = { suggestions: [pending, accepted, dismissed], role: "viewer" as const };
+  request.mockResolvedValue(list);
+  const view = () => pane.suggestionChatProps(true, false, true);
+  const [tray, publishTray] = createSignal(() => view());
+  const { container } = mountSolid(() =>
+    createComponent(ChatSessionSuggestions, {
+      get suggestions() {
+        return tray().sessionSuggestions;
+      },
+      get liveResolutions() {
+        return tray().sessionSuggestionLiveResolutions;
+      },
+      get role() {
+        return tray().sessionSuggestionRole;
+      },
+      get messages() {
+        tray();
+        return state.chatMessages;
+      },
+      busyIds: new Set<string>(),
+      archived: false,
+      canResolve: false,
+      onResolve: vi.fn(),
+    }),
+  );
+  const visible = () => {
+    publishTray(() => view());
+    flush();
+    return [...container.querySelectorAll("[data-suggestion-id]")].map((node) =>
+      node.getAttribute("data-suggestion-id"),
+    );
+  };
+
+  await pane.refreshSessionSuggestions();
+  expect(visible()).toEqual([pending.id]);
+
+  pane.handleSessionSuggestionEvent({ action: "resolved", suggestion: accepted });
+  pane.handleSessionSuggestionEvent({ action: "resolved", suggestion: dismissed });
+  await pane.refreshSessionSuggestions();
+  expect(visible()).toEqual([pending.id, accepted.id, dismissed.id]);
+  view().onCloseSessionSuggestion(dismissed.id);
+  await pane.refreshSessionSuggestions();
+  expect(visible()).toEqual([pending.id, accepted.id]);
+  state.chatMessages = [
+    {
+      role: "user",
+      content: accepted.text,
+      __openclaw: {
+        id: "accepted-turn",
+        idempotencyKey: "session-suggestion:accepted:user",
+        seq: 1,
+      },
+    },
+  ];
+  expect(visible()).toEqual([pending.id]);
+  pane.resetSessionSuggestions();
+  await pane.refreshSessionSuggestions();
+  expect(visible()).toEqual([pending.id]);
+  expect(request.mock.calls.every(([method]) => method === "session.suggestions.list")).toBe(true);
 });

@@ -79,6 +79,7 @@ const catalog = {
       title: "Skill file preview",
       source: "Skill source",
       open: "Open full file",
+      openTooltip: "Open file",
       loading: "Loading skill file…",
       unavailable: "Skill file unavailable",
       unavailableHint: "The skill may have moved or is not installed for this agent.",

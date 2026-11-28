@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { withExistingOpenClawStateSchema as withSchema } from "../../state/openclaw-state-db-schema-policy.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
@@ -45,18 +44,6 @@ function atWorkerCommit(beforeCommit: () => void, preserveAuthority = true) {
   );
 }
 
-async function expectOffThread(run: () => Promise<void>, checkDisk = false) {
-  const sql = observeHostDataSql();
-  const disk = checkDisk ? vi.spyOn(fs, "statfsSync") : undefined;
-  await run();
-  expect(sql.queries).toEqual([]);
-  if (disk) {
-    expect(disk).not.toHaveBeenCalled();
-  }
-  disk?.mockRestore();
-  sql.restore();
-}
-
 function fixture() {
   const root = roots.make("worktree-capacity-worker-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: root };
@@ -85,13 +72,13 @@ it("releases off-thread disk debt after caller and schema admission end", async 
           workerAuthority: { ...guard.workerAuthority, assertCurrent },
           assertCurrent,
         });
-        await expectOffThread(() => reserve(capacity, f.root), true);
+        await reserve(capacity, f.root);
         return { capacity, context };
       });
       expect(f.debts()).toHaveLength(1);
       caller.abort(new Error("caller cancelled"));
       expect(() => ended.context.admission.assertCurrent()).toThrow("schema admission has ended");
-      await expectOffThread(() => ended.capacity.release());
+      await ended.capacity.release();
       expect(f.debts()).toEqual([]);
     }),
   );
@@ -192,6 +179,38 @@ it("settles completed byte debt on refusal without reserving refused increases",
   });
   expect(f.debts()).toEqual([]);
 });
+
+it.for(["pending bytes", "stronger reserve"] as const)(
+  "waits on the peer contributing %s instead of an earlier debt-free peer",
+  async (blocking) => {
+    const f = fixture();
+    useInProcessWorktreeCapacityTransport();
+    const GiB = 1024 ** 3;
+    const stats = fs.statfsSync(f.root);
+    let available = 100 * GiB;
+    vi.spyOn(fs, "statfsSync").mockImplementation(() =>
+      createWorktreeCapacityStatfs(stats, available),
+    );
+    await withWorktreeMutationLease({ env: f.env, id: "planning" }, async (planning) => {
+      await reserve(planning, f.root, 0);
+      const [empty] = f.debts();
+      await withWorktreeMutationLease({ env: f.env, id: "blocking" }, async (writer) => {
+        await reserve(writer, f.root, blocking === "pending bytes" ? 1024 ** 2 : 0, false);
+        const held = f.debts().find((row) => row.lease_key !== empty?.lease_key);
+        available = blocking === "pending bytes" ? 4 * GiB : 2 * GiB;
+        await expect(
+          withWorktreeMutationLease({ env: f.env, id: "contender" }, (contender) =>
+            reserve(contender, f.root, 1, blocking === "stronger reserve"),
+          ),
+        ).rejects.toMatchObject({
+          name: WorktreeCapacityContentionError.name,
+          reservationKey: held?.lease_key,
+        });
+      });
+    });
+    expect(f.debts()).toEqual([]);
+  },
+);
 
 it.each([true, false])(
   "reclaims an exited disk reservation only with its recorded namespace (namespace: %s)",

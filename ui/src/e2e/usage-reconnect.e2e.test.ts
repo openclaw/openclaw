@@ -322,7 +322,9 @@ suite.define(() => {
       await waitForRequestCount(gateway, "sessions.usage", 2);
 
       await gateway.setMethodResponse("sessions.usage", currentInstanceResult);
-      await page.getByRole("button", { name: "Current instance", exact: true }).click();
+      await page.getByRole("button", { name: "Display", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Sessions", exact: true }).click();
+      await page.getByRole("menuitemradio", { name: "Current instance", exact: true }).click();
       await gateway.resolveDeferred("sessions.usage", staleFamilyResult);
       await expect.poll(() => refreshButton(page).isEnabled()).toBe(true);
 

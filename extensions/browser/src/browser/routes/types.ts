@@ -16,7 +16,13 @@ export type BrowserRequest = {
    */
   signal?: AbortSignal;
   /** Gateway authority, including invalidation before transport retirement; independent of request timeout. */
-  requester?: { connId?: string; signal: AbortSignal; isCurrent: () => boolean };
+  requester?: {
+    connId?: string;
+    signal: AbortSignal;
+    isCurrent: () => boolean;
+    /** Set by the Gateway only for the operator's own Control UI connection, never from params. */
+    operatorUi?: true;
+  };
   /** In-process owner assertion rerun after profile admission and before tab actions. */
   assertCurrent?: (profile?: ResolvedBrowserProfile) => void | Promise<void>;
   /** Resource identity survives the RPC; each viewer separately owns its original actor borrow. */

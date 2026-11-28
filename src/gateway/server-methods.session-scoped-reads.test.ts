@@ -6,6 +6,7 @@ import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepar
 import { registerAgentWorkspaceAccess } from "../agents/workspace-access.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessions from "../config/sessions/session-accessor.js";
+import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as sessionDiff from "../sessions/session-diff.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -23,6 +24,7 @@ import { handleGatewayRequest } from "./server-methods.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { createHistoryReadContext } from "./server-methods/chat-history.test-helpers.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
+import { retainSessionScopedRead } from "./server-methods/session-scoped-read.js";
 import { sessionsDiffHandlers } from "./server-methods/sessions-diff.js";
 import * as fileAssets from "./server-methods/sessions-file-assets.js";
 import { sessionsFilesHandlers } from "./server-methods/sessions-files.js";
@@ -142,6 +144,75 @@ function prepareRead(method: (typeof methods)[number], beforeReturn: () => Promi
 }
 
 describe("narrow session read owners", () => {
+  it("keeps an admitted invited workspace target after membership removal", async () => {
+    await withScopedReader(
+      "invited-workspace-reader",
+      async ({ reader, context }) => {
+        const entry = { sessionId: "invited-workspace", updatedAt: 1 };
+        await seed(entry);
+        await addSessionMember(scope, {
+          identityId: reader.authenticatedUserProfile!.profileId,
+          addedBy: "owner",
+          addedAt: 1,
+        });
+        const read = await retainSessionScopedRead(
+          {
+            req: gatewayRequest("workspace", "sessions.files.list", { sessionKey: key }),
+            params: {},
+            client: reader,
+            context,
+            respond: vi.fn(),
+            isWebchatConnect: () => false,
+          },
+          key,
+          "main",
+          { retain: true },
+        );
+        try {
+          await removeSessionMember(scope, reader.authenticatedUserProfile!.profileId);
+          expect(
+            read!.isInvitedWorkspaceTarget({ agentId: "main", canonicalKey: key, entry }),
+          ).toBe(true);
+          expect(
+            read!.isInvitedWorkspaceTarget({
+              agentId: "main",
+              canonicalKey: key,
+              entry: { sessionId: "replacement" },
+            }),
+          ).toBe(false);
+        } finally {
+          read?.release();
+        }
+      },
+      { role: "invited" },
+    );
+  });
+
+  it("finishes an admitted invited read after membership removal", async () => {
+    await withScopedReader(
+      "invited-reader",
+      async ({ reader, context }) => {
+        const profileId = reader.authenticatedUserProfile!.profileId;
+        const owner = roleClient("view", "invited-owner");
+        await seed({ sessionId: "invited-read", updatedAt: 1, createdActor: createdActor(owner) });
+        await addSessionMember(scope, { identityId: profileId, addedBy: "owner", addedAt: 1 });
+        const io = prepareRead("sessions.files.get", async () => {
+          await removeSessionMember(scope, profileId);
+        });
+        const respond = vi.fn();
+        await dispatchRead("sessions.files.get", { client: reader, context, respond });
+        expect(io).toHaveBeenCalledOnce();
+        expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls)).toBe(true);
+        // The next read is admitted after the removal and refused.
+        respond.mockClear();
+        await dispatchRead("sessions.files.get", { client: reader, context, respond });
+        expect(io).toHaveBeenCalledOnce();
+        expect(respond.mock.calls[0]?.[0]).toBe(false);
+      },
+      { role: "invited" },
+    );
+  });
+
   it("admits CSP previews for session-only readers and revokes resources when sharing ends", async () => {
     await withScopedReader("preview-reader", async ({ state, reader, context }) => {
       reader.connId = "narrow-preview";
@@ -359,7 +430,7 @@ describe("narrow session read owners", () => {
     },
   );
 
-  it.each(["current", "source", "generation"] as const)(
+  it.each(["current", "generation"] as const)(
     "keeps the original %s through message subscription preparation",
     async (change) => {
       await withScopedReader("subscription-reader", async ({ reader: client, cfg }) => {
@@ -379,14 +450,12 @@ describe("narrow session read owners", () => {
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const respond = vi.fn();
-        let current = true;
         const request = handleGatewayRequest({
           req: gatewayRequest(change, "sessions.messages.subscribe", { key, agentId: "main" }),
           client,
           context,
           respond,
           isWebchatConnect: () => false,
-          hasCurrentClientAuthority: () => current,
           extraHandlers: createLazyCoreHandlers({
             methods: ["sessions.messages.subscribe"],
             loadHandlers: async () => {
@@ -400,9 +469,6 @@ describe("narrow session read owners", () => {
         try {
           await Promise.race([entered.promise, request]);
           expect(respond, JSON.stringify(respond.mock.calls)).not.toHaveBeenCalled();
-          if (change === "source") {
-            current = false;
-          }
           if (change === "generation") {
             await seed({ ...entry, lifecycleRevision: "replacement", sessionId: "replacement" });
           }
@@ -410,26 +476,19 @@ describe("narrow session read owners", () => {
           release.resolve();
           await outcome;
         }
-        if (change === "source") {
-          expect(await outcome).toMatchObject([
-            { status: "rejected", reason: { message: "Gateway requester authority changed" } },
-          ]);
-          expect(respond).not.toHaveBeenCalled();
+        expect(await outcome).toEqual([{ status: "fulfilled", value: undefined }]);
+        if (change === "current") {
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            true,
+            { subscribed: true, key, agentId: "main" },
+            undefined,
+          );
         } else {
-          expect(await outcome).toEqual([{ status: "fulfilled", value: undefined }]);
-          if (change === "current") {
-            expect(respond).toHaveBeenCalledExactlyOnceWith(
-              true,
-              { subscribed: true, key, agentId: "main" },
-              undefined,
-            );
-          } else {
-            expect(respond).toHaveBeenCalledExactlyOnceWith(
-              false,
-              undefined,
-              expect.objectContaining({ code: "INVALID_REQUEST" }),
-            );
-          }
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({ code: "INVALID_REQUEST" }),
+          );
         }
         expect(subscribers.get(key).has(client.connId)).toBe(change === "current");
       });
@@ -545,32 +604,15 @@ describe("narrow session read owners", () => {
         updatedAt: 1,
         createdActor: { type: "human", source: "profile", id: GATEWAY_OWNER_PROFILE_ID },
       });
-      for (const changed of [false, true]) {
-        client.internal.operatorRoleActor = {
-          kind: "operator",
-          profileId: GATEWAY_OWNER_PROFILE_ID,
-        };
-        const io = prepareRead(method, async () => {
-          if (changed) {
-            client.internal!.operatorRoleActor = {
-              kind: "operator",
-              profileId: "another-person",
-            };
-          }
-        });
-        const respond = vi.fn();
-        await dispatchRead(method, {
-          client,
-          context: createDirectChatContext(),
-          respond,
-        });
-        expect(io).toHaveBeenCalledOnce();
-        expect(respond.mock.calls[0]?.[0]).toBe(!changed);
-        if (changed) {
-          expect(respond.mock.calls[0]?.[1]).toBeUndefined();
-        }
-        io.mockRestore();
-      }
+      const io = prepareRead(method, async () => {});
+      const respond = vi.fn();
+      await dispatchRead(method, {
+        client,
+        context: createDirectChatContext(),
+        respond,
+      });
+      expect(io).toHaveBeenCalledOnce();
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
     });
   });
 
@@ -630,7 +672,6 @@ describe("narrow session read owners", () => {
       for (const changed of [
         "metadata-no-revision",
         "metadata",
-        "authority",
         "generation",
         "visibility",
         ...(method === "sessions.branches.list"
@@ -658,71 +699,58 @@ describe("narrow session read owners", () => {
           entered.resolve();
           await release.promise;
         });
-        let current = true;
         const respond = vi.fn();
         const request = dispatchRead(method, {
           client: reader,
           context,
           respond,
-          hasCurrentClientAuthority: () => current,
         });
         const outcome = Promise.allSettled([request]);
         try {
           await Promise.race([entered.promise, request]);
           expect(io).toHaveBeenCalledOnce();
           expect(respond).not.toHaveBeenCalled();
-          if (changed === "authority") {
-            current = false;
-          } else {
-            await seed({
-              ...entry,
-              ...(metadataOnly
-                ? {
-                    label: "Renamed during read",
-                    updatedAt: 2,
-                    lastActivityAt: 2,
-                    totalTokens: 10,
-                  }
-                : changed === "generation"
-                  ? { lifecycleRevision: "replacement" }
-                  : changed === "reset"
-                    ? { sessionId: "replacement" }
-                    : changed === "archive"
-                      ? { archivedAt: 2 }
-                      : changed === "workspace"
-                        ? { spawnedWorkspaceDir: path.join(state.workspaceDir, "replacement") }
-                        : { visibility: "draft" }),
-            });
-          }
+          await seed({
+            ...entry,
+            ...(metadataOnly
+              ? {
+                  label: "Renamed during read",
+                  updatedAt: 2,
+                  lastActivityAt: 2,
+                  totalTokens: 10,
+                }
+              : changed === "generation"
+                ? { lifecycleRevision: "replacement" }
+                : changed === "reset"
+                  ? { sessionId: "replacement" }
+                  : changed === "archive"
+                    ? { archivedAt: 2 }
+                    : changed === "workspace"
+                      ? { spawnedWorkspaceDir: path.join(state.workspaceDir, "replacement") }
+                      : { visibility: "draft" }),
+          });
         } finally {
           release.resolve();
           await outcome;
           io.mockRestore();
         }
         const settled = await outcome;
-        if (changed === "authority") {
-          expect(settled).toMatchObject([
-            { status: "rejected", reason: { message: "Gateway requester authority changed" } },
-          ]);
-          expect(respond).not.toHaveBeenCalled();
-        } else {
-          expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
-          expect(respond).toHaveBeenCalledOnce();
-          const response = respond.mock.calls[0];
-          const scenario = `${method}/${changed}: ${JSON.stringify(response)}`;
-          expect.soft(response?.[0], scenario).toBe(metadataOnly);
-          expect
-            .soft(response?.[1], scenario)
-            .toEqual(
-              metadataOnly
-                ? method === "sessions.branches.list"
-                  ? { branches: [] }
-                  : method === "sessions.files.assets"
-                    ? { assets: [] }
-                    : expect.objectContaining({ sessionKey: key })
-                : undefined,
-            );
-        }
+        expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
+        expect(respond).toHaveBeenCalledOnce();
+        const response = respond.mock.calls[0];
+        const scenario = `${method}/${changed}: ${JSON.stringify(response)}`;
+        expect.soft(response?.[0], scenario).toBe(metadataOnly);
+        expect
+          .soft(response?.[1], scenario)
+          .toEqual(
+            metadataOnly
+              ? method === "sessions.branches.list"
+                ? { branches: [] }
+                : method === "sessions.files.assets"
+                  ? { assets: [] }
+                  : expect.objectContaining({ sessionKey: key })
+              : undefined,
+          );
       }
     });
   });

@@ -1,0 +1,82 @@
+# Scribe runs
+
+The scribe's prompt checks access, sets up any automation and lists its
+settings; this is only the work. Do not ask questions. Acquire with the Granola
+plugin's tools ([source acquisition](source-acquisition.md)).
+
+## Learn from Granola
+
+The pending, checkpoint and completion rules below address the November 12, 2026
+live run that stopped after digesting a meeting instead of finishing ingestion:
+[#197890](https://github.com/openclaw/openclaw/pull/197890) and
+[#197391](https://github.com/openclaw/openclaw/pull/197391). The per-run meeting
+target in step 5 addresses runs that ingested one meeting while others stayed
+pending ([#199744](https://github.com/openclaw/openclaw/pull/199744)). The
+`gone` state in step 3 addresses runs that failed every time on a pending
+meeting deleted from Granola
+([#202388](https://github.com/openclaw/openclaw/pull/202388)). The
+`insufficient evidence` and `review` outcomes address
+[unsupported meeting records](https://github.com/openclaw/openclaw/pull/205816).
+
+The prompt names which meetings (the owner's, or every meeting the account can
+read) and how far back to start (today, or the last 7 or 30 days, in the owner's
+time zone).
+
+1. **Plugin.** Tool search for `granola list_meetings`. If the Granola tools
+   are missing or say the account is not connected, stop with
+   `Scribe status: failed — the Granola plugin is not installed or connected`.
+2. **Checkpoint.** `knowledge_lookup` the note page
+   `Knowledge scribe checkpoint · Learn from Granola`. Its first line is
+   `Start: YYYY-MM-DD`, the start date the prompt set when the page was
+   created. Then one line per Granola meeting: meeting date, UUID,
+   `updated_at` and a state: `done` (with the meeting page title), `no
+   transcript`, `gone`, `insufficient evidence` (with the observed source
+   version and brief reason), `review` (with the existing page title and
+   reason), or `pending` (with why). Lines record outcomes only: never write
+   resume notes, plans or instructions for a later run on the page.
+   Create the page with `knowledge_save_page` (type `note`) on the first run,
+   writing the prompt's start date.
+3. **List.** `list_meetings` from the later of `Start` and 7 days before the
+   newest `done` meeting date, through today; never earlier than `Start`. For
+   the owner's meetings pass
+   `involvement: {captured_by_me: true, listed_as_participant: true}`. Follow
+   `next_cursor`. Add every `pending` meeting by UUID (read with
+   `get_meetings`), whatever its date, until its outcome is known.
+   A `pending` meeting that `get_meetings` reports
+   as not found or inaccessible was deleted or unshared in Granola: record it
+   `gone` and go on to the other meetings; it is not a run failure. Skip
+   `done`, `no transcript`, `gone`, `insufficient evidence` and `review`
+   meetings unless a later `updated_at` shows the note changed.
+4. **Dedup.** Before acquiring, `knowledge_grep` the UUID, then the meeting
+   title, and read candidate meeting pages with the same date (±1 day). A
+   page is not proof of a complete ingestion: an earlier run may have stopped
+   after publishing it. Before recording an existing page `done`, acquire and
+   retain its current transcript and apply step 1's source-evidence gate. A
+   recorder's available `no transcript` outcome stays `no transcript`; an
+   incomplete or unavailable source stays `pending`. If a complete source is
+   insufficient, record `review` with the existing page title and reason;
+   preserve the page and dependent material without deleting or mass-rewriting
+   it. Otherwise run the step-5 verification: record `done` only if it passes,
+   or reconcile into that page ([speakers](speakers.md)) and finish steps 3–5;
+   never create a second page.
+5. **Ingest.** Oldest first, one meeting at a time, run steps 1–5 of this skill
+   in full. A meeting you start, you finish: acquiring or digesting a meeting
+   is not a stopping point. `pending` is only for reasons outside the run: the
+   meeting is still being recorded, its transcript is not ready yet, or
+   verification still fails after you tried to fix it. A complete retained
+   transcript that fails the source-evidence gate is `insufficient evidence`,
+   not pending: do not publish from it or retry it until `updated_at` changes.
+   Record `no transcript` only for the recorder's available no-transcript
+   outcome. Record `done` only after verification passes. Write each line with
+   `knowledge_edit_body` as soon as the meeting's outcome is known, so an
+   interrupted run resumes instead of redoing or losing it.
+   Then start the next pending meeting. A scheduled run's message sets how many
+   meetings it ingests; without one, ingest every pending meeting. That number
+   is a target, not a limit: stop short only when no meeting is left that
+   nothing outside the run holds back. Compaction keeps what you published, so
+   a long run is no reason to stop.
+6. Count meetings ingested, already in Knowledge, left pending, insufficient
+   evidence, flagged for review and without a transcript, and pages and claims
+   written. If meetings are left pending, none was ingested and nothing outside
+   the run held them back, the run did not do its work: end with
+   `Scribe status: needs attention — <why>` instead of `on`.

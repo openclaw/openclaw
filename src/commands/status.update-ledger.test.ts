@@ -171,8 +171,10 @@ describe("status update ledger evidence", () => {
         expect(rows[0]?.Value).toContain("Last update run failed (post-update-failed)");
         expect(rows[0]?.Value).not.toContain("openclaw update");
       } else {
+        expect(rows[0]?.Value).toContain("(post-update-failed)");
+        expect(rows[0]?.Value).toContain("gateway verification");
         expect(rows[0]?.Value).toContain(
-          "⚠️ OpenClaw update failed: post-update-failed. Gateway did not settle; startup phase: waiting for managed service",
+          "Gateway did not settle; startup phase: waiting for managed service",
         );
         if (detail) {
           expect(rows[0]?.Value).toContain(detail);
@@ -244,7 +246,7 @@ describe("status update ledger evidence", () => {
         expect(rows[0]?.Value).toContain("Last update run failed (preflight-no-good-commit)");
         expect(rows[0]?.Value).not.toContain("openclaw update");
       } else {
-        expect(rows[0]?.Value).toContain("⚠️ OpenClaw update failed: preflight-no-good-commit.");
+        expect(rows[0]?.Value).toContain("(preflight-no-good-commit).");
         if (healthy) {
           expect(rows[0]?.Value).toContain("run `openclaw update`");
         }

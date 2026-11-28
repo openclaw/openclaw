@@ -9,6 +9,11 @@ import type { inspectOtherOpenClawProcesses } from "../infra/openclaw-process-ce
 import { writeArtifact as write } from "../plugins/public-surface.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
+  changedStoreFiles,
+  snapshotStoreFiles,
+} from "../test-utils/store-snapshot.test-support.js";
+import { decideDoctorContributionPending } from "./doctor-health-context.test-support.js";
+import {
   createDoctorHealthFlowContext,
   resolveDoctorHealthContributions,
   runDoctorHealthContributionList,
@@ -66,11 +71,7 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
-async function runCaptureReport(repair = false, update = false) {
-  const contribution = resolveDoctorHealthContributions().find(
-    (entry) => entry.id === "doctor:legacy-plugin-source-captures",
-  );
-  expect(contribution, "capture cleanup must be registered with Doctor").toBeDefined();
+function captureContext(repair: boolean, update = false) {
   const ctx = createDoctorHealthFlowContext({
     env: {
       HOME: parent,
@@ -81,6 +82,20 @@ async function runCaptureReport(repair = false, update = false) {
     options: { repair },
   });
   ctx.prompter.shouldRepair = repair;
+  return ctx;
+}
+
+const captureContribution = () => {
+  const contribution = resolveDoctorHealthContributions().find(
+    (entry) => entry.id === "doctor:legacy-plugin-source-captures",
+  );
+  expect(contribution, "capture cleanup must be registered with Doctor").toBeDefined();
+  return contribution!;
+};
+
+async function runCaptureReport(repair = false, update = false) {
+  const contribution = captureContribution();
+  const ctx = captureContext(repair, update);
   if (update) {
     await runDoctorHealthContributionList(ctx, [contribution!]);
   } else {
@@ -247,4 +262,32 @@ it("keeps inspection errors advisory and empty temporary directories silent", as
   expect(output).toContain("fixture service inspection unavailable");
   expect(output).toContain("fixture permission denied");
   expect(output).not.toContain("Removed ");
+});
+
+it("has pending work exactly while a capture root would be reclaimed, and decides without writing", async () => {
+  const pending = (repair = true) =>
+    decideDoctorContributionPending(captureContribution(), captureContext(repair));
+  await expect(pending()).resolves.toBe("none");
+
+  const legacy = capture("old/source.cjs", "abc", path.join(stateDir, "tmp"));
+  inspectAsLaterProcess();
+  const before = snapshotStoreFiles(parent);
+  await expect(pending()).resolves.toBe("work");
+  await expect(pending(false)).resolves.toBe("none");
+  expect(changedStoreFiles(before, snapshotStoreFiles(parent))).toEqual([]);
+  await duringMaintenance(() => runCaptureReport(true));
+  expect(fs.existsSync(legacy)).toBe(false);
+  await expect(pending()).resolves.toBe("none");
+
+  // A managed root is reclaimed under its custody lock, which only the cleanup may take.
+  const managed = path.join(stateDir, "tmp", "plugin-captures", "managed-root");
+  write(path.join(managed, "owner.sqlite"), "custody");
+  fs.mkdirSync(path.join(managed, "native"));
+  const old = new Date(Date.now() - 2 * 60 * 60 * 1_000);
+  fs.utimesSync(managed, old, old);
+  await expect(pending()).resolves.toBe("work");
+
+  fs.rmSync(managed, { recursive: true });
+  readCommand.mockRejectedValue(new Error("fixture service inspection unavailable"));
+  await expect(pending()).resolves.toBe("undecidable");
 });

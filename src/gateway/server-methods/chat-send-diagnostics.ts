@@ -19,6 +19,7 @@ const PHASES = [
   "effects",
   "response",
   "dispatch",
+  "run",
 ] as const;
 type ChatSendPhase = (typeof PHASES)[number] | `detail.${string}`;
 type PostAckStage = "startup" | "steer" | "queued";
@@ -48,6 +49,7 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
   const emit = createQueuedDiagnosticPhaseEmitter();
   const timing = createPhaseTimings<ChatSendPhase>();
   const { totals } = timing;
+  let dispatchScope: ReturnType<typeof timing.scope> | undefined;
   let stage: "request" | PostAckStage = "request";
   let startedAt = performance.now();
   let acknowledgedMs: number | undefined;
@@ -136,7 +138,13 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       timing.close();
     }
   };
-  const scope = (phase: ChatSendPhase) => (finished ? undefined : timing.scope(phase));
+  const scope = (phase: ChatSendPhase) => {
+    const current = finished ? undefined : timing.scope(phase);
+    if (phase === "dispatch") {
+      dispatchScope = current;
+    }
+    return current;
+  };
   return {
     setRunIdentity(sessionId: string, runId: string) {
       identity = { sessionId, runId };
@@ -168,6 +176,13 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       if (typeof spanName !== "string") {
         return undefined;
       }
+      if (
+        stage === "startup" &&
+        spanName.startsWith("reply.admission.") &&
+        spanName.endsWith("_wait")
+      ) {
+        stage = "queued";
+      }
       const phase = `detail.${spanName}` as const;
       if (durationMs !== undefined) {
         totals.set(phase, (totals.get(phase) ?? 0) + durationMs);
@@ -175,6 +190,15 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       }
       if (spanName === DEPENDENCY_RETIRE_VERIFY) {
         dependencyRetireVerifyAttempts++;
+      }
+      if (spanName === "reply.run_prepared_reply") {
+        // Steering can await a whole prepared reply without the startup callback.
+        dispatchScope?.mark("run");
+        const detail = scope(phase);
+        return () => {
+          detail?.finish();
+          dispatchScope?.mark("dispatch");
+        };
       }
       return scope(phase)?.finish;
     },

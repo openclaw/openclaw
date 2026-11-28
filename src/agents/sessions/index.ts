@@ -7,7 +7,6 @@ export * from "./extensions/index.js";
 export type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "./extensions/types.js";
 export * from "./model-registry.js";
 export * from "./resource-loader.js";
-export type { CreateAgentSessionOptions } from "./sdk.js";
 export * from "./session-manager.js";
 export { SettingsManager } from "./settings-manager.js";
 export * from "../../skills/loading/session.js";

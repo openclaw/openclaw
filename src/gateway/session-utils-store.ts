@@ -11,8 +11,16 @@ import {
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
+import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
+import { isConversationToolAllowed } from "../agents/conversation-tool-policy-pipeline.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveRunEntryCliRuntime } from "../agents/embedded-agent-runner/run-entry-runtime.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
+import { hasUnrestrictedGatewayExecution } from "../agents/execution-authority.js";
+import { isGatewayToolAllowedWithoutAction } from "../agents/gateway-tool-policy.js";
+import { resolveAgentHarnessSelectionDecision } from "../agents/harness/selection-decision.js";
 import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
+import { resolveModelExecCeilings } from "../agents/lazy-exec-tool.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   buildModelAliasIndex,
@@ -20,7 +28,11 @@ import {
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
 import { resolveSandboxRuntimeSettings } from "../agents/sandbox/config.js";
-import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-exec-mode.js";
+import {
+  projectEffectiveExecPolicy,
+  SESSION_PERMISSION_BY_EXEC_MODE,
+} from "../agents/session-permission-exec-mode.js";
+import { resolveEffectiveToolFsWorkspaceOnly } from "../agents/tool-fs-policy.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import { resolveConfiguredPrimaryModelForAgent } from "../agents/utility-model.js";
 import { hasWorkspaceGitCheckout } from "../agents/workspace-git.js";
@@ -36,7 +48,11 @@ import type {
   SessionEntryReadScope,
 } from "../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
+import {
+  resolveExecModeFromPolicy,
+  resolveExecPolicyForMode,
+  type ExecApprovalsFile,
+} from "../infra/exec-approvals-core.js";
 import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
 import {
   isIncognitoSessionKey,
@@ -332,7 +348,7 @@ function resolveGatewayAgentModel(
 ): NonNullable<GatewayAgentRow["model"]> {
   // Agent rows expose model identity to clients; credential-profile binding stays in
   // canonical config and is consumed only by execution-time model selection.
-  const primary = `${resolvedModel.provider}/${resolvedModel.model}`;
+  const primary = resolvedModel && `${resolvedModel.provider}/${resolvedModel.model}`;
   const utilityOnly =
     !resolveConfiguredPrimaryModelForAgent({ cfg, agentId }) &&
     readUtilityModelSetting(cfg, agentId).kind === "explicit";
@@ -345,7 +361,7 @@ function resolveGatewayAgentModel(
     normalizeLowercaseStringOrEmpty,
   );
   return {
-    ...(utilityOnly ? {} : { primary }),
+    ...(utilityOnly || !primary ? {} : { primary }),
     ...(fallbacks.length > 0 ? { fallbacks } : {}),
   };
 }
@@ -361,6 +377,85 @@ function resolvedPermissionLabel(
     policy.security === canonical.security &&
     policy.ask === canonical.ask
     ? SESSION_PERMISSION_BY_EXEC_MODE[mode]
+    : undefined;
+}
+
+function resolveAgentDefaultPermissionLabel(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  model: NonNullable<ReturnType<typeof resolveDefaultModelForAgent>>;
+  execApprovals: ExecApprovalsFile;
+}): GatewayAgentRow["defaultPermissionMode"] {
+  const { cfg, agentId, model } = params;
+  const defaults = resolveExecDefaults({ cfg, agentId, execApprovals: params.execApprovals });
+  const projected = projectEffectiveExecPolicy({
+    base: defaults,
+    modelExecCeilings: resolveModelExecCeilings({
+      cfg,
+      agentId,
+      modelProvider: model.provider,
+      modelId: model.model,
+    }),
+  });
+  const effective = {
+    security: projected.security ?? defaults.security,
+    ask: projected.ask ?? defaults.ask,
+  };
+  const policy = {
+    ...defaults,
+    ...effective,
+    mode: projected.mode ?? resolveExecModeFromPolicy(effective),
+  };
+  const label = resolvedPermissionLabel(policy);
+  if (label !== "full") {
+    return label;
+  }
+  try {
+    const primary = resolveConfiguredPrimaryModelForAgent({ cfg, agentId });
+    if (
+      resolveRunEntryCliRuntime({
+        config: cfg,
+        agentId,
+        provider: model.provider,
+        model: model.model,
+        authProfileId: primary ? splitTrailingAuthProfile(primary).profile : undefined,
+      }).useCliExecution
+    ) {
+      return undefined;
+    }
+    const runtime = resolveAgentHarnessSelectionDecision({
+      config: cfg,
+      agentId,
+      provider: model.provider,
+      modelId: model.model,
+    });
+    // Plugin and CLI execution can replace Gateway tools with native behavior.
+    // Selection alone cannot prove their effective unrestricted command policy.
+    if (!runtime.builtIn || runtime.selectedReason === "cli_runtime_passthrough_openclaw") {
+      return undefined;
+    }
+  } catch {
+    // An unavailable or unsupported runtime cannot establish a default grant.
+    return undefined;
+  }
+  // Agent defaults have no session lineage. The runtime separately binds the
+  // actual callable surface and current authority for the requesting turn.
+  const capabilityProfile = resolveConversationCapabilityProfile({
+    config: cfg,
+    agentId,
+    modelProvider: model.provider,
+    modelId: model.model,
+  });
+  return hasUnrestrictedGatewayExecution({
+    execAuthority:
+      isConversationToolAllowed(capabilityProfile, "exec") &&
+      isGatewayToolAllowedWithoutAction("exec", cfg)
+        ? "gateway-host"
+        : undefined,
+    execPolicy: policy,
+    workspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg, agentId }),
+  })
+    ? label
     : undefined;
 }
 
@@ -427,90 +522,126 @@ export async function listAgentsForGateway(
   const provenanceById = new Map(
     provenanceRecords.map((record) => [record.agentId, record] as const),
   );
-  const agents = roster.map((entry) => {
-    const { id } = entry;
-    const agentConfig = resolveAgentConfig(cfg, id);
-    const newSessionPermissionMode = agentConfig?.newSessionPermissionMode;
-    // This label must never overstate permissiveness. When sandbox policy can vary
-    // by session, the effective policy is unknowable at agent scope: omit the label.
-    const defaultPermissionMode =
-      resolveSandboxRuntimeSettings(cfg.agents?.defaults?.sandbox, agentConfig?.sandbox).mode ===
-      "off"
-        ? resolvedPermissionLabel(resolveExecDefaults({ cfg, agentId: id, execApprovals }))
-        : undefined;
-    const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
-    const model = resolveGatewayAgentModel(cfg, id, resolvedModel);
-    const utilitySetting = readUtilityModelSetting(cfg, id);
-    const selectionParams = { cfg, agentId: id, defaultProvider: resolvedModel.provider };
-    const utility =
-      utilitySetting.kind === "explicit"
-        ? resolveModelRefFromString({
-            ...selectionParams,
-            raw: utilitySetting.modelRef,
-            aliasIndex: buildModelAliasIndex(selectionParams),
-          })?.ref
-        : undefined;
-    const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: id });
-    const agentRuntime = projectWorkerPlacementAgentRuntime(
-      resolveModelAgentRuntimeMetadata({
+  const agents = await Promise.all(
+    roster.map(async (entry) => {
+      const { id } = entry;
+      const agentConfig = resolveAgentConfig(cfg, id);
+      const description = agentConfig?.description?.trim();
+      const newSessionPermissionMode = agentConfig?.newSessionPermissionMode;
+      const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
+      // This label must never overstate permissiveness. When sandbox policy can vary
+      // by session, the effective policy is unknowable at agent scope: omit the label.
+      const defaultPermissionMode =
+        resolvedModel &&
+        resolveSandboxRuntimeSettings(cfg.agents?.defaults?.sandbox, agentConfig?.sandbox).mode ===
+          "off"
+          ? resolveAgentDefaultPermissionLabel({
+              cfg,
+              agentId: id,
+              model: resolvedModel,
+              execApprovals,
+            })
+          : undefined;
+      const model = resolveGatewayAgentModel(cfg, id, resolvedModel);
+      const utilitySetting = readUtilityModelSetting(cfg, id);
+      const selectionParams = {
         cfg,
         agentId: id,
-        provider: resolvedModel.provider,
-        model: resolvedModel.model,
-        sessionKey,
-        acpRuntime: false,
-      }),
-    );
-    const hasAgentCatalog = options?.modelCatalogByAgentId?.has(id);
-    // Unconfigured system rows inherit the default catalog; keep its provider
-    // policy attached. A configured owner with no catalog must not inherit it.
-    const preparedCatalog = options?.modelCatalogByAgentId?.get(
-      hasAgentCatalog ? id : basic.defaultId,
-    );
-    const thinkingProfile = resolveGatewayModelThinkingProfile({
-      cfg,
-      agentId: id,
-      provider: resolvedModel.provider,
-      model: resolvedModel.model,
-      modelCatalog: preparedCatalog?.entries,
-      sessionKey,
-      providerPolicySource: preparedCatalog?.pluginRegistry,
-    });
-    const workspace = resolveAgentWorkspaceDir(cfg, id);
-    // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
-    // repo are worktree-capable, so the UI toggle and the create path cannot diverge.
-    const workspaceGit = hasWorkspaceGitCheckout(workspace);
-    const agent = Object.assign(
-      {
-        id,
-        ...(entry.admissionRefusal
-          ? { status: entry.status, admissionRefusal: entry.admissionRefusal }
-          : {}),
-        ...(options?.includeSystem ? { kind: entry.kind } : {}),
-        name: entry.name,
-        identity: identityById.get(id),
-        workspace,
-        workspaceGit,
-        agentRuntime,
-        // Preserve the established serialized projection order for byte-stable responses.
-        thinkingLevels: thinkingProfile.thinkingLevels,
-        thinkingOptions: thinkingProfile.thinkingLevels.map((level) => level.label),
-        thinkingDefault: thinkingProfile.thinkingDefault,
-      },
-      { model },
-      utility ? { utilityModel: `${utility.provider}/${utility.model}` } : {},
-      defaultPermissionMode ? { defaultPermissionMode } : {},
-      newSessionPermissionMode ? { newSessionPermissionMode } : {},
-    );
-    const provenance = provenanceById.get(id);
-    return provenance
-      ? Object.assign(agent, {
-          createdVia: provenance.createdVia,
-          creatorAgentId: provenance.creatorAgentId,
-          createdAt: provenance.createdAtMs,
-        })
-      : agent;
-  });
+        defaultProvider: resolvedModel?.provider ?? DEFAULT_PROVIDER,
+      };
+      const utility =
+        utilitySetting.kind === "explicit"
+          ? resolveModelRefFromString({
+              ...selectionParams,
+              raw: utilitySetting.modelRef,
+              aliasIndex: buildModelAliasIndex(selectionParams),
+            })?.ref
+          : undefined;
+      const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: id });
+      const hasAgentCatalog = options?.modelCatalogByAgentId?.has(id);
+      // Unconfigured system rows inherit the default catalog; keep its provider
+      // policy attached. A configured owner with no catalog must not inherit it.
+      const preparedCatalog = options?.modelCatalogByAgentId?.get(
+        hasAgentCatalog ? id : basic.defaultId,
+      );
+      // Runtime and thinking describe the configured model; an agent without one has neither.
+      const modelFacts = resolvedModel && {
+        agentRuntime: projectWorkerPlacementAgentRuntime(
+          resolveModelAgentRuntimeMetadata({
+            cfg,
+            agentId: id,
+            provider: resolvedModel.provider,
+            model: resolvedModel.model,
+            sessionKey,
+            acpRuntime: false,
+          }),
+        ),
+        thinkingParams: {
+          cfg,
+          agentId: id,
+          provider: resolvedModel.provider,
+          model: resolvedModel.model,
+          modelCatalog: preparedCatalog?.entries,
+          sessionKey,
+          providerPolicySource: preparedCatalog?.pluginRegistry,
+        },
+      };
+      const thinkingProfile =
+        modelFacts && resolveGatewayModelThinkingProfile(modelFacts.thinkingParams);
+      // With its own override, thinkingDefault is that override; editors also need the level
+      // clearing it would fall back to (per-model params, global default, model default).
+      const thinkingInheritedDefault =
+        modelFacts && agentConfig?.thinkingDefault
+          ? resolveGatewayModelThinkingProfile({
+              ...modelFacts.thinkingParams,
+              withoutAgentThinkingDefault: true,
+            }).thinkingDefault
+          : undefined;
+      const workspace = resolveAgentWorkspaceDir(cfg, id);
+      // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
+      // repo are worktree-capable, so the UI toggle and the create path cannot diverge.
+      const workspaceGit = await hasWorkspaceGitCheckout(workspace);
+      const agent = Object.assign(
+        {
+          id,
+          ...(entry.admissionRefusal
+            ? { status: entry.status, admissionRefusal: entry.admissionRefusal }
+            : {}),
+          ...(options?.includeSystem ? { kind: entry.kind } : {}),
+          name: entry.name,
+          ...(description ? { description } : {}),
+          ...(agentConfig?.recommendedPrompts?.length
+            ? { recommendedPrompts: agentConfig.recommendedPrompts }
+            : {}),
+          identity: identityById.get(id),
+          workspace,
+          workspaceGit,
+          ...(modelFacts && thinkingProfile
+            ? {
+                agentRuntime: modelFacts.agentRuntime,
+                // Preserve the established serialized projection order for byte-stable responses.
+                thinkingLevels: thinkingProfile.thinkingLevels,
+                thinkingOptions: thinkingProfile.thinkingLevels.map((level) => level.label),
+                thinkingDefault: thinkingProfile.thinkingDefault,
+              }
+            : {}),
+          ...(thinkingInheritedDefault ? { thinkingInheritedDefault } : {}),
+        },
+        { model },
+        utility ? { utilityModel: `${utility.provider}/${utility.model}` } : {},
+        defaultPermissionMode ? { defaultPermissionMode } : {},
+        newSessionPermissionMode ? { newSessionPermissionMode } : {},
+      );
+      const provenance = provenanceById.get(id);
+      return provenance
+        ? Object.assign(agent, {
+            createdVia: provenance.createdVia,
+            creatorAgentId: provenance.creatorAgentId,
+            createdAt: provenance.createdAtMs,
+          })
+        : agent;
+    }),
+  );
   return {
     defaultId: basic.defaultId,
     ownership: basic.ownership,

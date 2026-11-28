@@ -1,16 +1,23 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  GATEWAY_CLIENT_IDS,
+  isNativeAppUiClient,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { DEFAULT_ECHO_TRANSCRIPT_FORMAT } from "../../media-understanding/echo-transcript.js";
+import {
+  DEFAULT_ECHO_TRANSCRIPT_FORMAT,
+  formatAudioTranscriptForAgent,
+} from "../../media-understanding/echo-transcript.js";
 import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
-import { formatAudioTranscriptForAgent } from "../../plugin-sdk/media-understanding-runtime.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
-import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type {
+  UserTurnInput,
+  PersistedUserTurnMessage,
+} from "../../sessions/user-turn-input.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { PreparedSkillLibrarySession } from "../../skills/library/selection.js";
 import {
@@ -30,7 +37,6 @@ import { resolveOperatorSessionCreation } from "../session-creation-provenance.j
 import { resolveGatewayInputParticipant } from "../session-input-participant.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
-import { isAcpBridgeClient } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -153,6 +159,7 @@ export function prepareChatSendUserTurn(params: {
   request: Pick<
     NormalizedChatSendRequest,
     | "clientInfo"
+    | "participating"
     | "inboundMessage"
     | "suppressCommandInterpretation"
     | "systemInputProvenance"
@@ -161,8 +168,7 @@ export function prepareChatSendUserTurn(params: {
   >;
   session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey"> &
     Partial<Pick<PreparedChatSendSession, "cfg">>;
-  admission: Pick<AdmittedChatSend, "originatingRoute"> &
-    Partial<Pick<AdmittedChatSend, "assertWorkAdmissionCurrent" | "assertClientUploadAllowed">>;
+  admission: Pick<AdmittedChatSend, "originatingRoute"> & Partial<AdmittedChatSend>;
   attachments: PreparedChatSendAttachments;
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
@@ -177,10 +183,7 @@ export function prepareChatSendUserTurn(params: {
   const persistedMediaForTranscriptPromise = (async (): ReturnType<
     typeof persistInboundImagesForTranscript
   > => {
-    if (
-      (attachments.parsedImages.length === 0 && attachments.offloadedRefs.length === 0) ||
-      isAcpBridgeClient(client)
-    ) {
+    if (attachments.parsedImages.length === 0 && attachments.offloadedRefs.length === 0) {
       return { entries: [], omission: "none" };
     }
     return await persistInboundImagesForTranscript({
@@ -219,10 +222,9 @@ export function prepareChatSendUserTurn(params: {
   void pluginBoundMediaPromise.catch(() => undefined);
   // Generated media hints belong to the prompt and reset payload, not command arguments.
   const commandBody = request.inboundMessage;
+  const suppressCommands = request.suppressCommandInterpretation || Boolean(request.participating);
   const commandSource =
-    !request.suppressCommandInterpretation && commandBody.trim().startsWith("/")
-      ? "text"
-      : undefined;
+    !suppressCommands && commandBody.trim().startsWith("/") ? "text" : undefined;
   const buildTextContext = (text: string) => {
     // The attachment parser appends managed-media hints after the original input.
     const parsedMessage =
@@ -268,7 +270,7 @@ export function prepareChatSendUserTurn(params: {
     AccountId: accountId,
     MessageThreadId: messageThreadId,
     ...(commandSource ? { CommandSource: commandSource } : {}),
-    CommandAuthorized: !request.suppressCommandInterpretation,
+    CommandAuthorized: !suppressCommands,
     CommandTurn: commandSource
       ? {
           kind: "text-slash",
@@ -282,13 +284,17 @@ export function prepareChatSendUserTurn(params: {
           authorized: false,
           body: commandBody,
         },
-    ...(request.suppressCommandInterpretation ? { CommandInterpretationSuppressed: true } : {}),
+    ...(suppressCommands ? { CommandInterpretationSuppressed: true } : {}),
     MessageSid: session.clientRunId,
     SessionCreation: { ...creation, ...(sandbox ? { sandbox } : {}) },
     ...resolveChatSendCallerContext(client, request.clientInfo, originatingChannel),
     GatewayRunToolBindings: request.toolBindings,
+    TurnGrant: admission.operatorAuthority?.grant,
     GatewayUiCommandTarget: gatewayUiCommandTarget,
   };
+  if (request.participating) {
+    delete ctx.ApprovalReviewerDeviceId;
+  }
   const recoveredRequester = readQueuedChatInputAdmission(session.clientRunId)?.requesterProfile;
   const requester = client?.authenticatedUserProfile;
   const externalInput =
@@ -309,7 +315,7 @@ export function prepareChatSendUserTurn(params: {
     client &&
     requester &&
     (client.authenticatedUserId || client.internal?.authenticatedOperator) &&
-    isBrowserOperatorUiClient(request.clientInfo) &&
+    (isBrowserOperatorUiClient(request.clientInfo) || isNativeAppUiClient(request.clientInfo)) &&
     !isSyntheticGatewayCaller(client) &&
     externalInput
   ) {

@@ -50,6 +50,18 @@ function renderSecurity(
 }
 
 describe("Security", () => {
+  it("describes all reviewer outcomes for the resolved Auto command policy", () => {
+    const security = extractQuickSettingsSecurity(
+      { tools: { exec: { mode: "auto" } } },
+      { execApprovalDefaults: { security: "full", ask: "off" } },
+    );
+    const row = expectRowByTitle(renderSecurity(security).container, "Gateway command defaults");
+    expect(row.querySelector(".settings-row__control")?.textContent).toBe("Auto");
+    expect(row.querySelector(".settings-row__desc")?.textContent).toBe(
+      "A reviewer may allow or deny commands outside the allowlist, or ask for your approval.",
+    );
+  });
+
   it("locks settings while config is busy but keeps every way out", () => {
     const { container } = renderSecurity({}, { configBusy: true });
     expect(expectRowByTitle(container, "Browser tools").querySelector("input")?.disabled).toBe(
@@ -59,7 +71,7 @@ describe("Security", () => {
       true,
     );
     expect(
-      expectRowByTitle(container, "Command permissions").matches("button:not(:disabled)"),
+      expectRowByTitle(container, "Gateway command defaults").matches("button:not(:disabled)"),
     ).toBe(true);
     expect(expectRowByTitle(container, "Devices").matches("button:not(:disabled)")).toBe(true);
   });
@@ -164,7 +176,7 @@ describe("Security", () => {
     ["Gateway authentication", "onOpenGatewaySettings"],
     ["Network access", "onOpenGatewaySettings"],
     ["Devices", "onOpenDevices"],
-    ["Command permissions", "onOpenDevices"],
+    ["Gateway command defaults", "onOpenDevices"],
     ["Approvals", "onOpenApprovals"],
   ] as const)("opens the owner of %s", (title, handler) => {
     const open = vi.fn();
@@ -172,6 +184,26 @@ describe("Security", () => {
     expectRowByTitle(container, title).click();
     expect(open).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    [
+      "full",
+      "Full",
+      "No routine approval prompts. Additional security checks can still require approval.",
+    ],
+    ["deny", "Deny", "Commands are blocked by default."],
+  ] as const)(
+    "identifies %s as Gateway defaults rather than every agent's permissions",
+    (security, label, description) => {
+      const policy = extractQuickSettingsSecurity(
+        { tools: { exec: { mode: "full", strictInlineEval: true } } },
+        { execApprovalDefaults: { security, ask: "off" } },
+      );
+      const row = expectRowByTitle(renderSecurity(policy).container, "Gateway command defaults");
+      expect(row.querySelector(".settings-row__control")?.textContent).toBe(label);
+      expect(row.querySelector(".settings-row__desc")?.textContent).toBe(description);
+    },
+  );
 
   it("hands the schema editor its section titles and switch summaries", () => {
     const { container } = renderSecurity(
@@ -469,7 +501,7 @@ it.each([["operator.admin"], ["operator.read"]])(
       />
     ));
     await waitForSolid(() => {
-      const row = expectRowByTitle(container, "Command permissions");
+      const row = expectRowByTitle(container, "Gateway command defaults");
       expect(row.querySelector(".settings-row__control")?.textContent).toBe("Unknown");
       expect(row.querySelector(".settings-row__desc")).toBeNull();
     });
@@ -510,7 +542,7 @@ it("retires host policy reads across reconnects of the same client", async () =>
   await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
   currentRead.resolve({ resolvedDefaults: { security: "deny", ask: "off" } });
   const policy = () =>
-    expectRowByTitle(container, "Command permissions").querySelector(".settings-row__control")
+    expectRowByTitle(container, "Gateway command defaults").querySelector(".settings-row__control")
       ?.textContent;
   await waitForSolid(() => expect(policy()).toBe("Deny"));
   oldRead.resolve({ resolvedDefaults: { security: "full", ask: "off" } });

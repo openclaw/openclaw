@@ -208,7 +208,6 @@ it("L6/Y1/Y2: Gateway usage protects read skills, and post-turn cleanup is daily
       runId: "usage-contract",
       workspaceDir: state.workspaceDir,
       skillsSnapshot: snapshot,
-      loopDetection: { enabled: false },
     });
     const result = await read.execute("read-used", { path: path.join(root, "used", "SKILL.md") });
     expect(result.content).toContainEqual(

@@ -2,23 +2,45 @@ import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import type { readChatTranscriptAttachmentSource } from "../chat-history-state.ts";
 import { resolveCappedMessageId } from "../chat-message-recovery.ts";
-import { buildMessageItems } from "../chat-thread-items.ts";
+import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
 import { imageTitle } from "./chat-image-presentation.ts";
 import {
   createMessageMediaOptions,
   type MessageMediaOptions,
 } from "./chat-message-bubble-presentation.ts";
-import { projectMessageMedia } from "./chat-message-media.ts";
+import { projectMessageMedia } from "./chat-message-media-projection.ts";
 import type {
   TranscriptAttachmentEntry,
   TranscriptAttachments,
   SidebarContent,
 } from "./chat-sidebar-content-types.ts";
 
-/** Projects only the adopted window, preserving message and media slot identities. */
+export function representedArtifactIds(
+  entries: readonly TranscriptAttachmentEntry[] | undefined,
+  query?: string,
+) {
+  const ids = new Set<string>();
+  for (const entry of entries ?? []) {
+    if (query !== undefined && !transcriptAttachmentMatches(entry, query)) {
+      continue;
+    }
+    const id =
+      entry.kind === "image"
+        ? entry.image.artifactId
+        : entry.item.type === "attachment"
+          ? entry.item.attachment.artifactId
+          : undefined;
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return ids;
+}
+
+/** The catalog and chat fallback share message and media slot identities. */
 export function projectTranscriptAttachments(
   source: ReturnType<typeof readChatTranscriptAttachmentSource>,
-  options: MessageMediaOptions,
+  options: MessageMediaOptions & { showMessage?: (id: string) => void },
   onOpenSidebar: (content: SidebarContent) => void,
 ): TranscriptAttachments {
   const entries: TranscriptAttachmentEntry[] = [];
@@ -30,6 +52,7 @@ export function projectTranscriptAttachments(
       normalized.content.some((item) => item.type === "omitted_media") ||
       Boolean(resolveCappedMessageId(row.message, normalized.role));
     const media = projectMessageMedia(row.message, normalized.content);
+    const timestamp = rawMessageTimestamp(row.message) ?? undefined;
     if (media.nextPairingQrExpiresAt !== undefined) {
       pairingQrExpirations.push({
         messageKey: row.key,
@@ -53,9 +76,13 @@ export function projectTranscriptAttachments(
       },
       media,
     );
+    const id = nativeOptions.messageId;
+    const showMessage = options.showMessage;
+    const onShowMessage = id && showMessage ? () => showMessage(id) : undefined;
     for (const [index, image] of media.images.entries()) {
       entries.push({
         kind: "image",
+        onShowMessage,
         image,
         options: nativeOptions,
         onOpenSidebar,
@@ -69,11 +96,13 @@ export function projectTranscriptAttachments(
         ]),
         label: imageTitle(image),
         mimeType: image.mimeType,
+        timestamp,
       });
     }
     for (const [index, item] of media.attachments.entries()) {
       entries.push({
         kind: "attachment",
+        onShowMessage,
         item,
         options: nativeOptions,
         onOpenSidebar,
@@ -86,6 +115,7 @@ export function projectTranscriptAttachments(
         ]),
         label: item.attachment.label,
         mimeType: item.attachment.mimeType,
+        timestamp,
       });
     }
   }

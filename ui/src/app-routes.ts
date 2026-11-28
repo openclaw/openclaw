@@ -12,11 +12,11 @@ import {
   agentRouteFromPath,
   canonicalPluginTabLocation,
   dynamicRouteFromPath,
+  isApplicationEntryPath,
   isSessionRouteId,
   pathForAgentPanel,
   pathForRoute,
   locationForRoute,
-  pluginSlugCandidate,
   pluginTabSlugFromPath,
   routeIdFromPath,
   setPluginTabSlugs,
@@ -62,10 +62,13 @@ import { canonicalPluginsRouteLocation } from "./pages/plugins/route-data.ts";
 import { pages as pluginsPages } from "./pages/plugins/route.tsx";
 import { page as portalsPage } from "./pages/portals/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
+import { page as projectsPage } from "./pages/projects/route.tsx";
+import { page as rolesPage } from "./pages/roles/route.tsx";
 import { page as searchPage } from "./pages/search/route.ts";
 import { page as secretsPage } from "./pages/secrets/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
+import { canonicalSkillsRouteLocation } from "./pages/skills/route-location.ts";
 import { pages as skillsPages } from "./pages/skills/route.ts";
 import { page as systemsPage } from "./pages/systems/route.ts";
 import { page as clawsPage } from "./pages/templates/route.ts";
@@ -103,6 +106,7 @@ const APP_ROUTE_TREE = [
   clawsPage,
   agentsPage,
   approvalsPage,
+  rolesPage,
   channelsPage,
   cloudWorkersPage,
   connectionPage,
@@ -116,6 +120,7 @@ const APP_ROUTE_TREE = [
   profilePage,
   workboardPage,
   worktreesPage,
+  projectsPage,
   sessionsPage,
   systemsPage,
   secretsPage,
@@ -169,6 +174,9 @@ function canonicalRouteLocation(
   location: RouteLocation,
   basePath: string,
 ): RouteLocation {
+  if (isApplicationEntryPath(location.pathname, basePath)) {
+    return { ...location, pathname: pathForRoute("chat", basePath) };
+  }
   return (
     canonicalSettingsLocation(routeId, location, basePath) ??
     (routeId === "model-setup"
@@ -179,7 +187,9 @@ function canonicalRouteLocation(
           ? canonicalPluginTabLocation(location, basePath)
           : routeId === "plugins" || routeId === "plugin-settings"
             ? (canonicalPluginsRouteLocation(location, basePath) ?? location)
-            : location)
+            : routeId === "skills"
+              ? (canonicalSkillsRouteLocation(location, basePath) ?? location)
+              : location)
   );
 }
 
@@ -270,17 +280,6 @@ export async function startApplicationRouter(
     history.replace({
       ...location,
       pathname: pathForAgentPanel(initialAgentRoute.agentId, null, basePath),
-    });
-    location = history.location();
-  }
-  // Single-segment plugin deep links wait for hello before outlet recovery.
-  if (
-    routeIdFromPath(location.pathname, basePath) === null &&
-    !pluginSlugCandidate(location.pathname, basePath)
-  ) {
-    history.replace({
-      ...location,
-      pathname: router.pathForRoute("chat", basePath),
     });
     location = history.location();
   }

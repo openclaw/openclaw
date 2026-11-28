@@ -21,7 +21,7 @@ function parseTranscriptMessageId(value: unknown): string | undefined {
   return typeof id === "string" && id.trim() ? id : undefined;
 }
 
-export function isTelegramTextOnlyChannelData(
+function isTelegramTextOnlyChannelData(
   channelData: NonNullable<ReplyPayload["channelData"]>,
 ): boolean {
   if (Object.keys(channelData).length !== 1 || !isRecord(channelData.telegram)) {
@@ -199,3 +199,8 @@ export function resolveCompleteTelegramPromptContextProjectionIds(
   }
   return complete;
 }
+
+/** Classifies Telegram's inert rich-text metadata so its finals count as ordinary text. */
+export const telegramDurableFinalPolicy = {
+  isTextOnlyChannelData: isTelegramTextOnlyChannelData,
+};

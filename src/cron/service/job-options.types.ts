@@ -28,6 +28,8 @@ export type CronAddOptions = {
   /** Selected revisions captured from a validated caller session, never public input. */
   skillLibrarySelections?: CronStoredJob["skillLibrarySelections"];
   matchesExisting?: (job: CronJob) => boolean;
+  /** Internal create-only policy: an existing owned declaration is never rewritten. */
+  keepDeclarationFor?: { agentId: string; sessionKey: string; accountId: string };
   enabledExplicit?: boolean;
   /** Reserved declaration namespaces require trusted ownership at creation. */
   systemOwned?: boolean;

@@ -1,6 +1,26 @@
+import {
+  normalizeJsonSchemaForTypeBox,
+  normalizeTypeBoxValidationErrors,
+} from "@openclaw/normalization-core/json-schema";
 import { Compile } from "typebox/schema";
 import { expect, it } from "vitest";
-import { normalizeJsonSchemaForTypeBox, normalizeTypeBoxValidationErrors } from "./json-schema.js";
+
+it("repairs colliding patterns without losing __proto__", () => {
+  const normalized = normalizeJsonSchemaForTypeBox({
+    type: "object",
+    patternProperties: Object.fromEntries([
+      ["^https:", { minLength: 1 }],
+      ["^https\\:", { maxLength: 10 }],
+      ["__proto__", { type: "string" }],
+    ]),
+  });
+  expect(normalized).toMatchObject({
+    patternProperties: Object.fromEntries([
+      ["^https:", { allOf: [{ minLength: 1 }, { maxLength: 10 }] }],
+      ["__proto__", { type: "string" }],
+    ]),
+  });
+});
 
 it("removes only schema format keywords when annotations are requested", () => {
   const fields = (keys: string, value: unknown) =>

@@ -234,7 +234,7 @@ suite.define(() => {
         await reader.getByRole("heading", { name: reviewRequest.title, exact: true }).waitFor();
         expect(new URL(page.url()).pathname).toBe("/activity");
         const external = reader
-          .locator(".lr-toolbar")
+          .locator(".lr-document-header")
           .getByRole("link", { name: "Open on " + TEST_LINK_READER.label, exact: true });
         expect(await external.getAttribute("href")).toBe(reviewRequest.url);
         expect(await external.getAttribute("target")).toBe("_blank");

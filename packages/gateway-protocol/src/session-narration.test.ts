@@ -11,9 +11,12 @@ describe("session narration protocol", () => {
     [{ key: "agent:main:work" }, true],
     [{ key: "agent:main:work", mode: "narration" }, true],
     [{ key: "agent:main:work", mode: "narration", includeApprovals: true }, true],
+    [{ key: "agent:main:work", includeLiveToolOutput: true }, true],
+    [{ key: "agent:main:work", includeLiveToolOutput: false }, false],
+    [{ key: "agent:main:work", includeLiveToolOutput: "true" }, false],
     [{ key: "agent:main:work", mode: "full" }, false],
     [{ key: "agent:main:work", mode: true }, false],
-  ])("validates the optional narration intent: %j", (params, valid) => {
+  ])("validates optional session delivery interests: %j", (params, valid) => {
     expect(Value.Check(SessionsMessagesSubscribeParamsSchema, params)).toBe(valid);
   });
 

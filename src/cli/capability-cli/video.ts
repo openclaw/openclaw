@@ -9,13 +9,14 @@ import {
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
+import { resolveFilesystemPath } from "../../infra/home-dir.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
 import { positiveDurationError } from "../../shared/positive-duration.js";
 import { registerMediaUnderstandingCommand } from "./media-understanding-command.js";
-import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText } from "./output.js";
 import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
+import type { CapabilityEnvelope } from "./result-types.js";
 
 const GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS = 120_000;
 
@@ -68,7 +69,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
           throw positiveDurationError("--duration", "s");
         }
         const timeoutMs = parseOptionalTimeoutMs(opts.timeoutMs);
-        const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
+        const { getModelsCommandSecretTargetIds } = await import("../model-secret-targets.js");
         const { generateVideo } = await import("../../video-generation/runtime.js");
         const { readResponseWithLimit } = await import("../../infra/http-body.js");
         const { resolveGeneratedMediaMaxBytes } =
@@ -153,7 +154,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
                     extensionForMime(mimeType) ||
                     path.extname(video.fileName ?? "") ||
                     path.extname(output);
-                  const resolvedOutput = path.resolve(output);
+                  const resolvedOutput = resolveFilesystemPath(output);
                   const parsed = path.parse(resolvedOutput);
                   const filePath =
                     result.videos.length <= 1

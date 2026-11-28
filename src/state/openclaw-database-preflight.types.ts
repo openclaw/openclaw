@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SqliteCleanCloseSealRefusal } from "../infra/sqlite-clean-close-seal.js";
 import type { SqliteSchemaIssue } from "../infra/sqlite-schema-contract.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import type { AgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
@@ -15,6 +16,7 @@ export type AgentDatabasePreflightStats = {
   stateIntegrityCheckCount?: number;
   stateIntegrityMs?: number;
   stateSealCount?: number;
+  stateIntegrityReason?: SqliteCleanCloseSealRefusal | "maintenance" | "startup-not-ready";
 };
 
 export type IncompatibleOpenClawDatabase = {
@@ -81,7 +83,14 @@ export type OpenClawDatabaseSchemaPreflightOperation =
   | "gateway-restart"
   | "gateway-startup";
 
+export type StartupStateSchemaReader = () =>
+  | ReturnType<
+      typeof import("./openclaw-agent-schema-inspection-worker.js").createAgentSchemaInspectionWorker
+    >
+  | undefined;
+
 export type OpenClawDatabasePreflightOptions = {
+  takeStateSchemaReader?: StartupStateSchemaReader;
   env: NodeJS.ProcessEnv;
   onAgentDatabaseDiscovery?: (prepared: PreparedAgentDatabaseMigrationDiscovery) => void;
   onAgentInspection?: (stats: AgentDatabasePreflightStats) => void;
@@ -110,6 +119,7 @@ export type OpenClawDatabasePreflightOptions = {
 };
 
 export type OpenClawDatabaseReadinessOptions = {
+  takeStateSchemaReader?: StartupStateSchemaReader;
   env: NodeJS.ProcessEnv;
   onAgentInspection?: (stats: AgentDatabasePreflightStats) => void;
   onRegisteredAgentDatabases?: OpenClawDatabasePreflightOptions["onRegisteredAgentDatabases"];

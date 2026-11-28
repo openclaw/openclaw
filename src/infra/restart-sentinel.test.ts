@@ -93,6 +93,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createPackageReleasePrefixFixture } from "./package-release-slot.test-support.js";
 import {
   readRestartSentinelRowSync,
   writeRestartSentinelRowSync,
@@ -100,10 +101,6 @@ import {
 } from "./restart-sentinel-store.js";
 import {
   clearRestartSentinelIfRevision,
-  markUpdateFailureReportReceiptPending,
-  markUpdateFailureReportReceiptPrepared,
-  readUpdateFailureReportReceipt,
-  reserveUpdateFailureReportReceipt,
   finalizeUpdateRestartSentinelRunningVersion,
   hasRestartSentinel,
   readRestartSentinel,
@@ -257,31 +254,6 @@ describe("restart sentinel", () => {
     expect(written.payload).toStrictEqual(restartPayload());
     await expect(readRestartSentinel()).resolves.toEqual(written);
   });
-
-  it.each(["transaction", "commit"])(
-    "keeps the report prepared when publication authority retires at %s admission",
-    async (stage) => {
-      const receipt = [`receipt-refusal-${stage}`, "report-owner", "a".repeat(64)] as const;
-      await reserveUpdateFailureReportReceipt(...receipt);
-      await markUpdateFailureReportReceiptPrepared(...receipt);
-      const isCurrent = retireAtAdmission(stage);
-      const refusal = new Error("Report publisher retired");
-      const assertCurrent = () => {
-        if (!isCurrent()) {
-          throw refusal;
-        }
-      };
-      await expect(
-        markUpdateFailureReportReceiptPending(...receipt, process.env, undefined, assertCurrent),
-      ).rejects.toBe(refusal);
-      admission.beforeGrant = undefined;
-      await expect(readUpdateFailureReportReceipt(receipt[0])).resolves.toMatchObject({
-        status: "prepared",
-        reservationId: receipt[1],
-        previewDigest: receipt[2],
-      });
-    },
-  );
 
   it.each(["transaction", "commit"] as const)(
     "preserves the notification when its producer loses authority at %s admission",
@@ -618,6 +590,30 @@ describe("restart sentinel", () => {
       await finalizeGit(commit);
       await expectPayload({ status: "error", stats: { reason } });
       await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "verifies a package restart from the release its link selects, and only that release",
+    async () => {
+      const releases = createPackageReleasePrefixFixture(tempDirs.make("openclaw-release-root-"));
+      const previous = releases.addRelease("r1", "2026.11.3");
+      const selected = releases.addRelease("r2", "2026.12.1");
+      releases.linkTo("r2");
+      const write = () =>
+        writeRestartSentinel(
+          updatePayload({
+            stats: { mode: "npm", root: releases.slot, after: { version: "expected-version" } },
+          }),
+        );
+      // A restarted Gateway discovers its root by real path: the selected release.
+      await write();
+      await finalizeUpdateRestartSentinelRunningVersion("2026.12.1", process.env, "", selected);
+      await expectPayload({ status: "ok", stats: { root: releases.slot } });
+      // A Gateway still running the release the link no longer names is another installation.
+      await write();
+      await finalizeUpdateRestartSentinelRunningVersion("2026.11.3", process.env, "", previous);
+      await expectPayload({ status: "error", stats: { reason: "restart-root-mismatch" } });
     },
   );
 

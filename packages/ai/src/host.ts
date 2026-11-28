@@ -117,12 +117,6 @@ export type AiTransformTransportMessages = (
   },
 ) => Context["messages"];
 
-/** Strict-tool policy inputs for OpenAI-compatible routes. */
-export interface OpenAIStrictToolSettingOptions {
-  transport?: "stream" | "websocket";
-  supportsStrictMode?: boolean;
-}
-
 export type AiInlineTextBlock = { type: "text"; text: string };
 export type AiInlineImageBlock = { type: "image"; data: string; mimeType: string };
 export type AiInlineContentBlock = AiInlineTextBlock | AiInlineImageBlock;
@@ -153,14 +147,6 @@ export interface AiTransportHost {
   redactToolPayloadText(text: string): string;
   /** Normalizes Anthropic inline image blocks before provider payload construction. */
   normalizeAnthropicInlineContentBlocks?: AnthropicInlineContentNormalizer;
-  /**
-   * Resolves the host strict-tool default for OpenAI-compatible routes.
-   * undefined lets the request omit the strict flag entirely.
-   */
-  resolveOpenAIStrictToolSetting(
-    model: Pick<Model, "provider" | "api" | "baseUrl" | "id"> & { compat?: unknown },
-    options?: OpenAIStrictToolSettingOptions,
-  ): boolean | undefined;
   /** Provider-plugin operations required by the generic package transports. */
   plugin: AiTransportPluginHost;
   /** Builds provider-owned Copilot compatibility headers for one message turn. */
@@ -213,24 +199,24 @@ export interface AiTransportHost {
 
 const MAX_PENDING_CUSTOM_API_REGISTRATIONS = 32;
 
-const pendingCustomApiRegistrations: Array<{
+type PendingCustomApiRegistration = {
   registry: ApiRegistry;
   api: Api;
   streamFn: StreamFn;
-}> = [];
+};
 
 function queueCustomApiRegistration(registry: ApiRegistry, api: Api, streamFn: StreamFn): boolean {
-  const existing = pendingCustomApiRegistrations.find(
+  const existing = hostState.pendingRegistrations.find(
     (registration) => registration.registry === registry && registration.api === api,
   );
   if (existing) {
     existing.streamFn = streamFn;
     return false;
   }
-  if (pendingCustomApiRegistrations.length >= MAX_PENDING_CUSTOM_API_REGISTRATIONS) {
+  if (hostState.pendingRegistrations.length >= MAX_PENDING_CUSTOM_API_REGISTRATIONS) {
     throw new Error("Too many custom transport APIs were registered before host configuration");
   }
-  pendingCustomApiRegistrations.push({ registry, api, streamFn });
+  hostState.pendingRegistrations.push({ registry, api, streamFn });
   return false;
 }
 
@@ -244,8 +230,6 @@ const inertAiTransportHost: ActiveAiTransportHost = {
   resolveSecretSentinel: (value) => value,
   redactToolPayloadText: (text) => text,
   normalizeAnthropicInlineContentBlocks: async (content) => [...content],
-  resolveOpenAIStrictToolSetting: (_model, options) =>
-    options?.supportsStrictMode ? false : undefined,
   plugin: {
     resolveProviderStream: () => undefined,
     resolveTransportTurnState: () => undefined,
@@ -279,7 +263,6 @@ const inertAiTransportHost: ActiveAiTransportHost = {
   logWarn: () => {},
 };
 
-let activeAiTransportHost: ActiveAiTransportHost = inertAiTransportHost;
 type ProcessWithAsyncHooksBuiltin = NodeJS.Process & {
   getBuiltinModule?: (id: "node:async_hooks") => {
     AsyncLocalStorage: new <T>() => {
@@ -300,10 +283,40 @@ function createAiTransportHostScope() {
   return asyncHooks ? new asyncHooks.AsyncLocalStorage<ActiveAiTransportHost>() : undefined;
 }
 
-// Avoid a static node:async_hooks import: provider modules also load in browser/Vite builds.
-const scopedAiTransportHost = createAiTransportHostScope();
-let pendingUnscopedHost: ActiveAiTransportHost | undefined;
-let pendingUnscopedOperations = 0;
+type AiTransportHostState = {
+  inert: ActiveAiTransportHost;
+  active: ActiveAiTransportHost;
+  scope: ReturnType<typeof createAiTransportHostScope>;
+  pendingHost: ActiveAiTransportHost | undefined;
+  pendingOperations: number;
+  pendingRegistrations: PendingCustomApiRegistration[];
+};
+
+const HOST_STATE_KEY = Symbol.for("openclaw.ai.transportHost");
+
+function resolveAiTransportHostState(): AiTransportHostState {
+  // SAFETY: globalThis is an object; this view only accesses our symbol-owned state.
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  if (Object.hasOwn(globalStore, HOST_STATE_KEY)) {
+    // SAFETY: this module is the sole writer of this symbol and always stores AiTransportHostState.
+    return globalStore[HOST_STATE_KEY] as AiTransportHostState;
+  }
+  const state: AiTransportHostState = {
+    inert: inertAiTransportHost,
+    active: inertAiTransportHost,
+    // Avoid a static node:async_hooks import: transports also load in browsers.
+    scope: createAiTransportHostScope(),
+    pendingHost: undefined,
+    pendingOperations: 0,
+    pendingRegistrations: [],
+  };
+  globalStore[HOST_STATE_KEY] = state;
+  return state;
+}
+
+// Native plugins and source modules can share the retained default runtime.
+// Its providers must also share host policy and async scope across module copies.
+const hostState = resolveAiTransportHostState();
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return (
@@ -317,12 +330,12 @@ function trackUnscopedOperation(host: ActiveAiTransportHost, result: unknown): v
   if (!isPromiseLike(result)) {
     return;
   }
-  pendingUnscopedHost = host;
-  pendingUnscopedOperations += 1;
+  hostState.pendingHost = host;
+  hostState.pendingOperations += 1;
   const release = () => {
-    pendingUnscopedOperations -= 1;
-    if (pendingUnscopedOperations === 0) {
-      pendingUnscopedHost = undefined;
+    hostState.pendingOperations -= 1;
+    if (hostState.pendingOperations === 0) {
+      hostState.pendingHost = undefined;
     }
   };
   void Promise.resolve(result).then(release, release);
@@ -330,59 +343,59 @@ function trackUnscopedOperation(host: ActiveAiTransportHost, result: unknown): v
 
 /** Reports whether distinct host policy can survive asynchronous work. */
 export function supportsScopedAiTransportHosts(): boolean {
-  return scopedAiTransportHost !== undefined;
+  return hostState.scope !== undefined;
 }
 
 /** Resolves an explicit embedding policy without replacing the process default. */
 export function createAiTransportHost(host: Partial<AiTransportHost> = {}): ActiveAiTransportHost {
   return {
-    ...inertAiTransportHost,
+    ...hostState.inert,
     ...host,
     normalizeAnthropicInlineContentBlocks:
       host.normalizeAnthropicInlineContentBlocks ??
-      inertAiTransportHost.normalizeAnthropicInlineContentBlocks,
-    plugin: { ...inertAiTransportHost.plugin, ...host.plugin },
+      hostState.inert.normalizeAnthropicInlineContentBlocks,
+    plugin: { ...hostState.inert.plugin, ...host.plugin },
   };
 }
 
 /** Provider operations retain their policy across lazy loads and asynchronous I/O. */
 export function runWithAiTransportHost<T>(host: ActiveAiTransportHost, run: () => T): T {
-  if (!scopedAiTransportHost) {
-    if (host !== activeAiTransportHost) {
+  if (!hostState.scope) {
+    if (host !== hostState.active) {
       throw new Error("Scoped AI transport hosts require Node.js async context support");
     }
-    if (pendingUnscopedHost && pendingUnscopedHost !== host) {
+    if (hostState.pendingHost && hostState.pendingHost !== host) {
       throw new Error("AI transport host changed while browser provider work was still pending");
     }
     const result = run();
     trackUnscopedOperation(host, result);
     return result;
   }
-  return scopedAiTransportHost.run(host, run);
+  return hostState.scope.run(host, run);
 }
 
 /** Installers must read the process default, never an unrelated operation's scoped policy. */
 export function getDefaultAiTransportHost(): ActiveAiTransportHost {
-  return activeAiTransportHost;
+  return hostState.active;
 }
 
 /** Installs host implementations for the transport policy ports. */
 export function configureAiTransportHost(host: Partial<AiTransportHost>): void {
-  if (!scopedAiTransportHost && pendingUnscopedOperations > 0) {
+  if (!hostState.scope && hostState.pendingOperations > 0) {
     throw new Error("Cannot replace the AI transport host while browser provider work is pending");
   }
-  activeAiTransportHost = createAiTransportHost(host);
-  const transportHost = activeAiTransportHost;
+  hostState.active = createAiTransportHost(host);
+  const transportHost = hostState.active;
   if (
-    transportHost.registerCustomApi === inertAiTransportHost.registerCustomApi ||
-    pendingCustomApiRegistrations.length === 0
+    transportHost.registerCustomApi === hostState.inert.registerCustomApi ||
+    hostState.pendingRegistrations.length === 0
   ) {
     return;
   }
 
   // Transport modules may register before host wiring. Drain once after a concrete
   // registrar installs so module caching cannot permanently lose those registrations.
-  const pending = pendingCustomApiRegistrations.splice(0);
+  const pending = hostState.pendingRegistrations.splice(0);
   for (const registration of pending) {
     transportHost.registerCustomApi(registration.registry, registration.api, registration.streamFn);
   }
@@ -390,7 +403,7 @@ export function configureAiTransportHost(host: Partial<AiTransportHost>): void {
 
 /** Returns the active transport host (inert defaults unless configured). */
 export function getAiTransportHost(): ActiveAiTransportHost {
-  return scopedAiTransportHost?.getStore() ?? activeAiTransportHost;
+  return hostState.scope?.getStore() ?? hostState.active;
 }
 
 /** Resolves sentinel substrings in custom headers at a no-fetch adapter boundary. */

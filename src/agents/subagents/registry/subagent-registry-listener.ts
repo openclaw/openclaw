@@ -3,9 +3,12 @@ import {
   isAgentEventLifecycleGenerationCurrent,
   onAgentEvent,
 } from "../../../infra/agent-events.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
+import {
+  isGatewayRestartDraining,
+  runWithGatewayIndependentRootWorkContinuation,
+} from "../../../process/gateway-work-admission.js";
+import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { isAgentLifecycleYieldedWaiting } from "../../agent-lifecycle-parent-state.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
@@ -32,56 +35,47 @@ export function createSubagentRegistryListener(config: {
   pendingLifecycle: ReturnType<typeof createPendingLifecycleScheduler>;
   resumeRequesterSettleWake: (runId: string, entry: SubagentRunRecord) => void;
   adoptPausedSubagentRunIntoSuccessor: (entry: SubagentRunRecord) => Promise<boolean>;
-  refreshFrozenResultFromSession: (sessionKey: string) => Promise<unknown>;
   completeSubagentRunWithRecovery: (
     params: SubagentCompletionRequest,
     source: string,
   ) => Promise<void>;
 }) {
-  const {
-    runs,
-    pendingLifecycle,
-    refreshFrozenResultFromSession,
-    completeSubagentRunWithRecovery,
-  } = config;
+  const { runs, pendingLifecycle, completeSubagentRunWithRecovery } = config;
   let listenerStop: (() => void) | null = null;
 
   function ensureListener() {
     if (listenerStop) {
       return;
     }
-    listenerStop = onAgentEvent((evt) => {
-      if (!evt || evt.stream !== "lifecycle") {
+    const stopSession = sessionChanges.subscribe((evt) => {
+      if ("all" in evt || evt.scope !== "runtime" || isGatewayRestartDraining()) {
+        return;
+      }
+      // Runtime row changes follow terminal persistence. Raw model end events
+      // also describe pause notices and unfinished tool handoffs.
+      void runWithGatewayIndependentRootWorkContinuation(async () => {
+        for (const child of getSubagentRunsForRequesterSession(evt.sessionKey)) {
+          if (child.waitForMessage && isYieldedSubagentRun(child)) {
+            await settleUnreachableYieldedSubagentRun({
+              runId: child.runId,
+              entry: child,
+              complete: completeSubagentRunWithRecovery,
+            });
+          }
+        }
+      }, "subagents:requester-settlement").catch((err: unknown) => {
+        subagentRegistryLog.warn("requester settlement handler failed", { err });
+      });
+    });
+    const stopAgent = onAgentEvent((evt) => {
+      if (evt.stream !== "lifecycle") {
         return;
       }
       // Own lifecycle writes before their first await.
       void runWithGatewayIndependentRootWorkContinuation(async () => {
         const phase = evt.data?.phase;
-        if (
-          (phase === "end" || phase === "error") &&
-          evt.data.executionStarted !== false &&
-          !isAgentLifecycleYieldedWaiting(evt.data) &&
-          evt.data.stopReason !== "restart" &&
-          evt.sessionKey
-        ) {
-          for (const child of getSubagentRunsForRequesterSession(evt.sessionKey)) {
-            if (child.waitForMessage && isYieldedSubagentRun(child)) {
-              await settleUnreachableYieldedSubagentRun({
-                runId: child.runId,
-                entry: child,
-                complete: completeSubagentRunWithRecovery,
-                requesterEnded: true,
-              });
-            }
-          }
-        }
         let entry = runs.get(evt.runId);
         if (!entry) {
-          if (phase === "end" && typeof evt.sessionKey === "string") {
-            const sessionKey = evt.sessionKey;
-            // A replacement generation can finish after its predecessor row is terminal.
-            await refreshFrozenResultFromSession(sessionKey);
-          }
           return;
         }
         const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -102,10 +96,8 @@ export function createSubagentRegistryListener(config: {
             await mutateSubagentRuns(
               [runId],
               (rows) => {
-                const current = rows.get(runId);
-                if (!current || !isSameSubagentRunOwner(current, entry)) {
-                  throw new Error("Subagent lifecycle start lost its original run");
-                }
+                // mutateSubagentRuns checks assertCurrent before this synchronous plan.
+                const current = rows.get(runId)!;
                 if (
                   current.execution.status === "terminal" ||
                   current.killIntent ||
@@ -144,16 +136,19 @@ export function createSubagentRegistryListener(config: {
         }
         // A retry's start may still be publishing when its terminal event arrives.
         // Join the existing per-run mutation queue before selecting that attempt.
-        const observed = await mutateSubagentRuns([runId], (rows) => ({ value: rows.get(runId) }), {
-          runs,
-          context,
-          assertCurrent,
-        });
+        const observed = await mutateSubagentRuns(
+          [runId],
+          (rows) => ({ value: rows.get(runId)! }),
+          {
+            runs,
+            context,
+            assertCurrent,
+          },
+        );
         if (
-          !observed ||
-          (startedAt !== undefined &&
-            observed.execution.startedAt !== undefined &&
-            observed.execution.startedAt !== startedAt)
+          startedAt !== undefined &&
+          observed.execution.startedAt !== undefined &&
+          observed.execution.startedAt !== startedAt
         ) {
           return;
         }
@@ -224,15 +219,17 @@ export function createSubagentRegistryListener(config: {
         subagentRegistryLog.warn("lifecycle event handler failed", { err, runId: evt.runId });
       });
     });
+    listenerStop = () => {
+      stopAgent();
+      stopSession();
+    };
   }
 
   return {
     ensure: ensureListener,
     reset: () => {
-      if (listenerStop) {
-        listenerStop();
-        listenerStop = null;
-      }
+      listenerStop?.();
+      listenerStop = null;
     },
   };
 }

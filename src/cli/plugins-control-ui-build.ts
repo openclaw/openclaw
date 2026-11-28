@@ -16,6 +16,7 @@ import { normalizeManifestControlUi } from "../plugins/manifest-control-ui.js";
 import type { PluginManifestControlUi } from "../plugins/manifest-types.js";
 import { PLUGIN_MANIFEST_FILENAME } from "../plugins/manifest.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
+import { readPluginAuthoringJson } from "./plugins-authoring-json.js";
 import { buildPluginBundle } from "./plugins-build-bundle.js";
 import { nameControlUiChunks } from "./plugins-control-ui-chunks.js";
 
@@ -45,15 +46,15 @@ export async function buildPluginControlUi(params: {
   platform?: NodeJS.Platform;
 }): Promise<PluginManifestControlUi> {
   const rootDir = await fs.realpath(params.rootDir);
-  const manifestText = await fs
-    .readFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME), "utf8")
-    .catch((error: unknown) => {
-      if (isRecord(error) && error.code === "ENOENT") {
-        return "{}";
-      }
+  let authored: unknown;
+  try {
+    authored = readPluginAuthoringJson(path.join(rootDir, PLUGIN_MANIFEST_FILENAME), true);
+  } catch (error) {
+    if (!isRecord(error) || error.code !== "ENOENT") {
       throw error;
-    });
-  const authored: unknown = JSON.parse(manifestText);
+    }
+    authored = {};
+  }
   const presentation = normalizeManifestControlUi(
     isRecord(authored) ? authored.controlUi : undefined,
     isRecord(authored) ? authored.channels : undefined,

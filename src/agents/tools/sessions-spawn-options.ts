@@ -40,6 +40,8 @@ export type SessionsSpawnToolOptions = {
   /** Host-owned sessions_create mode: a visible session without supervision or completion. */
   independent?: boolean;
   signal?: AbortSignal;
+  /** Retained host invocation, checked before preparation and creation. */
+  assertActive?: () => void;
 } & SpawnedToolContext;
 
 type VisibleSessionsSpawnOptions = SessionsSpawnToolOptions & {

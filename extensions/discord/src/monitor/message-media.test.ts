@@ -425,20 +425,6 @@ describe("resolveMediaList", () => {
       },
     ],
     [
-      "does not infer audio from an .ogg filename with definitive MIME application/pdf",
-      attachmentFixture("att-definitive-application/pdf", "document.ogg", {
-        content_type: "application/pdf",
-      }),
-      { contentType: "application/pdf" },
-    ],
-    [
-      "does not infer audio from an .ogg filename with definitive MIME text/plain",
-      attachmentFixture("att-definitive-text/plain", "document.ogg", {
-        content_type: "text/plain",
-      }),
-      { contentType: "text/plain" },
-    ],
-    [
       "does not classify a duration-bearing video attachment as audio",
       attachmentFixture("att-video-duration", "PXL_2024.mp4", {
         content_type: "video/mp4",

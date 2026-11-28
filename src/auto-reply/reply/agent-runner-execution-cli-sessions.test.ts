@@ -1,3 +1,4 @@
+import "./agent-runner-execution.test-support.js"; // Register mocks before eager runtime imports.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -7,7 +8,6 @@ import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/ru
 import { FailoverError } from "../../agents/failover-error.js";
 import { registerGeneratedMediaTaskActivity } from "../../agents/media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../agents/media-generation-activity.test-support.js";
-import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -16,8 +16,10 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import type { TemplateContext } from "../templating.js";
-import {
-  createCliFollowupRun as createCliRun,
+import { createTestUserTurnRecorder } from "./agent-runner-execution.transcript.test-support.js";
+
+const {
+  createCliFollowupRun: createCliRun,
   createMinimalRunAgentTurnParams,
   expectMockCallArgFields,
   getExecuteAgentTurnForTest,
@@ -25,10 +27,12 @@ import {
   requireMockCall,
   requireRecord,
   setupAgentRunnerExecutionTestState,
-} from "./agent-runner-execution.test-support.js";
-import { createTestUserTurnRecorder } from "./agent-runner-execution.transcript.test-support.js";
-
+} = await import("./agent-runner-execution.test-support.js");
 const state = await setupAgentRunnerExecutionTestState();
+// Placement admission reaches CLI runtime selection through Gateway session utilities. A static
+// import would evaluate that graph before the harness mocks register, binding real CLI detection.
+const { installSessionPlacementAdmissionProvider } =
+  await import("../../agents/session-placement-admission.js");
 
 afterEach(resetGeneratedMediaTaskActivityForTests);
 
@@ -165,6 +169,24 @@ describe("executeAgentTurn: CLI session routing", () => {
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
       currentThreadTs: "1700000000.000100",
       replyToMode: "all",
+    });
+  });
+
+  it("sends a stranded-reply retry as host input without changing its provenance (#206304)", async () => {
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const human = createCliRun("claude-cli", "claude-opus-5");
+    human.run.inputProvenance = { kind: "external_user" };
+    const retry = { ...human, strandedReplyRetry: true };
+    for (const followupRun of [human, retry]) {
+      state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
+      await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+    }
+    // Identical runs differ only in native input origin; authority readers keep the human turn.
+    const [humanParams, retryParams] = state.runCliAgentMock.mock.calls.map(([p]) => p);
+    expect(humanParams?.promptOrigin).toBeUndefined();
+    expect(retryParams).toMatchObject({
+      promptOrigin: "host",
+      inputProvenance: { kind: "external_user" },
     });
   });
 

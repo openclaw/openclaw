@@ -1,7 +1,13 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expressionBuilder } from "kysely";
-import type { ClientCredentialDatabase } from "./client-credential-schema.js";
+import type {
+  ClientCredentialDatabase,
+  ClientCredentialResult,
+  ClientIdentityRecord,
+  ClientSocketRecord,
+  ClientTokenRecord,
+} from "./client-credential-schema.js";
 import {
   salvageStoredIdentityRow,
   storedDeviceIdentityFromRow,
@@ -123,9 +129,12 @@ function claimClientNativeToken(
   return true;
 }
 
-export type ClientIdentityRecord = ClientCredentialDatabase["device_identities"];
-export type ClientTokenRecord = ClientCredentialDatabase["device_auth_tokens"];
-export type ClientSocketRecord = ClientCredentialDatabase["native_exec_socket_credentials"];
+export type {
+  ClientCredentialResult,
+  ClientIdentityRecord,
+  ClientSocketRecord,
+  ClientTokenRecord,
+} from "./client-credential-schema.js";
 export type ClientTokenKey = Pick<ClientTokenRecord, "device_id" | "role"> & {
   gateway_scope?: string;
 };
@@ -163,15 +172,6 @@ export type ClientCredentialOperation =
       fallback: ClientSocketRecord;
       requested?: { path?: string; token?: string };
     };
-
-export type ClientCredentialResult =
-  | { kind: "identity"; identity: ClientIdentityRecord | null }
-  | { kind: "token"; token: ClientTokenRecord | null }
-  | { kind: "tokens"; tokens: ClientTokenRecord[]; nextRole: string | null }
-  | { kind: "identityRepair"; identity: ClientIdentityRecord; repaired: boolean; rotated: boolean }
-  | { kind: "changed"; changed: boolean }
-  | { kind: "cleared"; count: number }
-  | { kind: "socket"; socket: ClientSocketRecord | null };
 
 export function performClientCredentialOperation(
   database: DatabaseSync,

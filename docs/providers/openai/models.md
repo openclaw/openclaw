@@ -9,12 +9,46 @@ title: "OpenAI models"
 sidebarTitle: "Models"
 ---
 
+## GPT-6.2 Astra and Sol
+
+Select `openai/gpt-6.2-astra` or `openai/gpt-6.2-sol` explicitly. Both support
+OpenAI Platform API keys and eligible paid ChatGPT/Codex subscriptions (Plus,
+Pro, Enterprise, and Edu); the selected account catalog decides availability.
+Adding support does not change an existing model, auth order, or default.
+
+Both accept text and images, with a 1,050,000-token physical context window,
+922,000 maximum input tokens, and 128,000 maximum output tokens. OpenClaw keeps
+the conservative 272,000-token default budget; opt into longer context as
+described in [setup](/providers/openai/setup#context-window-defaults-and-long-context-opt-in).
+Account-reported subscription budgets remain authoritative.
+
+Reasoning cannot be disabled. Use `low`, `medium` (the starting default),
+`high`, `xhigh`, or `max`; `minimal` maps to `low`. Tool-bearing turns require
+the Responses API, including when an official Chat Completions adapter was
+configured. Do not send temperature, top-p, or log-probability controls.
+Standard, Fast, and Ultrafast use the existing speed controls; account and
+workspace policy can restrict a tier. Ultrafast requires Pro 200 for Sol,
+Pro 500 for both models, or eligible workspace access.
+
+Standard API pricing per million tokens is $8 input / $0.40 cached input /
+$40 output for Astra, and $2 / $0.10 / $10 for Sol. Thirty-minute cache writes
+cost $10 and $2.50 respectively; 12-hour writes cost $20 and $5. Above 272,000
+input tokens, input/cache rates double and output rates multiply by 1.5 for
+the full request. Fast costs 2× Standard. Ultrafast costs 3× through February
+28, 2027, then 6× beginning March 1, 2027 (Pacific time). Subscription usage
+and API billing remain separate.
+
+See the official [Astra reference](https://developers.openai.com/api/docs/models/gpt-6.2-astra),
+[Sol reference](https://developers.openai.com/api/docs/models/gpt-6.2-sol), and
+[migration guide](https://developers.openai.com/api/docs/guides/latest-model).
+
 ## Quick choice
 
 | Goal                                              | Use                                                                | Notes                                                               |
 | ------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------- |
 | ChatGPT/Codex subscription, native Codex runtime  | `openai/gpt-6-astra`                                               | Fresh subscription setup; sign in with Codex auth.                  |
 | Direct API-key billing for agent turns            | `openai/gpt-6-astra` plus an ordered API-key auth profile          | Fresh API-key setup uses Astra.                                     |
+| GPT-6.2 Astra or Sol                              | `openai/gpt-6.2-astra` or `openai/gpt-6.2-sol`                     | Select explicitly with API-key or eligible subscription auth.       |
 | GPT-6.1 Sol                                       | `openai/gpt-6.1-sol`                                               | Select explicitly; reasoning cannot be disabled.                    |
 | GPT-6 Sol                                         | `openai/gpt-6-sol`                                                 | Select explicitly; account access can differ between auth routes.   |
 | Lower-cost GPT-6 Luna                             | `openai/gpt-6-luna`                                                | Select explicitly; check the account catalog for availability.      |
@@ -37,16 +71,18 @@ GPT-5.4 and GPT-5.4 Mini are retired from the ChatGPT-account Codex route. Run `
 
 ## Models your API key lists
 
-With an OpenAI API key, `openclaw models list --provider openai` shows every chat
-model your account's `/v1/models` lists that runs on the Responses API, including
-models newer than your OpenClaw release. Models without a catalog row use
-conservative defaults: text input, a 128k context window, and unknown cost.
-Embedding, image, video, audio, realtime, speech, transcription, moderation, and
-legacy completions models stay hidden, as do models past their OpenAI shutdown
-date. Search models stay hidden because they run only on Chat Completions; live,
-unrecognized cyber, experiment, and alpha IDs stay hidden because they can fail
-on Responses. The documented `gpt-5.6-cyber` Daybreak model is included when the
-account lists it; approved Daybreak Red access is still required.
+With an OpenAI API key, the model picker offers every chat model your account's
+`/v1/models` lists that runs on the Responses API, including models newer than
+your OpenClaw release. Models without a catalog row use conservative defaults:
+text input, a 128k context window, and unknown cost. Models whose IDs name an
+embedding, image, video, audio, realtime, speech, transcription, moderation, or
+legacy completions family stay out of the default picker, as do live, cyber,
+experiment, and alpha IDs, which often fail on Responses for the listing key.
+`openclaw models list --provider openai` and `--all` list them, and a typed or
+configured reference to one still runs; an account with access to a cyber model
+such as `gpt-5.6-cyber` selects it that way. Models past their OpenAI shutdown
+date are excluded, and search models are not listed because they run only on
+Chat Completions.
 GPT-3.5, GPT-4 (including GPT-4o and GPT-4.1), o1, o3, and o4 models stay hidden
 from the list because their tool capabilities differ from the modern models.
 You can still select one by its reference, for example as
@@ -105,17 +141,26 @@ and [Codex runtime behavior](/plugins/codex-harness/runtime-behavior#automatic-d
 
 ### Chat Access control
 
-The chat and new-session model controls provide a **Daybreak** toggle and an
-**Access** selector when the account advertises a Daybreak program for the selected
-model and runtime and your operator role permits it. Turning Daybreak off selects
-**Standard**; turning it on restores the last permitted Blue or Red choice. Saved
-choices remain scoped to the authenticated user and agent.
+The chat and new-session model controls show a single **Daybreak** toggle when
+the selected model and runtime advertise **Daybreak Blue** or **Daybreak Red**
+for the account. Turning Daybreak off selects **Standard**. A model that requires Daybreak keeps the
+toggle on and disables it once its program is selected. If a saved selection
+needs a different Daybreak program, turn on Daybreak to apply the model's program
+in the same chat. Switching models in the Control UI updates the saved choice
+to the destination's advertised Daybreak program or clears it if the destination
+advertises none. Before sending a turn, the Control UI also repairs a saved choice
+when the catalog confirms it no longer applies. When discovery data is missing
+and the model selection stays the same, the toggle is hidden and existing chat
+and draft choices are preserved. Saved preferences remain scoped to the
+authenticated user and agent.
 
 An unset session choice follows the configured model/agent Access default. Without
-a configured default, supported OpenAI routes use Standard. An explicit session
-choice overrides the default; an explicit empty model `accessPrograms: {}` retains
-provider/native inheritance. If the saved choice becomes unavailable, select
-Standard rather than silently downgrading the request.
+a configured default, supported OpenAI routes use Standard, except that a model whose
+advertised programs exclude Standard uses its one Daybreak program: cyber models
+advertise only Daybreak Red, so they default to Red. An explicit session
+choice overrides the default. An explicit empty model setting
+`accessPrograms: {}` retains provider/native inheritance. A stale saved choice
+can fail before submission. Follow the error's guidance for the selected model.
 
 The session choice survives `/new` and session reset, and is inherited by a fork
 unless replaced. Changes affect the next admitted turn, not an already-running
@@ -137,7 +182,7 @@ omits `accessPrograms`. An explicit
 operator: `[]` permits Standard only, and Blue and Red are listed independently.
 For restricted operators, omission also permits Standard only. The actual model
 must separately be allowed by the role's model policy, and account access and
-provider entitlement are still required. Configured defaults do not bypass
+provider entitlement are still required. Configured and advertised defaults do not bypass
 explicit ceilings or restricted-role grants. Server-side checks cover direct requests, creation,
 execution, and retained or recovered authority after permissions change.
 
@@ -177,7 +222,9 @@ the provider enforces entitlement on every actual request.
 For the OpenClaw runtime on an official OpenAI Platform or ChatGPT subscription
 Responses endpoint, set the selected
 model's `params.accessPrograms.cyber` to `standard`, `daybreak_blue`, or
-`daybreak_red`. Omitting the setting defaults supported routes to Standard; use
+`daybreak_red`. Omitting the setting defaults supported routes to Standard, or to
+the model's one advertised Daybreak program when the account's metadata for that
+model excludes Standard; use
 `accessPrograms: {}` to retain OpenAI's model/account/project defaults. Neither `accessPrograms` nor `cyber` accepts
 `null`. Native Codex also accepts this model setting on ChatGPT authentication,
 with the session override taking precedence. This setting never grants access.

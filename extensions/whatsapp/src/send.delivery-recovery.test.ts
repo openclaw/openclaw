@@ -45,6 +45,7 @@ vi.mock("./connection-controller-runtime-context.js", () => ({
 const cfg = { channels: { whatsapp: {} } } as OpenClawConfig;
 const accountId = "default";
 const chunkConfig = { channels: { whatsapp: { textChunkLimit: 160 } } };
+const oggOpus = `OggS${"\0".repeat(22)}\x01\x13OpusHead`.padEnd(64, "\0");
 const mediaFixture = (
   kind: "document" | "image" | "audio",
   fileName: string,
@@ -201,7 +202,7 @@ it("preserves accepted receipts and callback order after caption failure", async
   const mediaReadFile = vi.fn(async () => Buffer.from("legacy-read"));
   const media = {
     "fixture://forced.png": mediaFixture("image", "forced.png", "image/png", "png"),
-    "fixture://voice.ogg": mediaFixture("audio", "voice.ogg", "audio/ogg", "ogg"),
+    "fixture://voice.ogg": mediaFixture("audio", "voice.ogg", "audio/ogg", oggOpus),
   } as const;
   mocks.loadOutboundMediaFromUrl.mockImplementation(async (url: string) => {
     const fixture = media[url as keyof typeof media];

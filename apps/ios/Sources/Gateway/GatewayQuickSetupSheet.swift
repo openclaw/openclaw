@@ -135,15 +135,9 @@ struct GatewayQuickSetupSheet: View {
             .navigationTitle("Quick Setup")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        self.quickSetupDismissed = true
-                        self.dismiss()
-                    } label: {
-                        Text("Close")
-                            .font(OpenClawType.subheadSemiBold)
-                    }
-                    .buttonStyle(OpenClawCloseButtonStyle())
+                OpenClawSheetCloseItem {
+                    self.quickSetupDismissed = true
+                    self.dismiss()
                 }
             }
         }

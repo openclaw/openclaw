@@ -1,2 +1,0 @@
-# Regression coverage for stable official-plugin channel recovery and no downgrade.
-257

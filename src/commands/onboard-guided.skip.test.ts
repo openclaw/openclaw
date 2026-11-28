@@ -2,7 +2,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 
@@ -18,6 +18,11 @@ vi.mock("../agents/auth-profiles.runtime.js", () => ({
 vi.mock("../plugins/provider-setup-availability.js", () => ({
   detectAvailableSetupProviderIds: async () => new Set(),
 }));
+
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_PROFILE", "");
+  vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
+});
 
 let root: string | undefined;
 afterEach(async () => {
