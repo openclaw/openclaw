@@ -45,7 +45,7 @@ import { addGatewayClientOptions } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { formatDocsHelp } from "./help-format.js";
 import { requestLogsTail, type LogsFollowConnection } from "./logs-cli.gateway.js";
-import { parseLogsPositiveInt } from "./logs-cli.options.js";
+import { formatLogTruncationNotice, parseLogsPositiveInt } from "./logs-cli.options.js";
 
 type LogsTailPayload = Partial<Omit<LogsTailResult, "cursor">> & {
   source?: string;
@@ -93,8 +93,8 @@ const LOCAL_FALLBACK_NOTICE = "Local Gateway RPC unavailable; reading configured
 const JOURNAL_FALLBACK_NOTICE =
   "Local Gateway RPC unavailable; reading active systemd gateway journal instead.";
 const JOURNAL_CURSOR_PREFIX = "-- cursor: ";
-const JOURNAL_MAX_LIMIT = 5000;
-const JOURNAL_MAX_BYTES = 1_000_000;
+const LOGS_MAX_LIMIT = 5000;
+const LOGS_MAX_BYTES = 1_000_000;
 
 async function fetchGatewayLogs(
   opts: LogsRequestOptions,
@@ -182,8 +182,8 @@ async function readSystemdJournalFallback(params: {
   if (service.status !== "running" || typeof service.pid !== "number") {
     return null;
   }
-  const limit = resolveIntegerOption(params.limit, 1, { min: 1, max: JOURNAL_MAX_LIMIT });
-  const maxBytes = resolveIntegerOption(params.maxBytes, 1, { min: 1, max: JOURNAL_MAX_BYTES });
+  const limit = resolveIntegerOption(params.limit, 1, { min: 1, max: LOGS_MAX_LIMIT });
+  const maxBytes = resolveIntegerOption(params.maxBytes, 1, { min: 1, max: LOGS_MAX_BYTES });
   const unitOverride = process.env.OPENCLAW_SYSTEMD_UNIT?.trim();
   const unitName = unitOverride
     ? unitOverride.endsWith(".service")
@@ -686,11 +686,15 @@ export function registerLogsCli(program: Command) {
             }
           }
         }
-        if (
-          payload.truncated &&
-          !emitNotice("Log tail truncated (increase --limit or --max-bytes).")
-        ) {
-          return;
+        if (payload.truncated) {
+          const notice = formatLogTruncationNotice({
+            moreLines: limit < LOGS_MAX_LIMIT,
+            moreBytes: maxBytes < LOGS_MAX_BYTES,
+            journal: sourceKind === "journal",
+          });
+          if (!emitNotice(notice)) {
+            return;
+          }
         }
         if (payload.reset && !emitNotice(formatLogResetNotice(payload.skippedBytes))) {
           return;
