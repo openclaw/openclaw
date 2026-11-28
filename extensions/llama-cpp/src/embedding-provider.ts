@@ -4,7 +4,6 @@ import type {
   EmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/embedding-providers";
 import {
-  DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
   LLAMA_CPP_PROVIDER_ID,
   resolveLegacyLlamaCppModelCacheDir,
@@ -30,16 +29,12 @@ function createCacheKeyData(model: string, dimensions?: number): Record<string, 
 
 function resolveModelIdentity(local: EmbeddingProviderCreateOptions["local"], dimensions?: number) {
   const embeddingModel = resolveLlamaCppEmbeddingModel(local);
-  const model = embeddingModel.isDefault
-    ? DEFAULT_LLAMA_CPP_EMBEDDING_MODEL
-    : embeddingModel.source;
+  const model = embeddingModel.canonicalSource;
   const aliases = new Set<string>();
-  if (embeddingModel.isDefault) {
-    aliases.add(path.resolve(embeddingModel.cacheDir, DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE));
-    aliases.add(
-      path.resolve(resolveLegacyLlamaCppModelCacheDir(), DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE),
-    );
-    aliases.add(DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE);
+  if (embeddingModel.cacheFile) {
+    aliases.add(path.resolve(embeddingModel.cacheDir, embeddingModel.cacheFile));
+    aliases.add(path.resolve(resolveLegacyLlamaCppModelCacheDir(), embeddingModel.cacheFile));
+    aliases.add(embeddingModel.cacheFile);
     if (embeddingModel.source !== model) {
       aliases.add(embeddingModel.source);
     }

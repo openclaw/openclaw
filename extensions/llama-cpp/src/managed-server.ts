@@ -19,11 +19,13 @@ import {
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_REVISION,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SHA256,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES,
+  LEGACY_LLAMA_CPP_EMBEDDING_MODEL,
   LLAMA_CPP_DEFAULT_PORT,
   resolveCachedLlamaCppModelPath,
   resolveHomePath,
   resolveLlamaCppModelCacheDir,
   resolveLlamaCppModelSource,
+  resolveLlamaCppPresetPath,
 } from "./defaults.js";
 import {
   findManagedLlamaServerAsset,
@@ -44,6 +46,8 @@ import {
 } from "./llama-server-preset.js";
 import { resolveLlamaCppMediaArtifact } from "./media-catalog.js";
 import { resolveLlamaCppCatalogArtifact } from "./model-catalog.js";
+
+export { resolveLlamaCppPresetPath } from "./defaults.js";
 
 type ModelArtifact = {
   fileName: string;
@@ -196,9 +200,17 @@ function defaultArtifact(source: string): ModelArtifact | undefined {
   if (source === DEFAULT_LLAMA_CPP_EMBEDDING_MODEL) {
     return {
       fileName: DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
-      url: `https://huggingface.co/ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/resolve/${DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_REVISION}/embeddinggemma-300m-qat-Q8_0.gguf?download=true`,
+      url: `https://huggingface.co/ggml-org/embeddinggemma-2-GGUF/resolve/${DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_REVISION}/embeddinggemma-2-Q8_0.gguf?download=true`,
       expectedSize: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES,
       expectedSha256: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SHA256,
+    };
+  }
+  if (source === LEGACY_LLAMA_CPP_EMBEDDING_MODEL.source) {
+    return {
+      fileName: LEGACY_LLAMA_CPP_EMBEDDING_MODEL.cacheFile,
+      url: `https://huggingface.co/ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/resolve/${LEGACY_LLAMA_CPP_EMBEDDING_MODEL.revision}/embeddinggemma-300m-qat-Q8_0.gguf?download=true`,
+      expectedSize: LEGACY_LLAMA_CPP_EMBEDDING_MODEL.sizeBytes,
+      expectedSha256: LEGACY_LLAMA_CPP_EMBEDDING_MODEL.sha256,
     };
   }
   return undefined;
@@ -437,18 +449,6 @@ async function findAvailableLlamaServerPort(preferred = LLAMA_CPP_DEFAULT_PORT):
     (await tryPort(preferred)) ??
     (await tryPort(0)) ??
     Promise.reject(new Error("No loopback port is available for llama-server"))
-  );
-}
-
-export function resolveLlamaCppPresetPath(
-  service: ModelProviderConfig["localService"],
-): string | undefined {
-  const args = service?.args ?? [];
-  const inline = args.find((arg) => arg.startsWith("--models-preset="));
-  return (
-    inline?.slice("--models-preset=".length) ??
-    args.find((_, index) => args[index - 1] === "--models-preset") ??
-    service?.env?.LLAMA_ARG_MODELS_PRESET
   );
 }
 
