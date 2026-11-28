@@ -102,6 +102,28 @@ it("serializes mixed tool output and supplies the empty-output fallback", async 
   });
 });
 
+// The prefix-only cut dropped the end of the output without a notice. File tools run in the
+// hosted VM, so the bound names no Gateway path.
+it("bounds oversized output with head, tail and a size-only notice", async () => {
+  const full = [...Array.from({ length: 6_000 }, (_, i) => `row ${i}`), "LAST-ROW"].join("\n");
+  const tool: AnyAgentTool = {
+    name: "fixture_large",
+    label: "Fixture large",
+    description: "Returns synthetic oversized content",
+    parameters: Type.Object({}, { additionalProperties: false }),
+    execute: async () => ({ content: [{ type: "text", text: full }], details: {} }),
+  };
+  await withFixtureTool(tool, async (surface) => {
+    const result = await execute(surface, tool.name, "large", {});
+    assert(result.success);
+    expect(result.output.length).toBeLessThan(full.length);
+    expect(result.output).toContain("row 0\n");
+    expect(result.output).toMatch(/LAST-ROW$/u);
+    expect(result.output).toMatch(/\[\.\.\. \d+ chars omitted\]/u);
+    expect(result.output).not.toContain("Full output:");
+  });
+});
+
 describe("a delivered send to a configured delivery target", () => {
   // Shape of a cron send: the delivery target is the current source and the
   // message tool confirms the source reply.

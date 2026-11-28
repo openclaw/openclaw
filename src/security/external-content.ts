@@ -353,6 +353,33 @@ export function wrapExternalContent(content: string, options: WrapExternalConten
   ].join("\n");
 }
 
+/**
+ * Splits text that is exactly one `wrapExternalContent` envelope into its frame (warning, start
+ * marker, metadata) and body, so a size bound can cut the body and keep both markers.
+ */
+export function splitExternalContentEnvelope(
+  text: string,
+): { open: string; body: string; close: string } | undefined {
+  const start = new RegExp(`<<<${EXTERNAL_CONTENT_START_NAME} id="([a-f0-9]{16})">>>\\n`, "u").exec(
+    text,
+  );
+  // Only what wrapExternalContent writes before the start marker.
+  const prefix = start ? text.slice(0, start.index) : undefined;
+  if (!start || (prefix !== "\n" && prefix !== `${EXTERNAL_CONTENT_WARNING}\n\n\n`)) {
+    return undefined;
+  }
+  const close = `\n<<<${EXTERNAL_CONTENT_END_NAME} id="${start[1]}">>>`;
+  const bodyStart = text.indexOf("\n---\n", start.index) + 5;
+  if (bodyStart < 5 || !text.endsWith(close) || bodyStart > text.length - close.length) {
+    return undefined;
+  }
+  return {
+    open: text.slice(0, bodyStart),
+    body: text.slice(bodyStart, text.length - close.length),
+    close,
+  };
+}
+
 export function buildSafeExternalPrompt(params: {
   content: string;
   source: ExternalContentSource;

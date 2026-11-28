@@ -8,6 +8,8 @@ import {
   runWithToolExecutionValidation,
 } from "../agent-tools.execution-validation.js";
 import type { AnyAgentTool } from "../agent-tools.types.js";
+import { boundToolResult } from "../embedded-agent-runner/tool-result-bound.js";
+import type { PrivateTempFileOptions } from "../sessions/tools/private-temp-file.js";
 import { consumeToolExecutionNotStarted as consumeTrustedToolNoStartError } from "../tool-effect-receipt.js";
 import { resolveToolResultFailureKind } from "../tool-result-error.js";
 import { createAgentHarnessToolExecutionBoundaryRegistry } from "./tool-execution.js";
@@ -34,6 +36,8 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
   ) => void;
   snapshotResult?: (result: AgentToolResult<unknown>) => unknown;
   applyMiddleware: (event: AgentToolResultMiddlewareEvent) => Promise<AgentToolResult<unknown>>;
+  /** Inputs of the one tool-result bound applied after middleware; `spill: false` when the reader cannot open a Gateway file. */
+  resultBound?: { contextWindowTokens?: number; spill?: PrivateTempFileOptions | false };
   onExecutionResult?: (execution: AgentHarnessToolExecution) => void;
   onResult: (result: AgentHarnessToolPresentation) => TResult | Promise<TResult>;
   onError: (failure: AgentHarnessToolInvocationFailure) => TResult | Promise<TResult>;
@@ -102,7 +106,7 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
       rawFailureKind,
     };
     params.onExecutionResult?.(execution);
-    const result = await params.applyMiddleware({
+    const middlewareResult = await params.applyMiddleware({
       threadId: params.call.threadId,
       turnId: params.call.turnId,
       toolCallId: params.call.toolCallId,
@@ -112,6 +116,11 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
       isError: execution.rawIsError,
       result: rawResult,
     });
+    const result = await boundToolResult(
+      middlewareResult,
+      params.resultBound?.contextWindowTokens,
+      params.resultBound?.spill,
+    );
     const presentation = resolveAgentHarnessToolResultPresentation({
       result,
       executionIsError: execution.rawIsError,

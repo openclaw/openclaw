@@ -245,7 +245,8 @@ export async function buildAgentsApiToolSurface(
   let lastToolError: AgentsApiToolSurface["lastToolError"];
   const executionBoundaries = createAgentHarnessToolExecutionBoundaryRegistry();
   const contextTokens = params.contextTokenBudget ?? params.model.contextWindow;
-  const maxChars =
+  // Cap for strings this adapter builds after the result bound (errors, serialized output).
+  const maxOutputChars =
     contextTokens === undefined
       ? DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS
       : resolveLiveToolResultMaxChars({ contextWindowTokens: contextTokens });
@@ -399,6 +400,8 @@ export async function buildAgentsApiToolSurface(
         runId: params.runId,
         signal,
         boundaries: executionBoundaries,
+        // File tools run in the hosted VM, which cannot open a Gateway file: size-only notice.
+        resultBound: { contextWindowTokens: contextTokens, spill: false },
         prepareArguments: (args) => {
           if (!isRecord(args)) {
             throw new Error(`Arguments for OpenClaw tool ${call.name} must be an object`);
@@ -557,20 +560,17 @@ export async function buildAgentsApiToolSurface(
           assertCurrent();
           signal.throwIfAborted();
           dispatchAfterHook(presented);
-          let text = "";
-          for (const block of presented.content) {
-            if (text.length >= maxChars) {
-              break;
-            }
-            const next =
-              block.type === "text"
-                ? block.text
-                : "[Image result omitted from Agents API function output]";
-            text += `${text ? "\n" : ""}${sliceToolResultTextToBudget(next, maxChars - text.length)}`;
-          }
-          text = sliceToolResultTextToBudget(
-            text || "Tool completed with no text output.",
-            maxChars,
+          // The invocation owner bounded each block; separators and image placeholders added
+          // here keep the adapter's own cap on the serialized string.
+          const text = sliceToolResultTextToBudget(
+            presented.content
+              .map((block) =>
+                block.type === "text"
+                  ? block.text
+                  : "[Image result omitted from Agents API function output]",
+              )
+              .join("\n") || "Tool completed with no text output.",
+            maxOutputChars,
           );
           return {
             transcriptResult: observed,
@@ -602,7 +602,7 @@ export async function buildAgentsApiToolSurface(
           return {
             transcriptResult: failed,
             success: false,
-            error: sliceToolResultTextToBudget(message, maxChars),
+            error: sliceToolResultTextToBudget(message, maxOutputChars),
           };
         },
       });
