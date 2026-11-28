@@ -23,12 +23,8 @@ function presenceConnectionDescription(entry: PresenceEntry): string {
   ].join(" · ");
 }
 
-export function presenceConnectionDescriptions(entries: readonly PresenceEntry[]): string[] {
-  // Matching reported facts describe connections, never a count of physical devices.
-  return [...new Set(entries.map(presenceConnectionDescription).filter(Boolean))].toSorted();
-}
-
-export function groupPresenceConnections(entries: readonly PresenceEntry[]) {
+export function projectPresenceConnections(entries: readonly PresenceEntry[]) {
+  const descriptions = new Set<string>();
   const groups = new Map<string, { description: string; entry: PresenceEntry; count: number }>();
   for (const entry of entries) {
     const description = presenceConnectionDescription(entry);
@@ -45,8 +41,11 @@ export function groupPresenceConnections(entries: readonly PresenceEntry[]) {
         group.entry = entry;
       }
     } else {
+      if (description) {
+        descriptions.add(description);
+      }
       groups.set(key, { description, entry, count: 1 });
     }
   }
-  return [...groups.values()];
+  return { descriptions: [...descriptions].toSorted(), groups: [...groups.values()] };
 }
