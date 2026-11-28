@@ -333,7 +333,10 @@ describe("sandbox health", () => {
     ],
     [
       "a role-required sandbox without egress",
-      { entries: { work: agentOn("bridge"), other: {} } },
+      {
+        defaults: { sandbox: { docker: { network: "bridge" } } },
+        entries: { work: agentOn("bridge"), other: { sandbox: { docker: { network: "none" } } } },
+      },
       guestRole,
       true,
     ],
