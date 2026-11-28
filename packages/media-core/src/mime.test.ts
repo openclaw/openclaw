@@ -183,6 +183,26 @@ describe("mime detection", () => {
     expect(await detectMime({ buffer })).toBe("audio/x-caf");
   });
 
+  it("distinguishes Ogg-contained Opus from other Ogg payloads by their authentic container signature", async () => {
+    // Regression for #206612: a requested .opus output was renamed to .ogg because sniffing
+    // Opus-in-Ogg bytes collapsed to the same generic "audio/ogg" as Ogg Vorbis.
+    const opusBuffer = Buffer.concat([
+      Buffer.from("OggS", "ascii"),
+      Buffer.alloc(24),
+      Buffer.from("OpusHead", "ascii"),
+    ]);
+    expect(await detectMime({ buffer: opusBuffer })).toBe("audio/opus");
+    expect(extensionForMime(await detectMime({ buffer: opusBuffer }))).toBe(".opus");
+
+    const vorbisBuffer = Buffer.concat([
+      Buffer.from("OggS", "ascii"),
+      Buffer.alloc(24),
+      Buffer.from("\x01vorbis", "ascii"),
+      Buffer.alloc(1),
+    ]);
+    expect(await detectMime({ buffer: vorbisBuffer })).toBe("audio/ogg");
+  });
+
   it("does not inspect ZIP metadata beyond the 1 MiB sniffing limit", async () => {
     const zip = new JSZip();
     zip.file("padding.bin", Buffer.alloc(1024 * 1024));
