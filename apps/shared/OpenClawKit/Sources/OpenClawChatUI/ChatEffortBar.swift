@@ -56,18 +56,7 @@ struct ChatEffortBar: View {
                 }
             }
             if showsInlineSpeed {
-                HStack(spacing: 12) {
-                    Text("Speed")
-                        .font(OpenClawChatTypography.body(size: 15, weight: .regular, relativeTo: .subheadline))
-                        .foregroundStyle(OpenClawChatTheme.muted)
-                        .accessibilityHidden(true)
-                    Spacer(minLength: 8)
-                    ChatEffortSpeedPicker(viewModel: self.viewModel)
-                        .pickerStyle(.segmented)
-                        .controlSize(.large)
-                        .fixedSize()
-                }
-                .frame(minHeight: ChatEffortBarMetrics.touch)
+                ChatEffortSpeedRow(viewModel: self.viewModel)
             }
             if let lockReason {
                 Text(verbatim: lockReason)
@@ -96,29 +85,37 @@ struct ChatEffortBar: View {
     }
 }
 
-/// The composer presents these choices inline; the model sheet presents them in a Settings-style row.
-struct ChatEffortSpeedPicker: View {
+/// Speed as a segmented control, in the composer's effort bar and in the model sheet's Effort page.
+struct ChatEffortSpeedRow: View {
     let viewModel: OpenClawChatViewModel
-    var showsMenuIcons = false
+    /// In the model sheet the row matches the Settings-style Effort row above it.
+    var isSheetPage = false
 
     var body: some View {
-        Picker(selection: Binding(
-            get: { self.viewModel.composerSpeedSelection },
-            set: { self.viewModel.selectFastMode($0) }))
-        {
-            ForEach(self.viewModel.composerSpeedOptions, id: \.self) { option in
-                let title = Text(verbatim: ChatEffortBar.speedLabel(option))
-                if self.showsMenuIcons, let bolt = ChatSpeedBolt(rawValue: option) {
-                    Label { title } icon: { bolt.image }.tag(option)
-                } else {
-                    title.tag(option)
+        HStack(spacing: 12) {
+            Text("Speed")
+                .font(self.isSheetPage ? OpenClawChatTypography.settingsBody :
+                    OpenClawChatTypography.body(size: 15, weight: .regular, relativeTo: .subheadline))
+                .foregroundStyle(self.isSheetPage ? Color.primary : OpenClawChatTheme.muted)
+                .accessibilityHidden(true)
+            Spacer(minLength: 8)
+            Picker(selection: Binding(
+                get: { self.viewModel.composerSpeedSelection },
+                set: { self.viewModel.selectFastMode($0) }))
+            {
+                ForEach(self.viewModel.composerSpeedOptions, id: \.self) { option in
+                    Text(verbatim: ChatEffortBar.speedLabel(option)).tag(option)
                 }
+            } label: {
+                Text("Speed")
             }
-        } label: {
-            Text("Speed").font(OpenClawChatTypography.settingsBody).foregroundStyle(.primary)
+            .pickerStyle(.segmented)
+            .controlSize(.large)
+            .fixedSize()
+            .disabled(self.viewModel.composerPhoneEffortLockReason != nil)
+            .accessibilityIdentifier("chat-effort-bar-speed")
         }
-        .disabled(self.viewModel.composerPhoneEffortLockReason != nil)
-        .accessibilityIdentifier("chat-effort-bar-speed")
+        .frame(minHeight: ChatEffortBarMetrics.touch)
     }
 }
 
