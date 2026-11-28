@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawProtocol
 import Testing
 @testable import OpenClawChatUI
 
@@ -162,6 +163,42 @@ struct ChatAssistantRunGroupTests {
             liveRunID: "run", hasLiveContent: true, searchActive: false)
         #expect(persisted.last?.id == live.last?.id)
         #expect(persisted.last?.parts.map(\.id) == ["row:\(narration.id)", "row:\(call.id)", "tool:next"])
+    }
+
+    @Test @MainActor
+    func `Imported tool calls keep their live run`() async throws {
+        let wire = Data(#"""
+        [
+          {"role":"assistant","timestamp":3,"__openclaw":{"id":"shelf-page","importedFrom":"claude-cli","cliSessionId":"library","externalId":"shelf-page"},
+           "content":[{"type":"toolcall","id":"toolu_shelf_a","name":"mcp__openclaw__read","arguments":{"path":"north.txt"}}]},
+          {"role":"user","timestamp":4,"__openclaw":{"id":"shelf-receipt","importedFrom":"claude-cli","cliSessionId":"library","externalId":"shelf-receipt"},
+           "content":[{"type":"tool_result","tool_use_id":"toolu_shelf_a","is_error":false,"content":"north shelf"}]},
+          {"role":"assistant","timestamp":5,"__openclaw":{"id":"shelf-next","importedFrom":"claude-cli","cliSessionId":"library","externalId":"shelf-next"},
+           "content":[{"type":"thinking","thinking":"Checking"},{"type":"toolcall","id":"toolu_shelf_b","name":"mcp__openclaw__read","arguments":{"path":"west.txt"}}]}
+        ]
+        """#.utf8)
+        let decoded = try await OpenClawChatViewModel.decodeMessages(JSONDecoder().decode(
+            [AnyCodable].self,
+            from: wire))
+        #expect(decoded.count == 3)
+        #expect(decoded.allSatisfy { $0.sourceMetadata?.importedFrom == "claude-cli" })
+        #expect(decoded[1].isToolResult)
+        #expect(decoded.allSatisfy { $0.workRunID == nil })
+        var completed = Self.tool("toolu_shelf_a", at: 2)
+        completed.isComplete = true
+        let live = [completed, Self.tool("toolu_shelf_b", at: 4)]
+        let parts = ChatAssistantRunGroup.orderedParts(decoded.map(ChatTranscriptRow.message), tools: live)
+        #expect(parts.count == decoded.count, "A reload must not add a second copy of either tool")
+        let recorded = parts.compactMap { part -> OpenClawChatMessage? in
+            if case let .row(.message(message)) = part { return message }
+            return nil
+        }
+        #expect(recorded.allSatisfy { $0.workRunID == "run" }, "Both calls and their result belong to the live run")
+
+        var other = completed
+        other.runID = "other"
+        let ambiguous = ChatAssistantRunGroup.orderedParts([.message(decoded[0])], tools: [completed, other])
+        #expect(ambiguous.count == 3, "A call ID shared by two runs is not evidence for either")
     }
 
     @Test

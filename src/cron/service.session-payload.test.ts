@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   readCronRunRecordsForTests,
   readCronRunHistoryPageForTests,
@@ -84,6 +86,15 @@ const schedule = (kind: "at" | "every" | "cron", at: number): CronJobCreate["sch
 
 describe("ordinary session agent turns", () => {
   it("pauses a transferred job and removes the previous owner's explicit account", async () => {
+    const state = await createOpenClawTestState({ label: "cron-transferred-account" });
+    onTestFinished(() => state.cleanup());
+    setRuntimeConfigSnapshot({});
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "openai:old": { type: "api_key", provider: "openai", key: "synthetic-old-account-key" },
+      },
+    });
     const { cron } = await service();
     const job = await cron.add(
       {

@@ -33,7 +33,6 @@
     "session.sharing": "Session visibility/membership management is a Control UI operator surface; iOS reads visibility/sharingRole from session rows and has no sharing editor.",
     "session.sharing.evidence": "Principal-less sharing evidence is a Control UI operator surface; iOS refreshes canonical session rows through sessions.changed.",
     "session.suggestion": "The suggestion queue is a Control UI collaboration surface; iOS does not render or resolve session suggestions.",
-    "session.tool": "Session tool stream is not rendered by the iOS chat surface yet.",
     "session.typing": "Collaborative typing state is a Control UI-only ephemeral indicator; iOS does not render it.",
     "sessions.catalog.routes.changed": "The native catalog picker uses shared catalog methods and does not cache Control UI route method maps.",
     "sessions.processes.changed": "Background process lists are a Control UI surface; iOS progress cards already consume progressCard.changed and do not call sessions.processes.list.",

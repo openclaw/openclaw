@@ -513,7 +513,18 @@ extension OpenClawChatViewModel {
         }
         guard var message = payload.message else { return }
         message.transcriptMessageID = message.transcriptMessageID ?? payload.messageId
-        let ingested = message.ingestedMessages.map { Self.stripInboundMetadata(from: $0) }
+        let ingested = message.ingestedMessages.map { incoming in
+            var row = Self.stripInboundMetadata(from: incoming)
+            // A streamed result can arrive without prepared activity after history recorded an unpaired call.
+            // Carry the matching terminal item with the result so its provisional outcome is replaced on merge.
+            if isCurrentSession, row.isToolResult, row.activity == nil, let id = row.toolCallId,
+               let run = row.workRunID, let call = self.turnToolCallsById[id], call.runID == run,
+               let activity = call.activity, activity.phase == "end"
+            {
+                row.activity = [activity]
+            }
+            return row
+        }
         // Confirmation is gateway-scoped, not presentation-scoped. A flush
         // can drain session A while session B is visible, and A's event must
         // still retire its durable row before this handler returns early.
@@ -960,7 +971,12 @@ extension OpenClawChatViewModel {
     /// left the turn with neither for that round trip; the transcript collapsed and lost its
     /// scroll position.
     private func clearStreamingActivityAfterHistory(_ context: HistoryRequest) -> Task<Void, Never> {
-        if self.liveText(self.streamingAssistantText) == nil {
+        #if os(iOS)
+        let waitingForToolReceipts = !self.toolActivities.isEmpty
+        #else
+        let waitingForToolReceipts = false
+        #endif
+        if !waitingForToolReceipts, self.liveText(self.streamingAssistantText) == nil {
             self.clearStreamingActivity()
         }
         return Task {

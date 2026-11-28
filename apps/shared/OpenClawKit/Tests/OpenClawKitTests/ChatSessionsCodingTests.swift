@@ -305,6 +305,26 @@ struct ChatSessionsCodingTests {
         #expect(recorded.resultText == "Nested success output")
     }
 
+    @Test @MainActor func `answer preview does not create tool activity`() {
+        let model = OpenClawChatViewModel(
+            sessionKey: "main", transport: ToolResultIngestionTransport())
+        defer { model.detachTransport() }
+        model.pendingRuns.insert("run")
+        model.handleTransportEvent(.agent(.init(runId: "run", seq: 1, stream: "item", ts: 1, data: [
+            "kind": .init("tool"), "phase": .init("start"), "itemId": .init("read"), "title": .init("Read sample"),
+        ])))
+        model.handleTransportEvent(.agent(.init(runId: "run", seq: 2, stream: "item", ts: 2, data: [
+            "kind": .init("answer_candidate"), "phase": .init("update"), "itemId": .init("answer"),
+            "title": .init("Answer candidate"), "status": .init("candidate"), "progressText": .init("Done"),
+            "hideFromChannelProgress": .init(true),
+        ])))
+        model.handleTransportEvent(.agent(.init(runId: "run", seq: 3, stream: "assistant", ts: 3, data: [
+            "text": .init("Done"),
+        ])))
+        #expect(model.toolActivities.map(\.toolCallId) == ["read"])
+        #expect(model.streamingAssistantText == "Done")
+    }
+
     @Test @MainActor func `ios nested live row adopts history without changing presentation identity`() async throws {
         let model = OpenClawChatViewModel(
             sessionKey: "main",
@@ -923,6 +943,47 @@ struct ChatSessionsCodingTests {
 
 #if os(iOS)
 extension ChatSessionsCodingTests {
+    @Test @MainActor func `streamed result keeps its own runs terminal activity`() throws {
+        let model = OpenClawChatViewModel(
+            sessionKey: "main", transport: ToolResultIngestionTransport())
+        defer { model.detachTransport() }
+        model.pendingRuns.insert("run")
+        let call = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "toolCall", id: "call", name: "bash")],
+            timestamp: 1,
+            transcriptRunID: "run",
+            activity: [Self.nestedActivity(callID: "call", status: nil)])
+        model.handleTransportEvent(.sessionMessage(.init(
+            sessionKey: "main", message: call, messageId: "call-row", messageSeq: 1)))
+        model.handleTransportEvent(.agent(.init(runId: "run", seq: 2, stream: "item", ts: 2, data: [
+            "kind": .init("command"), "itemId": .init("tool:call"), "toolCallId": .init("call"),
+            "phase": .init("end"), "status": .init("completed"), "title": .init("Run command"),
+        ])))
+        func receive(_ run: String, _ id: String, _ activity: [OpenClawAgentActivityItem]? = nil) {
+            let result = OpenClawChatMessage(
+                role: "toolResult",
+                content: [.init(type: "text", text: "timed")],
+                timestamp: 3,
+                transcriptRunID: run,
+                toolCallId: "call",
+                toolName: "bash",
+                isError: false,
+                activity: activity)
+            model.handleTransportEvent(.sessionMessage(.init(
+                sessionKey: "main", message: result, messageId: id, messageSeq: 3)))
+        }
+        receive("run", "result")
+        let merged = try #require(ChatTranscriptRow.mergeToolResults(in: model.messages).first)
+        #expect(ChatToolActivity.items(message: merged).first?.displayState == .finished)
+        #expect(ChatToolActivity.items(message: merged).first?.resultText == "timed")
+        receive("other", "foreign-result")
+        #expect(model.messages.last?.activity == nil)
+        let recorded = [Self.nestedActivity(callID: "call", status: "blocked")]
+        receive("run", "prepared-result", recorded)
+        #expect(model.messages.last?.activity == recorded)
+    }
+
     @Test(arguments: [
         "inferred-final", "inferred-commentary", "ordinary-final", "inferred-only",
         "ambiguous-earlier", "ordinary-ambiguous", "nested-only-earlier", "unknown-earlier",

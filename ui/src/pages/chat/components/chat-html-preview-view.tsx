@@ -10,8 +10,15 @@ const Preview = lazy(() => import("./chat-html-preview-element.tsx"), {
   export: "ChatHtmlPreview",
 });
 
-export function HtmlPreviewLoading() {
-  return <PanelLoadingSkeleton variant="document" label={t("common.loading")} compact />;
+export function HtmlPreviewLoading(props: { overlay?: boolean }) {
+  return (
+    <PanelLoadingSkeleton
+      variant="document"
+      label={t("common.loading")}
+      compact
+      overlay={props.overlay}
+    />
+  );
 }
 
 export function HtmlPreview(props: {
