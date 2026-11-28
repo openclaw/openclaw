@@ -246,68 +246,6 @@ async function relabelCandidate(from, to) {
   return relabeled;
 }
 
-async function recoverLegacyCrashWithCandidate(candidatePackage, crashedGateway, expectedCommit) {
-  const { holder: crashedHolder, lockPath } = crashedGateway;
-  const recoveryPrefix = path.join(runtime, "candidate-recovery");
-  const recoveryEnv = {
-    ...env,
-    PATH: `${path.join(recoveryPrefix, "bin")}:${env.PATH}`,
-    npm_config_prefix: recoveryPrefix,
-    NPM_CONFIG_PREFIX: recoveryPrefix,
-    npm_config_cache: path.join(runtime, "candidate-recovery-npm-cache"),
-  };
-  await run(
-    "candidate-recovery-install",
-    "npm",
-    ["install", "-g", candidatePackage, "--no-fund", "--no-audit"],
-    false,
-    recoveryEnv,
-  );
-  assert.equal(
-    readJson(path.join(recoveryPrefix, "lib/node_modules/openclaw/dist/build-info.json")).commit,
-    expectedCommit,
-    "candidate recovery CLI does not match the tested candidate",
-  );
-  await run(
-    "candidate-recover-inspect",
-    "openclaw",
-    ["gateway", "recover-lock", "--json"],
-    false,
-    recoveryEnv,
-  );
-  const inspection = output("candidate-recover-inspect");
-  assert.equal(inspection.present, true, "candidate recovery did not inspect the retained lock");
-  assert(
-    inspection.holders.some((holder) =>
-      holder.includes(`${lockPath}: holder ${crashedHolder.pid} `),
-    ),
-    "candidate recovery inspected a different lock path or holder",
-  );
-  assert.equal(typeof inspection.confirmation, "string", "candidate recovery omitted confirmation");
-  await run(
-    "candidate-recover-confirm",
-    "openclaw",
-    ["gateway", "recover-lock", "--confirm", inspection.confirmation, "--json"],
-    false,
-    recoveryEnv,
-  );
-  const recovered = output("candidate-recover-confirm");
-  assert.equal(recovered.recovered, true, "candidate recovery did not confirm recovery");
-  assert(recovered.removed >= 1, "candidate recovery removed no retained owner records");
-  await run(
-    "candidate-recover-after",
-    "openclaw",
-    ["gateway", "recover-lock", "--json"],
-    false,
-    recoveryEnv,
-  );
-  assert.equal(
-    output("candidate-recover-after").present,
-    false,
-    "candidate recovery left a lock behind",
-  );
-}
-
 async function freePort() {
   const server = net.createServer();
   await new Promise((resolve, reject) => {
@@ -578,7 +516,6 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     })}\n`;
     fs.mkdirSync(path.dirname(orphanSidecar), { recursive: true });
     fs.writeFileSync(orphanSidecar, orphanSidecarBytes, { mode: 0o600 });
-    let crashedGateway;
     if (crashGateway) {
       // The service pid file names its supervisor, not the Gateway holding state.
       const lockPath = path.join(
@@ -603,7 +540,6 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       ]);
       const retained = readJson(lockPath);
       assert.equal(retained.ownerId, holder.ownerId, "Crash lost its legacy lock");
-      crashedGateway = { lockPath, holder: retained };
       writeJson("crashed-gateway-lock", { lockPath, holder: retained });
     }
     let update;
@@ -630,37 +566,6 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     }
     // Public status belongs after updater settlement and before fixture teardown.
     // A failed query is secondary to the original update outcome.
-    if (updateFailure && crashedGateway?.holder.processNamespace === undefined) {
-      const retainedHolder = JSON.parse(fs.readFileSync(crashedGateway.lockPath, "utf8"));
-      assert.deepEqual(
-        retainedHolder,
-        crashedGateway.holder,
-        "legacy crash lock changed before recovery",
-      );
-      const failureText = JSON.stringify(updateFailure);
-      writeJson("legacy-crash-refusal", {
-        failure: updateFailure,
-        holder: crashedGateway.holder,
-        retainedHolder,
-      });
-      assert(
-        /cannot verify Gateway ownership|Legacy holder|recover-lock|live or unverified owner/iu.test(
-          failureText,
-        ),
-        "legacy crash recovery path did not observe the expected ownership refusal",
-      );
-      await run("recorded-run-before-recovery", "openclaw", ["update", "status", "--json"]);
-      await recoverLegacyCrashWithCandidate(candidatePackage, crashedGateway, build.commit);
-      update = await updateTo("update-retry", candidatePackage);
-      if (update.exitCode !== 0) {
-        updateFailure = Object.assign(new Error("Published updater retry failed"), {
-          command: "update-retry",
-          exitCode: update.exitCode || 1,
-        });
-      } else {
-        updateFailure = undefined;
-      }
-    }
     if (updateFailure) {
       failures.push(updateFailure);
       if (hasUnjoinedWork(updateFailure)) {
@@ -671,11 +576,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     if (updateFailure) {
       throw updateFailure;
     }
-    const result = output(
-      update.exitCode === 0 && fs.existsSync(path.join(artifacts, "update-retry.stdout"))
-        ? "update-retry"
-        : "update",
-    );
+    const result = output("update");
     const recorded = output("recorded-run").lastRun;
     assert(recorded, "Update omitted its durable run");
     for (const record of [result.run, recorded].filter(Boolean)) {
