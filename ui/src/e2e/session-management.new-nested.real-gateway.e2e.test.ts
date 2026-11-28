@@ -63,9 +63,14 @@ suite.define(() => {
     const retained = "agent:main:selection-proof-retained";
     const removed = "agent:main:selection-proof-removed";
     const keys = [replaced, retained, removed];
+    const titles = new Map([
+      [replaced, "Replace this selection"],
+      [retained, "Keep this selection"],
+      [removed, "Remove this selection"],
+    ]);
     try {
       for (const key of keys) {
-        await client.request("sessions.create", { key, agentId: "main", label: key });
+        await client.request("sessions.create", { key, agentId: "main", label: titles.get(key) });
       }
       const initial = await client.request<SessionsListResult>("sessions.list", {
         agentId: "main",
@@ -112,7 +117,7 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         const roster = page.locator("openclaw-sessions-page");
         const checkbox = (key: string) =>
-          roster.locator(`input[type="checkbox"][aria-label$=": ${key}"]`);
+          roster.getByRole("checkbox", { name: `Select session: ${titles.get(key)}`, exact: true });
         for (const key of keys) {
           await checkbox(key).check();
         }
@@ -130,6 +135,7 @@ suite.define(() => {
           key: retained,
           label: "Retained selection refreshed",
         });
+        titles.set(retained, "Retained selection refreshed");
         await roster.getByText("Retained selection refreshed", { exact: true }).waitFor();
         for (const key of [removed, replaced]) {
           expect(
@@ -141,6 +147,7 @@ suite.define(() => {
           agentId: "main",
           label: "Selection successor",
         });
+        titles.set(replaced, "Selection successor");
         await roster.getByText("Selection successor", { exact: true }).waitFor();
         await expect.poll(() => checkbox(removed).count()).toBe(0);
         await expect.poll(() => checkbox(replaced).isChecked()).toBe(false);

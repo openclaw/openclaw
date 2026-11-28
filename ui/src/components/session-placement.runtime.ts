@@ -6,6 +6,7 @@ import type { ApplicationGatewaySnapshot } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
+import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import type { SessionCapability } from "../lib/sessions/session-capability.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
@@ -108,7 +109,7 @@ export async function changeSessionPlacement(params: {
     if (abandonSource) {
       const confirmed = await showConfirmDialog({
         title: t("sessionsView.continueOnGatewayTitle", {
-          session: params.row.label || params.row.key,
+          session: resolveSessionDisplayName(params.row.key, params.row),
         }),
         message: t("sessionsView.continueOnGatewayConfirm"),
         confirmLabel: t("sessionsView.continueOnGatewayAction"),
@@ -165,7 +166,7 @@ export async function changeSessionPlacement(params: {
         mode: selectionMode,
         presentation,
         source,
-        sessionLabel: selectedRow.label || selectedRow.key,
+        sessionLabel: resolveSessionDisplayName(selectedRow.key, selectedRow),
         activeRun: selectedRow.hasActiveRun === true,
         repositoryOnly: repositorySessionNeedsWorker(selectedRow),
         allowMachineOverrides: !selectedRequiredProfile,

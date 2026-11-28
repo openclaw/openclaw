@@ -275,7 +275,7 @@ describe("patchSessionRows", () => {
     expect(h.pruneSidebarSessionEntry).toHaveBeenCalledExactlyOnceWith(rows[1]!.key);
     expectError(
       h,
-      `${rows[0]!.key}: failed ${rows[0]!.key}; ${rows[2]!.key}: failed ${rows[2]!.key}`,
+      `${rows[0]!.label}: failed ${rows[0]!.key}; ${rows[2]!.label}: failed ${rows[2]!.key}`,
     );
     expect(h.reconcileMutation).toHaveBeenCalledOnce();
   });

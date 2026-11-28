@@ -6,7 +6,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
-import { formatUiError, UserFacingError } from "./format-error.ts";
+import { formatUiError, formatUiErrorDetails, UserFacingError } from "./format-error.ts";
 
 const PROGRAMMING_MESSAGE = "Cannot read properties of undefined (reading 'map')";
 
@@ -25,6 +25,16 @@ describe("formatUiError", () => {
     expect(formatUiError(error)).toBe(
       `Couldn’t complete this request. Ask an admin to grant ${access}.`,
     );
+  });
+
+  it("keeps a stale session key in diagnostics, not in recovery guidance", () => {
+    const error = new GatewayProtocolRequestError({
+      code: "INVALID_REQUEST",
+      message: "Session agent:main:nightly changed before patch. Retry.",
+      details: { reason: "session-changed" },
+    });
+    expect(formatUiError(error)).toBe("The session changed. Try again.");
+    expect(formatUiErrorDetails(error)).toContain(error.message);
   });
 
   it("keeps permission guidance when a denial only has the legacy message", () => {

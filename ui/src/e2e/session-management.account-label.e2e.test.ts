@@ -99,9 +99,7 @@ suite.define(() => {
         );
         const row =
           surface === "sessions"
-            ? page.locator(".sessions-table tbody tr", {
-                has: page.getByRole("checkbox", { name: `Select session: ${key}`, exact: true }),
-              })
+            ? page.locator(".sessions-table .session-data-row")
             : page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
         await row.waitFor({ state: "visible" });
         const openRename = async () => {

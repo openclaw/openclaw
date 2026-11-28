@@ -33,7 +33,15 @@ suite.define(() => {
     (surface) =>
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const main = sessionRow("agent:main:main", "Main", 1);
-        const target = sessionRow("agent:main:nightly", "Nightly owner", 2, {
+        const name = surface === "list" ? "handbook ⎇ nightly" : "Nightly owner";
+        const target = sessionRow("agent:main:nightly", name, 2, {
+          ...(surface === "list"
+            ? {
+                label: undefined,
+                displayName: undefined,
+                worktree: { repoRoot: "/demo/handbook", branch: "openclaw/nightly" },
+              }
+            : {}),
           hasAutomation: true,
         });
         const gateway = await ui.installSessionRows(page, [main, target], {
@@ -58,7 +66,7 @@ suite.define(() => {
         );
         const row =
           surface === "list"
-            ? page.locator(".session-data-row").filter({ hasText: target.label })
+            ? page.locator(".session-data-row").filter({ hasText: name })
             : page.locator('.sidebar-recent-session[data-session-key="' + target.key + '"]');
         await ui.visible(row);
 
@@ -69,10 +77,8 @@ suite.define(() => {
         await automation.getByText("Every 1 day", { exact: true }).waitFor();
         expect(await automation.textContent()).not.toContain(job.id);
         expect(await automation.getByRole("switch").count()).toBe(0);
-        await dialog
-          .getByText('Archiving "Nightly owner" pauses its automations.', { exact: false })
-          .waitFor();
         await captureUiProof(suite, page, "archive-automation-confirm-" + surface + ".png");
+        expect(await dialog.textContent()).toContain(`Archiving "${name}" pauses its automations.`);
         expect((await gateway.getRequests("cron.list")).map(({ params }) => params)).toContainEqual(
           expect.objectContaining({ sessionKey: target.key, enabled: "enabled", compact: true }),
         );

@@ -1,4 +1,7 @@
-import { readMissingScopeError } from "@openclaw/gateway-client/browser";
+import {
+  GatewayProtocolRequestError,
+  readMissingScopeError,
+} from "@openclaw/gateway-client/browser";
 import { asNullableRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { redactToolDetail } from "./browser-redact.ts";
 
@@ -33,6 +36,13 @@ export function reportProgrammingError(error: object): void {
 export function readErrorDisplayOverride(error: unknown, fallback = ""): string | undefined {
   if (error instanceof UserFacingError) {
     return redactToolDetail(error.message) || fallback;
+  }
+  if (
+    error instanceof GatewayProtocolRequestError &&
+    error.code === "INVALID_REQUEST" &&
+    asNullableRecord(error.details)?.reason === "session-changed"
+  ) {
+    return "The session changed. Try again.";
   }
   const missingScope = readMissingScopeError(error);
   if (missingScope) {

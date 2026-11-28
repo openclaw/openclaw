@@ -97,7 +97,7 @@ function activeSession() {
     key: sessionKey,
     sessionId: "session-placement-move",
     kind: "direct" as const,
-    label: "Move proof",
+    displayName: "Move proof",
     updatedAt: 2,
     hasActiveRun: true,
     placement: {
@@ -230,6 +230,7 @@ suite.define(() => {
 
       await gateway.deferNext("sessions.move");
       await continueAction.click();
+      await page.getByRole("dialog", { name: "Continue “Move proof” on the Gateway?" }).waitFor();
       await page.getByText("Unsynced device files", { exact: false }).waitFor();
       await page.getByRole("button", { name: "Continue on Gateway", exact: true }).click();
 

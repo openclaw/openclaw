@@ -10,10 +10,9 @@ import { showConfirmDialog } from "./confirm-dialog.ts";
 registerSessionPlacementEnglish();
 
 export function formatBatchSessionRemovalError(error: unknown): string {
-  const message = formatUiError(error);
   return readSessionWorkspaceRecoveryRequiredError(error)
-    ? `${message} ${t("sessionsView.workspaceRecoveryBatchHint")}`
-    : message;
+    ? t("sessionsView.workspaceRecoveryBatchHint")
+    : formatUiError(error);
 }
 
 /** One explicit loss decision and one retry of the already requested removal. */

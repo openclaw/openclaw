@@ -35,7 +35,7 @@ const enSessionPlacement = {
       "The device for “{session}” is offline with unsynced changes. Reconnect it to keep them, or discard them to archive now. Interrupted work won’t be replayed.",
     discardWorkspaceArchiveAction: "Discard changes and archive",
     workspaceRecoveryBatchHint:
-      "Recover each offline session separately before retrying this selection.",
+      "Recover each offline session separately before retrying this selection. Reconnect the device to keep unsynced files, or continue on the Gateway without them.",
     stopDeviceWorker: "Stop session on device…",
     offlineDeviceStopUnavailable:
       "Reconnect the device to stop and sync its workspace, or continue on the Gateway.",

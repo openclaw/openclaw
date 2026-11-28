@@ -14,7 +14,7 @@ import {
 
 type HiddenRunReadRow = Pick<
   GatewaySessionRow,
-  "key" | "agentId" | "sessionId" | "sharingRole" | "markedUnreadAt"
+  "key" | "agentId" | "sessionId" | "sharingRole" | "markedUnreadAt" | "label"
 >;
 export type HiddenRunReadOutcome = { key: string; ok: boolean; error?: unknown };
 
@@ -83,8 +83,10 @@ export function createHiddenRunReads(
                 ok: outcome.ok,
                 ...(error ? { error } : {}),
               });
-              if (error) {
-                errors.push(`${outcome.key}: ${formatUiError(error)}`);
+              if (error && options.publishErrors) {
+                const label = chunk.find((entry) => entry.target.key === outcome.key)?.row.label;
+                const message = formatUiError(error);
+                errors.push(label ? `${label}: ${message}` : message);
               }
             }
           } catch (error) {

@@ -33,7 +33,7 @@ describe("sessions page cloud stop", () => {
       );
       const placement = createActiveSessionPlacement({ environmentId: "environment-1" });
       const target = sessionRow("cloud", {
-        label: "Cloud task",
+        displayName: "Cloud task",
         hasActiveRun: state === "provisioning",
         placement: state === "active" ? placement : { ...placement, state },
       });
@@ -56,7 +56,7 @@ describe("sessions page cloud stop", () => {
             state === "active"
               ? "The session stops working on it and the cloud device is released. Your conversation and accepted changes stay."
               : "This session stops working on its device after saving workspace changes. Your conversation and saved changes stay.",
-          details: `Session: ${target.label ?? target.key}`,
+          details: "Session: Cloud task",
           confirmLabel: "Stop",
         }),
       );

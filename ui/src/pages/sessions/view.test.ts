@@ -249,11 +249,17 @@ describe("sessions view", () => {
 
   it("opens the session menu from the kebab and row context-menu shortcuts", async () => {
     const onOpenSessionMenu = vi.fn();
-    const session = createRow("agent:main:dashboard:1", { updatedAt: Date.now() });
+    const session = createRow("agent:main:dashboard:1", {
+      displayName: "Launch notes",
+      updatedAt: Date.now(),
+    });
     await renderSettled(session, { onOpenSessionMenu });
+    expect(getInput('input[aria-label="Select session: Launch notes"]')).not.toBeNull();
+    expect(getButton('button[aria-label="Show session details for Launch notes"]')).not.toBeNull();
+    expect(query(".session-key-cell")?.getAttribute("data-tooltip")).toBe("Launch notes");
 
     const menuButton = expectDefined(
-      getButton('button[aria-label="Open session menu: agent:main:dashboard:1"]'),
+      getButton('button[aria-label="Open session menu: Launch notes"]'),
       "session menu",
     );
     expect(menuButton.getAttribute("aria-haspopup")).toBe("menu");

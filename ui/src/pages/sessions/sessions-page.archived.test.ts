@@ -61,7 +61,7 @@ describe("sessions page archived deletion", () => {
     const page = await createRenderedPage(context, sessionsResult([target]), "archived");
     await sessions.refreshList({ agentId: "main", archivedFilter: "archived" });
     const checkbox = () =>
-      page.querySelector<HTMLInputElement>(`input[aria-label="Select session: ${target.key}"]`);
+      page.querySelector<HTMLInputElement>('.session-data-row input[type="checkbox"]');
     expect(checkbox()).not.toBeNull();
     checkbox()!.click();
     await page.updateComplete;

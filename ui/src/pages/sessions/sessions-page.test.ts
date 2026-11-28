@@ -503,7 +503,7 @@ describe("sessions page lifecycle", () => {
       vi.mocked(showConfirmDialog).mockResolvedValue(true);
       const selectRow = () => {
         const checkbox = page.querySelector<HTMLInputElement>(
-          `input[aria-label="Select session: ${target.key}"]`,
+          '.session-data-row input[type="checkbox"]',
         );
         expect(checkbox).not.toBeNull();
         checkbox!.click();

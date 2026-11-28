@@ -9,7 +9,10 @@ import {
   installDialogPolyfill,
   waitForConfirmDialogActions,
 } from "../test-helpers/modal-dialog.ts";
-import { withSessionWorkspaceRecovery } from "./session-workspace-recovery.runtime.ts";
+import {
+  formatBatchSessionRemovalError,
+  withSessionWorkspaceRecovery,
+} from "./session-workspace-recovery.runtime.ts";
 
 function createRecoveryHarness() {
   const client = new GatewayBrowserClient({ url: "ws://gateway.example.test" });
@@ -22,7 +25,7 @@ function createRecoveryHarness() {
   const recoveryError = (sessionId = session.sessionId) =>
     new GatewayRequestError({
       code: "UNAVAILABLE",
-      message: "Reconnect the device to preserve its workspace.",
+      message: `Session ${session.key} has an unrecovered workspace result on an offline device.`,
       details: {
         code: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
         cause: "device_offline",
@@ -86,6 +89,13 @@ describe("session workspace recovery controls", () => {
     await h.dispose();
     document.body.replaceChildren();
     restoreDialog();
+  });
+
+  it("explains how to recover an offline selection without showing the routing key", () => {
+    const message = formatBatchSessionRemovalError(h.recoveryError());
+    expect(message).toContain("Reconnect the device");
+    expect(message).toContain("Recover each offline session separately");
+    expect(message).not.toContain("agent:main:offline");
   });
 
   it("does not recover another session identity", async () => {

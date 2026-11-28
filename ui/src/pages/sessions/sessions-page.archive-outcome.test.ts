@@ -203,7 +203,7 @@ describe("Sessions archive outcome lifetime", () => {
       const fixture = await setup(target, true);
       const { page, pending, started, patches, gateway } = fixture;
       const checkbox = () =>
-        page.querySelector<HTMLInputElement>(`input[aria-label="Select session: ${target.key}"]`)!;
+        page.querySelector<HTMLInputElement>('.session-data-row input[type="checkbox"]')!;
       checkbox().click();
       await page.updateComplete;
       const completion = page.patchSession(

@@ -14,6 +14,7 @@ import {
 } from "../../components/session-workspace-recovery.runtime.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccessRequest,
@@ -369,16 +370,13 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
       return;
     }
     const scope = captureRequestScope();
+    const session = resolveSessionDisplayName(row.key, row);
     if (
       !scope ||
       !(await confirmMutation({
-        title: t(`${stopAction.copyKey}Confirm`, {
-          session: normalizeOptionalString(row.label) ?? row.key,
-        }),
+        title: t(`${stopAction.copyKey}Confirm`, { session }),
         message: t(`${stopAction.copyKey}Description`),
-        details: t("sessionsView.stopCloudWorkerTarget", {
-          session: normalizeOptionalString(row.label) ?? row.key,
-        }),
+        details: t("sessionsView.stopCloudWorkerTarget", { session }),
         confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
         signal: scope.signal,
       })) ||
@@ -457,7 +455,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
               session: {
                 key,
                 sessionId: expectedSessionId,
-                label: row?.label || row?.displayName || key,
+                label: resolveSessionDisplayName(key, row),
                 agentId,
               },
               scope,

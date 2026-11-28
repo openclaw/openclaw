@@ -238,7 +238,7 @@ suite.define(() => {
   });
 
   it("finds an older off-roster transcript without enumerating session pages", async () => {
-    const first = sessionRow("first");
+    const first = sessionRow("first", "Recent planning");
     const missed = sessionRow("missed", "Earlier launch planning", timestamp - 86_400_000);
     page = await newPage();
     const gateway = await installMockGateway(page, {
@@ -261,11 +261,11 @@ suite.define(() => {
     const { input } = await openSearch(page);
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await page
-      .getByRole("checkbox", { name: `Select session: ${first.key}`, exact: true })
+      .getByRole("checkbox", { name: "Select session: Recent planning", exact: true })
       .waitFor();
     expect(
       await page
-        .getByRole("checkbox", { name: `Select session: ${missed.key}`, exact: true })
+        .getByRole("checkbox", { name: "Select session: Earlier launch planning", exact: true })
         .count(),
     ).toBe(0);
     const listRequests = await gateway.getRequests("sessions.list");

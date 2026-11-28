@@ -4,7 +4,8 @@ import { getInitialHistoryRequests } from "./chat-initial-history.test-support.t
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "sessions-navigation-identity" });
-const targetKey = "agent:main:thread:12345678-aaaa-4000-8000-000000000001";
+const targetId = "12345678-aaaa-4000-8000-000000000001";
+const targetKey = `agent:main:thread:${targetId}`;
 const targetText = "Selected target transcript 741";
 const timestamp = Date.parse("2026-09-15T12:00:00.000Z");
 
@@ -109,15 +110,7 @@ suite.define(() => {
           await input.press("Enter");
         }
         const selected = scenario.source
-          ? page
-              .locator(".session-data-row")
-              .filter({
-                has: page.getByRole("checkbox", {
-                  name: `Select session: ${targetKey}`,
-                  exact: true,
-                }),
-              })
-              .locator(".session-link")
+          ? page.locator(`.session-data-row .session-link[href$="${targetId.replaceAll("-", "")}"]`)
           : page.locator(".sessions-transcript-search__result");
         await selected.waitFor({ state: "visible" });
         const searchRequests = await gateway.getRequests("sessions.search");

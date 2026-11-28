@@ -227,7 +227,6 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
     identityName() && keyParts()
       ? `${identityEmoji() ? `${identityEmoji()} ` : ""}${identityName()} (${keyParts()!.channel})`
       : null;
-  const keyCellTitle = () => friendlyKeyLabel() ?? row().key;
   const canLink = createMemo(() => row().kind !== "global");
   const chatUrl = createMemo(() =>
     canLink()
@@ -244,10 +243,13 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
   const displayKind = createMemo(() => resolveSessionDisplayKind(row()));
   const listTitle = createMemo(() => resolveSessionDisplayName(row().key, row()));
   const primaryTitle = () =>
-    displayName() || trimmedLabel() ? listTitle() : (friendlyKeyLabel() ?? listTitle());
+    displayName() || trimmedLabel() || row().derivedTitle?.trim() || row().worktree
+      ? listTitle()
+      : (friendlyKeyLabel() ?? listTitle());
+  const rowTitle = () => (props.phoneLayout ? listTitle() : primaryTitle());
   const secondaryTitle = () => {
     const context = friendlyKeyLabel() ?? row().key;
-    return context !== primaryTitle() ? context : null;
+    return context !== rowTitle() ? context : null;
   };
   const kindClass = () => ["session-kind", `session-kind--${displayKind()}`];
   const rowClass = () => [
@@ -261,8 +263,8 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
   // The {count} placeholder predates the drawer redesign; it carries the session title.
   const detailsToggleLabel = createMemo(() =>
     isExpanded()
-      ? t("sessionsView.hideSessionDetails", { count: keyCellTitle() })
-      : t("sessionsView.showSessionDetails", { count: keyCellTitle() }),
+      ? t("sessionsView.hideSessionDetails", { count: rowTitle() })
+      : t("sessionsView.showSessionDetails", { count: rowTitle() }),
   );
   const categoryMode = () => props.groupBy === "category";
   // Dropping on a row targets that row's group so the whole section area accepts drops.
@@ -342,7 +344,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
           <Checkbox
             checked={props.selectedKeys.has(row().key)}
             onChange={() => props.onToggleSelect(row().key)}
-            aria-label={`${selectLabel()}: ${row().key}`}
+            aria-label={`${selectLabel()}: ${rowTitle()}`}
           />
         </td>
         <td class="data-table-key-col">
@@ -350,7 +352,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
             <div class="session-list-cell">
               <span class="session-list-cell__title">
                 {unreadDot()}
-                <RowLink text={listTitle()} />
+                <RowLink text={rowTitle()} />
               </span>
               <span class="session-list-cell__meta">
                 <code class="session-list-cell__key">{row().key}</code>
@@ -361,12 +363,12 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
           ) : (
             <div
               class={["session-key-cell", { mono: primaryTitle() === row().key }]}
-              data-tooltip={keyCellTitle()}
+              data-tooltip={rowTitle()}
             >
               <div class="session-key-cell__text">
                 <span class="session-key-cell__primary">
                   {unreadDot()}
-                  <RowLink text={primaryTitle()} />
+                  <RowLink text={rowTitle()} />
                 </span>
                 {secondaryTitle() ? (
                   <span class="muted session-key-display-name">{secondaryTitle()}</span>
@@ -411,7 +413,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
               size={28}
               glyph="row"
               class="session-row-menu-trigger"
-              label={`${menuLabel()}: ${row().key}`}
+              label={`${menuLabel()}: ${rowTitle()}`}
               tooltip={menuLabel()}
               icon={
                 <i
@@ -591,7 +593,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
             <div class="session-details-panel__hero">
               <div>
                 <div class="session-details-panel__eyebrow">{t("sessionsView.sessionDetails")}</div>
-                <div class="session-details-panel__title">{primaryTitle()}</div>
+                <div class="session-details-panel__title">{rowTitle()}</div>
                 {secondaryTitle() ? (
                   <div class="muted session-details-panel__subtitle">{secondaryTitle()}</div>
                 ) : undefined}

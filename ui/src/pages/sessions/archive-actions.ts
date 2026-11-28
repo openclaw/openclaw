@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   resolveUiDefaultAgentId,
   resolveUiSessionRowAgentId,
@@ -35,7 +36,7 @@ export function createSessionsArchive(host: {
       }
       const session = {
         ...row,
-        label: row.label ?? row.displayName ?? row.key,
+        label: resolveSessionDisplayName(row.key, row),
         pinned: row.pinned === true,
         active: false,
         hasArchiveDescendants: hasDescendants,

@@ -60,7 +60,7 @@ it.each([false, true])(
 
 it("settles partial outcomes and conditional no-ops without hiding a newer manual marker", async () => {
   const rows = ["marked", "read", "failed"].map((id) =>
-    sessionRow(id, { unread: true, updatedAt: 1 }),
+    sessionRow(id, { unread: true, updatedAt: 1, label: `${id} review` }),
   );
   const reply = createDeferred();
   const started = createDeferred();
@@ -94,7 +94,7 @@ it("settles partial outcomes and conditional no-ops without hiding a newer manua
   });
   h.update({ hello: sessionMutationGatewayHello() });
   await h.sessions.refresh({ force: true });
-  const operation = h.sessions.acknowledgeHiddenRuns(rows);
+  const operation = h.sessions.acknowledgeHiddenRuns(rows, { publishErrors: true });
   expect(h.sessions.state.result?.sessions.map((row) => row.unread)).toEqual([false, false, false]);
   await started.promise;
   h.changed({
@@ -112,7 +112,7 @@ it("settles partial outcomes and conditional no-ops without hiding a newer manua
   expect(outcomes.map(({ ok }) => ok)).toEqual([true, true, false]);
   expect(h.sessions.state.result?.sessions.map((row) => row.unread)).toEqual([true, false, true]);
   expect(h.sessions.state.result?.sessions[0]).toMatchObject({ unread: true, markedUnreadAt: 99 });
-  expect(h.sessions.state.error).toBeNull();
+  expect(h.sessions.state.error).toBe("failed review: Synthetic target failure");
 });
 
 it("rechecks access after a chunk and skips viewers and manual unread markers", async () => {

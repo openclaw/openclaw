@@ -84,7 +84,7 @@ function localSession() {
     key: sessionKey,
     sessionId: "menu-placement-1",
     kind: "direct",
-    label,
+    displayName: label,
     updatedAt: Date.now(),
     status: "done",
     hasActiveRun: false,
@@ -183,6 +183,7 @@ suite.define(() => {
           await action.click();
           const dialog = page.locator("openclaw-modal-dialog");
           await dialog.locator('[data-value="device:runner"]').waitFor();
+          expect(await dialog.locator(".session-move__description").textContent()).toContain(label);
           expect(await dialog.locator('[data-value="gateway"]').count()).toBe(0);
           expect(await dialog.locator('[data-value="device:offline"]').isDisabled()).toBe(true);
           await gateway.deferNext("sessions.dispatch");

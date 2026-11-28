@@ -248,13 +248,12 @@ export async function patchSessionRows(
   const errors: string[] = [];
   const successful = dispatched.flatMap(({ rows: chunkRows, result }) =>
     result.outcomes.flatMap((outcome, index) => {
+      const row = chunkRows[index];
       if (!outcome.ok) {
-        errors.push(
-          `${outcome.key}: ${formatBatchSessionRemovalError(new GatewayRequestError(outcome.error))}`,
-        );
+        const message = formatBatchSessionRemovalError(new GatewayRequestError(outcome.error));
+        errors.push(row?.label ? `${row.label}: ${message}` : message);
         return [];
       }
-      const row = chunkRows[index];
       if (row && patch.archived === true) {
         deps.pruneSidebarSessionEntry(row.key);
       }
