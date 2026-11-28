@@ -1,7 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { beginClipboardCopy } from "../../../lib/clipboard.ts";
 import { downloadHref } from "../../../lib/download.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import { copyImageToClipboard } from "./chat-image-actions.tsx";
 
 const WIDGET_SNAPSHOT_REQUEST_TYPE = "openclaw:widget-snapshot-request";
 const WIDGET_SNAPSHOT_REPLY_TYPE = "openclaw:widget-snapshot";
@@ -84,15 +84,10 @@ export async function exportWidget(
   const snapshot = requestWidgetSnapshot(frame);
 
   if (action === "copy") {
-    beginClipboardCopy();
     try {
-      if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
-        throw new Error("image clipboard is unavailable");
-      }
-      const blob = snapshot.then(async (value) => (await globalThis.fetch(value)).blob());
-      void blob.catch(() => {});
-      // ClipboardItem keeps the click's transient activation while its PNG promise resolves.
-      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      await copyImageToClipboard(() =>
+        snapshot.then(async (value) => (await globalThis.fetch(value)).blob()),
+      );
       return "png";
     } catch (error) {
       const snapshotError = await snapshot.then(
