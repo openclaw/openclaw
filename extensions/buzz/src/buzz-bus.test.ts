@@ -127,6 +127,19 @@ describe("Buzz mention delivery", () => {
     expect(relayMocks.close).toHaveBeenCalledOnce();
   });
 
+  it("adds the configured NIP-OA authentication tag to sent messages", async () => {
+    const authTag = ["auth", SENDER_PUBLIC_KEY, "kind=9", "a".repeat(128)];
+    const expectedTags = [["h", CHANNEL_ID], ["e", "root-id", "", "reply"], authTag];
+
+    await sendTestTextOneShot({ authTag: JSON.stringify(authTag), threadId: "root-id" });
+    expect(relayMocks.publish.mock.calls[0]?.[0]).toMatchObject({ kind: 9, tags: expectedTags });
+
+    relayMocks.publish.mockClear();
+    const bus = await startTestBus({ authTag: JSON.stringify(authTag) });
+    await bus.sendText({ channelId: CHANNEL_ID, text: "hello", threadId: "root-id" });
+    expect(relayMocks.publish.mock.calls[0]?.[0]).toMatchObject({ kind: 9, tags: expectedTags });
+  });
+
   it("closes a standalone relay when mention preflight rejects the message", async () => {
     await expect(sendTestTextOneShot({ text: "Hello @Missing" })).rejects.toThrow(
       'Buzz mention "@missing" does not match a current room member',
