@@ -10,7 +10,7 @@ describe("tool result summary", () => {
       expect(
         buildTraceToolSummary({
           toolMetas: [
-            { toolName: "bash", isError: true },
+            { toolName: "bash", meta: "exit=1", isError: true },
             { toolName: "bash", isError: true },
             { toolName: successfulTool, isError: false },
           ],
