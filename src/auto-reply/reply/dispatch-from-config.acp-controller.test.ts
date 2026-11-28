@@ -2,7 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
-  withTestTimeout,
+  withinTest,
 } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -195,9 +195,9 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
   });
 
-  it.each(["accepted", "persistence-failed"] as const)(
+  it.for(["accepted", "persistence-failed"] as const)(
     "settles a bound channel answer without replay: %s",
-    async (outcome) => {
+    async (outcome, { signal }) => {
       const { dispatchInboundMessageWithRoutedChannelDispatcher } = await import("../dispatch.js");
       mockAcpSession(acpKey);
       const boundAt = Date.now();
@@ -295,7 +295,7 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
       let answer: Promise<unknown> | undefined;
       let otherChannel: Promise<unknown> | undefined;
       try {
-        await withTestTimeout(promptDelivered.promise, 10000, "bound question was not delivered");
+        await withinTest(promptDelivered.promise, signal);
         if (outcome === "persistence-failed") {
           const recorder = createUserTurnTranscriptRecorder({
             input: { text: "1" },
@@ -305,15 +305,13 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
             .spyOn(recorder, "persistApproved")
             .mockRejectedValue(new Error("fixture persistence failed"));
           answer = send("1", recorder);
-          await expect(
-            withTestTimeout(answer, 3000, "persistence failure did not settle"),
-          ).rejects.toThrow(/^fixture persistence failed$/);
+          await expect(withinTest(answer, signal)).rejects.toThrow(/^fixture persistence failed$/);
           expect(persist).toHaveBeenCalledOnce();
           cancel.abort();
           release.resolve();
-          await withTestTimeout(first, 3000, "question did not close");
-          await withTestTimeout(send("1"), 3000, "redelivery did not settle");
-          await withTestTimeout(send("next"), 3000, "next turn did not settle");
+          await withinTest(first, signal);
+          await withinTest(send("1"), signal);
+          await withinTest(send("next"), signal);
           expect(started).toEqual(["ask", "next"]);
           return;
         }
@@ -322,32 +320,22 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
         otherChannel = send("2", undefined, "C2");
         await vi.waitFor(() => expect(replyDispatchEntries).toEqual([acpKey, acpKey]));
         answer = send("1");
-        expect(
-          await withTestTimeout(response.promise, 3000, "answer waited for the asking turn"),
-        ).toEqual({
+        expect(await withinTest(response.promise, signal)).toEqual({
           action: "accept",
           content: { question_0: "Red" },
         });
-        await withTestTimeout(answer, 3000, "answer source did not settle");
+        await withinTest(answer, signal);
         expect(answerSettled).toHaveBeenCalledOnce();
         release.resolve();
-        await withTestTimeout(
-          Promise.all([first, otherChannel]),
-          3000,
-          "ordinary bound turns did not finish",
-        );
+        await withinTest(Promise.all([first, otherChannel]), signal);
         // A later ordinary turn crosses the same FIFO after any queued duplicate.
-        await withTestTimeout(send("next"), 3000, "next bound turn did not settle");
+        await withinTest(send("next"), signal);
         expect(started).toEqual(["ask", "2", "next"]);
       } finally {
         cancel.abort();
         release.resolve();
         try {
-          await withTestTimeout(
-            Promise.allSettled([first, answer, otherChannel]),
-            3000,
-            "ACP dispatch did not drain",
-          );
+          await withinTest(Promise.allSettled([first, answer, otherChannel]), signal);
         } finally {
           broker.stop();
           setEmbeddedQuestionBroker(previousBroker);

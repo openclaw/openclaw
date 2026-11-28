@@ -276,16 +276,18 @@ export async function claimPendingAgentQuestionAnswer(params: {
   return claimQuestionAnswer(params);
 }
 
+function readClaimableQuestion(key: string | undefined) {
+  const state = key ? pendingAgentQuestions.get(key) : undefined;
+  return state && !state.resolving && !(state.kind === "gateway" && state.cancelRequested)
+    ? state
+    : undefined;
+}
+
 /** Retain the exact question across mailbox admission; a replacement cannot inherit this reply. */
 export function capturePendingChannelQuestion(sessionKey: string, scope: string) {
   const key = sessionKey.trim();
-  const captured = pendingAgentQuestions.get(key);
-  if (
-    !captured ||
-    captured.channelAnswerScope !== scope ||
-    captured.resolving ||
-    (captured.kind === "gateway" && captured.cancelRequested)
-  ) {
+  const captured = readClaimableQuestion(key);
+  if (captured?.channelAnswerScope !== scope) {
     return undefined;
   }
   return (
@@ -316,13 +318,11 @@ async function claimQuestionAnswer(
   assertPreparedCurrent?: () => Promise<void>,
 ): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
-  const state = sessionKey ? pendingAgentQuestions.get(sessionKey) : undefined;
+  const state = readClaimableQuestion(sessionKey);
   if (
     !state ||
     (state.channelAnswerScope !== undefined &&
-      state.channelAnswerScope !== params.channelAnswerScope) ||
-    state.resolving ||
-    (state.kind === "gateway" && state.cancelRequested)
+      state.channelAnswerScope !== params.channelAnswerScope)
   ) {
     return false;
   }
@@ -330,11 +330,7 @@ async function claimQuestionAnswer(
   if (authority?.toolAuthorityPreparation || authority?.prepareCurrent) {
     authority = await prepareQuestionDispatchAuthority(authority);
   }
-  if (
-    pendingAgentQuestions.get(sessionKey!) !== state ||
-    state.resolving ||
-    (state.kind === "gateway" && state.cancelRequested)
-  ) {
+  if (readClaimableQuestion(sessionKey) !== state) {
     return false;
   }
   withQuestionInputAssertion(() => authority?.assertCurrent());
@@ -536,7 +532,7 @@ function runAgentHarnessSecretInput(
     const onAbort = () => finish();
     const timeout = setTimeout(onAbort, params.timeoutMs);
     timeout.unref();
-    const state: PendingAgentSecretInput & { channelAnswerScope?: string } = {
+    const state: PendingAgentQuestion = {
       channelAnswerScope: params.delivery.channelAnswerScope,
       kind: "secret",
       sessionKey,

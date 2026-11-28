@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
 import {
@@ -138,7 +138,9 @@ describe("gateway harness questions", () => {
       cleanup();
     }),
   );
-  it("does not capture an ordinary follow-up while the channel answer is being persisted", async () => {
+  it("does not capture an ordinary follow-up while the channel answer is being persisted", async ({
+    signal,
+  }) => {
     const sessionKey = "agent:main:channel-answer";
     const scope = "channel-A";
     const gatewayCall = vi.fn<AgentHarnessQuestionGatewayCall>(async () => ({}));
@@ -173,7 +175,7 @@ describe("gateway harness questions", () => {
           async () => {},
         ),
       );
-      await withTestTimeout(started.promise, 3000, "answer never entered persistence");
+      await withinTest(started.promise, signal);
       expect(capturePendingChannelQuestion(sessionKey, scope)).toBeUndefined();
       release.resolve();
       await expect(submitted).resolves.toBe(true);
@@ -192,7 +194,7 @@ describe("gateway harness questions", () => {
     } finally {
       release.resolve();
       first.dispose();
-      await withTestTimeout(Promise.allSettled([submitted]), 3000, "answer attempt did not drain");
+      await withinTest(Promise.allSettled([submitted]), signal);
     }
   });
 
