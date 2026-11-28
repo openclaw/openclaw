@@ -85,6 +85,14 @@ it.each(["channel", "self"] as const)(
       );
     const admitted = await prepare();
     config.tools = { sessions: { visibility: "self" } };
+    owner.setRow({
+      key: sibling,
+      sessionId: sibling,
+      chatType: "channel",
+      space: "t111",
+      origin: { provider: "slack" },
+      deliveryContext: { channel: "slack", accountId: "default", to: "channel:c222" },
+    });
     expect(await owner.run(() => admitted.withCurrentAccess((visible) => [...visible]))).toEqual([
       initialVisibility === "channel",
     ]);

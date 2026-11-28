@@ -184,6 +184,7 @@ export async function finalizeSessionsListChannelRead<T>(params: {
     requesterAgentId: params.requesterAgentId,
     requesterSessionKey: params.requesterSessionKey,
     a2aPolicy: params.a2aPolicy,
+    channelAccess: "admitted" as const,
     allowArchivedMetadata: params.allowArchivedMetadata,
     targets: params.sessions.map(({ entry, agentId: sessionAgentId }) => ({
       key: entry.key,

@@ -193,6 +193,7 @@ export async function prepareSessionTranscriptChannelRead(params: {
                   requesterAgentId: params.requesterAgentId,
                   requesterSessionKey: params.requesterSessionKey,
                   a2aPolicy,
+                  channelAccess: "admitted",
                   targets: captured.map((entry) => entry.target),
                 },
                 currentRead,

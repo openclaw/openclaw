@@ -22,11 +22,13 @@ type ChannelReadParams = {
   requesterSessionKey: string;
   a2aPolicy: AgentToAgentPolicy;
   targets: readonly SessionChannelReadTarget[];
+  /** Preserve a channel decision made before the read while rechecking owner identity. */
+  channelAccess?: "current" | "admitted";
   /** Explicit archive inventory may disclose metadata, never transcript enrichment. */
   allowArchivedMetadata?: boolean;
 };
 
-/** Check every buffered disclosure in the same synchronous owner read as its publication. */
+/** Recheck buffered disclosure owners while preserving an explicitly admitted channel decision. */
 export function currentSessionChannelReadAccess(
   params: ChannelReadParams,
   read?: SessionRowReadView,
@@ -60,14 +62,17 @@ export function currentSessionChannelReadAccess(
     agentId: params.requesterAgentId,
     key: params.requesterSessionKey,
   });
-  const channelChecker = createSessionVisibilityDecisionChecker({
-    action: "history",
-    requesterAgentId: params.requesterAgentId,
-    requesterSessionKey: params.requesterSessionKey,
-    requesterChannelScope: requester?.channelScope,
-    visibility: "channel",
-    a2aPolicy: params.a2aPolicy,
-  });
+  const channelChecker =
+    params.channelAccess === "admitted"
+      ? undefined
+      : createSessionVisibilityDecisionChecker({
+          action: "history",
+          requesterAgentId: params.requesterAgentId,
+          requesterSessionKey: params.requesterSessionKey,
+          requesterChannelScope: requester?.channelScope,
+          visibility: "channel",
+          a2aPolicy: params.a2aPolicy,
+        });
   return params.targets.map((target) => {
     if (isSelf(target)) {
       return requester !== undefined;
@@ -81,13 +86,15 @@ export function currentSessionChannelReadAccess(
     ) {
       return false;
     }
-    const row = {
+    if (!channelChecker) {
+      return true;
+    }
+    return channelChecker.check({
       ...target,
       channelScope: current.channelScope,
       spawnedBy: current.row.entry.spawnedBy,
       parentSessionKey: current.row.entry.parentSessionKey,
-    };
-    return channelChecker.check(row).allowed;
+    }).allowed;
   });
 }
 

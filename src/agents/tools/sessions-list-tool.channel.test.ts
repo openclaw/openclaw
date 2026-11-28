@@ -290,7 +290,7 @@ describe("sessions_list channel visibility", () => {
     });
   });
 
-  it("checks channel routes after the final owner preparation await", async () => {
+  it("preserves admitted channel rows through final owner preparation", async () => {
     const requester = "agent:main:slack:channel:c111:thread:3.001";
     const sibling = "agent:main:slack:channel:c111:thread:3.002";
     const row = (key: string, to = "channel:c111") => ({
@@ -334,10 +334,13 @@ describe("sessions_list channel visibility", () => {
     const result = await owner.run(() => tool.execute("channel-list-owner-preparation", {}));
 
     expect(result.details).toMatchObject({
-      count: 1,
-      sessions: [expect.objectContaining({ key: requester })],
+      count: 2,
+      sessions: [
+        expect.objectContaining({ key: requester }),
+        expect.objectContaining({ key: sibling }),
+      ],
     });
-    expect(JSON.stringify(result.details)).not.toContain("LATE CHANNEL SECRET");
+    expect(JSON.stringify(result.details)).toContain("LATE CHANNEL SECRET");
     expect(preparations).toBe(1);
   });
 });
