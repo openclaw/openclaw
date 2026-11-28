@@ -416,8 +416,9 @@ job's scratch or settings.
 
 `scratch_get` returns content and the current revision. `scratch_set` replaces
 the complete content, or clears it with `null`, and requires `expectedRevision`
-from that read. If the prompt says scratch was shortened, reread the complete
-content before replacing it. On a revision conflict, read again and reconcile
+from that read. If the prompt says scratch was shortened, read the complete
+content with the `automations` tool's `scratch_get` action before replacing it.
+On a revision conflict, read again and reconcile
 the content instead of overwriting another edit.
 
 Use a normal final reply for a visible result and `NO_REPLY` for silence.

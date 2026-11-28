@@ -103,7 +103,7 @@ export function appendCronJobScratchPrompt(
   const bounded = sliceToolResultTextToBudget(scratch.content, 2000);
   return `${prompt}\n\nAutomation scratch (revision ${scratch.revision}):\n${bounded}${
     bounded !== scratch.content
-      ? "\n[Scratch shortened for this prompt; reread the complete scratch before replacing it.]"
+      ? "\n[Scratch shortened for this prompt; read the complete scratch with the automations tool's scratch_get action before replacing it.]"
       : ""
   }`;
 }

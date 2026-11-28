@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { buildCronCommandBody } from "./run-prompt.js";
+import { appendCronJobScratchPrompt, buildCronCommandBody } from "./run-prompt.js";
 
 it("keeps collection guidance in the automation message for an existing session", async () => {
   const { commandBody } = await buildCronCommandBody({
@@ -44,4 +44,30 @@ it("supplies the retained result as data without changing job instructions", asy
   );
   expect(commandBody).toContain("repeated known blockers quiet");
   expect(commandBody).toContain("Explicitly requested recurring digests or reports still deliver");
+});
+
+it("points a shortened scratch at the scratch_get action instead of an unaddressed reread", () => {
+  const content = `oldest-first checklist line\n${"detail ".repeat(420)}`;
+  const prompt = appendCronJobScratchPrompt("Run the check.", {
+    content,
+    revision: 7,
+    updatedAtMs: 1,
+  });
+
+  expect(prompt).toContain("Automation scratch (revision 7):");
+  expect(prompt).toContain("Scratch shortened for this prompt");
+  expect(prompt).toContain("scratch_get");
+  expect(prompt).not.toContain("reread the complete scratch before replacing it.]");
+});
+
+it("keeps an unshortened scratch prompt free of truncation notices", () => {
+  const prompt = appendCronJobScratchPrompt("Run the check.", {
+    content: "short checklist",
+    revision: 2,
+    updatedAtMs: 1,
+  });
+
+  expect(prompt).toContain("Automation scratch (revision 2):\nshort checklist");
+  expect(prompt).not.toContain("Scratch shortened");
+  expect(prompt).not.toContain("scratch_get");
 });
