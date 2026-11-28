@@ -68,20 +68,29 @@ Common examples:
   - `open`, `navigate`, snapshot, or tab-opening flows fail with a browser/network policy error while `start` and `tabs` still work
   - An address typed into a tab the agent has used shows the browser's "is blocked" page with `ERR_BLOCKED_BY_CLIENT`: the [SSRF policy](/tools/browser/configuration#ssrf-policy) denies that address. Open it in a new tab, or allow the host with `browser.ssrfPolicy.allowedHostnames`.
 
-Use this minimal sequence to separate the two:
+Run these checks with the browser profile used by the affected workflow. Replace
+`TAB_ID` with the ID returned by `open`.
 
 ```bash
 openclaw browser --browser-profile openclaw start
 openclaw browser --browser-profile openclaw tabs
 openclaw browser --browser-profile openclaw open https://example.com
+openclaw browser --browser-profile openclaw snapshot --target-id TAB_ID
 ```
 
 How to read the results:
 
 - If `start` fails with `not reachable after start`, troubleshoot CDP readiness first.
 - If `start` succeeds but `tabs` fails, the control plane is still unhealthy. Treat this as a CDP reachability problem, not a page-navigation problem.
-- If `start` and `tabs` succeed but `open` or `navigate` fails, the browser control plane is up and the failure is in navigation policy or the target page.
-- If `start`, `tabs`, and `open` all succeed, the basic managed-browser control path is healthy.
+- If navigation reports a policy denial, inspect the rejected destination and the [SSRF policy](/tools/browser/configuration#ssrf-policy).
+- If the snapshot contains the example page's text, HTTPS navigation and page inspection worked in this profile. For a signed-in workflow, reopen the saved page in that profile and confirm the expected workspace is visible.
+
+On macOS, if Chrome displays `chrome://version` but public HTTPS pages time out,
+check the login keychain in the desktop session on the Mac running Chrome. If
+it is locked, unlock it in Keychain Access and repeat the public-page check.
+While HTTPS is stalled, you can [sample the Chrome process in Activity Monitor](https://support.apple.com/guide/activity-monitor/run-system-diagnostics-actmntr2225/mac).
+A sample repeatedly waiting in `copy_certificates_from_keychain` is evidence
+that Chrome is waiting for macOS to load certificates.
 
 A cold Playwright connection must initialize every existing page in the profile.
 If a renderer is unresponsive, even a snapshot of a healthy tab can time out.
