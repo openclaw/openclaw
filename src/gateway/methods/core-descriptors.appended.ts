@@ -34,4 +34,5 @@ export const CORE_GATEWAY_METHOD_SPECS_APPENDED = [
   ["sessions.catalog.route", "session-catalog", "operator.sessions.read", "2026.11"],
   ["session.members.setAccess", "sessions-sharing", "operator.write", "2026.11"],
   ["chat.pendingInputs.own", "chat", "operator.sessions.read", "2026.11", PROFILE_DEPENDENT],
+  ["worktrees.sessionOwners", "worktrees", "operator.write", "2026.11"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

@@ -2717,6 +2717,11 @@ export function isWorktreesListParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").WorktreesListParamsSchema
 >;
+export function isWorktreesSessionOwnersParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").WorktreesSessionOwnersParamsSchema
+>;
 export function isBoardGetParams(
   value: unknown,
 ): value is import("typebox").Static<typeof import("../../schema-modules.js").BoardGetParamsSchema>;

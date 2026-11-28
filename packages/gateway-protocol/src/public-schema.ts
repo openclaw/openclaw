@@ -523,6 +523,8 @@ export {
   WorktreeRecordSchema,
   WorktreesListParamsSchema,
   WorktreesListResultSchema,
+  WorktreesSessionOwnersParamsSchema,
+  WorktreesSessionOwnersResultSchema,
   WorktreesCreateParamsSchema,
   WorktreesRemoveParamsSchema,
   WorktreesRemoveResultSchema,

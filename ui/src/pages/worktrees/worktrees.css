@@ -1,0 +1,20 @@
+.worktrees-details {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35em;
+
+  > span:first-child,
+  > .worktrees-session-owner {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  > .worktrees-session-owner {
+    text-decoration: underline;
+  }
+
+  > .worktrees-updated {
+    flex: none;
+  }
+}

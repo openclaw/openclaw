@@ -15,6 +15,8 @@ import {
   validateWorktreesRemoveParams,
   validateWorktreesRestoreParams,
   validateWorktreesRetireSnapshotParams,
+  validateWorktreesSessionOwnersParams,
+  type WorktreesSessionOwnersResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { WorktreeRestoreError } from "../../agents/worktrees/errors.js";
 import { WORKTREE_CHECKOUT_TIMEOUT_MS } from "../../agents/worktrees/git.js";
@@ -176,6 +178,20 @@ export const worktreesHandlers: GatewayRequestHandlers = {
       undefined,
     );
   }),
+  "worktrees.sessionOwners": worktreeHandler(
+    validateWorktreesSessionOwnersParams,
+    async ({ respond, client, context }, { keys }) => {
+      const { readWorktreeSessionOwners } = await import("./worktree-session-owners.js");
+      await readWorktreeSessionOwners(
+        context,
+        client,
+        keys,
+        (result: WorktreesSessionOwnersResult) => {
+          respond(true, result);
+        },
+      );
+    },
+  ),
   "worktrees.create": worktreeHandler(validateWorktreesCreateParams, async (opts, params) => {
     const { respond } = opts;
     if (params.expectedRepoIdentity && !params.expectedOwnerId) {

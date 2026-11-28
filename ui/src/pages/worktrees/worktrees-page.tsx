@@ -26,15 +26,22 @@ import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
-  resolveSessionPreferredFaceForKey,
+  resolveSessionNavigationAgentId,
+  resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import {
+  normalizeDefaultMainSessionAliasForUi,
+  resolveUiConfiguredMainKey,
+} from "../../lib/sessions/session-key.ts";
 import { sessionHubTabs, type SessionHubTab } from "../sessions/session-hub-tabs.ts";
 import "../../styles/settings.css";
 import "../../styles/hub-tabs.css";
 import { WorktreeReferenceChoice } from "./reference-choice.tsx";
 import { WorktreesModel } from "./worktrees-model.ts";
+import "./worktrees.css";
 
 const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees";
 
@@ -105,33 +112,59 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
   const operation = () => pending().operation() ?? view().operation;
   const busy = () => operation() !== null || view().operationPending;
 
-  const owner = (record: WorktreesModel["records"][number]) => {
-    if (record.ownerKind === "session" && record.ownerId) {
-      const face = resolveSessionPreferredFaceForKey(model.context, record.ownerId);
-      const target = sessionNavigationTarget({
-        context: model.context,
-        face,
-        sessionKey: record.ownerId,
-        preferenceDerivedFace: true,
+  const ownerSessions = createMemo(() => view().ownerSessions, { lazy: true });
+  const fallbackAgentId = createMemo(() => resolveSessionNavigationAgentId(view().context), {
+    lazy: true,
+  });
+  const mainKey = createMemo(
+    () => {
+      const { agents, gateway } = view().context;
+      return resolveUiConfiguredMainKey({
+        agentsList: agents.state.agentsList,
+        hello: gateway.snapshot.hello,
       });
-      return (
-        <a
-          href={target.href}
-          title={record.ownerId}
-          onClick={(event) =>
-            handleNavigationClick(event, () => model.context.navigate(face, target.options))
-          }
-        >
-          {t("worktrees.ownerSession")}
-        </a>
-      );
-    }
-    return record.ownerKind === "workboard" ? (
-      <span title={record.ownerId ?? ""}>{t("worktrees.ownerWorkboard")}</span>
-    ) : (
-      <span>{t("worktrees.ownerManual")}</span>
+    },
+    { lazy: true },
+  );
+
+  function SessionOwnerLink(props: { sessionKey: string }) {
+    const row = createMemo(() =>
+      ownerSessions().get(normalizeDefaultMainSessionAliasForUi(props.sessionKey)),
     );
-  };
+    const face = createMemo(() => resolveSessionPreferredFace(row()));
+    const target = createMemo(() =>
+      sessionNavigationTarget({
+        basePath: model.context.basePath,
+        face: face(),
+        fallbackAgentId: row()?.agentId ?? fallbackAgentId(),
+        mainKey: mainKey(),
+        sessionKey: props.sessionKey,
+        row: row(),
+        preferenceDerivedFace: true,
+      }),
+    );
+    const resolvedTitle = createMemo(() => {
+      const session = row();
+      return session &&
+        [session.label, session.displayName].some(
+          (name) => name?.trim() && name.trim() !== session.key,
+        )
+        ? resolveSessionDisplayName(session.key, session)
+        : undefined;
+    });
+    return (
+      <a
+        class="worktrees-session-owner"
+        href={target().href}
+        title={resolvedTitle()}
+        onClick={(event) =>
+          handleNavigationClick(event, () => model.context.navigate(face(), target().options))
+        }
+      >
+        {resolvedTitle() ?? t("worktrees.ownerSession")}
+      </a>
+    );
+  }
 
   return (
     <>
@@ -285,17 +318,34 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                       <SettingsRow
                         title={record().name}
                         description={
-                          <>
-                            <span title={record().repoRoot}>
-                              {pathDisplayName(record().repoRoot)}
+                          <span class="worktrees-details">
+                            <span>
+                              <span title={record().repoRoot}>
+                                {pathDisplayName(record().repoRoot)}
+                              </span>
+                              {" · "}
+                              {record().branch}
                             </span>
-                            {" · "}
-                            {record().branch}
-                            {" · "}
-                            {owner(record())}
-                            {" · "}
-                            {formatRelativeTimestamp(record().lastActiveAt)}
-                          </>
+                            <span aria-hidden="true">·</span>
+                            <Show
+                              when={record().ownerKind === "session" && record().ownerId}
+                              fallback={
+                                record().ownerKind === "workboard" ? (
+                                  <span title={record().ownerId ?? ""}>
+                                    {t("worktrees.ownerWorkboard")}
+                                  </span>
+                                ) : (
+                                  <span>{t("worktrees.ownerManual")}</span>
+                                )
+                              }
+                            >
+                              {(key) => <SessionOwnerLink sessionKey={key()} />}
+                            </Show>
+                            <span aria-hidden="true">·</span>
+                            <span class="worktrees-updated">
+                              {formatRelativeTimestamp(record().lastActiveAt)}
+                            </span>
+                          </span>
                         }
                         control={
                           <>

@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/index.js";
+import { WORKTREE_SESSION_OWNER_BATCH_SIZE } from "../../../../packages/gateway-protocol/src/worktree-session-owner-limit.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -88,9 +89,12 @@ function mutableGateway(request: Request) {
 function contextWithGateway(gateway: ApplicationContext["gateway"]): ApplicationContext {
   return {
     basePath: "",
+    agents: { state: { agentsList: null } },
+    agentSelection: { state: { selectedId: "main" } },
     gateway,
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),
+    sessions: { state: { result: null } },
   } as unknown as ApplicationContext;
 }
 
@@ -105,6 +109,7 @@ function createWorktreesPage(request?: Request, initial: ModelState = {}) {
   let dispose: (() => void) | undefined;
   const page = {
     model,
+    context,
     element,
     setContext,
     setGateway(gateway: ApplicationContext["gateway"]) {
@@ -204,6 +209,86 @@ afterEach(() => {
 });
 
 describe("WorktreesPage lifecycle", () => {
+  it("reuses a held row and resolves distinct off-roster owners in bounded batches", async () => {
+    const held = "agent:main:existing-owner";
+    const misses = Array.from(
+      { length: WORKTREE_SESSION_OWNER_BATCH_SIZE + 1 },
+      (_, index) => "agent:main:off-roster-" + index,
+    );
+    const records = [held, ...misses, misses[0]!].map((ownerId, index) =>
+      worktree("checkout-" + index, { ownerKind: "session", ownerId }),
+    );
+    const request = vi.fn(async (method: string, params: { keys?: string[] }) => {
+      if (method === "worktrees.list") {
+        return { worktrees: records };
+      }
+      return {
+        sessions: (params.keys ?? []).map((key) => ({
+          requestedKey: key,
+          key,
+          agentId: "main",
+          displayName: "Owner " + key,
+        })),
+      };
+    });
+    const page = createWorktreesPage(request);
+    const readUnrelatedKey = vi.fn((index: number) => "agent:main:unrelated-" + index);
+    const roster = [
+      ...Array.from({ length: 200 }, (_, index) => ({
+        get key() {
+          return readUnrelatedKey(index);
+        },
+      })),
+      { key: held, displayName: "Held owner", boardFace: "dashboard" },
+    ];
+    Object.defineProperty(page.context().sessions.state, "result", { value: { sessions: roster } });
+    await page.ready();
+    await waitForSolid(() => expect(page.model.ownerSessions.size).toBe(misses.length + 1));
+    expect(request.mock.calls).toEqual([
+      ["worktrees.list", {}, expect.anything()],
+      ["worktrees.sessionOwners", { keys: misses.slice(0, -1) }, expect.anything()],
+      ["worktrees.sessionOwners", { keys: misses.slice(-1) }, expect.anything()],
+    ]);
+    expect(readUnrelatedKey).toHaveBeenCalledTimes(200);
+    expect(page.query('a[title="Held owner"]')?.getAttribute("href")).toContain("/dashboard/");
+  });
+
+  it("keeps the owner link stable until the refreshed lookup settles", async () => {
+    const ownerId = "agent:main:dashboard:off-roster-owner";
+    const owned = worktree("checkout", { ownerKind: "session", ownerId });
+    const lookup = deferred<{ sessions: [] }>();
+    const owner = {
+      requestedKey: ownerId,
+      key: ownerId,
+      agentId: "main",
+      displayName: "Existing owner",
+      boardFace: "dashboard",
+    };
+    let ownerReads = 0;
+    const request = vi.fn(async (method: string) =>
+      method === "worktrees.list"
+        ? { worktrees: [owned] }
+        : ++ownerReads === 1
+          ? { sessions: [owner] }
+          : lookup.promise,
+    );
+    const page = createWorktreesPage(request);
+    await page.ready();
+    const namedLink = await waitForSolid(() => {
+      const link = page.query('a[title="Existing owner"]');
+      expect(link?.getAttribute("href")).toContain("/dashboard/");
+      return link;
+    });
+    await page.model.load();
+    expect(ownerReads).toBe(2);
+    expect(page.query('a[title="Existing owner"]')).toBe(namedLink);
+    lookup.resolve({ sessions: [] });
+    await waitForSolid(() => {
+      expect(page.query('a[title="Existing owner"]')).toBeNull();
+      expect(page.query(".worktrees-session-owner")?.textContent).toBe("Session");
+    });
+  });
+
   it("shows pending list readiness and retries a failed first read", async () => {
     const first = deferred<{ worktrees: WorktreeRecord[] }>();
     const request = listRequest([worktree()]).mockReturnValueOnce(first.promise);

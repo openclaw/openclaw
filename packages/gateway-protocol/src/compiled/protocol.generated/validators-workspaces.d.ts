@@ -34,6 +34,7 @@ export {
   isProjectsMoveSessionParams,
   isProjectsRenameParams,
   isWorktreesListParams,
+  isWorktreesSessionOwnersParams,
   isBoardGetParams,
   isBoardUpdateParams,
   isBoardWidgetContent,

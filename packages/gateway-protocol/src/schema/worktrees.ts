@@ -1,5 +1,6 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { WORKTREE_SESSION_OWNER_BATCH_SIZE } from "../worktree-session-owner-limit.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -68,6 +69,22 @@ export const WorktreeRecordSchema = closedObject({
 export const WorktreesListParamsSchema = closedObject({});
 export const WorktreesListResultSchema = closedObject({
   worktrees: Type.Array(WorktreeRecordSchema),
+});
+
+export const WorktreesSessionOwnersParamsSchema = closedObject({
+  keys: Type.Array(NonEmptyString, { minItems: 1, maxItems: WORKTREE_SESSION_OWNER_BATCH_SIZE }),
+});
+export const WorktreesSessionOwnersResultSchema = closedObject({
+  sessions: Type.Array(
+    closedObject({
+      requestedKey: NonEmptyString,
+      key: NonEmptyString,
+      agentId: NonEmptyString,
+      label: Type.Optional(Type.String()),
+      displayName: Type.Optional(Type.String()),
+      boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
+    }),
+  ),
 });
 
 export const WorktreesCreateParamsSchema = closedObject({
@@ -224,6 +241,8 @@ export const WorktreesRetireSnapshotResultSchema = closedObject({
 export type WorktreeRecord = Static<typeof WorktreeRecordSchema>;
 export type WorktreesListParams = Static<typeof WorktreesListParamsSchema>;
 export type WorktreesListResult = Static<typeof WorktreesListResultSchema>;
+export type WorktreesSessionOwnersParams = Static<typeof WorktreesSessionOwnersParamsSchema>;
+export type WorktreesSessionOwnersResult = Static<typeof WorktreesSessionOwnersResultSchema>;
 export type WorktreesCreateParams = Static<typeof WorktreesCreateParamsSchema>;
 export type WorktreesRemoveParams = Static<typeof WorktreesRemoveParamsSchema>;
 export type WorktreesRemoveResult = Static<typeof WorktreesRemoveResultSchema>;

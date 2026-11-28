@@ -5,7 +5,9 @@ import type {
   WorktreesGcResult,
   WorktreesListResult,
   WorktreesRemoveResult,
-} from "../../../../packages/gateway-protocol/src/index.js";
+  WorktreesSessionOwnersResult,
+} from "../../../../packages/gateway-protocol/src/schema/worktrees.js";
+import { WORKTREE_SESSION_OWNER_BATCH_SIZE } from "../../../../packages/gateway-protocol/src/worktree-session-owner-limit.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -16,13 +18,27 @@ import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
 import type { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
+import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
+import {
+  isUiGlobalSessionKey,
+  normalizeAgentId,
+  normalizeDefaultMainSessionAliasForUi,
+} from "../../lib/sessions/session-key.ts";
 import { createManagedWorktree } from "../../lib/worktrees/create-worktree.ts";
 
 registerSessionOrganizationEnglish();
 
+type OwnerSession = Omit<
+  WorktreesSessionOwnersResult["sessions"][number],
+  "requestedKey" | "agentId"
+> & {
+  agentId?: string;
+};
+
 /** Request admission stays synchronous while Solid projects this page's presentation. */
 export class WorktreesModel {
   records: WorktreeRecord[] = [];
+  ownerSessions = new Map<string, OwnerSession>();
   listLoaded = false;
   listFailed = false;
   listRead: { result: Promise<void> } = { result: Promise.resolve() };
@@ -49,6 +65,40 @@ export class WorktreesModel {
       this.listFailed = true;
       this.error = formatUiError(error);
     },
+  });
+  private readonly ownersRequest = createPageRequest(() => this.publish(), {
+    task: async (
+      {
+        scope,
+        keys,
+        sessions,
+      }: { scope: GatewayConnectionScope; keys: string[]; sessions: Map<string, OwnerSession> },
+      { signal },
+    ) => {
+      for (let i = 0; i < keys.length; i += WORKTREE_SESSION_OWNER_BATCH_SIZE) {
+        signal.throwIfAborted();
+        let result: WorktreesSessionOwnersResult;
+        try {
+          result = await scope.client.request<WorktreesSessionOwnersResult>(
+            "worktrees.sessionOwners",
+            { keys: keys.slice(i, i + WORKTREE_SESSION_OWNER_BATCH_SIZE) },
+            { signal },
+          );
+        } catch {
+          // Titles are optional. Keep confirmed rows, but not old metadata for failed batches.
+          signal.throwIfAborted();
+          break;
+        }
+        for (const session of result.sessions) {
+          sessions.set(normalizeDefaultMainSessionAliasForUi(session.requestedKey), session);
+        }
+      }
+      return sessions;
+    },
+    onComplete: (sessions) => {
+      this.ownerSessions = sessions;
+    },
+    onError: () => {},
   });
   private readonly branchesRequest = createPageRequest(() => this.update({}), {
     task: ({ repoRoot }: { scope: GatewayConnectionScope; repoRoot: string }, { signal }) =>
@@ -106,6 +156,8 @@ export class WorktreesModel {
     this.presentationLifetime.resolve();
     this.presentationLifetime = Promise.withResolvers<void>();
     this.listRequest.cancel();
+    this.ownersRequest.cancel();
+    this.ownerSessions = new Map();
     this.branchesRequest.cancel();
     this.listFailed = false;
     this.update({ operation: null });
@@ -136,10 +188,56 @@ export class WorktreesModel {
     if (!options.preserveError) {
       this.error = null;
     }
+    this.ownersRequest.cancel();
     const pending = this.listRequest.run(scope);
-    this.listRead = { result: Promise.race([pending, this.retired]) };
+    const read = { result: Promise.race([pending, this.retired]) };
+    this.listRead = read;
     this.publish();
     await pending;
+    if (this.listRead === read && this.gateway.isCurrent(scope) && !this.listFailed) {
+      this.loadOwnerSessions(scope);
+    }
+  }
+
+  private loadOwnerSessions(scope: GatewayConnectionScope) {
+    const keys = new Map<string, string>();
+    for (const record of this.records) {
+      if (record.ownerKind === "session" && record.ownerId) {
+        keys.set(normalizeDefaultMainSessionAliasForUi(record.ownerId), record.ownerId);
+      }
+    }
+    if (keys.size === 0) {
+      this.ownerSessions = new Map();
+      this.publish();
+      return;
+    }
+    const roster = this.context.sessions.state;
+    const fallbackAgentId = resolveSessionNavigationAgentId(this.context);
+    const sessions = new Map<string, OwnerSession>();
+    for (const row of roster.result?.sessions ?? []) {
+      const key = normalizeDefaultMainSessionAliasForUi(row.key);
+      if (
+        keys.has(key) &&
+        (!isUiGlobalSessionKey(key) ||
+          (roster.agentId &&
+            normalizeAgentId(roster.agentId) === normalizeAgentId(fallbackAgentId)))
+      ) {
+        keys.delete(key);
+        sessions.set(key, row);
+      }
+    }
+    const pendingSessions = new Map(sessions);
+    for (const key of keys.keys()) {
+      const previous = this.ownerSessions.get(key);
+      if (previous) {
+        pendingSessions.set(key, previous);
+      }
+    }
+    this.ownerSessions = pendingSessions;
+    this.publish();
+    if (keys.size > 0) {
+      void this.ownersRequest.run({ scope, keys: [...keys.values()], sessions });
+    }
   }
 
   private async runOperation(scope: GatewayConnectionScope, action: () => Promise<unknown>) {
