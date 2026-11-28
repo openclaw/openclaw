@@ -1,8 +1,8 @@
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 
 type WorkboardCardLookupResult =
-  | { card: WorkboardCard; error?: undefined }
-  | { card?: undefined; error: string };
+  | { card: WorkboardCard; error?: undefined; reason?: undefined }
+  | { card?: undefined; error: string; reason: "not_found" | "ambiguous" };
 
 export function resolveWorkboardCardByIdOrPrefix(
   cards: readonly WorkboardCard[],
@@ -14,11 +14,14 @@ export function resolveWorkboardCardByIdOrPrefix(
   }
   const matches = cards.filter((card) => card.id.startsWith(id));
   if (matches.length === 0) {
-    return { error: `Card not found: ${id}` };
+    return { error: `Card not found: ${id}`, reason: "not_found" };
   }
   if (matches.length > 1) {
-    return { error: `Ambiguous card id prefix: ${id} (${matches.length} matches)` };
+    return {
+      error: `Ambiguous card id prefix: ${id} (${matches.length} matches)`,
+      reason: "ambiguous",
+    };
   }
   const card = matches[0];
-  return card ? { card } : { error: `Card not found: ${id}` };
+  return card ? { card } : { error: `Card not found: ${id}`, reason: "not_found" };
 }

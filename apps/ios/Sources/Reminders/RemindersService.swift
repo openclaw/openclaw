@@ -106,10 +106,19 @@ final class RemindersService: RemindersServicing {
             from: dueDate)
         components.calendar = calendar
         components.timeZone = timeZone
-        // EventKit requires a Gregorian due calendar and a matching start date on iOS.
-        reminder.startDateComponents = components
+        let offset = timeZone.secondsFromGMT(for: dueDate)
+        if let reconstructed = components.date, timeZone.secondsFromGMT(for: reconstructed) != offset {
+            // Pin the offset when the named zone resolves a repeated wall time to its other occurrence.
+            components.timeZone = TimeZone(secondsFromGMT: offset)
+        }
+        // Setting the due date can shift a repeated-hour start. Assign the matching start last.
         reminder.dueDateComponents = components
-        reminder.addAlarm(EKAlarm(absoluteDate: dueDate))
+        reminder.startDateComponents = components
+        if components.timeZone != timeZone {
+            reminder.addAlarm(EKAlarm(relativeOffset: 0))
+        } else {
+            reminder.addAlarm(EKAlarm(absoluteDate: dueDate))
+        }
     }
 
     private static func resolveList(

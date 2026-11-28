@@ -19,7 +19,7 @@ describe("FaceTime talk driver lifecycle", () => {
     await withEnvAsync({ SELECTED_REALTIME_KEY: "selected-key" }, async () => {
       await resolveFaceTimeRealtimeProvider({
         config: resolveFaceTimeConfig({
-          ownerHandles: ["caller@example.com"],
+          allowedCallers: ["caller@example.com"],
           realtime: {
             provider: "selected",
             providers: {
@@ -363,7 +363,7 @@ describe("FaceTime talk driver lifecycle", () => {
     await startReadyFaceTimeTalkDriver(
       startParams({
         config: resolveFaceTimeConfig({
-          ownerHandles: ["caller@example.com"],
+          allowedCallers: ["caller@example.com"],
           realtime: { toolPolicy: "none" },
         }),
       }),
@@ -404,7 +404,7 @@ describe("FaceTime talk driver lifecycle", () => {
     await startReadyFaceTimeTalkDriver(
       startParams({
         config: resolveFaceTimeConfig({
-          ownerHandles: ["caller@example.com"],
+          allowedCallers: ["caller@example.com"],
           realtime: {
             sessionKey: "agent:lobster:facetime",
             instructions: "Speak warmly and keep answers short.",

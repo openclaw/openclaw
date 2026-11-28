@@ -5,17 +5,59 @@
  */
 import { randomBytes } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { open, unlink } from "node:fs/promises";
+import { lstat, open, realpath, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { finished } from "node:stream/promises";
 import type { SandboxFsBridge } from "../../sandbox/fs-bridge.types.js";
 import { getSandboxInputStager } from "../../sandbox/input-staging.js";
 
+export type SpillOwner = { agentId: string; sessionKey: string };
+
+// Process-local exact paths only: restart or cap eviction makes old notices unreadable.
+const ownSpillFiles = new Map<string, Set<string>>();
+
+async function recordOwnSpillFile(owner: SpillOwner, filePath: string): Promise<void> {
+  const resolved = await realpath(filePath);
+  const key = JSON.stringify([owner.agentId, owner.sessionKey]);
+  const files = ownSpillFiles.get(key) ?? new Set<string>();
+  files.delete(resolved);
+  files.add(resolved);
+  if (files.size > 64) {
+    files.delete(files.values().next().value!);
+  }
+  // Registration, not reads, refreshes owner recency.
+  ownSpillFiles.delete(key);
+  ownSpillFiles.set(key, files);
+  if (ownSpillFiles.size > 256) {
+    ownSpillFiles.delete(ownSpillFiles.keys().next().value!);
+  }
+}
+
+export async function resolveOwnSpillFile(
+  owner: SpillOwner,
+  filePath: string,
+): Promise<string | undefined> {
+  try {
+    const resolved = await realpath(filePath);
+    if (!ownSpillFiles.get(JSON.stringify([owner.agentId, owner.sessionKey]))?.has(resolved)) {
+      return undefined;
+    }
+    const stat = await lstat(resolved);
+    // A same-uid local process can still swap between this check and open.
+    return stat.isFile() && (typeof process.getuid !== "function" || stat.uid === process.getuid())
+      ? resolved
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export type PrivateTempFileOptions = {
   sandbox?: { root?: string; bridge?: SandboxFsBridge };
   assertCurrent?: () => void;
   signal?: AbortSignal;
+  owner?: SpillOwner;
 };
 
 export async function writePrivateTempFile(
@@ -68,6 +110,9 @@ export async function writePrivateTempFile(
     if (!assertFile) {
       throw new Error("Private output disappeared during creation");
     }
+    if (options?.owner) {
+      await recordOwnSpillFile(options.owner, filePath);
+    }
     await file.writeFile(content);
     await file.close();
   } catch (error) {
@@ -94,14 +139,33 @@ export type PrivateTempFileStream = {
 };
 
 /** Host-only: opens one owner-only temp file for ordered appends up to maxBytes. */
-export function openPrivateTempFileStream(prefix: string, maxBytes: number): PrivateTempFileStream {
+export function openPrivateTempFileStream(
+  prefix: string,
+  maxBytes: number,
+  options?: { owner?: SpillOwner },
+): PrivateTempFileStream {
   const path = createPrivateTempFilePath(prefix);
   // An exclusive open never grants custody of an existing path.
   const stream = createWriteStream(path, { flags: "wx", mode: 0o600 });
-  const done = finished(stream).then(
-    () => true,
-    () => false,
-  );
+  const { promise: registered, resolve: resolveRegistered } = Promise.withResolvers<boolean>();
+  stream.once("open", () => {
+    if (!options?.owner) {
+      resolveRegistered(true);
+      return;
+    }
+    void recordOwnSpillFile(options.owner, path).then(
+      () => resolveRegistered(true),
+      () => resolveRegistered(false),
+    );
+  });
+  stream.once("error", () => resolveRegistered(false));
+  const done = Promise.all([
+    finished(stream).then(
+      () => true,
+      () => false,
+    ),
+    registered,
+  ]).then(([written, admitted]) => written && admitted);
   let bytes = 0;
   let limitReached = false;
   return {

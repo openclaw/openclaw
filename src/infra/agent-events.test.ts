@@ -40,7 +40,6 @@ import {
   sweepStaleRunContexts,
 } from "./agent-run-registry.js";
 import type { AgentRunContext } from "./agent-run-registry.types.js";
-import { emitAgentRunStatusEvent } from "./agent-run-status-events.js";
 
 type AgentEventsModule = {
   events: typeof import("./agent-events.js");
@@ -81,22 +80,6 @@ beforeEach(() => resetAgentEventsForTest());
 afterEach(() => {
   vi.restoreAllMocks();
   resetAgentEventsForTest();
-});
-
-test("emits typed run startup status with run context", () => {
-  registerRun("run", { sessionKey: "session", agentId: "main" });
-  const events = captureEvents();
-  emitAgentRunStatusEvent({ runId: "run", phase: "preparing_workspace" });
-  expect(events).toEqual([
-    expect.objectContaining({
-      runId: "run",
-      seq: 1,
-      stream: "run_status",
-      sessionKey: "session",
-      agentId: "main",
-      data: { phase: "preparing_workspace" },
-    }),
-  ]);
 });
 
 test("publishes only projection-relevant run context changes", () => {

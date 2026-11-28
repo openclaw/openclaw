@@ -63,6 +63,7 @@ export function createSteeredCliMessageInjection(params: {
               params.context.params.config ?? {},
               params.context.params.agentId,
             ),
+            config: params.context.params.config,
             images: options?.images,
             imageOrder: options?.imageOrder,
             media: options?.media,

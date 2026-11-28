@@ -21,6 +21,7 @@ import {
   clearAgentRunContext,
   releaseAgentRunContext,
 } from "../../src/infra/agent-run-registry.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 assert(global.gc, "Run with --expose-gc");
 assert(process.env.OPENCLAW_STATE_DIR, "Use an isolated OPENCLAW_STATE_DIR");
@@ -58,9 +59,7 @@ for (let i = 0; i < 10_000; i++) {
   }
 }
 const index = buildSubagentSessionListReadIndex(now, undefined, subagentRuns);
-const rows = Array.from(subagentRuns.values(), (row) =>
-  index.getDisplaySubagentRun(row.childSessionKey),
-);
+const rows = Array.from(index.inputs.inMemoryRuns);
 const iterations = 2_000;
 const inspector = new Session();
 const sumBytes = (node: HeapProfiler.SamplingHeapProfileNode): number =>
@@ -79,12 +78,7 @@ try {
     }
     global.gc();
     if (mode === "allocation") {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 32768,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 32768);
     }
     const hostLoad = loadavg();
     const before = process.threadCpuUsage();

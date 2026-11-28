@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { hashFileDescriptorSync } from "./file-descriptor.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import * as fileGeneration from "./sqlite-file-generation.js";
 import {
@@ -313,6 +314,22 @@ function retainedWalFixture(checkpointed = false) {
   expect(fs.readFileSync(`${fixture.file}-shm`).readUInt32LE(8)).not.toBe(0);
   return fixture;
 }
+
+it("hashes SQLite's lock bytes as the zeros SQLite leaves", () => {
+  // Windows enforces SQLite's EXCLUSIVE lock on these 512 bytes: reading them fails with EBUSY.
+  const lockBytes = 0x4000_0000;
+  const file = path.join(dirs.make("update-generation-lock-bytes-"), "state.sqlite");
+  fs.writeFileSync(file, "SQLite format 3\0");
+  fs.truncateSync(file, lockBytes + 4096);
+  const fd = fs.openSync(file, "r+");
+  try {
+    const fullRead = hashFileDescriptorSync(fd).sha256;
+    fs.writeSync(fd, Buffer.alloc(512, 0xff), 0, 512, lockBytes);
+    expect(createSqliteFileGenerationReader()(file).database.sha256).toBe(fullRead);
+  } finally {
+    fs.closeSync(fd);
+  }
+});
 
 it("binds a WAL index an outside reader rebuilds over retained frames during the read", () => {
   const { file, staging } = retainedWalFixture();

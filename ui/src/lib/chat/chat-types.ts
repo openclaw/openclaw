@@ -90,6 +90,8 @@ export type DurableDraftModelSelection = {
 
 export type DurableComposerDraft = {
   revision: number;
+  /** Unchanged attachments keep their identity across caption edits. */
+  attachmentVersion?: string;
   text: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
@@ -388,6 +390,8 @@ export type MessageGroup = {
   senderLabel?: string | null;
   senderSession?: { sessionKey?: string; agentId?: string; label?: string } | null;
   sender?: SenderIdentity;
+  /** Author credited on an approved suggestion; the sender is the approver. */
+  suggestedBy?: SenderIdentity;
   sourceClients?: MessageClientSource[];
   replyToSender?: SenderIdentity;
   replyToMessage?: { message: unknown; key: string };
@@ -500,6 +504,8 @@ export type NormalizedMessage = {
   senderLabel?: string | null;
   senderSession?: { sessionKey?: string; agentId?: string; label?: string } | null;
   sender?: SenderIdentity;
+  /** Author credited on an approved suggestion; the sender is the approver. */
+  suggestedBy?: SenderIdentity;
   sourceClients?: MessageClientSource[];
   audioAsVoice?: boolean;
   replyPreview?: { text: string; senderLabel?: string | null };

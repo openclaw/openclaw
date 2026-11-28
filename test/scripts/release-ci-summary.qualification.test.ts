@@ -118,32 +118,6 @@ describe("candidate-owned publish consumer chain", () => {
     };
     await expect(validateReleaseRunEvidence(verifier(f), client)).rejects.toThrow("HTTP 404");
   });
-  it("retains an empty waiver record when a frozen Q named job passed", async () => {
-    const version = "2099.1.1-beta.1";
-    const f = candidatePublicationFixture({ candidateVersion: version });
-    const client = {
-      ...f.client,
-      getWorkflowSource: (sha: string, path?: string) =>
-        path === "scripts/lib/release-validation-waivers.json"
-          ? JSON.stringify({
-              schema: "openclaw.release-validation-waivers/v1",
-              waivers: [
-                {
-                  targetVersion: version,
-                  childRole: "pluginPrereleaseCandidate",
-                  jobName: "plugin-prerelease-suite",
-                  reason: "Synthetic historical approval",
-                  aggregates: [],
-                },
-              ],
-            })
-          : f.client.getWorkflowSource(sha, path),
-    };
-    await expect(validateReleaseRunEvidence(verifier(f), client)).resolves.toMatchObject({
-      waivers: [],
-    });
-  });
-
   it("evaluates raw failed evidence against Q data rather than the verifier checkout", async () => {
     const f = candidatePublicationFixture({
       candidateVersion: "2099.1.1-beta.1",
@@ -594,6 +568,58 @@ describe("candidate-owned publish consumer chain", () => {
         root: { runId: root.runId, workflowRefProof: "candidate-owned-admission-v1" },
         current: { conclusion: "success" },
       });
+    },
+  );
+
+  // Fast-tracked betas publish from build-only or failed FRV evidence. Stable promotion
+  // must still find a passing stable-profile FRV for the beta it reuses.
+  it.each(["build-only", "failed", "beta-profile"] as const)(
+    "refuses beta-to-stable promotion from %s beta evidence",
+    async (fault) => {
+      const root = candidatePublicationFixture({
+        candidateVersion: "2026.8.28-beta.1",
+        releaseProfile: fault === "beta-profile" ? "beta" : "stable",
+        reuseEvidence: false,
+        ...(fault === "build-only" ? { rerunGroup: "build-only" as const } : {}),
+      });
+      const client =
+        fault === "failed"
+          ? {
+              ...root.client,
+              getRun: async (id: string) => ({
+                ...(await root.client.getRun(id)),
+                ...(id === root.runId ? { conclusion: "failure" } : {}),
+              }),
+              getRunView: async (id: string) => ({
+                ...(await root.client.getRunView(id)),
+                ...(id === root.runId ? { conclusion: "failure" } : {}),
+              }),
+            }
+          : root.client;
+      await expect(
+        validateReleaseRunEvidence(
+          {
+            ...verifier(root),
+            reuseRequest: {
+              targetSha: "d".repeat(40),
+              releaseProfile: "stable",
+              runReleaseSoak: "true",
+              validationInputs: {
+                ...root.manifest.validationInputs,
+                targetVersion: "2026.8.28",
+                coveragePolicy: "npm-stable-v1",
+              },
+            },
+          },
+          client,
+        ),
+      ).rejects.toThrow(
+        fault === "build-only"
+          ? "Build-only artifacts require a fast-track request"
+          : fault === "failed"
+            ? "parent run is not completed/success"
+            : "ineligible reuse candidate",
+      );
     },
   );
 

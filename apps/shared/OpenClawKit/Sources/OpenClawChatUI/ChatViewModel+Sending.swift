@@ -9,7 +9,7 @@ struct SlashFilterCache {
 }
 
 private let chatSendingLogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
-private let localSessionCommands: Set<String> = ["/new", "/reset", "/clear", "/compact"]
+let localSessionCommands: Set<String> = ["/new", "/reset", "/clear", "/compact"]
 
 extension OpenClawChatViewModel {
     public var canSend: Bool {
@@ -55,10 +55,18 @@ extension OpenClawChatViewModel {
 
     var workingIndicatorIdentity: String {
         let selectedRunIDs = self.liveUsageRunID.map { Set([$0]) } ?? []
+        var inputs = pendingLocalUserEchoMessageIDsByRunID
+        // Adopting the Gateway's copy of the input ends its echo entry but keeps its ID. Without this the
+        // line was rebuilt mid-turn: its claw restarted and its label went blank.
+        if let run = self.liveUsageRunID, inputs[run] == nil,
+           let input = self.messages.last(where: { $0.role == "user" && $0.workRunID == run })
+        {
+            inputs[run] = input.id
+        }
         return ChatWorkingIdentity.resolve(
             sessionKey: sessionKey,
             pendingRunIDs: selectedRunIDs,
-            localUserMessageIDsByRunID: pendingLocalUserEchoMessageIDsByRunID,
+            localUserMessageIDsByRunID: inputs,
             fallbackGeneration: runOwnershipGeneration)
     }
 
@@ -322,6 +330,7 @@ extension OpenClawChatViewModel {
             self.applyDeferredExternalStateIfReady()
         }
 
+        guard await self.prepareNewChatDraftSettings(for: draft.session) else { return }
         guard await self.prepareLiveRoute(for: draft) else { return }
         guard await self.validateAttachmentBudgetForSend(draft.attachments, session: draft.session) else { return }
         guard self.composerModelAvailabilityMessage == nil else {
@@ -510,6 +519,9 @@ extension OpenClawChatViewModel {
                 fileName: attachment.fileName,
                 content: attachment.data.base64EncodedString())
         }
+        #if os(iOS)
+        inlineVideos.remember(draft.attachments, messageKey: Self.outboxUserIdempotencyKey(runId))
+        #endif
         let userContent = Self.userContent(
             messageText: draft.outgoingMessageText,
             attachments: draft.attachments,
@@ -529,13 +541,13 @@ extension OpenClawChatViewModel {
         pendingLocalUserEchoMessageIDsByRunID[runId] = userMessageID
         runMessageScopesByRunID[runId] = currentRunMessageScope()
 
-        // Clear input immediately for responsive UX (before network await).
-        if input == draft.input {
+        // Reconnect can suspend long enough for a new draft to have the same text.
+        if input == draft.input, self.composerRevision(for: draft.session.key) == draft.composerRevision {
             input = ""
         }
         let sentAttachmentIDs = Set(draft.attachments.map(\.id))
         attachments.removeAll { sentAttachmentIDs.contains($0.id) }
-        // A live send has no outbox insert to clear its draft, so write the cleared composer now.
+        // A live send has no outbox insert to clear its draft, so persist the current composer now.
         self.flushComposerDraftText()
 
         return LiveSendAttempt(
@@ -740,6 +752,7 @@ extension OpenClawChatViewModel {
     }
 
     private func finishAcceptedComposerSend(_ draft: SendDraft) {
+        if self.newChatDraft?.key == draft.session.key { self.newChatDraft = nil }
         self.recordSuccessfulInput(
             draft.trimmed,
             transcriptEcho: draft.outgoingMessageText,

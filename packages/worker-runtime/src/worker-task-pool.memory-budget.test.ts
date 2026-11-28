@@ -5,6 +5,7 @@ import type { WorkerLifecycle } from "./worker-lifecycle.js";
 import { createWorkerComputeCapacity } from "./worker-task-capacity.js";
 import type { WorkerPoolMemoryBudget, WorkerTaskHost } from "./worker-task-host.js";
 import { WorkerTaskPoolCore } from "./worker-task-pool-core.js";
+import type { WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
 
 class FixtureWorker extends EventEmitter implements WorkerLifecycle {
   readonly inputs: Array<{ taskId: number; input: unknown }> = [];
@@ -40,6 +41,7 @@ class FixtureWorker extends EventEmitter implements WorkerLifecycle {
 const pools: Array<WorkerTaskPoolCore<string, string>> = [];
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
+  vi.useRealTimers();
 });
 
 function createBudget(admit: () => boolean) {
@@ -54,7 +56,11 @@ function createBudget(admit: () => boolean) {
   } satisfies WorkerPoolMemoryBudget;
 }
 
-function createPool(budget: WorkerPoolMemoryBudget | undefined, maxWorkers = 2) {
+function createPool(
+  budget: WorkerPoolMemoryBudget | undefined,
+  maxWorkers = 2,
+  options: Partial<WorkerTaskPoolOptions<string>> = {},
+) {
   const workers: FixtureWorker[] = [];
   const createMemoryBudget = vi.fn((): WorkerPoolMemoryBudget | undefined => budget);
   const host: WorkerTaskHost = {
@@ -81,17 +87,86 @@ function createPool(budget: WorkerPoolMemoryBudget | undefined, maxWorkers = 2) 
     },
   };
   const pool = new WorkerTaskPoolCore<string, string>(
-    { workerUrl: new URL("file:///synthetic-worker.mjs"), maxWorkers, idleTimeoutMs: 0 },
+    {
+      workerUrl: new URL("file:///synthetic-worker.mjs"),
+      maxWorkers,
+      idleTimeoutMs: 0,
+      ...options,
+    },
     host,
   );
   pools.push(pool);
-  return { pool, workers, createMemoryBudget };
+  return { pool, workers, host, createMemoryBudget };
 }
 
 const settle = () =>
   new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
+
+it.each([0, 60_000])(
+  "keeps the shared reader when preparation finishes out of order (primary idle %i)",
+  async (idleTimeoutMs) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const { pool, host, workers } = createPool(undefined, 2, {
+      idleTimeoutMs,
+      burstIdleTimeoutMs: 5_000,
+    });
+    host.isSharedWorker = (worker) => worker === workers[0];
+    const gate = Promise.withResolvers<string>();
+    const first = pool.run(() => gate.promise, {});
+    const second = pool.run("second", {});
+    await settle();
+    const shared = workers[0]!;
+    shared.reply();
+    await second;
+    gate.resolve("first");
+    await settle();
+    const dedicated = workers[1]!;
+    dedicated.reply();
+    await first;
+
+    const warm = pool.run("warm", {});
+    const rescue = pool.run("rescue", {});
+    expect(shared.inputs.at(-1)?.input).toBe("warm");
+    expect(dedicated.inputs.at(-1)?.input).toBe("rescue");
+    dedicated.reply();
+    shared.reply();
+    await Promise.all([warm, rescue]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(dedicated.terminate).toHaveBeenCalledOnce();
+    expect(shared.terminate).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(55_000);
+    expect(shared.terminate).toHaveBeenCalledTimes(idleTimeoutMs ? 1 : 0);
+  },
+);
+
+it("charges time already idle when a dedicated reader becomes surplus", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  const { pool, host, workers } = createPool(undefined, 2, {
+    idleTimeoutMs: 0,
+    burstIdleTimeoutMs: 5_000,
+  });
+  host.isSharedWorker = (worker) => worker === workers[1];
+  const gate = Promise.withResolvers<string>();
+  const first = pool.run("dedicated", {});
+  const second = pool.run(() => gate.promise, {});
+  await settle();
+  const dedicated = workers[0]!;
+  dedicated.reply();
+  await first;
+  await vi.advanceTimersByTimeAsync(4_000);
+  gate.resolve("shared");
+  await settle();
+  const shared = workers[1]!;
+  shared.reply();
+  await second;
+  await vi.advanceTimersByTimeAsync(999);
+  expect(dedicated.terminate).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(dedicated.terminate).toHaveBeenCalledOnce();
+  expect(shared.terminate).not.toHaveBeenCalled();
+});
 
 it("queues refused growth on the floor worker instead of starting or dropping it", async () => {
   const budget = createBudget(() => false);

@@ -228,6 +228,7 @@ export function resolveExecPreparedRunEnvironment(defaults?: ExecToolDefaults) {
         agentId: defaults?.executionAgentId ?? defaults?.agentId ?? "main",
       })),
     localProcessEnv: installationTargetEnv(getInstallationTarget()),
+    localToolEnv: defaults?.preparedLocalToolEnv,
   };
 }
 
@@ -436,11 +437,13 @@ export function resolvePreparedExecEnvironment(params: {
   localGitConfigParameters?: string;
   managedLocalIdentity?: boolean;
   localProcessEnv?: Readonly<Record<string, string>>;
+  localToolEnv?: Readonly<Record<string, string>>;
   scratchEnv?: Record<string, string>;
   warnings: string[];
 }): {
   env: Record<string, string>;
   requestedEnv?: Record<string, string>;
+  legacyScratchRequestedEnv?: Record<string, string>;
   executionContext?: SystemRunExecutionContext;
 } {
   if (params.localProcessEnv && params.host !== "gateway") {
@@ -454,11 +457,13 @@ export function resolvePreparedExecEnvironment(params: {
   };
   const routingEnv = buildExecRoutingEnv(executionContext);
   const explicitEnv: Record<string, string> | undefined =
-    params.scratchEnv !== undefined ||
-    params.execParams.env !== undefined ||
-    params.pluginEnv !== undefined
-      ? { ...params.scratchEnv, ...params.execParams.env, ...params.pluginEnv }
+    params.execParams.env !== undefined || params.pluginEnv !== undefined
+      ? { ...params.execParams.env, ...params.pluginEnv }
       : undefined;
+  // Runtime scratch defaults must not change approval bindings; explicit overrides still do.
+  const executionOverrides = params.scratchEnv
+    ? { ...params.scratchEnv, ...explicitEnv }
+    : explicitEnv;
   const storeEnvResult = params.storeEnv
     ? sanitizeHostExecEnvWithDiagnostics({
         baseEnv: {},
@@ -493,23 +498,24 @@ export function resolvePreparedExecEnvironment(params: {
     );
   }
   const hasStoreEnv = storeEnv && Object.keys(storeEnv).length > 0;
-  const untrustedRequestedEnv: Record<string, string> | undefined = hasStoreEnv
-    ? { ...storeEnv, ...explicitEnv }
-    : explicitEnv;
-  const requestedEnv: Record<string, string> | undefined = params.storeSecretEnv
-    ? { ...storeEnv, ...params.storeSecretEnv, ...explicitEnv }
-    : untrustedRequestedEnv;
+  const untrustedExecutionEnv: Record<string, string> | undefined = hasStoreEnv
+    ? { ...storeEnv, ...executionOverrides }
+    : executionOverrides;
+  const requestedEnv: Record<string, string> | undefined =
+    hasStoreEnv || params.storeSecretEnv || explicitEnv
+      ? { ...storeEnv, ...params.storeSecretEnv, ...explicitEnv }
+      : undefined;
   const hostEnvResult =
     params.host === "sandbox"
       ? null
       : sanitizeHostExecEnvWithDiagnostics({
           baseEnv: inheritedBaseEnv,
-          overrides: untrustedRequestedEnv,
+          overrides: untrustedExecutionEnv,
           blockPathOverrides: true,
         });
   if (
     hostEnvResult &&
-    untrustedRequestedEnv &&
+    untrustedExecutionEnv &&
     (hostEnvResult.rejectedOverrideBlockedKeys.length > 0 ||
       hostEnvResult.rejectedOverrideInvalidKeys.length > 0)
   ) {
@@ -546,7 +552,7 @@ export function resolvePreparedExecEnvironment(params: {
     params.sandbox && params.host === "sandbox"
       ? buildSandboxEnv({
           defaultPath: DEFAULT_PATH,
-          paramsEnv: untrustedRequestedEnv,
+          paramsEnv: untrustedExecutionEnv,
           sandboxEnv: params.sandbox.env,
           containerWorkdir: params.sandbox.containerWorkdir,
         })
@@ -585,7 +591,7 @@ export function resolvePreparedExecEnvironment(params: {
     // Secret-kind entries are authenticated ciphertext, not active credentials.
     // Inject them after ordinary env filtering so names such as GH_TOKEN remain usable.
     for (const [key, value] of Object.entries(params.storeSecretEnv)) {
-      if (!explicitEnv || !Object.hasOwn(explicitEnv, key)) {
+      if (!executionOverrides || !Object.hasOwn(executionOverrides, key)) {
         env[key] = value;
       }
     }
@@ -608,13 +614,31 @@ export function resolvePreparedExecEnvironment(params: {
             .join(" "),
         }
       : undefined;
-  // Prepared values win locally; nodes sanitize their own base env and reject scrub override keys.
-  const executionEnv = mergeProcessEnv([env, preparedEnv, routingEnv, gitPolicyEnv]);
+  // Node-owned tool settings stay on this host. Approval and remote requests carry only
+  // the caller's requested environment and their existing routing/identity fields.
+  const executionEnv = mergeProcessEnv([
+    env,
+    params.host === "gateway" ? params.localToolEnv : undefined,
+    preparedEnv,
+    routingEnv,
+    gitPolicyEnv,
+  ]);
   const forwardedEnv =
     params.host === "node" || !routingEnv ? requestedEnv : { ...requestedEnv, ...routingEnv };
 
   return {
     env: executionEnv,
+    ...(params.host === "gateway" && params.scratchEnv
+      ? {
+          legacyScratchRequestedEnv: {
+            ...storeEnv,
+            ...params.storeSecretEnv,
+            ...executionOverrides,
+            ...routingEnv,
+            ...preparedEnv,
+          },
+        }
+      : {}),
     ...(params.host === "node" && routingEnv ? { executionContext } : {}),
     ...(params.host !== "node" && Object.keys(preparedEnv).length > 0
       ? { requestedEnv: { ...forwardedEnv, ...preparedEnv } }

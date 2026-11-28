@@ -16,6 +16,7 @@ import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const [mode, directory, argument = "35840", sampling] = process.argv.slice(2);
 assert.ok(directory && (mode === "seed" || mode === "run"));
@@ -153,12 +154,7 @@ if (mode === "seed") {
   );
   const inspector = new Session();
   if (sampling === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const loadBefore = os.loadavg();
   const cpuBefore = process.cpuUsage();

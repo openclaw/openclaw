@@ -1,9 +1,17 @@
 import { randomUUID } from "node:crypto";
+import type { OpenClawPluginToolFactory } from "openclaw/plugin-sdk/plugin-entry";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { contract } from "./contract.js";
+import plugin from "./index.js";
 import { createKnowledgeService } from "./service.js";
-import { operatorContext, storeFixture, toolContext, useTestTempDirs } from "./test-support.js";
+import {
+  operatorContext,
+  sessionActions,
+  storeFixture,
+  toolContext,
+  useTestTempDirs,
+} from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
 
@@ -62,7 +70,7 @@ async function setup() {
       expectedRevision: r!.revision,
       expectedHash: r!.hash,
       reason: "Evidence-backed context update",
-      annotations,
+      ...(annotations === undefined ? {} : { annotations }),
       ...extra,
     };
     const result = await f.service.annotate(input, f.owner);
@@ -133,6 +141,73 @@ it("context annotations preserve assertion text/lifecycle, append evidence, and 
   expect((await f.service.record_detail({ id: original.id }, f.owner)).record!.lifecycle).toBe(
     "active",
   );
+});
+
+it("appends evidence without annotations while rejecting empty and nested updates", async () => {
+  const f = await setup(),
+    claim = await f.claim();
+  const before = (await f.service.record_detail({ id: claim.id, includeMetadata: true }, f.owner))
+    .record;
+  await expect(f.annotate(claim.id, undefined)).rejects.toThrow(/Invalid annotation/);
+  await expect(f.annotate(claim.id, {})).rejects.toThrow(/Invalid annotation/);
+  await expect(
+    f.annotate(claim.id, { entities: [f.source.id], addEvidence: f.evidence }),
+  ).rejects.toThrow(
+    "Invalid annotation input. Pass entities and addEvidence as top-level fields beside annotations, not inside it.",
+  );
+  const evidence = { ...f.evidence[0], start_line: 2, end_line: 2 };
+  const { input, result } = await f.annotate(claim.id, undefined, { addEvidence: [evidence] });
+  const after = (await f.service.record_detail({ id: claim.id, includeMetadata: true }, f.owner))
+    .record;
+  expect(after!.metadata!.evidence).toEqual([...f.evidence, evidence]);
+  expect(after!.body).toBe(before!.body);
+  expect(after!.lifecycle).toBe(before!.lifecycle);
+  expect(after!.revision).toBe(before!.revision + 1);
+  expect((await f.service.annotate(input, f.owner)).revision).toBe(result.revision);
+  await expect(f.service.annotate({ ...input, annotations: {} }, f.owner)).rejects.toThrow(
+    /request|replay|intent/i,
+  );
+});
+
+it("the registered annotation tool explains nested fields and accepts the corrected call", async () => {
+  const f = await setup(),
+    claim = await f.claim();
+  const factories = new Map<string, OpenClawPluginToolFactory>();
+  plugin.register({
+    ...f.api,
+    id: "knowledge",
+    ...sessionActions(),
+    registerTool(factory, options) {
+      if (typeof factory === "function" && options?.name === "knowledge_annotate") {
+        factories.set("knowledge_annotate", factory);
+      }
+    },
+  });
+  const tool = factories.get("knowledge_annotate")?.(f.owner.tool);
+  if (!tool || Array.isArray(tool)) {
+    throw new Error("Expected the registered annotation tool");
+  }
+  const before = (await f.service.record_detail({ id: claim.id }, f.owner)).record;
+  const input = {
+    requestId: randomUUID(),
+    id: claim.id,
+    expectedRevision: before.revision,
+    expectedHash: before.hash,
+    reason: "Link the subject",
+  };
+  const hint =
+    "{ expectedHash: string; expectedRevision: number /* integer, >= 1 */; id: string; reason: string; requestId: string; addEvidence?: Array<...>; annotations?: { ... }; entities?: Array<...>; expectedVaultId?: string; ... }";
+  expect(hint.length).toBeLessThanOrEqual(300);
+  await expect(
+    tool.execute(randomUUID(), { ...input, annotations: { entities: [f.source.id] } }),
+  ).rejects.toThrow(
+    `Feature input does not match its schema: annotations: must not have additional properties: "entities". Use top-level input fields: ${hint}`,
+  );
+  await tool.execute(randomUUID(), { ...input, entities: [f.source.id] });
+  const after = (await f.service.record_detail({ id: claim.id, includeMetadata: true }, f.owner))
+    .record;
+  expect(after.revision).toBe(before.revision + 1);
+  expect(after.metadata.entities).toEqual([f.source.id]);
 });
 
 it("uncertain identity and attribution retain evidence; cross-scope guesses and forged evidence are rejected", async () => {
@@ -439,11 +514,10 @@ it("entity annotations link a claim by ID without changing its assertion, and re
   const before = (await f.service.record_detail({ id: claim.id, includeMetadata: true }, f.owner))
     .record;
   expect(before!.metadata!.entities).toBe(undefined);
-  const { input } = await f.annotate(
-    claim.id,
-    {},
-    { entities: [alex.id], reason: "Relink unique subject" },
-  );
+  const { input } = await f.annotate(claim.id, undefined, {
+    entities: [alex.id],
+    reason: "Relink unique subject",
+  });
   const linked = (await f.service.record_detail({ id: claim.id, includeMetadata: true }, f.owner))
     .record;
   expect(linked!.metadata!.entities).toStrictEqual([alex.id]);
@@ -479,7 +553,7 @@ it("entity annotations link a claim by ID without changing its assertion, and re
     f.owner,
   );
   await expect(f.annotate(claim.id, {}, { entities: [sam.id] })).rejects.toThrow(/active pages/);
-  await f.annotate(claim.id, {}, { entities: [] });
+  await f.annotate(claim.id, undefined, { entities: [] });
   expect(
     (await f.service.record_detail({ id: claim.id, includeMetadata: true }, f.owner)).record!
       .metadata!.entities,

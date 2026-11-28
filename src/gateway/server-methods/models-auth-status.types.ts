@@ -45,6 +45,13 @@ export type ModelAuthStatusProvider = {
     source: "config" | "env";
     envVar?: string;
   };
+  /** Provider-plugin actions for its saved OAuth sign-ins. */
+  oauthAccountActions?: {
+    /** The provider can revoke a sign-in's grant; `label` is the plugin's text. */
+    disconnect?: { label?: string };
+    /** HTTPS page where the person manages apps connected to their account. */
+    manage?: { url: string; label?: string };
+  };
   /** The saved sign-in doesn't cover voice and no API key is set; adding one would. */
   voiceApiKeyRequired?: true;
   usage?: Pick<

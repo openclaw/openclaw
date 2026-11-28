@@ -1,5 +1,4 @@
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
-import { isConversationConfigChange } from "../../../../src/config/read-dependencies.js";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
@@ -22,7 +21,7 @@ import { createSessionEventSubscriptionOwner } from "./session-event-subscriptio
 import { createSessionGitHubPublication } from "./session-github-publication.ts";
 import { createSessionGroupCatalog } from "./session-group-catalog.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
-import { isPrimarySessionListQuery } from "./session-list-query.ts";
+import { isPrimarySessionListQuery, isSessionListInvalidation } from "./session-list-query.ts";
 import { createSessionMutations } from "./session-mutations.ts";
 import { optimisticSessionRowFields } from "./session-pending-rows.ts";
 import { createSessionPermissionProjection } from "./session-permission-projection.ts";
@@ -537,10 +536,10 @@ export function createSessionCapability(
       githubPublication.observePullRequests(event.payload);
       return;
     }
-    if (event.event === "chat.metadata.changed" || isConversationConfigChange(event)) {
+    const listInvalidated = isSessionListInvalidation(event);
+    if (event.event === "chat.metadata.changed" || listInvalidated) {
       roster.observations.descriptions.clear();
-      if (event.event === "config.changed") {
-        // Config can change configured-agent membership even with no chat pane mounted.
+      if (listInvalidated) {
         roster.scheduleEvent();
       }
       return;
@@ -656,6 +655,7 @@ export function createSessionCapability(
         ? registerListener(listeners, () => listener(roster.listSnapshot(scope)))
         : roster.subscribeList(scope, listener),
     refreshList: roster.refreshList,
+    wakeList: roster.wakeList,
     reconcile,
     captureReconcile,
     observeRow,

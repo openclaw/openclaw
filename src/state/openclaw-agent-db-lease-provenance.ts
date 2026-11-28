@@ -4,11 +4,33 @@ import { hostname } from "node:os";
 import {
   createManagedHandoffBootIdentityReader,
   predatesCurrentBoot,
+  readWindowsBootIdentityAsync,
 } from "../infra/update-managed-service-handoff-boot.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { VERSION } from "../version.js";
 
 let boot: string | null | undefined;
+let windowsBootProbe: Promise<void> | undefined;
+
+function bootFingerprint(identity: string, namespace: string): string {
+  return [hostname(), identity, namespace, VERSION].join("\0");
+}
+
+/** Resolve the optional Windows proof outside listener publication and SQLite. */
+export function prepareAgentDatabaseLeaseProvenance(): Promise<void> | undefined {
+  if (process.platform !== "win32" || boot !== undefined) {
+    return undefined;
+  }
+  windowsBootProbe ??= (async () => {
+    try {
+      const identity = await readWindowsBootIdentityAsync(process.env);
+      boot = identity ? bootFingerprint(identity, "win32") : null;
+    } catch {
+      boot = null;
+    }
+  })();
+  return windowsBootProbe;
+}
 
 export function mayShareAgentDatabaseFile(left: string, right: string): boolean {
   if (left === right) {
@@ -67,7 +89,7 @@ export function createAgentDatabaseLeaseStaleReasonReader() {
 
 export function readAgentDatabaseLeaseProvenance(pathname: string): string | null {
   try {
-    if (boot === undefined) {
+    if (boot === undefined && !windowsBootProbe) {
       // Boot identity lasts for this process; failed OS probes must not repeat on every open.
       boot = null;
       if (["linux", "darwin", "win32"].includes(process.platform)) {
@@ -77,7 +99,7 @@ export function readAgentDatabaseLeaseProvenance(pathname: string): string | nul
           currentBoot.platform === "linux"
             ? fs.readlinkSync("/proc/self/ns/pid")
             : currentBoot.platform;
-        boot = [hostname(), currentBoot.identity, namespace, VERSION].join("\0");
+        boot = bootFingerprint(currentBoot.identity, namespace);
       }
     }
     if (!boot) {

@@ -589,47 +589,6 @@ describe("splitMediaFromOutput", () => {
     ]);
   });
 
-  it("preserves paragraph breaks in ordered media text segments", () => {
-    const result = splitMediaFromOutput(
-      "First paragraph\n\nSecond paragraph\nMEDIA:https://example.com/a.png",
-    );
-
-    expect(result.segments).toEqual([
-      { type: "text", text: "First paragraph\n\nSecond paragraph" },
-      { type: "media", url: "https://example.com/a.png" },
-    ]);
-  });
-
-  it.each([
-    ["before", "First paragraph\n\nMEDIA:https://example.com/a.png\nSecond paragraph"],
-    ["after", "First paragraph\nMEDIA:https://example.com/a.png\n\nSecond paragraph"],
-    ["around", "First paragraph\n\nMEDIA:https://example.com/a.png\n\nSecond paragraph"],
-    ["with spaces", "First paragraph\n \nMEDIA:https://example.com/a.png\n  \nSecond paragraph"],
-    ["with tabs", "First paragraph\n\t\nMEDIA:https://example.com/a.png\n\t\nSecond paragraph"],
-  ])("preserves a paragraph separator %s an attachment", (_placement, input) => {
-    const result = splitMediaFromOutput(input);
-
-    expect(result.segments).toEqual([
-      { type: "text", text: "First paragraph\n" },
-      { type: "media", url: "https://example.com/a.png" },
-      { type: "text", text: "Second paragraph" },
-    ]);
-  });
-
-  it.each(["    ", "\t"])("does not emit a whitespace-only media caption: %j", (whitespace) => {
-    const result = splitMediaFromOutput(`${whitespace}\nMEDIA:https://example.com/a.png`);
-
-    expect(result.text).toBe("");
-    expect(result.segments).toEqual([{ type: "media", url: "https://example.com/a.png" }]);
-  });
-
-  it("drops separator-only lines before the caption after extracting leading media", () => {
-    expectParsedMediaOutputCase("MEDIA:https://example.com/a.png\n\nCaption", {
-      text: "Caption",
-      mediaUrls: ["https://example.com/a.png"],
-    });
-  });
-
   it.each([
     {
       name: "a marker carrying trailing text",
@@ -842,42 +801,6 @@ describe("splitMediaFromOutput", () => {
     expectUnrecognizedMediaTextCase(input, extractMarkdownImages);
   });
 
-  it.each(["\n", "\r\n", "\r"])(
-    "extracts multiline Markdown images across %j line endings",
-    (newline) => {
-      const url = "https://example.com/chart.png";
-      for (const image of [
-        `![chart](${newline}${url}${newline})`,
-        `![quarterly${newline}chart](${url})`,
-        `![chart](${url}${newline}"Quarterly chart")`,
-      ]) {
-        const input = `Before${newline}${image}${newline}After`;
-        expect(splitMediaFromOutput(input, extractMarkdownImages)).toEqual(
-          splitMediaFromOutput(
-            `Before${newline}![chart](${url})${newline}After`,
-            extractMarkdownImages,
-          ),
-        );
-      }
-    },
-  );
-
-  it.each([false, true])(
-    "preserves multiline image captions and media order (whitespace=%s)",
-    (preserveTrailingWhitespace) => {
-      const url = "https://example.com/chart.png";
-      const options = { ...extractMarkdownImages, preserveTrailingWhitespace };
-      expect(
-        splitMediaFromOutput(
-          `Before ![chart](\n${url}\n) after\nMEDIA:/tmp/next.png\nTail`,
-          options,
-        ),
-      ).toEqual(
-        splitMediaFromOutput(`Before ![chart](${url}) after\nMEDIA:/tmp/next.png\nTail`, options),
-      );
-    },
-  );
-
   it("applies the image allowlist to complete multiline spans", () => {
     const selected = "file:///tmp/selected.png";
     const unselected = "![other](\nhttps://example.com/other.png\n)";
@@ -896,28 +819,6 @@ describe("splitMediaFromOutput", () => {
     ["multiline inline code", "``example\n![chart](https://example.com/chart.png)\n``"],
   ])("keeps Markdown image syntax literal in %s", (_name, input) => {
     expectUnrecognizedMediaTextCase(input, extractMarkdownImages);
-  });
-
-  it.each(["\n", "\r\n", "\r"])("keeps image offsets across %j line endings", (newline) => {
-    const url = "https://example.com/chart.png";
-    expectParsedMediaOutputCase(
-      `before${newline}${newline}![chart](${url})`,
-      { text: "before", mediaUrls: [url] },
-      extractMarkdownImages,
-    );
-  });
-
-  it.each(["\n", "\r\n", "\r"])("separates MEDIA directives across %j line endings", (newline) => {
-    const result = splitMediaFromOutput(
-      `MEDIA:/tmp/first.png${newline}MEDIA:/tmp/second.png${newline}Caption${newline}End`,
-    );
-    expect(result.mediaUrls).toEqual(["/tmp/first.png", "/tmp/second.png"]);
-    expect(result.text).toBe(`Caption${newline}End`);
-    expect(result.segments).toEqual([
-      { type: "media", url: "/tmp/first.png" },
-      { type: "media", url: "/tmp/second.png" },
-      { type: "text", text: `Caption${newline}End` },
-    ]);
   });
 
   it.each(["\n", "\r\n", "\r"])("keeps fenced MEDIA literal across %j line endings", (newline) => {

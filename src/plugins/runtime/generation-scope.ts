@@ -13,8 +13,6 @@ import {
 } from "./gateway-request-scope.js";
 import { runOutsidePluginRuntimeGenerationRegistryScope } from "./generation-state.js";
 
-export { getPluginRuntimeGenerationRegistry } from "./generation-state.js";
-
 /** Carries one prepared plugin generation through all nested runtime lookups. */
 export function withPluginRuntimeGenerationScope<T>(
   generation: {

@@ -454,6 +454,51 @@ describe("OpenAI realtime voice provider routing", () => {
     expect(quicksilverRequest.instructions).toMatch(/Always address the caller as Captain\.$/);
   });
 
+  it("lists Live 1.1 Codex and uses ChatGPT for Talk even with a Platform key", async () => {
+    const model = "gpt-live-1.1-codex";
+    const oauthToken = accountToken("account-123");
+    mockOAuth(oauthToken);
+    mockAuthTypes("oauth");
+    const { provider, internalApi, ready, session, createBrowserSession } = browserFixture();
+    const request = { ...browserRequest, providerConfig: { model, apiKey: PLATFORM_KEY }, model };
+
+    expect(provider.models).toContain(model);
+    expect(await ready(request)).toBe(true);
+    expect(await internalApi.isGatewayRelayConfiguredAsync?.(request)).toBe(true);
+    await session(request);
+    expect(createBrowserSession).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ model }),
+      oauth(oauthToken, "account-123"),
+    );
+  });
+
+  it("does not start Talk or gateway relay Live 1.1 Codex with only a Platform key", async () => {
+    const model = "gpt-live-1.1-codex";
+    const providerConfig = { model, apiKey: PLATFORM_KEY };
+    const request = { ...browserRequest, providerConfig, model };
+    const { provider, internalApi, ready, session, createBrowserSession } = browserFixture();
+    const bridge = provider.createBridge({
+      providerConfig,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+    });
+    const fetchOffer = vi.fn<typeof fetch>().mockRejectedValue(new Error("Unexpected offer"));
+    vi.stubGlobal("fetch", fetchOffer);
+    try {
+      expect(await ready(request)).toBe(false);
+      expect(await internalApi.isGatewayRelayConfiguredAsync(request)).toBe(false);
+      await expect(session(request)).rejects.toThrow("requires ChatGPT sign-in");
+      await expect(bridge.connect()).rejects.toThrow("requires ChatGPT sign-in");
+      expect(createBrowserSession).not.toHaveBeenCalled();
+      expect(fetchOffer).not.toHaveBeenCalled();
+      expect(FakeWebSocket.instances).toHaveLength(0);
+    } finally {
+      await bridge.close();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("rejects OAuth-only gpt-live-1 before broker session creation", async () => {
     const model = "gpt-live-1";
     mockOAuth();

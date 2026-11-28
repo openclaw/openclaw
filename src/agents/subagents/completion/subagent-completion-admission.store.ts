@@ -8,7 +8,6 @@ import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions
 import type { DeliveryQueueStoredStatus } from "../../../infra/delivery-queue-sqlite.kernel.js";
 import type { QueuedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
 import type { SessionDeliveryWorkerOperations } from "../../../infra/session-delivery-queue.worker.js";
-import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
@@ -37,6 +36,7 @@ import {
   captureRequesterSettleWakeProgress,
   sameRequesterSettleRunIdentity,
 } from "../registry/subagent-requester-settle-identity.js";
+import { isSubagentPausedByYield } from "../registry/subagent-requester-turn-custody.js";
 import {
   compareSubagentRunGeneration,
   isSameSubagentRunOwner,
@@ -120,7 +120,7 @@ async function appendChildStatusToRequester(batch: readonly SubagentRunRecord[])
     (child) =>
       child.expectsCompletionMessage !== false &&
       child.execution.status === "terminal" &&
-      child.pauseReason !== "sessions_yield" &&
+      !isSubagentPausedByYield(child) &&
       !hasConsumedRequesterInput(child) &&
       child.delivery?.status !== "delivered",
   );
@@ -344,7 +344,6 @@ export async function admitSubagentCompletionDelivery(params: {
 
 type CompletionMutationOptions = {
   context?: OpenClawStateWorkerContext;
-  databaseOptions?: OpenClawStateDatabaseOptions;
   assertCurrent?: () => void;
 };
 
@@ -403,12 +402,7 @@ async function mutateCompletion(
   } = {},
 ): Promise<CompletionMutationPublication> {
   const runIds = entries.map((entry) => entry.runId);
-  const context =
-    options.context ??
-    captureOpenClawStateWorkerContext({
-      path: options.databaseOptions?.database?.path ?? options.databaseOptions?.path,
-      env: options.databaseOptions?.env,
-    });
+  const context = options.context ?? captureOpenClawStateWorkerContext();
   const result = await mutateSubagentRuns(
     runIds,
     (rows) => {
@@ -597,8 +591,8 @@ function currentRequesterEntries(
     // A pause notice belongs to this child, even when a resumed sibling rekeys the cohort.
     const settlesPauseNotice =
       operation === "settle" &&
-      current?.pauseReason === "sessions_yield" &&
-      expected.pauseReason === "sessions_yield" &&
+      isSubagentPausedByYield(current) &&
+      isSubagentPausedByYield(expected) &&
       current.requesterSettleWake?.pauseNotice;
     if (
       !current ||

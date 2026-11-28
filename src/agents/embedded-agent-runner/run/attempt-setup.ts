@@ -51,6 +51,8 @@ import type { guardSessionManager } from "../../session-tool-result-guard-wrappe
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { boundSessionToolResult } from "../../sessions/session-tool-result-preparation.js";
+import type { SpillOwner } from "../../sessions/tools/private-temp-file.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool-shared.js";
 import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
@@ -253,6 +255,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   agentDir: string;
   attempt: EmbeddedRunAttemptInternalParams;
   computerContextEpoch: { value: number };
+  spillOwner?: SpillOwner;
   dropThinkingBlocksForEstimate: boolean;
   effectiveCwd: string;
   effectiveFsWorkspaceOnly: boolean;
@@ -411,6 +414,28 @@ export function installEmbeddedAttemptContextGuards(input: {
     contextWindowTokens: contextTokenBudget,
   });
 
+  // Bound every executed result before its first send, after result hooks ran.
+  const spill =
+    input.sandbox?.enabled && input.sandbox.fsBridge
+      ? { sandbox: { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge } }
+      : { owner: input.spillOwner };
+  const previousAfterToolCall = activeSession.agent.afterToolCall;
+  activeSession.agent.afterToolCall = async (context, signal) => {
+    const update = await previousAfterToolCall?.call(activeSession.agent, context, signal);
+    const result =
+      update?.content === undefined && update?.details === undefined
+        ? context.result
+        : {
+            ...context.result,
+            content: update.content ?? context.result.content,
+            details: update.details ?? context.result.details,
+          };
+    const bounded = await boundSessionToolResult(input.sessionManager, result, spill);
+    return bounded === result
+      ? update
+      : { ...update, content: bounded.content, details: bounded.details };
+  };
+
   const previousContextTransform = activeSession.agent.transformContext;
   activeSession.agent.transformContext = async (messages, signal) => {
     let localRoots: readonly string[] | undefined;
@@ -522,6 +547,7 @@ export function installEmbeddedAttemptContextGuards(input: {
     recordCacheTouch: cacheTouch.recordCacheTouch,
     remove: () => {
       activeSession.agent.transformContext = previousContextTransform;
+      activeSession.agent.afterToolCall = previousAfterToolCall;
       removeToolResultGuard();
       removeContextEngineLoopHook?.();
       activeSession.agent.transformContext = previousCacheTtlTransform;

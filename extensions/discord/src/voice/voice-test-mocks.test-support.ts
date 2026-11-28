@@ -187,8 +187,6 @@ const mocks = await vi.hoisted(async () => {
     controlRealtimeVoiceAgentRunMock: vi.fn<typeof controlRealtimeVoiceAgentRun>(),
     createRealtimeSessionMock: createRealtimeSessionMockLocal,
     realtimeSessionMock: realtimeSessionMockLocal,
-    resolveAudioInputBudgetMock:
-      vi.fn<PluginRuntime["mediaUnderstanding"]["resolveAudioInputBudget"]>(),
     decodeOpusStreamChunksMock: vi.fn<(typeof import("./audio.js"))["decodeOpusStreamChunks"]>(),
     updateVoiceStateMock: vi.fn() as Mock,
     enqueueSystemEventMock: vi.fn() as Mock,
@@ -408,7 +406,6 @@ vi.mock("../runtime.js", () => ({
       session: { getSessionEntryAsync: async () => undefined },
     },
     mediaUnderstanding: {
-      resolveAudioInputBudget: mocks.resolveAudioInputBudgetMock,
       transcribeAudioFile: mocks.transcribeAudioFileMock,
     },
     tts: {

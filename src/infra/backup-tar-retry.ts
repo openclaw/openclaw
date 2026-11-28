@@ -1,5 +1,6 @@
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { sleep } from "../utils/sleep.js";
+import { BackupSqliteSourceAppearedError } from "./backup-sqlite-discovery-retry.js";
 import { hasErrnoCode } from "./errno.js";
 
 const BACKUP_TAR_MAX_ATTEMPTS = 3;
@@ -17,6 +18,9 @@ export async function writeTarArchiveWithRetry<T>(params: {
     try {
       return await params.runTar(attemptTempArchivePath);
     } catch (err) {
+      if (err instanceof BackupSqliteSourceAppearedError) {
+        throw err;
+      }
       failure = err;
     }
     if (!hasErrnoCode(failure, "EOF") || attempt === BACKUP_TAR_MAX_ATTEMPTS) {

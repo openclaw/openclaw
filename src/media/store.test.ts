@@ -1,7 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import JSZip from "jszip";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
@@ -570,13 +570,15 @@ describe("media store filesystem faults", () => {
     },
   );
 
-  it("rejects missing stream staging without consuming the source", async () => {
+  it("closes the source when stream staging fails", async () => {
     const subdir = "stream-before-open";
-    const input = Buffer.from("media stream must not be consumed before staging");
-    let consumptionStarted = false;
+    let sourceClosed = false;
     const stream = (async function* () {
-      consumptionStarted = true;
-      yield input;
+      try {
+        yield Buffer.from("media stream staged into a missing directory");
+      } finally {
+        sourceClosed = true;
+      }
     })();
     const originalOpen = fs.open.bind(fs);
     let directoryPruned = false;
@@ -599,7 +601,19 @@ describe("media store filesystem faults", () => {
     });
 
     expect(directoryPruned).toBe(true);
-    expect(consumptionStarted).toBe(false);
+    expect(sourceClosed).toBe(true);
+  });
+
+  it("rejects a source that fails before staging starts reading it", async () => {
+    // Baileys returns a live decrypt stream; a small undecryptable file fails before staging opens.
+    const subdir = "stream-early-error";
+    const stream = new PassThrough();
+    const store = await freshStore(subdir);
+    const saving = store.saveMediaStream(stream, "image/jpeg", subdir, 1024);
+    stream.destroy(new Error("bad decrypt"));
+
+    await expect(saving).rejects.toThrow("bad decrypt");
+    await expect(fs.readdir(path.join(store.getMediaDir(), subdir))).resolves.toEqual([]);
   });
 
   it("rejects publication failure without replaying a consumed stream", async () => {

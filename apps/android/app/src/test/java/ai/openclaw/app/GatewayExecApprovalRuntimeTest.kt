@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
@@ -21,6 +22,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -38,6 +40,13 @@ import java.util.concurrent.atomic.AtomicInteger
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewayExecApprovalRuntimeTest {
+  private val runtimes = mutableListOf<NodeRuntime>()
+
+  @After
+  fun closeRuntimes() {
+    runtimes.forEach(::closeNodeRuntimeTestFixture)
+  }
+
   @Before
   fun clearPlainPrefs() {
     RuntimeEnvironment
@@ -1552,7 +1561,7 @@ class GatewayExecApprovalRuntimeTest {
         "openclaw.node.approval.runtime.test.${UUID.randomUUID()}",
         android.content.Context.MODE_PRIVATE,
       )
-    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
+    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs)).also(runtimes::add)
   }
 
   private fun connectedRuntime(methods: Set<String> = unifiedMethods): NodeRuntime = createTestRuntime().also { seedConnectedRuntime(it, methods) }
@@ -1743,7 +1752,7 @@ class GatewayExecApprovalRuntimeTest {
     code: String,
     message: String,
     reason: String? = null,
-  ): GatewayRequestRejected = GatewayRequestRejected(GatewaySession.ErrorShape(code, message, reason?.let(::gatewayErrorDetails)))
+  ): GatewayRequestRejected = GatewayRequestRejected(ErrorShape(code, message, reason?.let(::gatewayErrorDetails)))
 
   private val unifiedMethods = setOf("approval.get", "approval.resolve", "exec.approval.list")
   private val legacyMethods = setOf("exec.approval.list", "exec.approval.get", "exec.approval.resolve")

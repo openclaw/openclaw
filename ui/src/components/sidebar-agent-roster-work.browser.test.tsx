@@ -44,6 +44,7 @@ async function mountViewport(pinnedAgentIds: string[] = []) {
           value={{
             element: () => viewport,
             content: () => undefined,
+            observeContent: () => () => {},
             rowFloor: () => 32,
             captureRowFloor: () => {},
             registerWindow: () => () => {},

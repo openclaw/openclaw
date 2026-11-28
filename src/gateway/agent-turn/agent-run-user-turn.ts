@@ -16,7 +16,7 @@ import type { RuntimeContextFragment } from "../../agents/internal-runtime-conte
 import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import { captureRequesterOrigin, type RequesterOrigin } from "../../agents/requester-origin.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
-import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import { prepareCommandOwnerAuthority } from "../../auto-reply/command-owner-facts.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -347,9 +347,16 @@ export async function prepareAgentRunUserTurn(params: {
           };
         }
       }
+      const peerDelivery = readSessionSendDeliveryAdmission({
+        runId: params.runId,
+        sessionKey: params.resolvedSessionKey,
+        sessionId: params.admittedSessionId,
+        agentId: params.activeSessionAgentId,
+      });
       const input: UserTurnInput = {
         subagentCompletions: params.subagentCompletions,
         ...(params.privateCompletion ||
+        peerDelivery?.delivery.returnedResult?.hideInput === true ||
         isCompletionReportInputProvenance(params.inputProvenance) ||
         isSubagentCoordinationInputProvenance(params.inputProvenance)
           ? { display: false as const }
@@ -369,12 +376,6 @@ export async function prepareAgentRunUserTurn(params: {
         ...(media.length > 0 ? { media } : {}),
         ...(slots.length > 0 ? { mediaImageLayout: { slots } } : {}),
       };
-      const peerDelivery = readSessionSendDeliveryAdmission({
-        runId: params.runId,
-        sessionKey: params.resolvedSessionKey,
-        sessionId: params.admittedSessionId,
-        agentId: params.activeSessionAgentId,
-      });
       recorder = createUserTurnTranscriptRecorder({
         trackInputCompletion: trackRequesterCompletion || peerDelivery !== undefined,
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,

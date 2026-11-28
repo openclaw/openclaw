@@ -4,7 +4,34 @@ import OpenClawKit
 import OpenClawProtocol
 import OSLog
 
-struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
+struct IOSGatewayChatTransport: OpenClawChatGatewayTransport, OpenClawChatGoalTransport, OpenClawChildStopTransport {
+    func prepareChildStop(_ target: OpenClawChildStopTarget) async -> OpenClawChildStopAction? {
+        guard let route = await self.currentSessionMutationRoute(),
+              let scopes = await self.gateway.currentOperatorScopes(ifCurrentRoute: route),
+              target.allows(scopes: scopes),
+              await self.gateway.supportsServerMethod(OpenClawChildStopTarget.method, ifCurrentRoute: route) == true
+        else { return nil }
+        return OpenClawChildStopAction(target: target) {
+            try await self.requestSessionMutation(target.request, ifCurrentRoute: route)
+        }
+    }
+
+    func goalControls() async -> (update: Bool, clear: Bool) {
+        guard let route = await self.currentSessionMutationRoute(),
+              let scopes = await self.gateway.currentOperatorScopes(ifCurrentRoute: route),
+              scopes.contains("operator.write") || scopes.contains("operator.admin") else { return (false, false) }
+        async let update = self.gateway.supportsServerMethod("sessions.goal.update", ifCurrentRoute: route)
+        async let clear = self.gateway.supportsServerMethod("sessions.goal.clear", ifCurrentRoute: route)
+        return await (update == true, clear == true)
+    }
+
+    func mutateGoal(_ mutation: OpenClawChatGoalMutation) async throws -> Data {
+        guard let route = await self.currentSessionMutationRoute() else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        return try await self.requestSessionMutation(mutation.request, ifCurrentRoute: route)
+    }
+
     var chatGatewayAgentID: String? {
         self.globalAgentId
     }
@@ -568,6 +595,19 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         kind: OpenClawChatMediaKind,
         playback: OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
     {
+        // A user's upload is not an artifact; history names it `media://inbound/<id>`. The transcript
+        // reads its thumbnail; `.native` asks for the bytes as uploaded, for the viewer.
+        if kind == .image, let source = OpenClawChatInboundMedia.canonicalSource(artifactId) {
+            guard let route = await gateway.currentRoute() else { return nil }
+            let target = self.sessionTarget(for: sessionKey)
+            return await self.sourceResourceLoader?.loadInboundImage(
+                source,
+                original: playback == .native,
+                sessionKey: target.sessionKey,
+                agentID: target.agentID,
+                ifCurrentRoute: route)
+                .map(OpenClawChatLoadedMedia.data)
+        }
         guard kind.acceptsManagedArtifactID(artifactId),
               let mediaArtifactLoader,
               let route = await gateway.currentRoute(),

@@ -266,8 +266,17 @@ function ChatThreadContent(
     const stopSearch = searchState.subscribe(() => {
       const nextQuery = searchState.snapshot.query.trim();
       if (nextQuery && nextQuery !== query) {
-        // A live reply remains below the matches; end-follow must not hide them.
-        input.transcript.scrollToOffset(0);
+        void searchState.resumeEarlierHistory?.();
+        // A live reply can sit below the matches. Only ask for the first result
+        // after this query has rendered rows to receive that scroll command.
+        onSettled(() => {
+          if (
+            searchState.snapshot.query.trim() === nextQuery &&
+            input.transcript.scrollElement === element
+          ) {
+            input.transcript.scrollToOffset(0);
+          }
+        });
       }
       query = nextQuery;
     });

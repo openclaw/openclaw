@@ -378,9 +378,11 @@ openclaw skills workshop restore release-notes --version <version-id>
 | `restore <name> [--version <id>]`              | Restores the newest saved version, or the named one. The current live copy is saved first, so restore is undoable.               |
 
 Every Workshop command accepts `--agent <id>` and `--json`. `archive` and
-`restore` act as `user` in the change feed. The printed archive Undo command
-includes the archived agent's `--agent <id>`, so it restores that agent even
-when your current directory selects a different agent.
+`restore` act as `user` in the change feed. When an archive returns a saved version, its printed Undo
+command includes `--agent <id>` and `--version <id>`. It restores that snapshot
+even if your current directory selects another agent or the skill has newer
+versions. If the snapshot has expired, the command reports an error. Running
+`restore` without `--version` still selects the newest saved version.
 
 The human-readable `workshop list` root path neutralizes terminal controls and
 shows embedded line breaks and tabs as visible escapes. `--json` retains the

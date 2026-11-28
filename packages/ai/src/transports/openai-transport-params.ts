@@ -7,11 +7,6 @@ import {
   clampOpenAIPromptCacheKey,
   resolveOpenAIPromptCacheLifetimeMs,
 } from "../providers/openai-prompt-cache.js";
-import type { OpenAIToolProjection } from "../providers/openai-tool-projection.js";
-import {
-  findOpenAIStrictToolProjectionDiagnostics,
-  resolveOpenAIProjectedToolsStrictToolFlag,
-} from "../providers/openai-tool-schema.js";
 import { resolveModelRequestTimeoutMs } from "./host-policy.js";
 import {
   resolveOpenAICompletionsCompat,
@@ -21,10 +16,7 @@ import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
 import type { OpenAIModeModel } from "./openai-transport-shared.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
-import { isCodeModeModelVisibleToolName, sha256Hex } from "./transport-utils.js";
-
-const MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 256;
-const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
+import { isCodeModeModelVisibleToolName } from "./transport-utils.js";
 
 const OPENAI_COMPLETIONS_APIS: ReadonlySet<string> = new Set([
   "openai-completions",
@@ -246,59 +238,6 @@ export function assertCodeModeResponsesToolSurface(
       names.length > 0 ? names.join(",") : "none"
     }`,
   );
-}
-
-export function resolveOpenAIStrictToolFlagWithDiagnostics(
-  projection: OpenAIToolProjection,
-  strictSetting: boolean | null | undefined,
-  context: { transport: "responses" | "completions"; model: OpenAIModeModel },
-): boolean | undefined {
-  const strict = resolveOpenAIProjectedToolsStrictToolFlag(projection, strictSetting);
-  if (strictSetting === true && strict === false) {
-    getAiTransportHost().logDebug("openai-transport", () => {
-      const diagnostics = findOpenAIStrictToolProjectionDiagnostics(projection);
-      const key = sha256Hex(
-        JSON.stringify({
-          transport: context.transport,
-          provider: context.model.provider ?? null,
-          model: context.model.id ?? null,
-          diagnostics: diagnostics.map((entry) => ({
-            toolIndex: entry.toolIndex,
-            toolName: entry.toolName ?? null,
-            violations: entry.violations,
-          })),
-        }),
-      );
-      if (loggedOpenAIStrictToolDowngradeDiagnosticKeys.has(key)) {
-        return null;
-      }
-      if (
-        loggedOpenAIStrictToolDowngradeDiagnosticKeys.size >=
-        MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS
-      ) {
-        loggedOpenAIStrictToolDowngradeDiagnosticKeys.clear();
-      }
-      loggedOpenAIStrictToolDowngradeDiagnosticKeys.add(key);
-      const sample = diagnostics.slice(0, 5).map((entry) => ({
-        tool: entry.toolName ?? `tool[${entry.toolIndex}]`,
-        violations: entry.violations.slice(0, 8),
-      }));
-      return {
-        message:
-          `OpenAI ${context.transport} tool schema strict mode downgraded to strict=false for ` +
-          `${context.model.provider ?? "unknown"}/${context.model.id ?? "unknown"} ` +
-          `because ${diagnostics.length} tool schema(s) are not strict-compatible`,
-        data: {
-          transport: context.transport,
-          provider: context.model.provider,
-          model: context.model.id,
-          incompatibleToolCount: diagnostics.length,
-          sample,
-        },
-      };
-    });
-  }
-  return strict;
 }
 
 export function buildOpenAIClientHeaders(

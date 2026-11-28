@@ -34,7 +34,6 @@ export async function useUpdateControl(state: OpenClawTestState) {
 
 export async function withUpdater<T>(
   state: OpenClawTestState,
-  preflight: boolean,
   run: (fence: UpdateRecoveryFence) => Promise<T>,
 ) {
   const { createUpdateRun } = await import("../infra/update-run-ledger.js");
@@ -42,7 +41,7 @@ export async function withUpdater<T>(
     await import("../cli/update-cli/update-command-executor.js");
   const update = createUpdateRun({ trigger: "cli" }, { env: state.env });
   return withUpdateCommandExecutor(update.runId, async (executor) =>
-    run(await executor.enter(state.root, preflight ? { preflight: true } : undefined)),
+    run(await executor.enter(state.root, { preflight: true })),
   );
 }
 

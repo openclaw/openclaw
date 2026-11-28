@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
 import type { ManagedServiceBoundaryOptions } from "./update-managed-service-handoff-boundary-contract.test-support.js";
 import type { ManagedServiceManagerBoundaryResult } from "./update-managed-service-handoff-lifecycle.test-support.js";
-import { renderUpdateRunReport } from "./update-run-report.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 export function registerManagedCampaignFailureTests(
@@ -121,17 +120,29 @@ export function registerManagedCampaignFailureTests(
           }),
         ]),
       );
-      const report = renderUpdateRunReport(recorded).markdown;
-      expect(report).toContain(reason);
-      expect(report).toContain(structuredFacts ? failureMessage : diagnostic);
       expect(recorded.verification.recovery).toMatchObject({ serviceRestartSafe: false });
-      expect(report).toContain(
-        gatewayHealth === "ready"
-          ? "Recorded recovery: verified serving 1.0.0"
-          : gatewayHealth === "exited"
-            ? "Recorded recovery: readiness unverified (service-not-running)"
-            : "Recorded recovery: recovery check failed (gateway-probe-failed)",
+      const recoveryStep = recorded.steps.find(
+        (step) => step.step === "gateway recovery verification",
       );
+      expect(recoveryStep).toMatchObject({
+        status: gatewayHealth === "ready" ? "completed" : "failed",
+        exitCode: gatewayHealth === "ready" ? 0 : 1,
+      });
+      if (gatewayHealth === "ready") {
+        expect(recorded.verification).toMatchObject({
+          serviceRunning: true,
+          runningVersion: "1.0.0",
+          versionMatch: true,
+          settled: true,
+        });
+      } else {
+        expect(recoveryStep?.failureFacts).toContainEqual(
+          expect.objectContaining({
+            check: "gateway-recovery",
+            code: gatewayHealth === "exited" ? "service-not-running" : "gateway-probe-failed",
+          }),
+        );
+      }
       expect(state.triageInput).toMatchObject({
         error: expect.stringContaining(
           gatewayHealth === "ready" ? "Service recovery succeeded." : "Service recovery failed.",

@@ -12,7 +12,10 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createNoisyPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { buildRuntimeContextCustomMessage } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
+import {
+  buildRuntimeContextCustomMessage,
+  buildSystemUpdateMessage,
+} from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
@@ -882,7 +885,22 @@ describe("worker transcript commit application", () => {
     if (!Value.Check(WorkerTranscriptMessageSchema, carrier)) {
       throw new Error("Worker schema rejected the runtime-owned context message");
     }
-    const request = { runEpoch: 7, seq: 1, baseLeafId: null, messages: [message, carrier] };
+    const quoted = JSON.stringify(text);
+    const content = String(carrier.content);
+    expect(carrier.details).toMatchObject({
+      dataRanges: [{ start: content.indexOf(quoted), end: content.length }],
+    });
+    // A fallback written before quote labels had the append marker but no ranges.
+    const legacy = buildSystemUpdateMessage(
+      "Earlier runtime update",
+      "runtime-context",
+      true,
+      "append",
+    );
+    if (!Value.Check(WorkerTranscriptMessageSchema, legacy)) {
+      throw new Error("Worker schema rejected the older fallback update");
+    }
+    const request = { runEpoch: 7, seq: 1, baseLeafId: null, messages: [message, legacy, carrier] };
     expect(Value.Check(WorkerTranscriptCommitParamsSchema, request)).toBe(true);
     expect(
       Value.Check(WorkerTranscriptCommitParamsSchema, {
@@ -900,19 +918,22 @@ describe("worker transcript commit application", () => {
       },
     });
     runtime.onMessagePersisted(message);
+    runtime.onMessagePersisted(legacy);
     runtime.onMessagePersisted(carrier);
     await runtime.withSessionWriteSettlement(() => undefined);
     await expect(committer.commit(input)).resolves.toMatchObject({ ok: true });
 
     const reopened = await SessionManager.openAsync(sessionTarget);
-    expect(reopened.getEntries()).toHaveLength(2);
+    expect(reopened.getEntries()).toHaveLength(3);
     expect(reopened.buildSessionContext().messages[0]).toMatchObject(message);
-    expect(reopened.buildSessionContext().messages[1]).toEqual({
+    expect(reopened.buildSessionContext().messages[1]).toMatchObject(legacy);
+    expect(reopened.buildSessionContext().messages[2]).toEqual({
       ...carrier,
       display: false,
       idempotencyKey: expect.any(String),
     });
     expect(updates.map((update) => update.lifecycleRevision)).toEqual([
+      "worker-original-revision",
       "worker-original-revision",
       "worker-original-revision",
     ]);

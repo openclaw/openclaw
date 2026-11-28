@@ -1,11 +1,12 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { CONTROL_UI_LOCALE_ENTRIES, controlUiLanguageLabel } from "./lib/control-ui-i18n-config.ts";
 import type { RawCopyBaseline, RawCopyBaselineEntry } from "./lib/control-ui-i18n-raw-copy.ts";
 import type { LocaleMeta } from "./lib/control-ui-i18n-sync-plan.ts";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const I18N_ASSETS_DIR = path.join(ROOT, "ui/src/i18n/.i18n");
@@ -252,7 +253,7 @@ function usage() {
   ].join("\n");
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const cliArgs = process.argv.slice(2);
   if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
     process.stdout.write(`${usage()}\n`);

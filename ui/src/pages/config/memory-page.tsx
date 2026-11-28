@@ -13,7 +13,6 @@ import type { ControlUiSettingsSnapshot } from "../../../../src/plugin-sdk/contr
 import { pathForMemoryTab } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { i18n } from "../../i18n/lib/translate.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
@@ -644,32 +643,28 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
         memoryImportHref={props.memoryImportHref}
         canImportMemory={readGatewayOperatorAccess(gateway.read().snapshot).canAdmin}
         overview={
-          <ShellLayoutBoundary traits={{ settingsPage: true }}>
-            <ControlUiSettingsPresentation
-              application={application}
-              placement={{ section: "memory", panel: "overview" }}
-              readSnapshot={() => readSettingsSnapshot("overview")}
-              subscribe={subscribeSettings}
-              navigate={navigateTab}
-              refreshAgents={() => {
-                void application.agents.ensureList();
-              }}
-            />
-          </ShellLayoutBoundary>
+          <ControlUiSettingsPresentation
+            application={application}
+            placement={{ section: "memory", panel: "overview" }}
+            readSnapshot={() => readSettingsSnapshot("overview")}
+            subscribe={subscribeSettings}
+            navigate={navigateTab}
+            refreshAgents={() => {
+              void application.agents.ensureList();
+            }}
+          />
         }
         memories={
-          <ShellLayoutBoundary traits={{ settingsPage: true }}>
-            <ControlUiSettingsPresentation
-              application={application}
-              placement={{ section: "memory", panel: "memories" }}
-              readSnapshot={() => readSettingsSnapshot("memories")}
-              subscribe={subscribeSettings}
-              navigate={navigateTab}
-              refreshAgents={() => {
-                void application.agents.ensureList();
-              }}
-            />
-          </ShellLayoutBoundary>
+          <ControlUiSettingsPresentation
+            application={application}
+            placement={{ section: "memory", panel: "memories" }}
+            readSnapshot={() => readSettingsSnapshot("memories")}
+            subscribe={subscribeSettings}
+            navigate={navigateTab}
+            refreshAgents={() => {
+              void application.agents.ensureList();
+            }}
+          />
         }
         dreams={
           <Show when={agentId()} keyed>

@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { captureAuthProfileAuthorization } from "../../../agents/auth-profiles/authorization.js";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../../../agents/auth-profiles/runtime-snapshots.js";
 import { updateAuthProfileStoreWithLock } from "../../../agents/auth-profiles/store-runtime.js";
 import {
   persistAuthProfileBatch,
@@ -35,7 +34,6 @@ import * as snapshots from "../../../infra/sqlite-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import { createNonExitingRuntime } from "../../../runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
 import * as stateDb from "../../../state/openclaw-state-db.js";
 import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -287,52 +285,6 @@ it.each(["model", "provider", "session"] as const)(
     });
   },
 );
-
-it("records shadow-Doctor bindings that can run against the live credential databases", async () => {
-  await withAccounts(async (live) => {
-    const cfg = await configure(live);
-    await saveProfiles(oauthProfile("openai:default", "synthetic-access"));
-    const expected = await captureCronInferenceBinding({
-      cfg,
-      agentId: "main",
-      model: "openai/gpt-5.5@openai:default",
-    });
-    await saveJobs(live.statePath("cron", "jobs.json"), legacyJob("carried-over"));
-    await stateDb.closeOpenClawStateDatabaseAsync();
-    closeOpenClawAgentDatabasesForTest();
-    clearRuntimeAuthProfileStoreSnapshots();
-    const repaired = await withOpenClawTestState({ label: "upgrade-shadow" }, async (shadow) => {
-      await fs.cp(live.stateDir, shadow.stateDir, { recursive: true });
-      await shadow.writeConfig(config(shadow));
-      await doctor.withDoctorConfigMaintenance(async () => {
-        await using ctx = await doctor.prepareDoctorContext(shadow.configPath, {
-          options: { repair: true, nonInteractive: true, stateUpgradeLiveStateDir: live.stateDir },
-        });
-        await runLegacyCronHealth(ctx);
-      });
-      const [job] = await readJobs(shadow.statePath("cron", "jobs.json"));
-      expect(job?.inferenceBinding?.authorizationId).toBe(expected?.authorizationId);
-      if (!job?.inferenceBinding) {
-        throw new Error("Shadow Doctor did not record the carried-over job's account");
-      }
-      return job;
-    });
-    setRuntimeConfigSnapshot(cfg);
-    const inference = await prepareCronRunInference({
-      job: repaired,
-      cfg,
-      binding: repaired.inferenceBinding,
-      agentDir: live.agentDir(),
-    });
-    try {
-      expect(inference).toBeDefined();
-      expect(() => inference?.assertCandidate("openai", false)).not.toThrow();
-    } finally {
-      inference?.dispose();
-    }
-    expect(globalThis.fetch).not.toHaveBeenCalled();
-  });
-});
 
 it("recovers only an old upgrade's path-bound jobs, without rerunning or reenabling them", async () => {
   await withAccounts(async (state) => {

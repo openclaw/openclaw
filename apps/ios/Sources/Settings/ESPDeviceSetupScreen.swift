@@ -26,24 +26,26 @@ struct ESPDeviceSetupScreen: View {
             } else {
                 self.entrySection
             }
-            Section {
-                Text(self.status.isEmpty ? (self.session?.message ?? "Open phone setup on the device to begin.") : self
-                    .status)
-                    .font(OpenClawType.footnote)
-                    .accessibilityIdentifier("ESPSetup.Status")
-                if let session = self.session, session.receipt != nil,
-                   !self.status.isEmpty || session.message != session.receiptMessage
-                {
-                    Text(session.receiptMessage)
-                        .font(OpenClawType.footnote)
+            // Status and the USB note are read-only text: the footer of the page's last group,
+            // not rows of their own.
+            Section {} footer: {
+                VStack(alignment: .leading, spacing: 8) {
+                    SettingsFootnote(verbatim: self.status.isEmpty
+                        ? (self.session?.message ?? "Open phone setup on the device to begin.")
+                        : self.status)
+                        .accessibilityIdentifier("ESPSetup.Status")
+                    if let session = self.session, session.receipt != nil,
+                       !self.status.isEmpty || session.message != session.receiptMessage
+                    {
+                        SettingsFootnote(verbatim: session.receiptMessage)
+                    }
+                    Text(
+                        """
+                        You can also use USB setup. Tab5 devices with remote C6 Wi-Fi \
+                        require USB setup for their network.
+                        """)
+                        .font(SettingsType.footnote)
                 }
-            } footer: {
-                Text(
-                    """
-                    You can also use USB setup. Tab5 devices with remote C6 Wi-Fi \
-                    require USB setup for their network.
-                    """)
-                    .font(OpenClawType.footnote)
             }
         }
         .sheet(isPresented: self.$showScanner, onDismiss: self.deliverScan) { self.scannerSheet }
@@ -72,13 +74,12 @@ struct ESPDeviceSetupScreen: View {
                 self.scanID = self.scanner.beginScan()
                 self.showScanner = true
             } label: {
-                Label { Text("Scan device QR").font(OpenClawType.body) } icon: { Image(systemName: "qrcode.viewfinder")
-                }
+                Text("Scan device QR").font(SettingsType.label)
             }
             TextField(text: self.$serviceName) {
-                Text("Device service name").font(OpenClawType.subhead)
+                Text("Device service name").font(SettingsType.label)
             }
-            .font(OpenClawType.subhead)
+            .font(SettingsType.label)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .accessibilityIdentifier("ESPSetup.ServiceName")
@@ -90,24 +91,24 @@ struct ESPDeviceSetupScreen: View {
                 } catch {
                     self.status = error.localizedDescription
                 }
-            } label: { Text("Connect to device").font(OpenClawType.body) }
+            } label: { Text("Connect to device").font(SettingsType.label) }
                 .disabled(self.actionID != nil)
                 .accessibilityIdentifier("ESPSetup.Connect")
         } header: {
-            Text("ESP device").font(OpenClawType.captionSemiBold)
+            SettingsSectionTitle("ESP device")
         } footer: {
-            Text("Scan the QR shown by the device, or enter its service name and proof exactly as displayed.")
-                .font(OpenClawType.footnote)
+            SettingsFootnote(
+                "Scan the QR shown by the device, or enter its service name and proof exactly as displayed.")
         }
     }
 
     @ViewBuilder private func deviceSections(_ session: ESPSetupSession) -> some View {
         Section {
             if !session.deviceLabel.isEmpty {
-                Text(verbatim: session.deviceLabel + " · " + session.model).font(OpenClawType.headline)
+                Text(verbatim: session.deviceLabel + " · " + session.model).font(SettingsType.label)
             }
             if session.phase == .connecting {
-                ProgressView { Text("Connecting securely…").font(OpenClawType.body) }
+                ProgressView { Text("Connecting securely…").font(SettingsType.label) }
             }
             if !session.comparison.isEmpty {
                 Text(verbatim: session.comparison).font(OpenClawType.title1)
@@ -115,9 +116,9 @@ struct ESPDeviceSetupScreen: View {
             }
             if session.phase == .comparing {
                 Text("Compare this code with the device. Confirm using the device's physical controls.")
-                    .font(OpenClawType.body)
+                    .font(SettingsType.label)
             }
-            Button { self.close() } label: { Text("Cancel setup").font(OpenClawType.body) }
+            Button { self.close() } label: { Text("Cancel setup").font(SettingsType.label) }
         }
         if session.phase == .ready || session.phase == .working {
             self.wifiSection(session)
@@ -130,7 +131,7 @@ struct ESPDeviceSetupScreen: View {
     private func wifiSection(_ session: ESPSetupSession) -> some View {
         Section {
             Button { self.start { await session.scan() } } label: {
-                Text("Scan Wi-Fi networks").font(OpenClawType.body)
+                Text("Scan Wi-Fi networks").font(SettingsType.label)
             }
             ForEach(session.networks) { network in
                 Button {
@@ -138,18 +139,18 @@ struct ESPDeviceSetupScreen: View {
                     self.password = ""
                 } label: {
                     HStack {
-                        Text(verbatim: network.label).font(OpenClawType.body)
+                        Text(verbatim: network.label).font(SettingsType.label)
                         Spacer()
-                        Text(verbatim: "\(network.rssi) dBm").font(OpenClawType.caption)
+                        SettingsValueText(.verbatim("\(network.rssi) dBm"))
                         if self.selectedSSID == network.ssid { Image(systemName: "checkmark") }
                     }
                 }
             }
             if self.selectedSSID != nil {
-                Button { self.selectedSSID = nil } label: { Text("Enter SSID manually").font(OpenClawType.body) }
+                Button { self.selectedSSID = nil } label: { Text("Enter SSID manually").font(SettingsType.label) }
             } else {
-                TextField(text: self.$manualSSID) { Text("Network name (SSID)").font(OpenClawType.subhead) }
-                    .font(OpenClawType.subhead)
+                TextField(text: self.$manualSSID) { Text("Network name (SSID)").font(SettingsType.label) }
+                    .font(SettingsType.label)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
             }
@@ -165,14 +166,13 @@ struct ESPDeviceSetupScreen: View {
                 }
                 self.password = ""
                 self.start { await session.applyWiFi(ssid: ssid, password: password) }
-            } label: { Text("Apply Wi-Fi to device").font(OpenClawType.body) }
+            } label: { Text("Apply Wi-Fi to device").font(SettingsType.label) }
         } header: {
-            Text("Wi-Fi").font(OpenClawType.captionSemiBold)
+            SettingsSectionTitle("Wi-Fi")
         } footer: {
-            Text(session
+            SettingsFootnote(session
                 .truncated ? "The scan is incomplete. You can enter another SSID manually." :
                 "Choose a scanned network or enter its exact name. Changes are sent only when you tap Apply.")
-                .font(OpenClawType.footnote)
         }
     }
 
@@ -181,7 +181,7 @@ struct ESPDeviceSetupScreen: View {
             if let preview {
                 ForEach(Array(preview.link.connectionEndpoints.enumerated()), id: \.offset) { _, endpoint in
                     if let url = endpoint.websocketURL {
-                        Text(verbatim: url.absoluteString).font(OpenClawType.subhead)
+                        Text(verbatim: url.absoluteString).font(SettingsType.label)
                             .textSelection(.enabled)
                     }
                 }
@@ -192,8 +192,8 @@ struct ESPDeviceSetupScreen: View {
                             try await preview.authorize(appModel: self.appModel)
                         }
                     }
-                } label: { Text("Apply Gateway to device").font(OpenClawType.body) }
-                Button { self.preview = nil } label: { Text("Discard setup code").font(OpenClawType.body) }
+                } label: { Text("Apply Gateway to device").font(SettingsType.label) }
+                Button { self.preview = nil } label: { Text("Discard setup code").font(SettingsType.label) }
             } else {
                 Button {
                     self.start {
@@ -203,26 +203,26 @@ struct ESPDeviceSetupScreen: View {
                             self.status = error.localizedDescription
                         } catch {}
                     }
-                } label: { Text("Prepare Gateway setup").font(OpenClawType.body) }
+                } label: { Text("Prepare Gateway setup").font(SettingsType.label) }
                     .disabled(!self.appModel.isOperatorGatewayConnected || !self.appModel.hasOperatorAdminScope)
             }
         } header: {
-            Text("Gateway").font(OpenClawType.captionSemiBold)
+            SettingsSectionTitle("Gateway")
         } footer: {
             Text(
                 """
                 Prepare a fresh setup code from this phone's current Gateway. Review every address \
                 before applying it to the device. This phone's connection stays the same.
                 """)
-                .font(OpenClawType.footnote)
+                .font(SettingsType.footnote)
         }
     }
 
     private func secretField(_ title: LocalizedStringKey, text: Binding<String>) -> some View {
-        SecureField(text: text, prompt: Text(title).font(OpenClawType.subhead)) {
-            Text(title).font(OpenClawType.subhead)
+        SecureField(text: text, prompt: Text(title).font(SettingsType.label)) {
+            Text(title).font(SettingsType.label)
         }
-        .font(OpenClawType.subhead)
+        .font(SettingsType.label)
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
         .accessibilityLabel(Text(title))
@@ -300,7 +300,7 @@ struct ESPDeviceSetupScreen: View {
         self.preview = nil
     }
 
-    private func close(message: String = "Setup closed. Earlier saved changes are not rolled back.") {
+    private func close(message: String = "Setup closed. Earlier saved changes aren’t undone.") {
         self.clearDrafts()
         self.scanner.cancel()
         self.showScanner = false

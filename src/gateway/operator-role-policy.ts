@@ -17,6 +17,7 @@ import {
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
+import type { UserProfileRoleChange } from "../state/user-profile-writes.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
@@ -24,6 +25,7 @@ import {
   openclawIdTunnelRolePolicy,
   openclawIdSubjectRolePolicy,
 } from "./openclaw-id/tunnel-principal.js";
+import { operatorRefusalText } from "./operator-refusal.js";
 import {
   isNamedOperatorRoleEnforcementEnabled,
   isOperatorRoleEnforcedFor,
@@ -56,6 +58,72 @@ const deniedOperatorRole: GatewayOperatorRoleDefinition = {
   agents: [],
   scopes: [],
 };
+
+type RoleSessions = GatewayOperatorRoleDefinition["sessions"];
+
+const OTHERS_ORDER = ["none", "view", "suggest", "write"];
+// Without a ceiling a member's stored level is ignored; any ceiling applies it
+// (resolveSessionMemberAccess), so "uncapped" ranks above "send".
+const INVITED_ORDER = ["read", "suggest", "send", "uncapped"];
+
+/**
+ * Session permissions only narrow along their order: none < view < suggest < write, and
+ * none < invited < write, where an invitation narrows when its access ceiling drops. Invited and
+ * view or suggest are not comparable, so a change between them counts as a loss. Invited tool
+ * and permission limits apply to the next request.
+ */
+function sessionsNarrowed(before: RoleSessions, after: RoleSessions): boolean {
+  if (before.others === "none" || after.others === "write") {
+    return false;
+  }
+  if (before.others === "invited" && after.others === "invited") {
+    return (
+      INVITED_ORDER.indexOf(after.maxInvitedAccess ?? "uncapped") <
+      INVITED_ORDER.indexOf(before.maxInvitedAccess ?? "uncapped")
+    );
+  }
+  if (before.others === "invited" || after.others === "invited") {
+    return true;
+  }
+  return OTHERS_ORDER.indexOf(after.others) < OTHERS_ORDER.indexOf(before.others);
+}
+
+/**
+ * A role write loses access unless the new effective role keeps every operator scope, agent and
+ * session permission of the old one. A role that cannot be resolved is not comparable, so it
+ * counts as a loss. Other role limits (tools, sandbox, projects) apply to the next request only.
+ */
+export function roleChangeLosesAccess(
+  cfg: OpenClawConfig,
+  change: UserProfileRoleChange,
+  identity: { githubLogin?: string | null; openclawIdAccountIds?: readonly string[] } | undefined,
+): boolean {
+  const definition = (role: string | null) => {
+    const { effectiveRole } = resolveOperatorRoleSelection(
+      change.profileId,
+      role,
+      cfg,
+      identity?.githubLogin ?? null,
+      operatorRoleSubject({ ...identity, profileId: change.profileId }),
+    );
+    return effectiveRole ? cfg.gateway?.roles?.definitions[effectiveRole] : undefined;
+  };
+  const before = definition(change.previousRole);
+  const after = definition(change.role);
+  if (!before || !after) {
+    return before !== after;
+  }
+  return (
+    !roleScopesAllow({
+      role: "operator",
+      requestedScopes: before.scopes,
+      allowedScopes: after.scopes,
+    }) ||
+    (after.agents !== "*" &&
+      (before.agents === "*" || before.agents.some((agent) => !after.agents.includes(agent)))) ||
+    sessionsNarrowed(before.sessions, after.sessions)
+  );
+}
 
 type GatewaySessionAgentAuthorization = {
   cfg: OpenClawConfig;
@@ -468,7 +536,7 @@ export function authorizeGatewaySessionCreation(
   }
   return errorShape(
     ErrorCodes.FORBIDDEN,
-    `Your operator role cannot create sessions for agent "${params.agentId}"; choose an allowed agent or ask a gateway administrator to update your role.`,
+    operatorRefusalText("agent-not-in-role", `start a session with agent "${params.agentId}"`),
   );
 }
 
@@ -520,4 +588,49 @@ export function assertOperatorCloudProfileDispatchAllowed(params: {
       "Your operator role cannot dispatch to this cloud profile; choose your own session and an allowed profile, or ask a gateway administrator to update your role.",
     ),
   );
+}
+
+const OPERATOR_ROLE_SELF_LOCKOUT_MESSAGE =
+  "This change would remove your administrator access (operator.admin), and you could no longer manage roles. Assign yourself a role that includes operator.admin first, then try again.";
+
+/**
+ * Returns a refusal when a role change would leave the person making it without
+ * operator.admin. `assignment` previews a pending users.setRole; otherwise the person's
+ * current assignment is resolved under `config`. The gateway owner and shared-token
+ * connections are never under roles, so they cannot lock themselves out this way.
+ */
+export function resolveOperatorRoleSelfLockout(params: {
+  client: GatewayClient | null | undefined;
+  config: OpenClawConfig;
+  assignment?: { profileId: string; role: string | null };
+}): string | undefined {
+  const { client } = params;
+  const profileId = client?.authenticatedUserProfile?.profileId;
+  if (
+    !profileId ||
+    profileId === GATEWAY_OWNER_PROFILE_ID ||
+    client?.connect?.role !== "operator"
+  ) {
+    return undefined;
+  }
+  const profile = captureResidentUserProfileAccess(profileId).readCurrentFacts();
+  // An assignment names either the alias the caller used or the canonical row.
+  const assigned =
+    params.assignment &&
+    (params.assignment.profileId === profileId || params.assignment.profileId === profile.profileId)
+      ? params.assignment.role
+      : profile.assignedRole;
+  // An OpenClaw ID owner device keeps the owner's grants whatever its person's role says.
+  const role = openclawIdSubjectRolePolicy(client.internal?.openclawIdPrincipal, () =>
+    resolveOperatorRolePolicyForAssignment(
+      profile.profileId,
+      assigned,
+      params.config,
+      profile.githubLogin,
+      operatorRoleSubject(profile),
+    ),
+  );
+  return role && !role.scopes.includes(ADMIN_SCOPE)
+    ? OPERATOR_ROLE_SELF_LOCKOUT_MESSAGE
+    : undefined;
 }

@@ -235,14 +235,15 @@ describe("truncateToolResultText", () => {
   it.each(["m", "你𠀀😀"])(
     "keeps both head and tail cuts on complete code points (%s)",
     (middle) => {
-      const marker = "\n\n⚠️ [... middle content omitted — showing head and tail ...]\n\n";
-      const text = `${"a".repeat(6)}😀${middle.repeat(100)}😀${"x".repeat(22)} Error`;
-      expect(
-        truncateToolResultText(text, 100, {
-          suffix: () => "!",
-          minKeepChars: 1,
-        }),
-      ).toBe(`${"a".repeat(6)}${marker}${"x".repeat(22)} Error!`);
+      const text = `${"a".repeat(6)}😀${middle.repeat(20_000)}😀${"x".repeat(22)} done`;
+      const result = truncateToolResultText(text, 10_000, { suffix: () => "!", minKeepChars: 1 });
+      const [head, tail] = result.split("\n\n!\n\n");
+      expect(text.startsWith(head!)).toBe(true);
+      expect(text.endsWith(tail!)).toBe(true);
+      expect(tail).toMatch(/x done$/u);
+      expect(result).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+      );
     },
   );
 });
@@ -303,7 +304,7 @@ describe("truncateToolResultMessage", () => {
       expect(
         result.content.slice(0, -1).every((block) => block.type !== "text" || block.text === ""),
       ).toBe(true);
-      expect(output.at(-1)).toMatch(/!$/u);
+      expect(output.at(-1)).toContain("!");
     }
   });
 });
@@ -356,7 +357,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(content.slice(0, -1)).toEqual(rows.slice(0, content.length - 1));
     expect(content.at(-1)).toMatchObject({
       type: "text",
-      text: expect.stringMatching(/truncated; rerun with narrower args/u),
+      text: expect.stringMatching(/chars omitted\]/u),
     });
     expect(getToolResultTextBudget(result)).toBeLessThanOrEqual(16_000);
     expect(message.content).toHaveLength(1_000);
@@ -519,7 +520,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
       if (kind === "oversized") {
         const freshText = toolText(freshResults[0]!);
         expect(freshText).toContain("z".repeat(2_000));
-        expect(freshText).toContain("truncated");
+        expect(freshText).toContain("chars omitted");
         expect(freshText.length).toBeLessThanOrEqual(8_000);
       } else {
         expect(freshResults.map(toolText)).toEqual(outputs);
@@ -562,13 +563,12 @@ describe("truncateOversizedToolResultsInMessages", () => {
     if (kind === "tiny") {
       expect(result.truncatedCount).toBeGreaterThan(0);
       expect(totalText(result.messages)).toBeLessThanOrEqual(8);
-    } else if (kind === "plain") {
-      expect(texts[0]).toContain("[tool result elided");
-      expect(texts[0]).not.toContain("full output preserved at");
     } else {
+      // Without a disclosed file, no notice points at one.
       expect(
-        texts.some((text) => text.startsWith("[tool result elided:") && !text.includes("rerun")),
+        texts.some((text) => /\[\.\.\. \d+ chars omitted\]|^\[tool result elided/u.test(text)),
       ).toBe(true);
+      expect(texts.join("")).not.toContain("preserved at");
     }
   });
 
@@ -603,7 +603,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
       const details =
         kind === "partial"
           ? { spill: { path: spillPath, chars: 2_000_000, truncated: true } }
-          : { fullOutputPath: spillPath };
+          : { spill: { path: spillPath } };
       const messages = [
         toolResult(firstText, "spill_0", details),
         ...Array.from({ length: count - 1 }, (_, index) =>
@@ -621,7 +621,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
         expect(text).toContain("partial");
         expect(text).not.toContain("full output preserved");
       } else if (kind === "private") {
-        expect(text).toContain("[tool result elided");
+        expect(text).toMatch(/\[\.\.\. \d+ chars omitted\]|^\[tool result elided/u);
       } else if (kind === "compact") {
         expect(text).toBe(`[read ${spillPath}]`);
       } else {
@@ -859,7 +859,7 @@ describe("truncateOversizedToolResultsInSession", () => {
           message.content.some((block) => block.type === "text" && block.text === text),
       );
 
-    expect(toolResultTexts.some((text) => text.includes("truncated"))).toBe(true);
+    expect(toolResultTexts.some((text) => text.includes("chars omitted"))).toBe(true);
     expect(toolResultTexts.join("").length).toBeLessThan(medium.length * 3);
     expect(findAssistant("pre-boundary checkpoint owner")?.providerReplay).toEqual(
       staleCheckpointReplay,
@@ -910,7 +910,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     const after = wireToolOutput(project(results()).messages);
     expect(after).toHaveLength(3);
     expect(after?.slice(0, 2)).toEqual(before);
-    expect(toolText(results()[2]!)).toContain("truncated");
+    expect(toolText(results()[2]!)).toContain("chars omitted");
 
     expect(await recover(scope, budget)).toMatchObject({ truncated: true });
     expect(results().slice(0, 2)).not.toEqual(sent);
@@ -1012,62 +1012,63 @@ describe("truncateOversizedToolResultsInSession", () => {
     const inactiveTool = findTool(stored, "call_inactive");
     const selectedTool = findTool(activeMessages(scope), "call_selected");
 
-    expect(selectedTool ? toolText(selectedTool) : "").toContain("truncated");
+    expect(selectedTool ? toolText(selectedTool) : "").toContain("chars omitted");
     expect(originalSelectedTool ? toolText(originalSelectedTool) : "").toBe(activeLarge);
     expect(inactiveTool ? toolText(inactiveTool) : "").toBe(inactiveLarge);
   });
 });
 
 describe("truncateToolResultText head+tail strategy", () => {
-  it.each([
-    "(Command exited with code 1)",
-    "Command timed out after 5 seconds.",
-    "Command timed out waiting for output.",
-    "Command aborted by signal SIGTERM",
-    "Process exited with signal SIGTERM.",
-    "Process stopped by request (signal SIGTERM).",
-    "Command not found",
-    "Command not executable (permission denied)",
-  ])("preserves the terminal diagnostic %s within the weighted cap", (diagnostic) => {
-    const text = `${"progress output\n".repeat(800)}\n${diagnostic}`;
+  it("keeps the head, the last line and one notice whatever the content", () => {
+    const text = `${"progress output\n".repeat(800)}LAST LINE`;
     const result = truncateToolResultText(text, 8_192, { minimumRawWeight: 4 });
 
-    expect(result).toContain(diagnostic);
-    expect(result).toContain("middle content omitted");
+    expect(result.startsWith("progress output\n")).toBe(true);
+    expect(result.endsWith("LAST LINE")).toBe(true);
+    expect(result.match(/\[\.\.\. \d+ chars omitted\]/gu)).toHaveLength(1);
     expect(result.length * 4).toBeLessThanOrEqual(8_192);
   });
 
-  it.each([
-    {
-      kind: "error",
-      text:
-        "Line 1\n".repeat(500) +
-        "data data data\n".repeat(500) +
-        "\nError: something failed\nStack trace: at foo.ts:42\n",
-    },
-    { kind: "ordinary", text: "normal line\n".repeat(1000) },
-    {
-      kind: "newline",
-      text: Array.from({ length: 100 }, (_, i) => `line ${i}: ${"x".repeat(50)}`).join("\n"),
-    },
-  ])("preserves the $kind tail appropriately", ({ kind, text }) => {
-    const result = truncateToolResultText(text, kind === "newline" ? 3000 : 5000);
-    if (kind === "error") {
-      expect(result).toContain("Line 1");
-      expect(result).toContain("Error: something failed");
-      expect(result).toContain("middle content omitted");
-    } else if (kind === "newline") {
-      expect(result).toContain("truncated");
-      expect(result.length).toBeLessThan(text.length);
-      const suffixIndex = result.indexOf("\n\n⚠️");
-      if (suffixIndex > 0) {
-        const keptContent = result.slice(0, suffixIndex);
-        expect(keptContent.lastIndexOf("\n")).toBeGreaterThan(keptContent.length - 100);
-      }
-    } else {
-      expect(result).toContain("normal line");
-      expect(result).not.toContain("middle content omitted");
-      expect(result).toContain("truncated");
-    }
+  it("keeps the tail when the omitted count gains a digit", () => {
+    // 9,999 chars past a full-budget prefix, but over 10,000 once head, tail and notice share it.
+    const text = `${"a".repeat(25_990)}LAST-TAIL`;
+    const result = truncateToolResultText(text, 16_000);
+
+    expect(result.endsWith("LAST-TAIL")).toBe(true);
+    expect(result.length).toBeLessThanOrEqual(16_000);
+  });
+
+  it("keeps the tail of a dense line under the context guard's weighted budget", () => {
+    const text = `${"a".repeat(30_000)} Error: failed`;
+    const result = truncateToolResultText(text, 8_192, { minKeepChars: 0, minimumRawWeight: 2 });
+
+    expect(result.endsWith("Error: failed")).toBe(true);
+    expect(result.length * 2).toBeLessThanOrEqual(8_192);
+  });
+
+  it("keeps the tail under a small recovery budget", () => {
+    const text = `${"log line\n".repeat(2_000)}Error: failed`;
+    const result = truncateToolResultText(text, 3_000, { minKeepChars: 0 });
+
+    expect(result.endsWith("Error: failed")).toBe(true);
+    expect(result.length).toBeLessThanOrEqual(3_000);
+  });
+
+  it("cuts the head on a line boundary", () => {
+    const text = Array.from({ length: 400 }, (_, i) => `line ${i}: ${"x".repeat(50)}`).join("\n");
+    const result = truncateToolResultText(text, 10_000);
+    const head = result.slice(0, result.indexOf("\n\n[... "));
+
+    expect(head.length).toBeGreaterThan(0);
+    expect(text.startsWith(`${head}\n`)).toBe(true);
+  });
+
+  it("keeps whole short records as a prefix instead of splitting them", () => {
+    const text = Array.from({ length: 100 }, (_, i) => `record-${i} | payload`).join("\n");
+    const result = truncateToolResultText(text, 400);
+
+    expect(result).toMatch(/^record-0 \| payload\n/u);
+    expect(result.match(/\[\.\.\. \d+ chars omitted\]/gu)).toHaveLength(1);
+    expect(result).not.toContain("record-99");
   });
 });

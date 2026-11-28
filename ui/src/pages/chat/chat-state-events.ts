@@ -61,6 +61,19 @@ function refreshChatEventHistory(
   void loadChatHistory(state, { deferBranches: !presented, supersedeInFlight });
 }
 
+export function reconcileChatRunAfterSessionPublication(
+  state: ChatPageHost,
+  presented: boolean,
+): boolean {
+  const runId = state.chatRunId;
+  const reconciled = reconcileChatRunAfterSessionStatePublication(state);
+  if (runId && reconciled) {
+    // A terminal row settles activity, not the transcript. Recover the saved reply now.
+    refreshChatEventHistory(state, presented, true);
+  }
+  return reconciled;
+}
+
 function globalSessionEventMatchesChat(
   state: ChatPageHost,
   event: NonNullable<ReturnType<typeof readSessionChangedEvent>>,
@@ -153,7 +166,7 @@ function handleSessionMessageEvent(
     ) {
       retirePendingChatLiveEvents(state, result.row.lastRunId);
     }
-    reconcileChatRunAfterSessionStatePublication(state);
+    reconcileChatRunAfterSessionPublication(state, presentation());
   }
   if (runIdBeforeApply && matchesChat) {
     const runId = event.clientRunId ?? event.runId ?? runIdBeforeApply;
@@ -267,7 +280,7 @@ function handleSessionsChangedEvent(
     ) {
       retirePendingChatLiveEvents(state, result.row.lastRunId);
     }
-    reconcileChatRunAfterSessionStatePublication(state);
+    reconcileChatRunAfterSessionPublication(state, presentation());
   }
   if (resetsSelectedSession || changesBranchTopology) {
     // The old snapshot can already be waiting for live-event code with no cursor.

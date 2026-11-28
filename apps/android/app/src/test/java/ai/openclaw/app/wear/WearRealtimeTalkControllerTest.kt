@@ -1,9 +1,14 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.wear.shared.WearDecodeResult
+import ai.openclaw.wear.shared.WearEventType
+import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProtocol
+import ai.openclaw.wear.shared.WearProtocolCodec
 import ai.openclaw.wear.shared.WearRealtimeAudioFrameType
+import ai.openclaw.wear.shared.WearRealtimeTalkCodec
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import ai.openclaw.wear.shared.WearRealtimeTalkStatus
 import android.util.Base64
@@ -28,6 +33,91 @@ import org.robolectric.RobolectricTestRunner
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 class WearRealtimeTalkControllerTest {
+  @Test
+  fun microphoneAcknowledgmentsPreserveProgressWithoutSendingTalkEvents() =
+    runTest {
+      val (controller, sent) = backgroundScope.recordingTalkController()
+      assertTrue(controller.start("watch-a", "session-a", "attempt-a", null))
+      try {
+        controller.handleGatewayEvent(
+          "talk.event",
+          """{"relaySessionId":"relay-1","type":"transcript","role":"user","text":"Check the repository","final":true}""",
+        )
+        runCurrent()
+        for (status in listOf(WearRealtimeTalkStatus.THINKING, WearRealtimeTalkStatus.SPEAKING)) {
+          if (status == WearRealtimeTalkStatus.SPEAKING) {
+            controller.handleGatewayEvent(
+              "talk.event",
+              """{"relaySessionId":"relay-1","type":"audio","audioBase64":"${Base64.encodeToString(ByteArray(32_000), Base64.NO_WRAP)}"}""",
+            )
+            runCurrent()
+          }
+          assertEquals(status, sent.last().status)
+          val before = sent.size
+          repeat(50) {
+            controller.handleGatewayEvent("talk.event", """{"relaySessionId":"relay-1","type":"inputAudio"}""")
+            runCurrent()
+          }
+          controller.handleGatewayEvent("talk.event", """{"relaySessionId":"retired-relay","type":"inputAudio"}""")
+          runCurrent()
+          assertEquals(status to before, controller.snapshot.value.status to sent.size)
+        }
+      } finally {
+        controller.stop("watch-a", "attempt-a")
+      }
+    }
+
+  @Test
+  fun equalSnapshotsAreQuietButChangedTextAndNewAttemptsAreDelivered() =
+    runTest {
+      val (controller, sent) = backgroundScope.recordingTalkController()
+      assertTrue(controller.start("watch-a", "session-a", "attempt-a", null))
+      try {
+        runCurrent()
+        val listeningCount = sent.size
+        repeat(3) {
+          controller.handleGatewayEvent("talk.event", """{"relaySessionId":"relay-1","type":"ready"}""")
+        }
+        runCurrent()
+        assertEquals(listeningCount, sent.size)
+
+        val audio = Base64.encodeToString(ByteArray(32_000), Base64.NO_WRAP)
+        controller.handleGatewayEvent("talk.event", """{"relaySessionId":"relay-1","type":"audio","audioBase64":"$audio"}""")
+        runCurrent()
+        assertEquals(WearRealtimeTalkStatus.SPEAKING, sent.last().status)
+        val speakingCount = sent.size
+        repeat(3) {
+          controller.handleGatewayEvent("talk.event", """{"relaySessionId":"relay-1","type":"audio","audioBase64":"$audio"}""")
+        }
+        runCurrent()
+        assertEquals(speakingCount, sent.size)
+
+        controller.handleGatewayEvent(
+          "talk.event",
+          """{"relaySessionId":"relay-1","type":"transcript","role":"assistant","text":"Repository checked","final":true}""",
+        )
+        runCurrent()
+        assertEquals(speakingCount + 1, sent.size)
+        assertEquals(WearRealtimeTalkStatus.SPEAKING, sent.last().status)
+        assertEquals(
+          "Repository checked",
+          sent
+            .last()
+            .conversation
+            .single()
+            .text,
+        )
+
+        controller.stop("watch-a", "attempt-a")
+        assertTrue(controller.start("watch-a", "session-a", "attempt-b", null))
+        runCurrent()
+        assertEquals("attempt-b", sent.last().attemptId)
+        assertEquals(controller.snapshot.value, sent.last())
+      } finally {
+        controller.stop("watch-a")
+      }
+    }
+
   @Test
   fun fullReplySurvivesBeyondTheWirePreview() =
     runTest {
@@ -535,7 +625,7 @@ class WearRealtimeTalkControllerTest {
               createParams += params
               if (createParams.size == 1) {
                 throw GatewayRequestRejected(
-                  GatewaySession.ErrorShape(
+                  ErrorShape(
                     code = "INVALID_REQUEST",
                     message =
                       "invalid talk.session.create params: at root: unexpected property 'language'",
@@ -569,7 +659,7 @@ class WearRealtimeTalkControllerTest {
             if (method == "talk.session.create") {
               createAttempts += 1
               throw GatewayRequestRejected(
-                GatewaySession.ErrorShape(
+                ErrorShape(
                   code = "INVALID_REQUEST",
                   message = "invalid talk.session.appendAudio params",
                 ),
@@ -979,6 +1069,24 @@ class WearRealtimeTalkControllerTest {
       assertTrue("talk.session.close" in gatewayMethods)
       assertEquals(listOf("watch-a"), forcedChannelCloses)
     }
+}
+
+private fun CoroutineScope.recordingTalkController(): Pair<WearRealtimeTalkController, List<WearRealtimeTalkSnapshot>> {
+  val sent = mutableListOf<WearRealtimeTalkSnapshot>()
+  val bridge =
+    WearProxyBridge(
+      scope = this,
+      sender =
+        WearMessageSender { _, path, data ->
+          check(path == WearProtocol.EVENT_PATH)
+          val event = (WearProtocolCodec.decode(data) as WearDecodeResult.Success).message as WearMessage.Event
+          check(event.event == WearEventType.Talk)
+          sent += WearRealtimeTalkCodec.decode(checkNotNull(event.payload))
+        },
+      peerResolver = WearPeerResolver { setOf("watch-a") },
+      handleRequest = { _, _ -> error("No watch request expected") },
+    )
+  return testTalkController(onSnapshot = { bridge.publishTalk(WearRealtimeTalkCodec.encode(it)) }) to sent
 }
 
 private fun CoroutineScope.testTalkController(

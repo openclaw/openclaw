@@ -19,12 +19,10 @@ import {
   getSubagentRunsForChildSession,
   getSubagentRunsForRequesterSession,
   getSubagentSessionReadLookup,
-  immutableSubagentRunSessionList,
   subagentRuns,
 } from "./subagent-registry-memory.js";
 import {
   buildLatestSubagentRunReadIndexFromRuns,
-  buildSubagentRunReadIndexFromRuns,
   getLatestSubagentRunForChild,
   getSubagentRunByChildSessionKeyFromRuns,
   listRunsForControllerFromRuns,
@@ -33,6 +31,7 @@ import {
   type LatestSubagentRunReadIndex,
   type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
+import { captureSubagentSessionListReadIndex } from "./subagent-registry-read-index.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import {
   getSubagentSessionListRunsSnapshotForChildSessions,
@@ -43,11 +42,7 @@ import {
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { owesRequesterCompletion } from "./subagent-requester-settle-identity.js";
-import {
-  compareSubagentRunGeneration,
-  copySubagentRunRuntimeOwner,
-  latestSubagentRun,
-} from "./subagent-run-generation.js";
+import { compareSubagentRunGeneration, latestSubagentRun } from "./subagent-run-generation.js";
 import {
   isSubagentRunLive,
   isSubagentRunQueued,
@@ -57,13 +52,6 @@ export { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.
 
 export type { SubagentRunReadIndex } from "./subagent-registry-queries.js";
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
-
-export {
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
-  isSubagentRunPausedForContinuation,
-  resolveSubagentSessionStatus,
-} from "./subagent-session-metrics.js";
 
 export type SubagentRootRequester = {
   sessionKey: string;
@@ -337,29 +325,11 @@ export function buildSubagentSessionListReadIndex(
     (sessionKeys
       ? getSubagentSessionListRunsSnapshotForSessions(subagentRuns, sessionKeys)
       : getSubagentSessionListRunsSnapshotForRead(subagentRuns));
-  // Liveness copies carry runtime ownership; shared display facts must never acquire it.
-  return buildSubagentRunReadIndexFromRuns({
+  return captureSubagentSessionListReadIndex(
     runs,
-    inMemoryRuns: sessionKeys
-      ? [...runs.keys()].flatMap((runId) => {
-          const entry = subagentRuns.get(runId);
-          return entry
-            ? [
-                copySubagentRunRuntimeOwner(
-                  entry,
-                  Object.freeze({ ...immutableSubagentRunSessionList(entry) }),
-                ),
-              ]
-            : [];
-        })
-      : Array.from(subagentRuns.values(), (entry) =>
-          copySubagentRunRuntimeOwner(
-            entry,
-            Object.freeze({ ...immutableSubagentRunSessionList(entry) }),
-          ),
-        ),
     now,
-  });
+    sessionKeys ? undefined : subagentRuns.values(),
+  );
 }
 
 /** Direct-child discovery needs only its controllers, without building global topology. */

@@ -180,6 +180,12 @@ function sessionsBoardView(input: Record<string, unknown>): WorkboardSessionsBoa
   const view: WorkboardSessionsBoardView = {};
   for (const [key, value] of Object.entries(input.view)) {
     switch (key) {
+      case "agentId":
+        if (typeof value !== "string" || !value.trim()) {
+          throw new Error("view.agentId must be a non-empty string.");
+        }
+        view.agentId = value.trim();
+        break;
       case "involvingMe":
       case "includePeople":
         if (typeof value !== "boolean") {

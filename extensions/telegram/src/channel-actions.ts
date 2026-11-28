@@ -291,6 +291,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         ...(ctx.mediaAccess !== undefined ? { mediaAccess: ctx.mediaAccess } : {}),
         mediaLocalRoots: ctx.mediaLocalRoots,
         mediaReadFile: ctx.mediaReadFile,
+        agentId: ctx.agentId ?? undefined,
         sessionKey: ctx.sessionKey,
         inboundEventKind: ctx.inboundEventKind,
         gatewayClientScopes: ctx.gatewayClientScopes,

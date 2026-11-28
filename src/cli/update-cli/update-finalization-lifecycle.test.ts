@@ -25,7 +25,6 @@ import { withCliCommandCleanup, withCliProcessScope } from "../runtime-cleanup-s
 import { closeCliResources } from "../runtime-cleanup.js";
 import { exitAfterSignalExitBarriers, waitForCliSignalExit } from "../signal-exit-barrier.js";
 import { expectMessages } from "./update-boundary.test-support.js";
-import { resultFixture } from "./update-command-fixtures.test-support.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
 import { captureUpdateFinalizationDoctorOutput } from "./update-finalization-output.js";
 
@@ -327,11 +326,7 @@ it("records a nested Doctor refusal before reporting standalone finalization", a
       }),
     ]),
   });
-  const report = await prepareUpdateFailureReport({
-    attemptId: run.runId,
-    recordedRun: run,
-    result: resultFixture(undefined, { status: "error", mode: "unknown", durationMs: 1 }),
-  });
+  const report = await prepareUpdateFailureReport(run);
   expect(report.body).toContain("Reason code: doctor-failed");
   expect(report.body).toContain(`Failed phase finalize-doctor: exit 23 (${message})`);
   expect(report.body).not.toContain("Failed phase finalize-doctor: exit unknown");

@@ -57,6 +57,7 @@ import { captureAgentWorkspaceReadiness } from "../../workspace-readiness.js";
 import { log } from "../logger.js";
 import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
+import { createShellCallAdmission } from "./attempt-shell-call.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./attempt-thread-helpers.js";
 import {
   applyEmbeddedAttemptToolsAllow,
@@ -148,6 +149,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
           ))
           ? true
           : undefined,
+      // The attempt's deferred-tool resolver loads on-demand tools on their first direct call.
+      loadsOnDemandTools: true,
       modelToolsEnabled: toolsEnabled,
       disableTools: attempt.disableTools,
       isRawModelRun,
@@ -211,6 +214,10 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   // Compaction summaries omit screenshot image blocks. Frames are bound to this
   // generation so retained tool-result text cannot authorize stale coordinates.
   const computerContextEpoch: ComputerContextEpoch = { value: 0 };
+  const spillOwner = {
+    agentId: params.setup.sessionAgentId,
+    sessionKey: attempt.sessionKey?.trim() || attempt.sessionId,
+  };
   const skillInstructionDeliveryCache = new Map<string, Promise<boolean>>();
   const toolSearchCatalogRef = toolSurfaceRuntime.toolSearchCatalogRef;
   const nestedToolActivityState = createAttemptNestedToolActivityState();
@@ -247,7 +254,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     requireExplicitMessageTarget,
     config: toolSearchRuntimeConfig,
     sessionKey: params.setup.sandboxSessionKey,
-    runSessionKey: attempt.sessionKey?.trim() || attempt.sessionId,
+    runSessionKey: spillOwner.sessionKey,
     sessionId: attempt.sessionId,
     runId: attempt.runId,
     agentDir: params.agentDir,
@@ -363,9 +370,11 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         assertInvocationCurrent: assertActive,
         prepareHostFileMutation: assertActive?.prepareSessionSourceStorageEffect,
         agentId: params.setup.sessionAgentId,
+        spillOwner,
         ...buildConversationContext(),
         exec: {
           ...attempt.execOverrides,
+          admitShellCall: createShellCallAdmission(attempt),
           ...(sessionPermissionPolicy
             ? { mode: resolveSessionPermissionExecMode(sessionPermissionPolicy) }
             : {}),
@@ -571,6 +580,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       codeModeControlsEnabledForRun,
       codeModeSkills,
       computerContextEpoch,
+      spillOwner,
       skillInstructionDeliveryCache,
       get messageToolAvailable() {
         return messageToolAvailable;
