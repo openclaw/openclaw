@@ -446,7 +446,12 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     // complete result before commit, without modifying an already audited artifact.
     const { firstKeptEntryId } = completedCompaction;
     const firstKeptIndex = pathEntries.findIndex((entry) => entry.id === firstKeptEntryId);
-    if (pendingEntryIndex >= 0 && (firstKeptIndex < 0 || firstKeptIndex > pendingEntryIndex)) {
+    if (firstKeptIndex < 0) {
+      throw new Error(
+        "Compaction must retain an entry that is still in the current session branch.",
+      );
+    }
+    if (pendingEntryIndex >= 0 && firstKeptIndex > pendingEntryIndex) {
       throw new Error("Compaction must retain the unprocessed pending user request.");
     }
     if (
