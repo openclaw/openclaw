@@ -17,9 +17,7 @@ type SystemNoticeKind = {
   // Explicit status copy, never the model-facing instruction. Other kinds retain
   // their detailed context or actionable update outcomes unchanged.
   summaryKey?: string;
-  // Collapse the variable body behind a disclosure. For bulky injected context
-  // (skill instructions, continuation summaries) the label stays visible while
-  // the payload opens on demand.
+  // Show the label and leave the variable body behind a disclosure.
   collapsedBody?: true;
   showTimestamp?: true;
   // Injected mid-run context does not begin a new operator turn; kinds that do
@@ -39,11 +37,6 @@ const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
   },
   "restart-sentinel": {
     labelKey: "chat.systemNotice.gatewayRestarted.label",
-  },
-  cli_harness_context: {
-    labelKey: "chat.systemNotice.cliHarnessContext.label",
-    collapsedBody: true,
-    startsTurn: false,
   },
   claude_cli_task_notification: {
     labelKey: "chat.systemNotice.claudeCliTaskNotification.label",

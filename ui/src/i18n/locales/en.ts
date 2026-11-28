@@ -93,11 +93,7 @@ type EnglishCatalog = TranslationMap & {
       toolCards: TranslationMap & Record<"activity" | "review" | "verbs", TranslationMap>;
       systemNotice: TranslationMap &
         Record<
-          | "guardian"
-          | "automationRecovery"
-          | "gatewayRestarted"
-          | "cliHarnessContext"
-          | "claudeCliTaskNotification",
+          "guardian" | "automationRecovery" | "gatewayRestarted" | "claudeCliTaskNotification",
           TranslationMap
         >;
       mermaid: TranslationMap;
@@ -1742,7 +1738,6 @@ const startupEnglish = {
       guardian: {},
       automationRecovery: {},
       gatewayRestarted: {},
-      cliHarnessContext: {},
       claudeCliTaskNotification: {},
     },
     skillLearned: {},

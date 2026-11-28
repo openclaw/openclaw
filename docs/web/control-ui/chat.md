@@ -128,6 +128,7 @@ parent turn continues. If that completion does not establish success or failure,
 the row keeps the tool's known purpose and shows **Outcome unknown** separately.
 Reloading history preserves the recorded purpose. In imported Claude CLI history,
 a tool result without an error flag counts as completed, just as it does live.
+Claude Code's internal continuation summaries do not appear in the chat timeline.
 A saved call without a loaded result shows **No result available** rather than
 counting as an unknown outcome.
 Live execution facts and the active run’s replay snapshot establish **Running**;

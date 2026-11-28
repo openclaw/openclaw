@@ -111,9 +111,6 @@ const enChatMessageMetadata = {
       gatewayRestarted: {
         label: "System · Gateway restarted",
       },
-      cliHarnessContext: {
-        label: "System · injected context",
-      },
       claudeCliTaskNotification: {
         label: "System · background task",
       },
@@ -124,19 +121,12 @@ const enChatMessageMetadata = {
 export const registerChatMessageMetadataEnglish = Object.assign(
   () => {
     Object.assign(en.chat.messages, enChatMessageMetadata.chat.messages);
-    const {
-      guardian,
-      automationRecovery,
-      gatewayRestarted,
-      cliHarnessContext,
-      claudeCliTaskNotification,
-      ...labels
-    } = enChatMessageMetadata.chat.systemNotice;
+    const { guardian, automationRecovery, gatewayRestarted, claudeCliTaskNotification, ...labels } =
+      enChatMessageMetadata.chat.systemNotice;
     Object.assign(en.chat.systemNotice, labels);
     Object.assign(en.chat.systemNotice.guardian, guardian);
     Object.assign(en.chat.systemNotice.automationRecovery, automationRecovery);
     Object.assign(en.chat.systemNotice.gatewayRestarted, gatewayRestarted);
-    Object.assign(en.chat.systemNotice.cliHarnessContext, cliHarnessContext);
     Object.assign(en.chat.systemNotice.claudeCliTaskNotification, claudeCliTaskNotification);
   },
   { catalog: enChatMessageMetadata },
