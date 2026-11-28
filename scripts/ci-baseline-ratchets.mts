@@ -1,16 +1,28 @@
+import { execFileSync } from "node:child_process";
 import { constants } from "node:os";
 import { performance } from "node:perf_hooks";
 import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
+import { touchesPluginSdkSurface } from "./lib/changed-path-facts.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
-import { parseRatchetArgs } from "./lib/shrink-ratchet.mts";
+import { parseRatchetArgs, resolveRatchetBase } from "./lib/shrink-ratchet.mts";
 
-export async function main(argv = process.argv.slice(2)) {
-  if (parseRatchetArgs(argv).prune) {
+export async function main(argv = process.argv.slice(2), root = process.cwd()) {
+  const args = parseRatchetArgs(argv);
+  if (args.prune) {
     throw new Error("CI baseline ratchets cannot prune baselines.");
   }
+  // The SDK export and surface budget checks gate only changes that can move the SDK surface;
+  // every PR reaches this job, so an unbudgeted export cannot merge.
+  const base = resolveRatchetBase(root, args);
+  const changed = base
+    ? execFileSync("git", ["diff", "--name-only", base, "HEAD"], { cwd: root, encoding: "utf8" })
+        .split("\n")
+        .filter(Boolean)
+    : [];
+  const sdkSurface = touchesPluginSdkSurface(changed);
   const checks = [
     // Only one large semantic inventory runs; the second slot drains smaller checks.
     { name: "database-worker", args: ["check:database-worker-ratchet", ...argv] },
@@ -28,6 +40,12 @@ export async function main(argv = process.argv.slice(2)) {
     { name: "test-lines", args: ["check:test-lines-ratchet", ...argv] },
     { name: "config-docs", args: ["config:docs:check"] },
     { name: "plugin-inventory", args: ["plugins:inventory:check"] },
+    ...(sdkSurface
+      ? [
+          { name: "plugin-sdk-exports", args: ["plugin-sdk:check-exports"] },
+          { name: "plugin-sdk-surface", args: ["plugin-sdk:surface:check"] },
+        ]
+      : []),
   ];
   const controller = new AbortController();
   const timings: Array<{ name: string; durationMs: number; status: number }> = [];

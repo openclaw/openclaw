@@ -102,3 +102,11 @@ export function isTestOnlyPath(changedPath) {
     changedPath.startsWith("test/")
   );
 }
+
+const PLUGIN_SDK_SURFACE_PATH_RE =
+  /^(?:package\.json$|src\/plugin-sdk\/|packages\/plugin-sdk\/|extensions\/(?:tsconfig\.package-boundary\.paths\.json|xai\/tsconfig\.json)$|scripts\/(?:plugin-sdk-surface-report\.mts|sync-plugin-sdk-exports\.mts|lib\/plugin-sdk-(?:declaration-budget\.mts|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json)))/u;
+
+/** Whether changed files can alter Plugin SDK exports or surface budgets. @param {readonly string[]} paths */
+export function touchesPluginSdkSurface(paths) {
+  return paths.some((changedPath) => PLUGIN_SDK_SURFACE_PATH_RE.test(changedPath));
+}
