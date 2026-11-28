@@ -54,6 +54,7 @@ import type {
   ReplyDispatchAssistantTranscript,
 } from "../get-reply-options.types.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
+import { resolveAcpChannelAnswerScope } from "./acp-channel-answer-scope.js";
 import { createLazyAcpElicitationHandler } from "./acp-elicitation-handler-lazy.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { resolveAcpProjectionSettings } from "./acp-stream-settings.js";
@@ -152,7 +153,6 @@ export async function tryDispatchAcpReplyCore(
   const normalizedDispatchChannel = normalizeOptionalLowercaseString(
     params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
   );
-  const explicitDispatchAccountId = normalizeOptionalString(params.ctx.AccountId);
   const dispatchChannels = params.cfg.channels as
     | Record<string, { defaultAccount?: unknown } | undefined>
     | undefined;
@@ -161,7 +161,8 @@ export async function tryDispatchAcpReplyCore(
       ? undefined
       : dispatchChannels?.[normalizedDispatchChannel]?.defaultAccount;
   const effectiveDispatchAccountId =
-    explicitDispatchAccountId ?? normalizeOptionalString(defaultDispatchAccount);
+    normalizeOptionalString(params.ctx.AccountId) ??
+    normalizeOptionalString(defaultDispatchAccount);
   const hasBoundConversationForSession = async (): Promise<boolean> => {
     const channel = normalizedDispatchChannel;
     if (!channel) {
@@ -231,6 +232,7 @@ export async function tryDispatchAcpReplyCore(
       (await claimPreparedPendingAgentQuestionAnswer(
         {
           sessionKey: acpResolution.sessionKey,
+          channelAnswerScope: resolveAcpChannelAnswerScope(params.ctx),
           text: pendingAnswerText,
           sourceRecorder: inputRecorder,
           // The released question dispatcher retains its opaque synchronous source guard.
@@ -578,7 +580,8 @@ export async function tryDispatchAcpReplyCore(
     }).admit("acp");
     recordAcceptedSessionParticipantInput(params.ctx, participantTarget);
     const turnAdmission = admittedRunContext;
-    const elicitationParams = {
+    const onElicitation = createLazyAcpElicitationHandler({
+      channelAnswerScope: resolveAcpChannelAnswerScope(params.ctx),
       sourceSessionKey: sessionKey,
       targetSessionKey: canonicalSessionKey,
       outerRequestId: requestId,
@@ -589,8 +592,7 @@ export async function tryDispatchAcpReplyCore(
         params.abortSignal?.aborted !== true &&
         admittedRunContext === turnAdmission &&
         getAdmittedRunDelegatedAuthority(turnAdmission) !== undefined,
-    };
-    const onElicitation = createLazyAcpElicitationHandler(elicitationParams);
+    });
     // ACP can act before its terminal transcript arrives. Consume accepted input
     // before submission while leaving final assistant/outcome persistence below.
     await persistInput?.();

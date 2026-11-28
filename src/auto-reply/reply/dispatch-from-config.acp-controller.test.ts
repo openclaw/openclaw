@@ -214,7 +214,9 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
     runtime.runTurn.mockImplementation(async function* (input) {
       started.push(input.text);
       if (input.text === "ask") {
-        if (!input.onElicitation) throw new Error("missing ACP elicitation handler");
+        if (!input.onElicitation) {
+          throw new Error("missing ACP elicitation handler");
+        }
         response.resolve(
           await input.onElicitation(
             {
@@ -262,7 +264,9 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
         replyOptions: source.options,
         dispatcherOptions: {
           deliver: async (payload) => {
-            if (payload.text?.includes("Red")) promptDelivered.resolve();
+            if (payload.text?.includes("Red")) {
+              promptDelivered.resolve();
+            }
           },
           onSettled: body === "1" ? answerSettled : undefined,
         },
