@@ -5,6 +5,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { createMacosAppInstallOwner } from "../../commands/test-runtime-config-helpers.js";
 import {
   createGatewayUpdateLifecycle,
   type UpdateCheckLifecycle,
@@ -48,10 +49,12 @@ beforeEach(async () => {
   lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
   install.root = "/tmp/openclaw-checkout";
   install.kind = "git";
+  scheduleGatewayRestart.mockClear();
 });
 afterEach(async () => {
   await lifecycle.stop();
   await home.restore();
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   prepareUpdate.mockClear();
 });
@@ -69,8 +72,69 @@ async function invoke(params: object, client: unknown = null) {
     context: { getRuntimeConfig: () => ({}), broadcast },
   } as unknown as Parameters<typeof updateRunHandler>[0]);
   expect(respond).toHaveBeenCalledOnce();
-  return { payload: respond.mock.calls[0]?.[1], broadcast };
+  return { respond, payload: respond.mock.calls[0]?.[1], broadcast };
 }
+
+async function invokeInstalledUpdate(prepare: (root: string) => Promise<void>) {
+  install.root = await fs.mkdtemp(path.join(home.home, "host-owned-"));
+  vi.spyOn(
+    await import("../../infra/openclaw-root.js"),
+    "resolveOpenClawPackageRoot",
+  ).mockResolvedValue(install.root);
+  const resolveManager = vi.spyOn(
+    await import("../../infra/ocm-update-client.js"),
+    "resolveOcmUpdateManager",
+  );
+  await prepare(install.root);
+
+  const { respond, broadcast } = await invoke({});
+  expect(resolveManager).not.toHaveBeenCalled();
+  expect(await listUpdateRunsAsync()).toEqual([]);
+  expect(prepareUpdate).not.toHaveBeenCalled();
+  expect(scheduleGatewayRestart).not.toHaveBeenCalled();
+  expect(broadcast).not.toHaveBeenCalled();
+  return respond;
+}
+
+it("refuses an app-owned Gateway update before delegation, history, or restart effects", async () => {
+  const installOwner = createMacosAppInstallOwner();
+  const respond = await invokeInstalledUpdate(async (root) => {
+    await fs.writeFile(
+      path.join(root, "openclaw-install-owner.json"),
+      JSON.stringify(installOwner),
+    );
+  });
+  expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
+    code: "UNAVAILABLE",
+    message: "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
+    details: { reason: "host-owned-install", installOwner },
+    retryable: false,
+  });
+});
+
+it("refuses immutable activation before manager delegation, history, or preparation", async () => {
+  const respond = await invokeInstalledUpdate(async (root) => {
+    vi.spyOn(
+      await import("../../infra/update-immutable-install.js"),
+      "inspectImmutableInstall",
+    ).mockResolvedValue({
+      root,
+      currentPath: path.join(root, "releases", "a".repeat(40)),
+      currentSha: "a".repeat(40),
+    });
+  });
+  expect(respond).toHaveBeenCalledExactlyOnceWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      code: "UNAVAILABLE",
+      details: { reason: "immutable-native-updater-required" },
+      message: expect.stringContaining(
+        "root installation owner outside the Gateway service cgroup",
+      ),
+    }),
+  );
+});
 
 it("refuses before preparing a release when the Gateway may not replace its process", async () => {
   vi.stubEnv("OPENCLAW_NO_RESPAWN", "1");
