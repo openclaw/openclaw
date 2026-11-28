@@ -1,0 +1,2 @@
+# Cursor root mcp.json capability detection and runtime merge precedence regressions.
+30
