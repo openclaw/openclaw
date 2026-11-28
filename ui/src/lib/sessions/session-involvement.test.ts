@@ -4,8 +4,8 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionRequest } from "./hydration-family.test-support.ts";
 import { sessionsResult } from "./session-capability.test-support.ts";
-import { rosterFixture } from "./session-roster-refresh.test-support.ts";
 import { setSessionInvolvement } from "./session-involvement-write.runtime.ts";
+import { rosterFixture } from "./session-roster-refresh.test-support.ts";
 
 const row = {
   key: "agent:main:design",

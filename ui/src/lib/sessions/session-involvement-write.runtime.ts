@@ -1,6 +1,9 @@
 import type { SessionsSetInvolvementParams } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SessionMutationsHost } from "./session-mutations-host.ts";
-import { resolvePendingConversation, type createOptimisticRowField } from "./session-pending-rows.ts";
+import {
+  resolvePendingConversation,
+  type createOptimisticRowField,
+} from "./session-pending-rows.ts";
 
 const involvementWritesByHost = new WeakMap<SessionMutationsHost, Map<string, Promise<void>>>();
 

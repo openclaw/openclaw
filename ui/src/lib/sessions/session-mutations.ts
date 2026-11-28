@@ -42,7 +42,8 @@ import type {
   SessionResetResult,
 } from "./session-types.ts";
 
-type SessionInvolvementWrite = typeof import("./session-involvement-write.runtime.ts").setSessionInvolvement;
+type SessionInvolvementWrite =
+  typeof import("./session-involvement-write.runtime.ts").setSessionInvolvement;
 
 export function createSessionMutations(host: SessionMutationsHost) {
   const reportError = (scope: SessionConnectionScope, error: unknown) => {

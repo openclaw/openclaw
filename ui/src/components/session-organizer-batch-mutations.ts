@@ -13,8 +13,8 @@ import {
   sessionAccessRowForBatch,
   type SessionMethodAccessRequest,
 } from "../lib/session-method-access.ts";
-import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import { setSessionInvolvement as writeSessionInvolvement } from "../lib/sessions/session-involvement-write.runtime.ts";
+import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionMutationResult,

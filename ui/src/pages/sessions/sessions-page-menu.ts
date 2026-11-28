@@ -8,8 +8,8 @@ import { moveSessionFromMenu } from "../../components/session-placement-action.t
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
-import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { setSessionInvolvement as writeSessionInvolvement } from "../../lib/sessions/session-involvement-write.runtime.ts";
+import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { sessionAgentId, sessionPathAgentId } from "./agent-scope.ts";
 import type { createSessionsArchive } from "./archive-actions.ts";
 import type { createSessionGroups } from "./custom-groups.ts";
