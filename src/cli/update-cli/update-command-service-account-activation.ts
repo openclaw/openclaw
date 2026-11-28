@@ -71,14 +71,25 @@ const { spawnSync } = require("node:child_process");
 const log = (message) => console.log(message);
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const systemctl = (...args) => spawnSync("/usr/bin/systemctl", args, { stdio: "inherit" }).status === 0;
-const active = () => spawnSync("/usr/bin/systemctl", ["show", "-p", "ActiveState", "--value", p.unit], { encoding: "utf8" }).stdout.trim();
-// The account's answer is untrusted: success needs exit 0 and the expected status word on
-// the last line of bounded output.
+const show = (property) => String(spawnSync("/usr/bin/systemctl", ["show", "-p", property, "--value", p.unit], { encoding: "utf8" }).stdout || "").trim();
+// The account's answer is untrusted: success needs exit 0 and the expected status word in
+// the final JSON object of bounded output (Doctor output comes first).
 const asAccount = (expected, ...args) => {
   const run = spawnSync(p.runuser, ["-u", p.account, "--", process.execPath, "-e", p.loader, p.envFile, p.root + "/dist/index.js", ...args], { env: { PATH: p.path }, cwd: "/", stdio: ["ignore", "pipe", "inherit"], encoding: "utf8", maxBuffer: 256 * 1024, timeout: 60 * 60000 });
-  if (run.status !== 0 || run.error) return false;
-  try { return JSON.parse(run.stdout.trim().split("\\n").at(-1)).status === expected; } catch { return false; }
+  if (run.status !== 0 || run.error || typeof run.stdout !== "string") return false;
+  const text = run.stdout;
+  const at = text.startsWith("{") ? 0 : text.lastIndexOf("\\n{") + 1;
+  if (at <= 0 && !text.startsWith("{")) return false;
+  try { return JSON.parse(text.slice(at)).status === expected; } catch { return false; }
 };
+// Stopped means inactive with no populated cgroup; KillMode= can leave processes behind.
+const emptyCgroup = (cg) => {
+  if (!cg) return true;
+  if (!cg.startsWith("/") || cg.split("/").slice(1).some((part) => !part || part === "." || part === "..")) return false;
+  try { return /^populated 0$/m.test(fs.readFileSync("/sys/fs/cgroup" + cg + "/cgroup.events", "utf8")); }
+  catch (error) { return Boolean(error && error.code === "ENOENT"); }
+};
+const stopped = () => ["inactive", "failed"].includes(show("ActiveState")) && emptyCgroup(show("ControlGroup")) && emptyCgroup(p.controlGroup);
 const deadline = Date.now() + 2 * 60 * 60000;
 const settle = () => {
   let version;
@@ -96,14 +107,6 @@ const settle = () => {
   }
   log("the installed updater restored " + version + "; restoring " + p.account + "'s state");
   systemctl("stop", p.unit);
-  // Stopped means inactive with an empty cgroup; KillMode= can leave processes behind.
-  const emptyCgroup = () => {
-    const cg = p.controlGroup;
-    if (typeof cg !== "string" || !cg.startsWith("/") || cg.split("/").slice(1).some((part) => !part || part === "." || part === "..")) return false;
-    try { return /^populated 0$/m.test(fs.readFileSync("/sys/fs/cgroup" + p.controlGroup + "/cgroup.events", "utf8")); }
-    catch (error) { return error && error.code === "ENOENT"; }
-  };
-  const stopped = () => ["inactive", "failed"].includes(active()) && emptyCgroup();
   for (let i = 0; i < 90 && !stopped(); i++) spawnSync("/bin/sleep", ["1"]);
   if (!stopped()) { log(p.unit + " did not stop; state not restored, backup kept at " + p.backupRoot); return; }
   if (asAccount("restored", "update", "restore", "--backup-root", p.backupRoot)) systemctl("start", p.unit);
@@ -314,8 +317,12 @@ async function activateSystemServiceAsAccount(
           if (unit.active !== "inactive" && unit.active !== "failed") {
             return false;
           }
+          // systemd keeps a unit's cgroup while any process remains in it; an inactive unit
+          // with no cgroup has none. The cgroup it had while running must be empty too.
           try {
-            return Boolean(controlGroup) && isSystemdControlGroupEmpty(controlGroup);
+            return [unit.controlGroup, controlGroup].every(
+              (group) => !group || isSystemdControlGroupEmpty(group),
+            );
           } catch {
             return false;
           }
@@ -361,9 +368,19 @@ async function activateSystemServiceAsAccount(
     };
     const stoppedAt = Date.now();
     if (!(await stopConfirmed())) {
-      // Nothing was migrated; give the previous Gateway back.
-      await control("start").catch(() => {});
-      return failed(false, `${unitName} did not stop; nothing was migrated.`);
+      // Never start the new package next to processes that may still write the state. Once
+      // the installed updater restores the previous package, the settle step starts it.
+      const settleUnit = await scheduleSettle("start", execution, handoff, {
+        root: options.root,
+        candidateVersion: options.candidateVersion,
+        backupRoot,
+        controlGroup,
+      });
+      handoffOwned = settleUnit === undefined;
+      return failed(
+        false,
+        `${unitName} did not stop cleanly; nothing was migrated.${settleUnit ? ` It starts again once the previous package is restored (${settleUnit}).` : ` Start it with sudo systemctl start ${unitName} once the previous package is restored.`}`,
+      );
     }
     const migrated = await asAccount(
       ["update", "migrate", "--backup-root", backupRoot],

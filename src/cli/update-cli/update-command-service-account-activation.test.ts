@@ -334,3 +334,164 @@ describe("selected unit not run by another account", () => {
     expect(native.events).toEqual([]);
   });
 });
+
+/**
+ * The settle step runs later in a transient root unit. Run the exact scheduled script with
+ * stand-ins for systemctl, the package file, the cgroup and the account's answers.
+ */
+describe("settle step after the installed updater exits", () => {
+  type World = {
+    version: string;
+    active: string;
+    controlGroup?: string;
+    cgroupEvents?: string;
+    account: Record<string, [number, string]>;
+  };
+
+  async function settleScript(): Promise<string> {
+    installAccount({ migrate: [1, ""], restore: ok("restored") });
+    await activate();
+    const script = scheduledScripts()[0];
+    if (!script) {
+      throw new Error("expected a scheduled settle script");
+    }
+    return script;
+  }
+
+  function runSettle(script: string, mode: "settle" | "start", world: World) {
+    const payload = {
+      mode,
+      driverPid: 1,
+      root: "/opt/openclaw",
+      candidateVersion: "2026.11.16",
+      unit: "openclaw-gateway.service",
+      runuser: "/usr/sbin/runuser",
+      account: "openclaw",
+      envFile: "/tmp/handoff/env.json",
+      handoffDir: "/tmp/handoff",
+      backupRoot: "/var/lib/openclaw/.openclaw-update/x/native",
+      controlGroup: "/system.slice/openclaw-gateway.service",
+      loader: "loader",
+      path: "/usr/bin:/bin",
+    };
+    const events: string[] = [];
+    const fakeFs = {
+      readFileSync: (file: string) => {
+        if (file === `${payload.root}/package.json`) {
+          return JSON.stringify({ version: world.version });
+        }
+        if (file.endsWith("/cgroup.events") && world.cgroupEvents !== undefined) {
+          return world.cgroupEvents;
+        }
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      },
+      rmSync: (dir: string) => events.push(`rm ${dir}`),
+    };
+    const fakeChildProcess = {
+      spawnSync: (command: string, args: string[]) => {
+        if (command === "/usr/bin/systemctl" && args[0] === "show") {
+          return {
+            status: 0,
+            stdout: args[2] === "ActiveState" ? world.active : (world.controlGroup ?? ""),
+          };
+        }
+        if (command === "/usr/bin/systemctl") {
+          events.push(`systemctl ${args.join(" ")}`);
+          if (args[0] === "stop") {
+            world.active = "inactive";
+          }
+          return { status: 0 };
+        }
+        if (command === payload.runuser) {
+          const step = args[args.indexOf("update") + 1] ?? "";
+          events.push(`as ${args[1]}: update ${step}`);
+          const [status, stdout] = world.account[step] ?? [70, ""];
+          return { status, stdout };
+        }
+        return { status: 0 };
+      },
+    };
+    vm.runInNewContext(script, {
+      require: (name: string) => (name === "node:fs" ? fakeFs : fakeChildProcess),
+      // The installed updater has exited.
+      process: {
+        argv: ["node", JSON.stringify(payload)],
+        execPath: "/usr/bin/node",
+        kill: () => {
+          throw new Error("no such process");
+        },
+      },
+      console: { log: (message: string) => events.push(`log ${message}`) },
+      setTimeout,
+    });
+    return events;
+  }
+
+  it("records the kept update as the account, reading its indented result", async () => {
+    const events = runSettle(await settleScript(), "settle", {
+      version: "2026.11.16",
+      active: "active",
+      account: { finish: ok("finished") },
+    });
+
+    expect(events.filter((event) => !event.startsWith("log "))).toEqual([
+      "as openclaw: update finish",
+      "rm /tmp/handoff",
+    ]);
+    expect(events.join("\n")).not.toContain("did not confirm");
+  });
+
+  it("restores the state as the account and restarts after the updater restored the package", async () => {
+    const events = runSettle(await settleScript(), "settle", {
+      version: "2026.11.10",
+      active: "active",
+      account: { restore: ok("restored") },
+    });
+
+    expect(events.filter((event) => !event.startsWith("log "))).toEqual([
+      "systemctl stop openclaw-gateway.service",
+      "as openclaw: update restore",
+      "systemctl start openclaw-gateway.service",
+      "rm /tmp/handoff",
+    ]);
+  });
+
+  it.each([
+    {
+      name: "the account's restore gives no status",
+      world: { account: { restore: [0, "done\n"] as [number, string] } },
+      restoreRuns: true,
+    },
+    {
+      name: "processes remain in the unit's cgroup",
+      world: { cgroupEvents: "populated 1\n", account: { restore: ok("restored") } },
+      restoreRuns: false,
+    },
+  ])("leaves the unit stopped when $name", async ({ world, restoreRuns }) => {
+    const events = runSettle(await settleScript(), "settle", {
+      version: "2026.11.10",
+      active: "active",
+      ...world,
+    });
+
+    expect(events).not.toContain("systemctl start openclaw-gateway.service");
+    expect(events.includes("as openclaw: update restore")).toBe(restoreRuns);
+  });
+
+  it.each([
+    { version: "2026.11.10", started: true },
+    { version: "2026.11.16", started: false },
+  ])(
+    "starts a restored unit only on the previous package ($version)",
+    async ({ version, started }) => {
+      const events = runSettle(await settleScript(), "start", {
+        version,
+        active: "inactive",
+        account: {},
+      });
+
+      expect(events.includes("systemctl start openclaw-gateway.service")).toBe(started);
+      expect(events.some((event) => event.startsWith("as "))).toBe(false);
+    },
+  );
+});

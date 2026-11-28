@@ -412,6 +412,9 @@ function serviceVerdict(overrides: Partial<UpdateAdmissionVerdict> = {}): Update
 
 describe("candidate admission run as the unit's account", () => {
   it("admits with the verdict the service account's own admission gave for its state", async () => {
+    // Installed updaters stage the candidate in a private directory.
+    fs.chmodSync(home, 0o700);
+    const homeMode = fs.statSync(home).mode & 0o7777;
     const accountProcess = installAccountProcess({
       stdout: JSON.stringify(serviceVerdict()),
       code: 0,
@@ -467,6 +470,8 @@ describe("candidate admission run as the unit's account", () => {
     expect(accountProcess.read("context-mode")).toMatch(/^-r--------[@+.]? /u);
     const handoff = accountProcess.read("argv").trim().split("\n").at(-1)!;
     expect(fs.existsSync(path.dirname(handoff))).toBe(false);
+    // The traverse bit added for the account's admission is gone again.
+    expect(fs.statSync(home).mode & 0o7777).toBe(homeMode);
     // Nothing of this process's own (broken) state was read or changed.
     expect(snapshotUpdateFixtureFiles(home)).toEqual(before);
   });
