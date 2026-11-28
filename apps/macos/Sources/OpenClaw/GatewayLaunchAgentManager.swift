@@ -348,6 +348,35 @@ enum GatewayLaunchAgentManager {
         return arguments
     }
 
+    static func needsAppServiceLauncher(
+        serviceRuntime: BundledRuntime?,
+        installedArguments: [String]) -> Bool
+    {
+        serviceRuntime != nil ||
+            (installedArguments.first?.hasSuffix("/Contents/MacOS/openclaw-mac") == true &&
+                installedArguments.dropFirst().first == "_gateway-service")
+    }
+
+    private static func appendAppServiceLauncherArguments(
+        to arguments: inout [String],
+        serviceRuntime: BundledRuntime?) throws
+    {
+        guard arguments.first == "install", BundledRuntime.isBundledApp else { return }
+        let installed = self.launchdConfigSnapshot()?.programArguments ?? []
+        // A staged Bun or an existing app helper preserves attribution across recovery and reinstall.
+        guard self.needsAppServiceLauncher(
+            serviceRuntime: serviceRuntime, installedArguments: installed)
+        else { return }
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else {
+            throw GatewayHostingError(message: "The signed app identity is unavailable; reinstall OpenClaw.app")
+        }
+        arguments += [
+            "--app-launcher-path", Bundle.main.bundleURL
+                .appendingPathComponent("Contents/MacOS/openclaw-mac").path,
+            "--app-bundle-identifier", bundleIdentifier,
+        ]
+    }
+
     static func bundledRuntimeReplacementError(
         appManaged: Bool,
         installedRuntimePath: String?,
@@ -470,12 +499,18 @@ enum GatewayLaunchAgentManager {
         environmentWrapper: URL) -> [String]?
     {
         var command = programArguments[...]
-        if command.first == "/bin/sh" { command = command.dropFirst() }
+        if command.first?.hasSuffix("/Contents/MacOS/openclaw-mac") == true {
+            command = command.dropFirst()
+            guard command.first == "_gateway-service" else { return nil }
+            command = command.dropFirst()
+        }
+        let hasShellWrapper = command.first == "/bin/sh"
+        if hasShellWrapper { command = command.dropFirst() }
         if command.first == environmentWrapper.path {
             command = command.dropFirst()
             guard command.first == environmentFile.path else { return nil }
             command = command.dropFirst()
-        } else if programArguments.first == "/bin/sh" {
+        } else if hasShellWrapper {
             return nil
         }
         guard let executable = command.first, executable.hasPrefix("/") else { return nil }
@@ -505,12 +540,14 @@ enum GatewayLaunchAgentManager {
         else { return nil }
         let prefix = Array(command[..<service])
         guard self.serviceCLIEntrypoint(prefix) != nil else { return nil }
+        let serviceArguments = snapshot.programArguments.first?.hasSuffix("/Contents/MacOS/openclaw-mac") == true
+            ? snapshot.programArguments.dropFirst(2) : snapshot.programArguments[...]
         return InstalledServiceCLI(
             prefix: self.concreteServicePrefix(prefix),
             sqliteLibrary: snapshot.environment["OPENCLAW_SQLITE_LIBRARY"],
             environment: snapshot.environment,
-            usesGeneratedEnvironment: snapshot.programArguments.first == "/bin/sh" ||
-                snapshot.programArguments.first == environmentWrapper.path,
+            usesGeneratedEnvironment: serviceArguments.first == "/bin/sh" ||
+                serviceArguments.first == environmentWrapper.path,
             sourcePrefix: prefix)
     }
 
@@ -776,7 +813,10 @@ extension GatewayLaunchAgentManager {
         let beforeSpawn: (@Sendable () -> String?)?
         if args.first.map(["install", "uninstall", "start", "stop", "restart"].contains) == true {
             let custody: ServiceAuthority
-            do { custody = try expectedServiceAuthority ?? self.gatewayServiceAuthority() } catch {
+            do {
+                try self.appendAppServiceLauncherArguments(to: &arguments, serviceRuntime: serviceRuntime)
+                custody = try expectedServiceAuthority ?? self.gatewayServiceAuthority()
+            } catch {
                 return .failure(error.localizedDescription)
             }
             let authority = legacyAuthority ?? restoring ?? selectedCLI

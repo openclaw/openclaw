@@ -187,7 +187,7 @@ profile selection, safe credential input, and background app launch.
 - Prefer requiring a TeamID match for all privileged surfaces.
 - PeekabooBridge: `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` (DEBUG-only) may allow same-UID callers for local development.
 - All communication remains local-only. No network sockets are exposed.
-- TCC prompts originate only from the GUI app bundle. Keep the signed bundle ID stable across rebuilds.
+- TCC evaluates each requesting process and its responsible app. The app-managed Gateway service starts from the signed `openclaw-mac` helper in OpenClaw.app; CLI-installed services can retain a separate runtime identity. Keep the app's bundle ID and signing identity stable across rebuilds.
 - Exec approvals socket hardening: file mode `0600`, local token stored in
   `client/credentials.sqlite` under the resolved client state root, peer-UID check
   (`getpeereid`), HMAC-SHA256 challenge/response, and a short TTL on requests.

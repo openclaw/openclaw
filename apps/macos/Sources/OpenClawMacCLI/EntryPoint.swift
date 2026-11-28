@@ -17,6 +17,9 @@ enum RootCommandAction: Equatable {
 struct OpenClawMacCLI {
     static func main() async {
         let args = Array(CommandLine.arguments.dropFirst())
+        if args.first == "_gateway-service" {
+            exit(runAppGatewayService(Array(args.dropFirst())))
+        }
         let context: MacCLIContext
         do {
             context = try MacCLIContext(arguments: args)

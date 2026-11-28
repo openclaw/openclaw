@@ -85,6 +85,10 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--runtime <runtime>", "Daemon runtime (node|bun|standalone). Default: node")
     .option("--runtime-path <path>", "Pin an absolute Node/Bun executable path")
     .addOption(
+      new Option("--app-launcher-path <path>", "Signed macOS app service launcher").hideHelp(),
+    )
+    .addOption(new Option("--app-bundle-identifier <id>", "macOS app bundle identity").hideHelp())
+    .addOption(
       new Option("--expected-runtime-pin <json>", "Require the observed runtime intent").hideHelp(),
     )
     .addOption(

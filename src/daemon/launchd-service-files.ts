@@ -18,6 +18,7 @@ import {
 } from "./launchd-legacy-ca-migration.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
+  LAUNCH_AGENT_APP_SERVICE_COMMAND,
   buildLaunchAgentPlist,
   normalizeLaunchdPlistXml,
   quoteLaunchAgentEnvironmentValue,
@@ -34,7 +35,11 @@ import {
   readServiceFileState,
   type GatewayServiceDefinitionTransactionHooks,
 } from "./service-stage.js";
-import type { GatewayServiceEnv, GatewayServiceInstallArgs } from "./service-types.js";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceEnv,
+  GatewayServiceInstallArgs,
+} from "./service-types.js";
 import {
   assertGatewayServiceUpdateCurrent,
   withGatewayServiceInstallationRecovery,
@@ -198,18 +203,17 @@ async function prepareLaunchAgentPlist(
       params.stdout?.write(`${formatLine("Warning", message)}\n`);
     }
   };
-  let installedExtraCa: string | undefined;
+  let installed: GatewayServiceCommandConfig | null = null;
   try {
     // Read the actual installed service before replacing its private env file.
     // The invoking updater shell does not own the service's CA configuration.
-    const installed = await readLaunchAgentProgramArgumentsFromFile(
+    installed = await readLaunchAgentProgramArgumentsFromFile(
       resolveLaunchAgentPlistPathForLabel(params.env, params.label),
       {
         ...resolveLaunchAgentEnvironmentReadOptions(params.env, params.label),
         requireEffective: true,
       },
     );
-    installedExtraCa = installed?.environment?.NODE_EXTRA_CA_CERTS;
   } catch (error) {
     rethrowCaMigrationAuthorityError(error);
     warn(
@@ -220,12 +224,36 @@ async function prepareLaunchAgentPlist(
     env: params.env,
     label: params.label,
     environment: params.environment,
-    installedExtraCa,
+    installedExtraCa: installed?.environment?.NODE_EXTRA_CA_CERTS,
     assertCurrent: () => params.definitionTransaction.assertCurrent(),
     warn,
   });
   const entries = collectLaunchAgentEnvironmentEntries(environment);
   let { programArguments } = params;
+  const previousGateway = installed?.programArguments.lastIndexOf("gateway") ?? -1;
+  const nextGateway = programArguments.lastIndexOf("gateway");
+  // A same-CLI reinstall may change Gateway flags but must keep its signed launch owner.
+  const retainAppLauncher =
+    !params.appLauncherPath &&
+    !params.appBundleIdentifier &&
+    previousGateway > 0 &&
+    nextGateway > 0 &&
+    isDeepStrictEqual(
+      installed?.programArguments.slice(0, previousGateway),
+      programArguments.slice(0, nextGateway),
+    );
+  const appLauncherPath =
+    params.appLauncherPath ?? (retainAppLauncher ? installed?.appLauncherPath : undefined);
+  const appBundleIdentifier =
+    params.appBundleIdentifier ?? (retainAppLauncher ? installed?.appBundleIdentifier : undefined);
+  if (Boolean(appLauncherPath) !== Boolean(appBundleIdentifier)) {
+    throw new Error("App launcher and bundle identifier must be supplied together");
+  }
+  if (installed?.appLauncherPath && !appLauncherPath) {
+    warn(
+      "Gateway service command changed; removing OpenClaw.app launch ownership and bundle association.",
+    );
+  }
   if (entries.length > 0) {
     // Secret values belong to the private env file, never inline plist XML.
     const envDir = resolveLaunchAgentEnvDir(params.env);
@@ -262,10 +290,26 @@ async function prepareLaunchAgentPlist(
       ];
     }
   }
+  if (appLauncherPath) {
+    if (
+      !path.isAbsolute(appLauncherPath) ||
+      !appLauncherPath.endsWith("/Contents/MacOS/openclaw-mac")
+    ) {
+      throw new Error(
+        "App launcher must be the absolute openclaw-mac executable inside OpenClaw.app",
+      );
+    }
+    if (!["ai.openclaw.mac", "ai.openclaw.mac.debug"].includes(appBundleIdentifier ?? "")) {
+      throw new Error("App launcher requires the running OpenClaw.app bundle identifier");
+    }
+    // Keep the signed helper alive as launchd's first executable and the Gateway's responsible app.
+    programArguments = [appLauncherPath, LAUNCH_AGENT_APP_SERVICE_COMMAND, ...programArguments];
+  }
   return buildLaunchAgentPlist({
     label: params.label,
     comment: resolveGatewayServiceDescription(params),
     programArguments,
+    associatedBundleIdentifier: appLauncherPath ? appBundleIdentifier : undefined,
     workingDirectory: params.workingDirectory,
     stdoutPath: params.stdoutPath,
     // Diagnostics reads stdout; launchd needs both handles pointed at that same file.
@@ -491,7 +535,17 @@ export async function writeLaunchAgentPlist(
       captured.restore,
     );
   }
-  const { env, programArguments, workingDirectory, environment, description, stdout, warn } = args;
+  const {
+    env,
+    programArguments,
+    appLauncherPath,
+    appBundleIdentifier,
+    workingDirectory,
+    environment,
+    description,
+    stdout,
+    warn,
+  } = args;
   const label = resolveLaunchAgentLabel(env);
   await assertNoSystemLaunchDaemonOwnership(label);
 
@@ -512,6 +566,8 @@ export async function writeLaunchAgentPlist(
     env,
     label,
     programArguments,
+    appLauncherPath,
+    appBundleIdentifier,
     workingDirectory,
     description,
     stdoutPath,
@@ -573,6 +629,8 @@ export async function rewriteLaunchAgentPlistForRestart({
       env,
       label,
       programArguments: existing.programArguments,
+      appLauncherPath: existing.appLauncherPath,
+      appBundleIdentifier: existing.appBundleIdentifier,
       workingDirectory: existing.workingDirectory,
       description: serviceDescription,
       stdoutPath,

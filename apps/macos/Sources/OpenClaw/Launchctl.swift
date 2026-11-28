@@ -72,13 +72,16 @@ enum LaunchAgentPlist {
         guard let fileURL, let wrapperURL else { return [:] }
         let filePath = fileURL.standardizedFileURL.path
         let wrapperPath = wrapperURL.standardizedFileURL.path
-        let usesShellWrapper = programArguments.count >= 3 &&
-            programArguments[0] == "/bin/sh" &&
-            programArguments[1] == wrapperPath &&
-            programArguments[2] == filePath
-        let usesDirectWrapper = programArguments.count >= 2 &&
-            programArguments[0] == wrapperPath &&
-            programArguments[1] == filePath
+        let offset = programArguments.count >= 2 &&
+            programArguments[0].hasSuffix("/Contents/MacOS/openclaw-mac") &&
+            programArguments[1] == "_gateway-service" ? 2 : 0
+        let usesShellWrapper = programArguments.count >= offset + 3 &&
+            programArguments[offset] == "/bin/sh" &&
+            programArguments[offset + 1] == wrapperPath &&
+            programArguments[offset + 2] == filePath
+        let usesDirectWrapper = programArguments.count >= offset + 2 &&
+            programArguments[offset] == wrapperPath &&
+            programArguments[offset + 1] == filePath
         // Read only the canonical file when the LaunchAgent uses OpenClaw's generated wrapper.
         // This keeps arbitrary ProgramArguments paths from becoming app-readable secret sources.
         guard usesShellWrapper || usesDirectWrapper,

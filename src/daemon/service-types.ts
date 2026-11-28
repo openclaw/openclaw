@@ -59,6 +59,9 @@ export type GatewayServiceInstallArgs = {
   stdout: NodeJS.WritableStream;
   warn?: (message: string) => void;
   programArguments: string[];
+  /** Signed app helper used only by an app-managed macOS LaunchAgent. */
+  appLauncherPath?: string;
+  appBundleIdentifier?: string;
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
@@ -325,6 +328,9 @@ export type GatewayServiceManagedOverrides = {
 /** Effective platform command with its authored base and inspected override metadata. */
 export type GatewayServiceCommandConfig = GatewayServiceCommandSnapshot & {
   sourcePath?: string;
+  /** Retained only for a signed app-managed LaunchAgent restart rewrite. */
+  appLauncherPath?: string;
+  appBundleIdentifier?: string;
   definitionPaths?: string[];
   /** Selected login items observed with the Scheduled Task registration missing. */
   startupEntryPaths?: string[];

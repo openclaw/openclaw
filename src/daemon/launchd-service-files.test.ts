@@ -224,6 +224,104 @@ const binaryPlist = Buffer.from(
 );
 
 describe.skipIf(process.platform === "win32")("LaunchAgent file restoration", () => {
+  it("keeps an existing shell-first service generic during reinstall", async () => {
+    mockPlutil();
+    const { plistPath, args } = fixture("legacy-generic", {});
+    await writePlist(plistPath, { programArguments });
+    await expect(readCommand(plistPath)).resolves.toMatchObject({ programArguments });
+    await stageLaunchAgent(args);
+    const installed = await readCommand(plistPath);
+    expect(installed?.programArguments).toEqual(programArguments);
+    expect(installed?.appLauncherPath).toBeUndefined();
+    expect(await fs.readFile(plistPath, "utf8")).not.toContain("AssociatedBundleIdentifiers");
+  });
+
+  it("retains app identity for the same service CLI and drops it on runtime conversion", async () => {
+    mockPlutil();
+    const { env, label, plistPath, args } = fixture("app-reinstall", {
+      OPENCLAW_GATEWAY_TOKEN: "synthetic-token",
+    });
+    const warn = vi.fn();
+    const appLauncherPath = "/Applications/OpenClaw.app/Contents/MacOS/openclaw-mac";
+    const command = [
+      "/fixture/runtime/service/bun",
+      "--no-install",
+      "/fixture/runtime/build/lib/node_modules/openclaw/dist/index.js",
+      "gateway",
+    ];
+    const readInstalled = () =>
+      readCommand(plistPath, {
+        ...serviceFiles.resolveLaunchAgentEnvironmentReadOptions(env, label),
+        requireEffective: true,
+      });
+    await stageLaunchAgent({
+      ...args,
+      programArguments: command,
+      appLauncherPath,
+      appBundleIdentifier: "ai.openclaw.mac",
+    });
+    await stageLaunchAgent({ ...args, programArguments: [...command, "--port", "18790"] });
+    await expect(readInstalled()).resolves.toMatchObject({
+      programArguments: [...command, "--port", "18790"],
+      appLauncherPath,
+      appBundleIdentifier: "ai.openclaw.mac",
+    });
+    await stageLaunchAgent({
+      ...args,
+      warn,
+      programArguments: ["/usr/bin/node", command[2], "gateway"],
+    });
+    const converted = await readInstalled();
+    expect(converted?.appLauncherPath).toBeUndefined();
+    expect(converted?.programArguments[0]).toBe("/usr/bin/node");
+    expect(await fs.readFile(plistPath, "utf8")).not.toContain("AssociatedBundleIdentifiers");
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("removing OpenClaw.app launch ownership"),
+    );
+  });
+
+  it.each(["ai.openclaw.mac", "ai.openclaw.mac.debug"])(
+    "keeps the %s app launcher and effective Gateway command through a restart rewrite",
+    async (appBundleIdentifier) => {
+      mockPlutil();
+      const { env, label, plistPath, wrapper, envFile, args } = fixture("app-service", {
+        OPENCLAW_GATEWAY_TOKEN: "synthetic-token",
+      });
+      const appLauncherPath = "/Applications/OpenClaw.app/Contents/MacOS/openclaw-mac";
+      await stageLaunchAgent({ ...args, appLauncherPath, appBundleIdentifier });
+      const inspect = () =>
+        readCommand(plistPath, {
+          ...serviceFiles.resolveLaunchAgentEnvironmentReadOptions(env, label),
+          requireEffective: true,
+        });
+      await expect(inspect()).resolves.toMatchObject({
+        programArguments,
+        appLauncherPath,
+        appBundleIdentifier,
+      });
+      await serviceFiles.rewriteLaunchAgentPlistForRestart({ env, label, plistPath });
+      const plist = await fs.readFile(plistPath, "utf8");
+      expect(plist).toContain(
+        `<key>AssociatedBundleIdentifiers</key>\n    <string>${appBundleIdentifier}</string>`,
+      );
+      const raw =
+        plist.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/)?.[1] ?? "";
+      expect([...raw.matchAll(/<string>(.*?)<\/string>/g)].map((match) => match[1])).toEqual([
+        appLauncherPath,
+        "_gateway-service",
+        "/bin/sh",
+        wrapper,
+        envFile,
+        ...programArguments,
+      ]);
+      await expect(inspect()).resolves.toMatchObject({
+        programArguments,
+        appLauncherPath,
+        appBundleIdentifier,
+      });
+    },
+  );
+
   it.each([
     ["three-line PEM", "-----BEGIN PRIVATE KEY-----  \nfixture\n-----END PRIVATE KEY-----"],
     ["escaped quotes and trailing newline", "first 'quoted'\nsecond 'line'\n"],

@@ -27,6 +27,7 @@ export const LAUNCH_AGENT_POLICY = {
   StandardInPath: "/dev/null",
 } as const;
 export const LAUNCH_AGENT_ENV_WRAPPER_SHELL = "/bin/sh";
+export const LAUNCH_AGENT_APP_SERVICE_COMMAND = "_gateway-service";
 
 type ReadLaunchAgentProgramArgumentsOptions = GatewayServiceReadOptions & {
   expectedEnvironmentWrapperPath?: string;
@@ -291,9 +292,21 @@ export async function resolveLaunchAgentProgramArguments(
   ) {
     throw new Error("Invalid LaunchAgent command fields");
   }
-  const layout = resolveGeneratedEnvWrapperLayout(args, options);
+  const appLauncherPath =
+    args[0]?.endsWith("/Contents/MacOS/openclaw-mac") &&
+    args[1] === LAUNCH_AGENT_APP_SERVICE_COMMAND
+      ? args[0]
+      : undefined;
+  const appBundleIdentifier =
+    appLauncherPath && typeof plist?.AssociatedBundleIdentifiers === "string"
+      ? plist.AssociatedBundleIdentifiers
+      : undefined;
+  const serviceArgs = appLauncherPath ? args.slice(2) : args;
+  const layout = resolveGeneratedEnvWrapperLayout(serviceArgs, options);
   const fileEnvironment = await readLaunchAgentEnvironmentFile(layout?.envFilePath, options);
-  const effectiveProgramArguments = layout ? args.slice(layout.commandStartIndex) : args;
+  const effectiveProgramArguments = layout
+    ? serviceArgs.slice(layout.commandStartIndex)
+    : serviceArgs;
   if (options?.requireEffective && !effectiveProgramArguments[0]) {
     throw new Error("Missing LaunchAgent command");
   }
@@ -312,13 +325,16 @@ export async function resolveLaunchAgentProgramArguments(
   // Only the existing generated wrapper contract exposes its inner executable.
   const program = plist?.Program === undefined ? args[0] : plist.Program;
   if (typeof program === "string" && program) {
-    const executable = layout && program === args[0] ? effectiveProgramArguments[0] : program;
+    const executable =
+      (layout || appLauncherPath) && program === args[0] ? effectiveProgramArguments[0] : program;
     if (executable) {
       options?.onEffectiveExecutable?.(executable);
     }
   }
   return {
     programArguments: effectiveProgramArguments,
+    ...(appLauncherPath ? { appLauncherPath } : {}),
+    ...(appBundleIdentifier ? { appBundleIdentifier } : {}),
     ...(workingDirectory ? { workingDirectory } : {}),
     ...(Object.keys(environment).length > 0 ? { environment } : {}),
     ...(Object.keys(environmentValueSources).length > 0 ? { environmentValueSources } : {}),
@@ -330,6 +346,7 @@ export function buildLaunchAgentPlist({
   label,
   comment,
   programArguments,
+  associatedBundleIdentifier,
   workingDirectory,
   stdoutPath,
   stderrPath,
@@ -338,6 +355,7 @@ export function buildLaunchAgentPlist({
   label: string;
   comment?: string;
   programArguments: string[];
+  associatedBundleIdentifier?: string;
   workingDirectory?: string;
   stdoutPath: string;
   stderrPath: string;
@@ -352,6 +370,9 @@ export function buildLaunchAgentPlist({
   const commentXml = comment?.trim()
     ? `\n    <key>Comment</key>\n    <string>${escapeXml(comment.trim())}</string>`
     : "";
+  const associationXml = associatedBundleIdentifier
+    ? `\n    <key>AssociatedBundleIdentifiers</key>\n    <string>${escapeXml(associatedBundleIdentifier)}</string>`
+    : "";
   const envXml = renderEnvDict(environment);
   const policyXml = Object.entries(LAUNCH_AGENT_POLICY)
     .map(([key, value]) => {
@@ -363,5 +384,5 @@ export function buildLaunchAgentPlist({
       return `    <key>${key}</key>\n    ${xml}`;
     })
     .join("\n");
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n  <dict>\n    <key>Label</key>\n    <string>${escapeXml(label)}</string>\n    ${commentXml}\n${policyXml}\n    <key>ProgramArguments</key>\n    <array>${argsXml}\n    </array>\n    ${workingDirXml}\n    <key>StandardOutPath</key>\n    <string>${escapeXml(stdoutPath)}</string>\n    <key>StandardErrorPath</key>\n    <string>${escapeXml(stderrPath)}</string>${envXml}\n  </dict>\n</plist>\n`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n  <dict>\n    <key>Label</key>\n    <string>${escapeXml(label)}</string>\n    ${commentXml}${associationXml}\n${policyXml}\n    <key>ProgramArguments</key>\n    <array>${argsXml}\n    </array>\n    ${workingDirXml}\n    <key>StandardOutPath</key>\n    <string>${escapeXml(stdoutPath)}</string>\n    <key>StandardErrorPath</key>\n    <string>${escapeXml(stderrPath)}</string>${envXml}\n  </dict>\n</plist>\n`;
 }
