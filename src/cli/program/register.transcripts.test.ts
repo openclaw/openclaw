@@ -24,6 +24,7 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import type { TranscriptSessionDescriptor } from "../../transcripts/types.js";
+import { formatCliFailureLines } from "../failure-output.js";
 import { withConsoleLogsRoutedToStderrForJson } from "../json-output-mode.js";
 import { testApi as configGuardTestApi } from "./config-guard.js";
 import { registerPreActionHooks } from "./preaction.js";
@@ -127,6 +128,27 @@ describe("transcripts CLI", () => {
       expect(output).toBe(expected);
     }
     expect(await captureStdout(() => noteStaleUpdateRuns())).toContain(warning);
+  });
+
+  it("shows the dated choices when a meeting ID matches more than one capture", async () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "meetings");
+    for (const day of ["20", "21", "22"]) {
+      await store.writeSession(
+        sessionFixture("design-review", { startedAt: `2026-05-${day}T10:00:00.000Z` }),
+      );
+    }
+    for (const command of ["show", "path"]) {
+      const result = await runCli([command, "design-review"]).catch((error: unknown) => error);
+      expect(result).toBeInstanceOf(Error);
+      const output = formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: result,
+      }).join(" ");
+      expect(output).toContain("2026-05-21/design-review");
+      expect(output).toContain("2026-05-22/design-review");
+      expect(output).toContain("openclaw --profile meetings transcripts list");
+    }
+    expect(await runCli(["list"])).toContain("2026-05-20/design-review");
   });
 
   it("keeps JSON inspection available before a summary exists", async () => {

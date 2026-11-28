@@ -3,8 +3,10 @@ import type { Command } from "commander";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { normalizeExportText } from "../../transcripts/store-artifacts.js";
+import { TranscriptSessionAmbiguousError } from "../../transcripts/store-errors.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
-import { throwExpectedCliError } from "../expected-cli-error.js";
+import { formatCliCommand } from "../command-format.js";
+import { ExpectedCliError, throwExpectedCliError } from "../expected-cli-error.js";
 
 type TranscriptsCliOptions = {
   json?: boolean;
@@ -21,6 +23,27 @@ function createStore(): TranscriptsStore {
   return new TranscriptsStore(path.join(stateDir, "transcripts"), {
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
   });
+}
+
+async function readCliSessionEntry(store: TranscriptsStore, selector: string) {
+  const entry = await store.readSessionEntry(selector).catch((error: unknown) => {
+    if (error instanceof TranscriptSessionAmbiguousError) {
+      throw new ExpectedCliError({
+        message: error.message,
+        machineOutput: error.message,
+        humanOutput: [
+          `More than one meeting matches “${sanitizeTerminalText(selector)}”. Run the command again with a dated selector:`,
+          ...error.selectors.map((match) => `  ${sanitizeTerminalText(match)}`),
+          `To see all dated selectors, run \`${formatCliCommand("openclaw transcripts list")}\`.`,
+        ].join("\n"),
+      });
+    }
+    throw error;
+  });
+  if (!entry) {
+    throwExpectedCliError(`transcripts session not found: ${selector}`);
+  }
+  return entry;
 }
 
 function writeLine(value: string): void {
@@ -83,10 +106,7 @@ export function registerTranscriptsCli(program: Command): void {
     .option("--json", "Print JSON")
     .action(async (sessionSelector: string, options: TranscriptsCliOptions): Promise<void> => {
       const store = createStore();
-      const entry = await store.readSessionEntry(sessionSelector);
-      if (!entry) {
-        throwExpectedCliError(`transcripts session not found: ${sessionSelector}`);
-      }
+      const entry = await readCliSessionEntry(store, sessionSelector);
       const storedSummary = await store.readSummary(entry.session);
       const materializedMarkdown =
         storedSummary.markdown === undefined
@@ -120,10 +140,7 @@ export function registerTranscriptsCli(program: Command): void {
     .option("--json", "Print JSON")
     .action(async (selector: string, options: TranscriptsPathOptions): Promise<void> => {
       const store = createStore();
-      const entry = await store.readSessionEntry(selector);
-      if (!entry) {
-        throwExpectedCliError(`transcripts session not found: ${selector}`);
-      }
+      const entry = await readCliSessionEntry(store, selector);
       const kind = options.dir
         ? "all"
         : options.metadata
