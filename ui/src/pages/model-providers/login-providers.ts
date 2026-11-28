@@ -181,6 +181,7 @@ export function filterLoginProviders(groups: LoginProvider[], query: string): Lo
     [
       group.id,
       group.label,
+      ...group.authProviders.flatMap((id) => [id, providerDisplayLabel(id)]),
       ...(group.apiKeyProviders.length ? [t("modelProviders.status.apiKey")] : []),
       ...group.choices.flatMap((choice) => [choice.label, choice.hint ?? ""]),
     ].some((text) => text.toLocaleLowerCase().normalize("NFC").includes(search)),

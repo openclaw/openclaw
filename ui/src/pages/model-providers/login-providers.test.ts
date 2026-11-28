@@ -3,7 +3,7 @@
 import { expect, it } from "vitest";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
 import { capability, loginOption } from "../../test-helpers/model-providers.ts";
-import { buildLoginProviders } from "./login-providers.ts";
+import { buildLoginProviders, filterLoginProviders } from "./login-providers.ts";
 
 it("lists browser sign-in providers before key-only and token-only providers", () => {
   const providers = buildLoginProviders({
@@ -111,7 +111,11 @@ it("keeps a key form for every key owner a combined card holds", () => {
       groupId: "opencode",
     });
 
-  expect(build([opencode("opencode"), opencode("opencode-go")])).toMatchObject([
+  const groups = build([opencode("opencode"), opencode("opencode-go")]);
+  expect(groups).toMatchObject([
     { id: "opencode", label: "OpenCode", apiKeyProviders: ["opencode", "opencode-go"] },
+  ]);
+  expect(filterLoginProviders(groups, "opencode-go").map((group) => group.id)).toEqual([
+    "opencode",
   ]);
 });

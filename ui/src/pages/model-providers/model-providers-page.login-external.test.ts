@@ -104,6 +104,16 @@ describe("Models provider login", () => {
     try {
       await openPicker(page);
       expect(page.querySelector('[data-models-catalog-provider="opencode-go"]')).toBeNull();
+      const search = page.querySelector<HTMLInputElement>("[data-models-catalog-search]")!;
+      search.value = "OpenCode Go";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      await waitForSolid(() =>
+        expect(
+          [...page.querySelectorAll("[data-models-catalog-provider]")].map((card) =>
+            card.getAttribute("data-models-catalog-provider"),
+          ),
+        ).toEqual(["opencode"]),
+      );
       await selectProvider(page, "opencode");
       const keys = () => [
         ...page.querySelectorAll<HTMLButtonElement>("[data-models-login-api-key]"),
