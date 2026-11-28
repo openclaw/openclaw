@@ -44,6 +44,10 @@ suite.define(() => {
       await expectWritingPolicy(input, true);
       expect(await input.inputValue()).toBe("test");
       await input.press("Escape");
+      await input.waitFor({ state: "hidden" });
+      await page.keyboard.press("ControlOrMeta+K");
+      await input.waitFor({ state: "visible" });
+      expect(await input.inputValue()).toBe("test");
       await page.reload();
       await page.locator(".agent-chat__composer-combobox textarea:visible").waitFor();
       const held = await holdModuleResponse(
