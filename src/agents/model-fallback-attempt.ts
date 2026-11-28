@@ -640,7 +640,14 @@ export function throwFallbackFailureSummary(params: {
       authMode: lastAttempt?.authMode,
       status: lastAttempt?.status,
       rateLimitRetriesExhausted: lastAttempt?.rateLimitRetriesExhausted,
-      rateLimitResetAt: lastAttempt?.rateLimitResetAt,
+      // Only a single route can own the aggregate cooldown; never attribute another model's reset.
+      rateLimitResetAt:
+        lastAttempt?.rateLimitResetAt ??
+        (params.candidates.length === 1 &&
+        lastAttempt?.reason === "rate_limit" &&
+        lastAttempt.code === MODEL_FALLBACK_SKIPPED_CODE
+          ? (params.soonestCooldownExpiry ?? undefined)
+          : undefined),
       code: lastAttempt?.code,
       userMessage:
         params.lastError instanceof FailoverError &&
