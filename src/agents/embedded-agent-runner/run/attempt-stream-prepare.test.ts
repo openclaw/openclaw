@@ -888,33 +888,30 @@ describe("prepareEmbeddedAttemptStream", () => {
     },
   );
 
-  it.each(["deferred lifecycle adoption"] as const)(
-    "releases acquired stream subscriptions when %s fails",
-    async (stage) => {
-      const { session, listeners, releases } = await trackPreparedStreamSubscriptions((subscribe) =>
-        mocks.subscribe.mockImplementation(subscribe),
-      );
-      const failure = new Error(`${stage} failed`);
-      const fail = () => {
-        throw failure;
-      };
-      expect(() =>
-        prepareCatalogExecutor({
-          activeSession: session,
-          attempt: {
-            deferTerminalLifecycle: true,
-            onDeferredLifecycleOwner: fail,
-          },
-        }),
-      ).toThrow(failure);
-      expect(releases).toHaveLength(2);
-      expect(listeners.size).toBe(0);
-      for (const release of releases) {
-        expect(release).toHaveBeenCalledOnce();
-      }
-      expect(Boolean(getActiveNativeAttempt("session-output-schema"))).toBe(false);
-    },
-  );
+  it("releases acquired stream subscriptions when deferred lifecycle adoption fails", async () => {
+    const { session, listeners, releases } = await trackPreparedStreamSubscriptions((subscribe) =>
+      mocks.subscribe.mockImplementation(subscribe),
+    );
+    const failure = new Error("deferred lifecycle adoption failed");
+    const fail = () => {
+      throw failure;
+    };
+    expect(() =>
+      prepareCatalogExecutor({
+        activeSession: session,
+        attempt: {
+          deferTerminalLifecycle: true,
+          onDeferredLifecycleOwner: fail,
+        },
+      }),
+    ).toThrow(failure);
+    expect(releases).toHaveLength(2);
+    expect(listeners.size).toBe(0);
+    for (const release of releases) {
+      expect(release).toHaveBeenCalledOnce();
+    }
+    expect(Boolean(getActiveNativeAttempt("session-output-schema"))).toBe(false);
+  });
 
   it("releases each stream subscription once through complete cleanup", async () => {
     const { session, listeners, releases } = await trackPreparedStreamSubscriptions((subscribe) =>
