@@ -19,7 +19,6 @@ import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs
 import { loadCronJobsStore, saveCronJobsStore } from "../../../cron/store.js";
 import * as receipts from "../../../cron/store/run-receipt-store.test-support.js";
 import type { CronStoredJob } from "../../../cron/types.js";
-import { runLegacyCronHealth } from "../../../flows/doctor-health-contribution-runners.state.js";
 import { mintCronStandingGrantLocked } from "../../../gateway/operator-approval-standing-grants.worker.js";
 import * as grants from "../../../gateway/operator-approval-store.js";
 import * as snapshots from "../../../infra/sqlite-snapshot.js";
@@ -103,13 +102,6 @@ const makeAccountJob = (id: string, model?: string) =>
   }) satisfies CronStoredJob;
 
 afterEach(() => vi.restoreAllMocks());
-
-async function repair(configPath: string) {
-  await doctor.withDoctorConfigMaintenance(async () => {
-    await using ctx = await doctor.prepareDoctorContext(configPath);
-    await runLegacyCronHealth(ctx);
-  });
-}
 
 function legacyJob(id: string, model?: string): CronStoredJob {
   const job = makeAccountJob(id, model);
@@ -267,7 +259,7 @@ it("adopts legacy reminders while preserving live agent turns, stored accounts a
       agents: { ...cfg.agents, ownership: "explicit" },
       auth: { profiles: { "openai:default": { provider: "openai", mode: "oauth" as const } } },
     });
-    await state.writeConfig(cfg);
+    await configure(state, cfg);
     await upsertAuthProfileWithLockOrThrow(oauthProfile("openai:default", "synthetic-access"));
     const binding = await captureCronInferenceBinding({
       cfg,
@@ -359,7 +351,8 @@ it("adopts legacy reminders while preserving live agent turns, stored accounts a
       "SELECT g.*, j.grant_definition_generation FROM operator_approval_standing_grants g JOIN cron_jobs j ON j.job_id = g.cron_job_id WHERE g.cron_job_id = 'pinned'";
     const grantBefore = query(grantSql)!;
 
-    await repair(state.configPath);
+    const repair = () => doctor.withDoctorConfigMaintenance(() => migrate(cfg));
+    await repair();
     const repaired = await readJobs(storePath);
     const adopted = expect.objectContaining({
       provider: "openai",
@@ -397,7 +390,7 @@ it("adopts legacy reminders while preserving live agent turns, stored accounts a
     });
     const backups = await backupsOnDisk();
     expect(backups).toHaveLength(1);
-    await repair(state.configPath);
+    await repair();
     expect(await readJobs(storePath)).toEqual(repaired);
     expect(await backupsOnDisk()).toEqual(backups);
     const revision = resolveCronJobConfigRevision(repaired[0]!);
@@ -452,7 +445,9 @@ it.each([
         expect(await readJobs(storePath)).toEqual([original]);
       } else {
         // Without a prior selection, the unattended planner skips personal accounts.
-        expect(result.changes.join("\n")).toContain("retain openai:shared");
+        expect(result.changes.join("\n"), result.warnings.join("\n")).toContain(
+          "retain openai:shared",
+        );
         expect(result.changes.join("\n")).not.toContain(personalId);
         expect((await readJobs(storePath))[0]?.inferenceBinding).toMatchObject({
           profileId: "openai:shared",
