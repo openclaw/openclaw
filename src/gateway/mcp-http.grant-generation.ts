@@ -2,9 +2,12 @@
 // generation the run started on. A plugin reload retires that generation while the run goes on,
 // so every later loopback request would keep resolving the retired plugin and fail, for every
 // tool, until the run ends. Embedded runs re-admit outside the retired generation at their next
-// step; a loopback request is a CLI run's next step, so it does the same.
+// step; a loopback request is a CLI run's next step, so it does the same. A reload that hands the
+// run's plugins over to the new generation fails nothing at construction: tools built from the
+// retired registry refuse every call instead, so a retired registry re-admits before construction.
 import { isPreparedModelRuntimePluginLifecycleFailure } from "../agents/prepared-model-runtime-admission-errors.js";
 import { isPluginReloadingError } from "../plugins/plugin-replacement-retry.js";
+import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import {
   ExpiredPluginRegistryScopeError,
   withPluginRuntimeGatewayRequestScope,
@@ -37,6 +40,10 @@ export async function resolveInMcpGrantRequestScope<T>(
   signal: AbortSignal,
 ): Promise<T> {
   try {
+    const registry = retiredGrantScopes.has(scope) ? undefined : scope.pluginRegistry;
+    if (registry && isPluginRegistryRetired(registry)) {
+      retiredGrantScopes.add(scope);
+    }
     return await runInMcpGrantRequestScope(scope, resolve);
   } catch (error) {
     if (
