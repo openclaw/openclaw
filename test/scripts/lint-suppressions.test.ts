@@ -139,6 +139,7 @@ describe("production lint suppressions", () => {
         "extensions/browser/src/browser/page-function-runtime.ts|@typescript-eslint/no-base-to-string|1",
         "extensions/browser/src/browser/page-function-runtime.ts|no-eval|2",
         "extensions/browser/src/browser/pw-tools-core.activity.ts|unicorn/prefer-dom-node-text-content|1",
+        "extensions/browser/src/browser/pw-tools-core.interactions.actions.ts|preserve-caught-error|1",
         "extensions/codex/session-history-worker-runtime.ts|no-warning-comments|1",
         "extensions/codex/src/app-server/run-attempt-turn-request.ts|preserve-caught-error|1",
         // Persisted research receipts omit undefined fields exactly as JSON encoding does.

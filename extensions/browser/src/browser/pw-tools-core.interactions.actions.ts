@@ -3,6 +3,7 @@ import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { Locator, Page } from "playwright-core";
 import { resolveActInteractionTimeoutMs } from "./act-policy.js";
 import type { BrowserFormField } from "./client-actions.types.js";
+import { BrowserTabCrashedError, isBrowserTabCrashedError } from "./errors.js";
 import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
 import { evaluateBrowserFunction } from "./page-function-runtime.js";
 import {
@@ -188,8 +189,12 @@ export async function insertTextViaPlaywright(
     try {
       // Native insertion preserves the focused frame and selection without reading the clipboard.
       await page.keyboard.insertText(opts.text);
-    } catch {
+    } catch (error) {
+      if (isBrowserTabCrashedError(error)) {
+        throw new BrowserTabCrashedError({ cause: error });
+      }
       // Playwright errors can contain the inserted text, including pasted passwords.
+      // oxlint-disable-next-line preserve-caught-error -- Do not retain the pasted text in an error cause.
       throw new Error(
         "Unable to paste text into the browser. Focus an editable field and try again.",
       );

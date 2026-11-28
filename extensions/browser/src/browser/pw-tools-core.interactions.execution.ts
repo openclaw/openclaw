@@ -4,6 +4,7 @@ import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import type { BrowserBatchAbort, BrowserBatchActionResult } from "./client-actions-types.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
 import type { BrowserDownloadResult } from "./download-types.js";
+import { BrowserTabCrashedError, isBrowserTabCrashedError } from "./errors.js";
 import { assertBrowserNavigationResultAllowed } from "./navigation-guard.js";
 import { pageTargetInfo } from "./pw-session-connection.js";
 import {
@@ -157,8 +158,12 @@ export async function executeActViaPlaywright(
   targetId?: string;
 }> {
   const action = opts.action;
+  // Closing a crashed tab is how an agent recovers; only action traffic is refused.
+  // A batch admits each child action on its own, so a close-only batch can still
+  // reach the close helper's crash exemption instead of failing at the parent.
+  const allowCrashed = action.kind === "close" || action.kind === "batch";
   return await runActionExecution(
-    opts,
+    { ...opts, allowCrashed },
     actionUsesNavigationRequestGuard(action),
     async (page, execution) => {
       if (action.kind === "batch") {
@@ -188,7 +193,7 @@ export async function executeActViaPlaywright(
  * quarantine. Act calls and operator input bursts share it.
  */
 export async function runActionExecution<T extends Record<string, unknown>>(
-  opts: GuardedInteractionOptions,
+  opts: GuardedInteractionOptions & { allowCrashed?: boolean },
   usesNavigationRequestGuard: boolean,
   run: (page: Page, execution: GuardedInteractionOptions) => Promise<T>,
 ): Promise<
@@ -200,6 +205,7 @@ export async function runActionExecution<T extends Record<string, unknown>>(
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
     ssrfPolicy: opts.ssrfPolicy,
+    allowCrashed: opts.allowCrashed ?? false,
   });
   const withOperationTarget = async <P extends Record<string, unknown>>(payload: P) => {
     const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId;
@@ -290,7 +296,9 @@ async function batchViaPlaywright(
   },
 ): Promise<{ results: BrowserBatchActionResult[]; aborted?: BrowserBatchAbort }> {
   const navigationPolicy = interactionNavigationPolicy(opts);
-  const page = opts.page ?? (await getPageForTargetId(opts));
+  // Children admit themselves: close keeps its crash exemption, every other
+  // action still refuses a dead renderer through its own page resolution.
+  const page = opts.page ?? (await getPageForTargetId({ ...opts, allowCrashed: true }));
   const results: BrowserBatchActionResult[] = [];
   const finishAborted = (
     reason: BrowserBatchAbort["reason"],
@@ -338,7 +346,12 @@ async function batchViaPlaywright(
       } catch (err) {
         if (
           isBrowserObservedDialogBlockedError(err) ||
-          err instanceof BrowserInteractionAuthorityError
+          err instanceof BrowserInteractionAuthorityError ||
+          // A crashed tab is a target-level failure, not a child result: keep the
+          // typed conflict (or rethrow Playwright's crash for the route mapper) and
+          // stop before later children touch the dead renderer.
+          err instanceof BrowserTabCrashedError ||
+          isBrowserTabCrashedError(err)
         ) {
           throw err;
         }
