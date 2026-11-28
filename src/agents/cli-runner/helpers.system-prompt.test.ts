@@ -247,7 +247,7 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("current source is default target");
   });
 
-  it("keeps the session project section on Gateway-started turns of an owner conversation", async () => {
+  it("keeps the session project section across automation and peer turns of an owner conversation", async () => {
     const workspaceDir = "/workspace";
     vi.spyOn(projects, "listProjectRegistry").mockResolvedValue([
       {
@@ -258,7 +258,8 @@ describe("buildCliAgentSystemPrompt", () => {
       },
       { id: "website", displayName: "Website", source: "registered", repoRoot: "/website" },
     ]);
-    const prompt = (requester: Parameters<typeof prepareCliSystemPrompt>[0]["requester"]) =>
+    // One conversation, session_project offered on every turn; only the turn's source changes.
+    const turn = (requester: Parameters<typeof prepareCliSystemPrompt>[0]["requester"]) =>
       prepareCliSystemPrompt({
         workspaceDir,
         config: { agents: { entries: { main: { workspace: workspaceDir } } } },
@@ -270,16 +271,27 @@ describe("buildCliAgentSystemPrompt", () => {
         modelDisplay: "claude-cli/opus",
         requester,
       });
+    const owner = () => turn({ senderIsOwner: true });
+    const automation = { kind: "internal_system", sourceTool: "cron_execution" } as const;
+    const peer = {
+      kind: "inter_session",
+      sourceTool: "sessions_send",
+      sourceSessionKey: "agent:main:other",
+    } as const;
 
-    const owner = await prompt({ senderIsOwner: true });
-    expect(owner).toContain("## Session project");
-    // Completions, automations and sessions_send turns carry no sender; they render the same prompt.
-    for (const inputProvenance of [
-      { kind: "internal_system", sourceTool: "exec" },
-      { kind: "inter_session", sourceTool: "subagent_announce" },
-    ] as const) {
-      expect(await prompt({ senderIsOwner: false, inputProvenance })).toBe(owner);
+    const first = await owner();
+    expect(first).toContain("## Session project");
+    expect(first).toContain('{"id":"website","name":"Website"}');
+    for (const inputProvenance of [automation, peer]) {
+      // Gateway-started turns carry no sender and no operator authority.
+      expect(await turn({ senderIsOwner: false, inputProvenance })).toBe(first);
+      expect(await owner()).toBe(first);
     }
-    expect(await prompt({ senderIsOwner: false })).not.toContain("## Session project");
+    // A person who may not choose projects never sees the list.
+    for (const inputProvenance of [undefined, { kind: "external_user" } as const]) {
+      const outside = await turn({ senderIsOwner: false, inputProvenance });
+      expect(outside).not.toContain("## Session project");
+      expect(outside).not.toContain("Website");
+    }
   });
 });
