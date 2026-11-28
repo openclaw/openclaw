@@ -250,7 +250,12 @@ describe("buildCliAgentSystemPrompt", () => {
   it("keeps the session project section on Gateway-started turns of an owner conversation", async () => {
     const workspaceDir = "/workspace";
     vi.spyOn(projects, "listProjectRegistry").mockResolvedValue([
-      { id: "workspace:main", displayName: "Workspace", source: "workspace", repoRoot: workspaceDir },
+      {
+        id: "workspace:main",
+        displayName: "Workspace",
+        source: "workspace",
+        repoRoot: workspaceDir,
+      },
       { id: "website", displayName: "Website", source: "registered", repoRoot: "/website" },
     ]);
     const prompt = (requester: Parameters<typeof prepareCliSystemPrompt>[0]["requester"]) =>

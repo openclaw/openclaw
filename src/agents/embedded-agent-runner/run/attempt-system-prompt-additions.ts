@@ -40,9 +40,12 @@ export async function prepareAttemptSystemPromptAdditions(params: {
   storePath?: string;
   toolsAllow?: string[];
   entry?: InternalSessionEntry;
-  senderIsOwner?: boolean;
-  inputProvenance?: InputProvenance;
-  admittedRunContext?: AdmittedRunContext;
+  /** Who started this turn; the project guidance is shown only to requesters who may move it. */
+  requester?: {
+    senderIsOwner?: boolean;
+    inputProvenance?: InputProvenance;
+    admittedRunContext?: AdmittedRunContext;
+  };
 }) {
   let extraSystemPrompt = params.extraSystemPrompt;
   const incognito =
@@ -123,9 +126,11 @@ export async function prepareAttemptSystemPromptAdditions(params: {
             agentId: params.agentId,
             sessionKey: params.sessionKey,
             entry: params.entry,
-            senderIsOwner: params.senderIsOwner,
-            operatorAuthority: readAdmittedRunOperatorAuthority(params.admittedRunContext),
-            inputProvenance: params.inputProvenance,
+            senderIsOwner: params.requester?.senderIsOwner,
+            operatorAuthority: readAdmittedRunOperatorAuthority(
+              params.requester?.admittedRunContext,
+            ),
+            inputProvenance: params.requester?.inputProvenance,
           }),
         }
       : {}),

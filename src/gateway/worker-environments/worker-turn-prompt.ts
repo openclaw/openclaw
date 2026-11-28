@@ -85,6 +85,7 @@ export async function prepareWorkerTurnPrompt(params: {
   });
   const additions = await prepareAttemptSystemPromptAdditions({
     ...turn,
+    requester: turn,
     agentId,
     provider: model.provider,
     modelId: model.id,
