@@ -136,16 +136,18 @@ it.each([
 );
 
 it("still stops a polling tool's non-polling action repeated through dispatch_action", async () => {
-  const { agent } = captureAgent(surface("tools").tools, {}, [
+  const executed: string[] = [];
+  const { agent } = captureAgent(surface("tools", executed).tools, {}, [
     ...turns(TOOL_REPEAT_STOP_AT, "dispatch_action", {
       id: "subagents",
-      args: { action: "kill", target: "child-1" },
+      args: { action: "cancel", runId: "child-1" },
     }),
     answer,
   ]);
 
   await agent.prompt("start");
 
+  expect(executed).toEqual(Array.from({ length: TOOL_REPEAT_STOP_AT - 1 }, () => "subagents"));
   expect(agent.state.messages.at(-1)).toMatchObject({ errorCode: TOOL_REPEAT_LIMIT_CODE });
 });
 
