@@ -38,12 +38,10 @@ type QaSessionTranscriptSeedMessage =
   | { role: "toolResult"; toolCallId: string; toolName: string; text: string; timestamp: number };
 
 type QaSessionTranscriptSeedParams = {
-  label?: string;
   messages: readonly QaSessionTranscriptSeedMessage[];
   sessionId: string;
   sessionKey: string;
-  updatedAt: number;
-};
+} & ({ mode: "append" } | { mode?: "seed"; label?: string; updatedAt: number });
 
 type QaSessionEntrySeed = {
   agentId: string;
@@ -374,18 +372,21 @@ async function seedQaSessionTranscript(
     agentId: "qa",
     env: runtimeEnv,
   });
-  const label = params.label?.trim();
-  await upsertSessionEntry({
-    agentId: "qa",
-    env: runtimeEnv,
-    sessionKey,
-    storePath,
-    entry: {
-      sessionId,
-      updatedAt: params.updatedAt,
-      ...(label ? { origin: { label } } : {}),
-    },
-  });
+  // Gateway-created conversations already have their own entry and access metadata.
+  if (params.mode !== "append") {
+    const label = params.label?.trim();
+    await upsertSessionEntry({
+      agentId: "qa",
+      env: runtimeEnv,
+      sessionKey,
+      storePath,
+      entry: {
+        sessionId,
+        updatedAt: params.updatedAt,
+        ...(label ? { origin: { label } } : {}),
+      },
+    });
+  }
 
   for (const seed of params.messages) {
     const appended = await appendSessionTranscriptMessageByIdentity({
