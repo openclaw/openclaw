@@ -81,6 +81,7 @@ export function startEarlyApplicationGateway(
       snapshot?.deltaCursor,
       [],
       snapshot?.sessionId ? snapshot.historyState : undefined,
+      !snapshot,
     );
     return history;
   };

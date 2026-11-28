@@ -177,7 +177,10 @@ export function CommandPaletteInput(props: {
           writingsuggestions="false"
           spellcheck={props.mode === "compose" ? "true" : "false"}
           id={COMMAND_PALETTE_INPUT_ID}
-          class="cmd-palette__input"
+          class={[
+            "cmd-palette__input",
+            { "cmd-palette__input--compose": props.mode === "compose" },
+          ]}
           aria-label={props.placeholder}
           aria-autocomplete={props.controls ? "list" : undefined}
           aria-haspopup={props.controls ? "listbox" : undefined}
@@ -206,6 +209,11 @@ export function CommandPaletteInput(props: {
             measuredPlaceholder = event.currentTarget.placeholder;
           }}
         />
+        <Show when={props.mode === "compose"}>
+          <span class="cmd-palette__placeholder" aria-hidden="true">
+            {committedPlaceholder()}
+          </span>
+        </Show>
       </div>
     </div>
   );

@@ -46,23 +46,33 @@ struct ChatAssistantIntroCard: View {
     }
 }
 
-struct ChatLoadingBubble: View {
+#if os(macOS)
+/// macOS chat windows: opening a chat shows nothing at first, because most loads finish within the
+/// delay; a slower load then shows a plain centered spinner. iOS draws `ChatTranscriptSkeleton`.
+struct ChatDelayedLoadingIndicator: View {
+    static let delay: Duration = .milliseconds(1500)
+    @State private var isVisible = false
+
     var body: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
-            Text("Loading chat")
-                .font(OpenClawChatTypography.captionSemiBold)
-                .foregroundStyle(.secondary)
+        ZStack {
+            if self.isVisible {
+                // Neutral ink: the app tint is the accent red, reserved for the primary action.
+                ProgressView()
+                    .tint(.secondary)
+                    .transition(.opacity)
+            }
         }
-        .padding(.vertical, 9)
-        .padding(.horizontal, 12)
-        .background(
-            Capsule()
-                .fill(OpenClawChatTheme.subtleCard))
-        .padding(.leading, 10)
+        .task {
+            do {
+                try await Task.sleep(for: Self.delay)
+            } catch {
+                return
+            }
+            withAnimation(.easeIn(duration: 0.2)) { self.isVisible = true }
+        }
     }
 }
+#endif
 
 struct ChatNoticeCard: View {
     let systemImage: String

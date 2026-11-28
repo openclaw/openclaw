@@ -524,7 +524,7 @@ describeLive("cron scheduling through an isolated Gateway", () => {
           declarationKey: "probe:declaration-recovery",
           agentId: "probe",
           enabled: true,
-          schedule: { kind: "every", everyMs: 86_400_000 },
+          schedule: { kind: "every", everyMs: 60_000 },
           sessionTarget: "isolated",
           wakeMode: "next-heartbeat",
           payload: {
@@ -545,7 +545,7 @@ describeLive("cron scheduling through an isolated Gateway", () => {
           ]);
         const { job } = await declare();
         for (let cycle = 0; cycle < 2; cycle += 1) {
-          // Public state repair places the job one scheduled failure before automatic disabling.
+          // Seed the streak, but let the scheduler run the command and record the tenth failure.
           await cliJson(instance, [
             "gateway",
             "call",
@@ -563,12 +563,28 @@ describeLive("cron scheduling through an isolated Gateway", () => {
               },
             }),
           ]);
-          const disabled = await waitForJob(instance, job.id, (saved) => !saved.enabled);
-          expect(disabled).toMatchObject({
-            enabled: false,
-            state: { consecutiveErrors: 10, autoDisabled: { reason: "consecutive-failures" } },
-          });
+          const failed = await waitForJob(
+            instance,
+            job.id,
+            (saved) => saved.state.consecutiveErrors === 10,
+          );
+          expect(failed.enabled).toBe(true);
+          expect(failed.state.lastRunStatus).toBe("error");
+          expect(failed.state.autoDisabled).toBeUndefined();
+          const endedAt = failed.state.lastRunAtMs! + failed.state.lastDurationMs!;
+          expect(failed.state.nextRunAtMs).toBe(endedAt + 60 * 60_000);
           if (cycle === 0) {
+            expect(await declare()).toMatchObject({
+              updated: false,
+              job: {
+                id: job.id,
+                state: { consecutiveErrors: 10, nextRunAtMs: failed.state.nextRunAtMs },
+              },
+            });
+            expect(await cliJson(instance, ["cron", "disable", job.id])).toMatchObject({
+              enabled: false,
+              state: { consecutiveErrors: 10 },
+            });
             const recovered = await declare();
             expect(recovered).toMatchObject({ updated: true, job: { id: job.id, enabled: true } });
             expect(recovered.job.state.consecutiveErrors).toBe(0);
@@ -584,7 +600,7 @@ describeLive("cron scheduling through an isolated Gateway", () => {
         });
         await cliJson(instance, ["cron", "rm", job.id]);
         logLiveProgress(
-          "cron scheduler: explicit declaration recovery cleared failures and allowed a second automatic disable",
+          "cron scheduler: recurring failures backed off; redeclaring the stopped job cleared its streak and resumed scheduling",
         );
       },
       () => instance.cleanup(),

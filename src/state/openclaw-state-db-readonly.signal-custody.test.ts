@@ -52,6 +52,7 @@ const mocks = vi.hoisted(() => ({
     coordinationKey: databasePath,
     databasePath,
     identity: mocks.sourceIdentity,
+    isCurrent: () => true,
     assertCurrent() {},
   }),
   forbidden: vi.fn(() => {

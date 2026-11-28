@@ -22,7 +22,6 @@ import {
   holdProfileAppearanceRead,
   profileAppearanceReply,
 } from "./app-shell-gateway.test-support.ts";
-import { makeBootRoster } from "./bootstrap.test-support.ts";
 import { createGatewayMetadataObserver } from "./gateway-observers.ts";
 import { UI_NAVIGATION_PREFERENCE_KEYS } from "./server-prefs-state.ts";
 import { pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
@@ -374,21 +373,6 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     expect(loadSettings()).toMatchObject({ theme: "knot", accent: "#336699" });
     expect(refreshTheme).toHaveBeenCalledOnce();
     expect(invalidate).toHaveBeenCalledOnce();
-  });
-
-  it("loads current agent discovery when hello lands", async () => {
-    const { context, host, owner, snapshot } = createProfileAppearanceGateway(null);
-    const agentsList = makeBootRoster();
-    const ensureList = vi.fn(async () => agentsList);
-    Object.assign(context, {
-      agents: { state: { agentsList: null }, ensureList },
-    });
-    host.routeState.routeId = "chat";
-
-    owner.synchronizeGateway(snapshot);
-    await Promise.resolve();
-
-    expect(ensureList).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])(

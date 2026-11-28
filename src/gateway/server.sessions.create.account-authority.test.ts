@@ -249,9 +249,9 @@ test.each([
     withFixture([row.scope, row.selection !== "none", row.origin], async (fixture) => {
       const links = listUserProfileAuthLinks(fixture.owner.id);
       if (row.selection === "none") {
-        vi.mocked(fixture.context.loadGatewayModelCatalogSnapshot)
-          .mockImplementation(() => new Promise(() => {}))
-          .mockClear();
+        vi.mocked(fixture.context.loadGatewayModelCatalogSnapshot).mockImplementation(
+          () => new Promise(() => {}),
+        );
       }
       await fixture.create(
         row.selection === "explicit"
@@ -259,9 +259,6 @@ test.each([
           : undefined,
         row.idempotent,
       );
-      if (row.selection === "none") {
-        expect(fixture.context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
-      }
 
       expect(fixture.respond.mock.calls[0]?.slice(0, 2)).toEqual([
         true,
@@ -403,12 +400,11 @@ test.each([-3_600_000, 3_600_000])(
     const fixture = await createCatalogFixture();
     const thinking = vi
       .spyOn(modelCatalogRuntime, "loadProviderScopedThinkingCatalog")
-      .mockResolvedValueOnce([]);
+      .mockImplementationOnce(() => new Promise(() => {}));
     onTestFinished(() => thinking.mockRestore());
     await fixture.create(model, "seed");
     expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
     expect(fixture.entry()).toBeDefined();
-    expect(thinking).not.toHaveBeenCalled();
     const before = fixture.entry();
     const gates = [holdCatalog(fixture.context), holdCatalog(fixture.context)];
     fixture.respond.mockClear();

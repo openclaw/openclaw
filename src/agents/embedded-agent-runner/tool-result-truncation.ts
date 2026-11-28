@@ -297,7 +297,7 @@ export const toolResultWarningDedupe = {
   sessionRecovery: createDedupeCache({ ttlMs: 0, maxSize: TOOL_RESULT_WARNING_DEDUPE_LIMIT }),
 };
 
-type ToolResultTruncationOptions = {
+export type ToolResultTruncationOptions = {
   suffix?: (truncatedChars: number) => string;
   minKeepChars?: number;
   minimumRawWeight?: number;
@@ -525,18 +525,15 @@ export function getToolResultSpillDetails(message: object) {
   if (!isRecord(details)) {
     return undefined;
   }
-  const nestedSpill = isRecord(details.spill) ? details.spill : undefined;
-  // web_fetch owns the nested contract. Exec tools still own the flat spill fields.
-  const path = nestedSpill?.path ?? details.fullOutputPath;
-  if (typeof path !== "string" || path.length === 0) {
+  const spill = isRecord(details.spill) ? details.spill : undefined;
+  if (typeof spill?.path !== "string" || spill.path.length === 0) {
     return undefined;
   }
-  const chars = nestedSpill?.chars ?? details.spilledChars;
   return {
-    path,
-    truncated: nestedSpill?.truncated === true || details.spillTruncated === true,
-    ...(typeof chars === "number" && Number.isFinite(chars)
-      ? { chars: Math.max(0, Math.floor(chars)) }
+    path: spill.path,
+    truncated: spill.truncated === true,
+    ...(typeof spill.chars === "number" && Number.isFinite(spill.chars)
+      ? { chars: Math.max(0, Math.floor(spill.chars)) }
       : {}),
   };
 }

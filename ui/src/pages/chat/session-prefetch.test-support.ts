@@ -52,6 +52,7 @@ export function prefetchHistoryRequest() {
 
 export async function advanceSessionPrefetch(milliseconds = 300) {
   await vi.advanceTimersByTimeAsync(milliseconds);
+  await vi.dynamicImportSettled();
   await settleSessionPrefetch();
 }
 

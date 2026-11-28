@@ -542,7 +542,7 @@ suite.define(() => {
       await input.press("ControlOrMeta+Enter");
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
-        message: `> ${selectedText}\n\nSummarize the risks.`,
+        message: `> ${selectedText}\n\nFrom agent:main:main\n\nSummarize the risks.`,
       });
       expect(create.params).not.toHaveProperty("attachments");
       expect(await composer.inputValue()).toBe(draft);

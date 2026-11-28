@@ -114,7 +114,7 @@ export function renderProjectsView(model: ProjectsModel, view: () => ProjectsMod
   });
   const filtered = createMemo(() => {
     const query = foldSearchCase(view().query.trim().normalize("NFC"));
-    const records = view().records;
+    const records = view().displayedRecords;
     return query
       ? records.filter((project) =>
           [project.displayName, project.repositoryIdentity, project.repoRoot].some((value) =>
@@ -467,10 +467,16 @@ function ProjectDetails(props: {
             <button
               type="button"
               class="btn"
-              disabled={!props.model.gateway.connected || props.view().operation !== null}
+              disabled={
+                !props.model.gateway.connected ||
+                (props.view().operation !== null && props.view().operation !== "rename")
+              }
+              aria-disabled={props.view().operation === "rename" ? "true" : undefined}
               onClick={() => void props.model.rename(props.project)}
             >
-              {t("projectsPage.rename")}
+              {props.view().pendingRename?.projectId === props.project.id
+                ? t("common.saving")
+                : t("projectsPage.rename")}
             </button>
           </openclaw-modal-actions>
         </Show>
