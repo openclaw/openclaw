@@ -55,7 +55,8 @@ def load_payload(
 ) -> Dict[str, Any]:
     if input_path:
         if input_path == "-":
-            raw = sys.stdin.read()
+            # A piped export uses the same encoding as the file import.
+            raw = sys.stdin.buffer.read().decode("utf-8")
         else:
             with open(input_path, "r", encoding="utf-8") as handle:
                 raw = handle.read()
