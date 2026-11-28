@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   inspectCandidateChangelogRange,
@@ -50,11 +51,11 @@ function createFixture(selectedVersion = version, split = true) {
   };
   writeSelected();
   const targetSha = commit();
-  const validate = (tag = "v" + selectedVersion, target = targetSha) => {
+  const validate = (tag = "v" + selectedVersion, target = targetSha, rootDir = root) => {
     // The production caller runs in its target repository for ancestry checks.
-    const cwd = vi.spyOn(process, "cwd").mockReturnValue(root);
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(rootDir);
     try {
-      const input = { rootDir: root, repository: "openclaw/openclaw", tag, targetSha: target };
+      const input = { rootDir, repository: "openclaw/openclaw", tag, targetSha: target };
       return validateCandidateChangelog(input);
     } finally {
       cwd.mockRestore();
@@ -105,6 +106,37 @@ describe("candidate publication changelog scope", () => {
         `Review changes outside the selected changelog: https://github.com/example/project/compare/${prepared}...${reverted}`,
       ),
     });
+  });
+
+  it.each([1, 2])("checks provenance in a depth-%s clone without fetching history", (depth) => {
+    const f = createFixture();
+    const seed = f.git("rev-parse", "HEAD^");
+    const shallow = tempDirs.make("openclaw-shallow-changelog-");
+    f.git("clone", "--depth=" + depth, "--no-tags", pathToFileURL(f.root).href, shallow);
+    const git = fixtureGit(shallow, "Release Fixture", "release-fixture@example.com", true);
+    if (depth === 1) {
+      // Both endpoints exist, but the candidate's parent edge is still shallow.
+      git("fetch", "--depth=1", "origin", seed);
+      expect(() => f.validate(undefined, undefined, shallow)).toThrow(/shallow.*fetch.*history/iu);
+      expect(git("rev-parse", "--is-shallow-repository")).toBe("true");
+      expect(git("rev-list", "--count", "HEAD")).toBe("1");
+      git("fetch", "--unshallow", "origin");
+    }
+    expect(f.validate(undefined, undefined, shallow).releaseNotesProvenance.status).toBe("passed");
+  });
+
+  it("still rejects a genuinely unrelated contribution record base", () => {
+    const f = createFixture(version, false);
+    const seed = f.git("rev-parse", "HEAD^");
+    const unrelated = f.git("commit-tree", "HEAD^{tree}", "-m", "unrelated history");
+    f.write(
+      "CHANGELOG.md",
+      readFileSync(join(f.root, "CHANGELOG.md"), "utf8").replace(seed + "..", unrelated + ".."),
+    );
+    const target = f.commit();
+    expect(() => f.validate(undefined, target)).toThrow(
+      "contribution record base " + unrelated + " is not an ancestor of recorded target " + seed,
+    );
   });
 
   it.each([true, false])("ignores archived bot credits with split=%s", (split) => {
