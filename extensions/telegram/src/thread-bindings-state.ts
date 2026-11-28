@@ -11,8 +11,12 @@ import type {
 
 type PendingBindingMutation = { preparedValueJson?: string | null };
 
+export type TelegramThreadBindingOwner = TelegramThreadBindingManager & {
+  retireInQueue: () => void;
+};
+
 type TelegramThreadBindingsState = {
-  managersByAccountId: Map<string, TelegramThreadBindingManager>;
+  managersByAccountId: Map<string, TelegramThreadBindingOwner>;
   queues: Map<string, StoreWriterQueue>;
   pendingMutations: WeakMap<TelegramThreadBindingManager, Map<string, PendingBindingMutation>>;
   bindingsByAccountConversation: Map<string, TelegramThreadBindingRecord>;
@@ -32,7 +36,7 @@ export function getThreadBindingsState(): TelegramThreadBindingsState {
   threadBindingsState = resolveGlobalSingleton<TelegramThreadBindingsState>(
     TELEGRAM_THREAD_BINDINGS_STATE_KEY,
     () => ({
-      managersByAccountId: new Map<string, TelegramThreadBindingManager>(),
+      managersByAccountId: new Map<string, TelegramThreadBindingOwner>(),
       queues: new Map<string, StoreWriterQueue>(),
       pendingMutations: new WeakMap<
         TelegramThreadBindingManager,
