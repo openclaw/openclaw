@@ -1,5 +1,6 @@
 /** Agent-run lease admission for lifecycle-owned prepared model runtimes. */
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
@@ -101,6 +102,29 @@ function createPreparedModelRuntimeAdmissionClaim(context: PreparedModelRuntimeL
     },
     release,
   };
+}
+
+/** Passive inventory may cross execution isolation, but never its configured source or scope. */
+function preparedModelRuntimeCatalogInputsMatch(
+  left: PreparedModelRuntimeInput,
+  right: PreparedModelRuntimeInput,
+): boolean {
+  const inventoryKey = (input: PreparedModelRuntimeInput) =>
+    ownerKey({
+      ...input,
+      readOnly: false,
+      loadRuntimePlugins: false,
+      runtimePluginPurpose: undefined,
+      runtimePluginSelections: undefined,
+      allowGatewaySubagentBinding: false,
+    });
+  return (
+    inventoryKey(left) === inventoryKey(right) &&
+    preparedModelRuntimeConfigsMatch(
+      projectConfigOntoRuntimeSourceSnapshot(left.config),
+      projectConfigOntoRuntimeSourceSnapshot(right.config),
+    )
+  );
 }
 
 function preparedModelRuntimeBorrowMatchesInput(
@@ -448,18 +472,7 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
     // Execution purpose isolates plugins, not the configured agent's published inventory.
     const catalogOwner =
       configuredOwner &&
-      ownerKey({
-        ...configuredOwner.input,
-        loadRuntimePlugins: false,
-        runtimePluginPurpose: undefined,
-        runtimePluginSelections: undefined,
-      }) ===
-        ownerKey({
-          ...inventoryInput,
-          loadRuntimePlugins: false,
-          runtimePluginPurpose: undefined,
-          runtimePluginSelections: undefined,
-        })
+      preparedModelRuntimeCatalogInputsMatch(configuredOwner.input, inventoryInput)
         ? configuredOwner
         : owner;
     snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);
