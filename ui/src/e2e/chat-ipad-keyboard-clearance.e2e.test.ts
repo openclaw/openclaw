@@ -33,7 +33,7 @@ suite.define(() => {
     { label: "touch-windows", platform: "Win32", userAgent: "Windows", touch: 10, ipad: false },
     { label: "iphone", platform: "iPhone", userAgent: "iPhone", touch: 5, ipad: false },
   ])(
-    "keeps the action row stable on $label",
+    "keeps right-edge clearance out of the compact composer on $label",
     async ({ label, platform, userAgent, touch, ipad }) => {
       await suite.withPage(
         {
@@ -76,16 +76,22 @@ suite.define(() => {
             console.info("iPad clearance geometry", { buttonWidth, gap: await rightControlGap() });
           };
           if (ipad) {
-            await page.setViewportSize({ width: 600, height: 1000 });
+            await page.setViewportSize({ width: 520, height: 1000 });
             await textarea.blur();
             await expect
               .poll(() => composer.getAttribute("data-composer-layout"))
               .toBe("single-line");
+            if (label === "desktop-mode-ipad") {
+              const frame = await takeControlUiScreenshotFrame(page, composer, [textarea], {
+                animations: "disabled",
+              });
+              await writeFile(path.join(suite.artifactDir, "ipad-composer-compact.png"), frame.png);
+            }
             for (const direction of ["ltr", "rtl"]) {
               await page.evaluate((value) => {
                 document.documentElement.dir = value;
               }, direction);
-              await expectButtonClearance();
+              await expect.poll(rightControlGap).toBeLessThan(16);
             }
             await page.evaluate(() => {
               document.documentElement.dir = "ltr";
@@ -100,12 +106,6 @@ suite.define(() => {
               const element = action.closest(".agent-chat__input")!;
               return element.getBoundingClientRect().right - action.getBoundingClientRect().right;
             });
-          if (label === "desktop-mode-ipad") {
-            const frame = await takeControlUiScreenshotFrame(page, composer, [textarea, send], {
-              animations: "disabled",
-            });
-            await writeFile(path.join(suite.artifactDir, "ipad-composer.png"), frame.png);
-          }
           if (ipad) {
             await expectButtonClearance();
           } else {
