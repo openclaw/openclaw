@@ -127,6 +127,7 @@ function operationHandler(
       options,
       requireString(params, "sessionKey"),
       active.view.agentId,
+      { allowMetadataChanges: true },
     );
     try {
       const result =
@@ -202,7 +203,9 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
     const sessionKey = requireString(params, "sessionKey");
     const agentId = resolveMcpAppSessionOwner(params, context.getRuntimeConfig());
     const requesterId = resolveMcpAppRequesterId(client);
-    const read = await retainSessionScopedRead(options, sessionKey, agentId);
+    const read = await retainSessionScopedRead(options, sessionKey, agentId, {
+      allowMetadataChanges: true,
+    });
     const assertRequestCurrent = () => {
       read?.assertCurrent();
       if (requesterId !== resolveMcpAppRequesterId(client)) {
