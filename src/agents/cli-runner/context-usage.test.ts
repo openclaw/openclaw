@@ -7,11 +7,12 @@ afterEach(() => {
 
 it("coalesces to the latest observation, even when it returns to the last written count", async () => {
   vi.useFakeTimers();
-  const write = vi.fn(async (_tokens: number) => {});
+  const first = Promise.withResolvers<void>();
+  const write = vi.fn(async (_tokens: number) => {}).mockImplementationOnce(() => first.promise);
   await using publisher = createCliContextPublisher(write);
   publisher.observe(200);
-  await vi.advanceTimersByTimeAsync(0);
   for (const n of [201, 202, 200]) publisher.observe(n);
+  first.resolve();
   await vi.advanceTimersByTimeAsync(1_000);
   expect(write.mock.calls).toEqual([[200]]);
   publisher.observe(180);
