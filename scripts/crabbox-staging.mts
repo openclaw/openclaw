@@ -463,7 +463,7 @@ function sameHost(left: ProcessProvenance, right: ProcessProvenance) {
 function ownerState(
   receipt: Receipt,
   confirmation?: OperatorConfirmation,
-): "absent" | "active" | "unknown" {
+): "absent" | "rebooted" | "active" | "unknown" {
   const current = currentProcessProvenance();
   if (!current) {
     return "unknown";
@@ -477,9 +477,11 @@ function ownerState(
       return "unknown";
     }
     // A PID from another boot can name an unrelated live process now.
-    return recorded.bootId !== current.bootId || ownerAbsent(receipt.ownerPid)
-      ? "absent"
-      : "active";
+    return recorded.bootId !== current.bootId
+      ? "rebooted"
+      : ownerAbsent(receipt.ownerPid)
+        ? "absent"
+        : "active";
   }
   if (
     confirmation &&
@@ -496,6 +498,17 @@ function ownerState(
       ? "absent"
       : "active"
     : "unknown";
+}
+
+function rebootedWriters(receipt: Receipt, owner: ReturnType<typeof ownerState>) {
+  // A reboot retires local processes, not their diagnostics, claims or source.
+  // Keep the failed writer state intact until the ordinary recovery checks pass.
+  return (
+    owner === "rebooted" &&
+    receipt.users === "admitted" &&
+    receipt.hold === "writers" &&
+    (receipt.state === "admitted" || receipt.state === "removing")
+  );
 }
 
 function confirmPriorBoot(
@@ -1639,6 +1652,7 @@ function metadataStatus(
     };
   }
   const owner = ownerState(receipt, confirmation);
+  const rebootRetirement = rebootedWriters(receipt, owner);
   if (idleMirror(receipt) && (!receipt.ownerProvenance || owner !== "unknown")) {
     return {
       ...base,
@@ -1679,14 +1693,14 @@ function metadataStatus(
         "Preparation or durable recovery metadata is incomplete; preserve this copy for inspection.",
     };
   }
-  if (receipt.users === "admitted" || receipt.state === "preparing") {
+  if ((receipt.users === "admitted" && !rebootRetirement) || receipt.state === "preparing") {
     return {
       ...base,
       status: "protected",
       reason: "Writer settlement was not recorded; PID absence does not authorize removal.",
     };
   }
-  if (receipt.hold === "writers" || receipt.hold === "registration") {
+  if ((receipt.hold === "writers" && !rebootRetirement) || receipt.hold === "registration") {
     return {
       ...base,
       status: "protected",
@@ -1702,7 +1716,10 @@ function metadataStatus(
         "Claim or diagnostic preservation is incomplete; repair the named destination or lease, then run staging recover with this ID to retry.",
     };
   }
-  if (!["prepared", "settled", "preserved", "removing"].includes(receipt.state)) {
+  if (
+    !rebootRetirement &&
+    !["prepared", "settled", "preserved", "removing"].includes(receipt.state)
+  ) {
     return {
       ...base,
       status: "protected",
@@ -1728,7 +1745,9 @@ function metadataStatus(
   return {
     ...base,
     status: "candidate",
-    reason: "Source preservation and unchanged contents must still be verified before removal.",
+    reason: rebootRetirement
+      ? "Same-host reboot retired admitted writers; source, diagnostics, claims and current users must still be verified."
+      : "Source preservation and unchanged contents must still be verified before removal.",
   };
 }
 
@@ -1891,7 +1910,11 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
     }
   };
   const assertProducerAbsent = (receipt: Receipt) => {
-    if (ownerState(receipt, confirmation) !== "absent") {
+    const owner = ownerState(receipt, confirmation);
+    if (
+      (owner !== "absent" && owner !== "rebooted") ||
+      (receipt.users === "admitted" && !rebootedWriters(receipt, owner))
+    ) {
       throw new Error("The producer's absence can no longer be established.");
     }
     if (confirmation) {
@@ -1984,6 +2007,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
       throw new Error("Staging has no recorded owner.");
     }
     const selectedWitness = options.witness ?? before.witness;
+    const rebootRetirement = rebootedWriters(before, ownerState(before, confirmation));
     const status = metadataStatus(
       root,
       { ...before, witness: selectedWitness },
@@ -2103,7 +2127,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
       });
       if (!claims.ok) {
         unsettled ||= claims.unjoined === true;
-        if (!unsettled && !options.dryRun) {
+        if (!unsettled && !options.dryRun && !rebootRetirement) {
           saveReceipt({
             ...receipt,
             hold: "claims",
@@ -2125,7 +2149,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
       manifest = { ...manifest, artifacts: readArtifactRecord(root, receipt.artifactManifest) };
     }
     recoveryMetadata(root, source, manifest.artifacts);
-    if (receipt.users === "settled") {
+    if (receipt.users === "settled" || rebootRetirement) {
       try {
         if (!manifest.artifacts) {
           throw new Error("Diagnostic preservation was not recorded.");
@@ -2137,7 +2161,9 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
           receiptDeadline(receipt),
         );
       } catch (error) {
-        if (options.dryRun || receipt.state === "removing") {
+        // A recorded diagnostic identity remains authoritative across retries,
+        // including a later source-proof failure. Never recapture changed bytes.
+        if (options.dryRun || receipt.state === "removing" || manifest.artifacts) {
           throw error;
         }
         if (!receipt.repositoryIdentity) {
@@ -2166,8 +2192,8 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
         saveReceipt({
           ...receipt,
           artifactManifest: saved.digest,
-          state: "preserved",
-          hold: undefined,
+          state: rebootRetirement ? receipt.state : "preserved",
+          hold: rebootRetirement ? receipt.hold : undefined,
         });
       }
     }
@@ -2217,7 +2243,12 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
           "Read-only recovery checks passed; actual recovery must reacquire locks and revalidate this receipt.",
       };
     }
-    saveReceipt({ ...receipt, state: "removing", hold: undefined, witness: selectedWitness });
+    saveReceipt({
+      ...receipt,
+      state: "removing",
+      hold: rebootRetirement ? receipt.hold : undefined,
+      witness: selectedWitness,
+    });
     witness.revalidate();
     assertCurrentReceipt();
     rmSync(join(root, "payload"), { recursive: true, force: true });
@@ -2244,8 +2275,9 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
       id,
       recovered: true,
       operatorConfirmation: confirmation,
-      reason:
-        "Independent retained source, diagnostics, and native claims verified; abandoned staging removed.",
+      reason: rebootRetirement
+        ? "Same-host reboot retired admitted writers; independent retained source, diagnostics, and native claims verified; abandoned staging removed."
+        : "Independent retained source, diagnostics, and native claims verified; abandoned staging removed.",
     };
   } catch (error) {
     const reason =
@@ -2375,7 +2407,7 @@ export async function runStagingCommand(
     }
   }
   console.log(
-    "Usage: node scripts/crabbox-wrapper.mjs staging inspect [--after <nextCursor>]\n       node scripts/crabbox-wrapper.mjs staging inspect <id> [--same-host-prior-boot]\n       node scripts/crabbox-wrapper.mjs staging recover <id> [--confirm-same-host-prior-boot --receipt-sha256 <digest>] [--witness-repo <path> --witness-ref <full-ref>]\n\nOnly positively settled, unchanged staging with independently retained source and preserved diagnostics can be removed. Existing native claims are inspected without provider calls or claim mutation.",
+    "Usage: node scripts/crabbox-wrapper.mjs staging inspect [--after <nextCursor>]\n       node scripts/crabbox-wrapper.mjs staging inspect <id> [--same-host-prior-boot]\n       node scripts/crabbox-wrapper.mjs staging recover <id> [--confirm-same-host-prior-boot --receipt-sha256 <digest>] [--witness-repo <path> --witness-ref <full-ref>]\n\nOnly unchanged staging with positively settled users or verified same-host reboot retirement, independently retained source, and preserved diagnostics can be removed. Reboot retirement does not prove successful finalization. Existing native claims are inspected without provider calls or claim mutation.",
   );
   return args.length === 0 || args[0] === "--help" ? 0 : 2;
 }
