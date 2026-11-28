@@ -1,15 +1,15 @@
+@testable import OpenClaw
 import OpenClawChatUI
 import SwiftUI
 import UIKit
 import Vision
 import XCTest
-@testable import OpenClaw
 
 @MainActor
 final class SidebarStartupPinsTests: XCTestCase {
     func testDrawerDoesNotExposePartialPinsWhileReconnecting() async throws {
         for scheme: ColorScheme in [.light, .dark] {
-            try await self.exerciseDrawer(scheme: scheme)
+            try await exerciseDrawer(scheme: scheme)
         }
     }
 
@@ -34,9 +34,10 @@ final class SidebarStartupPinsTests: XCTestCase {
             selectDestination: { _ in },
             selectSession: { _ in },
             openPagesEditor: {},
-            openSearch: {})
-            .environment(app).environment(controller).defaultAppStorage(defaults)
-            .environment(\.colorScheme, scheme)
+            openSearch: {}
+        )
+        .environment(app).environment(controller).defaultAppStorage(defaults)
+        .environment(\.colorScheme, scheme)
         let host = UIHostingController(rootView: sidebar)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 340, height: 850))
         host.overrideUserInterfaceStyle = scheme == .dark ? .dark : .light
@@ -57,44 +58,28 @@ final class SidebarStartupPinsTests: XCTestCase {
             let attachment = XCTAttachment(image: image)
             attachment.name = "\(theme)-\(name)"
             attachment.lifetime = .keepAlways
-            self.add(attachment)
-        }
-
-        func labels(in image: UIImage) throws -> [String: CGRect] {
-            let request = VNRecognizeTextRequest()
-            try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([request])
-            var labels: [String: CGRect] = [:]
-            for result in request.results ?? [] {
-                if let string = result.topCandidates(1).first?.string { labels[string] = result.boundingBox }
-            }
-            return labels
+            add(attachment)
         }
 
         await Task.yield()
-        XCTAssertNotNil(try labels(in: image())["Atlas"], "Cached conversations remain reachable offline")
+        XCTAssertNotNil(try Self.labels(in: image())["Atlas"], "Cached conversations remain reachable offline")
         app.apply(.attemptStarted, to: .operator, route: nil)
         await Task.yield()
         let opening = image()
         attach(opening, "opening")
-        let openingLabels = try labels(in: opening)
+        let openingLabels = try Self.labels(in: opening)
         XCTAssertNil(openingLabels["Atlas"])
         XCTAssertFalse(openingLabels.keys.contains { $0.localizedCaseInsensitiveContains("Loading sessions") })
-        func shortcuts(_ image: UIImage) throws -> Data {
-            // Include the page controls, not the safe-area chrome. OCR sometimes joins a leading
-            // system icon to its label, which says nothing about whether that row moved.
-            let source = try XCTUnwrap(image.cgImage)
-            let scale = image.scale
-            let crop = CGRect(x: 8 * scale, y: 135 * scale, width: 220 * scale, height: 227 * scale)
-            let pixels = try XCTUnwrap(source.cropping(to: crop))
-            return try XCTUnwrap(UIImage(cgImage: pixels).pngData())
-        }
-        let openingShortcuts = try shortcuts(opening)
+        let pinnedHeading = try XCTUnwrap(Self.heading("Pinned", in: openingLabels), "\(openingLabels.keys)")
+        let sessionsHeading = try XCTUnwrap(Self.heading("Sessions", in: openingLabels), "\(openingLabels.keys)")
+        let openingShortcuts = try Self.shortcuts(opening)
 
         app.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
-        app.personalSidebarPins = IOSSidebarPins(entries: [atlas, archive].map { "session:\($0.key)" })
+        let drafts = row("Drafts", updated: 0.5)
+        app.personalSidebarPins = IOSSidebarPins(entries: [atlas, archive, drafts].map { "session:\($0.key)" })
         await Task.yield()
-        XCTAssertNil(try labels(in: image())["Atlas"], "Do not offer just the pin that happens to be in the cache")
-        let rows = [inbox, atlas, archive, row("Notes", updated: 4), row("Plans", updated: 5)]
+        XCTAssertNil(try Self.labels(in: image())["Atlas"], "Do not offer just the pin that happens to be in the cache")
+        let rows = [inbox, atlas, archive, drafts] + [("Notes", 4.0), ("Plans", 5), ("Recipes", 6)].map(row)
         model.testRosterLoad = { .init(sessions: rows, isCached: false) }
         await model.refresh(appModel: app)
         let start = CACurrentMediaTime()
@@ -110,12 +95,54 @@ final class SidebarStartupPinsTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         let ready = image()
         attach(ready, "ready")
-        let readyLabels = try labels(in: ready)
-        let titles = Set(readyLabels.keys.flatMap { $0.split(whereSeparator: { !$0.isLetter }).map(String.init) })
-        XCTAssertTrue(titles.isSuperset(of: ["Atlas", "Almanac", "Inbox", "Notes", "Plans"]), "\(titles)")
-        XCTAssertTrue(try shortcuts(ready) == openingShortcuts, "The page controls must not move when sessions appear")
+        let readyLabels = try Self.labels(in: ready)
+        let titles = Self.words(in: readyLabels)
+        let expected: Set = ["Atlas", "Almanac", "Drafts", "Inbox", "Notes", "Plans", "Recipes"]
+        XCTAssertTrue(titles.isSuperset(of: expected), "\(titles)")
+        // The loading state shows the same headings in the same places, so nothing above a row moves.
+        for (title, before) in [("Pinned", pinnedHeading), ("Sessions", sessionsHeading)] {
+            let after = try XCTUnwrap(Self.heading(title, in: readyLabels))
+            XCTAssertEqual(after.midY, before.midY, accuracy: 0.002, title)
+        }
+        XCTAssertTrue(try Self.shortcuts(ready) == openingShortcuts, "Page controls must not move when sessions appear")
         app.apply(.dropped, to: .operator, route: nil)
-        await Task.yield()
-        XCTAssertNotNil(try labels(in: image())["Atlas"], "Between reconnect attempts, show the cached roster")
+        try await Task.sleep(for: .milliseconds(300))
+        let dropped = image()
+        attach(dropped, "dropped")
+        XCTAssertTrue(
+            try Self.words(in: Self.labels(in: dropped)).contains("Atlas"),
+            "Between reconnect attempts, show the cached roster"
+        )
+    }
+
+    private static func labels(in image: UIImage) throws -> [String: CGRect] {
+        let request = VNRecognizeTextRequest()
+        try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([request])
+        var labels: [String: CGRect] = [:]
+        for result in request.results ?? [] {
+            if let string = result.topCandidates(1).first?.string {
+                labels[string] = result.boundingBox
+            }
+        }
+        return labels
+    }
+
+    private static func words(in labels: [String: CGRect]) -> Set<String> {
+        Set(labels.keys.flatMap { $0.split(whereSeparator: { !$0.isLetter }).map(String.init) })
+    }
+
+    /// A section heading sits at the text inset, left of the page labels that follow their icons.
+    private static func heading(_ title: String, in labels: [String: CGRect]) -> CGRect? {
+        labels.first { $0.key.hasPrefix(title) && $0.value.minX < 0.1 }?.value
+    }
+
+    /// The page controls, not the safe-area chrome. OCR sometimes joins a leading system icon to its
+    /// label, which says nothing about whether that row moved, so compare pixels.
+    private static func shortcuts(_ image: UIImage) throws -> Data {
+        let source = try XCTUnwrap(image.cgImage)
+        let scale = image.scale
+        let crop = CGRect(x: 8 * scale, y: 135 * scale, width: 220 * scale, height: 227 * scale)
+        let pixels = try XCTUnwrap(source.cropping(to: crop))
+        return try XCTUnwrap(UIImage(cgImage: pixels).pngData())
     }
 }
