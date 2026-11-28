@@ -223,6 +223,34 @@ describe("portable research", () => {
     expect(io.complete).toHaveBeenCalledTimes(1);
     expect(io.search).not.toHaveBeenCalled();
   });
+  it("names an overlong planning question without exposing its text", async () => {
+    const { io } = fixture();
+    io.complete = vi.fn(async () => ({
+      text: JSON.stringify({ questions: ["private".repeat(84)] }),
+    }));
+    const result = await runPortableResearch({ question: "River length" }, io);
+    expect(result.gaps).toContain(
+      "Research response did not satisfy the evidence contract at planning (/questions/0: maxLength 500); no repair call was made.",
+    );
+    expect(result.report).not.toContain("private");
+    expect(io.search).not.toHaveBeenCalled();
+    expect(vi.mocked(io.complete).mock.calls[0]?.[0]).toContain("each at most 500 characters");
+  });
+  it("names an overlong extraction query without exposing its text", async () => {
+    const { io } = fixture();
+    const responses = [
+      { questions: ["river length"] },
+      { findings: [], gaps: [], queries: ["private".repeat(84)] },
+    ];
+    io.complete = vi.fn(async () => ({ text: JSON.stringify(responses.shift()) }));
+    const result = await runPortableResearch({ question: "River length" }, io);
+    expect(result.gaps).toContain(
+      "Research response did not satisfy the evidence contract at extraction (/queries/0: maxLength 500); no repair call was made.",
+    );
+    expect(result.report).not.toContain("private");
+    expect(io.search).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(io.complete).mock.calls[1]?.[0]).toContain("each at most 500 characters");
+  });
   it("keeps verified findings when a model reply lists more items than the schema allows", async () => {
     const { io, evidence, verdict } = fixture();
     const extra = (prefix: string, count: number) =>
