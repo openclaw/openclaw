@@ -5745,6 +5745,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   });
 
   it.skipIf(process.platform === "win32").for([
+    { task: "control-ui-performance", eventName: "pull_request" },
+    { task: "control-ui-performance", eventName: "workflow_dispatch" },
     { task: "bundled-protocol", eventName: "pull_request" },
     { task: "bundled-protocol", eventName: "workflow_dispatch" },
     { task: "guards", eventName: "pull_request" },
@@ -5756,31 +5758,48 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     { timeout: 55_000 },
     async ({ task, eventName }, { signal }) => {
       const base = "c".repeat(40);
+      const checkoutAncestor = eventName === "workflow_dispatch" ? "d".repeat(40) : base;
+      const comparisonBase = task === "control-ui-performance" ? checkoutAncestor : base;
+      const checkoutHead =
+        task === "control-ui-performance" && eventName === "pull_request"
+          ? "e".repeat(40)
+          : "a".repeat(40);
       const baseRef = "refs/remotes/origin/ci-ratchet-base";
-      const jobName = task === "bundled-protocol" ? "checks-fast-core" : "check-shard";
+      const jobName =
+        task === "control-ui-performance"
+          ? task
+          : task === "bundled-protocol"
+            ? "checks-fast-core"
+            : "check-shard";
       const job = readCiWorkflow().jobs[jobName];
       const needsBase =
+        task === "control-ui-performance" ||
         task === "bundled-protocol" ||
         (task === "guards" ? eventName === "pull_request" : eventName !== "workflow_dispatch");
       const checkoutBase = evaluateWorkflowExpression(job.env?.CHECKOUT_BASE_SHA ?? "${{ '' }}", {
         eventName,
         repository: "fixture/checkout",
         matrix: { task },
-        preflightOutputs: { diff_base_revision: base },
+        preflightOutputs: {
+          checkout_base_revision: checkoutAncestor,
+          diff_base_revision: base,
+        },
       });
       const report = await runCiGitStep({
         signal,
         job: jobName,
         step:
-          task === "bundled-protocol"
-            ? "Run ${{ matrix.task }} (${{ matrix.runtime }})"
-            : "Run check shard",
+          task === "control-ui-performance"
+            ? "Check Control UI performance against base"
+            : task === "bundled-protocol"
+              ? "Run ${{ matrix.task }} (${{ matrix.runtime }})"
+              : "Run check shard",
         checkoutBeforeStep: true,
         // The authenticated checkout and trusted harness fetch succeed. Network
         // access is unavailable afterward, even though the base is already local.
         fetchResults: [0, 0, 128],
         baseAvailableAfter: 0,
-        revisions: { [`${baseRef}^{commit}`]: base },
+        revisions: { HEAD: checkoutHead, [`${baseRef}^{commit}`]: comparisonBase },
         env: {
           TASK: task,
           RUN_BUNDLED_TESTS: String(eventName !== "pull_request"),
@@ -5789,6 +5808,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           SPLIT_PR_GUARDS: "false",
           GITHUB_EVENT_NAME: eventName,
           CHECKOUT_KIND: "linux-node",
+          CHECKOUT_SHA: checkoutHead,
           CHECKOUT_BASE_SHA: String(checkoutBase),
           CHECKOUT_TOKEN: "fixture-checkout-token",
           NARROW_CHECK_PATHS_JSON: "",
@@ -5801,11 +5821,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(report.code, report.output).toBe(0);
       expect(report.fetches).toHaveLength(2);
       const sourceFetch = report.fetches.find(({ cwd }) => cwd === report.workspace);
-      expect(sourceFetch?.args.includes(`+${base}:refs/remotes/origin/ci-ratchet-base`)).toBe(
-        needsBase,
-      );
+      expect(sourceFetch?.args.includes(`+${comparisonBase}:${baseRef}`)).toBe(needsBase);
       const consumers = report.commands.filter(({ tool }) => tool === "node" || tool === "pnpm");
-      if (task === "bundled-protocol") {
+      if (task === "control-ui-performance") {
+        expect(sourceFetch?.args).toContain(`+${checkoutHead}:refs/remotes/origin/ci-target`);
+        expect(report.checkouts.some(({ args }) => args.at(-1) === checkoutHead)).toBe(true);
+        expect(consumers.filter(({ tool }) => tool === "pnpm").map(({ args }) => args)).toEqual([
+          ["ui:check-performance:base", comparisonBase],
+        ]);
+      } else if (task === "bundled-protocol") {
         expect(consumers.map(({ args }) => args)).toEqual(
           eventName === "pull_request"
             ? [["protocol:check"]]
