@@ -512,36 +512,57 @@ describe("session startup catch-up", () => {
     }
   });
 
-  it("indexes a real SQLite delete archive through the transcript listener", async () => {
-    vi.useFakeTimers();
-    const session = await writeSqliteSession({ content: "lifecycle archive memory" });
-    const harness = await Harness.create([], true);
-    harness.startTranscriptListener();
+  it.each([
+    ["agent:main:chat:thread", true],
+    ["agent:main:cron:synthetic-job", false],
+    ["agent:main:cron:synthetic-job:run:synthetic-run", false],
+  ] as const)(
+    "indexes a real SQLite delete archive only for conversations: %s",
+    async (sessionKey, indexable) => {
+      vi.useFakeTimers();
+      const session = await writeSqliteSession({ sessionKey, content: "lifecycle archive memory" });
+      const harness = await Harness.create([], true);
+      harness.startTranscriptListener();
 
-    try {
-      await expect(
-        deleteSessionEntry({
-          agentId: "main",
-          archiveTranscript: true,
-          expectedSessionId: session.sessionId,
-          sessionKey: session.sessionKey,
-          storePath: session.storePath,
-        }),
-      ).resolves.toBe(true);
-      await harness.waitForCorpusList();
-      expect(harness.getPendingArchiveFiles()).toHaveLength(1);
+      try {
+        await expect(
+          deleteSessionEntry({
+            agentId: "main",
+            archiveTranscript: true,
+            expectedSessionId: session.sessionId,
+            sessionKey: session.sessionKey,
+            storePath: session.storePath,
+          }),
+        ).resolves.toBe(true);
+        await harness.waitForCorpusList();
+        expect(await memorySessions.listSessionTranscriptCorpusEntriesForAgent("main")).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ artifactKind: "archive-artifact", sessionKey }),
+          ]),
+        );
+        expect(harness.getPendingArchiveFiles()).toHaveLength(indexable ? 1 : 0);
 
-      await flushSessionSync(harness, 31_000);
+        const restarted = harness.restartForStartup();
+        const dirtyFiles = await restarted.markStartupDirtyFiles(true);
+        expect(dirtyFiles).toHaveLength(indexable ? 1 : 0);
+        expect(restarted.isSessionsDirty()).toBe(indexable);
 
-      expect(harness.indexedPaths).toHaveLength(1);
-      expect(harness.indexedPaths[0]).toMatch(
-        /^sessions\/main\/thread\.jsonl\.deleted\..+(?:\.zst)?$/,
-      );
-      expect(harness.indexedContents).toEqual(["User: lifecycle archive memory"]);
-    } finally {
-      harness.stopTranscriptListener();
-    }
-  });
+        await flushSessionSync(harness, 31_000);
+
+        expect(harness.indexedPaths).toHaveLength(indexable ? 1 : 0);
+        if (indexable) {
+          expect(harness.indexedPaths[0]).toMatch(
+            /^sessions\/main\/thread\.jsonl\.deleted\..+(?:\.zst)?$/,
+          );
+        }
+        expect(harness.indexedContents).toEqual(
+          indexable ? ["User: lifecycle archive memory"] : [],
+        );
+      } finally {
+        harness.stopTranscriptListener();
+      }
+    },
+  );
 
   it.each(["thread.trajectory.jsonl.reset.2026-06-23T10-00-00.000Z.zst"])(
     "ignores non-corpus session artifact updates for %s",
