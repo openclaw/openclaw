@@ -345,7 +345,7 @@ export async function resolveProviderAuths(params: {
       const providerIdSet = new Set(providerIds);
       // A configured CLI backend owns its login outside OpenClaw, so it is a
       // credential source for its plugin's usage hook even with no env or profile.
-      let hasConfiguredCliBackendSource = false;
+      const configuredCliBackends: string[] = [];
       try {
         const snapshot = loadManifestMetadataSnapshot({
           config: directCredentialState.cfg,
@@ -363,11 +363,11 @@ export async function resolveProviderAuths(params: {
             providerIds.add(providerId);
           }
           const cliBackendIds = normalizeProviderIds(plugin.cliBackends ?? []);
-          if (!hasConfiguredCliBackendSource && cliBackendIds.length > 0) {
+          if (cliBackendIds.length > 0) {
             const configured = (configuredCliRuntimeIds ??= collectConfiguredCliRuntimeIds(
               directCredentialState.cfg,
             ));
-            hasConfiguredCliBackendSource = cliBackendIds.some((id) => configured.has(id));
+            configuredCliBackends.push(...cliBackendIds.filter((id) => configured.has(id)));
           }
         }
       } catch {
@@ -459,7 +459,7 @@ export async function resolveProviderAuths(params: {
         ...authProfileSourceState,
         allowAuthProfileStore,
       };
-      if (allowAuthProfileStore || hasConfiguredCliBackendSource) {
+      if (allowAuthProfileStore || configuredCliBackends.length > 0) {
         // Legacy callbacks are synchronous, so capture the caller-owned store before invocation.
         if (state.getStore) {
           await resolveUsageAuthStore(state);
@@ -474,6 +474,7 @@ export async function resolveProviderAuths(params: {
             agentDir: state.agentDir,
             env: state.env,
             provider,
+            configuredCliBackends,
             // Provider-owned hooks may route API keys to a different billing endpoint
             // even when generic fallback for this usage provider remains OAuth-only.
             resolveApiKeyFromConfigAndStore: (options) =>

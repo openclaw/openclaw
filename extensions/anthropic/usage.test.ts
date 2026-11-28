@@ -229,19 +229,32 @@ function withNativeLogin<T>(
   });
 }
 
+const claudeCliRoute = { configuredCliBackends: ["claude-cli"] };
+const inferenceApiKey = {
+  resolveApiKeyCandidatesFromConfigAndStore: async () => ["sk-ant-api03-inference"],
+};
+
 it.each([
   ["with no OpenClaw credential", {}],
   ["behind a stored setup-token profile", setupTokenProfile],
+  ["behind an inference API key", inferenceApiKey],
 ])("reads the native Claude CLI login for usage %s", async (_name, overrides) => {
-  const env = { ANTHROPIC_API_KEY: "cleared-for-claude" };
-  const auth = await withNativeLogin(nativeLogin, () => resolveAuth({ ...overrides, env }));
+  // The backend's own config root selects the login, not the default one.
+  const env = { ANTHROPIC_API_KEY: "cleared-for-claude", CLAUDE_CONFIG_DIR: "/srv/claude-work" };
+  const auth = await withNativeLogin(nativeLogin, () =>
+    resolveAuth({ ...claudeCliRoute, ...overrides, env }),
+  );
   expect(auth).toEqual({
     token: "native-access-token",
     subscriptionType: "max",
     rateLimitTier: "default_claude_max_20x",
     email: "cli@example.com",
   });
-  expect(probeClaudeCliAuthStatus).toHaveBeenCalledWith({ env, signal: undefined });
+  expect(probeClaudeCliAuthStatus).toHaveBeenCalledWith({
+    command: "claude",
+    env,
+    signal: undefined,
+  });
 
   const fetchFn = vi.fn(async () => Response.json({ five_hour: { utilization: 40 } }));
   const snapshot = await fetchUsage({ ...auth, fetchFn });
@@ -259,22 +272,37 @@ it.each([
 });
 
 it.each([
+  ["no Claude CLI route", {}],
+  ["only another backend's route", { configuredCliBackends: ["google-gemini-cli"] }],
+])("never reads a native Claude login with %s", async (_name, route) => {
+  for (const overrides of [{}, setupTokenProfile, inferenceApiKey]) {
+    const auth = await withNativeLogin(nativeLogin, () => resolveAuth({ ...route, ...overrides }));
+    expect(auth).toEqual({ handled: true });
+  }
+  expect(probeClaudeCliAuthStatus).not.toHaveBeenCalled();
+});
+
+it.each([
   ["an expired token Claude could not refresh", { ...nativeLogin, expiresAt: Date.now() - 1 }],
   ["a token without the user:profile scope", { ...nativeLogin, scopes: ["user:inference"] }],
 ])("skips native usage for %s", async (_name, login) => {
-  expect(await withNativeLogin(login, () => resolveAuth())).toEqual({ handled: true });
+  expect(await withNativeLogin(login, () => resolveAuth(claudeCliRoute))).toEqual({
+    handled: true,
+  });
 });
 
 it.each(["not-installed", "missing", "timeout"])(
   "reports no native usage when the Claude CLI probe is %s",
   async (status) => {
     probeClaudeCliAuthStatus.mockResolvedValue({ status });
-    expect(await resolveAuth()).toEqual({ handled: true });
+    expect(await resolveAuth(claudeCliRoute)).toEqual({ handled: true });
   },
 );
 
 it("skips native usage when Claude authenticates with something other than claude.ai", async () => {
-  const auth = await withNativeLogin(nativeLogin, () => resolveAuth(), { authMethod: "api_key" });
+  const auth = await withNativeLogin(nativeLogin, () => resolveAuth(claudeCliRoute), {
+    authMethod: "api_key",
+  });
   expect(auth).toEqual({ handled: true });
 });
 

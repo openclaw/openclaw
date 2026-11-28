@@ -28,7 +28,11 @@ import {
   resolveClaudeWebSessionKey,
 } from "./claude-usage.js";
 import { probeClaudeCliAuthStatus } from "./cli-auth-seam.js";
-import { CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
+import {
+  CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_COMMAND,
+  CLAUDE_CLI_PROFILE_ID,
+} from "./cli-constants.js";
 
 const ANTHROPIC_COST_URL = "https://api.anthropic.com/v1/organizations/cost_report";
 const ANTHROPIC_MESSAGES_USAGE_URL =
@@ -276,15 +280,24 @@ export async function resolveAnthropicUsageAuth(
 }
 
 /**
- * Usage auth from the native Claude CLI login. Claude owns the refresh-token family, so
- * OpenClaw only reads the current access token. `claude auth status` runs first: it
- * confirms the claude.ai login is what Claude uses here and refreshes an expiring token
- * under Claude's own lock. Keychain-only logins (macOS) stay unread, so nothing prompts.
+ * Usage auth from the native Claude CLI login, only when config routes turns through
+ * claude-cli. Claude owns the refresh-token family, so OpenClaw only reads the current
+ * access token. `claude auth status` runs the backend's command in the env its local turns
+ * get (claude-cli has no configurable command or env): it confirms the claude.ai login,
+ * reports its directory, and refreshes an expiring token under Claude's own lock.
+ * Keychain-only logins (macOS) stay unread, so nothing prompts.
  */
 async function resolveClaudeNativeLoginUsageAuth(
   ctx: ProviderResolveUsageAuthContext,
 ): Promise<ProviderResolvedUsageAuth> {
-  const status = await probeClaudeCliAuthStatus({ env: ctx.env, signal: ctx.signal });
+  if (!ctx.configuredCliBackends?.includes(CLAUDE_CLI_BACKEND_ID)) {
+    return { handled: true };
+  }
+  const status = await probeClaudeCliAuthStatus({
+    command: CLAUDE_CLI_COMMAND,
+    env: ctx.env,
+    signal: ctx.signal,
+  });
   if (
     status.status !== "available" ||
     status.authMethod !== "claude.ai" ||

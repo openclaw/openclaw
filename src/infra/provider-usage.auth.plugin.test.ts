@@ -45,7 +45,10 @@ vi.mock("../plugins/provider-runtime.js", async () => ({
   )),
   resolveProviderUsageAuthWithPlugin: resolvePlugin,
 }));
-vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
+vi.mock("../plugins/manifest-contract-eligibility.js", async () => ({
+  ...(await vi.importActual<typeof import("../plugins/manifest-contract-eligibility.js")>(
+    "../plugins/manifest-contract-eligibility.js",
+  )),
   loadManifestMetadataSnapshot: () => ({
     plugins: [
       {
@@ -316,7 +319,12 @@ describe("provider usage auth boundary", () => {
         expect(await resolveWith(config)).toEqual([
           { provider: "anthropic", token: "native-login-token", subscriptionType: "max" },
         ]);
-        expect(resolvePlugin.mock.calls.map(([params]) => params.provider)).toEqual(["anthropic"]);
+        expect(
+          resolvePlugin.mock.calls.map(([params]) => [
+            params.provider,
+            params.context.configuredCliBackends,
+          ]),
+        ).toEqual([["anthropic", ["claude-cli"]]]);
         // The backend owns its login; the empty OpenClaw profile store stays closed.
         expect(storedOAuth).toBeNull();
         expect(loadStore).not.toHaveBeenCalled();
@@ -337,6 +345,21 @@ describe("provider usage auth boundary", () => {
     ])("skips the plugin without a configured CLI backend (%s)", async (_label, config) => {
       expect(await resolveWith(config)).toEqual([]);
       expect(resolvePlugin).not.toHaveBeenCalled();
+    });
+
+    it("tells the plugin no CLI backend is routed when only an API key admits it", async () => {
+      resolvePlugin.mockResolvedValueOnce({ handled: true });
+      expect(
+        await resolveProviderAuths({
+          providers: ["anthropic"],
+          env: { ANTHROPIC_API_KEY: "sk-ant-api03-inference" },
+          config: {},
+          agentDir: "/tmp/openclaw-agent",
+        }),
+      ).toEqual([]);
+      expect(
+        resolvePlugin.mock.calls.map(([params]) => params.context.configuredCliBackends),
+      ).toEqual([[]]);
     });
 
     it("does not open other providers through an unrelated CLI backend", async () => {
