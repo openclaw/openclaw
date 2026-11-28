@@ -199,7 +199,7 @@ export function getSessionControllerEntry(
     if (matches.some((entry) => entry.active)) {
       throw new ReplyRunAlreadyActiveError(canonicalKey);
     }
-    throw new Error("Session controller identity requires a physical store scope");
+    throw new Error("OpenClaw found more than one match and couldn’t tell which session to use.");
   }
   let entry = matches[0];
   if (!entry) {

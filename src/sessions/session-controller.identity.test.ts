@@ -149,6 +149,21 @@ it("treats equal active identities in two stores as busy and mutates only the se
   await expect(idleReceipt).resolves.toBe(true);
 });
 
+it("explains an ambiguous session even when the store is known", () => {
+  const storeScope = "/stores/overlap.sqlite";
+  const current = reserve(target(storeScope, key, "current"));
+  const previous = reserve(target(storeScope, key + ":previous", "previous"));
+  try {
+    const overlap = captureTarget({ storeScope, sessionKey: key, aliases: ["previous"] });
+    expect(() => reserve(overlap)).toThrow(
+      "OpenClaw found more than one match and couldn’t tell which session to use.",
+    );
+  } finally {
+    retireInput(current);
+    retireInput(previous);
+  }
+});
+
 it("aliases of one physical incarnation share the same selector", async () => {
   const first = reserve(target("/stores/aliases.sqlite"));
   const aliasKey = "agent:main:alias";
