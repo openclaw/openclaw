@@ -165,6 +165,7 @@ jobs:
           BUILD_PROFILE: ${{ inputs.build_profile }}
         run: node .release-harness/scripts/repo-e2e-artifacts.mts restore "$RUNNER_TEMP/repo-e2e-build" "$BUILD_PROFILE"
       - name: Install Playwright Chromium
+        timeout-minutes: 15
         uses: ./.release-harness/.github/actions/setup-playwright-chromium
         with:
           cache-mode: restore

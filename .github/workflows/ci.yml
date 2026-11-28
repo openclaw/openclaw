@@ -1786,6 +1786,7 @@ jobs:
       - name: Setup ripgrep for differential guards
         id: guard_ripgrep
         if: ${{ !cancelled() && steps.guard_setup.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.OPENCLAW_CI_ON_PUSH != 'true' }}
+        timeout-minutes: 10
         uses: ./.ci-harness/.github/actions/setup-ripgrep
 
       - name: Check main push ratchets and protocol additions
@@ -1895,6 +1896,7 @@ jobs:
       - name: Install Playwright Chromium for public-build browser tests
         id: browser_chromium
         if: ${{ !cancelled() && needs.preflight.outputs.reuse_browser_extension_build == 'true' && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        timeout-minutes: 15
         uses: ./.ci-harness/.github/actions/setup-playwright-chromium
         with:
           cache-mode: *cache_mode
@@ -2506,6 +2508,7 @@ jobs:
       - &install_playwright_chromium
         name: Install Playwright Chromium
         id: ui_chromium
+        timeout-minutes: 15
         uses: ./.ci-harness/.github/actions/setup-playwright-chromium
         with:
           cache-mode: *cache_mode
@@ -3109,6 +3112,7 @@ jobs:
 
       - name: Install ripgrep for baseline ratchets
         if: runner.os == 'Linux'
+        timeout-minutes: 10
         uses: ./.ci-harness/.github/actions/setup-ripgrep
 
       - name: Run baseline ratchets
@@ -3802,6 +3806,7 @@ jobs:
 
       - name: Install ripgrep for native grep tests
         if: matrix.requires_ripgrep == true && runner.os == 'Linux'
+        timeout-minutes: 10
         uses: ./.ci-harness/.github/actions/setup-ripgrep
 
       - name: Prepare Docker sandbox image

@@ -38,6 +38,7 @@ runs:
       shell: bash
       env:
         COMPATIBILITY_TARGET: ${{ inputs.compatibility-target }}
+        PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT: "120000"
       run: |
         set -euo pipefail
         if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
