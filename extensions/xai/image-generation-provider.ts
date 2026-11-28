@@ -48,6 +48,10 @@ function buildRequest(
     body.resolution = resolution;
   }
 
+  if (params.model === "grok-imagine-image-2.0" && params.req.quality) {
+    body.quality = params.req.quality;
+  }
+
   if (params.inputImages.length > 0) {
     if (params.inputImages.length > 1) {
       body.images = params.inputImages.map((input) => ({
