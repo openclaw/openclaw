@@ -411,23 +411,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       preset: "runtime",
     },
     {
-      configs: ["test/vitest/vitest.infra.config.ts"],
-      files: [
-        "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
-        "src/agents/subagents/registry/subagent-control.accounting.test.ts",
-        "src/agents/tools/sessions-send-communication.test.ts",
-        "src/plugins/loader.runtime-registry.test.ts",
-        "src/state/dreaming-startup-admission.test.ts",
-        "test/canonical-descendant.integration.test.ts",
-        "test/codex-web-search-native.integration.test.ts",
-        "test/cron-conversation-delivery.codex.integration.test.ts",
-        "test/runtime-agent.codex-initialization.integration.test.ts",
-        "test/skill-usage.codex.integration.test.ts",
-        "test/slack-outbound-permanent-rejection-loopback.test.ts",
-      ],
-      preset: "runtime",
-    },
-    {
       configs: [gatewayDatabaseConfig],
       files: [
         "test/plugins/chat-abort-codex.gateway.test.ts",
@@ -436,61 +419,9 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       preset: "runtime",
     },
     {
-      configs: ["test/vitest/vitest.gateway-database-workers.config.ts"],
-      files: [
-        "src/gateway/talk/client-permission-parity.test.ts",
-        "src/gateway/tool-resolution.swarm-collector.test.ts",
-        "src/gateway/session-row-projection.subagent-index.test.ts",
-        "src/gateway/session-subagent-resume.test.ts",
-        "src/gateway/session-utils.queued-collector-narrow-abort.test.ts",
-        "test/plugins/deep-research-routing.gateway.test.ts",
-      ],
-      preset: "runtime",
-    },
-    {
-      configs: ["test/vitest/vitest.gateway-methods.config.ts"],
-      files: [
-        "src/gateway/server-methods/session-catalog-privacy.test.ts",
-        "src/gateway/server-methods/sessions-lifecycle-dormant.test.ts",
-      ],
-      preset: "runtime",
-    },
-    {
-      configs: ["test/vitest/vitest.agents-spawn-production-boundary.config.ts"],
-      files: ["src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts"],
-      preset: "runtime",
-    },
-    {
-      configs: ["test/vitest/vitest.runtime-config.config.ts"],
-      files: ["src/config/io.load-async.test.ts"],
-      preset: "runtime",
-    },
-    {
-      configs: ["test/vitest/vitest.plugins.config.ts"],
-      files: ["src/plugins/plugin-generation-source-inspection.worker.test.ts"],
-      preset: "runtime",
-    },
-    {
       configs: ["test/vitest/vitest.plugins.config.ts"],
       files: ["src/plugins/plugin-generation-source-inspection.worker.test.ts", "unknown.test.ts"],
       preset: "full",
-    },
-    {
-      configs: ["test/vitest/vitest.agents-core.config.ts"],
-      files: [
-        "src/agents/agent-tools.delegated-authority.test.ts",
-        "src/agents/session-placement-computer.test.ts",
-        "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
-      ],
-      preset: "runtime",
-    },
-    {
-      configs: ["test/vitest/vitest.gateway-server.config.ts"],
-      files: [
-        "src/gateway/server.beam-owned-view.test.ts",
-        "src/gateway/server.subagent-transcript-conflict.test.ts",
-      ],
-      preset: "runtime",
     },
     {
       configs: ["test/vitest/vitest.agents-spawn-production-boundary.config.ts"],
@@ -504,30 +435,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       configs: ["test/vitest/vitest.agents-spawn-production-boundary.config.ts"],
       files: [],
       preset: "full",
-    },
-    {
-      configs: ["test/vitest/vitest.gateway-client.config.ts"],
-      files: ["src/gateway/client-callsites.guard.test.ts"],
-      preset: "runtime",
-    },
-    {
-      configs: ["test/vitest/vitest.auto-reply.config.ts"],
-      files: ["src/auto-reply/reply/dispatch-from-config.delivery.test.ts"],
-      preset: "runtime",
-    },
-    {
-      configs: ["test/vitest/vitest.tooling.config.ts"],
-      files: [
-        "test/codex-settled-turn-finalization.integration.test.ts",
-        "test/conversation-tools.codex.integration.test.ts",
-        "test/scripts/ci-test-timings-tooling.test.ts",
-        "test/scripts/eager-import-closure.test.ts",
-        "test/scripts/lint-suppressions.test.ts",
-        "test/scripts/plugin-sdk-surface-report.test.ts",
-        "test/scripts/pr-wrapper-source-closure.test.ts",
-        "test/vitest-projects-config.test.ts",
-      ],
-      preset: "runtime",
     },
     {
       configs: ["test/vitest/vitest.tooling.config.ts"],

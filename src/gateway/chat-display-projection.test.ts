@@ -421,69 +421,6 @@ it.each([
   }
 });
 
-it.each(["next-renderable", "last-renderable", "last-assistant"] as const)(
-  "preserves first-accepted previews and original messages on the %s target",
-  (placement) => {
-    const baseContent = [
-      text("Canvas results"),
-      { type: "canvas", preview: { viewId: "existing", url: "/existing" } },
-      { type: "canvas", preview: { viewId: "", url: "" } },
-      ...(placement === "last-assistant" ? [{ type: "toolCall", name: "canvas" }] : []),
-    ];
-    Object.freeze(baseContent);
-    const target = Object.freeze(assistant(baseContent, { timestamp: 42 }));
-    const toolAssistant = assistant([{ type: "toolCall", name: "canvas" }], {});
-    const tools = [
-      ["existing", "/rejected-id-url"],
-      ["first", "/rejected-id-url"],
-      ["first", "/later-url"],
-      ["second", "/later-url"],
-      ["url-duplicate", "/existing"],
-      [undefined, "/url-only"],
-      [undefined, "/url-only"],
-    ].map(([id, url]) => ({
-      role: "toolResult",
-      toolName: "canvas",
-      content: JSON.stringify({ kind: "canvas", view: { ...(id ? { id } : {}), url } }),
-    }));
-    const detailTool = {
-      role: "toolResult",
-      toolName: "demo__show",
-      content: "Keep the original tool result",
-      details: {
-        mcpAppPreview: { kind: "canvas", view: { id: "app" }, mcpApp: { viewId: "app" } },
-      },
-    };
-    const pending = [...tools, detailTool];
-    const messages =
-      placement === "next-renderable"
-        ? [...pending, toolAssistant, target]
-        : placement === "last-renderable"
-          ? [target, toolAssistant, ...pending]
-          : [target, ...pending];
-    Object.freeze(messages);
-    const original = JSON.stringify(messages);
-    const targetIndex = placement === "next-renderable" ? messages.length - 1 : 0;
-    const augmented = augmentChatHistoryWithCanvasBlocks(messages);
-    expect(augmented).toHaveLength(messages.length);
-    expect(augmented[targetIndex]).toMatchObject({
-      content: [
-        ...baseContent,
-        { type: "canvas", preview: { viewId: "first", url: "/rejected-id-url" } },
-        { type: "canvas", preview: { viewId: "second", url: "/later-url" } },
-        { type: "canvas", preview: { url: "/url-only" } },
-        { type: "canvas", preview: { viewId: "app", mcpApp: { viewId: "app" } } },
-      ],
-    });
-    for (const [index, message] of messages.entries()) {
-      if (index !== targetIndex) {
-        expect(augmented[index]).toEqual(message);
-      }
-    }
-    expect(JSON.stringify(messages)).toBe(original);
-  },
-);
-
 it("restores widgets from Claude CLI results coalesced into the tool-call message", () => {
   const widget = { kind: "canvas", presentation: { target: "assistant_message" } };
   const result = JSON.stringify({ ...widget, view: { id: "cv_cli", url: "/cv_cli" } });

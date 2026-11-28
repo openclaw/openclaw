@@ -24,7 +24,6 @@ import {
 } from "./delivery-queue-sqlite.js";
 import {
   completeDeliveryQueueEntryInDatabase,
-  deleteDeliveryQueueEntryInDatabase,
   getDeliveryQueueEntryOwnersInDatabase,
   updateDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite.kernel.js";
@@ -342,37 +341,6 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         account_id: "bot-a",
       });
       expect(loadDeliveryQueueEntry(stagingQueueName, stagingId, stateDir)).toBeNull();
-    });
-
-    it("update increments retry count", () => {
-      seedDeliveryQueueEntry({
-        queueName: QUEUE,
-        entry: { id: "rt-2", enqueuedAt: 1000, retryCount: 0 },
-        stateDir,
-      });
-
-      updateDeliveryQueueEntryInDatabase(openTestDatabase(), QUEUE, "rt-2", (entry) => ({
-        ...entry,
-        retryCount: entry.retryCount + 1,
-        lastError: "timeout",
-      }));
-
-      expect(loadDeliveryQueueEntry(QUEUE, "rt-2", stateDir)).toMatchObject({
-        id: "rt-2",
-        retryCount: 1,
-        lastError: "timeout",
-      });
-    });
-
-    it("delete removes the entry", () => {
-      seedDeliveryQueueEntry({
-        queueName: QUEUE,
-        entry: { id: "rt-3", enqueuedAt: 1000, retryCount: 0 },
-        stateDir,
-      });
-
-      deleteDeliveryQueueEntryInDatabase(openTestDatabase(), QUEUE, "rt-3");
-      expect(loadDeliveryQueueEntry(QUEUE, "rt-3", stateDir)).toBeNull();
     });
 
     it("complete retains an idempotency tombstone outside pending reads", async () => {

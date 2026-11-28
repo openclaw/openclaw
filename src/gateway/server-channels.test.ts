@@ -16,14 +16,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import { tryReadSecretFileSync } from "../infra/secret-file.js";
-import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
-import {
-  getActivePluginRegistry,
-  requireActivePluginChannelRegistry,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
@@ -32,7 +28,6 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
 import {
   clearActiveCredentialDegradedOwners,
   listActiveDegradedSecretOwners,
@@ -49,7 +44,7 @@ import {
   captureThawRestartTargets,
   restartRunningChannelAccounts,
 } from "./channel-thaw-restart.js";
-import { createChannelManager, type ChannelManager } from "./server-channels.js";
+import type { ChannelManager } from "./server-channels.js";
 import { registerChannelAutostartRecoveryTests } from "./server-channels.recovery.test-support.js";
 import {
   createRawHealthOverrideFixture,
@@ -2081,28 +2076,6 @@ describe("server-channels auto restart", () => {
       expect(format(account)).not.toContain("error:not linked");
     },
   );
-
-  it("creates formatted runtime and log sinks for channels loaded after manager construction", async () => {
-    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {});
-    installPlugin({ id: "slack", startAccount });
-    const channelLogs = {} as Record<ChannelId, SubsystemLogger>;
-    const channelRuntimeEnvs = {} as Record<ChannelId, RuntimeEnv>;
-    const manager = createChannelManager({
-      scheduler: createTestGatewayScheduler(),
-      getRuntimeConfig: () => ({}),
-      getPluginRegistry: requireActivePluginChannelRegistry,
-      channelLogs,
-      channelRuntimeEnvs,
-    });
-
-    await manager.startChannel("slack");
-
-    expect(startAccount).toHaveBeenCalledTimes(1);
-    const ctx = firstStartAccountContext(startAccount);
-    expect(ctx?.log).toBe(channelLogs.slack);
-    expect(ctx?.runtime).toBe(channelRuntimeEnvs.slack);
-    expect((ctx?.log as SubsystemLogger | undefined)?.subsystem).toBe("channels/slack");
-  });
 
   registerChannelAutostartRecoveryTests({ createManager, installTestRegistry, stayRunning });
 

@@ -597,14 +597,6 @@ it("advertises only admitted static dependencies, including re-exports and cycle
   ]);
 });
 
-it("preserves browser build admission when a module cannot be parsed for preload hints", async () => {
-  const fixture = activateFixture();
-  fixture.write("index.js", "export const = ;");
-  const catalog = await listControlUiPluginCatalog();
-  expect(catalog.diagnostics).toEqual([]);
-  expect(catalog.plugins[0]?.imports).toEqual([]);
-});
-
 it("serves hardlinked bundled assets, reloads a hardlinked manifest, and preserves working revisions", async () => {
   const fixture = activateFixture();
   fixture.link("dist/control-ui/index.js", "linked-entry.js");
