@@ -72,9 +72,12 @@ function prepareCliReplyToolAuthority(
     },
     undefined,
     undefined,
+    // Record the caller's cwd, as the reply and embedded producers do: the runner derives its
+    // own cwd only after this capture.
     captureReplyMessageJoinObservation({
       run: {
         ...workspace,
+        cwd: params.cwd,
         config: params.config,
         agentDir: params.agentDir,
         sessionFile: params.sessionFile,

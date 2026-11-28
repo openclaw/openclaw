@@ -1,8 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as replyAuthority from "../../auto-reply/reply/reply-tool-authority.js";
 import type { ReplyToolAuthorityInput } from "../../auto-reply/reply/reply-tool-authority.types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  captureReplyExecutionSelection,
+  isSameReplyExecutionSelection,
+} from "../../sessions/session-controller.execution-selection.js";
 import * as joinObservation from "../../sessions/session-controller.message-join-observation.js";
 import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
+import { resolveAgentDir } from "../agent-scope.js";
 import { captureCliRunToolAuthority } from "./tool-authority.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -95,7 +102,16 @@ describe("CLI question creator binding", () => {
         const projectedReads: AuthorityRead[] = [];
         const legacy = capture({
           ...input,
-          run: observeReads({ ...params, ...workspace }, legacyReads),
+          // The caller's cwd and agentDir, as an incoming reply records them.
+          run: observeReads(
+            {
+              ...params,
+              ...workspace,
+              cwd: params.cwd,
+              agentDir: params.agentDir,
+            },
+            legacyReads,
+          ),
         });
         const projected = capture({ ...input, run: observeReads(input.run, projectedReads) });
         expect(projectedReads).toEqual(legacyReads);
@@ -185,5 +201,50 @@ describe("CLI question creator binding", () => {
     const question = bound.bindQuestionAnswerAuthority(() => {});
     expect(question.requesterProfileId).toBe("creator-profile");
     expect(() => question.assertActive()).not.toThrow();
+  });
+});
+
+describe("CLI steering join observation", () => {
+  it("records the caller's execution selection, as an incoming reply does", () => {
+    const config: OpenClawConfig = {};
+    const sessionEntry: SessionEntry = { sessionId: "agent:main:main", updatedAt: 1 };
+    const observe = vi.spyOn(joinObservation, "captureReplyMessageJoinObservation");
+    // Agent-command dispatch (e.g. a helper-result turn) passes its agent dir but no cwd;
+    // the runner derives its cwd after this capture.
+    using authority = captureCliRunToolAuthority(
+      {
+        sessionId: "agent:main:main",
+        sessionFile: "/workspace/session.jsonl",
+        workspaceDir: "/workspace",
+        agentDir: resolveAgentDir(config, "main"),
+        config,
+        sessionEntry,
+        provider: "fixture",
+        prompt: "helper result",
+        timeoutMs: 1_000,
+        runId: "helper-result",
+      },
+      { agentId: "main", workspaceDir: "/workspace", cwd: "/workspace" },
+    );
+    expect(authority.hasReplyOperation).toBe(false);
+    const active = observe.mock.results[0]?.value.executionSelection;
+    // An incoming reply records its run as admitted: agentDir resolved, cwd left to the runner.
+    const incoming = (run: { agentDir?: string; cwd?: string }) =>
+      captureReplyExecutionSelection({
+        run: {
+          config,
+          agentId: "main",
+          agentDir: resolveAgentDir(config, "main"),
+          sessionFile: "/workspace/session.jsonl",
+          workspaceDir: "/workspace",
+          ...run,
+        },
+        sessionEntry,
+      });
+    expect(isSameReplyExecutionSelection(active, incoming({}))).toBe(true);
+    expect(isSameReplyExecutionSelection(active, incoming({ cwd: "/elsewhere" }))).toBe(false);
+    expect(isSameReplyExecutionSelection(active, incoming({ agentDir: "/other-agent" }))).toBe(
+      false,
+    );
   });
 });

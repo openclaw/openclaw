@@ -99,7 +99,8 @@ export function captureReplyMessageInjectionTarget(
           : (backend.toolAuthorityFingerprint ?? operation.toolAuthorityFingerprint);
       },
       get requesterPrincipalKey() {
-        return "handle" in attachment
+        // CLI preparation binds the requester to the operation, as the projections below read it.
+        return "handle" in attachment && !operationAuthority
           ? toolAuthority?.requesterPrincipalKey
           : operation.requesterPrincipalKey;
       },
