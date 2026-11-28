@@ -1,7 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  recordDeliveredCommandExchange,
+  shouldDeferDeliveredCommandExchange,
+} from "../../config/sessions/command-transcript.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
-import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
+import {
+  readAssistantDisplayContent,
+  retainAssistantModelContent,
+} from "../../shared/assistant-display-content.js";
 import { combineNonStreamingReplyParts } from "../../shared/text/trim-code-text.js";
 import { appendChatCanvasBlocksToMessage } from "../chat-display-projection.canvas.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
@@ -130,6 +137,8 @@ export async function finalizeChatSendDispatchedReplies(
     runtimeOwnsTranscript?: boolean;
     state: "final" | "aborted";
     stopReason?: string;
+    /** Delivered command input, retained so a deferred exchange records both rows. */
+    commandText?: string;
   },
 ): Promise<void> {
   const {
@@ -166,8 +175,9 @@ export async function finalizeChatSendDispatchedReplies(
     return;
   }
 
+  const runtimeOwnsTranscript = params.runtimeOwnsTranscript === true;
   const contextFreeCommand =
-    !params.runtimeOwnsTranscript &&
+    !runtimeOwnsTranscript &&
     deliveredReplies.length > 0 &&
     deliveredReplies.every(({ input }) => {
       const payload = readChatSendReplyPayload(input);
@@ -297,64 +307,113 @@ export async function finalizeChatSendDispatchedReplies(
       (payload) => getReplyPayloadMetadata(payload)?.assistantTranscriptOwned === true,
     );
     const shouldAppendAssistantTranscript = Boolean(
-      ((!params.runtimeOwnsTranscript && !payloadOwnsAssistantTranscript) ||
-        useTranscriptMirrorOwner) &&
+      ((!runtimeOwnsTranscript && !payloadOwnsAssistantTranscript) || useTranscriptMirrorOwner) &&
       canAppendAssistantTranscript &&
       (transcriptReply || persistedContentForAppend?.length),
     );
-    if (contextFreeCommand) {
-      await persistUserTurnTranscript({ contextFreeCommand: true });
-    } else {
-      await persistUserTurnTranscript();
-    }
-    if (!authorizeDelivery("transcript append")) {
-      return;
-    }
-    if (shouldAppendAssistantTranscript) {
-      const appended = await appendInjectedAssistantMessageToTranscript({
+    // A command ack delivered while another turn is running must not move that turn's
+    // transcript fence; it is recorded after that physical session settles instead (#194451).
+    // Production chat.send always threads the command input, so an absent commandText means
+    // there is no exchange to defer.
+    const commandText = params.commandText;
+    const deferCommandTranscript =
+      !runtimeOwnsTranscript &&
+      !contextFreeCommand &&
+      commandText !== undefined &&
+      rawFinalPayloads.length > 0 &&
+      rawFinalPayloads.every(
+        (payload) => getReplyPayloadMetadata(payload)?.commandReply === true,
+      ) &&
+      // The shared recorder owns this policy; scoping through the receiving store keeps a
+      // logical key that spans several stores from making the active-run lookup ambiguous.
+      shouldDeferDeliveredCommandExchange({
         sessionKey: transcriptSessionKey,
-        message: transcriptReply,
-        ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
-        sessionId,
-        storePath: latestStorePath,
         agentId: transcriptAgentId,
-        idempotencyKey: clientRunId,
-        stopReason,
-        ttsSupplement: ttsSupplementMarker,
-        ...(contextFreeCommand ? { contextFreeCommand: true } : {}),
+        storePath: latestStorePath,
         config: cfg,
-        onMessageCommitted: retainCommittedChatReplyMedia,
       });
-      if (appended.ok) {
-        message = broadcastAssistantContent?.length
-          ? applyAssistantDeliveryDirectives({
-              ...appended.message,
-              content: broadcastAssistantContent.map((block) => ({ ...block })),
-            })
-          : appended.message;
-      } else {
-        context.logGateway.warn(
-          `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
-        );
-        const fallbackAssistantContent =
-          stripManagedOutgoingAssistantContentBlocks(persistedAssistantContent) ??
-          stripManagedOutgoingAssistantContentBlocks(assistantContent);
-        const fallbackText = extractAssistantDisplayText(fallbackAssistantContent) ?? displayReply;
-        message = {
-          role: "assistant",
-          ...(fallbackAssistantContent?.length
-            ? { content: fallbackAssistantContent }
-            : fallbackText
-              ? { content: [{ type: "text", text: fallbackText }] }
-              : {}),
-          ...(fallbackText ? { text: fallbackText } : {}),
-          timestamp: Date.now(),
-          ...(ttsSupplementMarker ? { openclawTtsSupplement: ttsSupplementMarker } : {}),
+    if (deferCommandTranscript && commandText !== undefined) {
+      if (authorizeDelivery("transcript append")) {
+        // Deferring through the recorder keeps the prepared content, TTS marker, and media
+        // retention callback: the acknowledgement persists exactly as it would have inline.
+        await recordDeliveredCommandExchange({
+          sessionKey: transcriptSessionKey,
+          agentId: transcriptAgentId,
+          storePath: latestStorePath,
+          expectedSessionId: sessionId,
+          commandText,
+          commandId: clientRunId,
+          replyId: "gateway-ack",
+          replyText: transcriptReply,
+          ...(persistedContentForAppend?.length
+            ? {
+                content: retainAssistantModelContent(persistedContentForAppend),
+                displayContent: persistedContentForAppend,
+              }
+            : {}),
+          ...(ttsSupplementMarker ? { ttsSupplement: ttsSupplementMarker } : {}),
           stopReason,
-          usage: { input: 0, output: 0, totalTokens: 0 },
-        };
+          config: cfg,
+          onMessageCommitted: retainCommittedChatReplyMedia,
+        });
       }
-    } else if (broadcastAssistantContent?.length) {
+    } else {
+      if (contextFreeCommand) {
+        await persistUserTurnTranscript({ contextFreeCommand: true });
+      } else {
+        await persistUserTurnTranscript();
+      }
+      if (!authorizeDelivery("transcript append")) {
+        return;
+      }
+      if (shouldAppendAssistantTranscript) {
+        const appended = await appendInjectedAssistantMessageToTranscript({
+          sessionKey: transcriptSessionKey,
+          message: transcriptReply,
+          ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
+          sessionId,
+          storePath: latestStorePath,
+          agentId: transcriptAgentId,
+          idempotencyKey: clientRunId,
+          stopReason,
+          ttsSupplement: ttsSupplementMarker,
+          ...(contextFreeCommand ? { contextFreeCommand: true } : {}),
+          config: cfg,
+          onMessageCommitted: retainCommittedChatReplyMedia,
+        });
+        if (appended.ok) {
+          message = broadcastAssistantContent?.length
+            ? applyAssistantDeliveryDirectives({
+                ...appended.message,
+                content: broadcastAssistantContent.map((block) => ({ ...block })),
+              })
+            : appended.message;
+        } else {
+          context.logGateway.warn(
+            `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
+          );
+          const fallbackAssistantContent =
+            stripManagedOutgoingAssistantContentBlocks(persistedAssistantContent) ??
+            stripManagedOutgoingAssistantContentBlocks(assistantContent);
+          const fallbackText =
+            extractAssistantDisplayText(fallbackAssistantContent) ?? displayReply;
+          message = {
+            role: "assistant",
+            ...(fallbackAssistantContent?.length
+              ? { content: fallbackAssistantContent }
+              : fallbackText
+                ? { content: [{ type: "text", text: fallbackText }] }
+                : {}),
+            ...(fallbackText ? { text: fallbackText } : {}),
+            timestamp: Date.now(),
+            ...(ttsSupplementMarker ? { openclawTtsSupplement: ttsSupplementMarker } : {}),
+            stopReason,
+            usage: { input: 0, output: 0, totalTokens: 0 },
+          };
+        }
+      }
+    }
+    if (message === undefined && broadcastAssistantContent?.length) {
       message = {
         role: "assistant",
         content: broadcastAssistantContent,

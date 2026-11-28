@@ -402,7 +402,10 @@ export async function applyInlineDirectiveOverrides(params: {
             : undefined,
         ].filter(Boolean);
         typing.cleanup();
-        return { kind: "reply", reply: { text: parts.join(" ") } };
+        return {
+          kind: "reply",
+          reply: { text: parts.join(" ") },
+        };
       }
     }
     const {

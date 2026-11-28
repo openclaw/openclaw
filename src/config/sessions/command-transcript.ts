@@ -103,26 +103,34 @@ export async function prepareCommandTranscriptInput(
   return redactCommandTranscriptText(commandText, await redactConfigCommandInput(commandText));
 }
 
-type CommandExchangeParams = Pick<
+type CommandExchangeOwnerParams = Pick<
   Parameters<typeof appendAssistantMessageToSessionTranscript>[0],
-  | "agentId"
-  | "sessionKey"
-  | "expectedSessionId"
-  | "expectedLifecycleRevision"
-  | "expectedWriterRunId"
-  | "storePath"
-  | "config"
-  | "assertCurrent"
-  | "beforeMessageWrite"
-  | "contextFreeCommand"
-> & {
-  commandText: string;
-  replyText: string;
-  commandId: string;
-  replyId: string;
-  /** The command already committed its input as a user turn; record only the reply. */
-  commandInputCommitted?: boolean;
-};
+  "agentId" | "sessionKey" | "storePath" | "config" | "contextFreeCommand" | "expectedWriterRunId"
+>;
+
+type CommandExchangeParams = CommandExchangeOwnerParams &
+  Pick<
+    Parameters<typeof appendAssistantMessageToSessionTranscript>[0],
+    "expectedSessionId" | "expectedLifecycleRevision" | "assertCurrent" | "beforeMessageWrite"
+  > & {
+    commandText: string;
+    replyText: string;
+    commandId: string;
+    replyId: string;
+    /** The command already committed its input as a user turn; record only the reply. */
+    commandInputCommitted?: boolean;
+    /** Model content saved with the acknowledgement, derived from the prepared display content. */
+    content?: Parameters<typeof appendAssistantMessageToSessionTranscript>[0]["content"];
+    /** Prepared display content, so history keeps the media the reply delivered. */
+    displayContent?: Array<Record<string, unknown>>;
+    /** Companion TTS marker kept when the reply's audio attachment is persisted beside it. */
+    ttsSupplement?: { textSha256: string };
+    stopReason?: "stop" | "aborted";
+    /** Retains committed reply media after the deferred append commits. */
+    onMessageCommitted?: Parameters<
+      typeof appendAssistantMessageToSessionTranscript
+    >[0]["onMessageCommitted"];
+  };
 
 /** A local effect committed; this records its outcome, not delivery of the reply. */
 export function recordCommittedCommandExchange(params: CommandExchangeParams) {
@@ -138,7 +146,7 @@ const MAX_DEFERRED_COMMAND_EXCHANGE_WAITS = 8;
  * until no turn is executing. Rows coordinated with a writer run or kept out of context
  * cannot move the fence.
  */
-function resolveExchangeTarget(params: CommandExchangeParams): SessionTarget | undefined {
+function resolveExchangeTarget(params: CommandExchangeOwnerParams): SessionTarget | undefined {
   const sessionKey = params.sessionKey.trim();
   try {
     // Same physical owner the recorder writes to; a logical key can span several stores.
@@ -157,7 +165,7 @@ function resolveExchangeTarget(params: CommandExchangeParams): SessionTarget | u
 }
 
 function shouldDeferUntilActiveTurnSettles(
-  params: CommandExchangeParams,
+  params: CommandExchangeOwnerParams,
   target: SessionTarget | undefined,
 ): boolean {
   if (params.contextFreeCommand === true || params.expectedWriterRunId) {
@@ -199,6 +207,15 @@ async function recordAfterActiveTurnSettles(
   }
   logVerbose("Command transcript recording skipped: session stayed busy after delivery");
   return { ok: false as const, reason: "session stayed busy" };
+}
+
+/**
+ * Callers that own a separate recorder (Gateway chat.send finalization) ask the same policy
+ * before deciding whether to defer. The physical target keeps the lookup unambiguous when one
+ * logical key spans several stores.
+ */
+export function shouldDeferDeliveredCommandExchange(params: CommandExchangeOwnerParams): boolean {
+  return shouldDeferUntilActiveTurnSettles(params, resolveExchangeTarget(params));
 }
 
 /**
