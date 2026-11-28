@@ -249,6 +249,7 @@ async function deliverOwedNoticeAfterRestart(params: {
       : {
           createdAt: Math.floor(performance.timeOrigin) - 10_000,
           startedAt: Math.floor(performance.timeOrigin) - 9_000,
+          runTimeoutSeconds: 1,
         }),
   });
   subagentRuns.set(child.runId, child);

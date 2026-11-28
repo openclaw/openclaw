@@ -6,6 +6,7 @@ import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
+  SUBAGENT_ENDED_REASON_GATEWAY_RESTART,
 } from "./subagent-lifecycle-events.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
@@ -185,7 +186,7 @@ export async function settleRestartInterruptedSubagentRun(params: {
       outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
       // The old Gateway cannot publish another reply; the completion owner keeps any saved one.
       terminalReply: { disposition: "empty" },
-      reason: SUBAGENT_ENDED_REASON_ERROR,
+      reason: SUBAGENT_ENDED_REASON_GATEWAY_RESTART,
       sendFarewell: true,
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,

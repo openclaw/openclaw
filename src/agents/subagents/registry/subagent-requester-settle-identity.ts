@@ -2,7 +2,10 @@ import { isDeepStrictEqual } from "node:util";
 import { subagentCompletionForOutcome } from "../../../shared/subagent-completion.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import { isSubagentCompletionCancelled } from "./subagent-control-kill-intent.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import {
+  SUBAGENT_ENDED_REASON_KILLED,
+  subagentWorkerOutcomeStatus,
+} from "./subagent-lifecycle-events.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import {
@@ -316,7 +319,7 @@ export function settledCompletions(rows: readonly SubagentRunRecord[]) {
   return rows.flatMap((entry) => {
     const completion = subagentCompletionForOutcome(
       { runId: entry.runId, sessionKey: entry.childSessionKey, label: entry.label },
-      entry.execution.outcome?.status,
+      subagentWorkerOutcomeStatus(entry.endedReason, entry.execution.outcome),
       entry.endedReason === SUBAGENT_ENDED_REASON_KILLED,
     );
     return completion ? [completion] : [];

@@ -10,6 +10,7 @@ import {
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import { isSubagentRunVisibleToSession } from "./subagent-control-scope.js";
 import { isSubagentDeliveryWithheld } from "./subagent-delivery-state.js";
+import { subagentWorkerOutcomeStatus } from "./subagent-lifecycle-events.js";
 import { buildSubagentList, captureSubagentListReadContext } from "./subagent-list.js";
 import { withSubagentSessionListRead } from "./subagent-registry-read-index.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
@@ -34,8 +35,10 @@ export const SUBAGENT_SNAPSHOT_HEADINGS = [
   "## Active Subagents",
   "## Recently Completed Subagents",
   "## Child results awaiting delivery",
+  "## Recent Subagents",
 ] as const;
-const [ACTIVE_HEADING, RECENT_HEADING, PENDING_HEADING] = SUBAGENT_SNAPSHOT_HEADINGS;
+const [ACTIVE_HEADING, RECENT_HEADING, PENDING_HEADING, MIXED_RECENT_HEADING] =
+  SUBAGENT_SNAPSHOT_HEADINGS;
 
 function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
   if (
@@ -64,7 +67,7 @@ function formatPendingResult(entry: SubagentRunRecord): string {
     "-",
     `run_json=${quotePromptData(entry.runId)};`,
     `session_json=${quotePromptData(entry.childSessionKey)};`,
-    `outcome=${entry.execution.outcome?.status ?? "unknown"};`,
+    `outcome=${subagentWorkerOutcomeStatus(entry.endedReason, entry.execution.outcome)};`,
     `delivery=${entry.delivery?.status ?? "pending"};`,
     `requester_continuation=${entry.requesterSettleWake ? "pending" : "none"};`,
     `task_json=${quotePromptData(truncateUtf16Safe(entry.task, 96))};`,
@@ -198,9 +201,10 @@ export async function buildActiveSubagentRuntimeContext(params: {
         ]);
       }
       if (recentForPrompt.length > 0) {
+        const unconfirmed = recentForPrompt.some((entry) => entry.execution.state === "unknown");
         sections.push([
-          RECENT_HEADING,
-          `Children that ended in the last ${recentMinutes}m, newest first:`,
+          unconfirmed ? MIXED_RECENT_HEADING : RECENT_HEADING,
+          `Last ${recentMinutes}m, newest first:`,
           ...recentForPrompt.map(formatEntry),
         ]);
       }

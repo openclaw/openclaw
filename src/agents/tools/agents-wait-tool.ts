@@ -50,6 +50,7 @@ const CollectorCompletionSchema = Type.Object(
     status: Type.Union([
       Type.Literal("done"),
       Type.Literal("failed"),
+      Type.Literal("interrupted"),
       Type.Literal("killed"),
       Type.Literal("timeout"),
     ]),

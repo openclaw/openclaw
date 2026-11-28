@@ -145,10 +145,12 @@ requester transcript are not replayed.
 
 A crash or `SIGKILL` cannot write a shutdown marker. Startup can still resume an
 eligible root requester from its persisted run identity in the immediately preceding
-Gateway lifetime. Children do not resume independently. After any restart, a child
-that was still running in the previous Gateway is recorded as failed with an
-interruption error, and its requester receives that failure through the normal
-completion path, so a waiting parent wakes instead of waiting indefinitely.
+Gateway lifetime. Children do not resume independently. If the previous Gateway
+crashed before it recorded a child's result, the replacement Gateway closes its
+local run and wakes the parent with an interruption notice. The parent's status
+line shows `status=interrupted; execution=unknown`: losing contact does not
+establish that the worker stopped, failed, or succeeded. For a collector,
+`agents_wait` returns `interrupted` rather than leaving the parent waiting.
 The terminal notice waits for fresh requester authority after startup; it cannot
 use the previous Gateway's retired custody.
 

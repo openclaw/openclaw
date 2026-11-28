@@ -85,7 +85,7 @@ export type SubagentCompletionDeliveryState = {
     | "waiting_for_requester_turn";
 };
 
-export type SwarmCollectorStatus = "done" | "failed" | "killed" | "timeout";
+export type SwarmCollectorStatus = "done" | "failed" | "interrupted" | "killed" | "timeout";
 
 /** Persisted fields shared by compact registry reads and the full runtime record. */
 export type SubagentRunReadRecord = {

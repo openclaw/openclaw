@@ -1,5 +1,6 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { sanitizeRunStatusText } from "../../../agents/run-status-text.js";
+import { subagentWorkerOutcomeStatus } from "../../../agents/subagents/registry/subagent-lifecycle-events.js";
 import { subagentRuns } from "../../../agents/subagents/registry/subagent-registry-memory.js";
 import { createSubagentSessionListReadView } from "../../../agents/subagents/registry/subagent-registry-state.js";
 import {
@@ -75,7 +76,7 @@ export async function handleSubagentsInfoAction(
         errorContext: true,
       });
       const outcome = run.execution.outcome
-        ? `${run.execution.outcome.status}${outcomeError ? ` (${outcomeError})` : ""}`
+        ? `${subagentWorkerOutcomeStatus(run.endedReason, run.execution.outcome)}${outcomeError ? ` (${outcomeError})` : ""}`
         : "n/a";
       const taskText = sanitizeRunStatusText(run.task) || "n/a";
       const progressText = sanitizeRunStatusText(run.completion?.resultText);

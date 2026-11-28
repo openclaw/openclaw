@@ -65,7 +65,7 @@ type NativeSubagentCollection = {
   completed: Array<{
     runId: string;
     sessionKey: string;
-    status: "done" | "failed" | "killed" | "timeout";
+    status: "done" | "failed" | "interrupted" | "killed" | "timeout";
     result: string;
     /** The result may be incomplete: its complete answer was unavailable or exceeded 100 KB. */
     resultTruncated?: true;

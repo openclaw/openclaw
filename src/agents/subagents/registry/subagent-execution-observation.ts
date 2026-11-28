@@ -1,5 +1,6 @@
 import { isAgentRunWaitingForCapacity } from "../../../infra/agent-run-capacity-wait.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { SUBAGENT_ENDED_REASON_GATEWAY_RESTART } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRun, recordLatestSubagentRun } from "./subagent-run-generation.js";
@@ -88,7 +89,9 @@ export function observeSubagentExecution(
     };
   }
   if (hasSubagentRunEnded(entry)) {
-    return { state: "finished" };
+    return {
+      state: entry.endedReason === SUBAGENT_ENDED_REASON_GATEWAY_RESTART ? "unknown" : "finished",
+    };
   }
   if (entry.execution.status === "interrupted") {
     return { state: "unknown" };

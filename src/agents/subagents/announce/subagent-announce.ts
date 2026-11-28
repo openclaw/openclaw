@@ -29,7 +29,10 @@ import {
   buildSubagentPrivateCompletionInstruction,
   SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
 } from "../completion/subagent-completion-instructions.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
+import {
+  SUBAGENT_ENDED_REASON_KILLED,
+  subagentWorkerOutcomeStatus,
+} from "../registry/subagent-lifecycle-events.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   countPendingDescendantRuns,
@@ -344,14 +347,15 @@ async function runSubagentAnnounceFlowBound(
     const { childSessionCurrent } = preparedReply;
 
     const taskLabel = params.label || params.task || "task";
+    const workerStatus = subagentWorkerOutcomeStatus(params.endedReason, outcome);
     const statusLabel = killed
       ? describeChildrenEndedWithoutResult([taskLabel])
       : {
           ok: "completed; ready for parent review",
           timeout: outcome.error ? `timed out: ${outcome.error}` : "timed out",
           error: `failed: ${outcome.error || "unknown error"}`,
-          unknown: "finished with unknown status",
-        }[outcome.status];
+          unknown: outcome.error || "worker outcome unknown",
+        }[workerStatus];
 
     const announceSessionId =
       childSessionCurrent && childSessionEffectsAllowed() ? childSessionId || "unknown" : "unknown";
@@ -474,7 +478,7 @@ async function runSubagentAnnounceFlowBound(
             childSessionKey: params.childSessionKey,
             childSessionId: announceSessionId,
             taskLabel,
-            status: outcome.status,
+            status: workerStatus,
             statusLabel,
             result: findings,
             ...(childResultText ? {} : { noVisibleResult: true }),
@@ -495,7 +499,7 @@ async function runSubagentAnnounceFlowBound(
           subagentCompletions: [
             subagentCompletionForOutcome(
               { runId: params.childRunId, sessionKey: params.childSessionKey, label: params.label },
-              outcome.status,
+              workerStatus,
               killed,
             ),
           ].filter((completion) => completion !== undefined),
