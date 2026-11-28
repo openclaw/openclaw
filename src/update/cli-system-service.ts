@@ -2,6 +2,7 @@ import path from "node:path";
 import { satisfies } from "semver";
 import {
   assertGlobalUpdateOwner,
+  normalizeTag,
   parseUpdateChannel,
   parseUpdateTimeoutMs,
   requestUpdateDowngradeConfirmation,
@@ -21,6 +22,7 @@ import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import { runGlobalPackageUpdateSteps } from "../infra/package-update-steps.js";
 import { isSupportedBunVersion } from "../infra/runtime-guard.js";
 import { resolveEffectiveUpdateChannel } from "../infra/update-channels.js";
+import { fetchNpmPackageTargetStatus } from "../infra/update-check-package-target.js";
 import {
   createGlobalInstallEnv,
   detectGlobalInstallManagerForRoot,
@@ -38,7 +40,14 @@ export async function updateSystemServicePackage(
   root: string,
   unit: SystemdServiceAccountMismatch,
 ): Promise<void> {
-  const timeoutMs = parseUpdateTimeoutMs(opts.timeout) ?? PREPARE_DEADLINE_MS;
+  const deadline = Date.now() + (parseUpdateTimeoutMs(opts.timeout) ?? PREPARE_DEADLINE_MS);
+  const remaining = () => {
+    const timeoutMs = deadline - Date.now();
+    if (timeoutMs <= 0) {
+      throw new Error("System-service update timed out.");
+    }
+    return timeoutMs;
+  };
   const channel = parseUpdateChannel(opts.channel);
   if (
     opts.sha ||
@@ -50,7 +59,7 @@ export async function updateSystemServicePackage(
       "This system-service update replaces only the package. Run state maintenance and capability approval as the service account; Git SHAs and local override replay are not supported here.",
     );
   }
-  const manager = await detectGlobalInstallManagerForRoot(runCommandWithTimeout, root, timeoutMs);
+  const manager = await detectGlobalInstallManagerForRoot(runCommandWithTimeout, root, remaining());
   if (!manager) {
     throw new Error(
       "The system service's package manager could not be identified. Nothing changed.",
@@ -61,9 +70,9 @@ export async function updateSystemServicePackage(
     pkgRoot: root,
     honorPackageRoot: true,
     runCommand: runCommandWithTimeout,
-    timeoutMs,
+    timeoutMs: remaining(),
   });
-  await assertGlobalUpdateOwner({ root, installKind: "package", timeoutMs });
+  await assertGlobalUpdateOwner({ root, installKind: "package", timeoutMs: remaining() });
   const target = await resolveTarget({
     kind: "package",
     channel: resolveEffectiveUpdateChannel({
@@ -71,11 +80,18 @@ export async function updateSystemServicePackage(
       currentVersion: VERSION,
       installKind: "package",
     }).channel,
-    tag: opts.tag,
-    timeoutMs,
+    tag: normalizeTag(opts.tag) ?? undefined,
+    timeoutMs: remaining(),
   });
   if (target.kind !== "package") {
     throw new Error("A system-service package update requires a package target.");
+  }
+  const nodeEngine =
+    target.engines?.node ??
+    (await fetchNpmPackageTargetStatus({ target: target.version, timeoutMs: remaining() }))
+      .nodeEngine;
+  if (!nodeEngine) {
+    throw new Error("Could not read the target's Node requirements. The package was not changed.");
   }
   if (!opts.yes && (compareSemverStrings(VERSION, target.version) ?? 0) > 0) {
     const decision = await requestUpdateDowngradeConfirmation({
@@ -114,7 +130,7 @@ export async function updateSystemServicePackage(
       baseEnv: {},
       env: { PATH: "/usr/sbin:/usr/bin:/sbin:/bin" },
       cwd: "/",
-      timeoutMs: Math.min(timeoutMs, 10_000),
+      timeoutMs: Math.min(remaining(), 10_000),
       killProcessTree: true,
     },
   ).catch((cause: unknown) => {
@@ -130,12 +146,10 @@ export async function updateSystemServicePackage(
   const version = probe.stdout.trim();
   if (
     (bun && !isSupportedBunVersion(version)) ||
-    (!bun &&
-      target.engines?.node &&
-      !satisfies(version, target.engines.node, { includePrerelease: true }))
+    (!bun && !satisfies(version, nodeEngine, { includePrerelease: true }))
   ) {
     throw new Error(
-      `Service runtime ${version} cannot run this package (${bun ? "supported Bun required" : `Node ${target.engines?.node} required`}). ${nextStep}`,
+      `Service runtime ${version} cannot run this package (${bun ? "supported Bun required" : `Node ${nodeEngine} required`}). ${nextStep}`,
     );
   }
   const env = await createGlobalInstallEnv(
@@ -151,9 +165,19 @@ export async function updateSystemServicePackage(
     installSpec: target.spec,
     packageName: "openclaw",
     packageRoot: root,
-    runCommand: runCommandWithTimeout,
-    runStep: runUpdateStep,
-    timeoutMs,
+    runCommand: (argv, options) =>
+      runCommandWithTimeout(argv, {
+        ...(typeof options === "number" ? {} : options),
+        timeoutMs: Math.min(remaining(), typeof options === "number" ? options : options.timeoutMs),
+      }),
+    runStep: (step) =>
+      runUpdateStep({
+        ...step,
+        timeoutMs:
+          step.timeoutMs === undefined ? remaining() : Math.min(step.timeoutMs, remaining()),
+      }),
+    timeoutMs: remaining(),
+    workTimeoutMs: remaining(),
     env,
     resolveLifecycleNodeRunner: () => process.execPath,
   });
@@ -170,7 +194,7 @@ export async function updateSystemServicePackage(
       const restarted = await execSystemctl(
         ["--system", "restart", unit.unitName],
         process.env,
-        timeoutMs,
+        remaining(),
       );
       if (restarted.code !== 0) {
         throw new Error(restarted.stderr || restarted.stdout || "systemctl restart failed");
@@ -186,7 +210,7 @@ export async function updateSystemServicePackage(
     const active = await execSystemctl(
       ["--system", "is-active", "--quiet", unit.unitName],
       process.env,
-      timeoutMs,
+      remaining(),
     );
     if (active.code !== 0) {
       throw new Error(`Package installed, but ${unit.unitName} is not active. Check: ${checks}`);

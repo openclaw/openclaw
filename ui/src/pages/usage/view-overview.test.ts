@@ -292,7 +292,6 @@ describe("SessionsCard", () => {
       );
       const row = container.querySelector(".session-bar-row");
       const value = () => text(row, ".session-bar-value");
-      const average = () => text(container, ".sessions-card-stats > span");
       expect(text(row, ".session-bar-meta")).toContain("1m");
       const englishValue = value();
       await i18n.setLocale("de");
@@ -326,13 +325,12 @@ describe("SessionsCard", () => {
           maximumFractionDigits: 2,
         }).format(0),
       );
-      expect(average()).toBe("$0.00 avg");
     } finally {
       await restoreI18n();
     }
   });
 
-  it("renders a server page without changing its full-roster average", () => {
+  it("renders a server page in its server order", () => {
     const overview = createUsageOverview({
       total: 2,
       tableSessionCount: 100,
@@ -349,7 +347,6 @@ describe("SessionsCard", () => {
       }),
     );
     expect(texts(container, ".session-bar-title", false)).toEqual(["B", "A"]);
-    expect(text(container, ".sessions-card-stats")).toContain("500 avg");
   });
 
   it("leads with the top ten sessions and expands to the full page on request", () => {

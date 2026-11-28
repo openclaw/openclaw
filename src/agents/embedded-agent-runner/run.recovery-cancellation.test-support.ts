@@ -27,7 +27,7 @@ import type {
   EmbeddedRunAttemptInternalParams,
 } from "./run/internal-params.js";
 
-function timeoutAttempt(sessionIdUsed = "test-session") {
+function timeoutAttempt(sessionIdUsed: string) {
   const assistant = makeAssistantMessageFixture();
   assistant.usage = { ...assistant.usage, input: 180_000, totalTokens: 180_000 };
   return makeAttemptResult({
@@ -562,7 +562,7 @@ describe("recovery cancellation through the public run owner", () => {
           expect(sessionAccessor.loadSessionEntry(durableTarget)).toMatchObject({
             sessionId: runParams.sessionId,
           });
-          return { ...timeoutAttempt(), sessionIdUsed: runParams.sessionId };
+          return timeoutAttempt(runParams.sessionId);
         })
         .mockResolvedValueOnce(makeAttemptResult({ sessionIdUsed: runParams.sessionId }));
       mockedCompactDirect.mockImplementationOnce(async () => {

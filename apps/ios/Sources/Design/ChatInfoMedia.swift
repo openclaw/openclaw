@@ -165,7 +165,8 @@ struct ChatInfoMedia: View {
                             visit: self.visit,
                             item: item,
                             stripVisible: self.stripVisible,
-                            requestedID: self.$requestedID)
+                            isOpening: self.requestedID != nil,
+                            open: { self.requestedID = item.id })
                             .frame(width: 72, height: 72).clipShape(.rect(cornerRadius: 10))
                     }
                     if items.count > ChatInfoVisit.stripLimit {
@@ -223,13 +224,14 @@ struct ChatInfoMediaButton: View {
     let visit: ChatInfoVisit
     let item: ArtifactSummary
     let stripVisible: Bool
-    @Binding var requestedID: String?
+    let isOpening: Bool
+    let open: () -> Void
     @Environment(NodeAppModel.self) private var app
 
     var body: some View {
         let supported = self.item.download["mode"]?.value as? String != "unsupported"
         let key = self.visit.thumbnailKey(for: self.item, in: self.app)
-        Button { self.requestedID = self.item.id } label: {
+        Button(action: self.open) {
             ChatInfoMediaTile(
                 symbol: ChatInfoMedia.symbol(for: self.item),
                 isImage: supported && self.item.type == "image",
@@ -243,7 +245,7 @@ struct ChatInfoMediaButton: View {
             }
         }.buttonStyle(.plain).accessibilityLabel(Text(verbatim: self.item.title))
             .accessibilityIdentifier("chat-info-media-" + self.item.id)
-            .disabled(!supported || self.requestedID != nil)
+            .disabled(!supported || self.isOpening)
     }
 }
 
