@@ -153,7 +153,10 @@ in its `ExecStart`:
    status` run as that account shows it, and removes the backup. If the
    installed updater put the previous package back after a later failure, that
    unit instead stops the service, restores its state from the backup as the
-   service account, and starts it again.
+   service account, and starts it again. If the updater stopped before it
+   confirmed the new release ready, and the service does not answer its account's
+   `openclaw gateway health` now, the backup is not removed: the unit restores the
+   state and leaves the service stopped.
 
 If the new release does not come ready, the service's state is restored from that
 backup as the service account, only after the unit is confirmed stopped, and the

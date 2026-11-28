@@ -79,6 +79,7 @@ const show = (property) => String(spawnSync("/usr/bin/systemctl", ["show", "-p",
 const asAccount = (expected, ...args) => {
   const run = spawnSync(p.runuser, ["-u", p.account, "--", process.execPath, "-e", p.loader, p.envFile, p.root + "/dist/index.js", ...args], { env: { PATH: p.path }, cwd: "/", stdio: ["ignore", "pipe", "inherit"], encoding: "utf8", maxBuffer: 256 * 1024, timeout: 60 * 60000 });
   if (run.status !== 0 || run.error || typeof run.stdout !== "string") return false;
+  if (expected === undefined) return true;
   const text = run.stdout;
   const at = text.startsWith("{") ? 0 : text.lastIndexOf("\\n{") + 1;
   if (at <= 0 && !text.startsWith("{")) return false;
@@ -106,8 +107,18 @@ const settle = () => {
     return;
   }
   if (!rolledBack) {
-    log("update kept; recording it as " + p.account);
-    if (!asAccount("finished", "update", "finish", "--backup-root", p.backupRoot)) log("update finish did not confirm; the backup is kept; retry update finish as " + p.account);
+    // Retire the backup only for a verified activation: root's marker from the Doctor child, or
+    // the unit serving now with the account's own client reaching it.
+    const verified = fs.existsSync(p.handoffDir + "/verified") || (show("ActiveState") === "active" && asAccount(undefined, "gateway", "health", "--json"));
+    if (verified) {
+      log("update kept; recording it as " + p.account);
+      if (!asAccount("finished", "update", "finish", "--backup-root", p.backupRoot)) log("update finish did not confirm; the backup is kept; retry update finish as " + p.account);
+      return;
+    }
+    log("the update was not verified; restoring " + p.account + "'s state and leaving " + p.unit + " stopped");
+    systemctl("stop", p.unit);
+    for (let i = 0; i < 90 && !stopped(); i++) spawnSync("/bin/sleep", ["1"]);
+    if (!stopped() || !asAccount("restored", "update", "restore", "--backup-root", p.backupRoot)) log("restore did not confirm; backup kept at " + p.backupRoot);
     return;
   }
   log("the installed updater restored " + version + "; restoring " + p.account + "'s state");
@@ -440,6 +451,8 @@ async function activateSystemServiceAsAccount(
     if (!ready) {
       return await restore(`${unitName} did not come ready on ${options.candidateVersion}.`);
     }
+    // Root's own record that this activation was verified; the account cannot write here.
+    await fs.writeFile(path.join(handoff.directory, "verified"), "", { mode: 0o600, flag: "wx" });
     return {
       status: "updated",
       unitName,

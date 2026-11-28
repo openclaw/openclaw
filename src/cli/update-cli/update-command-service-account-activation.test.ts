@@ -351,6 +351,8 @@ describe("settle step after the installed updater exits", () => {
     version: string;
     buildId?: string;
     receipt?: boolean;
+    /** Root's marker that the Doctor child verified the started candidate. */
+    verified?: boolean;
     active: string;
     controlGroup?: string;
     cgroupEvents?: string;
@@ -398,6 +400,8 @@ describe("settle step after the installed updater exits", () => {
         }
         throw Object.assign(new Error("missing"), { code: "ENOENT" });
       },
+      existsSync: (file: string) =>
+        file === `${payload.handoffDir}/verified` && world.verified === true,
       rmSync: (dir: string) => events.push(`rm ${dir}`),
       lstatSync: (file: string) => {
         if (file === `${payload.backupRoot}.receipt.json` && world.receipt !== false) {
@@ -422,8 +426,12 @@ describe("settle step after the installed updater exits", () => {
           return { status: 0 };
         }
         if (command === payload.runuser) {
-          const step = args[args.indexOf("update") + 1] ?? "";
-          events.push(`as ${args[1]}: update ${step}`);
+          const step = args.includes("update")
+            ? (args[args.indexOf("update") + 1] ?? "")
+            : args.includes("health")
+              ? "health"
+              : "";
+          events.push(`as ${args[1]}: ${step === "health" ? "gateway" : "update"} ${step}`);
           const [status, stdout] = world.account[step] ?? [70, ""];
           return { status, stdout };
         }
@@ -446,9 +454,10 @@ describe("settle step after the installed updater exits", () => {
     return events;
   }
 
-  it("records the kept update as the account, reading its indented result", async () => {
+  it("records the verified kept update as the account, reading its indented result", async () => {
     const events = runSettle(await settleScript(), "settle", {
       version: "2026.11.16",
+      verified: true,
       active: "active",
       account: { finish: ok("finished") },
     });
@@ -459,6 +468,40 @@ describe("settle step after the installed updater exits", () => {
     ]);
     expect(events.join("\n")).not.toContain("did not confirm");
   });
+
+  it("records a kept update without the marker once the serving unit answers the account", async () => {
+    const events = runSettle(await settleScript(), "settle", {
+      version: "2026.11.16",
+      active: "active",
+      account: { health: [0, "{}"], finish: ok("finished") },
+    });
+
+    expect(events.filter((event) => !event.startsWith("log "))).toEqual([
+      "as openclaw: gateway health",
+      "as openclaw: update finish",
+      "rm /tmp/handoff",
+    ]);
+  });
+
+  it.each([
+    { name: "the unit is not running", active: "failed", health: [0, "{}"] as [number, string] },
+    { name: "the account cannot reach it", active: "active", health: [1, ""] as [number, string] },
+  ])(
+    "keeps the backup and restores an unverified kept update when $name",
+    async ({ active, health }) => {
+      // The updater died between the migration and readiness, then kept the candidate.
+      const events = runSettle(await settleScript(), "settle", {
+        version: "2026.11.16",
+        active,
+        account: { health, restore: ok("restored"), finish: ok("finished") },
+      });
+
+      expect(events).not.toContain("as openclaw: update finish");
+      expect(events).toContain("systemctl stop openclaw-gateway.service");
+      expect(events).toContain("as openclaw: update restore");
+      expect(events).not.toContain("systemctl start openclaw-gateway.service");
+    },
+  );
 
   it("restores the state as the account and restarts after the updater restored the package", async () => {
     const events = runSettle(await settleScript(), "settle", {
