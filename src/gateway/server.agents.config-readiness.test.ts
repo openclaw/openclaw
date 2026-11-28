@@ -12,6 +12,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { readRegisteredAgentDatabasePaths } from "../agents/agent-delete-databases.js";
 import { localStateOwnerFixtureEntrypoint } from "../cli/cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import {
@@ -25,6 +26,7 @@ import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as pluginLifecycleLease from "../plugins/plugin-lifecycle-lease.js";
+import { readAgentDeletionJournalAsync } from "../state/agent-deletion-journal.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { setCanonicalUserPreferences } from "../state/user-preferences.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
@@ -367,27 +369,52 @@ it("publishes overlapping mutations from two operators", async ({ signal }) => {
                 operator.request("agents.delete", deletion),
                 otherOperator.request("agents.delete", deletion),
               ]);
-              expect(results.filter((result) => result.status === "fulfilled")).toEqual([
-                {
-                  status: "fulfilled",
-                  value: expect.objectContaining({ ok: true, agentId: overlapAgentId }),
-                },
-              ]);
-              const failure: unknown = results.find(
-                (result) => result.status === "rejected",
-              )?.reason;
-              if (failure instanceof GatewayClientRequestError && failure.code === "UNAVAILABLE") {
-                // Cleanup can outlast the concurrent loser's five-second lease wait.
-                expect(failure.message).toContain(
+              // Keep-files deletion keeps the database registration, so the loser may delete the
+              // retired agent again (#207257) or outlast its five-second lease wait. Either way it
+              // must not change what the winner did.
+              expect(results).toContainEqual({
+                status: "fulfilled",
+                value: expect.objectContaining({ ok: true, agentId: overlapAgentId }),
+              });
+              for (const result of results) {
+                if (result.status === "fulfilled") {
+                  expect(result.value).toMatchObject({
+                    ok: true,
+                    agentId: overlapAgentId,
+                    removed: [],
+                    failed: [],
+                  });
+                  continue;
+                }
+                expect(result.reason).toBeInstanceOf(GatewayClientRequestError);
+                expect(result.reason).toMatchObject({ code: "UNAVAILABLE" });
+                expect(result.reason.message).toContain(
                   `agent deletion core:agent-deletion/${overlapAgentId} is held by `,
                 );
-                expect(failure.message).toContain("code=OPENCLAW_STATE_LEASE_HELD");
-              } else {
-                expect(failure).toMatchObject({
-                  code: "INVALID_REQUEST",
-                  message: `agent "${overlapAgentId}" not found`,
-                });
+                expect(result.reason.message).toContain("code=OPENCLAW_STATE_LEASE_HELD");
               }
+              // The lease serializes the two requests, so the loser runs as a repeat delete of a
+              // completed keep-files deletion. Repeat it explicitly to compare the stores.
+              const workspace = path.join(state.home, overlapAgentId);
+              const journal = await readAgentDeletionJournalAsync(overlapAgentId);
+              // The winner's journal, not a fresh one begun by the loser.
+              expect(journal).toMatchObject({
+                deleteFiles: false,
+                cleanupCompleted: true,
+                workspaceDir: workspace,
+              });
+              assert.isDefined(journal);
+              const registered = await readRegisteredAgentDatabasePaths(overlapAgentId);
+              expect(registered).not.toHaveLength(0);
+              await matches(otherOperator.request("agents.delete", deletion), {
+                ok: true,
+                agentId: overlapAgentId,
+                removed: [],
+                failed: [],
+              });
+              await Promise.all([workspace, journal.agentDir].map((kept) => fs.access(kept)));
+              expect(await readAgentDeletionJournalAsync(overlapAgentId)).toEqual(journal);
+              expect(await readRegisteredAgentDatabasePaths(overlapAgentId)).toEqual(registered);
             } else {
               await matches(operator.request("agents.delete", deletion), {
                 ok: true,
