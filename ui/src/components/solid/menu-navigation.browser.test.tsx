@@ -621,6 +621,7 @@ it("defers cold button pointer focus until click without suppressing context men
   const { handle, button } = mountColdMenu();
   const down = (mouseButton: number) => {
     const event = new PointerEvent("pointerdown", {
+      pointerType: "mouse",
       button: mouseButton,
       bubbles: true,
       cancelable: true,
