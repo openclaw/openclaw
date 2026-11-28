@@ -330,6 +330,10 @@ const readers: Readers & ThisType<ReaderContext> = {
     (input) => ({ kind: "session-title-fields", ...input }),
     (value) => value.fields,
   ),
+  readSearchTitles: reader(
+    (input) => ({ kind: "session-search-titles", ...input }),
+    (value) => value.titles,
+  ),
   readWatermark: reader(
     (input) => ({ kind: "transcript-watermark", ...input }),
     (value) => value.watermark,

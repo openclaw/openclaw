@@ -134,6 +134,13 @@ suite.define(() => {
           "gpt-5.5",
         ),
         "sessions.search": {
+          sessions: [
+            {
+              ...sessionRow("launch"),
+              sessionId: "session-launch",
+              derivedTitle: "Launch planning",
+            },
+          ],
           results: [
             searchHit(
               "launch",
@@ -164,10 +171,11 @@ suite.define(() => {
       query: "nebula launch",
       scope: searchScope,
     });
+    await captureUiProof("03-results.png");
     for (const text of ["Launch planning", "Assistant", "nebula launch checklist"]) {
       await expect.poll(() => result.textContent()).toContain(text);
     }
-    await captureUiProof("03-results.png");
+    expect(await result.textContent()).not.toContain("agent:main:launch");
 
     await search.getByRole("button", { name: "Clear" }).click();
     await expect.poll(() => input.inputValue()).toBe("");

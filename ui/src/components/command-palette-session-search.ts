@@ -73,9 +73,17 @@ export function buildCommandPaletteSessionItems(params: {
     (hit) => hit.sessionKey,
   );
   const rowsByKey = new Map(visibleRows.map((row) => [row.key, row] as const));
-  for (const row of transcriptResult?.sessions ?? []) {
-    if (!rowsByKey.has(row.key)) {
+  const transcriptTitles = new Map<string, string>();
+  for (const { derivedTitle, ...row } of transcriptResult?.sessions ?? []) {
+    const listed = rowsByKey.get(row.key);
+    if (!listed) {
       rowsByKey.set(row.key, row);
+    }
+    if (
+      derivedTitle &&
+      (!listed || (listed.sessionId === row.sessionId && row.sessionId && !listed.derivedTitle))
+    ) {
+      transcriptTitles.set(row.key, derivedTitle);
     }
   }
   const live = [...rowsByKey.values()]
@@ -117,21 +125,27 @@ export function buildCommandPaletteSessionItems(params: {
         exactThenRecent(left, right),
     )
     .slice(0, SESSION_SEARCH_LIMIT)
-    .map<CommandPaletteItem>(({ row, label, inMessages, transcriptHit }) => ({
-      id: `session-${row.key}`,
-      label,
-      icon: "messageSquare",
-      category: inMessages ? "messages" : "chats",
-      action: `${SESSION_ACTION_PREFIX}${row.key}`,
-      session: row,
-      description:
-        inMessages && transcriptHit
-          ? clampText(
-              transcriptHit.snippet.replace(/\s+/gu, " ").trim(),
-              SESSION_SEARCH_SNIPPET_MAX_CHARS,
-            )
-          : undefined,
-    }));
+    .map<CommandPaletteItem>(({ row, label, inMessages, transcriptHit }) => {
+      // A name learned from message search must not reclassify a message hit
+      // as a metadata match or make its snippet disappear.
+      const derivedTitle = transcriptTitles.get(row.key);
+      const session = derivedTitle ? { ...row, derivedTitle } : row;
+      return {
+        id: `session-${row.key}`,
+        label: derivedTitle ? resolveSessionDisplayName(row.key, session) : label,
+        icon: "messageSquare",
+        category: inMessages ? "messages" : "chats",
+        action: `${SESSION_ACTION_PREFIX}${row.key}`,
+        session,
+        description:
+          inMessages && transcriptHit
+            ? clampText(
+                transcriptHit.snippet.replace(/\s+/gu, " ").trim(),
+                SESSION_SEARCH_SNIPPET_MAX_CHARS,
+              )
+            : undefined,
+      };
+    });
   const archived = (params.archivedRows ?? [])
     .filter((row) => !rowsByKey.has(row.key))
     .map((row) => {

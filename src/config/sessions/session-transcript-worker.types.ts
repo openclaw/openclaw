@@ -232,6 +232,13 @@ type SessionTitleFieldsWorkerInput = {
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
+type SessionSearchTitlesWorkerInput = {
+  kind: "session-search-titles";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+  sessions: readonly { sessionKey: string; sessionId: string }[];
+};
+
 type SessionActivitySummarySourceWorkerInput = SessionActivitySummaryBatchInput & {
   kind: "session-activity-summary-source";
   database: { agentId: string; path: string };
@@ -335,6 +342,7 @@ export type SessionHistoryWorkerInput =
   | SessionTranscriptHistoryWorkerInput
   | SessionPreviewWorkerInput
   | SessionTitleFieldsWorkerInput
+  | SessionSearchTitlesWorkerInput
   | SessionTranscriptWatermarkWorkerInput
   | SessionTranscriptStatsWorkerInput
   | SessionTranscriptMessagePresenceWorkerInput
@@ -480,6 +488,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     "history-page": SessionHistoryWorkerResult;
     "session-preview": { kind: "session-preview"; items: SessionPreviewItem[] };
     "session-title-fields": { kind: "session-title-fields"; fields: SessionTitleFields };
+    "session-search-titles": { kind: "session-search-titles"; titles: (string | undefined)[] };
     "transcript-watermark": { kind: "transcript-watermark"; watermark: SessionTranscriptWatermark };
     "transcript-stats": { kind: "transcript-stats"; stats: SessionTranscriptStats };
     "transcript-message-presence": { kind: "transcript-message-presence"; present: boolean };
@@ -646,6 +655,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     ) => Promise<SessionHistoryWorkerResult>;
     readPreview: SessionHistoryReader<"session-preview", "items">;
     readTitleFields: SessionHistoryReader<"session-title-fields", "fields">;
+    readSearchTitles: CancellableSessionHistoryReader<"session-search-titles", "titles">;
     readWatermark: SessionHistoryReader<"transcript-watermark", "watermark">;
     readStats: SessionHistoryReader<"transcript-stats", "stats">;
     readActivitySummarySource: SessionHistoryReader<"session-activity-summary-source", "source">;

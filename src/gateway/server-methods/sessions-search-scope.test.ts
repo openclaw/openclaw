@@ -473,7 +473,9 @@ test("scope search reaches beyond 200 sessions and four agents with bounded matc
         },
       );
     }
-    const key = await seed("fifth", "old-target", owner, "distant uniqueneedle", {
+    const firstMessage = "Investigate the distant uniqueneedle";
+    const key = await seed("fifth", "old-target", owner, firstMessage, {
+      displayName: undefined,
       updatedAt: 1,
     });
     await Promise.all(
@@ -481,13 +483,27 @@ test("scope search reaches beyond 200 sessions and four agents with bounded matc
         expect(readSessionTranscriptIndexStatus({ agentId })).resolves.toBe(false),
       ),
     );
-    const result = await search(requestContext(cfg), identifiedClient(owner), {
+    const context = requestContext(cfg);
+    await initializeSessionReadContext(context);
+    const projection = expectDefined(getSessionRowProjection(context), "search projection");
+    const startupRows = projection.materializedCount;
+    const searchTranscripts = transcriptSearch.searchSessionTranscripts;
+    const materializedBeforeSearch: number[] = [];
+    vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementation((...args) => {
+      materializedBeforeSearch.push(projection.materializedCount - startupRows);
+      return searchTranscripts(...args);
+    });
+    const result = await search(context, identifiedClient(owner), {
       query: "uniqueneedle",
       limit: 1,
       scope: paletteScope,
     });
     expect(result.ok, result.error?.message).toBe(true);
-    expect(result.payload).toMatchObject({ results: [{ sessionKey: key }], sessions: [{ key }] });
+    expect.soft(materializedBeforeSearch).toEqual([0, 0, 0, 0, 0]);
+    expect(result.payload).toMatchObject({
+      results: [{ sessionKey: key }],
+      sessions: [{ key, derivedTitle: firstMessage }],
+    });
     expect(result.payload?.results).toHaveLength(1);
     expect(result.payload?.sessions).toHaveLength(1);
     expect(result.payload).not.toHaveProperty("indexing");
@@ -728,14 +744,14 @@ test("scope rechecks sharing after readiness and reports FTS failure instead of 
     const client = identifiedClient(viewer);
     await initializeSessionReadContext(context);
     const projection = expectDefined(getSessionRowProjection(context), "search projection");
-    const ensureMaterialized = projection.ensureMaterialized;
-    vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
+    const prepareSelection = projection.prepareSelection;
+    vi.spyOn(projection, "prepareSelection").mockImplementationOnce(async (options) => {
       await replaceSessionEntry(
         { agentId: "main", sessionKey: key },
         { sessionId: "replacement-generation", updatedAt: Date.now() },
       );
       await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, { visibility: "draft" });
-      await ensureMaterialized();
+      await prepareSelection(options);
     });
     expect(await search(context, client, { query: "needle", scope: {} })).toMatchObject({
       ok: true,

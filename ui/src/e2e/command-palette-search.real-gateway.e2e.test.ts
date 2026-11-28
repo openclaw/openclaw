@@ -40,6 +40,9 @@ const targetKey = "agent:fifth:search-proof-12345678-0000-4000-8000-000000000001
 const targetLabel = "Per-session communication controls in UI";
 const targetMessage =
   "The copperfinch observatory uses cross-agent message routing beside the violet lantern.";
+const untitledKey = "agent:fifth:search-without-stored-title";
+const untitledFirstMessage = "Plan the observatory opening";
+const untitledMatch = "The starlamp arrives on Friday.";
 const scope = {
   includeGlobal: false,
   includeUnknown: false,
@@ -93,6 +96,13 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
       updatedAt: now - 7 * 86_400_000,
       text: targetMessage,
     },
+    {
+      agentId: "fifth",
+      key: untitledKey,
+      label: undefined,
+      updatedAt: now - 8 * 86_400_000,
+      text: untitledFirstMessage,
+    },
   ];
   // Prepare canonical SQLite entries and synchronously indexed message appends
   // before the child starts, so its resident projection sees the complete corpus.
@@ -138,19 +148,20 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
         {
           config,
           cwd: owner.state.workspaceDir,
-          messages: [
-            {
-              message: {
-                role: "user",
-                content: [{ type: "text", text: fixture.text }],
-                timestamp: fixture.updatedAt,
-              },
-              now: fixture.updatedAt,
+          messages: (fixture.key === untitledKey
+            ? [fixture.text, untitledMatch]
+            : [fixture.text]
+          ).map((text, index) => ({
+            message: {
+              role: "user",
+              content: [{ type: "text", text }],
+              timestamp: fixture.updatedAt + index,
             },
-          ],
+            now: fixture.updatedAt + index,
+          })),
         },
       );
-      expect(appended).toHaveLength(1);
+      expect(appended).toHaveLength(fixture.key === untitledKey ? 2 : 1);
     }
   }
 }
@@ -582,6 +593,11 @@ suite.define(() => {
           expect(partial.resultKeys).toEqual([targetKey]);
           await results.getByRole("option").filter({ hasText: targetLabel }).waitFor();
           expect(await results.textContent()).toContain(targetMessage);
+
+          const untitled = await search("starlamp", 1, "cold-transcript-title.png");
+          expect(untitled.resultKeys).toEqual([untitledKey]);
+          await results.getByRole("option").filter({ hasText: untitledFirstMessage }).waitFor();
+          expect(await results.textContent()).toContain(untitledMatch);
 
           const common = await search(commonQuery, 25, "01-common-limited-search.png");
           expect(common.truncated).toBe(true);

@@ -182,7 +182,26 @@ export function TranscriptSearchResults(props: TranscriptSearchViewProps) {
 function TranscriptSearchContent(props: TranscriptSearchViewProps) {
   const resultState = () => props.readSearch();
   const results = createMemo(() => resultState()?.results ?? []);
-  const rows = createMemo(() => resultState()?.sessions ?? []);
+  const naming = createMemo(() => {
+    const titles = new Map<string, string>();
+    const firstKeyByTitle = new Map<string, string>();
+    const duplicateTitles = new Set<string>();
+    for (const row of resultState()?.sessions ?? []) {
+      const title = [row.label, row.displayName, row.derivedTitle]
+        .map(normalizeOptionalString)
+        .find((name) => name && name !== row.key);
+      if (title) {
+        titles.set(row.key, title);
+        const first = firstKeyByTitle.get(title);
+        if (first && first !== row.key) {
+          duplicateTitles.add(title);
+        } else {
+          firstKeyByTitle.set(title, row.key);
+        }
+      }
+    }
+    return { titles, duplicateTitles };
+  });
   const retryNotice = () => {
     return resultState()?.indexing ? t("sessionsView.transcriptSearchIndexing") : null;
   };
@@ -225,14 +244,9 @@ function TranscriptSearchContent(props: TranscriptSearchViewProps) {
           <div class="sessions-transcript-search__list">
             <For each={results()}>
               {(hit) => {
-                const label = createMemo(() => {
-                  const row = rows().find((candidate) => candidate.key === hit.sessionKey);
-                  return (
-                    normalizeOptionalString(row?.label) ??
-                    normalizeOptionalString(row?.displayName) ??
-                    hit.sessionKey
-                  );
-                });
+                const label = createMemo(
+                  () => naming().titles.get(hit.sessionKey) ?? hit.sessionKey,
+                );
                 const timestamp = createMemo(() =>
                   hit.timestamp > 0 ? formatRelativeTimestamp(hit.timestamp) : t("common.na"),
                 );
@@ -252,7 +266,11 @@ function TranscriptSearchContent(props: TranscriptSearchViewProps) {
                       </span>
                     </span>
                     <span class="sessions-transcript-search__snippet">{hit.snippet}</span>
-                    <span class="sessions-transcript-search__key">{hit.sessionKey}</span>
+                    <Show
+                      when={label() !== hit.sessionKey && naming().duplicateTitles.has(label())}
+                    >
+                      <span class="sessions-transcript-search__key">{hit.sessionKey}</span>
+                    </Show>
                   </button>
                 );
               }}
