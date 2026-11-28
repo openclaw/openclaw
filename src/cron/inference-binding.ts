@@ -1,11 +1,24 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { CronJob } from "./types.js";
+import type { CronStoredJob } from "./types.js";
 
-export function cronInferencePayload(job: Pick<CronJob, "payload" | "sessionTarget">) {
+export function followsSessionInferenceAccount(job: CronStoredJob | undefined): boolean {
+  return (
+    job?.systemEventAccount === "session" &&
+    job.payload.kind === "systemEvent" &&
+    job.sessionTarget === "main" &&
+    !job.inferenceBinding &&
+    !job.runtimeAuthority &&
+    !job.runtimeAuthorityRecoveryRequired
+  );
+}
+
+export function cronInferenceMigrationPayload(
+  job: Pick<CronStoredJob, "payload" | "sessionTarget" | "systemEventAccount">,
+) {
   const payload = job.payload;
-  return payload.kind === "systemEvent" ||
+  return (payload.kind === "systemEvent" && job.systemEventAccount !== "session") ||
     (payload.kind === "agentTurn" && job.sessionTarget !== "main")
     ? payload
     : undefined;

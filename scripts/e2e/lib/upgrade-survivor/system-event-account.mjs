@@ -3,6 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import { createServer, request } from "node:http";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -55,6 +56,42 @@ if (mode === "env-ref") {
   env.OPENCLAW_REMINDER_FIXTURE_KEY = fixtureKey;
 }
 const children = new Set();
+const otherKey = "sk-test-synthetic-other-account-207275";
+const accountHits = [];
+// Observe only synthetic account labels at the HTTP boundary, never store credential values.
+const witness =
+  mode === "literal"
+    ? createServer((req, res) => {
+        if (req.method === "POST") {
+          const bearer = req.headers.authorization;
+          accountHits.push(
+            bearer === "Bearer " + fixtureKey
+              ? "default"
+              : bearer === "Bearer " + otherKey
+                ? "other"
+                : "unknown",
+          );
+        }
+        const upstream = request(
+          {
+            hostname: "127.0.0.1",
+            port: port + 200,
+            path: req.url,
+            method: req.method,
+            headers: req.headers,
+          },
+          (response) => {
+            res.writeHead(response.statusCode ?? 502, response.headers);
+            response.pipe(res);
+          },
+        );
+        upstream.on("error", () => {
+          res.writeHead(502);
+          res.end();
+        });
+        req.pipe(upstream);
+      })
+    : undefined;
 async function start(exe, args, name, extra = {}) {
   const log = await fs.open(path.join(root, name + ".log"), "w", 0o600);
   try {
@@ -128,6 +165,10 @@ async function occurrence(id) {
   return history.entries[0];
 }
 try {
+  if (witness) {
+    witness.listen(port + 100, "127.0.0.1");
+    await once(witness, "listening");
+  }
   if (mode !== "no-model") {
     config.agents.defaults.model = { primary: "proof/proof-model" };
     config.models = {
@@ -150,14 +191,14 @@ try {
       [fileURLToPath(new URL("../../mock-openai-server.mjs", import.meta.url))],
       "model",
       {
-        MOCK_PORT: String(port + 100),
+        MOCK_PORT: String(port + (witness ? 200 : 100)),
         MOCK_REQUEST_LOG: requestLog,
         MOCK_RESPONSE_CONTROL: control,
       },
     );
   }
   await fs.writeFile(env.OPENCLAW_CONFIG_PATH, JSON.stringify(config), { mode: 0o600 });
-  async function saveAccount(profileId = "proof:fixture") {
+  async function saveAccount(profileId = "proof:fixture", key = fixtureKey) {
     const child = spawn(
       cli,
       [
@@ -174,7 +215,7 @@ try {
       { cwd: root, env, stdio: ["pipe", "ignore", "inherit"] },
     );
     const done = once(child, "close");
-    child.stdin.end(fixtureKey + "\n");
+    child.stdin.end(key + "\n");
     assert.equal((await done)[0], 0);
   }
   const latestStable = version === "2026.11.10";
@@ -293,8 +334,63 @@ try {
       requests: recoveryRequests,
     };
   }
+  let fresh;
+  if (mode === "literal") {
+    await stop(updatedGateway);
+    await saveAccount("proof:other", otherKey);
+    const gw = await gateway("fresh-reminder-gateway");
+    const select = (profile) =>
+      call([
+        "gateway",
+        "call",
+        "sessions.patch",
+        "--params",
+        JSON.stringify({ key: "agent:main:main", model: "proof/proof-model@proof:" + profile }),
+        "--json",
+      ]);
+    await select("default");
+    const reminder = JSON.parse(
+      await call([
+        "cron",
+        "add",
+        "--agent",
+        "main",
+        "--session",
+        "main",
+        "--every",
+        "7d",
+        "--system-event",
+        "Report fresh-reminder-check",
+        "--name",
+        "fresh-reminder",
+        "--json",
+      ]),
+    );
+    assert.equal(storedJob(reminder.id).profile, null);
+    const runWithAccount = async (id, expected) => {
+      accountHits.length = 0;
+      const result = await occurrence(id);
+      assert.equal(result.status, "ok", result.error);
+      assert.deepEqual(accountHits, [expected]);
+    };
+    await runWithAccount(reminder.id, "default");
+    await select("other");
+    await stop(gw);
+    await call(["doctor", "--fix", "--non-interactive"]);
+    await gateway("after-repeat-doctor");
+    assert.equal(storedJob(reminder.id).profile, null);
+    await runWithAccount(reminder.id, "other");
+    await runWithAccount(job.id, "default");
+    fresh = {
+      id: reminder.id,
+      profileAfterDoctor: storedJob(reminder.id).profile,
+      accounts: ["default", "other"],
+      repairedAccount: "default",
+    };
+  }
   console.log(
     JSON.stringify({
+      fresh,
       recovery,
       version,
       mode,
@@ -323,5 +419,10 @@ try {
 } finally {
   for (const child of [...children].toReversed()) {
     await stop(child);
+  }
+  if (witness?.listening) {
+    await new Promise((resolve) => {
+      witness.close(resolve);
+    });
   }
 }

@@ -36,7 +36,7 @@ import { prepareSqliteTargetFromSessionStorePath } from "../../../config/session
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import {
-  cronInferencePayload,
+  cronInferenceMigrationPayload,
   normalizeCronInferenceBinding,
   type CronInferenceBinding,
 } from "../../../cron/inference-binding.js";
@@ -116,7 +116,7 @@ export async function maybeRepairCronInferenceBindings(params: {
         // Malformed legacy rows must not abandon adoption for unrelated jobs or partitions.
         // Normalize only resolver input; the committed definition retains every authored field.
         const job = normalizeCronJobCreate(definition);
-        const payload = job && cronInferencePayload(job);
+        const payload = job && cronInferenceMigrationPayload(job);
         if (!job || !payload) {
           continue;
         }

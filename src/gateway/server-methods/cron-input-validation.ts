@@ -22,7 +22,6 @@ import {
 import { resolveCronDeliveryDefaultsScope } from "../../cron/delivery-defaults.js";
 import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
-import { cronInferencePayload } from "../../cron/inference-binding.js";
 import {
   requiresExternalCronDelivery,
   resolveDeliveryTarget,
@@ -317,14 +316,14 @@ export async function captureCronCreatorSession(
         callerScope.agentId,
       )
     : legacyActor;
-  const inferencePayload = hasRuntimeAuthority ? undefined : cronInferencePayload(job);
+  const inferencePayload =
+    !hasRuntimeAuthority && job.sessionTarget !== "main" && job.payload.kind === "agentTurn"
+      ? job.payload
+      : undefined;
   const inferenceAgentId = inferencePayload
     ? resolveCronJobEffectiveAgentId({ ...job, agentId }, tryResolveAmbientOwnerAgentId(cfg))
     : undefined;
-  const executionSessionKey =
-    job.payload.kind === "systemEvent"
-      ? "main"
-      : (resolveCronSessionTargetSessionKey(job.sessionTarget) ?? "");
+  const executionSessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? "";
   const executionSession =
     inferenceAgentId && executionSessionKey
       ? await loadGatewaySessionEntryReadOnlyInWorker({
@@ -333,34 +332,27 @@ export async function captureCronCreatorSession(
           agentId: inferenceAgentId,
         })
       : undefined;
-  const runtimeSessionEntry = inferencePayload
-    ? await loadCronRuntimeSessionEntry({
-        cfg,
-        job,
-        agentId,
-        executionEntry: executionSession?.entry,
-        loaded: sessionKey ? { key: sessionKey, entry: loaded?.entry } : undefined,
-      })
-    : undefined;
   const inference =
-    // A creator runtime grant owns its own inference identity. Never bind an ambient host profile.
     inferencePayload && inferenceAgentId
       ? await captureCronInferenceForCaller(
           {
             cfg,
             agentId: inferenceAgentId,
-            payloadKind: inferencePayload.kind,
-            model: inferencePayload.kind === "agentTurn" ? inferencePayload.model : undefined,
+            model: inferencePayload.model,
             isGmailHook:
-              inferencePayload.kind === "agentTurn" &&
               (inferencePayload.externalContentSource ??
                 resolveHookExternalContentSource(
                   parseAgentSessionKey(executionSessionKey)?.rest ?? executionSessionKey,
                 )) === "gmail",
-            sessionEntry:
-              job.payload.kind !== "systemEvent" && callerScope ? creatorSession : undefined,
+            sessionEntry: callerScope ? creatorSession : undefined,
             executionSessionEntry: executionSession?.entry,
-            runtimeSessionEntry,
+            runtimeSessionEntry: await loadCronRuntimeSessionEntry({
+              cfg,
+              job,
+              agentId: inferenceAgentId,
+              executionEntry: executionSession?.entry,
+              loaded: sessionKey ? { key: sessionKey, entry: loaded?.entry } : undefined,
+            }),
           },
           caller,
         )

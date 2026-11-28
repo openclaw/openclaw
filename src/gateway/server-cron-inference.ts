@@ -13,7 +13,7 @@ import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runt
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
-import { cronInferencePayload } from "../cron/inference-binding.js";
+import { cronInferenceMigrationPayload } from "../cron/inference-binding.js";
 import {
   inspectCronInferenceAccount,
   prepareCronInferenceDiagnosticSession,
@@ -34,7 +34,7 @@ async function describeCronInferenceMigration(
   job: CronStoredJob,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
-  const payload = cronInferencePayload(job);
+  const payload = cronInferenceMigrationPayload(job);
   if (
     !payload ||
     job.inferenceBinding ||

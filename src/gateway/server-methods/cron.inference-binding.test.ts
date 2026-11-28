@@ -73,6 +73,7 @@ describe("cron handler inference binding persistence", () => {
       payload: { kind: "systemEvent", text: "Reminder" },
     });
     const before = await fixture.reload();
+    expect(before.inferenceBinding).toBeUndefined();
     await updateModel(fixture, before.id, `openai/gpt-4.1@${subscriptionId}`);
     const after = await fixture.reload();
     expect(after).toMatchObject({
@@ -100,6 +101,8 @@ describe("cron handler inference binding persistence", () => {
   }) => {
     const payload = { kind: "systemEvent", text: "Reminder" } as const;
     await fixture.invoke("cron.add", { ...createParams(), sessionTarget: "main", payload });
+    const created = await fixture.reload();
+    await updateModel(fixture, created.id, `openai/gpt-4.1@${platformId}`);
     const before = await fixture.reload();
     expect(before.inferenceBinding?.profileId).toBe(platformId);
 
