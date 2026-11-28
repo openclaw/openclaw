@@ -65,9 +65,9 @@ function temporaryInstall(label: string) {
   return { root, [Symbol.dispose]: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
-function mockActiveSource(id: string, source: string, status?: string) {
+function mockActiveSource(id: string, source: string) {
   snapshotReport.mockReturnValue({
-    plugins: [{ id, origin: "config", source, ...(status ? { status } : {}) }],
+    plugins: [{ id, origin: "config", source }],
     diagnostics: [],
   });
 }
@@ -389,11 +389,7 @@ it("preserves replaced npm install directories across generation updates", async
 
 it("does not warn when the config-selected source is inside the npm install path", async () => {
   mockEnabledPlugin("discord");
-  mockActiveSource(
-    "discord",
-    "/tmp/openclaw/npm/node_modules/@openclaw/discord/dist/index.js",
-    "loaded",
-  );
+  mockActiveSource("discord", "/tmp/openclaw/npm/node_modules/@openclaw/discord/dist/index.js");
 
   await persistNpm("discord", {
     install: npmInstall("@openclaw/discord", "/tmp/openclaw/npm/node_modules/@openclaw/discord"),
