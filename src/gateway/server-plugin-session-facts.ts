@@ -34,6 +34,7 @@ import {
 import type { SelectionRow } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionVisibility } from "./session-sharing.js";
+import { resolveGatewaySessionDisplayName } from "./session-utils-display.js";
 import { prepareProjectedSessionList, selectSessionEntries } from "./session-utils-list.js";
 
 const SESSION_FACTS_LIMIT = 40;
@@ -368,7 +369,7 @@ export async function withTrustedPluginSessionFacts<T>(
                 key,
                 sessionId: entry.sessionId,
                 agentId: target.agentId,
-                label: safeText(entry.label, 240),
+                label: safeText(resolveGatewaySessionDisplayName(key, entry), 240),
                 derivedTitle: safeText(entry.autoLabel, 240),
                 run: "idle",
                 pullRequests: [],

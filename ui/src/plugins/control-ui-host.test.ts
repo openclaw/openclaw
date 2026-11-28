@@ -200,6 +200,9 @@ describe("native UI roster refresh", () => {
       limit: 1,
     };
     await fixture.sessions.refresh({ agentId: "main" });
+    const primarySnapshot = fixture.host.sessions.rows;
+    expect(Object.isFrozen(primarySnapshot)).toBe(true);
+    expect(Object.isFrozen(primarySnapshot[0])).toBe(true);
     fixture.host.sessions.observe(query, linkedListener);
     fixture.host.sessions.observe({ agentId: "research", limit: 2 }, researchListener);
     await vi.waitFor(() => {
@@ -229,7 +232,8 @@ describe("native UI roster refresh", () => {
         archivedFilter: archived,
       }).result?.sessions[0]?.label,
     ).toBe("Linked session");
-    expect(fixture.host.sessions.rows).toEqual(primary.sessions);
+    expect(fixture.host.sessions.rows).toBe(primarySnapshot);
+    expect(primarySnapshot).toEqual(primary.sessions);
   });
 
   it("publishes session query errors and rejects failed refreshes while allowing recovery", async () => {

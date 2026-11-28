@@ -8,13 +8,15 @@ import {
 } from "../../lib/workboard/test/index-helpers.ts";
 import type { WorkboardCard } from "../../lib/workboard/types.ts";
 import { waitForFast } from "../../test/wait-for.ts";
-import type { WorkboardProps } from "./view-helpers.tsx";
 import { buttonByLabel, createWorkboardView, openCardMenu } from "./view.test-support.ts";
 
 const provisional = "subagent:workboard-default-card-1";
 const canonical = "agent:writer:existing";
 
-function renderDetails(card: WorkboardCard, overrides: Partial<WorkboardProps> = {}) {
+function renderDetails(
+  card: WorkboardCard,
+  overrides: Parameters<typeof createWorkboardView>[0] = {},
+) {
   const props = { canWrite: true, onOpenSession: vi.fn(), ...overrides };
   const view = createWorkboardView(props);
   const { state } = view;

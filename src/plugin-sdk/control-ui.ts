@@ -360,7 +360,7 @@ export type ControlUiHost = {
   onEvent: (event: string, listener: (payload: unknown) => void) => ControlUiDisposer;
   subscribe: (listener: () => void) => ControlUiDisposer;
   sessions: {
-    /** The current application roster may be filtered and paginated. */
+    /** Read-only snapshot of the current application roster, which may be filtered and paginated. */
     readonly rows: readonly ControlUiSession[];
     readonly selectedKey: string;
     normalizeKey: (sessionKey: string) => string;

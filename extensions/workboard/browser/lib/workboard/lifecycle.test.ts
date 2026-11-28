@@ -1,6 +1,6 @@
 import "../../test/host.setup.ts";
 import { expect, it } from "vitest";
-import { getWorkboardLifecycle } from "./lifecycle.ts";
+import { getWorkboardLifecycle, indexWorkboardSessions } from "./lifecycle.ts";
 import { createGatewaySession, createWorkboardCard } from "./test/index-helpers.ts";
 
 const localKey = "subagent:workboard-default-card-1";
@@ -23,7 +23,7 @@ it.each([
   },
 ])("keeps $name unresolved", ({ linkedKey, sessionKeys }) => {
   const card = createWorkboardCard({ sessionKey: linkedKey });
-  const sessions = sessionKeys.map((key) => createGatewaySession({ key }));
+  const sessions = indexWorkboardSessions(sessionKeys.map((key) => createGatewaySession({ key })));
   expect(getWorkboardLifecycle(card, sessions)).toEqual({ session: null, state: "unknown" });
 });
 
@@ -40,9 +40,10 @@ it("uses only the current session for lifecycle even when a historical attempt i
       attempts: [{ id: "previous", status: "failed", startedAt: 1, sessionKey: previous.key }],
     },
   });
-  expect(getWorkboardLifecycle(card, [previous])).toEqual({ session: null, state: "unknown" });
+  const sessions = indexWorkboardSessions([previous]);
+  expect(getWorkboardLifecycle(card, sessions)).toEqual({ session: null, state: "unknown" });
   expect(
-    getWorkboardLifecycle(card, [previous], {
+    getWorkboardLifecycle(card, sessions, {
       key: localKey,
       status: "resolved",
       session: current,

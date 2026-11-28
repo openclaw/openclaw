@@ -5,9 +5,23 @@ import { isReservedSessionKey } from "./session-links.ts";
 import type { WorkboardSessionResolution } from "./session-resolution.ts";
 import type { WorkboardCard, WorkboardLifecycle } from "./types.ts";
 
+export function indexWorkboardSessions(sessions: readonly GatewaySessionRow[]) {
+  const index = new Map<string, GatewaySessionRow>();
+  if (sessions.length) {
+    const normalizeKey = workboardHost().sessions.normalizeKey;
+    for (const session of sessions) {
+      const key = normalizeKey(session.key);
+      if (!index.has(key)) {
+        index.set(key, session);
+      }
+    }
+  }
+  return index;
+}
+
 export function findWorkboardSession(
   card: WorkboardCard,
-  sessions: readonly GatewaySessionRow[],
+  sessions: ReadonlyMap<string, GatewaySessionRow>,
   resolution?: WorkboardSessionResolution,
 ): GatewaySessionRow | null {
   const sessionKey = workboardCardSessionKey(card);
@@ -19,14 +33,12 @@ export function findWorkboardSession(
     return resolution.status === "resolved" ? resolution.session : null;
   }
   // A filtered roster proves exact positive matches, never provisional uniqueness.
-  return (
-    sessions.find((session) => workboardHost().sessions.normalizeKey(session.key) === key) ?? null
-  );
+  return sessions.get(key) ?? null;
 }
 
 export function getWorkboardLifecycle(
   card: WorkboardCard,
-  sessions: readonly GatewaySessionRow[],
+  sessions: ReadonlyMap<string, GatewaySessionRow>,
   resolution?: WorkboardSessionResolution,
 ): WorkboardLifecycle {
   const session = findWorkboardSession(card, sessions, resolution);

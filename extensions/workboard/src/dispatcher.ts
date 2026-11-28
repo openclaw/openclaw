@@ -330,7 +330,7 @@ async function runWorkboardDispatch(
       });
       assertOwnerCurrent?.();
       if (worker?.archivedAt !== undefined) {
-        const message = `Worker session "${sessionKey}" is archived. Run openclaw sessions delete ${sessionKey} so the next dispatch starts a fresh worker, or restore the session.`;
+        const message = `The worker session for this card is archived. Restore it, or run openclaw sessions delete ${sessionKey} to start a fresh worker on the next dispatch.`;
         await params.store
           .addWorkerLog(card.id, { level: "warning", message, sessionKey })
           .catch(() => undefined);

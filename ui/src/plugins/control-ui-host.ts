@@ -4,6 +4,7 @@ import type {
   ControlUiHost,
   ControlUiPageNavigationOptions,
   ControlUiPageTarget,
+  ControlUiSession,
 } from "../../../src/plugin-sdk/control-ui.js";
 import { isPluginInlineViewVersion } from "../../../src/shared/plugin-inline-view.js";
 import { serializeSidebarEntry } from "../app-navigation.ts";
@@ -89,6 +90,8 @@ export function createControlUiPluginHost(
     };
   };
   const dock = getContext().assistantDock;
+  let rosterSource: readonly ControlUiSession[] | undefined;
+  let rosterSnapshot: readonly ControlUiSession[] = Object.freeze([]);
   // Only an activation that actually docked a conversation owns a close-on-dispose.
   let dockCloseRetained = false;
   return {
@@ -167,7 +170,23 @@ export function createControlUiPluginHost(
     },
     sessions: {
       get rows() {
-        return structuredClone(current().sessions.state.result?.sessions ?? []);
+        const rows = current().sessions.state.result?.sessions;
+        if (rows !== rosterSource) {
+          const snapshot = structuredClone(rows ?? []);
+          // The cloned rows are plain RPC data. Freeze them before sharing the snapshot.
+          const pending: object[] = [snapshot];
+          while (pending.length) {
+            const value = Object.freeze(pending.pop()!);
+            for (const child of Object.values(value)) {
+              if (child && typeof child === "object" && !Object.isFrozen(child)) {
+                pending.push(child);
+              }
+            }
+          }
+          rosterSource = rows;
+          rosterSnapshot = snapshot;
+        }
+        return rosterSnapshot;
       },
       get selectedKey() {
         return current().gateway.snapshot.sessionKey;

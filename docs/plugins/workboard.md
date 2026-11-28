@@ -15,6 +15,10 @@ and a link back to the card's task, run, and Control UI session. A separate
 **Sessions board** groups existing sessions into editable columns using rules over
 Gateway-owned facts.
 
+Workboard uses session names when they are available. Technical details still
+show session keys for troubleshooting, and a linked session can remain on a card
+after it is archived.
+
 Workboard is intentionally small: it tracks local operating work for one
 OpenClaw Gateway. It is not a replacement for GitHub Issues, Linear, Jira, or
 other team project management systems.

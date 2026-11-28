@@ -902,43 +902,60 @@ describe("WorkboardView", () => {
     );
   });
 
-  it.each(["available", "missing"] as const)("offers %s linked session choices", (availability) => {
-    const { host, state } = createLoadedWorkboardState();
-    state.draftOpen = true;
-    const missingKey = "agent:main:archived-session";
-    if (availability === "missing") {
-      state.draftSessionKey = missingKey;
-    }
-    const container = document.createElement("div");
-    const props = createWorkboardRenderProps(host, {
-      sessions:
-        availability === "available"
-          ? [
-              {
-                key: "agent:main:dashboard:1",
-                kind: "direct",
-                displayName: "Existing session",
-                updatedAt: 2,
-              },
-              createGatewaySession({ key: "global", kind: "global", agentId: "main" }),
-              createGatewaySession({ key: "unknown", kind: "unknown", agentId: "main" }),
-              createGatewaySession({ key: "agent:writer:unknown", agentId: "writer" }),
-            ]
-          : [],
-    });
-    renderInto(container, props);
-    const picker = sessionPicker(container);
-    if (availability === "available") {
-      expect(picker.options.map((option) => option.label)).toContain("No linked session");
-      expect(picker.options.map((option) => option.label)).toContain("Existing session");
-      expect(picker.options.map((option) => option.value)).toEqual([
-        "",
-        "agent:main:dashboard:1",
-        "agent:writer:unknown",
-      ]);
-    } else {
-      expect(picker.value).toBe(missingKey);
-      expect(picker.options).toContainEqual({ value: missingKey, label: missingKey });
-    }
-  });
+  it.each(["available", "archived", "missing"] as const)(
+    "offers %s linked session choices",
+    (availability) => {
+      const { host, state } = createLoadedWorkboardState();
+      state.draftOpen = true;
+      const missingKey = "agent:main:archived-session";
+      if (availability !== "available") {
+        state.draftSessionKey = missingKey;
+      }
+      const container = document.createElement("div");
+      const props = createWorkboardRenderProps(host, {
+        sessions:
+          availability === "available"
+            ? [
+                {
+                  key: "agent:main:dashboard:1",
+                  kind: "direct",
+                  derivedTitle: "Existing session",
+                  updatedAt: 2,
+                },
+                createGatewaySession({ key: "global", kind: "global", agentId: "main" }),
+                createGatewaySession({ key: "unknown", kind: "unknown", agentId: "main" }),
+                createGatewaySession({ key: "agent:writer:unknown", agentId: "writer" }),
+                createGatewaySession({ key: missingKey, archived: true }),
+              ]
+            : availability === "archived"
+              ? [
+                  createGatewaySession({
+                    key: missingKey,
+                    archived: true,
+                    displayName: undefined,
+                    derivedTitle: "Previous worker",
+                  }),
+                ]
+              : [],
+      });
+      renderInto(container, props);
+      const picker = sessionPicker(container);
+      if (availability === "available") {
+        expect(picker.options.map((option) => option.label)).toContain("No linked session");
+        expect(picker.options.map((option) => option.label)).toContain("Existing session");
+        expect(picker.options.map((option) => option.value)).toEqual([
+          "",
+          "agent:main:dashboard:1",
+          "agent:writer:unknown",
+        ]);
+      } else {
+        expect(picker.value).toBe(missingKey);
+        expect(picker.options).toContainEqual({
+          value: missingKey,
+          label: availability === "archived" ? "Previous worker" : "Session",
+          description: missingKey,
+        });
+      }
+    },
+  );
 });

@@ -24,7 +24,7 @@ function hasWorkboardProofEvidence(card: WorkboardCard): boolean {
 export function workboardCardMatchesHealthKey(
   card: WorkboardCard,
   key: WorkboardHealthKey,
-  sessions: readonly GatewaySessionRow[],
+  sessions: ReadonlyMap<string, GatewaySessionRow>,
 ): boolean {
   switch (key) {
     case "stale":

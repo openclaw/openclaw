@@ -1,8 +1,9 @@
 /** @jsxImportSource @solidjs/web */
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { AgentPicker, Dialog, SelectPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
 import { WorkboardErrorToast } from "../../components/toast.tsx";
+import { workboardHost } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
 import {
   changedDraftPayload,
@@ -31,6 +32,7 @@ import {
   renderPriorityIcon,
   formatStatusLabel,
   isWorkboardSessionChoice,
+  workboardSessionName,
   type WorkboardProps,
 } from "./view-helpers.tsx";
 import { liveInputValue } from "./view-input-value.ts";
@@ -172,7 +174,6 @@ function CardModalContent(props: WorkboardProps) {
   const notesValue = liveInputValue(() => state().draftNotes);
   const commentValue = liveInputValue(commentBody);
   const visibleError = () => workboardErrorMessage(state(), props.pageError);
-  const sessions = () => props.sessions.filter(isWorkboardSessionChoice);
   const statusOptions = () =>
     state().statuses.map((status) => ({
       value: status,
@@ -186,23 +187,41 @@ function CardModalContent(props: WorkboardProps) {
   const defaultAgentId = () => props.agentsList?.defaultId ?? props.defaultAgentId ?? "";
   const assignableAgentOptions = () =>
     buildAssignableAgentPickerOptions(props.agentsList, state().draftAgentId, defaultAgentId());
-  const sessionOptions = () => {
-    const options = [
-      { value: "", label: t("workboard.noLinkedSession") },
-      ...sessions().map((session) => ({
+  const roster = createMemo(() => props.sessions);
+  const sessionResolution = createMemo(() => props.sessionResolution);
+  const draftSessionKey = createMemo(() => state().draftSessionKey);
+  const sessionOptions = createMemo(() => {
+    const resolution = sessionResolution();
+    const candidates =
+      resolution?.status === "resolved" ? [resolution.session] : (resolution?.candidates ?? []);
+    const rows = new Map(roster());
+    const normalizeKey = workboardHost().sessions.normalizeKey;
+    for (const session of candidates) {
+      rows.set(normalizeKey(session.key), session);
+    }
+    const linkedKey = draftSessionKey();
+    const options = [{ value: "", label: t("workboard.noLinkedSession") }];
+    let includesLinked = false;
+    for (const session of rows.values()) {
+      if (!isWorkboardSessionChoice(session, session.key === linkedKey)) {
+        continue;
+      }
+      includesLinked ||= session.key === linkedKey;
+      options.push({
         value: session.key,
-        label: session.displayName ?? session.label ?? session.key,
-        description: session.displayName || session.label ? session.key : undefined,
-      })),
-    ];
-    if (
-      state().draftSessionKey &&
-      !options.some((option) => option.value === state().draftSessionKey)
-    ) {
-      options.push({ value: state().draftSessionKey, label: state().draftSessionKey });
+        label: workboardSessionName(session) ?? t("workboard.fieldSession"),
+        description: session.key,
+      });
+    }
+    if (linkedKey && !includesLinked) {
+      options.push({
+        value: linkedKey,
+        label: t("workboard.fieldSession"),
+        description: linkedKey,
+      });
     }
     return options;
-  };
+  });
   const editing = () => Boolean(state().editingCardId);
   const editingCard = () =>
     state().editingCardId

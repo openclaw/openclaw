@@ -30,6 +30,7 @@ import {
   formatEventLabel,
   formatLifecycle,
   formatPriorityLabel,
+  workboardSessionName,
   workboardErrorMessage,
   workboardMutationContext,
   workboardViewState,
@@ -221,7 +222,7 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
         returnFocusTarget: initialReturnFocusTarget,
         className: "drawer drawer--floating",
         label: card().title,
-        description: lifecycle().session?.displayName ?? formatted().detail,
+        description: workboardSessionName(lifecycle().session) ?? formatted().detail,
         style:
           "--openclaw-modal-width: 620px; --openclaw-modal-backdrop-filter: none; --openclaw-modal-backdrop-color: rgba(0, 0, 0, 0.24);",
         onCancel: dismissDetails,

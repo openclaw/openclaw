@@ -4,7 +4,7 @@ import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { expect, it } from "vitest";
 import { getWorkboardDependencyState } from "./card-state.ts";
-import { getWorkboardLifecycle } from "./lifecycle.ts";
+import { getWorkboardLifecycle, indexWorkboardSessions } from "./lifecycle.ts";
 import { loadWorkboard, refreshWorkboard } from "./loading.ts";
 import { moveWorkboardCard, updateWorkboardCardProperties } from "./mutations.ts";
 import { getWorkboardState, resetWorkboardConnectionState } from "./runtime.ts";
@@ -189,5 +189,5 @@ it.each([
 ] as const)("derives %s lifecycle from the native session", (status, expected) => {
   const session = createGatewaySession({ status, hasActiveRun: status === "running" });
   const card = createWorkboardCard({ sessionKey: session.key });
-  expect(getWorkboardLifecycle(card, [session]).state).toBe(expected);
+  expect(getWorkboardLifecycle(card, indexWorkboardSessions([session])).state).toBe(expected);
 });
