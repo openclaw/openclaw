@@ -670,13 +670,9 @@ export function createModelProviderLogin(options: {
           loginProviders([card.id, ...card.credentialProviderIds]).length > 0,
       };
     },
-    get pageActions() {
+    get loginMessage() {
       view.read();
-      return {
-        onConnect: () => open(),
-        connectDisabled: !options.canStart() || busy(),
-        loginMessage: message,
-      };
+      return message;
     },
     get wizardViewProps() {
       view.read();

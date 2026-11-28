@@ -37,6 +37,13 @@ suite.define(() => {
           featureMethods: [rpc.detect, rpc.auth, rpc.next],
           methodResponses: {
             [rpc.detect]: makeDetection({ authOptions: [providerLogin] }),
+            "models.authStatus": {
+              ts: 1,
+              providers: [],
+              providerCapabilities: [
+                { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
+              ],
+            },
             [rpc.auth]: runningWizard(),
             [rpc.next]: activationFailure(
               "The model could not finish setup",
@@ -58,6 +65,10 @@ suite.define(() => {
         await button(dialog, "Close").click();
         await expectCount(page.locator(".model-setup-discovery"), 1);
         await expect.poll(() => signIn.isDisabled()).toBe(outcome === "uncertain");
+        // Catalog sign-in cannot start a replacement attempt while the activation may commit.
+        const catalogConnect = page.locator("[data-models-catalog-provider] button").first();
+        await catalogConnect.waitFor({ state: "attached" });
+        expect(await catalogConnect.isDisabled()).toBe(outcome === "uncertain");
         const receiptKey = "openclaw.modelSetup.pendingActivation.v1";
         const receipt = await page.evaluate((key) => localStorage.getItem(key), receiptKey);
         expect(receipt === null).toBe(outcome === "rejected");

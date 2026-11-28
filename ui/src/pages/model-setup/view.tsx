@@ -466,14 +466,7 @@ function FirstRunSummary(props: ModelSetupViewProps) {
           </SettingsSection>
         )}
       </Show>
-      {/* Detected models appear with the page's first paint, never above a catalog already shown. */}
-      <Show
-        when={
-          props.canAdmin && !props.gatewayTooOld && props.detectionSettled !== false
-            ? result()
-            : undefined
-        }
-      >
+      <Show when={props.canAdmin && !props.gatewayTooOld ? result() : undefined}>
         {(ready) => (
           <CandidateRows
             {...props}

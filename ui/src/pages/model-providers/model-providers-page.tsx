@@ -51,9 +51,8 @@ export function ModelProvidersContent(props: {
   const installedAgents = <InstalledAgents />;
   // First-run setup owns local discovery, so its activations keep their recovery receipt.
   const [firstRunDiscovery, setFirstRunDiscovery] = createSignal(false);
-  // Detected models render above the catalog; one loading boundary waits for them so the
-  // catalog never moves when they arrive.
-  const [firstRunSettled, setFirstRunSettled] = createSignal(false);
+  // An unresolved first-run activation may still commit; no catalog attempt may replace it.
+  const [firstRunUnresolved, setFirstRunUnresolved] = createSignal(false);
   const firstRunSetup = (
     <Show when={props.firstRun}>
       <Loading>
@@ -61,7 +60,7 @@ export function ModelProvidersContent(props: {
           discoveryOpen={firstRunDiscovery()}
           agentLabel={discoveryData().agentLabel}
           credentialChoices={discoveryData().credentialChoices}
-          onDetectionSettled={() => setFirstRunSettled(true)}
+          onActivationUnresolved={setFirstRunUnresolved}
           onClose={() => {
             setFirstRunDiscovery(false);
             current().props.onRefresh();
@@ -108,7 +107,7 @@ export function ModelProvidersContent(props: {
           providerDetailsReady={showProviderDetails()}
           accountRecovery={<Recovery />}
           firstRunSetup={firstRunSetup}
-          firstRunPending={props.firstRun === true && !firstRunSettled()}
+          firstRunUnresolved={firstRunUnresolved()}
           installedAgents={current().installedAgentsAvailable ? installedAgents : undefined}
           agentModel={agentModel()}
           catalogReceipt={agentFailuresOnly() ? undefined : current().props.catalogReceipt}
@@ -118,7 +117,13 @@ export function ModelProvidersContent(props: {
             const { login } = props.controller;
             const group = catalogProviders().find((entry) => entry.id === providerId);
             // A provider with one way in starts it; the rest open its method step.
-            if (group && current().props.canMutate && !login.busy && !login.enter(group)) {
+            if (
+              group &&
+              current().props.canMutate &&
+              !login.busy &&
+              !firstRunUnresolved() &&
+              !login.enter(group)
+            ) {
               void login.open(group.authProviders, { select: group.id });
             }
           }}

@@ -390,12 +390,9 @@ suite.define(() => {
     await gateway.waitForRequest("openclaw.setup.detect");
     expect(await gateway.getRequests("openclaw.setup.detect")).toHaveLength(1);
     await page.getByRole("heading", { name: "Models", exact: true }).waitFor();
-    // One loading boundary holds the catalog until detection settles, so detected models
-    // never push it down after it appears.
-    const pageLoading = page.locator(".model-providers__loading");
-    await pageLoading.waitFor();
+    // Slow discovery never holds the provider catalog.
     const catalog = page.locator("[data-models-catalog]");
-    expect(await catalog.count()).toBe(0);
+    await catalog.getByRole("heading", { name: "Connect a provider", exact: true }).waitFor();
     expect(await page.locator(".model-setup-discovery").count()).toBe(0);
     expect(await page.locator(".connect-splash").count()).toBe(0);
     expect([...requestedWorkspaceModules]).toEqual([]);
@@ -435,8 +432,6 @@ suite.define(() => {
     const candidates = page.locator('[data-candidate-kind="claude-cli"]');
     await candidates.waitFor();
     expect(await candidates.textContent()).toContain("Claude Code");
-    await catalog.getByRole("heading", { name: "Connect a provider", exact: true }).waitFor();
-    expect(await pageLoading.count()).toBe(0);
     const candidateBottom = await candidates.evaluate((row) => row.getBoundingClientRect().bottom);
     const catalogTop = await catalog.evaluate((section) => section.getBoundingClientRect().top);
     expect(candidateBottom).toBeLessThanOrEqual(catalogTop);

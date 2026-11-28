@@ -40,8 +40,8 @@ export type ModelSetupPageProps = {
   agentLabel?: string;
   credentialChoices?: readonly string[];
   onClose?: () => void;
-  /** The first detection finished, or cannot run; the Models page holds its first paint until then. */
-  onDetectionSettled?: () => void;
+  /** The first-run activation became unresolved or settled; other entry points wait for it. */
+  onActivationUnresolved?: (unresolved: boolean) => void;
 };
 
 export function createModelSetup(
@@ -190,7 +190,7 @@ export function createModelSetup(
   const [detectionIdentity, setDetectionRequest] = createSignal<ModelSetupDetection>();
 
   let feedbackState: ModelSetupActivationState | undefined;
-  const [detectionSettled, setDetectionSettled] = createSignal(false);
+  let reportedUnresolved = false;
 
   function afterRender() {
     if (!connected) {
@@ -205,15 +205,9 @@ export function createModelSetup(
     }
     iconLoader.reconcile();
     firstRun.start();
-    const snapshot = context.gateway.snapshot;
-    if (
-      !detectionSettled() &&
-      (snapshot.phase !== "connected" ||
-        !canUseSetup(snapshot.client) ||
-        (state.detectionRequest === null && state.pageState.phase !== "loading"))
-    ) {
-      setDetectionSettled(true);
-      props.onDetectionSettled?.();
+    if (firstRun.unresolved !== reportedUnresolved) {
+      reportedUnresolved = firstRun.unresolved;
+      props.onActivationUnresolved?.(reportedUnresolved);
     }
   }
 
@@ -535,7 +529,6 @@ export function createModelSetup(
       // Outside first run, setup is the Models page's local discovery dialog.
       embedded: routeData()?.firstRun !== true,
       discoveryOpen: routeData()?.firstRun !== true || props.discoveryOpen === true,
-      detectionSettled: detectionSettled(),
       agentLabel: props.agentLabel ?? "",
       credentialChoices: props.credentialChoices ?? [],
       onClose: props.onClose,

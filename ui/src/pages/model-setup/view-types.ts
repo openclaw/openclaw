@@ -8,7 +8,6 @@ type OptionalOwnerProps =
   | "detecting"
   | "embedded"
   | "discoveryOpen"
-  | "detectionSettled"
   | "onFeedback"
   | "onWizardDialog"
   | "agentLabel"

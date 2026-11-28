@@ -209,7 +209,12 @@ export function ModelProviders(props: ModelProvidersViewProps) {
       connected={connected()}
       first={first() === true}
       agentLabel={props.credentialAgentLabel}
-      disabled={configMutationDisabled(props) || props.loginBusy || props.addProviderOpen}
+      disabled={
+        configMutationDisabled(props) ||
+        props.loginBusy ||
+        props.addProviderOpen ||
+        props.firstRunUnresolved === true
+      }
       loading={props.loading}
       initialQuery={first() ? props.providerQuery : undefined}
       searchRef={props.catalogSearchRef}
@@ -230,7 +235,7 @@ export function ModelProviders(props: ModelProvidersViewProps) {
         </Show>
         <Show when={hasDefaults() && (first() === false || savedDefaults())}>{defaults()}</Show>
         <Show
-          when={first() !== undefined && !props.firstRunPending}
+          when={first() !== undefined}
           fallback={
             <div class="model-providers__loading">
               <SettingsLoadingSkeleton rows={2} />
