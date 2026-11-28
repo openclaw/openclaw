@@ -38,6 +38,8 @@ const systemd = vi.hoisted(() => ({
   runuser: vi.fn<() => Promise<string | undefined>>(),
   entry: vi.fn<() => Promise<string | undefined>>(),
   candidateRoot: undefined as string | undefined,
+  /** The runner could not confirm the account's processes gone. */
+  uncertainCleanup: false,
 }));
 vi.mock("../../infra/openclaw-root.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/openclaw-root.js")>();
@@ -67,6 +69,19 @@ vi.mock("../../daemon/systemd-service-account-command.js", async (importOriginal
   ...(await importOriginal<typeof import("../../daemon/systemd-service-account-command.js")>()),
   findRootOwnedRunuser: systemd.runuser,
 }));
+vi.mock("../../process/exec.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../process/exec.js")>();
+  return {
+    ...actual,
+    runCommandBuffered: async (...args: Parameters<typeof actual.runCommandBuffered>) => {
+      const result = await actual.runCommandBuffered(...args);
+      const { CommandProcessCleanupError } = await import("../../process/exec-result.js");
+      return systemd.uncertainCleanup
+        ? { ...result, error: new CommandProcessCleanupError() }
+        : result;
+    },
+  };
+});
 vi.mock("../../daemon/gateway-entrypoint.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/gateway-entrypoint.js")>()),
   resolveGatewayInstallEntrypoint: systemd.entry,
@@ -136,6 +151,7 @@ async function admit(): Promise<UpdateAdmissionVerdict> {
 
 beforeEach(() => {
   process.exitCode = undefined;
+  systemd.uncertainCleanup = false;
   stdout = "";
   vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
     stdout += String(chunk);
@@ -452,6 +468,18 @@ describe("candidate admission run as the unit's account", () => {
     expect(Date.now() - started).toBeLessThan(10_000);
     expect(process.exitCode).toBe(3);
     expect(verdict.reasons[0]?.message).toContain("(admission timeout)");
+  });
+
+  it("refuses a valid admit verdict while the account's processes may still run", async () => {
+    installAccountProcess({ stdout: JSON.stringify(serviceVerdict()), code: 0 });
+    systemd.uncertainCleanup = true;
+
+    const verdict = await admit();
+
+    expect(process.exitCode).toBe(3);
+    expect(verdict.reasons[0]?.message).toContain(
+      "(the account's admission processes could not be confirmed stopped)",
+    );
   });
 
   it("refuses without starting the account's checks when no time is left", async () => {

@@ -7,6 +7,7 @@ import {
   UPDATE_ADMISSION_PROTOCOL,
   type UpdateAdmissionVerdict,
 } from "../../infra/update-run-schema.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import {
   createServiceAccountHandoff,
   runReleaseAsServiceAccount,
@@ -136,6 +137,10 @@ export async function admitAsServiceAccount(
   } finally {
     await traversal?.restore();
     await handoff.remove();
+  }
+  // A clean-looking verdict does not count while the account's processes may still run.
+  if (hasCommandProcessCleanupError(result.error)) {
+    return refuse("the account's admission processes could not be confirmed stopped");
   }
   if (result.termination !== "exit" || (result.code !== 0 && result.code !== 3)) {
     // Diagnostic only: the account's error line (or its last line), printable, bounded.
