@@ -193,13 +193,6 @@ const enNewSessionSetup = {
     local: "This computer",
     folderPlaceholder: "Agent workspace",
     localProjects: "Local projects",
-    manageSavedProjects: "Remove saved projects",
-    doneManagingProjects: "Done",
-    removeSavedProjectTitle: "Remove {name}?",
-    removeSavedProjectImpact:
-      "This removes the project from the Gateway catalog for all users and agents. Files, sessions and history are kept.",
-    removeSavedProjectLabel: "Remove {name}",
-    removeSavedProjectHint: "Remove from the shared catalog; keep files and sessions",
     noLocalProjects: "No local projects registered",
     noLocalProjectMatches: "No local projects match",
     noSharedProjects: "No projects are shared with your role. Ask an admin to share one.",

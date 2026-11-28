@@ -35,7 +35,7 @@ import { PlaceBrowser } from "./place-browser.tsx";
 import { disambiguate } from "./place-labels.ts";
 import { projectCloneInput } from "./project-chip.ts";
 import type { ProjectChipProps } from "./project-chip.tsx";
-import { createSavedProjectManagement, SavedProjectRow } from "./project-picker-saved-projects.tsx";
+import { SavedProjectRow } from "./project-picker-saved-projects.tsx";
 
 function DevicePathEntry(props: ProjectChipProps) {
   const [path, setPath] = createSignal(() => props.params.place.deviceFolder?.path ?? "");
@@ -88,7 +88,6 @@ function DevicePathEntry(props: ProjectChipProps) {
 export function ProjectPickerContent(props: ProjectChipProps) {
   const navigation = useContext(PickerNavigation);
   const browseRef = pickerOptionRef();
-  const management = createSavedProjectManagement(props);
   const applyFolder = (folder: string) => {
     if (!props.params.place.browser.browserNodeId) {
       props.params.place.applyFolder(folder);
@@ -550,7 +549,6 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                       picker={props}
                       project={project()}
                       suffix={checkoutSuffixes()[index()]}
-                      management={management}
                     />
                   )}
                 </For>
@@ -675,25 +673,6 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                     props.params.submitting ||
                     props.params.pendingPlacement ||
                     view().query.length < 2
-                  }
-                />
-              </Show>
-              <Show when={!props.nativeTerminal && management.canManage()}>
-                <SessionMenuItem
-                  item={{
-                    value: "manage-projects",
-                    label: management.managing()
-                      ? t("newSession.doneManagingProjects")
-                      : t("newSession.manageSavedProjects"),
-                    icon: <Icon name="settings" />,
-                    keepOpen: true,
-                    checked: management.managing(),
-                    onSelect: management.toggle,
-                  }}
-                  submitting={
-                    props.params.submitting ||
-                    props.params.pendingPlacement ||
-                    management.removing()
                   }
                 />
               </Show>

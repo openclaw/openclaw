@@ -1,11 +1,6 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ProjectsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import {
-  answerConfirmDialog,
-  installDialogPolyfill,
-  waitForConfirmDialogActions,
-} from "../../test-helpers/modal-dialog.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { focusChatComposerFromKeydown } from "../chat/chat-pane-shared.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
@@ -285,46 +280,21 @@ it("keeps search visible across reopening, routes row typing to it, and matches 
   view.unmount();
 });
 
-async function removalFixture(scopes = ["operator.admin"]) {
+it("distinguishes saved checkouts of the same repository when selecting a project", async () => {
   const fixture = createRepositoryFixture();
-  const { request, browser, context } = fixture;
-  const saved = {
-    id: "saved",
-    displayName: "lossless-claw",
-    repositoryIdentity: "owner-a/lossless-claw",
-    repoRoot: "/checkouts/primary/lossless-claw",
+  const { browser, request } = fixture;
+  const projects = ["primary", "release"].map((id) => ({
+    id,
+    displayName: "atlas",
+    repositoryIdentity: "acme/atlas",
+    repoRoot: `/checkouts/${id}/atlas`,
     source: "registered" as const,
-  };
-  const other = { ...saved, id: "other", repoRoot: "/checkouts/release/lossless-claw" };
-  const workspace = {
-    id: "builtin",
-    displayName: "Agent home",
-    repoRoot: "/workspace",
-    source: "workspace" as const,
-  };
-  let projects = [saved, other, workspace];
-  const removal = createDeferred<{ removed: boolean }>();
-  request.mockImplementation(async (method, params) => {
-    if (method === "projects.list") {
-      return { projects };
-    }
-    if (method === "projects.remove") {
-      await removal.promise;
-      projects = projects.filter((project) => project.id !== params!.id);
-      return { removed: true };
-    }
-    return { branches: [] };
-  });
-  Object.assign(context.gateway.snapshot.hello!, { auth: { role: "operator", scopes } });
+  }));
+  request.mockResolvedValue({ projects });
   prepareCatalog(fixture, true);
-  Object.assign(context.gateway.snapshot.hello!, {
-    features: { methods: ["projects.list", "projects.remove"] },
-  });
-  const restoreDialog = installDialogPolyfill();
-  onTestFinished(restoreDialog);
   const view = mountProjectChip(fixture, () => ({
     folder: "",
-    workspace: "/home/openclaw/.openclaw/workspace",
+    workspace: "/workspace",
     projectId: browser.projectId,
     selectedRemoteProject: browser.remoteProject,
     projects: browser.projects,
@@ -332,189 +302,10 @@ async function removalFixture(scopes = ["operator.admin"]) {
     projectQuery: browser.projectQuery,
   }));
   await waitForSolid(() =>
-    expect(view.container.querySelectorAll('[data-value^="project:"]')).toHaveLength(3),
+    expect(view.getByText("acme/atlas · /checkouts/primary/atlas")).not.toBeNull(),
   );
-  const openRemoval = async () => {
-    view.getByText("Remove saved projects").click();
-    flush();
-    const opener = view.container.querySelector<HTMLButtonElement>('[data-value="project:saved"]')!;
-    opener.focus();
-    opener.click();
-    flush();
-    return opener;
-  };
-  const confirmRemoval = async () => {
-    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
-    await waitForSolid(() =>
-      expect(request).toHaveBeenCalledWith("projects.remove", {
-        id: "saved",
-        deleteCheckout: false,
-      }),
-    );
-  };
-  return { ...fixture, view, removal, openRemoval, confirmRemoval };
-}
-
-it("hides shared catalog management from write-only operators", async () => {
-  const { view } = await removalFixture(["operator.write"]);
-  expect(view.queryByText("Remove saved projects")).toBeNull();
-  expect(view.queryByRole("button", { name: /^Remove / })).toBeNull();
-});
-
-it("keeps saved projects selectable if management access ends while the picker is open", async () => {
-  const { view, browser, context, changed } = await removalFixture();
-  view.getByText("Remove saved projects").click();
-  flush();
-  Object.assign(context.gateway.snapshot.hello!, { features: { methods: ["projects.list"] } });
-  changed();
-  flush();
-  expect(view.queryByText("Done")).toBeNull();
-  const saved = view.container.querySelector<HTMLButtonElement>('[data-value="project:saved"]')!;
-  expect(saved.disabled).toBe(false);
-  saved.click();
-  expect(browser.projectId).toBe("saved");
-});
-
-it("uses native confirmation, cancels without RPC, and reconciles the selected project through its owner", async () => {
-  const { browser, request, persistPreference, view, removal, openRemoval, confirmRemoval } =
-    await removalFixture();
-  browser.selectProject({ kind: "local", id: "saved" });
-  const opener = await openRemoval();
-  expect(view.getAllByRole("button", { name: /^Remove / })).toHaveLength(2);
-  expect(
-    view.container.querySelector<HTMLButtonElement>('[data-value="project:builtin"]')!.disabled,
-  ).toBe(true);
-  expect(view.getByRole("button", { name: "Done" }).getAttribute("aria-pressed")).toBe("true");
-  expect(opener.textContent).toContain("owner-a/lossless-claw · /checkouts/primary/lossless-claw");
-  expect(view.container.querySelector('[data-value="project:other"]')!.textContent).toContain(
-    "/checkouts/release/lossless-claw",
-  );
-  expect(view.container.textContent).toContain("Agent workspace");
-  const actions = await waitForConfirmDialogActions();
-  expect(document.activeElement?.textContent).toBe("Cancel");
-  expect([...actions.querySelectorAll("button")].map((button) => button.textContent)).toEqual([
-    "Cancel",
-    "Remove",
-  ]);
-  expect(document.body.textContent).toContain("Remove lossless-claw?");
-  expect(document.querySelector("dialog")?.textContent).toContain(
-    "/checkouts/primary/lossless-claw",
-  );
-  expect(document.body.textContent).toContain(
-    "This removes the project from the Gateway catalog for all users and agents. Files, sessions and history are kept.",
-  );
-  expect(opener.getAttribute("title")).toBe(
-    "Remove from the shared catalog; keep files and sessions",
-  );
-  answerConfirmDialog(actions, "cancel");
-  await waitForSolid(() => expect(document.activeElement).toBe(opener));
-  expect(request.mock.calls.filter(([method]) => method === "projects.remove")).toHaveLength(0);
-  opener.click();
-  await confirmRemoval();
-  removal.resolve({ removed: true });
-  await waitForSolid(() =>
-    expect(view.container.querySelector('[data-value="project:saved"]')).toBeNull(),
-  );
-  expect(browser.projectId).toBe("");
-  expect(persistPreference).toHaveBeenCalledWith(
-    "",
-    "/home/openclaw/.openclaw/workspace",
-    expect.objectContaining({ projectId: "", remoteProject: null }),
-  );
-  expect(view.container.querySelector('[data-value="project:other"]')).not.toBeNull();
-});
-
-it.each(["connection epoch", "new selection"] as const)(
-  "does not overwrite a newer %s after removing a saved project",
-  async (change) => {
-    const {
-      browser,
-      gateway,
-      state: place,
-      changed,
-      request,
-      removal,
-      openRemoval,
-      confirmRemoval,
-    } = await removalFixture();
-    browser.selectProject({ kind: "local", id: "saved" });
-    const fallback = vi.spyOn(place, "applyFolder");
-    await openRemoval();
-    await confirmRemoval();
-    if (change === "connection epoch") {
-      Object.assign(gateway, { connectionEpoch: gateway.connectionEpoch + 1 });
-    } else {
-      browser.selectProject({ kind: "local", id: "other" });
-    }
-    changed();
-    removal.resolve({ removed: true });
-    await waitForSolid(() =>
-      expect(
-        document.querySelector<HTMLButtonElement>('[data-value="manage-projects"]')!.disabled,
-      ).toBe(false),
-    );
-    expect(fallback).not.toHaveBeenCalled();
-    if (change === "connection epoch") {
-      expect(request.mock.calls.filter(([method]) => method === "projects.list")).toHaveLength(1);
-      expect(browser.projectId).toBe("saved");
-    } else {
-      await waitForSolid(() =>
-        expect(browser.projects.some((project) => project.id === "saved")).toBe(false),
-      );
-      expect(browser.projectId).toBe("other");
-    }
-  },
-);
-
-it("clears the selected project's preference on the removal receipt even if the next list fails", async () => {
-  const { browser, request, persistPreference, removal, openRemoval, confirmRemoval } =
-    await removalFixture();
-  browser.selectProject({ kind: "local", id: "saved" });
-  await openRemoval();
-  await confirmRemoval();
-  const original = request.getMockImplementation()!;
-  request.mockImplementation((method, params) =>
-    method === "projects.list"
-      ? Promise.reject(new Error("catalog unavailable"))
-      : original(method, params),
-  );
-  removal.resolve({ removed: true });
-  await waitForSolid(() => expect(browser.projectCatalogError).toBeInstanceOf(Error));
-  expect(browser.projectId).toBe("");
-  expect(persistPreference).toHaveBeenCalledWith(
-    "",
-    "/home/openclaw/.openclaw/workspace",
-    expect.objectContaining({ projectId: "" }),
-  );
-});
-
-it("reports a failed confirmed removal outside the dismissed picker", async () => {
-  const { openRemoval, confirmRemoval, removal } = await removalFixture();
-  const toast = vi.spyOn(await import("../../lib/toast.ts"), "showToast").mockReturnValue(true);
-  onTestFinished(() => toast.mockRestore());
-  await openRemoval();
-  await confirmRemoval();
-  removal.reject(new Error("Catalog unavailable"));
-  await waitForSolid(() =>
-    expect(toast).toHaveBeenCalledWith({ severity: "error", message: "Catalog unavailable" }),
-  );
-});
-
-it("re-reads the catalog after removal instead of adopting an in-flight pre-write list", async () => {
-  const { browser, request, view, removal, openRemoval, confirmRemoval } = await removalFixture();
-  const previousProjects = [...browser.projects];
-  const previousRead = createDeferred<ProjectsListResult>();
-  request.mockReturnValueOnce(previousRead.promise);
-  const refreshing = browser.refreshProjects();
-  await openRemoval();
-  await confirmRemoval();
-  removal.resolve({ removed: true });
-  previousRead.resolve({ projects: previousProjects });
-  await refreshing;
-  await waitForSolid(() =>
-    expect(view.container.querySelector('[data-value="project:saved"]')).toBeNull(),
-  );
-  expect(request.mock.calls.filter(([method]) => method === "projects.list")).toHaveLength(3);
+  view.getByRole("button", { name: /release\/atlas/ }).click();
+  expect(browser.projectId).toBe("release");
 });
 
 it.each([

@@ -172,39 +172,6 @@ describe("project registration presentation", () => {
   );
 });
 
-it("keeps saved-project confirmation in the native modal and returns focus on Escape", async () => {
-  const { browser, context, request, view } = mountBrowser();
-  onTestFinished(() => {
-    document.querySelector<HTMLButtonElement>("openclaw-modal-actions button[autofocus]")?.click();
-  });
-  await browser.projectRead;
-  Object.assign(context.gateway.snapshot.hello!, {
-    features: { methods: ["projects.list", "projects.remove"] },
-  });
-  request.mockImplementation(async (method) =>
-    method === "projects.list" ? { projects: [project] } : { branches: [] },
-  );
-  await browser.refreshProjects();
-  await page.getByRole("button", { name: "Remove saved projects" }).click();
-  const opener = view.getByRole<HTMLButtonElement>("button", {
-    name: "Remove Registered workspace /workspace",
-  });
-  await page
-    .getByRole("button", { name: "Remove Registered workspace /workspace", exact: true })
-    .click();
-  await waitForSolid(() =>
-    expect(document.querySelector<HTMLDialogElement>("dialog")?.open).toBe(true),
-  );
-  const cancel = page.getByRole("button", { name: "Cancel", exact: true });
-  await expect.element(cancel).toHaveFocus();
-  await userEvent.keyboard("{Tab}");
-  await expect.element(page.getByRole("button", { name: "Remove", exact: true })).toHaveFocus();
-  await userEvent.keyboard("{Escape}");
-  await waitForSolid(() => expect(document.querySelector("openclaw-modal-dialog")).toBeNull());
-  expect(document.activeElement).toBe(opener);
-  expect(request.mock.calls.filter(([method]) => method === "projects.remove")).toHaveLength(0);
-});
-
 it("searches GitHub through a native action or Enter, never from typing", async () => {
   const { browser, context, request, view } = mountBrowser();
   await browser.projectRead;

@@ -169,10 +169,8 @@ Reloading or leaving the app does not preserve this in-memory draft.
 Open **Workspace** on New session to choose a saved project, a recent folder, or
 a repository URL. The search/paste field opens immediately, even on short lists.
 The picker offers **Browse folders** and, when permitted, **Search GitHub**.
-GitHub search requires at least two characters. Administrators can choose
-**Remove saved projects**, then select the saved entry they want to remove. Removing
-a saved project requires confirmation and affects the shared Gateway catalog; it
-keeps the checkout, files, sessions, and history. Built-in workspaces cannot be removed.
+GitHub search requires at least two characters. Administrators can open
+**Manage projects** to maintain the shared catalog.
 
 For a new worktree, type part of a branch name in **From** to filter the loaded
 repository branches. The menu lists the default and current branches first,

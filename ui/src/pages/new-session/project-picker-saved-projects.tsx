@@ -1,11 +1,7 @@
 import { createSignal, Show } from "solid-js";
 import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
-import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { formatUiError } from "../../lib/format-error.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
-import { showToast } from "../../lib/toast.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import type { ProjectChipProps } from "./project-chip.tsx";
 import { ProjectFolderIcon } from "./project-folder-icon.tsx";
@@ -36,83 +32,14 @@ function ProjectRowIcon(props: Parameters<typeof ProjectIcon>[0]) {
   );
 }
 
-export function createSavedProjectManagement(props: ProjectChipProps) {
-  const [managing, setManaging] = createSignal(false);
-  const [removing, setRemoving] = createSignal(false);
-  const canManage = () =>
-    canCallGatewayMethod(
-      props.params.context?.gateway.snapshot,
-      "projects.remove",
-      "operator.admin",
-    );
-  const removeSavedProject = async (project: ProjectRecord) => {
-    const gateway = props.params.context?.gateway;
-    const draftGateway = props.params.gateway;
-    const browser = props.params.place.browser;
-    if (!gateway || project.source === "workspace" || !canManage() || removing()) {
-      return;
-    }
-    const client = gateway.snapshot.client;
-    const epoch = draftGateway.connectionEpoch;
-    if (!client) {
-      return;
-    }
-    const isCurrent = () =>
-      props.params.context?.gateway === gateway &&
-      props.params.gateway === draftGateway &&
-      props.params.place.browser === browser &&
-      gateway.snapshot.client === client &&
-      draftGateway.connectionEpoch === epoch;
-    try {
-      const confirmed = await showConfirmDialog({
-        title: t("newSession.removeSavedProjectTitle", { name: project.displayName }),
-        message: t("newSession.removeSavedProjectImpact"),
-        details: project.repoRoot ?? project.repositoryIdentity ?? project.id,
-        confirmLabel: t("common.remove"),
-        danger: true,
-        canConfirm: () => isCurrent() && canManage(),
-      });
-      if (!confirmed || !isCurrent() || !canManage() || removing()) {
-        return;
-      }
-      setRemoving(true);
-      await client.request("projects.remove", { id: project.id, deleteCheckout: false });
-      if (!isCurrent()) {
-        return;
-      }
-      if (browser.projectId === project.id) {
-        props.params.place.clearProjectSelection();
-      }
-      await browser.refreshProjects(true);
-    } catch (error) {
-      if (isCurrent()) {
-        showToast({ severity: "error", message: formatUiError(error) });
-      }
-    } finally {
-      setRemoving(false);
-    }
-  };
-  return {
-    managing: () => managing() && canManage(),
-    removing,
-    canManage,
-    removeSavedProject,
-    toggle(this: void) {
-      setManaging(!managing());
-    },
-  };
-}
-
 export function SavedProjectRow(props: {
   picker: ProjectChipProps;
   project: ProjectRecord;
   suffix?: string;
-  management: ReturnType<typeof createSavedProjectManagement>;
 }) {
   const icon = (
     <ProjectRowIcon context={props.picker.params.context} projectId={props.project.id} />
   );
-  const remove = () => props.management.managing() && props.project.source !== "workspace";
   const sub = () =>
     [props.project.repositoryIdentity, props.suffix].filter(Boolean).join(" · ") ||
     (props.project.source === "workspace"
@@ -122,26 +49,14 @@ export function SavedProjectRow(props: {
     <SessionMenuItem
       item={{
         value: `project:${props.project.id}`,
-        label: remove()
-          ? t("newSession.removeSavedProjectLabel", {
-              name: props.project.displayName,
-            })
-          : props.project.displayName,
+        label: props.project.displayName,
         icon,
         sub: sub(),
-        checked: !remove() && props.picker.params.place.browser.projectId === props.project.id,
-        keepOpen: remove(),
-        title: remove() ? t("newSession.removeSavedProjectHint") : sub(),
-        onSelect: () =>
-          remove()
-            ? void props.management.removeSavedProject(props.project)
-            : props.picker.params.place.selectProjectId(props.project.id),
+        checked: props.picker.params.place.browser.projectId === props.project.id,
+        title: sub(),
+        onSelect: () => props.picker.params.place.selectProjectId(props.project.id),
       }}
-      submitting={
-        props.picker.params.submitting ||
-        props.management.removing() ||
-        (props.management.managing() && !remove())
-      }
+      submitting={props.picker.params.submitting}
     />
   );
 }
