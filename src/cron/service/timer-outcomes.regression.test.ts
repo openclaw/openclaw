@@ -325,7 +325,7 @@ it.each([
     const store = timerRegressionFixtures.makeStorePath();
     const now = Date.parse("2026-08-03T06:00:00.000Z");
     const resetAt = now + resetMs;
-    const job = {
+    const job: CronStoredJob = {
       ...createIsolatedRegressionJob({
         id: `rate-limited-${path}`,
         name: "rate limited",
@@ -334,7 +334,7 @@ it.each([
         payload: { kind: "agentTurn", message: "report" },
         state: { nextRunAtMs: now },
       }),
-      ...(path === "session-target" ? { sessionTarget: "session:agent:main:target" } : {}),
+      ...(path === "session-target" ? { sessionTarget: "session:agent:main:target" as const } : {}),
     };
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
     const run = vi.fn(async () => ({
@@ -346,7 +346,9 @@ it.each([
     const state = createCronServiceState({
       storePath: store.storePath,
       nowMs: () => now,
-      ...(path === "isolated" ? { runIsolatedAgentJob: run } : { runSessionEvent: run }),
+      // Each job kind calls only its own execution adapter.
+      runIsolatedAgentJob: run,
+      runSessionEvent: run,
     });
     await onTimer(state);
     expect(run).toHaveBeenCalledOnce();
