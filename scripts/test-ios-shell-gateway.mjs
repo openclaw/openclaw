@@ -21,7 +21,7 @@ import { WebSocketServer, WebSocket } from "ws";
 // Opt-in slow connection proof: --connection-state --port=<owned-loopback-port>.
 // Forward OPENCLAW_IOS_CONNECTION_STATE_PROOF=1, OPENCLAW_IOS_LIVE_SETUP_CODE,
 // and OPENCLAW_IOS_CONNECTION_STATE_FIXTURE_URL via TEST_RUNNER_ to
-// OpenClawUITests/GatewayConnectionStateUITests/testIndependentConnectionAndDismissal.
+// OpenClawUITests/GatewayConnectionStateUITests/testIndependentConnectionAndRecovery.
 const connectionStateMode = process.argv.includes("--connection-state");
 // AgentWorkspacePaginationUITests uses --workspace-pagination and forwards
 // OPENCLAW_IOS_WORKSPACE_PAGINATION_URL plus OPENCLAW_IOS_LIVE_SETUP_CODE via TEST_RUNNER_.

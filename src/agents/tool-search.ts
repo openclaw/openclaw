@@ -335,30 +335,34 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       parameters: resolveSearchParameters(config.searchDefaultLimit),
       execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
         const request = readToolSearchRequest(args, config);
-        if (request.kind === "single") {
-          return formatToolSearchControlResult(
-            await runtime.search(request.search.query, {
-              limit: request.search.limit,
-              parentToolCallId: toolCallId,
-            }),
-            runtime,
-            { parentToolCallId: toolCallId, allowPartial: true },
+        try {
+          if (request.kind === "single") {
+            return formatToolSearchControlResult(
+              await runtime.search(request.search.query, {
+                limit: request.search.limit,
+                parentToolCallId: toolCallId,
+              }),
+              runtime,
+              { parentToolCallId: toolCallId, allowPartial: true },
+            );
+          }
+          const results = await Promise.all(
+            request.searches.map(async (search) => ({
+              query: search.query,
+              candidates: await runtime.search(search.query, {
+                limit: search.limit,
+                parentToolCallId: toolCallId,
+              }),
+            })),
           );
+          return formatToolSearchBatchResponse(
+            results,
+            runtime.hasNetworkContent(toolCallId),
+            runtime.resultBudget,
+          );
+        } finally {
+          runtime.clearControlInvocation(toolCallId);
         }
-        const results = await Promise.all(
-          request.searches.map(async (search) => ({
-            query: search.query,
-            candidates: await runtime.search(search.query, {
-              limit: search.limit,
-              parentToolCallId: toolCallId,
-            }),
-          })),
-        );
-        return formatToolSearchBatchResponse(
-          results,
-          runtime.hasNetworkContent(toolCallId),
-          runtime.resultBudget,
-        );
       },
     },
     {
@@ -369,16 +373,20 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       parameters: describeParameters,
       prepareArguments: prepareToolSearchDispatcherArguments,
       execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
-        const described = await runtime.describe(readToolSearchId(args), {
-          parentToolCallId: toolCallId,
-        });
-        const includeOutputSchema =
-          isRecord(args) && args[TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION] === true;
-        return formatToolSearchControlResult(described, runtime, {
-          parentToolCallId: toolCallId,
-          modelPayload: includeOutputSchema ? described : omitDescribedOutputSchema(described),
-          allowPartial: true,
-        });
+        try {
+          const described = await runtime.describe(readToolSearchId(args), {
+            parentToolCallId: toolCallId,
+          });
+          const includeOutputSchema =
+            isRecord(args) && args[TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION] === true;
+          return formatToolSearchControlResult(described, runtime, {
+            parentToolCallId: toolCallId,
+            modelPayload: includeOutputSchema ? described : omitDescribedOutputSchema(described),
+            allowPartial: true,
+          });
+        } finally {
+          runtime.clearControlInvocation(toolCallId);
+        }
       },
     },
     {
@@ -432,6 +440,8 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           });
         } catch (error) {
           throw formatToolSearchControlError(error, runtime, toolCallId, signal ?? ctx.abortSignal);
+        } finally {
+          runtime.clearControlInvocation(toolCallId);
         }
       },
     },

@@ -2585,6 +2585,47 @@ if [ "$SCENARIO" = "git-release" ]; then
 fi
 phase install-baseline install_baseline
 phase initialize-state initialize_state
+if [ "$SCENARIO" = "boot-plugin-convergence" ]; then
+  require_isolated_manual_baseline "$baseline_spec"
+  boot_plugin_helper=scripts/e2e/lib/upgrade-survivor/boot-plugin-convergence.mjs
+  phase prepare-boot-plugin node "$boot_plugin_helper" fixture
+  for version in 1.0.0 2.0.0; do
+    phase "pack-boot-plugin-$version" openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" npm pack \
+      "$RUNTIME_ROOT/boot-plugin-packages/$version" --ignore-scripts --pack-destination "$ARTIFACT_ROOT" --silent
+  done
+  # Use real npm archives and a moving selector, not fabricated install records or a pin.
+  phase baseline-boot-plugin-registry openclaw_prepublish_plugin_registry_start \
+    "" "" "1.0.0" "" "$RUNTIME_ROOT/boot-plugin-registry-v1" plugin_registry_pid \
+    survivor-boot-plugin 1.0.0 "$ARTIFACT_ROOT/survivor-boot-plugin-1.0.0.tgz"
+  phase install-boot-plugin-v1 openclaw_e2e_fixture_plugin_command openclaw -- \
+    plugins install npm:survivor-boot-plugin@latest --force
+  phase configure-boot-plugin node "$boot_plugin_helper" configure
+  GATEWAY_LOG="$ARTIFACT_ROOT/boot-plugin-baseline-gateway.log"
+  phase baseline-boot-plugin-start start_gateway
+  phase baseline-boot-plugin-runtime node "$boot_plugin_helper" observe baseline 1.0.0
+  phase baseline-boot-plugin-stop stop_gateway
+  phase resolve-boot-plugin-candidate resolve_candidate_version
+  # Deliberately bypass openclaw update, trial, and Doctor: replace only the installed core.
+  phase manual-core-swap openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" npm install \
+    -g --prefix "$npm_config_prefix" "$CANDIDATE_SPEC" --no-fund --no-audit \
+    >"$ARTIFACT_ROOT/boot-plugin-manual-core-swap.log" 2>&1
+  installed_version="$(read_installed_version)"
+  [ "$installed_version" = "$candidate_version" ] || { echo "Manual core swap installed the wrong candidate" >&2; exit 1; }
+  candidate_install_mode="manual-core-swap"
+  phase assert-boot-plugin-still-v1 node "$boot_plugin_helper" assert-preboot
+  openclaw_e2e_stop_process "$plugin_registry_pid"
+  phase candidate-boot-plugin-registry openclaw_prepublish_plugin_registry_start \
+    "" "" "2.0.0" "" "$RUNTIME_ROOT/boot-plugin-registry-v2" plugin_registry_pid \
+    survivor-boot-plugin 1.0.0 "$ARTIFACT_ROOT/survivor-boot-plugin-1.0.0.tgz" \
+    survivor-boot-plugin 2.0.0 "$ARTIFACT_ROOT/survivor-boot-plugin-2.0.0.tgz"
+  GATEWAY_LOG="$ARTIFACT_ROOT/boot-plugin-candidate-gateway.log"
+  phase candidate-boot-plugin-start start_gateway
+  phase candidate-boot-plugin-converged node "$boot_plugin_helper" observe candidate 2.0.0
+  phase candidate-boot-plugin-stop stop_gateway
+  run_completed="1"
+  echo "Boot plugin convergence passed: real npm v1, manual core swap, live v2, operator data preserved."
+  exit 0
+fi
 if [ "$SCENARIO" = "session-share" ]; then
   require_isolated_manual_baseline openclaw@2026.10.7
   phase configure-sharing-baseline node scripts/e2e/lib/upgrade-survivor/session-share.mjs configure "$(package_root)"

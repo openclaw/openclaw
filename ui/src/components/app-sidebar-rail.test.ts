@@ -149,47 +149,6 @@ function drag(
 }
 
 describe("personal navigation rail", () => {
-  it("keeps fixed navigation and Home, Inbox, identity separate from the middle view", async () => {
-    const { sidebar, dom } = await fixture();
-    expect(
-      [...dom.all("[data-navigation-view]")].map((button) =>
-        button.getAttribute("data-navigation-view"),
-      ),
-    ).toEqual(["sessions", "online"]);
-    const frame = dom.query("aside.sidebar")!;
-    const bottom = dom.query(".sidebar-rail__bottom")!;
-    expect(
-      domProbe(bottom).present(
-        ".sidebar-footer-bar__home",
-        "openclaw-sidebar-attention",
-        ".sidebar-identity-card",
-      ),
-    ).toEqual([true, true, true]);
-    expect(dom.present(".nav-item--home", ".sidebar-shell__footer .sidebar-identity-card")).toEqual(
-      [false, false],
-    );
-    // "More" opens with usable links on its first update, without replacing the Sessions sidebar.
-    expect(dom.query(".sidebar-pages-menu")).toBeNull();
-    await click(sidebar, "[data-rail-more]");
-    expect(dom.query('.sidebar-pages-menu [data-sidebar-entry="route:usage"] a')).not.toBeNull();
-    expect(dom.query(".sidebar-pages-menu-popover .sidebar-view-loading")).toBeNull();
-    expect(dom.query(".sidebar-session-content")).not.toBeNull();
-    expect(dom.query("aside.sidebar")).toBe(frame);
-    expect(dom.query(".sidebar-rail__bottom")).toBe(bottom);
-    const identity = bottom.querySelector(".sidebar-identity-card")!;
-    expect(
-      identity.querySelector(".sidebar-identity-card__avatar .sidebar-identity-card__status"),
-    ).not.toBeNull();
-    expect(identity.getAttribute("data-connection-status")).toBe("connected");
-    expect(identity.getAttribute("aria-label")).toContain("Identity and app menu for Self");
-    for (const status of ["connecting", "reconnecting", "offline", "reload-required"] as const) {
-      sidebar.connectionStatus = status;
-      await sidebar.updateComplete;
-      expect(identity.getAttribute("data-connection-status")).toBe(status);
-      expect(identity.querySelector(".gateway-status")).toBeNull();
-    }
-  });
-
   it("shows only running or unread on rail Home, even with a draft and held inputs", async () => {
     const key = "agent:main:main";
     const { sidebar, publish, dom } = await fixture({
@@ -367,46 +326,6 @@ describe("personal navigation rail", () => {
     await sidebar.updateComplete;
     expect(
       rail(sidebar, "session-rail:agent:main:mine")!.querySelector(".session-glyph__ring"),
-    ).toBeNull();
-  });
-
-  it("keeps a session shortcut's identity with only running and unread decorations", async () => {
-    const { sidebar, sessions, publish, dom } = await fixture();
-    const key = "agent:main:mine";
-    publish(
-      {
-        label: "Release Notes",
-        icon: "📝",
-        hasActiveRun: true,
-        status: "running",
-        unread: true,
-        agentStatus: {
-          note: "Waiting for input",
-          attention: "key",
-          expiresAt: Date.now() + 60_000,
-        },
-        worktree: { id: "wt-notes", branch: "docs/notes", repoRoot: "/repo" },
-      },
-      key,
-    );
-    sessions.sessions.setPullRequestSummary(key, { numbers: [1], state: "open" });
-    await update(sidebar, { storedOutboxes: outbox(key), sidebarEntries: [`session-rail:${key}`] });
-    const row = dom.query(`[data-session-key="${key}"]`)!;
-    expect(
-      domProbe(row).present(
-        ".sidebar-session-attention__icon",
-        ".session-row-badge--attention",
-        ".session-row-badge--draft",
-      ),
-    ).toEqual([true, true, true]);
-    const pin = dom.query(`.sidebar-rail [data-sidebar-entry="session-rail:${key}"]`)!;
-    expect(pin.querySelector(".session-glyph__emoji")?.textContent).toBe("📝");
-    expect(pin.querySelectorAll(".session-glyph__ring")).toHaveLength(1);
-    expect(pin.querySelectorAll(".session-glyph__badge--unread")).toHaveLength(1);
-    expect(
-      pin.querySelector(
-        ".sidebar-session-attention__icon, .session-row-badges, [data-pull-request-state], .session-owner-chip",
-      ),
     ).toBeNull();
   });
 

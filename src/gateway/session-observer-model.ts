@@ -6,6 +6,7 @@ import {
   type SessionObserverHealth,
   type SessionObserverPlanProgress,
 } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import {
   terminalHealthFor,
@@ -91,6 +92,8 @@ export type SessionObserverState = SessionActivityNoteState & {
   lastPublishedPreambleHeadline?: string;
   previousDigest?: SessionObserverDigest;
   preparedPromise?: Promise<PreparedModel>;
+  /** The session owner's authority, decided once when this run's observation starts. */
+  ownerAuthority?: Promise<AdmittedRunOperatorAuthority | undefined>;
   activeController?: AbortController;
   timer?: ReturnType<typeof setTimeout>;
   inFlight: boolean;

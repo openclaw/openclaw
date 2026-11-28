@@ -449,7 +449,7 @@ it.each(["json", "human", "check"] as const)(
   },
 );
 
-it("refuses an early Git release updater's schema change from --check, the same way each time", async () => {
+it("stops an early Git release updater's schema change from --check and starts its recovery, or names the rebuild", async () => {
   const stateDir = makeTempDir(tempRoots, "openclaw-worker-early-release-");
   const prefix = path.join(stateDir, "git-install");
   const root = path.join(prefix, "releases", "git-b", "build");
@@ -469,9 +469,20 @@ it("refuses an early Git release updater's schema change from --check, the same 
     ...(await importOriginal<typeof import("./openclaw-root.js")>()),
     resolveOpenClawPackageRootSync: () => root,
   }));
+  const job = { status: "systemctl --user status u", log: "journalctl --user -u u" };
+  const outcomes = [
+    { started: false, reason: "pnpm is not on PATH" },
+    { started: false, reason: "pnpm is not on PATH" },
+    { started: true, job, target: "a".repeat(40) },
+  ];
+  const start = vi.fn(async () => outcomes.shift());
+  // mock-isolation: Starting the recovery needs Git, a service manager and a service; its tests own that.
+  vi.doMock("./update-early-release-recovery-start.js", () => ({
+    startEarlyGitReleaseRecovery: start,
+  }));
   const attempts: string[] = [];
   try {
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       stderr.length = 0;
       vi.resetModules();
       await runWorker({}, "--check");
@@ -483,14 +494,24 @@ it("refuses an early Git release updater's schema change from --check, the same 
     }
   } finally {
     vi.doUnmock("./openclaw-root.js");
+    vi.doUnmock("./update-early-release-recovery-start.js");
     vi.unstubAllEnvs();
   }
 
+  expect(start).toHaveBeenCalledWith(
+    expect.objectContaining({
+      root,
+      pending: expect.objectContaining({ state: OPENCLAW_STATE_SCHEMA_VERSION - 1 }),
+    }),
+  );
   expect(attempts[0]).toContain(
     `migrates your databases (state schema ${OPENCLAW_STATE_SCHEMA_VERSION - 1} to ${OPENCLAW_STATE_SCHEMA_VERSION})`,
   );
   expect(attempts[0]).toContain("The update stopped before switching releases");
+  expect(attempts[0]).toContain("Automatic recovery did not start: pnpm is not on PATH.");
   expect(attempts[1]).toBe(attempts[0]);
+  expect(attempts[2]).toContain("the new release finishes the update in the background");
+  expect(attempts[2]).not.toContain("git pull");
 });
 
 it.each([false, true])(

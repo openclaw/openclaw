@@ -26,7 +26,7 @@ import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { resolveGatewaySessionActiveModel } from "./session-row-model-facts.js";
 import { sameSelectionFacts, type SelectionRow } from "./session-row-selection-facts.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
-import { sessionTitleRequests } from "./session-title-state.js";
+import { isTitlePending } from "./session-title-state.js";
 import type { SessionChildActivity, SessionListRowContext } from "./session-utils-contracts.js";
 import { sameSessionRowChildLinkEntry } from "./session-utils-projection.js";
 import * as rowProjection from "./session-utils-row.js";
@@ -113,10 +113,11 @@ export type Row = Pick<GatewaySessionRow, "hasMessages"> & {
   selection: ReturnType<typeof readSessionListSelectionFacts>;
   /** One accepted selection snapshot shared by recents and list consumers. */
   selectionSnapshot?: SelectionRow;
-  materialized?: ReturnType<typeof rowProjection.materializeSessionRow>;
+  materialized?: ReturnType<typeof rowProjection.replaceSessionRowFacts>;
   materializedSequence?: number;
   profileRevision?: number;
   subagentRevision?: number;
+  fallbackTitle?: string | null;
   lastMessagePreview?: string;
   lastAssistantMessage?: GatewaySessionRow["lastAssistantMessage"];
   fallbackModel?: ReturnType<
@@ -372,6 +373,7 @@ export function renewGeneration(row: Row): Row {
     sharingEntry: undefined,
     materialized: undefined,
     hasMessages: undefined,
+    fallbackTitle: undefined,
     lastMessagePreview: undefined,
     lastAssistantMessage: undefined,
     fallbackModel: undefined,
@@ -397,7 +399,11 @@ export function publishTranscriptFields(
   row: MaterializedRow,
   fields: Pick<
     Row,
-    "hasMessages" | "lastMessagePreview" | "lastAssistantMessage" | "fallbackModel"
+    | "hasMessages"
+    | "lastMessagePreview"
+    | "lastAssistantMessage"
+    | "fallbackModel"
+    | "fallbackTitle"
   >,
   cfg: Inputs["cfg"],
   context: SessionListRowContext,
@@ -416,6 +422,7 @@ export function publishTranscriptFields(
     activeModel: fields.fallbackModel ?? null,
   });
   if (
+    (fields.fallbackTitle === undefined || row.fallbackTitle === fields.fallbackTitle) &&
     row.hasMessages === fields.hasMessages &&
     row.lastMessagePreview === fields.lastMessagePreview &&
     isDeepStrictEqual(row.lastAssistantMessage, fields.lastAssistantMessage) &&
@@ -428,8 +435,16 @@ export function publishTranscriptFields(
     lastMessagePreview: fields.lastMessagePreview,
     lastAssistantMessage: fields.lastAssistantMessage,
   };
+  if (fields.fallbackTitle !== undefined) {
+    row.fallbackTitle = fields.fallbackTitle;
+  }
   Object.assign(row, transcript, { fallbackModel });
-  row.materialized = rowProjection.replaceSessionRowFacts(row.materialized, transcript);
+  row.materialized = rowProjection.replaceSessionRowFacts(row.materialized, {
+    ...transcript,
+    ...(!row.materialized.row.derivedTitle && row.fallbackTitle
+      ? { derivedTitle: row.fallbackTitle }
+      : {}),
+  });
   return true;
 }
 
@@ -486,12 +501,7 @@ export function present(
   });
   Object.assign(row, options.preparedFacts ?? record.facts?.present());
   row.hasBoard = record.hasBoard;
-  // Naming belongs to the in-flight owner, not persisted or materialized row state.
-  row.titlePending = sessionTitleRequests.isPending({
-    storePath: record.storeTarget.storePath,
-    sessionKey: record.key,
-    sessionId: record.entry.sessionId,
-  });
+  row.titlePending = isTitlePending(record);
   // Undefined omits wire fields without converting each presented row to dictionary storage.
   if (!options.includeDerivedTitles) {
     row.derivedTitle = undefined;
@@ -575,6 +585,7 @@ export function dematerialize(row: Row): Row {
     pendingDatabaseFacts: undefined,
     retainedDatabaseFacts: undefined,
     databaseFactsRevision: row.databaseFactsRevision + 1,
+    fallbackTitle: undefined,
     membership: new Set<string>(),
     lastMessagePreview: undefined,
     lastAssistantMessage: undefined,
@@ -692,9 +703,6 @@ export function acquireSessionRowEntry(params: {
   const refreshParents =
     reparented ||
     (parents.size > 0 && (!row.entry || !sameSessionRowChildLinkEntry(row.entry, entry)));
-  if (reparented) {
-    params.markRelated(row, "parents");
-  }
   const generation =
     !row.entry ||
     (row.entry.sessionId === entry.sessionId &&
@@ -720,6 +728,7 @@ export function acquireSessionRowEntry(params: {
         : undefined,
     ...(generation !== row.generation
       ? {
+          fallbackTitle: undefined,
           lastMessagePreview: undefined,
           lastAssistantMessage: undefined,
           fallbackModel: undefined,
@@ -735,6 +744,9 @@ export function acquireSessionRowEntry(params: {
     next = archive.demote(next);
   } else if (entry.archivedAt === undefined) {
     archive.forget(identity(next));
+  }
+  if (reparented) {
+    params.markRelated(row, "parents");
   }
   if (refreshChildren || refreshParents) {
     params.markRelated(next, refreshChildren ? (refreshParents ? "all" : "children") : "parents");

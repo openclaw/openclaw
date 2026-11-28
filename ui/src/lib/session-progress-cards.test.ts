@@ -437,7 +437,12 @@ describe("session progress card Gateway response boundary", () => {
         put.resolve({ card: null });
         read.resolve({ card: next });
       });
+      const lifetime = store.getLifetime(target);
       const dismissal = store.dismiss(target, card);
+      expect(store.get(target)).toBeNull();
+      expect(store.get(target, "saved")).toBe(card);
+      expect(store.getLifetime(target)).toBe(lifetime);
+      await expect(store.dismiss(target, card)).resolves.toBe(false);
       emitChange(sessionKey, null);
       const refreshing = store.load(target);
       if (eventFirst) {
@@ -459,6 +464,29 @@ describe("session progress card Gateway response boundary", () => {
       expect(store.get(target)).toEqual(next);
     },
   );
+
+  it("does not roll back a newer clear when the old write fails", async () => {
+    const { store, request, emitChange, card } = await loadedFixture();
+    const next = progress({ revision: 2, markdown: "Revised checklist" });
+    const first = createDeferred<{ card: null }>();
+    const second = createDeferred<{ card: null }>();
+    request
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({ card: next })
+      .mockReturnValueOnce(second.promise);
+    const original = store.dismiss(target, card);
+    emitChange(sessionKey, next.revision);
+    await store.load(target);
+    expect(store.get(target)).toBe(next);
+    const latest = store.dismiss(target, next);
+    first.reject(new Error("Retired write failed"));
+    await expect(original).resolves.toBe(false);
+    expect(store.get(target)).toBeNull();
+    expect(store.getError(target)).toBeUndefined();
+    second.reject(new Error("Current write failed"));
+    await expect(latest).rejects.toThrow("Current write failed");
+    expect(store.get(target)).toBe(next);
+  });
 
   it("retires a transient error when a conditional clear returns newer progress", async () => {
     const { store, request, card } = await loadedFixture();

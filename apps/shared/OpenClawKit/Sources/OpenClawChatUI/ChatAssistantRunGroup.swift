@@ -54,13 +54,22 @@ struct ChatAssistantRunGroup: Identifiable {
         }.first
     }
 
-    static func build(
-        _ rows: [ChatTranscriptRow],
-        tools: [OpenClawChatPendingToolCall] = [],
-        liveRunID: String?,
-        hasLiveContent: Bool,
-        searchActive: Bool) -> [Self]
-    {
+    /// Merge live starts and durable receipts before either platform groups its rows.
+    static func orderedParts(_ rows: [ChatTranscriptRow], tools: [OpenClawChatPendingToolCall]) -> [Part] {
+        guard !tools.isEmpty else { return rows.map(Part.row) }
+        let liveOwners = Dictionary(grouping: tools, by: \.id).mapValues { Set($0.compactMap(\.runID)) }
+        let rows = rows.map { row -> ChatTranscriptRow in
+            // CLI history can retain a provider call ID without a Gateway run ID. Attribute only the
+            // presentation copy: a name or the position next to another run is never proof of ownership.
+            guard case var .message(message) = row, message.workRunID == nil,
+                  message.sourceMetadata?.importedFrom == "claude-cli" else { return row }
+            let ids = message.isToolResult ? [message.toolCallId].compactMap(\.self) :
+                message.content.filter { $0.isToolCall || $0.isToolResult }.compactMap(\.id)
+            let owners = ids.reduce(into: Set<String>()) { $0.formUnion(liveOwners[$1] ?? []) }
+            guard owners.count == 1, let owner = owners.first else { return row }
+            message.transcriptRunID = owner
+            return .message(message)
+        }
         var parts = rows.map(Part.row)
         // Use the producer's start time, not the active-first tool list order.
         // Persisted calls take over their live copy without duplicating activity.
@@ -71,8 +80,11 @@ struct ChatAssistantRunGroup: Identifiable {
             default: []
             }
             return messages.flatMap { message in
-                message.content.filter(\.isToolCall).compactMap { block in
-                    message.workRunID.map { "\($0):\(block.id ?? "")" }
+                // A nested call also stands for its retired dispatcher envelope.
+                message.content.filter(\.isToolCall).flatMap { block in
+                    [block.id ?? "", block.parentToolCallId].compactMap { id in
+                        id.flatMap { id in message.workRunID.map { "\($0):\(id)" } }
+                    }
                 }
             }
         })
@@ -88,6 +100,17 @@ struct ChatAssistantRunGroup: Identifiable {
             } ?? parts.endIndex
             parts.insert(.tool(tool), at: index)
         }
+        return parts
+    }
+
+    static func build(
+        _ rows: [ChatTranscriptRow],
+        tools: [OpenClawChatPendingToolCall] = [],
+        liveRunID: String?,
+        hasLiveContent: Bool,
+        searchActive: Bool) -> [Self]
+    {
+        let parts = Self.orderedParts(rows, tools: tools)
         var groups: [Self] = []
         var boundaries: [String: UUID] = [:]
         var segments: [String: Int] = [:]
@@ -125,7 +148,18 @@ struct ChatAssistantRunGroup: Identifiable {
                     guard case let .run(runID, inputBoundary, _) = group.id else { return false }
                     return runID == liveRunID && inputBoundary == boundary
                 }) {
-                    groups[index].includesLive = true
+                    // The working line ends its turn. Output the Gateway stamped with no run (imported CLI
+                    // rows once their live calls end) stays above it; a new input or another run ends the turn.
+                    let unowned = groups[(index + 1)...].prefix { $0.runID == nil && $0.parts.first?.boundaryID == nil }
+                    if unowned.isEmpty {
+                        groups[index].includesLive = true
+                    } else {
+                        groups.insert(Self(
+                            id: .run(liveRunID, boundary, segments[liveRunID, default: 0]),
+                            runID: liveRunID,
+                            parts: [],
+                            includesLive: true), at: unowned.endIndex)
+                    }
                 } else {
                     groups.append(Self(
                         id: .run(liveRunID, boundary, segments[liveRunID, default: 0]),

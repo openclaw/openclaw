@@ -124,7 +124,8 @@ policy, approval, hook, logging, and result handling still apply.
 
 Network-backed results use the active model's normal tool-result budget, including
 the external-content wrapper and sanitization overhead. Tool Search does not
-apply a separate 20,000-character ceiling.
+apply a separate 20,000-character ceiling. Each structured control call carries
+the network provenance of its own result or error.
 
 If a complete network result cannot fit, Tool Search omits the payload rather than
 showing a partial page with a misleading continuation cursor. For a read-only

@@ -13,6 +13,20 @@ import type {
   SessionListSnapshot,
 } from "./session-types.ts";
 
+// Keep the admitted rows and pagination intact for rollback. Only a personal
+// query excludes a projected Hide; Show cannot admit an unobserved row.
+function presentedSnapshot(
+  entry: ManagedSessionList,
+  snapshot = entry.snapshot,
+): SessionListSnapshot {
+  const result = snapshot.result;
+  if (!entry.query.involvingMe || !result?.sessions.some((row) => row.hiddenFromInvolvingMe)) {
+    return snapshot;
+  }
+  const sessions = result.sessions.filter((row) => !row.hiddenFromInvolvingMe);
+  return { ...snapshot, result: { ...result, sessions, count: sessions.length } };
+}
+
 /** Manage presentation leases on the roster owner's existing managed-list entries. */
 export function createSessionPrimaryWindows(
   managedLists: Map<string, ManagedSessionList>,
@@ -59,7 +73,8 @@ export function createSessionPrimaryWindows(
     listener: (snapshot: SessionListSnapshot) => void,
     pageActive: boolean,
   ) => {
-    const subscribed = (snapshot: SessionListSnapshot) => listener(snapshot);
+    const subscribed = (snapshot: SessionListSnapshot) =>
+      listener(presentedSnapshot(entry, snapshot));
     entry.listeners.add(subscribed);
     // Observed queries own independent membership rather than a primary warm lease.
     retireWarmLists((candidate) => candidate === entry);
@@ -86,14 +101,10 @@ export function createSessionPrimaryWindows(
         const { result, agentId, loading, error, startupPending } = readPrimary();
         return { result, agentId, loading, error, startupPending };
       }
-      return (
-        managedLists.get(sessionListQueryKey(scope))?.snapshot ?? {
-          result: null,
-          agentId: null,
-          loading: false,
-          error: null,
-        }
-      );
+      const entry = managedLists.get(sessionListQueryKey(scope));
+      return entry
+        ? presentedSnapshot(entry)
+        : { result: null, agentId: null, loading: false, error: null };
     },
     /** Own an observed query subscription and fence explicit refresh against disposal. */
     observe(
@@ -111,7 +122,7 @@ export function createSessionPrimaryWindows(
         }
       };
       try {
-        listener(entry.snapshot);
+        listener(presentedSnapshot(entry));
       } catch (error) {
         unsubscribe();
         throw error;

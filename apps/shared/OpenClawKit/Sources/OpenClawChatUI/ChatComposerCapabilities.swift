@@ -7,12 +7,23 @@ public enum OpenClawChatPermissionMode: String, Codable, CaseIterable, Hashable,
     case workspace
     case full
 
+    /// Names and summaries match the Control UI permission picker.
     public var displayName: String {
         switch self {
-        case .readOnly: String(localized: "Read-only")
-        case .guarded: String(localized: "Guarded")
-        case .workspace: String(localized: "Workspace")
-        case .full: String(localized: "Full")
+        case .readOnly: String(localized: "Read only")
+        case .guarded: String(localized: "Ask me")
+        case .workspace: String(localized: "Auto-review")
+        case .full: String(localized: "Full access")
+        }
+    }
+
+    public var summary: String {
+        switch self {
+        case .readOnly:
+            String(localized: "Can read files in this session’s workspace. Can’t edit files or run commands.")
+        case .guarded: String(localized: "Asks you before doing anything outside the workspace.")
+        case .workspace: String(localized: "An AI reviewer approves actions outside the workspace.")
+        case .full: String(localized: "Edits files and runs commands anywhere, without review.")
         }
     }
 }
@@ -71,6 +82,7 @@ public struct OpenClawChatSessionToolOverrides: Codable, Hashable, Sendable {
 public struct OpenClawChatComposerSkill: Identifiable, Equatable, Sendable {
     public let key: String
     public let name: String
+    public let description: String
     public let baseEnabled: Bool
     public let missingDependencies: Bool
     public let blocked: Bool
@@ -83,6 +95,7 @@ public struct OpenClawChatComposerSkill: Identifiable, Equatable, Sendable {
     public init(
         key: String,
         name: String,
+        description: String = "",
         baseEnabled: Bool,
         missingDependencies: Bool,
         blocked: Bool,
@@ -90,6 +103,7 @@ public struct OpenClawChatComposerSkill: Identifiable, Equatable, Sendable {
     {
         self.key = key
         self.name = name
+        self.description = description
         self.baseEnabled = baseEnabled
         self.missingDependencies = missingDependencies
         self.blocked = blocked
@@ -100,6 +114,7 @@ public struct OpenClawChatComposerSkill: Identifiable, Equatable, Sendable {
 public struct OpenClawChatComposerTool: Identifiable, Equatable, Sendable {
     public let name: String
     public let label: String
+    public let description: String
     public let baseEnabled: Bool
     public let sessionDenied: Bool
 
@@ -107,14 +122,41 @@ public struct OpenClawChatComposerTool: Identifiable, Equatable, Sendable {
         self.name
     }
 
+    /// The description's first sentence, whole. Connector descriptions are written for the model and run on with
+    /// instructions to it; the first sentence says what the tool does.
+    public var summary: String {
+        Self.firstSentence(of: self.description)
+    }
+
+    /// Text up to the first ".", "!" or "?" followed by a space or the end. Abbreviations ("e.g.", "i.e.", "etc.",
+    /// "vs.") don't end it, and a period inside a number has no space after it. No end means the whole text.
+    nonisolated static func firstSentence(of text: String) -> String {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let abbreviations: Set = ["e.g", "i.e", "etc", "vs", "cf"]
+        var index = text.startIndex
+        while index < text.endIndex {
+            let next = text.index(after: index)
+            if ".!?".contains(text[index]), next == text.endIndex || text[next].isWhitespace {
+                let word = text[..<index].split(whereSeparator: { $0.isWhitespace || $0 == "(" }).last ?? ""
+                if text[index] != "." || !abbreviations.contains(word.lowercased()) {
+                    return String(text[..<next])
+                }
+            }
+            index = next
+        }
+        return text
+    }
+
     public init(
         name: String,
         label: String,
+        description: String = "",
         baseEnabled: Bool = true,
         sessionDenied: Bool = false)
     {
         self.name = name
         self.label = label
+        self.description = description
         self.baseEnabled = baseEnabled
         self.sessionDenied = sessionDenied
     }
@@ -128,6 +170,14 @@ public struct OpenClawChatComposerConnector: Identifiable, Equatable, Sendable {
 
     public var id: String {
         self.name
+    }
+
+    /// The configured server name read as a title, each word capitalized: mobbin reads as Mobbin. MCP servers send
+    /// the phone no display name, description or icon, so this is the closest proper name it has.
+    public var title: String {
+        self.name.split(whereSeparator: { $0 == "-" || $0 == "_" })
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
     }
 
     public init(

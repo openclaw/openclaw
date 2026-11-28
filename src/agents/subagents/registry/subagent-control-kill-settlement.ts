@@ -47,9 +47,9 @@ type SubagentKillSettlementOwnerParams = {
 };
 
 /** Identifies the terminal state produced by an accepted subagent kill. */
-export function isKilledSubagentTarget(state: SubagentKillTargetState): boolean {
+export function isKilledSubagentTarget(state: SubagentKillTargetState | undefined): boolean {
   return (
-    state.state === "terminal" &&
+    state?.state === "terminal" &&
     state.task.status === "cancelled" &&
     state.task.error === SUBAGENT_KILL_TASK_ERROR
   );
@@ -135,18 +135,8 @@ export function createSubagentKillSettlementOwner(params: SubagentKillSettlement
         reason: "killed",
         suppressTaskDelivery: params.suppressTaskDelivery,
         context: params.stateContext,
-        assertCurrent: () => {
-          params.assertState();
-          if (!isCurrent()) {
-            throw new Error("Subagent kill settlement lost its original claim.");
-          }
-        },
-        assertPublicationCurrent: () => {
-          params.assertState();
-          if (!isCurrent()) {
-            throw new Error("Subagent kill publication lost its original claim");
-          }
-        },
+        assertCurrent: assertClaimCurrent,
+        assertPublicationCurrent: assertClaimCurrent,
         onPublished: (count) => {
           marked = count;
         },

@@ -42,6 +42,7 @@ extension OpenClawChatViewModel {
             let swarm = Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: session) }
             return Task { _ = await (models?.value, swarm.value) }
         case let .sessionsChanged(change):
+            self.observeActivityChildChange(change)
             return self.handleSessionsChangedEvent(change)
         case let .sessionObserver(digest):
             self.sessions = ChatSessionSidebarModel.applying(
@@ -56,11 +57,12 @@ extension OpenClawChatViewModel {
             return self.handleAgentEvent(agent)
         case let .sessionReaction(event):
             self.handleSessionReactionEvent(event)
-        case let .progressCardChanged(event):
-            return self.handleProgressCardChanged(event)
+        case .progressCardChanged, .sessionPullRequestsChanged:
+            return self.handleActivityEvent(evt)
         case .questionRequested, .questionResolved:
             return self.handleQuestionEvent(evt)
         case .routeChanged, .reconnected, .seqGap:
+            self.forgetActivityChildrenOnRouteChange(evt)
             self.resetSessionReactions()
             self.invalidateSessionMetadataReadiness()
             self.syncSessionReactions(refreshMetadata: true)
@@ -79,6 +81,8 @@ extension OpenClawChatViewModel {
             // Old known-absent state must not authorize legacy plans on the new Gateway.
             self.progressCardStoreAvailable = nil
             self.invalidateProgressCardTarget()
+            // A new connection watches nothing yet; the last snapshot stays until the next push replaces it.
+            self.pullRequestWatch.key = nil
             self.modelAvailabilityIsSessionScoped = false
             self.invalidateComposerCapabilities()
             self.errorText = nil
@@ -513,7 +517,18 @@ extension OpenClawChatViewModel {
         }
         guard var message = payload.message else { return }
         message.transcriptMessageID = message.transcriptMessageID ?? payload.messageId
-        let ingested = message.ingestedMessages.map { Self.stripInboundMetadata(from: $0) }
+        let ingested = message.ingestedMessages.map { incoming in
+            var row = Self.stripInboundMetadata(from: incoming)
+            // A streamed result can arrive without prepared activity after history recorded an unpaired call.
+            // Carry the matching terminal item with the result so its provisional outcome is replaced on merge.
+            if isCurrentSession, row.isToolResult, row.activity == nil, let id = row.toolCallId,
+               let run = row.workRunID, let call = self.turnToolCallsById[id], call.runID == run,
+               let activity = call.activity, activity.phase == "end"
+            {
+                row.activity = [activity]
+            }
+            return row
+        }
         // Confirmation is gateway-scoped, not presentation-scoped. A flush
         // can drain session A while session B is visible, and A's event must
         // still retire its durable row before this handler returns early.
@@ -583,7 +598,7 @@ extension OpenClawChatViewModel {
                 runId: runID,
                 bufferedText: OpenClawChatEventText.assistantText(from: chat) ?? "")
             if let text = OpenClawChatEventText.assistantText(from: chat), !text.isEmpty {
-                self.reconcileRunStartup(ChatRunStartup(runID: runID, state: .activity, seq: nil))
+                self.reconcileRunStartup(ChatRunStartup(runID: runID, state: .answering, seq: nil))
             }
             return nil
         }
@@ -631,7 +646,8 @@ extension OpenClawChatViewModel {
 
         guard isTerminal, let terminalRunID else { return nil }
         if chat.state == "error" {
-            self.errorText = chat.errorMessage ?? "Chat failed"
+            chatUILogger.error("chat run failed: \(chat.errorMessage ?? "no message", privacy: .public)")
+            self.errorText = String(localized: "Couldn’t finish the reply.")
         }
         let hapticEvent: OpenClawChatHaptics.Event? = switch chat.state {
         case "final": .runCompleted
@@ -742,6 +758,7 @@ extension OpenClawChatViewModel {
         case "assistant":
             // History retains the assistant sequence but stores text separately.
             guard self.isApplyingRunSnapshot || data["text"]?.stringValue?.isEmpty == false else { return nil }
+            return ChatRunStartup(runID: event.runId, state: .answering, seq: event.seq)
         case "tool":
             guard let phase = data["phase"]?.stringValue,
                   ["start", "input_delta", "result"].contains(phase),
@@ -808,6 +825,15 @@ extension OpenClawChatViewModel {
             return nil
         }
         guard isSelectedPendingRun || isLegacySessionStream else { return nil }
+        #if os(iOS)
+        // Live reasoning is output: a previous “Waiting for a response” or retry phase is no longer current.
+        if evt.stream == "thinking", evt.data["phase"]?.stringValue != "persisted",
+           evt.data["text"]?.stringValue?.isEmpty == false || evt.data["delta"]?.stringValue?.isEmpty == false ||
+           (evt.data["progressTokens"]?.intValue ?? 0) > 0
+        {
+            self.reconcileRunStartup(.init(runID: evt.runId, state: .activity, seq: evt.seq))
+        }
+        #endif
         if let startup = self.startupState(for: evt) { self.reconcileRunStartup(startup) }
         self.invalidateRunSnapshots()
 
@@ -816,7 +842,11 @@ extension OpenClawChatViewModel {
             if let text = evt.data["text"]?.value as? String {
                 self.liveRunStateByRunID[evt.runId, default: ChatLiveRunState()].hasAgentAssistantText = true
                 self.updateActiveSessionRunWithoutChatSnapshot(false)
-                self.updateStreamingAssistantText(text, runID: evt.runId)
+                if evt.data["itemId"]?.value as? String == "cli-assistant:\(evt.runId)" {
+                    self.updateCLIAssistantText(text, runID: evt.runId)
+                } else {
+                    self.updateStreamingAssistantText(text, runID: evt.runId)
+                }
             }
         case "plan":
             // Released Gateways through v2026.8.x lack progressCard.get and only emit stream:"plan".
@@ -841,49 +871,13 @@ extension OpenClawChatViewModel {
                 markdown: explanation?.isEmpty == false ? explanation : nil,
                 steps: steps))
         case "item":
-            self.handleAgentActivityItem(evt)
+            Self.applyActivityItem(evt, to: &self.turnToolCallsById)
         case "tool":
-            self.handleAgentToolEvent(evt)
+            self.applyToolEvent(evt, to: &self.turnToolCallsById)
         default:
             break
         }
         return nil
-    }
-
-    private func handleAgentToolEvent(_ evt: OpenClawAgentEventPayload) {
-        guard let phase = evt.data["phase"]?.value as? String else { return }
-        guard let name = evt.data["name"]?.value as? String else { return }
-        guard let toolCallId = evt.data["toolCallId"]?.value as? String else { return }
-        if phase == "start" {
-            self.updateActiveSessionRunWithoutChatSnapshot(false)
-            let args = evt.data["args"]
-            self.turnToolCallsById[toolCallId] = OpenClawChatPendingToolCall(
-                toolCallId: toolCallId,
-                name: name,
-                args: args,
-                startedAt: evt.ts.map(Double.init) ?? Date().timeIntervalSince1970 * 1000,
-                isError: nil,
-                diffStat: nil,
-                activity: self.turnToolCallsById[toolCallId]?.activity,
-                runID: evt.runId)
-        } else if phase == "input_delta",
-                  var pending = self.turnToolCallsById[toolCallId],
-                  let diff = evt.data["diff"]?.dictionaryValue,
-                  let added = diff["added"]?.intValue,
-                  let removed = diff["removed"]?.intValue,
-                  added >= 0,
-                  removed >= 0
-        {
-            pending.diffStat = ChatToolDiffStat(added: added, removed: removed)
-            self.turnToolCallsById[toolCallId] = pending
-        } else if phase == "result" {
-            if var pending = self.turnToolCallsById[toolCallId], pending.activity != nil {
-                pending.isComplete = true
-                self.turnToolCallsById[toolCallId] = pending
-            } else {
-                self.turnToolCallsById[toolCallId] = nil
-            }
-        }
     }
 
     private func handleAgentUsageEvent(_ evt: OpenClawAgentEventPayload) {
@@ -960,7 +954,13 @@ extension OpenClawChatViewModel {
     /// left the turn with neither for that round trip; the transcript collapsed and lost its
     /// scroll position.
     private func clearStreamingActivityAfterHistory(_ context: HistoryRequest) -> Task<Void, Never> {
-        if self.liveText(self.streamingAssistantText) == nil {
+        #if os(iOS)
+        let waitingForToolReceipts = !self.toolActivities.isEmpty
+        #else
+        // CLI narration adopts its following call from the post-run history.
+        let waitingForToolReceipts = self.cliAssistantStream != nil && !self.toolActivities.isEmpty
+        #endif
+        if !waitingForToolReceipts, self.liveText(self.streamingAssistantText) == nil {
             self.clearStreamingActivity()
         }
         return Task {
@@ -985,18 +985,20 @@ extension OpenClawChatViewModel {
         return stringValue == "true" || stringValue == "yes" || stringValue == "1"
     }
 
+    /// Plain words for the screen; the agent's own error text goes to the log.
     private static func agentLifecycleErrorMessage(_ evt: OpenClawAgentEventPayload, aborted: Bool) -> String {
         if aborted {
-            return "Run aborted"
+            return String(localized: "The reply was stopped.")
         }
         for key in ["error", "message"] {
             if let message = evt.data[key]?.value as? String,
                !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             {
-                return message
+                chatUILogger.error("agent run failed: \(message, privacy: .public)")
+                break
             }
         }
-        return "Chat failed"
+        return String(localized: "Couldn’t finish the reply.")
     }
 
     func finishPendingRunAfterTerminalOkSendAck(_ response: OpenClawChatSendResponse) {
@@ -1008,7 +1010,7 @@ extension OpenClawChatViewModel {
         guard response.status == "timeout" || response.status == "error" else { return false }
         self.removePendingLocalUserEcho(for: response.runId)
         self.clearStreamingActivity()
-        self.errorText = "Chat failed before the run started; try again."
+        self.errorText = String(localized: "Couldn’t send your message.")
         self.retirePendingRun(response.runId, hapticEvent: .runFailed)
         self.logDiagnostic(
             "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
@@ -1055,7 +1057,8 @@ extension OpenClawChatViewModel {
             {
                 return false
             }
-            self.errorText = message
+            chatUILogger.error("chat run failed: \(message, privacy: .public)")
+            self.errorText = String(localized: "Couldn’t finish the reply.")
             self.retirePendingRun(runId, hapticEvent: .runFailed)
             self.clearStreamingActivity()
             return false

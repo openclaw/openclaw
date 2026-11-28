@@ -9,17 +9,20 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type * as GatewayTrial from "../update/gateway-trial.js";
 import { createPreparedReadinessFixture } from "./server/readiness.test-support.js";
 
 const fixture = vi.hoisted(() => ({ root: "", buildId: "build-before" as string | null }));
 const trial = vi.hoisted(() => ({
   residentReady: vi.fn<typeof import("../update/gateway-trial.js").announceReady>(),
   ready: vi.fn<typeof import("../update/gateway-trial.js").observeLegacyTrialReadiness>(),
+  plugins: vi.fn<typeof GatewayTrial.schedulePluginMaintenance>(),
 }));
 vi.mock("../update/gateway-trial.js", async (original) => ({
   ...(await original<typeof import("../update/gateway-trial.js")>()),
   announceReady: trial.residentReady,
   observeLegacyTrialReadiness: trial.ready,
+  schedulePluginMaintenance: trial.plugins,
 }));
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
@@ -81,6 +84,7 @@ beforeEach(async () => {
   fixture.buildId = "build-before";
   trial.ready.mockReset().mockResolvedValue(undefined);
   trial.residentReady.mockReset().mockResolvedValue(undefined);
+  trial.plugins.mockReset();
   await fs.mkdir(path.join(fixture.root, "dist"));
   vi.resetModules();
   owner = await import("./stale-install.js");
