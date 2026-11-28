@@ -24,7 +24,8 @@ export function resolveStatusUtilityModel(params: {
       ...(params.gatewayCatalog ? { catalog: { entries: params.gatewayCatalog.models } } : {}),
     });
   const fallbacks = setting.kind === "disabled" ? [] : setting.fallbacks;
-  const ref = selection?.modelRef ?? undefined;
-  const source = selection?.source ?? (setting.kind === "disabled" ? "disabled" : "none");
+  const ref = "modelRef" in selection ? (selection.modelRef ?? undefined) : undefined;
+  const source =
+    "source" in selection ? selection.source : setting.kind === "disabled" ? "disabled" : "none";
   return { ref, fallbacks, source } as const;
 }

@@ -180,6 +180,15 @@ extension ChatSessionSidebarModel {
             .hasPrefix("acp:")
     }
 
+    /// The same project label shown when grouping sessions in the sidebar.
+    public static func projectName(for session: OpenClawChatSessionEntry) -> String? {
+        self.projectPath(session).map(self.projectName(fromPath:))
+    }
+
+    private static func projectName(fromPath path: String) -> String {
+        path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? path
+    }
+
     static func projectPath(_ row: OpenClawChatSessionEntry) -> String? {
         // ui/src/lib/session-display.ts:91 and sessions/catalog-project-grouping.ts:32 share repo/worktree identity.
         let repository = (row.repository?["url"]?.value as? String).map {

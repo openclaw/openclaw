@@ -67,6 +67,7 @@ struct ChatFileAttachment: View {
                     ProgressView()
                 } else {
                     Image(systemName: "arrow.down.circle")
+                        .accessibilityHidden(true)
                 }
             }
             .padding(10)

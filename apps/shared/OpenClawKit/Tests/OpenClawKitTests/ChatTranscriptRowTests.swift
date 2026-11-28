@@ -20,6 +20,15 @@ struct ChatTranscriptRowTests {
         let expected: Expected
     }
 
+    #if os(iOS)
+    private static let harnessContext: Expected = .hidden
+    #else
+    private static let harnessContext: Expected = .notice(
+        label: "System · injected context",
+        body: "This session is being continued from a previous conversation.",
+        collapsed: true)
+    #endif
+
     @Test(arguments: [
         Case(
             name: "restart recovery hides producer prompt",
@@ -38,14 +47,11 @@ struct ChatTranscriptRowTests {
                 label: "System · gateway restarted",
                 body: "Gateway restarted after an update.")),
         Case(
-            name: "harness context folds its payload behind the label",
+            name: "harness context respects native transcript visibility",
             input: .notice(
                 sourceTool: "cli_harness_context",
                 text: "This session is being continued from a previous conversation."),
-            expected: .notice(
-                label: "System · injected context",
-                body: "This session is being continued from a previous conversation.",
-                collapsed: true)),
+            expected: harnessContext),
         Case(
             name: "background task notification folds its payload behind the label",
             input: .notice(

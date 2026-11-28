@@ -50,7 +50,7 @@ const oauthServer = (url: string, oauth?: object) => ({
   ...(oauth ? { oauth } : {}),
 });
 
-async function startOAuthFixture() {
+async function startOAuthFixture({ rejectRegistration = false } = {}) {
   let issuer = "";
   let codeChallenge: string | undefined;
   let tokenRedirectUri: string | undefined;
@@ -76,6 +76,12 @@ async function startOAuthFixture() {
       });
     }
     if (url.pathname === "/register" && request.method === "POST") {
+      if (rejectRegistration) {
+        return reply(
+          { error: "invalid_client_metadata", error_description: "private detail" },
+          400,
+        );
+      }
       const metadata = JSON.parse(await readBody(request)) as { redirect_uris?: string[] };
       const redirectUris = metadata.redirect_uris?.map((value) => {
         const redirect = new URL(value);
@@ -299,6 +305,25 @@ it("routes login and logout through a live Gateway owner and prints its sign-in 
       }),
     );
     expect(log).toHaveBeenCalledWith('MCP OAuth credentials cleared for "fixture".');
+  });
+});
+
+it("reports a rejected client registration before offering a sign-in URL", async () => {
+  await withTempHome("openclaw-mcp-registration-", async () => {
+    const fixture = await startOAuthFixture({ rejectRegistration: true });
+    try {
+      const { run, set } = createCli();
+      await set(oauthServer(`${fixture.issuer}/mcp`));
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      await expect(run("login", "fixture")).rejects.toMatchObject({ code: 1 });
+      expect(error).toHaveBeenCalledExactlyOnceWith(
+        `OAuth server rejected dynamic client registration for "fixture" (HTTP 400): invalid_client_metadata. Check the provider's client registration settings before retrying.`,
+      );
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      await fixture.close();
+    }
   });
 });
 

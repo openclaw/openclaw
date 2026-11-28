@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
@@ -26,6 +28,56 @@ import { node, repository, root } from "./prepare.test-support.js";
 import { prepareUpdate } from "./run.js";
 import { createTrialPending, readTrial, resolvePrefix, switchLink, writeTrial } from "./store.js";
 import * as targets from "./target.js";
+
+const exec = promisify(execFile);
+
+it("discards a rejected Git candidate without leaking its registration or touching another worktree", async () => {
+  vi.stubEnv("HOME", root);
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  const target = await repository(false, ">=1", {
+    ok: false,
+    reason: "fixture release refusal",
+    surfaces: [],
+  });
+  const git = (...args: string[]) => exec("git", ["-C", target.checkout, ...args]);
+  const unrelated = path.join(root, "unrelated");
+  await git("worktree", "add", "--detach", unrelated, target.sha);
+  const before = (await git("worktree", "list", "--porcelain")).stdout;
+  const registrations = path.join(target.checkout, ".git", "worktrees");
+  const beforeRegistrations = (await fs.readdir(registrations)).toSorted();
+  const beforeManifest = await fs.readFile(path.join(unrelated, "package.json"), "utf8");
+  try {
+    openOpenClawStateDatabase({ env: process.env });
+    const run = await createUpdateRunAsync({ trigger: "cli" });
+    expect(
+      await prepareUpdate({
+        runId: run.runId,
+        runningRoot: target.checkout,
+        runningVersion: VERSION,
+        channel: "dev",
+        node,
+      }),
+    ).toMatchObject({ status: "failed", reason: "release-check-failed" });
+    expect(await getUpdateRunAsync(run.runId)).toMatchObject({
+      status: "failed",
+      phase: "finished",
+      reason: "release-check-failed",
+      steps: expect.arrayContaining([
+        expect.objectContaining({ step: "prepare:build", status: "completed" }),
+        expect.objectContaining({ step: "candidate-release-check", status: "failed" }),
+      ]),
+    });
+    expect(await readTrial()).toBeNull();
+    expect(await fs.readdir(path.join(resolvePrefix(), "releases"))).toEqual([]);
+    expect((await git("worktree", "list", "--porcelain")).stdout).toBe(before);
+    expect((await fs.readdir(registrations)).toSorted()).toEqual(beforeRegistrations);
+    expect(await fs.readFile(path.join(unrelated, "package.json"), "utf8")).toBe(beforeManifest);
+    expect((await git("status", "--porcelain")).stdout).toBe("");
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+  }
+});
 
 it("records one failed terminal run when preparation lock acquisition throws", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));

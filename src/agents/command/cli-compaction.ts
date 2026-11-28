@@ -489,6 +489,7 @@ export async function runCliTurnCompactionLifecycle(
                   tokenBudget,
                   currentTokenCount,
                   force: true,
+                  reason: "budget",
                   compactionTarget: "budget",
                   runtimeContext,
                   runtimeSettings,

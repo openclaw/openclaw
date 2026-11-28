@@ -87,7 +87,8 @@ extension OpenClawChatViewModel {
     /// Session lists publish canonical agent keys even when the UI presents `main`.
     /// Keep visible model metadata on the same exact-then-alias read path.
     public func currentSessionEntry() -> OpenClawChatSessionEntry? {
-        self.sessions.first(where: { $0.key == self.sessionKey }) ??
+        if let draft = self.newChatDraft, draft.key == self.sessionKey { return draft.entry }
+        return self.sessions.first(where: { $0.key == self.sessionKey }) ??
             self.sessions.first(where: {
                 self.matchesCurrentSessionKey(incoming: $0.key, current: self.sessionKey)
             })
@@ -345,6 +346,10 @@ extension OpenClawChatViewModel {
         agentID: String?,
         syncSelection: Bool)
     {
+        if self.newChatDraft?.key == sessionKey {
+            if syncSelection { self.syncSelectedModel() }
+            return
+        }
         let existingIndex = self.sessionIndexForModelState(sessionKey: sessionKey)
         var updated = existingIndex.map { self.sessions[$0] }
             ?? self.sidebarData?.row(key: sessionKey, agentID: self.currentSessionSnapshot().deliveryAgentID)
@@ -403,7 +408,7 @@ extension OpenClawChatViewModel {
             included.insert(entry.key)
         }
 
-        if !included.contains(sessionKey) {
+        if !self.isNewChatDraft, !included.contains(sessionKey) {
             result.append(sorted.first(where: { $0.key == self.sessionKey }) ?? .init(key: sessionKey))
         }
 

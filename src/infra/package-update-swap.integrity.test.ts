@@ -22,7 +22,6 @@ import {
   createRetainedPackageSwap,
   symlinkDirectory,
 } from "./package-update-swap.test-support.js";
-import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -600,17 +599,6 @@ describe("retained npm package integrity", () => {
           ),
         }),
       ]);
-      const report = await prepareUpdateFailureReport(
-        {
-          attemptId: "baseline-stat-drift",
-          result: { mode: "npm", status: "error", steps: [result.step], durationMs: 0 },
-          recordedRun: { runId: "baseline-stat-drift", steps },
-        },
-        { env: {}, stateDir: base },
-      );
-      expect(report.body).toContain("Package rollback stat changed: fields=size,mtimeNs");
-      expect(report.body).not.toContain("private-entry-");
-      expect(report.body).not.toContain(base);
       expectNoCalls(beforeActivate, onLiveMutation);
       await expectInstallation(packageRoot, launcher);
     },
@@ -752,24 +740,6 @@ describe("retained npm package integrity", () => {
         expect(diagnostic).toContain("ino=0");
         expect(diagnostic).not.toContain("changed: fields=");
       }
-      const report = await prepareUpdateFailureReport(
-        {
-          attemptId: "baseline-failure",
-          result: { mode: "npm", status: "error", steps: [], durationMs: 0 },
-          recordedRun: { runId: "baseline-failure", steps },
-        },
-        { env: {}, stateDir: base },
-      );
-      expect(report.body).toContain("baseline-scan-failed");
-      if (shape === "timed-out scan" || unavailableInode) {
-        expect(report.body).toContain(cause);
-      } else {
-        expect(report.body).not.toContain(cause);
-        expect(report.body).toContain("[redacted-diagnostic]");
-      }
-      expect(report.body).not.toContain("identity fallback unavailable");
-      expect(report.body).not.toContain("private-inode-entry.js");
-      expect(report.body).not.toContain(base);
       expect(result).toMatchObject({ packageRollbackVerified: false });
       expectNoCalls(beforeActivate, onLiveMutation);
       await expectInstallation(packageRoot, launcher);

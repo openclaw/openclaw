@@ -88,6 +88,7 @@ type ChatHistoryPaneRequests = {
   subscriptionError?: string;
   subscriptionRetry?: AbortController;
   initialHistory?: InitialChatHistoryReceipt;
+  compactOpeningSessionKey?: string;
   historyRead?: AbortController;
   syncRetries: Map<
     "subscription" | "history",
@@ -128,6 +129,18 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
     chatHistoryPaneRequests.set(owner, requests);
   }
   return requests;
+}
+
+export function shouldRequestCompactOpening(state: ChatState, hasCompactReceipt = false): boolean {
+  if (state.settings?.compactSessionOpening !== true) {
+    return false;
+  }
+  const requests = chatHistoryRequests(state);
+  return (
+    !requests.acceptedHistory &&
+    !requests.windowReset?.isCurrent() &&
+    (hasCompactReceipt || (!state.currentSessionId && state.chatMessages.length === 0))
+  );
 }
 
 export function setChatHistoryRetrying(
@@ -398,6 +411,7 @@ export function resetChatHistoryProjection(
   // snapshot owner and its coalesced request before creating the next epoch.
   requests.historyVersion += 1;
   delete requests.initialHistory;
+  delete requests.compactOpeningSessionKey;
   delete requests.windowReset;
   // Keep the presentation accessor installed when clearing accepted history.
   requests.acceptedHistory = undefined;
