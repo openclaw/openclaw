@@ -198,7 +198,6 @@ final class TalkModeManager {
 
     private let allowSimulatorCapture: Bool
     private let gatewaySpeechSynthesizerOverride: (any TalkGatewaySpeechSynthesizing)?
-    private let audioSessionActivationAction: (@MainActor () throws -> Void)?
     private let audioSessionDeactivationAction: (@MainActor () throws -> Void)?
     private var audioSessionIsActive = false
 
@@ -419,7 +418,6 @@ final class TalkModeManager {
     init(
         allowSimulatorCapture: Bool = false,
         gatewaySpeechSynthesizer: (any TalkGatewaySpeechSynthesizing)? = nil,
-        audioSessionActivationAction: (@MainActor () throws -> Void)? = nil,
         audioSessionDeactivationAction: (@MainActor () throws -> Void)? = nil,
         recognitionFinalizationSleep: @escaping @Sendable () async throws -> Void = {
             try await Task.sleep(for: .seconds(2))
@@ -429,7 +427,6 @@ final class TalkModeManager {
         UserDefaults.standard.removeObject(forKey: "talk.speechLocale")
         self.allowSimulatorCapture = allowSimulatorCapture
         self.gatewaySpeechSynthesizerOverride = gatewaySpeechSynthesizer
-        self.audioSessionActivationAction = audioSessionActivationAction
         self.audioSessionDeactivationAction = audioSessionDeactivationAction
         self.recognitionFinalizationSleep = recognitionFinalizationSleep
         self.preferredInputDeviceID = UserDefaults.standard.string(
@@ -4013,11 +4010,7 @@ extension TalkModeManager {
         {
             return
         }
-        if let audioSessionActivationAction {
-            try audioSessionActivationAction()
-        } else {
-            try Self.configureAudioSession(preferredInputDeviceID: self.preferredInputDeviceID)
-        }
+        try Self.configureAudioSession(preferredInputDeviceID: self.preferredInputDeviceID)
         self.audioSessionIsActive = true
     }
 
