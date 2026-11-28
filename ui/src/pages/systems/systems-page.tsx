@@ -24,12 +24,18 @@ import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts"
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
+  resolveSessionNavigationAgentId,
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import {
+  isUiGlobalSessionKey,
+  resolveUiConfiguredMainKey,
+} from "../../lib/sessions/session-key.ts";
 import { SystemsBackups } from "./systems-backups.tsx";
-import type { SystemsInventoryRow } from "./systems-data.ts";
+import { indexSystemsAttachedSessions, type SystemsInventoryRow } from "./systems-data.ts";
 import { SystemMeasurements } from "./systems-measurements.tsx";
 import { createSystemsRead } from "./systems-read.ts";
 import { systemKindLabel, systemName, systemPlatform, systemStatus } from "./systems-sidebar.tsx";
@@ -138,6 +144,23 @@ export function SystemsPage(props: { controller: Systems; presented: boolean }) 
 
 function SystemsDetails(props: { controller: Systems; row?: SystemsInventoryRow }) {
   const controller = () => props.controller;
+  const related = createMemo(() => props.row?.sessions);
+  const attachmentIds = createMemo(() => props.row?.environment.worker?.attachedSessionIds);
+  const hasLiveRoster = createMemo(() => !controller().context.sessions.state.resultCached);
+  const attachedSessions = createMemo(() =>
+    hasLiveRoster() ? indexSystemsAttachedSessions(attachmentIds(), related()) : undefined,
+  );
+  const navigation = createMemo(() => {
+    const context = controller().context;
+    return {
+      basePath: context.basePath,
+      fallbackAgentId: resolveSessionNavigationAgentId(context),
+      mainKey: resolveUiConfiguredMainKey({
+        agentsList: context.agents.state.agentsList,
+        hello: context.gateway.snapshot.hello,
+      }),
+    };
+  });
   let panel!: HTMLElement;
   onSettled(() => {
     const opener = document.activeElement;
@@ -185,17 +208,21 @@ function SystemsDetails(props: { controller: Systems; row?: SystemsInventoryRow 
               <h3>{t("systems.relatedSessions")}</h3>
               <p class="systems-detail-hint">{t("systems.relatedHint")}</p>
               {row().sessions.length ? (
-                <For each={row().sessions}>
+                <For each={related()}>
                   {(relation) => {
                     const session = relation.session;
                     const face = resolveSessionPreferredFace(session);
-                    const target = () =>
-                      sessionNavigationTarget({
-                        context: controller().context,
+                    const target = () => {
+                      const options = {
                         face,
                         sessionKey: session.key,
                         preferenceDerivedFace: true,
-                      });
+                      };
+                      // Only the unqualified global key needs the shared owner-scope check.
+                      return isUiGlobalSessionKey(session.key)
+                        ? sessionNavigationTarget({ ...options, context: controller().context })
+                        : sessionNavigationTarget({ ...options, ...navigation(), row: session });
+                    };
                     return (
                       <a
                         class="systems-session-link"
@@ -207,7 +234,7 @@ function SystemsDetails(props: { controller: Systems; row?: SystemsInventoryRow 
                         }
                       >
                         <strong class="systems-session-link__title">
-                          {session.displayName ?? session.label ?? session.key}
+                          {resolveSessionDisplayName(session.key, session)}
                         </strong>
                         <span>{t("systems.relations." + relation.kind)}</span>
                       </a>
@@ -217,13 +244,19 @@ function SystemsDetails(props: { controller: Systems; row?: SystemsInventoryRow 
               ) : (
                 <p class="systems-detail-hint">{t("systems.noRelatedSessions")}</p>
               )}
-              {environment().worker?.attachedSessionIds.length ? (
+              {attachmentIds()?.length ? (
                 <>
                   <h3>{t("systems.attachedSessions")}</h3>
                   <p class="systems-detail-hint">{t("systems.attachedHint")}</p>
                   <ul>
-                    <For each={environment().worker!.attachedSessionIds}>
-                      {(id) => <li>{id}</li>}
+                    <For each={attachmentIds()}>
+                      {(id) => {
+                        const label = () => {
+                          const session = attachedSessions()?.get(id);
+                          return session ? resolveSessionDisplayName(session.key, session) : id;
+                        };
+                        return <li>{label()}</li>;
+                      }}
                     </For>
                   </ul>
                 </>

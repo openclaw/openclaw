@@ -7,6 +7,7 @@ import { createApplicationGateway } from "../../test-helpers/application-context
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import {
+  indexSystemsAttachedSessions,
   loadSystemsInventory,
   projectSystemsInventory,
   type SystemsInventory,
@@ -101,6 +102,41 @@ it("retains only recorded terminal references and never guesses a prior device o
   expect(rows[1]?.sessions).toEqual([]);
   expect(rows[4]?.sessions).toEqual([{ kind: "retained-placement", session: reclaimed }]);
   expect(rows[3]?.sessions).toEqual([{ kind: "placement", session: moved }]);
+});
+
+it("does not name ambiguous, previous-generation, or other-worker attachments", () => {
+  const named = session("named", { sessionId: "named-id", placement: active });
+  const sessions = [
+    named,
+    session("other-worker", {
+      sessionId: "other-id",
+      placement: { ...active, environmentId: "worker:other" },
+    }),
+    session("previous-generation", {
+      sessionId: "current-id",
+      previousSessionId: "previous-id",
+      placement: active,
+    }),
+    session("retained", {
+      sessionId: "retained-id",
+      placement: reclaimedPlacement("worker:active"),
+    }),
+    ...[1, 2, 3].map((number) =>
+      session(`duplicate-${number}`, { sessionId: "duplicate-id", placement: active }),
+    ),
+  ];
+  const selected = projectSystemsInventory(inventory, sessions).find(
+    (row) => row.environment.id === "worker:active",
+  );
+  const matches = indexSystemsAttachedSessions(
+    ["named-id", "other-id", "previous-id", "retained-id", "duplicate-id"],
+    selected?.sessions,
+  );
+  expect(matches?.get("named-id")).toBe(named);
+  expect(matches?.get("duplicate-id")).toBeNull();
+  for (const id of ["other-id", "previous-id", "retained-id"]) {
+    expect(matches?.get(id)).toBeUndefined();
+  }
 });
 
 function setup(...responses: unknown[]) {
