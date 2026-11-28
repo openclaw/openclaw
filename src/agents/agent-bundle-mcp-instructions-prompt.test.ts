@@ -67,7 +67,7 @@ async function startInstructionsMcpServer(params: { toolNames: string[]; instruc
   };
 }
 
-async function loadTools(server: { url: string }, sessionId: string, deniedTools: string[] = []) {
+async function loadTools(server: { url: string }, sessionId: string, deniedTools: string[]) {
   const runtime = createSessionMcpRuntime({
     sessionId,
     workspaceDir: "/workspace",
